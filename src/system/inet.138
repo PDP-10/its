@@ -1,0 +1,1430 @@
+;:;; -*- Mode:MIDAS -*- 
+; Insert new buffer stuff...
+$INSRT TCPBUF
+
+IP%VER==740000,,	; 0 IP Version # (= 4)
+IP%IHL==036000,,	; 0 IP Header Length in 32-bit wds - at least 5
+IP%TOS==001774,,	; 0 Type Of Service
+IP%TOL==000003,,777760	; 0 Total Length in octets (including header)
+IP%ID== 777774,,	; 1 Identification
+IP%FLG==     3,,400000	; 1 Flags
+  IP%FDF==   1,,0	;	Don't-Fragment flag
+  IP%FMF==	400000	;	More-Fragments flag
+IP%FRG==     0,,377760	; 1 Fragment Offset
+IP%TTL==776000,,	; 2 Time To Live
+IP%PTC==  1774,,	; 2 Protocol
+IP%CKS==     3,,777760	; 2 Header Checksum
+IP%SRC==777777,,777760	; 3 Source Address
+IP%DST==777777,,777760	; 4 Destination Address
+			; 5 Start of options
+IP$VER==<.BP IP%VER,0>
+IP$IHL==<.BP IP%IHL,0>
+IP$TOS==<.BP IP%TOS,0>
+IP$TOL==<.BP IP%TOL,0>
+IP$ID== <.BP IP%ID, 1>
+IP$FLG==<.BP IP%FLG,1>
+IP$FRG==<.BP IP%FRG,1>
+IP$TTL==<.BP IP%TTL,2>
+IP$PTC==<.BP IP%PTC,2>
+	%PTCIC==:1		; Protocol ICMP
+	%PTCTC==:6.		; Protocol TCP
+	%PTCUD==:17.		; Protocol UDP
+IP$CKS==<.BP IP%CKS,2>
+IP$SRC==<.BP IP%SRC,3>
+IP$DST==<.BP IP%DST,4>
+
+	; UDP fields
+UD$SRC==<242000,,0>		; 0 wd 1 Source port
+UD$DST==<042000,,0>		; 0 wd 2 Dest port
+UD$LEN==<242000,,1>		; 1 wd 1 # octets in data
+UD$CKS==<042000,,1>		; 1 wd 2 UDP checksum
+UD$DAT==<441000,,2>		; 2 Data - actually an ILDB pointer!
+
+	; ICMP fields
+IC$TYP==<341000,,0>		; 0 Type of message
+IC$COD==<241000,,0>		; 0 Code (subtype)
+IC$CKS==<042000,,0>		; 0 ICMP Checksum
+IC$GWA==<044000,,1>		; 1 Random arg, usually Gateway Addr
+IC$IPH==2			; 2 Random data, usually an IP header
+
+; Hack metering macro, since we'll want lots of 'em to start with.
+; You know, MR% used to be MTR%, except that when %NMTRS is over 100
+; you get duplicated symbols, and since they used to be defined with
+; == instead of ==: you didn't hear about it, either.
+
+%NMTRS==:140	; Allow this many meters
+DEFINE MTRCOD	; Put this macro someplace after last meter.
+EBLK
+MTRCNT:	BLOCK %NMTRS		; Holds actual meter AOS'd
+BBLK
+MTRNAM: BLOCK %NMTRS	; Holds <instr loc>,,<addr of ASCIZ meter name>
+	LOC MTRNAM
+	REPEAT %%%MTR,CONC MR%,\.RPCNT
+IF2,	REPEAT %%%MTR,CONC EXPUNGE MR%,\.RPCNT
+	LOC MTRNAM+%NMTRS
+
+TERMIN
+
+; METER - Must be used as in following example:
+;	METER("IP: # of bad cksums")
+%%%MTR==0
+DEFINE METER &(NAME)
+IFGE %%%MTR-%NMTRS,.ERR Too many meters!
+AOS MTRCNT+%%%MTR
+CONC MR%,\%%%MTR,==:<.,,[ASCIZ NAME]>
+;CONC MR%,\%%%MTR,==:<.,,>
+;IF1 SHOMTR %%%MTR,NAME
+%%%MTR==%%%MTR+1
+TERMIN
+
+DEFINE SHOMTR #OFF#,&STR&
+PRINTX /;;;;;;;; METER :::: MTRCNT+!OFF! => /
+PRINTX STR
+PRINTX /
+/
+TERMIN
+
+EBLK
+IPMDFL:	0	; # of flushed input datagrams
+IPMCKF:	0	; # of input datagrams with bad checksum
+IPMFRG:	0	; # of fragments received
+IPMFRD:	0	; # of sucessfully reassembled datagrams
+BBLK
+
+SUBTTL IP Input Interrupt Level
+
+; IPGIPT - Get datagram input buffer
+;	Clobbers Q,T
+;	A/ Max size of buffer in words
+; Returns .+1 if failure (error message already printed)
+; Returns .+2
+;	A/ Pointer to datagram structure associated with buffer
+;	B/ Input BLKI pointer to buffer, -<# wds>,,<addr-1>
+
+IPGIPT:	CAILE A,PKBSIZ	; Make sure size needed will fit in a packet buffer
+	 JRST IPGIP9
+	CALL PKTGFI	; Get a packet at int level
+	 RET		; Failed, none available.
+	TRCPKT A,"IPGIPT Net input alloc"
+	MOVE T,PK.BUF(A)	; Get addr of buffer
+	HRLOI B,-PKBSIZ	;  -<#wds>,,-1
+	ADDI B,(T)	; Now get BLKI pointer into buffer
+	JRST POPJ1	; Win!
+IPGIP9:	BUG CHECK,[IP: Too-big buff reqd =],OCT,A
+	RET		; Fail.
+
+
+; IPRDGM - Process a received datagram at PI level
+;	Must put datagram into one of the following lists:
+;		User IP input queue (IPQ)
+;		IP reassembly table
+;		ICMP processing
+;		TCP connection queue
+;	A/ Pointer to datagram structure
+;	B/ # words read in datagram
+;	C/ # wds offset to start of IP header
+;;; J is not used, and not supplied by all callers
+;;;	J/ host-table index of address datagram came from
+; Returns .+1 always
+; Can clobber all ACs except P
+; Sets up
+;	R/ addr of packet entry
+;	W/ addr of IP header
+;	H/ addr of IP data
+
+IPRDGM:	METER("IP: IDs rcvd")
+	MOVEI R,(A)		; Set up packet entry ptr in canonical place
+	TRCPKT R,"IPRDGM Input from net"
+	CAIGE B,5(C)		; Make sure it's big enough
+	 JRST IPRDG9	
+	HRLM B,PK.BUF(R)	; Store # words read
+	ADD C,PK.BUF(R)		; Find addr of start of IP header
+	HRLZM C,PK.IP(R)	; and set it.
+	MOVEI W,(C)
+	LDB H,[IP$IHL (W)]	; Find claimed length of IP header
+	ADDI H,(W)		; Get addr of start of IP data
+	HRLZM H,PK.TCP(R)	; Set that too.
+
+	; Do initial vectoring test.
+	SKIPE IPUQUS		; Check Queue 0 (SysIn)
+	 JRST IPRDG2		; It exists!!  Always vector for it.
+
+	; Perform initial checking for address, checksum, and so forth
+	; to verify datagram is good; also dispatch to handle fragments.
+	; This is entry point for re-vectors from SysIn IP queue.
+IPRDGV:	CALL IPCKSM		; Compute checksum for IP header
+	LDB B,[IP$CKS (W)]	; and get what the datagram had,
+	CAIE A,(B)		; in order to compare them...
+	 JRST [	METER("IP: Ifl bad cksm")
+		AOS IPMCKF	; Bump two meters
+		JRST IPRD90]	; Go flush it forthwith.
+	MOVE B,IP$DST(W)	; Get destination host, should be us
+IFE IPUNCP, CAME B,[IMPUS3_4]
+	 CAMN B,[IMPUS4_4]
+	  JRST IPRD10
+	; Packet is to be forwarded
+	METER("IP: Packets forwarded")
+	LDB B,[IP$TTL(W)]	; Decrement time to live
+	SOJLE B,[ METER("IP: Packets expired")
+		  JRST IPRD90 ]
+ICMEK1:	DPB B,[IP$TTL(W)]
+	CALL IPCKSM		; Update the checksum
+	DPB A,[IP$CKS(W)]
+	MOVEI A,(R)		; Transmit it
+	CALRET IPKSNQ
+
+IPRD10:	HRRE B,IP$FRG(W)	; HACK!  Get both IP%FMF and IP%FRG!
+	JUMPN B,IPRD50		; Jump if this is a fragment.
+
+	; Do datagram vectoring.  This code is temporarily (?) crude,
+	; it just scans the whole Internet Queue table.
+	; This is entry point for re-vectoring.  W must point to IP
+	; header, and H to IP data.  I should point at 1st queue entry
+	; to start checking at.
+IPRD20:	MOVEI I,2		; If drop in, start at 2 (leave 0+1 alone)
+	LDB B,[IP$PTC (W)]	; Get protocol number
+	CAIN B,%PTCTC		; Is it TCP?
+	 JRST TCPIS		; Yes, go process TCP input segment.
+	CAIN B,%PTCUD		; Well, is it UDP?
+	 JRST IPRD30		; Yeah, can handle that one.
+	CAIN B,%PTCIC		; Maybe ICMP?
+	 JRST ICMP		; Yup, hack it.
+IPRD90:	MOVEI A,(R)
+	CALL PKTRT		; Bah, nothing we handle, flush it.
+	AOS IPMDFL		; Bump count of flushed dgms.
+	RET
+
+	; Here to dispatch a UDP datagram
+IPRD30:	LDB A,[IP$TOL (W)]	; Make sure it's long enough!  Find dgm length
+	LDB B,[IP$IHL (W)]	; and get IP header length
+	IMULI B,4		; in octets
+	SUBI A,(B)		; to subtract from dgm length.
+	CAIGE A,2*4		; Must have enough data for UDP header!
+	 JRST [	METER("IP: Ifl bad UDP len")
+		JRST IPRD90]	; Flush this dgm.
+IPRD31:	CAIL I,NIPUQ
+	 JRST [	METER("IP: Ifl no UDP port")	; Didn't find any queues,
+		JRST IPRD90]	; so flush it.
+	SKIPN IPUQUS(I)		; Check each active UDP queue
+	 AOJA I,IPRD31
+	LDB B,[UD$DST (H)]	; Get UDP dest port number
+	HRRZ T,IPUQCT(I)	; and port # we're watching for
+	CAIE B,(T)
+	 AOJA I,IPRD31		; No match, try another.
+	METER("IP: # UDP dgms queued")
+	CAIA
+IPRDG2:	 SETZ I,		; Entry point for SysIn queueing
+	MOVEI Q,IPUQHD(I)	; Hurray, got it!  Add to queue
+	MOVE B,(Q)		; Save prev contents of header
+	MOVEI A,(R)
+	CALL PKQPL(PK.IP)	; Put at end of input IP queue
+	JUMPE B,IPQUSI		; If nothing previously there, give user int.
+	RET
+
+IPRDG9:	BUG INFO,[IP: Netin dgm too small, size ],OCT,B,[ offset ],OCT,C
+	JRST IPRD90		; Try flushing the packet buffer.
+
+; IP Datagram Reassembly - Handle received fragment.
+
+IPRD50:	AOS IPMFRG		; Bump count of fragments received
+
+	LDB D,[IP$ID (W)]	; Get datagram ID field
+	LDB C,[IP$PTC (W)]	; Then protocol field
+	HRLI D,(C)		; Make <ptcl>,,<ID>
+	MOVE E,IP$SRC(W)	; Then source address
+	MOVEI I,NIPF-1
+IPRD51:	CAME D,IPFDID(I)
+IPRD52:	 SOJGE I,.-1
+	JUMPL I,IPRD70		; If no more, must add to table.
+	MOVE B,IPFDPE(I)	; Matching ID!  Get buffer ptr
+	HLRZ T,PK.IP(B)		; Get IP header ptr for existing fragment
+	CAME E,IP$SRC(T)	; Ensure same source host
+	 JRST IPRD52		; Nope, go check next entry.
+	HLRZ H,PK.TCP(B)	; Get ptr to start of data in reassembly buff
+
+	; OK, we matched up a fragment!  Now start reassembly procedure.
+	; If fragment is first one (offset 0) then must copy IP header,
+	;	unless already done.  Safe to BLT since we always reserve
+	;	enough room for a full 15-word IP header.
+	; If fragment is last one (IP%FMF 0) then must set IP$TOL to
+	;	the total # octets in full datagram.  This gets fixed
+	;	to include the IP header length when datagram is complete.
+	; I/ idx of reassembly entry
+	; T/ ptr to IP header in reassembly buff
+	; H/ ptr to data in reassembly buff
+	; R, W as for entry to IPRD50
+IPRD55:	LDB A,[IP$IHL (W)]	; Get IP header length in 4-octet wds
+	LDB E,[IP$TOL (W)]	; Get total length of this dgm in octets
+	HRRE D,IP$FRG(W)	; Hack - get frag offset and more-frag flag
+	TRNN D,IP%FRG		; Is frag offset 0 - 1st part of dgm?
+	 JRST [	LDB C,[IP$FRG (T)]	; Yeah.  Already copied header?
+		JUMPE C,.+1		; Jump if so, don't do again.
+		MOVEI B,(T)
+		HRLI B,(W)		; Set up BLT from,,to
+		MOVEI C,(T)
+		ADDI C,(A)		; Get to+IHL
+		MOVE Q,IP$CKS(T)	; Save ptr to hole list
+		LDB TT,[IP$TOL (T)]	; Save TOL, might already be set.
+		BLT B,-1(C)		; Copy the IP header
+		HRRM Q,IP$CKS(T)	; Restore hole list head
+		DPB TT,[IP$TOL (T)]
+		JRST .+1]
+	ASH D,-3		; Get frag.first in terms of 4-octet words
+	JUMPGE D,[		; Jump for special processing if last frag
+		MOVNI B,(A)
+		ASH B,2		; Get -<# octets in header>
+		ADDI B,(E)	; Find # octets of data in this fragment
+		MOVEI C,(D)
+		LSH C,2		; Get # octets data is offset
+		ADDI B,(C)	; Finally get total # data octets of full dgm
+		DPB B,[IP$TOL (T)]
+		ADDI E,3	; Okay, round UP to full word
+		LSH E,-2	; Get rounded-up length in terms of 4-octet wds
+		SUBI E,1(A)	; Get # whole wds of data (minus 1)
+		JRST IPRD56]	; Go rejoin normal processing
+
+	; Not last frag.  Only special check is to ensure length of data
+	; is rounded down to a fragment boundary (frags are 8-octet chunks).
+	TRZ D,-1#<IP%FRG_-3>	; Not last frag, clean up RH of frag.first
+	LSH E,-2		; Get rounded length in terms of 4-octet words
+	SUBI E,1(A)		; Get # whole words of data, minus 1
+	TRNN E,1		; Paranoia: ensure # wds of data was EVEN
+	 SUBI E,1		; If not, round DOWN to ensure 8-octet boundary
+
+IPRD56:	JUMPL E,IPRD80		; Flush if bad length
+	ADDI E,(D)		; Get frag.last
+	CAIL E,<PKBSIZ-16.>	; Make sure datagram won't be too big.
+	 JRST [	METER("IP: Ifl huge dgm")
+		CALL IPFDFL	; Ugh, must flush whole datagram entry! 
+		JRST IPRD90]	; Would it be better instead to just
+				; truncate it, and accept anyway since TCP
+				; can ACK up to that much?  Probably not.
+
+	; Each hole descriptor is 1 word of format
+	;   hole.first:	<hole.last>,,<hole.next (hole.first of next hole)>
+	;
+	; During re-configuration of the hole descriptor list, following
+	; ACs are used
+	; A/ scratch
+	; B/ hole.first (wd offset)
+	; C/ hole.last
+	; D/ <lastflg>,,frag.first	; lastflg is 0 if last fragment.
+	; E/ frag.last
+	; Q/ ptr to current hole descriptor
+	; TT/ ptr to previous hole descriptor
+	; H/ ptr to start of data in reassembly buffer (base for offsets)
+	; W/ ptr to IP header of just-arrived fragment
+	; T/ ptr to IP header of reassembly buffer
+	; R/ ptr to packet entry of just-arrived fragment
+	MOVEI Q,IP$CKS(T)	; Get ptr to 1st hole descriptor
+IPRD61:	MOVEI TT,(Q)		; Save old ptr
+	HRRE Q,(Q)		; Get next descriptor
+	JUMPL Q,IPRD68		; Jump if end of list
+	MOVEI B,(Q)		; Set hole.first
+	ADDI Q,(H)		; Make ptr to hole descriptor
+	HLRZ C,(Q)		; Get hole.last
+	CAIGE C,(D)		; If hole.last < frag.first,
+	 JRST IPRD61		;   back to try next hole farther on.
+	CAIGE E,(B)		; If frag.last < hole.first,
+	 JRST IPRD68		;   passed affected area, so can stop now.
+
+	; New fragment interacts with current hole in some way!
+	; Remove current hole from the list, but keep Q pointing to
+	; start of hole.  TT points to the last valid hole descriptor.
+	MOVE A,(Q)		; Get hole.first of next hole
+	HRRM A,(TT)		; Store in prev hole, so current is skipped.
+	CAIL B,(D)		; If hole.first < frag.first, skip.
+	 JRST IPRD66
+
+	; Create new hole descriptor at start of old hole
+	;	with new.first = hole.first and new.last = frag.first-1
+	;  i.e. hole.first: <frag.first-1>,,<hole.next>
+	; First get ptr to new hole and put it on list.
+	HRRM B,(TT)		; Point prev hole to new hole.
+	HRLI A,-1(D)		; Make <frag.first-1>,,<hole.first of next>
+	MOVEM A,(Q)		; Store new hole descriptor.
+	MOVEI TT,(Q)		; Make prev be current, in case test below wins
+			; Drop thru to check high bound of old hole
+
+IPRD66:	CAIL E,(C)	; If frag.last < hole.last then hole not all filled
+	 JRST IPRD61	;  (hole all filled, so go check further holes)
+	CAIL D,		; Some hole left; is this the last fragment?
+	 JRST [	HLLOS (TT)	; Yes!  Zap prev hole to ensure list ends.
+		JRST IPRD68]	; and get out of loop now.
+
+	; Fragment didn't fill last part of hole, so need to create
+	; new hole descriptor for it,
+	;	with new.first = frag.last+1 and new.last = hole.last
+	;  i.e. frag.last+1: <hole.last>,,<hole.next>
+	MOVEI Q,1(E)	; Get frag.last+1
+	HRRM Q,(TT)	; Point previous to new hole
+	ADDI Q,(H)	; Make abs ptr to new hole
+	HRLI A,(C)	; Make <hole.last>,,<hole.next>
+	MOVEM A,(Q)	; Store new hole descriptor.
+			; Can drop through to end loop, since no further holes
+			; are affected.
+
+	; No more holes on list, we can copy the data now!
+IPRD68:	HLL D,PK.TCP(R)	; Get <ptr to start of arrived data>,,<frag.first>
+	ADDI D,(H)	; Now have BLT pointer
+	ADDI E,(H)	; and now have terminating address
+	CAIN E,(D)	; But if only moving 1 word,
+	 JRST [	HLRZ D,D	; Can't use BLT?
+		MOVE A,(D)	; So just move by hand
+		MOVEM A,(E)
+		JRST .+2]	; Skip over it.
+	BLT D,(E)	; Here we go!
+
+	; Now see if any holes left...
+	MOVEI W,(T)		; Save ptr to reassembly IP hdr (H already set)
+	MOVEI A,(R)		; No need for arrived dgm any more,
+	CALL PKTRTA		; so flush it now.
+	HRRE A,IP$CKS(W)	; See if any holes left
+	JUMPGE A,CPOPJ		; Jump if some left, nothing else to do.
+
+	HRRZ R,IPFDPE(I)	; Win!!! Get back packet-entry ptr
+	LDB A,[IP$IHL (W)]	; Must perform final TOL fixup.  Get IHL
+	LSH A,2+4		; in octets, shifted to TOL field
+	ADDM A,IP$TOL(W)	; Now have proper length!
+	SETZM IPFDPE(I)
+	SETOM IPFDID(I)
+	HRLOI A,377777
+	MOVEM A,IPFTTL(I)
+	AOS IPMFRD		; Bump cnt of # datagrams reassembled!
+	JRST IPRD20		; Go dispatch the datagram!
+
+
+	; Create entry in table to store 1st fragment in.
+IPRD70:	MOVEI I,NIPF-1
+	SKIPE IPFDPE(I)
+	 SOJGE I,.-1
+	JUMPL I,[METER("IP: Ifls Fragtab full")	; Barf, fragment table full.
+		JRST IPRD90]
+	LDB A,[IP$TTL (W)]	; Get time-to-live
+	JUMPE A,IPRD90		; Might as well hack zero case
+	IMULI A,30.		; Turn into 30ths
+	ADD A,TIME
+	MOVEM A,IPFTTL(I)	; Store timeout value
+	MOVEM D,IPFDID(I)	; Store ptcl,,ID
+	HRRZM R,IPFDPE(I)	; Store PE ptr
+
+	; Messy stuff, must get data set up into right place in buffer.
+	; If this is the 1st fragment we are OK, and can use original
+	; datagram buffer, else we have to shuffle data.  Simplest way
+	; to handle latter case is to just get a new buffer and copy
+	; it over.
+	LDB A,[IP$FRG (W)]	; Get fragment offset field
+	JUMPN A,IPRD75		; If not zero, jump to do copy.
+	LDB A,[IP$TOL (W)]	; Hurray, 1st fragment!  Get total length
+	LSH A,-2		; Round down to # words
+	LDB B,[IP$IHL (W)]
+	SUBI A,(B)		; Find # words that fragment uses
+	TRZ A,1			; Ensure # wds is rounded down to 8-octet chunk
+	JUMPLE A,[CALL IPFDFL	; Sigh, flush entry.
+		RET]		; Just return, only flushing one PE.
+	HRRM A,IP$CKS(W)	; Store first hole.next in header.
+	MOVEI B,(A)
+	ADDI B,(H)		; Get addr of start of hole
+	SETOM (B)		; Make it an infinite hole.
+	RET
+
+	; Fragment entry must be stored, but it isn't the 1st thing in
+	; the datagram.  We must cons up a fake initial fragment and
+	; then copy normally into that fragment.
+	; Note that this fake fragment must be carefully initiallized
+	; since certain IP fields are referred to in the reassembly code
+	; (via pointer in T)
+IPRD75:	CALL PKTGFI		; Get a PE ptr at PI lvl
+	 JRST IPFDFL		; Failed, must flush entry
+	TRCPKT A,"Reassembly alloc"
+	MOVEM A,IPFDPE(I)	; Store it
+	HRRZ T,PK.BUF(A)
+	HRLM T,PK.IP(A)		; Say IP header at start of buffer.
+	MOVEI H,15.		; Use maximum IHL for offset
+	HRRZM H,IP$CKS(T)	; Store this offset as ptr to 1st hole desc
+	ADDI H,(T)		; and make data start at end of max IP hdr.
+	HRLM H,PK.TCP(A)
+	SETOM (H)		; Make 1st hole descriptor be infinite
+	SETOM IP$FRG(T)		; Put crap in frag offset field
+	MOVE B,IP$SRC(W)	; and ensure source host copied too.
+	MOVEM B,IP$SRC(T)
+	JRST IPRD55		; Now go do the copy...
+
+IPRD80:	METER("IP: Ifl bad len")	; Bad IP length field
+	JRST IPRD90			; Go flush the dgm.
+
+; IPFCLK - Called every few seconds at clock level to check
+;	reassembly tables and flush any partially filled datagrams
+;	which have timed out.
+
+IPFCLK:	MOVEI I,NIPF-1
+	MOVE B,TIME
+	CONO PI,NETOFF		; Hack with net ints deferred.
+	CAML B,IPFTTL(I)
+	 CALL IPFDFL		; Flush the partial dgm
+	SOJGE I,.-2
+	CONO PI,NETON		; Done, re-enable net ints.
+	RET
+	
+; IPFDFL - Flush reassembly entry in I
+;	Clobbers A, Q, T
+
+IPFDFL:	SKIPE A,IPFDPE(I)
+	 CALL PKTRTA		; Flush the packet buffer
+	SETZM IPFDPE(I)
+	SETOM IPFDID(I)		; Clear out other table stuffs.
+	HRLOI A,377777
+	MOVEM A,IPFTTL(I)
+	RET
+
+
+; Datagram Fragment table.
+;	Free entries have IPFDPE 0, IPFDID -1, and IPFTTL SETZ-1 (max pos time)
+EBLK
+NIPF==:30		; Max # of outstanding IP datagram reassembly buffers
+IPFDPE:	BLOCK NIPF	; <PE ptr>
+IPFDID:	REPEAT NIPF,-1	; <protocol>,,<datagram ID from IP header>
+IPFTTL:	REPEAT NIPF,SETZ-1	; Sys time after which entry flushed.
+BBLK
+
+SUBTTL IP Output Interrupt Level
+
+IFE IPUNCP,[
+
+EBLK
+IPOUTQ:	0
+IPOBLQ:	0
+BBLK
+
+; IPGIOQ - Get IP Output Queue entry for IMP
+; Returns .+1 if nothing in queue
+; Returns .+2
+;	A/ Pointer to datagram structure
+;	B/ Output BLKO pointer to buffer, -<# wds>,,<addr-1>
+;	C/ Arpanet host address
+;	H/ host-table index
+; Clobbers Q,T,W,D,E
+
+IPGOQ1:	METER("IP: ODs flushed")
+	CALL PKTRT		; Internal looping point
+
+IPGIOQ:	MOVEI Q,IPOUTQ
+	CALL PKQGF(PK.IP)	; Get first thing off IP output list
+	JUMPE A,IPGOQ9		; Jump and return if nothing there.
+	MOVE T,PK.FLG(A)	; Get packet flags
+	TLNE T,(%PKFLS)		; Should we flush this one?
+	 JRST IPGOQ1		; Yes, down the drain it goes.
+	TLO T,(%PKPIL)
+	IORM T,PK.FLG(A)	; Say packet locked at PI level.
+
+	SKIPLE C,PK.BUF(A)
+	 CAMG C,[2,,0]
+	  BUG HALT,[IP: Null dgm on queue]
+IFE KS10P,[
+	;KS doesn't care, save 2 usec..
+	MOVN B,C		; Straightforward way to put together AOBJN ptr.
+	HRRI B,-1(C)		; Now have BLKO
+]
+	MOVE C,PK.DST(A)	; Get destination address
+
+	; IMP-specific!!!
+	; Ask interface if it wants this particular datagram right now.
+	;
+	CALL IMPCTS
+	 JRST IPGOQ5		; Can't send, requeue
+
+	; Got valid dgm, must ensure that block queue is merged back
+	; onto beginning of output queue.
+IPGOQ6:	METER("IP: ODs sent")
+	SKIPN D,IPOBLQ		; See if anything was blocked
+	 JRST POPJ1		; Nope, just take win return.
+	SETZM IPOBLQ	; Yes, block queue exists!  
+	SKIPN T,IPOUTQ	; Get ptr to 1st node on output queue
+	 JRST [	MOVEM D,IPOUTQ	; If nothing was left on output queue,
+		JRST POPJ1]	; can simply move the list.
+	HLRZ E,D	; Get ptr to last node on blocked queue
+	HRRM T,PK.IP(E)	; Point end of blocked Q to start of output Q
+	HRRM D,IPOUTQ	; and point start of output Q to start of block Q
+	JRST POPJ1	; and return with nice winning dgm.
+	
+	; Come here to handle blockage of IP datagram.
+IPGOQ5:	MOVSI T,(%PKPIL)
+	ANDCAM T,PK.FLG(A)	; Say not locked at PI after all
+	MOVEI Q,IPOBLQ
+	CALL PKQPL(PK.IP)	; Put blocked dgm onto block queue
+	JRST IPGIOQ		; Now go try next dgm.
+
+	; Output queue empty, just shift block queue back.
+IPGOQ9:	SKIPN A,IPOBLQ	; See if anything was put on block queue
+	 RET		; Nope, all's clear.
+	MOVEM A,IPOUTQ	; Aha, move it to standard output queue
+	SETZM IPOBLQ	; and clear the block-queue ptr.
+	RET		; Nothing to send from IP at moment.
+
+] ;IFE IPUNCP
+
+; IPIODN - Output of IP datagram complete, wrap up.
+;	Called by all device drivers.
+;	A/ pointer to datagram structure
+;	Clobbers T,Q
+; Returns .+1 always
+
+IPIODN:	TRCPKT A,"IPIODN Packet output complete"
+	MOVE T,PK.FLG(A)	; Get flags for packet
+	TLO T,(%PKODN)		; Say output done,
+	TLZ T,(%PKPIL)		; and unlock PI level output flag.
+	MOVEM T,PK.FLG(A)	; Store flags back.
+	CALRET PKTRT		; Return to freelist if not otherwise queued
+
+
+SUBTTL ICMP - Internet Control Message Protocol
+
+; ICMP called at NET interrupt level to process just-received ICMP
+;	datagram.
+
+ICMP:	
+
+	; First compute and verify checksum for ICMP data.
+
+	; Then dispatch on type for processing.
+	LDB E,[IP$SRC (W)]	; Load up source addr (commonly needed)
+	LDB A,[IC$TYP (H)]	; Get ICMP type field
+	CAIL A,NICMPT
+	 JRST ICMP19
+	AOS ICMPCT(A)		; Bump count of types
+	JRST @ICMPTB(A)		; Dispatch on type
+
+	; Bad type
+ICMP19:	BUG INFO,[ICMP: Bad type ],DEC,A,[from ],OCT,E
+ICMP90:	MOVEI A,(R)
+	CALL PKTRTA
+	RET
+
+ICMPTB:	ICMP90		;  0 Echo Reply (ignored)
+	ICMP19		;  1 -
+	ICMP19		;  2 -
+	ICMP90		;  3 Destination Unreachable (ignored)
+	ICMP90		;  4 Source Quench (ignored)
+	ICMRD		;  5 Re-direct
+	ICMP19		;  6 -
+	ICMP19		;  7 -
+	ICMEK		;  8 Echo
+	ICMP19		;  9 -
+	ICMP19		; 10 -
+	ICMP90		; 11 Time Exceeded (ignored)
+	ICMPP		; 12 Parameter Problem
+	ICMP90		; 13 TimeStamp (ignored)
+	ICMP90		; 14 TimeStamp Reply (ignored)
+	ICMP90		; 15 Information Request (ignored)
+	ICMP90		; 16 Information Reply (ignored)
+NICMPT==.-ICMPTB
+EBLK
+IPMICM:	0		; # of ICMP datagrams
+ICMPCT:	BLOCK NICMPT	; # of ICMP datagrams, by type
+BBLK
+
+; Type 8 - Echo
+
+ICMEK:	MOVEI A,0		; Set type to Echo Reply
+	DPB A,[IC$TYP (H)]
+	LDB A,[IC$CKS (H)]	; Fix checksum for change of 8 to 0
+	ADDI A,8_8
+	TRNE A,1_16.
+	 ADDI A,1
+	DPB A,[IC$CKS (H)]
+	MOVE A,IP$SRC(W)	; Exchange source and destination
+	EXCH A,IP$DST(W)
+	MOVEM A,IP$SRC(W)
+	MOVEI B,60.		; Reset time to live
+	JRST ICMEK1		; Go send packet
+
+; Type 12 - Parameter Problem.
+
+ICMPP:	LDB B,[IC$COD (H)]	; Get code field
+	JUMPE B,ICMPP2
+	BUG INFO,[ICMP: Param err, code ],OCT,B,[from ],OCT,E
+	JRST ICMP90
+ICMPP2:	LDB A,[341000,,1(H)]	; Get pointer into bad IP header
+	MOVEI B,(A)
+	LSH B,-2		; Find word # error is in
+	ADDI B,IC$IPH(H)	; Make addr to word
+	BUG INFO,[ICMP: Param err, ptr ],OCT,A,[wd ],OCT,(B),[from ],OCT,E
+	JRST ICMP90
+
+; ICMP type 5 - Redirect
+
+ICMRD:	MOVEI D,IC$IPH(H)
+	MOVE A,IP$SRC(D)	; Get source addr of alleged IP header
+	CAME A,[IMPUS4_4]	; Must be a datagram WE sent.
+IFE IPUNCP,[
+	 CAMN A,[IMPUS3_4]
+	  CAIA
+	]
+	   JRST ICMP90		; Bah, flush.  Probably should log it.
+	LDB A,[IP$DST (D)]	; Get dest addr we used
+	GETNET A		; Derive net number
+	LDB B,[IC$GWA (H)]	; Get gateway addr recommended for this net
+	MOVEI C,NIPGW-1		; Scan backwards thru gateway table
+	SETOB T,TT		; Index of free slot, index of oldest slot
+ICMRD2:	CAMN A,IPGWTN(C)
+	 JRST [	SKIPN IPGWTG(C)	; Don't change a direct-route entry!
+		 JRST ICMP90
+		JRST ICMRD3 ]
+	CAIL C,NIPPGW		; Skip if prime gateway, not replaceable
+	 JRST [	SKIPN IPGWTN(C)
+		 MOVEI T,(C)	; Save index of last free slot found
+		SKIPL TT
+		 CAML D,IPGWTM(C)
+		  MOVEI TT,(C)	; Save index of least recently used slot
+		MOVE D,IPGWTM(TT)
+		SOJA C,ICMRD2 ]
+	SOJGE C,ICMRD2
+
+	; Network not found in gateway table, must make new entry.
+	SKIPL C,T		; If there was one free,
+	 JRST ICMRD3		; go use that one.
+	MOVE C,TT		; Otherwise use least recently used entry
+	MOVE T,TIME
+	SUB T,IPGWTM(C)
+	CAIGE T,60.*60.*30.	; Flushing entry less than 1 hour old?
+	 BUG INFO,[ICMP: GW table full, net/gw ],OCT,IPGWTN(C),OCT,IPGWTG(C),[=>],OCT,A,OCT,B
+ICMRD3:	GETNET D,B		; Figure out which interface this gateway is on
+	MOVEI T,NIPPGW-1
+	SKIPN IPGWTG(T)
+	 CAME D,IPGWTN(T)
+	  SOJGE T,.-2
+	JUMPL T,ICMP90		; I can't figure out how to get to this gateway anyway
+	MOVEM A,IPGWTN(C)	; Set network number
+	MOVEM B,IPGWTG(C)	; and its corresponding gateway addr
+	MOVE T,IPGWTI(T)	; and its interface
+	MOVEM T,IPGWTI(C)
+	MOVE T,TIME		; Pretend it was used so it
+	MOVEM T,IPGWTM(C)	; stays around for a while
+	JRST ICMP90		; Done!
+
+SUBTTL IPQ Device - Internet Protocol Queues
+
+; Internet Protocol User Datagram Queue stuff, manipulated with
+; IPKIOT system call.
+; Queue 0 is special:
+;	Must be asked for explicitly
+;	All Input datagrams are vectored through it.
+;	No limit on input queue length
+;	Can put datagrams back into system for further processing
+;	Can send datagrams (like ordinary queue actually in this respect)
+; Queue 1 is also special:
+;	Must be asked for explicitly
+;	All output datagrams are vectored through it.
+;	No limit on queue length
+;	Can put datagrams back onto device output queue.
+
+IFNDEF NIPUQ,NIPUQ==10		; # User queues allowed
+EBLK
+IPUQUS:	BLOCK NIPUQ		; <flags><channel>,,<user index>
+	IQ%CH==<77,,>		; Field for channel #
+	IQ$CH==<.BP IQ%CH,IPUQUS> ; BP to channel #
+IPUQHD:	BLOCK NIPUQ		; Input queue header
+IPUQCT:	BLOCK NIPUQ		; # datagrams on input queue,,vector args
+
+IPQOSW:	-1 ? 0		; IP Queue assignment lock
+ BBLK
+
+; IPQO - IPQ OPEN routine
+;	Control bits currently defined are
+	%IQSYS==100	; Set up System Queue (0 or 1)
+	%IQSOU==200	; System Queue 1 if set, otherwise 0
+	%IQUDP==400	; Set up random queue for UDP (port # in FN1)
+
+IPQO:	CALL SWTL	; Only one job at a time hacking IQ allocation.
+	    IPQOSW
+	SETZB E,I		; Set up convenient zeros
+	TLNE C,%IQSYS		; Asking for system queue?
+	 JRST [	TLNE C,%IQSOU	; Yes, want input or output?
+		 MOVEI I,1	; Output, use queue 1
+		SKIPE IPUQUS(I)	; Skip if it's free
+		 JRST OPNL23	; Nope, say "file locked".
+		JRST IPQO2]	; Can grab it, do so!
+	MOVE I,[-<NIPUQ-2>,,2]	; Scan tables, skipping 0'th entry
+	SKIPE IPUQUS(I)		; Look for free slot
+	 AOBJN I,.-1
+	JUMPGE I,OPNL6		; If none available, claim "device full"
+	TLNN C,%IQUDP		; Got it.  If will use UDP vectoring,
+	 JRST OPNL33		; No, complain "meaningless args"
+				; since nothing else understood yet.
+	TLO E,%IQUDP		; then set flag for IPUQUS.
+	HRRZM A,IPUQCT(I)	; Store FN1 as UDP port number
+	CAIA
+IPQO2:	 SETZM IPUQCT(I)
+	SETZM IPUQHD(I)		; Clear input queue
+	MOVEI A,IPQDN		; IOCHNM device index to use
+	HRLI A,(I)		; Save IQ index in LH
+	MOVEM A,(R)
+	MOVEI A,-IOCHNM(R)	; Start putting together the IPUQUS entry.
+	SUBI A,(U)		; Get channel #
+	DPB A,[.BP IQ%CH,E]	; Remember it in IPUQUS word
+	HRRI E,(U)		; Put user index in RH
+	MOVEM E,IPUQUS(I)	; Store, queue is now activated!
+				; Note this must be last thing, to avoid
+				; timing errors.
+	CALRET LSWPJ1		; Unlock switch and return!
+
+; IPQCLS - IPQ CLOSE routine
+
+IPQCLS:	HLRZ I,(R)	; Get IQ idx
+	CAILE I,1	; Is it the Sys In or Out queue?
+	 JRST IPQCL5	; Nope, can handle normal case.
+	CONO PI,NETOFF	; Keep anything from being added meanwhile
+	SETZM IPUQUS(I)	; Mark queue not active, to avoid revector loops.
+	SETZM IPUQCT(I)	; Be tidy and clear other stuff too.
+	JUMPE I,IPQCL3
+
+	; Close down System Output queue.  This means all output
+	; on this queue gets moved directly onto the real output
+	; queue.
+IPQCL1:	MOVEI Q,IPUQHD(I)
+	CALL PKQGF(PK.IP)	; Get first thing queued up
+	JUMPE A,[CONO PI,NETON	; Exit if no more.
+		CALRET IPOGO]	; Ensure output fired up.
+	MOVEI Q,IPOUTQ
+	CALL PKQPL(PK.IP)	; Put at end of real output queue
+	JRST IPQCL1
+
+	; Close down System Input queue.  This means all currently
+	; queued input gets processed immediately.  Note I gets
+	; clobbered, but isn't necessary since we know this is queue 0.
+IPQCL3:	MOVEI Q,IPUQHD		; Get header for queue 0
+	CALL PKQGF(PK.IP)	; Get A/ packet ptr
+	JUMPE A,NETONJ
+	HLRZ B,PK.BUF(A)	; Get B/ # words in packet
+	SETZ C,			; Get C/ # wds offset to IP header
+	CALL IPRDGM		; Process and vector it.
+	JRST IPQCL3		; Get next
+	
+
+	; Normal datagram input queue.  Doesn't need NETOFF since
+	; PI level ignores the queue entry if it's inactive.  Just
+	; need to keep another job from assigning it...
+IPQCL5:	CONO PI,CLKOFF
+	SETZM IPUQUS(I)	; Clear its "active" entry word to stop queueing
+	CALL IPQRS2	; Flush its input queue (clears IPUQHD)
+	SETZM IPUQCT(I)
+	CONO PI,CLKON
+	RET
+
+; IPQRST - IPQ RESET routine.  Clears queue for channel.
+;	This is pretty drastic for the System I/O queues.
+
+IPQRST:	HLRZ I,(R)	; Get IQ idx
+	CONO PI,NETOFF	; Prevent new dgms from arriving meanwhile.
+	CALL IPQRS2	; Flush the queue
+	JRST NETONJ
+
+IPQRS2:	MOVEI Q,IPUQHD(I)
+	CALL PKQGF(PK.IP)	; Pull off 1st thing
+	JUMPE A,CPOPJ		; Return when no more
+	MOVE T,PK.FLG(A)
+	CAIN I,1		; If queue is the Sys Output queue
+	 JRST [	TLNE T,(%PKFLS)	; Then do special stuff.
+		 JRST IPQRS3	; Flush only if explicitly requested
+		TLZ T,(%PKPIL)	; Otherwise clear PI-Locked bit
+		TLO T,(%PKODN)	; and claim "output done" (ha ha)
+		MOVEM T,PK.FLG(A)
+		JRST IPQRS2]
+IPQRS3:	 CALL PKTRT	; Put all stuff on freelist.
+	JRST IPQRS2
+
+; IPQIO - IPQ I/O routine (if anything actually tries using this)
+
+IPQIO:	JRST OPNL34	; Say "Wrong Type Device"
+	POPJ P,
+
+; IPQSTA - IPQ STATUS routine
+
+IPQSTA:
+	POPJ P,
+
+; IPQWHY - IPQ WHYINT routine
+
+IPQWHY:
+	JRST POPJ1
+
+; IPQRCH - IPQ RFNAME/RCHST routine
+
+IPQRCH:
+	POPJ P,
+
+; IPQRFP - IPQ RFPNTR routine
+
+IPQRFP:	JRST OPNL34
+
+; IPQIOP - IPQ IOPUSH/IOPOP routine
+
+IPQIOP:	MOVEI T,(R)
+	SUBI T,IOCHNM(U)
+	CAIN I,
+	 MOVEI T,77	; IOPUSH, use 77
+	HLRZ I,(R)	; Get IPQ index
+	DPB T,[IQ$CH (I)]	; Deposit channel #
+	POPJ P,
+
+; IPQFRC - IPQ FORCE routine
+
+IPQFRC:
+	JRST POPJ1
+
+; IPQFIN - IPQ FINISH routine
+
+IPQFIN:
+	JRST POPJ1
+
+; IPQUSI - Give User Interrupt on I/O channel.  Not a system call,
+;	but called by PI level routines when input arrives for
+;	a previously empty queue.
+;	Clobbers T,Q
+;	I/ index to IP Queue
+
+IPQUSI:	LDB Q,[IQ$CH (I)]	; Get channel #
+	CAIN Q,77		; If IOPUSHed, no interrupt.
+	 RET
+	PUSH P,U
+	HRRZ U,IPUQUS(I)	; Get user index
+	CAIN U,
+	 BUG
+;	MOVSI T,(SETZ)		; Needn't force PCLSR'ing.
+;	IORM T,PIRQC(U)
+	MOVE T,CHNBIT(Q)
+	AND T,MSKST2(U)
+	IORM T,IFPIR(U)
+	POP P,U
+	RET
+
+
+
+SUBTTL .CALL IPKIOT - IPQ data transfer
+
+; .CALL IPKIOT - Internet Protocol Packet Transfer.
+;	Arg 1 is channel (must be open on IPQ:, specifies queue #)
+;	Arg 2 is address of buffer
+;	Arg 3 is count of words
+;	Val 1 is count of words read into user space (if any)
+;	Control bits specify function.  If none, "read" is assumed.
+; Get datagram from:
+	%IPIUS==100	; 1 = Get datagram from user space, not from a queue
+	%IPNOC==200	; Global input no-check flag, suppresses normal check.
+			;   For User Space, "check" means verify, set cksum.
+			;   For Input Queue, "check" means verify IP header.
+			;   For SysIn Queue, "check" means verify IP hdr.
+			;   For SysOut Queue, means nothing.
+	%IPNOH==400	; Don't Hang waiting for datagram (Queues only)
+	%IPIQK==1000	; Keep on queue, don't remove (only for %IPOUS)
+; Put datagram to:
+	%IPOUS==0	; User space
+	%IPOUT==1	; Output to network (bypasses SysOut queue)
+	%IPOFL==2	; Flush it
+	%IPORV==3	; Re-vector to input queues past this one
+
+IPKIOT:
+	HRRZ A,(R)
+	CAIE A,IPQDN	; Must be right type device (IPQ)
+	 JRST OPNL34	; Wrong device
+	HLRZ I,(R)	; Get IP input queue index
+	CAIL I,NIPUQ	; Ensure it's valid.
+	 BUG HALT,[Bad IPUQ idx in IOCHNM]
+	MOVE E,CTLBTS(U)	; Get control bits for this call
+	MOVEI J,(E)
+	ANDI J,3		; Get output type in J
+
+	TRNN E,%IPIUS	; Getting datagram from user?
+	 JRST [	CAIN J,%IPOUS	; Giving datagram to user?
+		 CAIL W,3	; Yes, ensure at least 3 args.
+		  JRST IPKIO2	; All's OK, go check input queue.
+		JRST OPNL30]	; Will write to user, but too few args!
+	CAIGE W,3	; Must have at least 3 args for this one.
+	 JRST OPNL30	;  Too few args.
+	
+	; Get datagram from user.
+	; B/ user addr of buffer
+	; C/ # of 32-bit words in buffer
+	TRZ E,%IPIQK	; Flush "keep" bit since won't be on any list!
+	CAIL C,5	; Must have at least 5 words for IP
+	 CAIL C,%IMXLN	; Must be less or eq to maximum datagram size
+	  JRST OPNL33	; Too big, say meaningless args.
+	CAIN J,%IPOUS	; Outputting back to self?
+	 JRST POPJ1	;  Yeah, just turn into a NOP.
+	CALL PKTGF	; Get a free packet buffer (hangs until got it)
+	PUSHJ P,LOSSET	; Must put back on freelist if we PCLSR on BLT fault
+	    PKTPCL	; Standard routine expects ptr in A
+	TRCPKT A,"IPKIOT Alloc"
+	MOVSI B,(B)
+	HRR B,PK.BUF(A)
+	MOVEI D,(C)
+	ADDI D,-1(B)		; Find last address copying into
+	XCTR XBR,[BLT B,(D)]	; Gobble up user's buffer!  May fault.
+	PUSHJ P,LSWDEL		; Made it through, can flush PCLSR protection
+	HRLM C,PK.BUF(A)	; Set # words used in buffer
+	MOVE B,PK.BUF(A)	; Find addr of start of buffer
+	HRLZM B,PK.IP(A)	; and set start of IP header.
+	LDB D,[IP$IHL (B)]	; Find claimed length of IP header
+	ADDI D,(B)		; Get addr of start of IP data
+	HRLZM D,PK.TCP(A)	; Set that too.
+	JRST IPKIO3		; Now decide about checking datagram!
+
+	; Get datagram from input queue.
+IPKIO2:	CONO PI,NETOFF
+	SKIPN A,IPUQHD(I)	; Anything in the queue?
+	 JRST [	CONO PI,NETON
+		TRNE E,%IPNOH	; No, see if ok to hang.
+		 JRST POPJ1	; Don't hang, win-return zero wds-read in A.
+		SKIPN IPUQHD(I)	; Hang, here we go.
+		 CALL UFLS
+		JRST IPKIO2]
+	TRNN A,-1		; Make sure something was there!
+	 BUG
+	CAIN I,1		; Is this SysOut queue?
+	 JRST [	MOVE T,PK.FLG(A) ; Yes, get flags
+		TLNN T,(%PKFLS)	; Actually wants to flush now?
+		 JRST .+1	; No, let's go with it.
+		MOVEI Q,IPUQHD(I)
+		CALL PKQGF(PK.IP)	; Remove from queue
+		CAIN A,
+		 BUG
+		CALL PKTRT		; Flush it.
+		JRST IPKIO2]
+	CONO PI,NETON
+	MOVE T,PK.BUF(A)	; Verify that something exists
+	TLNE T,-1		; in both <# wds> field
+	 TRNN T,-1		; and <buff addr> field.
+	  BUG HALT,[IPQ: Null dgm found on queue]
+	HLRZ T,PK.IP(A)		; Should also be an IP pointer
+	CAIN T,
+	 BUG HALT,[IPQ: IP-less dgm on queue]
+
+	; Now have pointer in A to a datagram.  It is still linked
+	; on the input queue, unless %IPIUS is set.
+IPKIO3:	TRNE E,%IPNOC		; Should we check the contents at all?
+	 JRST IPKIO5		; Nope, just go straight ahead.
+	JFCL		; Here we should verify/set checksum, but...
+
+	; Now figure out where datagram wants to go!
+IPKIO5:	JRST @.+1(J)		; Only have 4 possibilities so far.
+	  IQIO70		; %IPOUS Output to user
+	  IQIO60		; %IPOUT Output to network
+	  IQIO55		; %IPOFL Flush it
+	  IQIO80		; %IPORV Re-vector through input queues
+
+	; %IPOFL Flush datagram.
+IQIO55:	TRNN E,%IPIUS		; Is it from input queue list?
+	 CALL IPIQGF		;  Yes, take it off input queue list
+	CALL PKTRT		; Now can return to packet freelist!
+	JRST POPJ1		; Win return.
+
+	; %IPOUT Output datagram to network.
+IQIO60:	TRNN E,%IPIUS		; Is it still on an input list?
+	 CALL IPIQGF		;  Yes, take it off input queue list
+	CAILE I,1		; If not from Sys I/O queue,
+	 JRST [	CALL IPKSNQ	; Possibly send onto SysOut queue.
+		JRST POPJ1]
+	CALL IPKSNI		; Dgm from Sys queue, never goes back to SysOut
+	JRST POPJ1
+
+
+	; %IPOUS Output datagram to user (a "read" from user viewpoint)
+	; This is the only place where we can PCLSR on "output".  Note
+	; that we cannot get here if datagram came from user, so the
+	; datagram we point to is always still on input queue, and
+	; we can safely PCLSR without any special backup.
+IQIO70:	HLRZ D,PK.BUF(A)	; Find # words available
+	JUMPLE C,OPNL33		; Neg or zero count -> meaningless arg error
+	CAILE C,(D)		; If asking for more wds than exist,
+	 MOVEI C,(D)		; only furnish what we've got.
+	MOVEI D,(B)
+	ADDI D,-1(C)		; Find last user word to write
+	HRL B,PK.BUF(A)
+	XCTR XBW,[BLT B,(D)]	; Shove it at him; can PCLSR here.
+	TRNE E,%IPIQK		; Done!  Should we keep datagram around?
+	 JRST IQIO75		; Yes, don't flush it.
+	CALL IPIQGF		; Take datagram off the input queue.
+	CALL PKTRT		; Return entry/buffer to freelist.
+IQIO75:	MOVEI A,(C)		; Return count as 1st val!
+	JRST POPJ1
+
+	; Must re-vector through stuff...
+	; Note that it is illegal to re-vector a datagram from the SysOut
+	; queue, because it still shares pointers and stuff with
+	; (for example) TCP retransmit queues.  Later, could add code to
+	; get another packet buffer and copy it over, but this is better
+	; done at the device driver level probably.
+IQIO80:	TRNN E,%IPIUS		; Came from user?
+	 JRST [	CAIN I,1	; No, from a queue; is it the SysOut queue?
+		 JRST OPNL2	; Yes, illegal.  Say "Wrong direction".
+		CALL IPIQGF	; No, is OK.  Take it off input list.
+		JRST .+1]
+	MOVEI R,(A)
+	HLRZ W,PK.IP(R)		; Get pointer to IP header
+	HLRZ H,PK.TCP(R)	; and to IP data.
+	SETZ J,
+	CONO PI,NETOFF
+	CALL IPRDGV		; Go vector and process the datagram.
+	CONO PI,NETON
+	JRST POPJ1
+
+	; Auxiliary, clobbers D to do checking.
+IPIQGF:	MOVEI D,(A)
+	MOVEI Q,IPUQHD(I)	; Is from list, must take it off.
+	CALL PKQGF(PK.IP)	; Remove from IP queue list
+	CAME A,D
+	 BUG			; Something added in meantime???
+	RET
+
+SUBTTL IP TCP Interface Routines
+
+; IPMTU - Size of largest datagram we want to send to a given destination
+;	A/ Destination address
+;	Returns T/ MTU
+
+SUBN27==:<HOSTN 18,27,0,0>	; Damn macro generates an error inside literal
+NW%CHW==:<HOSTN 128,31,0,0>	; Old CHAOS-wrapping scheme, probably unused
+
+IPMTU:
+IFE IPUNCP,[
+	PUSH P,A		; Save address for a bit
+	MOVEI T,576.		; Default value
+	GETNET A		; Network part only
+	CAMN A,[NW%ARP]		; Arpanet?
+	 MOVEI T,%IMMTU		; MTU of IMP
+	CAMN A,[NW%AI]
+	 MOVEI T,%IMMTU		; AI net. We know we have a good path
+	CAMN A,[NW%CHW]		; Wrapped chaos packets
+	 MOVEI T,488.		; Smaller MTU
+	CAME A,[NW%LCS]		; Net 18 is ugly, must check subnets
+	 JRST IPMTU1
+	MOVE A,(P)		; Get full address back
+	TRZ A,177777		; Mask off all but 18.<subnet>
+	CAMN A,[SUBN27]		; Subnet 27 is fed by chaos-wrapping.
+	 SKIPA T,[488.-40.]	; Giving it a very small MTU
+	  MOVEI T,%IMMTU	; Good path to all others
+IPMTU1:	POP P,A
+] ;IFE IPUNCP
+IFN IPUNCP, MOVEI T,488.-40.	; This should be small enough...
+	RET
+
+IF1,.ERR Amazing MIT-Specific crocks near IPMTU...
+
+; IPBSLA - Best Local Address for a given destination
+;	A/ Destination IP Address
+;	Return A/ Local Address to use
+
+IPBSLA:
+IFE IPUNCP,[
+	GETNET A
+	CAMN A,NW%CHW
+	 SKIPA A,[IMPUS4]	; Local Address on wrapped-chaos net
+	MOVE A,[IMPUS3]		; Default local host address to IMP
+] ;IFE IPUNCP
+IFN IPUNCP, MOVE A,[IMPUS4]
+	RET
+
+; IPLCLH - Skip return if address in A is one of us.
+;	Called with JSP T,IPLCLH
+
+IPLCLH:
+IFE IPUNCP, CAME A,[IMPUS3]
+	 CAMN A,[IMPUS4]
+	  JRST 1(T)
+	JRST (T)
+
+; IPKSND - Invoked by TCP to send off a segment.
+;	Fills in the IP header fields, checksums, and puts on output queue.
+;	R, W, H set up pointing to segment
+; The out-of-TCP information is contained in the "IP header" that
+;	W points to:
+;		IP$SRC - Source addr
+;		IP$DST - Dest Addr
+;		IP$TOL - Length of segment in bytes (must add IP header length)
+; Clobbers A,B,C,D,E,Q,T
+EBLK
+IPIDCT:	0	; IP identification #, incremented for each datagram
+BBLK
+
+IPKHDR:	MOVE A,IP$VER(W)	; Get first word
+	ADDI A,<5*4>_4		; Add length of IP header (5 wds for now)
+	HRLI A,212000		; Fill in Ver, IHL, TOS
+	MOVEM A,IP$VER(W)	; Set 1st wd
+	ADDI A,3_4		; Now, to get # of words, round up
+	LSH A,-<4+2>		; (note flush 4 spare bits then divide by 4)
+	ANDI A,37777		; 14 bit field now
+	HRLM A,PK.BUF(R)	; Store # of words, for device driver.
+	MOVSI A,170030		; TTL and PTC (TCP)
+	MOVEM A,IP$TTL(W)	; Set 3rd wd
+
+IPKHD2:	AOS A,IPIDCT		; Get new ID number
+	LSH A,<16.+4>		; Left justify it
+	MOVEM A,IP$ID(W)	; Use to set up 2nd wd (no flags/frags)
+	CALL IPCKSM		; Get IP header checksum
+	DPB A,[IP$CKS (W)]	; In it goes!
+	RET
+
+IPKSND:	TRCPKT R,"IPKSND output call"
+	CALL IPKHDR
+	MOVEI A,(R)		; Set up PE ptr arg for following stuff.
+
+; IPKSNQ - entry point from IPKIOT, to send a datagram.
+;	A/ PE ptr to datagram - PK.BUF must be set up.
+;	Clobbers A,B,T,Q
+
+IPKSNQ:	MOVSI T,(%PKODN)	; Clear the "output-done" flag.
+	ANDCAM T,PK.FLG(A)
+	TRCPKT A,"IPKSNQ output call"
+	SKIPE IPUQUS+1		; Check - have System Output queue?
+	 JRST IPKSN5		; Yes, put on that queue.
+				; No, drop into IPKSNI
+
+; IPKSNI - Route packet to appropriate gateway and interface
+;	A/ PE ptr to datagram - PK.BUF must be set up.
+;	Clobbers A,B,T,Q
+IPKSNI:	PUSH P,C
+	SKIPLE C,PK.BUF(A)	; Get the packet buffer from the PE
+	 CAMG C,[2,,0]
+	  BUG HALT,[IP: Null dgm being sent]
+	LDB C,[IP$DST(C)]	; Get destination address
+
+	;; This is where to apply final gateway routing code, based on Internet address in C.
+	GETNET T,C		; Get network # into T
+	MOVSI Q,-NIPGW		; Search table of gateways and direct routes
+	CAME T,IPGWTN(Q)	; Skip if network # matches
+	 AOBJN Q,.-1
+	JUMPL Q,IPSNI1		; Jump if found entry in table
+	AOS Q,IPGWPG		; No gateway known for this network, so try a
+	CAIL Q,NIPMGW		; prime gateway and hope for an ICMP redirect!
+	 SETZB Q,IPGWPG		; Try a different prime gateway each time
+IPSNI1:	MOVE T,TIME		; Remember that this gateway entry was used
+	MOVEM T,IPGWTM(Q)
+	SKIPE IPGWTG(Q)		; Skip if this is a direct route
+	 MOVE C,IPGWTG(Q)	; Get gateway address
+	MOVEM C,PK.DST(A)	; Save gateway address for interface to use
+	CALL @IPGWTI(Q)		; Dispatch to interface
+	POP P,C
+	RET
+
+EBLK
+IPGWPG:	0		; Index of current prime gateway
+
+				; Network number
+IPGWTN:
+	NW%LCS			; LCS net
+	NW%AI			; MIT-AI-NET
+NIPMGW==<.-IPGWTN>		; Number of prime gateways
+IFE IPUNCP, NW%ARP		; ARPA Net
+	HOSTN 128,31,0,0	; MIT Chaosnet
+NIPPGW==<.-IPGWTN>		; Number of permanent gateways
+	BLOCK 64.		; Extra stuff to patch in and for redirects
+NIPGW==<.-IPGWTN>
+
+; Internet address of gateway servicing given net number
+IPGWTG:
+IFE IPUNCP,[
+	HOSTN 10,0,0,77		; MIT-GW
+	HOSTN 10,3,0,6		; MIT-AI-GW
+] ;IFE IPUNCP
+IFN IPUNCP,[
+	HOSTN 128,31,6,1	; ???
+	HOSTN 128,31,6,2	; ???
+] ;IFN IPUNCP
+IFE IPUNCP, 0			; Send direct to Arpanet
+	0			; Send direct to Chaosnet
+IFN .-IPGWTG-NIPPGW, .ERR Permanent gateway table at IPGWTG wrong size
+LOC IPGWTG+NIPGW
+
+IPGWTI:
+IFE IPUNCP,[
+	IPKSNA			; MIT-GW
+	IPKSNA			; MIT-AI-GW
+] ;IFE IPUNCP
+IFN IPUNCP,[
+	IPKSNC			; ???
+	IPKSNC			; ???
+] ;IFN IPUNCP
+IFE IPUNCP, IPKSNA		; direct to Arpanet
+	IPKSNC			; direct to Chaosnet
+IFN .-IPGWTI-NIPPGW, .ERR Permanent gateway table at IPGWTI wrong size
+REPEAT NIPGW-NIPPGW,IPKSNA
+
+IPGWTM:	BLOCK NIPGW		; TIME entry last used
+
+BBLK
+
+IFE IPUNCP,[
+
+; Queue packet for Arpanet interface
+IPKSNA:	MOVEI Q,IPOUTQ		; Otherwise use direct IP output queue.
+	MOVE B,(Q)		; Save previous contents of queue header
+	CALL PKQPL(PK.IP)	; Put on IP output queue
+	CAIE B,0		; Kick off IP output if necessary.
+	 RET			; Not necessary, queue was not empty
+IPOGO:	CALRET IMPIOS		; Just means kicking IMP for now.
+
+] ;IFE IPUNCP
+
+; Queue packet for Chaosnet interface
+; A has the pe
+; PK.DST(A) has the Internet address to send to, 128.31.subnet.host
+; The low 16 bits are Chaosnet address to send an UNC to
+IPKSNC:	PUSH P,H
+	PUSH P,J
+	PUSH P,E
+	PUSH P,W
+	MOVE J,A		;J has address of PE
+	MOVE H,PK.BUF(A)	;H has address of IP header	
+	MOVEI E,0		;E has number of bytes sent so far
+IPKSC1:	CALL CHABGI		;Get a Chaosnet buffer in A
+	 JRST IPKSC9		;Give up if can't get one
+	MOVSI T,-%CPKDT		;Zero out the Chaosnet header
+	HRRI T,(A)
+	SETZM (T)
+	AOBJN T,.-1
+	MOVEI T,%COUNC
+	DPB T,[$CPKOP(A)]
+	MOVE C,PK.DST(J)
+	DPB C,[$CPKDA(A)]
+	MOVEI T,MYCHAD
+	DPB T,[$CPKSA(A)]
+	MOVEI T,8_8		;DOD Internet #x0800	
+	DPB T,[$CPKAN(A)]	;Protocol number
+	AOS CHNIPO		;Meter Internet packets out to Chaosnet
+	LDB Q,[IP$IHL(H)]	;Internet header length in words
+	MOVE T,Q		;Save header length for later
+	MOVSI B,(H)		;BLT IP header into Chaos packet
+	HRRI B,%CPKDT(A)
+	ADDI Q,(B)
+	BLT B,-1(Q)		;Q saves address of first data word
+	LDB B,[IP$TOL(H)]	;Total length in octets including header
+	SUB B,E			;Number of bytes remaining to be sent
+	MOVEI C,IPKSC9		;Continuation if no more fragments needed
+	CAIG B,%CPMXC		;Skip if need to fragment
+	 JRST IPKSC2
+	MOVEI B,%CPMXC/4	;Compute number of 32-bit data words in fragment
+	SUB B,T
+	TRZ B,1			;Round down to even multiple of 8 octets
+	ADD B,T	
+	LSH B,2			;Number of bytes in this fragment including header
+	MOVEI W,IP%FMF		;Set more-fragments flag
+	IORM W,IP$FLG+%CPKDT(A)
+	MOVEI C,IPKSC1		;Continuation sends another fragment
+IPKSC2:	DPB B,[IP$TOL+%CPKDT(A)]	;Total length of this fragment
+	DPB B,[$CPKNB(A)]
+	PUSH P,C		;Save continuation address
+	MOVE W,E		;Get fragment offset
+	LSH W,-3		;8-octet units
+	LSH T,2			;Number of bytes in header
+	SUB B,T			;Number of data bytes
+	LDB C,[IP$FRG+%CPKDT(A)];Set fragment offset
+	ADD C,W
+	DPB C,[IP$FRG+%CPKDT(A)]
+	ADD T,E			;Byte offset of start of data to send
+	LSH T,-2		;Word offset
+	ADD T,H			;Word address
+	HRL Q,T			;BLT pointer to copy data
+	MOVEI T,3(B)
+	LSH T,-2		;Number of words to copy
+	ADDI T,-1(Q)		;Address of last word to store
+	BLT Q,(T)		;Copy the data
+	ADD E,B			;Offset for next fragment
+	MOVEI W,%CPKDT(A)
+	CALL IPCKSM		;Compute header checksum
+	DPB A,[IP$CKS (W)]	;Store header checksum
+	MOVEI A,-%CPKDT(W)	;Restore address of chaos packet
+	SETOM -2(A)		;Not on any packet lists
+	PUSH P,J		;Save registers clobbered by CHAXMT
+	PUSH P,D
+	PUSH P,E
+	PUSH P,TT
+	CALL CHAXMT		;Launch packet into Chaosnet
+	POP P,TT
+	POP P,E
+	POP P,D
+	POP P,J
+	POPJ P,			;Take continuation
+
+IPKSC9:	MOVE A,J		; The PE
+	CALL IPIODN		; Say we're done transmitting this packet,
+	POP P,W			; although it's still in Chaos NCP somewhere
+	POP P,E
+	POP P,J
+	POP P,H
+	POPJ P,
+
+IPKSN5:	MOVEI Q,IPUQHD+1	; Put on System Output queue
+	MOVE B,(Q)		; Save prev contents of header
+	CALL PKQPL(PK.IP)
+	CAIE B,			; If stuff already there,
+	 RET			; Just return, else
+	PUSH P,I		; Nothing there before, give user interrupt.
+	MOVEI I,1		; On IPQ SysOut queue.
+	CALL IPQUSI
+	POP P,I
+	RET
+
+; IPCKSM - Computes checksum for IP header.
+;	W/ points to IP header.
+;	Clobbers B,C
+; Returns A/ checksum
+
+IFNDEF JCRY0,JCRY0==:<JFCL 4,>	; Jump on Carry from bit 0 (and clear flag)
+
+IPCKSM:	SETZ A,
+	LDB C,[IP$IHL (W)]	; Get IP header length
+	MOVE B,IP$CKS(W)	; Get 3rd word
+	ANDCM B,[IP%CKS]	; Mask out the checksum field
+	JFCL 17,.+1		; Clear flags
+	ADD B,IP$VER(W)		; Add 1st wd
+	JCRY0 [AOJA A,.+1]
+	ADD B,IP$ID(W)		; Add 2nd
+	JCRY0 [AOJA A,.+1]
+	ADD B,IP$SRC(W)		; Add 4th
+	JCRY0 [AOJA A,.+1]
+	ADD B,IP$DST(W)		; Add 5th
+	JCRY0 [AOJA A,.+1]
+	CAILE C,5
+	 JRST IPCKS4		; Longer than 5 words, must hack options.
+IPCKS2:	LSHC A,16.		; Get high 2 bytes (plus carries) in A
+	LSH B,-<16.+4>		; Get low 2 bytes in B
+IPCKS3:	ADDI A,(B)		; Get total sum
+	CAILE A,177777		; Fits?
+	 JRST [	LDB B,[202400,,A]	; No, must get overflow bits
+		ANDI A,177777		; then clear them
+		JRST IPCKS3]		; and add in at low end.
+	ANDCAI A,177777		; Return ones complement
+	RET
+
+IPCKS4:	SUBI C,5		; C has a 4 bit value.
+	MOVN C,C		; Get neg of # words left
+	LSH C,1			; Double it
+	JUMPL C,IPCKS5(C)	
+	RET			; Something is wrong, so just return bad val.
+
+REPEAT 10.,[
+	ADD B,5+<10.-.RPCNT>(W)
+	JCRY0 [AOJA A,.+1]
+]
+IPCKS5:	JRST IPCKS2		; Options all added, now go fold sum.
+
+IFN 0,[	; Old version
+IPCKSM:	MOVEI C,(W)
+	HRLI C,442000		; Gobble 16-bit bytes
+	ILDB A,C		; wd 0 byte 1
+	ILDB B,C
+	ADDI A,(B)		; Add 2nd byte of 1st wd
+	ILDB B,C ? ADDI A,(B) ? ILDB B,C ? ADDI A,(B)	; 1 ID,frag
+	ILDB B,C ? ADDI A,(B) ? IBP C		 	; 2 Skip chksum field
+	ILDB B,C ? ADDI A,(B) ? ILDB B,C ? ADDI A,(B)	; 3 source addr
+	ILDB B,C ? ADDI A,(B) ? ILDB B,C ? ADDI A,(B)	; 4 dest addr
+IPCKS8:	CAIG A,177777
+	 JRST IPCKS9
+	LDB B,[202400,,A]	; Get any overflow
+	ANDI A,177777
+	ADDI A,(B)
+	JRST IPCKS8
+IPCKS9:	ANDCAI A,177777
+	RET
+
+] ;IFN 0

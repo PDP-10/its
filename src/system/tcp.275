@@ -1,0 +1,3629 @@
+; This file holds the modules for TCP.
+comment |	STUFF TO DO
+
+Incoming ACKs should prevent retrans from aborting connection, since
+clearly it is still alive, just doesn't have room for our stuff (which
+is possibly overflowing its window).
+
+Note Clark suggs on windowing/ACKing.
+	If input data seg doesnt have PUSH, don't send ACK, but set
+	a timeout for sending ACK.  Send ACK when:
+		PUSH is seen
+		outgoing seg forced out (new or retrans)
+		timed out
+
+Output buffering stinks.  If can't send buff due to too many segs,
+then should be able to keep adding to present segment.
+
+Provide way for output IOT to specify URGENT, and 
+Handle URGENT when received on input.
+
+|
+
+SUBTTL TCP definitions
+
+%WYTCP==:7		; Move to BITS later
+
+%MOD32==:740000		; LH mask used for mod 32 arithmetic
+%TCPMI==:5		; Max # segments in input queue per connection
+%TCPMO==:5		; Max # segments in output queue per connection
+%TCPDS==:536.		; Default max # bytes per segment (when no
+			;  knowledge of receiving host)
+%TCPMS==:2048.-40.	; Maximum possible segment size we can support
+			;  This must be 7777 (octal) or less.
+%TCPMB==:%TCPMI*%TCPMS	; Max # bytes of data in queue (a bit fictional)
+%TCPMR==:20.		; Max # retransmit retries allowed
+%TCPMQ==:20		; Max # pending RFCs allowed
+%TCPMP==:777		; Max port # allowed for pending-RFC (SYN) conns
+			;	Note pending-RFCs used ONLY for job startups,
+			;	SYNs are not queued in general.
+
+; Defintions of TCP Segment Header fields.
+%TCPHL==:5		; # of 32-bit words in fixed part of TCP header
+
+TH%SRC==:777774,,	; 0 Source Port
+TH%DST==:     3,,777760	; 0 Destination Port
+TH%SEQ==:777777,,777760	; 1 Sequence Number
+TH%ACK==:777777,,777760	; 2 Acknowledgement Number
+TH%THL==:740000,,	; 3 Data Offset (TCP Header Length in 32-bit wds)
+TH%RES==: 37400,,	; 3 Reserved (should be 0)
+TH%CTL==:   374,,	; 3 Control bits
+TH%WND==:     3,,777760	; 3 Window
+TH%CKS==:777774,,	; 4 Checksum
+TH%UP==:      3,,777760	; 4 Urgent Pointer
+			; 5 Start of Options/Data
+
+TH$SRC==:<.BP TH%SRC,0>
+TH$DST==:<.BP TH%DST,0 >
+TH$SEQ==:<.BP TH%SEQ,1>
+TH$ACK==:<.BP TH%ACK,2>
+TH$THL==:<.BP TH%THL,3>
+TH$RES==:<.BP TH%RES,3>
+TH$CTL==:<.BP TH%CTL,3>
+TH$WND==:<.BP TH%WND,3>
+TH$CKS==:<.BP TH%CKS,4>
+TH$UP==: <.BP TH%UP, 4>
+TH$OPT==:<441000,,5>	; An ILDB-type pointer to start of options.
+
+	; Control bit definitions (as located in full word)
+TC%URG==:<200,,>		; Urgent Pointer significant
+TC%ACK==:<100,,>		; Ack field significant
+TC%PSH==:< 40,,>		; Push Function
+TC%RST==:< 20,,>		; Reset connection
+TC%SYN==:< 10,,>		; Synchronize sequence numbers
+TC%FIN==:<  4,,>		; Finalize - no more data from sender
+
+; TCP Connection tables, normally indexed by I
+; These correspond to what the TCP document (RFC-793) calls
+; the "Transmission Control Block" parameters.
+; A TCB is "in use" if either XBUSER or XBSTAT is non-zero.
+;	XBUSER is set if a user job has channels associated with the TCB.
+;	XBSTAT is set if TCP is dealing with the TCB.
+; PI level will never touch any TCBs which have a zero XBSTAT, so it is
+;	safe for the MP level to hack a zero-XBSTAT TCB without using NETOFF.
+
+IFNDEF XBL,XBL==10.	; Allow this many TCP connections for now.
+
+EBLK	; General variables
+
+XBUSER:	BLOCK XBL	; RH User index
+	XB%STY==:<770000,,>	; TTY # of STY connected to (0 if none)
+	XB%ICH==:<007700,,>	; Input  channel #+1 (77=IOPUSHed)
+	XB%OCH==:<000077,,>	; Output channel #+1 (77=IOPUSHed)
+	XB$STY==:<.BP XB%STY,XBUSER>
+	XB$ICH==:<.BP XB%ICH,XBUSER>
+	XB$OCH==:<.BP XB%OCH,XBUSER>
+XBSTAT:	BLOCK XBL	; <flags>,,<TCP state>
+	; Connection flags (internal to ITS)
+	%XBMPL==:SETZ	; Current output segment locked at MP level (IOT)
+			; This must be sign bit for SGNSET/PCLSR to work.
+	%XBCTL==:<374,,> ; Array of output request bits
+	IFN %XBCTL-TH%CTL,.ERR %XBCTL flags must be the same as TH%CTL!!
+			; For all bits in %XBCTL the general meaning is
+			; "Set this bit in next outgoing segment".  If no bits
+			; are set, output is sent every 2 sec, otherwise every
+			; 1/2 sec.  If %XBNOW is set, output is sent as soon
+			; as something notices it.
+	%XBNOW==:<1,,>	; Send output segment ASAP (else 1/2 sec clock)
+	%XBACF==:<2,,>	; Our FIN has been ACKed
+
+	%XBABT==:< 400,,>	; We're aborting.
+	%XBFIN==:<1000,,>	; FIN received for input, input queue will not
+				; get any more additions.
+;	%XBWOK==:<100,,> ; State is OK for user to write (else get IOC err)
+;	%XBROK==:<200,,> ; State is OK for user to read (else get IOC err)
+	
+	; Connection state, as in TCP document (RFC-793)
+	; Some test/dispatch code depends on the fact that the first
+	; 4 states have the values they do.
+	;   ** NOTE: These .XSzzz symbols are not advertised to users.
+	;   ** Maybe I'll rename them in here sometime. --  CSTACY 9/84
+	.XSCLS==:0	; Closed (must be zero)
+	.XSSYQ==:1	; ADDITIONAL ITS STATE: Syn-Queued
+	.XSLSN==:2	; Listen
+	.XSSYN==:3	; Syn-Sent
+	.XSSYR==:4	; Syn-Rcvd
+	.XSOPN==:5	; Established (Open)
+	.XSFN1==:6	; Fin-Wait-1
+	.XSFN2==:7	; Fin-Wait-2
+	.XSCLW==:10	; Close-Wait
+	.XSCLO==:11	; Closing
+	.XSCLA==:12	; Last-Ack
+	.XSTMW==:13	; Time-Wait
+	.XSTOT==:14	; Total # of states
+XBSTAU:	BLOCK XBL	; User Channel state <input>,,<output>
+XBCLSU:	BLOCK XBL	; Close reason <input>,,<output>
+		.XCNTO==:0	; Never opened
+		.XCUSR==:1	; Closed by user
+		.XCFRN==:2	; Closed by foreign host
+		.XCRST==:3	; Fgn host reset things
+		.XCDED==:4	; Fgn host dead (apparently)
+		.XCINC==:5	; Incomplete transmission (retrans timeout)
+		;     ==:6	; Byte size mismatch - can't happen
+		.XCNCP==:7	; Local TCP went down
+		.XCRFS==:10	; Fgn host refused connection (valid RST
+				; received in SYN-SENT state)
+
+XBPORT:	BLOCK XBL	; <remote port><local port><4 zero bits>
+			; It is set up this way for fast lookup of
+			; incoming segments.
+XBHOST:	BLOCK XBL	; Remote host (HOSTS3 format)
+XBLCL:	BLOCK XBL	; Local host (HOSTS3 format)
+XBNADR:	REPEAT XBL,-1	; Net host address to give the device driver (-1 none)
+
+; MP Input - see TCPI for detailed description
+XBITQH:	BLOCK XBL	; Input Segment TCP queue header
+XBINBS:	BLOCK XBL	; Total # bytes in input queue
+XBINPS:	BLOCK XBL	; Total # segments in input queue
+XBIBP:	BLOCK XBL	; Main prog BP to input
+XBIBC:	BLOCK XBL	;  # bytes available for this BP
+
+; MP Output - see TCPW for detailed description
+XBOCOS:	BLOCK XBL	; Current Output Segment pointer (0 if none)
+XBOBP:	BLOCK XBL	; Main prog BP into output segment
+XBOBC:	BLOCK XBL	;  # bytes of room for this BP
+
+XBORTP:	BLOCK XBL	; Retransmit parameters
+XBORTQ:	BLOCK XBL	; Retransmit queue header
+XBORTL:	BLOCK XBL	; Retransmit queue length (# of segments)
+XBORTC:	BLOCK XBL	; Retransmit count (1st msg on queue)
+XBORTT:	BLOCK XBL	; Retransmit timeout (1st msg on queue)
+
+; TCP Send Sequence Variables
+XBSUNA:	BLOCK XBL	; Send Unacknowledged
+XBSNXT:	BLOCK XBL	; Send Next
+XBSWND:	BLOCK XBL	; Send Window (offered window)
+XBSAVW:	BLOCK XBL	; Available window (between SNXT and SUNA+WND)
+XBSUP:	BLOCK XBL	; Send Urgent Pointer
+XBSWL1:	BLOCK XBL	; Segment Seq number used for last window update
+XBSWL2:	BLOCK XBL	; Segment Ack number used for last window update
+XBSMSS:	BLOCK XBL	; Max seg size that receiver can handle
+
+; TCP Receive Sequence Variables
+XBRNXT:	BLOCK XBL	; Receive Next
+XBRWND:	BLOCK XBL	; Receive Window
+XBRUP:	BLOCK XBL	; Receive Urgent Pointer
+XBRMSS:	BLOCK XBL	; Max seg size we are expecting/ have asked for
+
+BBLK
+
+NTSYNL:	SIXBIT /TCP/		; Start SYS;ATSIGN TCP for random SYNs.
+EBLK
+	0	; Word for NUJBST etc to mung for above job starting
+
+TCPUP:	-1	; -1 to handle TCP stuff, 0 to turn off.
+TCPUSW:	0	; -1 to disable net conns from anyone but ourself (like NETUSW)
+		; Perhaps eventually this should be the same as NETUSW.
+TCPRQN:	0	; # of things in SYN queue, to keep it small
+TCPRQL:	0	; Index of last SYN queued.
+TCPCRI:	0	; Counter used for gensymming local port #s
+TISSLU:	0	; Last ISS used
+TISSC:	0	; Counter to further uniquize ISS
+TCPLCP:	0	; Last TCB index allocated
+TCPBSW:	-1 ? 0	; Lock switch for allocating TCB indices
+TCPTMO:	4*30.	; Default timeout for retransmits (in 30'ths of sec)
+BBLK
+
+; Macro to perform sequence-number range checking.
+; Note all numbers are 32-bit positive integers, modulo 2**32.
+; Use it like this:
+;	CMPSEQ <left>,<lt or le>,<seqno>,<lt or le>,<right>,<lerr>,<rerr>
+;		Left and Right are addrs of the range bounds.  One of them
+;			must be an AC.
+;		Seqno must be an AC.
+;		LT and LE are the strings "<" and "=<".
+;		Lerr and Rerr are the places to JRST to if the left or
+;			right compares fail, respectively.  Rerr can
+;			be omitted and will default to Lerr.
+;  e.g.
+;	CMPSEQ A,<,D,=<,XBSNXT(I),TSI30
+; NOTE CAREFULLY that only existence within a range is checked,
+; and the bounds L,R of the range MUST be known to be L =< R!
+; It does not work to use CMPSEQ for the degenerate case
+;		CMPSEQ A,<,B,<,B,ERR
+; to see if A < B.
+
+DEFINE CMPSEQ (L),C1,S,C2,(R),(OUTV1),(OUTV2)
+	%%%CML==0
+	%%%CMR==0
+IFSE [C1][<]  %%%CML==CAMG
+IFSE [C1][=<] %%%CML==CAMGE
+IFSE [C2][<]  %%%CMR==CAML
+IFSE [C2][=<] %%%CMR==CAMLE
+IFE %%%CML&%%%CMR, .ERR Seq compare has bad relational arg
+	%%%CMX==CAMLE
+IFSE [C1][=<] %%%CMX==CAML
+
+IFGE L-20,IFGE R-20, .ERR Seq compare needs ACs
+
+IFL L-20,CAMLE L,R	; Skip if normal order, L =< R
+.ELSE	 CAMGE R,L
+	  JRST [	; Reverse order, R < L.  Check S < R & L < S
+		%%%CMR S,R	; Skipwin if S <(=) R
+		 %%%CMX S,L	; Unusual test here, win if S >(~=) L
+		  JRST .+5	; If either wins, win completely!
+IFB OUTV2,	JRST OUTV1
+.ELSE		CAML S,[020000,,] ? JRST OUTV1 ? JRST OUTV2
+			]
+			; Normal order, L =< R 
+		%%%CML S,L	; Skipwin if S >(=) L
+		 JRST OUTV1
+		%%%CMR S,R	; Skipwin if S <(=) R
+IFB OUTV2,	 JRST OUTV1
+.ELSE		 JRST OUTV2
+TERMIN
+
+SUBTTL TCP Open system call
+
+; .CALL TCPOPN
+;	arg 1 - receive channel number
+;	arg 2 - transmit channel number
+;	arg 3 - local port # (-1 to gensym unique port #)
+;	arg 4 - foreign port # (-1 for wild)
+;	arg 5 - foreign host address (HOSTS3 fmt) (-1 for wild)
+;	arg 6 - Retransmission timeout (optional)
+
+;Control bits:
+;	- None needed for channels - they are opened as .UAI and .UAO
+;		automatically (no other modes possible).
+;	- 7 vs 8 bit ASCII transfers can be determined by user-space byte
+;		pointer used in SIOT.  System buffers are always 8-bit bytes.
+%NOLSN==:100	; Listen mode
+%NOBBI==:200	; Use big buffer for input  (not implemented yet)
+%NOBBO==:400	; Use big buffer for output (not implemented yet)
+%NOWDA==:1000	; Use word-align algorithm on transmit (not implemented yet)
+	
+; Note a value of -1 for either the foreign port or host will imply
+; that the call is a "listen".  For the time being, either also implies
+; the other, i.e. wild port means wild host and vice versa.  This is
+; because I havent figured out what the right thing to do is for the
+; various combinations that could result otherwise.
+; Word-align means that for the transmit side, all segments sent will
+; have the data aligned so that the first byte, and every fourth byte
+; after that, will start on a 32-bit word boundary.  This should
+; produce a noticeable speedup for transfers that involve large blocks
+; of words rather than small amounts of miscellaneous text.
+; For the latter, it only makes things worse, so is not the default.
+
+;  Return is semi-immediate; the call may
+; hang momentarily waiting for a free network buffer.  (Have timeout?
+; do a SKIPA SKIPA HANG to schedule, then fail if still none?)
+; Use NETBLK
+; to determine when the channels become open.  For a non-listen call,
+; there is an internal ITS timeout, but for listen the state can persist
+; forever.
+
+TCPOPN:	METER("TCP: syscal tcpopn")
+	MOVEI A,(A)
+	MOVEI B,(B)
+	CAIGE A,NIOCHN
+	 CAIL B,NIOCHN
+	  JRST OPNL14		; Bad channel # argument
+	CAIN A,(B)
+	 JRST OPNL33		; Illegal to use same channel # for both
+	MOVEI J,(B)
+	HRLI J,(A)		; Save chan #s in J/ <rcv>,,<xmit>
+	PUSH P,C
+	PUSH P,D
+	PUSH P,E
+	PUSH P,J
+	MOVEI R,(A)		; Close receive chan
+	ADDI R,IOCHNM(U)
+	PUSHJ P,CCLOSE		; Close whatever is already on channels.
+	HRRZ R,(P)		; Close xmit chan
+	ADDI R,IOCHNM(U)
+	PUSHJ P,CCLOSE
+	POP P,J
+	POP P,E
+	POP P,D
+	POP P,C
+
+	HLRZM J,UUAC(U)		; Remember input channel # for errs.
+	SKIPN TCPUP		; If TCP disabled,
+	 JRST OPNL7		; Fail, "device not ready".
+	CALL SWTL		; Lock TCB assignment switch
+	   TCPBSW
+	MOVE I,TCPLCP
+	SOJL I,TCPO2
+TCPO1:	SKIPN XBUSER(I)		; Hunt for free TCB
+	 SKIPE XBSTAT(I)	; Must be both closed and unassigned.
+	  SOJGE I,TCPO1
+	JUMPGE I,TCPO3		; Jump if got one!
+TCPO2:	MOVEI I,XBL		; Hit beginning, wrap back to end
+	CAMN I,TCPLCP
+	 JRST OPNL6		; No free TCB's available
+	MOVEM I,TCPLCP		; Might as well make faster next time
+	SOJA I,TCPO1
+
+TCPO3:	MOVEM I,TCPLCP		; Save scan pointer for next time
+	JRST TCPO4		; (This is here for patching. -CSTACY)
+
+	; Got an index, now see if we're going to do a LISTEN
+	; or an active open.
+TCPO4:	SETZ W,			; Assume active
+	CAME C,[-1]		; Verify local port is OK
+	 CAIG C,177777
+	  CAIA
+	   JRST OPNL11		; Complain "illegal file name"
+	CAMN D,[-1]
+	 AOJA W,.+3
+	  CAILE D,177777
+	   JRST OPNL11
+	CAMN E,[-1]
+	 ADDI W,2
+	; W = 0 if no wildcards, =1 if port wild, =2 if host wild, =3 both.
+	MOVE B,CTLBTS(U)	; Get control bits for call
+	CAIE W,
+	 TRO B,%NOLSN		; Set "Listen" bit if implied by args.
+; Crock - if either is wild, ensure both are.
+	CAIE W,
+	 SETOB D,E
+
+	SETZ R,			; Say we have no buffer
+	TRNE B,%NOLSN		; Skip if not listening, doing active open.
+	 JRST TCPO20		; Listening, don't need buffer.
+
+	; No wild-cards, this is going to be an active open.  We will need
+	; a buffer to send the initial SYN, so let's get it now and get
+	; all possible PCLSR'ing over with, before turning off the NET PI.
+	CALL PKTGFI		; Get a free packet, skip unless fail.
+	 CAIA			; Didn't get, skip to schedule.
+	  JRST TCPO15		; Got it!
+	SKIPA
+	 SKIPA			; Force a schedule
+	  CALL UFLS
+	CALL PKTGFI		; Try again.  If we fail again, net is full,
+	 JRST OPNL6		;  so better just return "device full" err.
+TCPO15:	MOVEI R,(A)		; We have buffer!  Fall through.
+	TRCPKT R,"TCPO15 Alloc to send initial SYN"
+
+	; Okay, nothing can stop us now from running through to completion.
+	; We do all the following code with net interrupts OFF so that
+	;	(a) We can scan all TCBs for port/host conflicts and be
+	;		sure we checked everything right,
+	;	(b) Incoming segments at int level won't be confused by
+	;		an inconsistent state for this TCB.
+	;	(c) We can check the pending-RFC queue safely.
+TCPO20:	CONO PI,NETOFF		; Don't let PI level see dirty work.
+	CAMN C,[-1]
+	 JRST [	CALL TCPPCR	; Assign unique TCP port #
+		ROT D,-16.	; Put fgn port in high 16 bits
+		DPB A,[.BP TH%DST,D]	; Deposit local port
+		JRST TCPO30]	; Note that since port is unique, no
+				; possible conflict with existing, so skip chk.
+				; Also, low 4 bits indicate wildness if set.
+
+	; Note that low 4 bits of XBPORT are set to indicate wildness.
+	; This ensures that TCPIS won't find them, but TSISQ will.
+	; Have specific local port, check to make sure it doesn't already
+	; exist in TCB tables.
+	ROT D,-16.		; Get fgn port in high 16 bits
+	DPB C,[.BP TH%DST,D]	; Put together the ports word
+	MOVSI T,-XBL
+TCPO22:	CAMN D,XBPORT(T)	; Look for matching port set
+	 SKIPN XBSTAT(T)	; which is in use
+	  AOBJN T,TCPO22
+	JUMPL T,TCPO91		; Ugh, found match!  Must fail...
+
+	; OK, D has our unique port set, and we're ready to set things up.
+TCPO30:	MOVEM D,XBPORT(I)	; Store port set <remote><local>
+	SKIPL A,E
+	 CALL CVH3NA		; Make sure it's HOSTS3 format.
+	MOVEM A,XBHOST(I)	; Store foreign host
+	CALL IPBSLA		; Call IP for best local address
+	MOVEM A,XBLCL(I)
+	CALL TXBINI		; Initialize the TCB
+	CALL TCPMSS		; Set default MSS values. Reexamined when 
+				; foreign host known if this is a wild listen.
+	CALL TCPRWS		; Open a default receive window
+	HRRZM U,XBUSER(I)	; Make TCB/index in use
+	HLRZ A,J		; Get back saved rcv channel #
+	DPB A,[XB$ICH (I)]	; Deposit input channel
+	DPB J,[XB$OCH (I)]	; and output channel
+	MOVE B,[0101,,0]	; Increment both channel #'s by 1
+	ADDM B,XBUSER(I)	; So can distinguish chan 0 from no chan.
+	HRLZ T,I		; Set up user's IOCHNM words
+	HRRI T,TCPDUI
+	ADDI A,IOCHNM(U)
+	MOVEM T,(A)		; Set up input chan <TCB idx>,,TCPDUI
+	HRRI T,TCPDUO
+	ADDI J,IOCHNM(U)
+	MOVEM T,(J)		; Set up output chan <TCB idx>,,TCPDUO
+
+	; Search pending-RFC queue to make sure we match up or reject
+	; with stuff in there.
+	LDB B,[.BP TH%DST,XBPORT(I)]	; B gets local port #
+	SETO D,			; D is -1 for any PE ptr.
+	CALL TCPRQS		; Search queue, return index in A
+	JUMPL A,TCPO41		; Ignore further RFC checks if nothing.
+	MOVEI C,(A)
+	HRRZ A,XBITQH(C)
+	CAIN A,
+	 BUG HALT
+	HLRZ W,PK.IP(A)
+	HLRZ H,PK.TCP(A)
+	TRNE D,17		; If we're "wild" accepting any request,
+	 JRST TCPO35		; Take it!
+	LDB B,[IP$SRC (W)]	; No, must try full match.
+	CAMN B,XBHOST(I)	; If hosts match
+	 CAME D,TH$SRC(H)	; and ports match too
+	  JRST TCPO40		; (don't)
+
+	; Matching request!!
+	; For now, we ignore the listen/active distinction here, and
+	; always try to establish connection with the pending RFC.
+	; So, can flush use of R for listen flag.  Have to flush the
+	; extra buffer if it was "active" open, though, since we can
+	; just re-use the pending-RFC packet.
+TCPO35:	METER("TCP: Open matched pending RFC")
+	JUMPN R,TCPO36
+	MOVEI Q,XBITQH(C)	; If don't already have buffer,
+	CALL PKQGF(PK.TCP)	; Get it from the queued SYN (C is idx to)
+	SKIPN R,A		; It had better have a buffer!
+	 BUG HALT
+	TRCPKT R,"TCPO36 Queued SYN used to answer pending RFC rqst"
+TCPO36:	LDB B,[IP$SRC (W)]
+	MOVEM B,XBHOST(I)	; Set host address
+	LDB B,[IP$DST (W)]
+	MOVEM B,XBLCL(I)	; Use local address the other end wants
+	MOVE D,TH$SRC(H)
+	MOVEM D,XBPORT(I)	; And ports
+	CALL TCPMSS		; Find default segment sizes for connection
+	CALL TCPRWS		; Set up receive window
+	EXCH C,I		; C identifies slot of queued SYN.
+	CALL TSISQF		; Flush the SYN from queue!
+	MOVEI I,(C)
+	CALL TSILSX		; Invoke interrupt level SYN+ACK, re-uses
+				; the packet and sets state and everything.
+	JRST TCPO80		; OK, take win return.
+
+	; Request doesn't match, restore it and fall thru.
+TCPO40:
+;	MOVEI Q,TCPRQH		; Thought we had something but didn't,
+;	CALL PKQPF(PK.TCP)	; so put back on queue.
+
+	; No matching request on pending-RFC queue.
+TCPO41:	CAIN R,			; Skip if handling active open
+	 JRST [	MOVEI A,.XSLSN	; No, handling a listen.
+		JRST TCPO70]	; Just change state and we're done.
+	
+	; Active open, must fire off initial SYN.
+	; R has PE ptr to free packet to be used for the SYN.
+	CALL TCPISS		; Get initial sequence #
+	MOVEM A,XBSUNA(I)	; Set up sequence vars
+	MOVEM A,XBSNXT(I)
+	MOVSI T,(TC%SYN)	; Note no ACK in initial segment!
+	TRCPKT R,"TCPO41 Send initial SYN"
+	CALL TSOSSN		; Send SYN segment (clobber mucho ACs)
+	MOVEI A,.XSSYN		; Set state to SYN-SENT and fall thru.
+
+TCPO70:	HRRM A,XBSTAT(I)	; Set state LISTEN or SYN-SENT.
+	CALL TCPUSI		; Change user state.
+TCPO80:	CONO PI,NETON
+	JRST LSWPJ1		; Success return, unlock switch and skip.
+
+	; Port match failure, must back off and fail.
+TCPO91:	CONO PI,NETON	; No need to hide our shame
+	SKIPE A,R	; If we had a buffer,
+	 CALL PKTRT	; return it to freelist.
+	JRST OPNL13	; Say "file already exists".
+
+; TXBINI - Initialize TCB connection table entries for specific index.
+;	The things it doesn't touch are commented out below.
+;	I/ TCB index
+
+TXBINI:
+;	SETZM XBUSER(I)		; Set after
+;	SETZM XBSTAT(I)		; Set after
+	SETZM XBSTAU(I)
+	SETZM XBCLSU(I)
+;	SETZM XBPORT(I)		; Set prior
+;	SETZM XBHOST(I)		; Set prior	
+;	SETZM XBLCL(I)
+	SETOM XBNADR(I)
+
+	; I/O vars
+	SKIPE XBITQH(I)
+	 BUG CHECK,[TCP: Init TCB has input, I=],OCT,I,[list ],OCT,XBITQH(I)
+	SETZM XBITQH(I)
+	SETZM XBINBS(I)
+	SETZM XBINPS(I)
+	SETZM XBIBP(I)
+	SETZM XBIBC(I)
+
+	SKIPE XBOCOS(I)
+	 BUG CHECK,[TCP: Init TCB has output, I=],OCT,I,[list ],OCT,XBOCOS(I)
+	SETZM XBOCOS(I)
+	SETZM XBOBP(I)
+	SETZM XBOBC(I)
+
+	; Retransmit stuff
+	SETZM XBORTP(I)
+	SKIPE XBORTQ(I)
+	 BUG CHECK,[TCP: Init TCB has retrans, I=],OCT,I,[list ],OCT,XBORTQ(I)
+	SETZM XBORTQ(I)
+	SETZM XBORTL(I)
+	SETZM XBORTC(I)
+	SETZM XBORTT(I)
+
+	; TCP Send Sequence Initialization
+	SETZM XBSUNA(I)
+	SETZM XBSNXT(I)
+	SETZM XBSWND(I)
+	SETZM XBSAVW(I)
+	SETZM XBSUP(I)
+	SETZM XBSWL1(I)
+	SETZM XBSWL2(I)
+;	SETZM XBSMSS(I)		; Set after
+
+	; TCP Receive Sequence Initialization
+	SETZM XBRNXT(I)
+	SETZM XBRUP(I)
+;	SETZM XBRMSS(I)		; Set after
+;	SETZM XBRWND(I)		; Set after
+	RET
+
+; TCPPCR - Port Create.  Creates a unique local port #.
+;	Returns # in A.  Current algorithm is very simple/dumb.
+;	Must only be called at MP level with NETOFF.
+;	Clobbers T,Q
+
+TCPPCR:	PUSH P,B
+	MOVEI A,(U)	; Get user index
+	IDIVI A,LUBLK	; Find job #
+	AOS B,TCPCRI	; Bump and get new counter
+	ROT B,-8.	; Put low bits into high
+	LSHC A,8.	; Then shift them into port #
+	CALL TCPPLU	; See if this port unique or not.
+	 JRST [	AOS TCPCRI	; If not, AOS stuff and keep going.
+		AOJA A,.-1]
+	POP P,B
+	RET
+
+; TCPPLU - Port Lookup.  Skips if port # unique among local ports.
+;	A/ port #
+;	Clobbers T, Q.
+; Returns .+1 if fail (number not unique)
+;	T/ idx of matching TCB
+
+TCPPLU:	LSH A,4		; Shift over for easier compare
+	MOVSI T,-XBL
+TCPLU2:	SKIPN Q,XBPORT(T)
+	 JRST TCPLU3
+	AND Q,[TH%DST]
+	CAMN A,Q
+	 JRST TCPLU7
+TCPLU3:	AOBJN T,TCPLU2
+	AOS (P)
+TCPLU7:	LSH A,-4
+	RET
+
+; TCPMSS - Determine and set max bytes per segment for TCB in I
+;	I/ TCB index. XBHOST should be set already.
+;	Bashes A, T
+; Base maximum TCP segment sizes on size of largest datagram IP wants
+; to send to destination. This sets the default sizes. We will tell
+; the foreign side what we want (XBRMSS) with a TCP MSS option in the
+; outgoing SYN. We will adjust what we send (XBSMSS) down if foreign
+; side requests it with MSS opton in an incoming SYN.
+
+TCPMSS:	MOVE A,XBHOST(I)	; Foreign address
+	CALL IPMTU		; IP datagram size to T
+	SUBI T,40.
+	MOVEM T,XBSMSS(I)	; Set default send and receive segment sizes
+	MOVEM T,XBRMSS(I)
+	RET
+
+
+SUBTTL Other TCP device system call routines
+
+; Device name in DEVTAB, device code in DCHSTB, index in RSTB to some tables
+
+; OPEN - from DEVADR
+
+TCPO:	JRST OPNL12		; Say "mode not avail"
+	; Save rest temporarily.
+	HLRS C
+	MOVSI A,(A)		; Save RH of FN1 in LH of IOCHNM
+	JSP Q,OPSLC7
+	  TCPDUI,,TCPDUO
+	  TCPDBI,,TCPDBO
+	  TCPDUI,,TCPDUO
+	  TCPDBI,,TCPDBO
+
+; CLOSE - from CLSTB
+;	R/ addr of IOCHNM word
+
+TCPCLS:	METER("TCP: syscal close")
+	HLRZ I,(R)		; Get TCB index from LH of IOCHNM
+	CAIL I,XBL		; Make sure it's reasonable
+	 BUG HALT,[TCP: CLS idx bad]
+	HRRZ A,XBUSER(I)	; Verify user
+	CAIE A,(U)
+	 BUG HALT,[TCP: CLS usr bad]
+	SETO D,			; See if input or output
+	HRRZ A,(R)
+	CAIN A,TCPDUO		; Output?
+	 AOSA D
+	  CAIN A,TCPDUI		; Input?
+	   ADDI D,1
+	CAIGE D,		; D/ 0 for input, 1 for output.
+	 BUG			; IOCHNM value screwed up??
+	LDB A,[XB$ICH (I)]	; Get input chan # according to TCB
+	LDB B,[XB$OCH (I)]	; Ditto output
+	MOVEI C,(R)
+	SUBI C,IOCHNM(U)	; Find channel # we're closing
+	ADDI C,1		; Increment since TCB # is really #+1
+	CAME C,A(D)		; Compare with channel # in TCB
+	 BUG HALT,[TCP: Close chan not same as TCB chan]
+	JUMPN D,[MOVEI D,2
+		CAIE A,
+		 MOVEI D,3
+		JRST TCPC06]
+	CAIE B,
+	 IORI D,1
+TCPC06:
+	; D is now a 2-bit channel status index.
+	; Bit 1.2 is 0 for input, 1 for output.
+	; Bit 1.1 is 0 if other channel is closed, 1 if it is still open.
+	SKIPN XBSTAT(I)		; Perhaps already gone?
+	 JRST TCPCL8		; Yeah, flush channel etc.
+	PUSH P,D
+	CONO PI,NETOFF		; Ensure that state doesn't change on us.
+	HRRZ J,XBSTAT(I)
+	CAIL J,.XSTOT
+	 BUG HALT,[TCP: CLS state bad]
+	XCT TCPCXT(J)	; Invoke closure stuff appropriate for state
+	CONO PI,NETON	; TCB state hacking done, can re-enable ints.
+	POP P,D
+
+	; Remove links between user channel and TCB.  If both channels
+	; are gone, XBUSER is cleared completely.
+	; The TCB is not necessarily closed at this point (XBSTAT zero)
+	; but TCP will look after it independently to ensure it eventually
+	; goes away.
+TCPCL8:	SETZ B,			; Get a zero
+	MOVEI T,.XCUSR		; Use this for "Close reason" if needed
+	TRNE D,2		; Remember D bit 1.2 indicates output chan
+	 JRST [	DPB B,[XB$OCH (I)]	; Yup, clear output chan.
+		CALL TCPUCO		; Set close reason if necessary
+		HRRZ A,XBOCOS(I)	; Does a COS buffer exist?
+		CAIN A,
+		 JRST TCPCL9		; Nope, nothing to flush.
+		CALL PKTRTA		; Aha, free it up.
+		SETZM XBOCOS(I)
+		SETZM XBOBP(I)
+		SETZM XBOBC(I)
+		JRST TCPCL9]
+	DPB B,[XB$ICH (I)]	; Clear input chan.
+	CALL TCPUCI		; Set close reason if need to.
+	CALL TXBIFL		; Flush input queue
+
+TCPCL9:	TRNN D,1		; Skip if other channel still there.
+	 SETZM XBUSER(I)	; Else flush whole word incl user index!
+	TRNE D,1		; If a channel is left,
+	 CALL TCPUSI		; we may need to take interrupt on it.
+	LDB A,[XB$STY (I)]	; Was a STY connected to channel?
+	JUMPE A,CPOPJ		; Return if not.
+	MOVEI I,(A)		; Ugh, must disconnect it!  Set up TTY #
+	CALL NSTYN0		; Disconnect
+	 JFCL
+	RET			; Return (CLOSE will clear IOCHNM/IOCHST)
+
+TCPCLE:	BUG CHECK,[TCP: Illegal state in CLOSE, J=],OCT,J,[ D=],OCT,D
+	CALL TXBFLS	; Flush all of TCB but XBUSER
+	RET
+
+TCPCXT:	OFFSET -.
+.XSCLS:: CALL TXBFLS	; Closed already, but flush again to make sure
+.XSSYQ:: CALL TCPCLE	; Syn-Queued - can't happen!!
+.XSLSN:: CALL TXBFLS	; Listen	- flush TCB, enter closed state.
+.XSSYN:: CALL TXBFLS	; Syn-Sent	- flush TCB, enter closed state.
+.XSSYR:: XCT TCPCXT+.XSOPN ; Syn-Rcvd - handled same as OPEN below
+.XSOPN:: XCT (D)[	; Established (Open)
+		CALL TCPCLE	; In (only)	- Can't happen
+		JFCL		; In (have Out)	- Disconnect input
+		CALL TCPC30	; Out (only)	- Send FIN, enter FIN-WAIT-1
+		CALL TCPC30]	; Out (have In)	-  "    "     "     "
+.XSFN1:: XCT (D)[	; Fin-Wait-1
+		JFCL		; In (only)	- Disconnect input
+		CALL TCPCLE	; In (have Out)	- Can't happen
+		CALL TCPCLE	; Out (only)	- Can't happen
+		CALL TCPCLE]	; Out (have In)	- Can't happen
+.XSFN2:: XCT (D)[	; Fin-Wait-2
+		CALL TXBFLS	; In (only)	- Flush, give up waiting
+		CALL TCPCLE	; In (have Out)	- Can't happen
+		CALL TCPCLE	; Out (only)	- Can't happen
+		CALL TCPCLE]	; Out (have In)	- Can't happen
+.XSCLW:: XCT (D)[	; Close-Wait
+		CALL TCPCLE	; In (only)	- Can't happen
+		JFCL		; In (have Out)	- Disconnect input
+		CALL TCPC70	; Out (only)	- Send FIN, enter LAST-ACK
+		CALL TCPC70]	; Out (have In)	-  "    "     "     "
+.XSCLO:: XCT TCPCXT+.XSFN1 ; Closing - handled same as Fin-Wait-1 etc.
+.XSCLA:: XCT TCPCXT+.XSFN1 ; Last-Ack - handled same as Fin-Wait-1 etc.
+.XSTMW:: XCT TCPCXT+.XSFN1 ; Time-Wait - handled same as Fin-Wait-1 etc.
+.XSTOT:: OFFSET 0
+
+	; Closing output channel while in SYN-RCVD state.
+	; Send a FIN and enter FIN-WAIT-1 state.
+TCPC30:	CALL TCPCLF
+	MOVEI J,.XSFN1
+	JRST TCPC75
+
+	; Closing output channel  while in CLOSE-WAIT state.
+	; Send a FIN and enter LAST-ACK state.
+TCPC70:	CALL TCPCLF
+	MOVEI J,.XSCLA
+TCPC75:	HRRM J,XBSTAT(I)
+	RET
+
+TCPCLF:	MOVSI T,(TC%ACK+TC%FIN+%XBNOW)	; Tell TCP that output needs FIN and ACK.
+	JRST TCPOFR			; Go force out current buffer if any
+
+; TCPUC - Set "Reason-closed" states if not already set.
+;	T/ Reason to use, if none already exists.
+;	Clobbers Q
+TCPUC:	CALL TCPUCI
+TCPUCO:	HRRZ Q,XBCLSU(I)
+	CAIN Q,
+	 HRRM T,XBCLSU(I)
+	RET
+TCPUCI:	HLRZ Q,XBCLSU(I)
+	CAIN Q,
+	 HRLM T,XBCLSU(I)
+	RET
+
+; TXBFLS - Flush all info about a TCB from TCP viewpoint.
+;	Mostly consists of freeing up all buffers used, and then
+;	clearing out most other data cells of the TCB.
+;	Note that XBUSER and XBSTAU are not affected!
+; TXBFLP - ditto but usable at PI level, it is careful not to smash
+;	things that MP level might be referencing.
+;  Clobbers A,T,Q
+; TXBIFL - Flushes input queue
+; TXBOFL - Flushes output queue (including retrans list!)
+
+TXBFLS:	SETZM XBSTAT(I)
+	CALL TXBIFL
+	CALL TXBOFL
+	SETZM XBPORT(I)
+	SETZM XBHOST(I)
+	RET
+
+; TXBFLP - Things to be careful of:
+;	- swiping COS
+;	- flushing input queue (don't touch it)
+
+TXBFLP:	CALL TXBOFL
+	SETZM XBSTAT(I)		; Say off-limits to PI level now.
+	SETZM XBPORT(I)
+	SETZM XBHOST(I)
+	LDB T,[XB$ICH (I)]	; See if input chan active
+	CAIN T,
+	 CALL TXBIFL		; No input chan, so ensure input q flushed
+	CALL TCPUSI		; Alert user to mung
+	RET
+
+TXBIFL:	SETZM XBINBS(I)
+	SETZM XBINPS(I)
+	SETZM XBIBP(I)
+	SETZM XBIBC(I)
+	MOVEI Q,XBITQH(I)
+	CALL PKPFLS
+	SKIPE XBITQH(I)
+	 BUG CHECK,[TCP: Incompl input fls I=],OCT,I,[list ],OCT,XBITQH(I)
+	CALL TCPRWS		; Reset receive window.
+	RET
+
+TXBOFL:	HRRZ A,XBOCOS(I)	; If current output seg exists,
+	CAIE A,
+	 SKIPGE XBSTAT(I)	; and isn't locked by MP level,
+	  CAIA
+	   JRST	[CALL PKTRTA	; then free it
+		SETZM XBOCOS(I)	; and clear the pointer.
+		SETZM XBOBP(I)
+		SETZM XBOBC(I)
+		JRST .+1]
+	SETZM XBORTT(I)
+	SETZM XBORTC(I)
+	MOVEI Q,XBORTQ(I)
+	CALL PKPFL		; Flush retrans list carefully.
+	SKIPE XBORTL(I)
+	 BUG CHECK,[TCP: Incompl output fls, I=],OCT,I,[list ],OCT,XBORTQ(I)
+	MOVE A,XBSNXT(I)
+	MOVEM A,XBSUNA(I)	; Claim everything ACK'd.
+	SETZM XBSWND(I)		; Zero our send window.
+	SETZM XBSAVW(I)		; and available window
+	SETZM XBSUP(I)		; and urgent pointer.
+	RET
+
+PKPFLS:	PUSH P,Q
+PKPFL2:	MOVE Q,(P)
+	CALL PKQGF(PK.TCP)
+	JUMPE A,POPQJ
+	CALL PKTRTA	; Should always be freeable.
+	JRST PKPFL2
+
+; Ditto, but for flushing retransmit queue, which has to be special
+; since packets are linked on IP output list as well as TCP list.
+; Since we can't take packets off the IP output list here, we just set
+; a flag telling output PI level to ignore the packet.
+
+PKPFL:	PUSH P,Q
+PKPFL3:	MOVE Q,(P)
+	CALL PKQGF(PK.TCP)
+	JUMPE A,POPQJ
+	CONO PI,PIOFF
+	MOVE T,PK.FLG(A)	; Check packet flags
+	TLNN T,(%PKODN)		; Output done?
+	 JRST [	TLO T,(%PKFLS)	; No, say to flush when hit it.
+		MOVEM T,PK.FLG(A)
+		CONO PI,PION
+		TRCPKT A,"PKPFL3 Packet not flushed"
+		JRST PKPFL4]
+	CONO PI,PION
+	CALL PKTRT
+PKPFL4:	SOSGE XBORTL(I)
+	 BUG CHECK,[TCP: Retrans Q count err]
+	JRST PKPFL3
+
+SUBTTL TCP Main Program Input
+
+; All TCP input segments for a connection are put on a queue that
+; is headed at XBITQH.  When this header is zero, there is no more
+; input; if the %XBFIN flag is also set, the remote host has closed
+; its transmit side and there will never be any more input.
+;	Segments are only added by PI level, at the end of the queue.
+;	Segments are only removed by MP level IOTs, at the start of the queue.
+; (An incoming RST will of course flush the queue at PI level)
+
+; If XBIBP is non-zero, it points into the first segment on the input queue,
+; and XBIBC is also valid; things are ready for MP IOTing.
+; However, neither XBIBP nor XBIBC is meaningful if XBITQH is zero.
+
+; Input IOT - from IOTTB
+	SKIPA T,[SIOKT]		; Come here for SIOT entry
+TCPI:	 MOVEI T,CHRKT
+	METER("TCP: syscal in")
+	HLRZ I,(R)		; Get TCB index
+	
+	; Verify state, do misc setup for reading
+	MOVSI B,(XB%STY)
+	TDNE B,XBUSER(I)	; Can't IOT if direct-connected to STY.
+	 JRST IOCR10		; "Chan in illegal mode"
+	HLRZ B,XBSTAU(I)	; Just reading state, don't need NETOFF.
+	SKIPG TCPTBI(B)		; Ensure meta-state allows reading.
+	 JRST [	HLRZ B,XBCLSU(I)	; Can't read, see if reason OK
+		CAIN B,.XCFRN		; Only OK reason is clean fgn close.
+		 JRST UNIEOF		; Yeah, just return quietly.
+		JRST IOCR10]
+
+	MOVE E,[441000,,4]	; 8-bit bytes, 4 to a word
+	MOVEI B,[
+	    XBIBP(I)	; Byte pointer
+	    XBIBC(I)	; # bytes to read
+	    TCPIBG	; Routine to get next buffer
+	    TCPIBD	; Routine to discard buffer
+	    0		; not used
+	    TRNA	; Negative - TCPIBG and TCPIBD will do waiting.
+		]
+	CALL (T)
+	 CAIA
+	  AOS (P)
+	SKIPG XBIBC(I)	; If count for this buffer reached zero,
+	 CALL TCPIBD	; Flush it so XBITQH is valid indication of input avail
+	RET
+
+; TCPIBD - Discard input buffer, invoked by I/O.
+;	This is always called before TCPIBG is.
+
+TCPIBD:	SKIPN XBIBP(I)		; Make sure something's there to discard.
+	 RET			; Nope, gone or was never set up.
+	MOVEI Q,XBITQH(I)	; Point to TCP input queue header
+	CALL PKQGF(PK.TCP)	; Get first thing off queue, into A
+	CAIN A,			; Something better be there.
+	 BUG HALT,[TCP: IOTI queue lost]
+
+	; Check BP just out of sheer paranoia.
+	HRRZ T,XBIBP(I)		; Find addr BP points to (maybe +1 actual)
+	HLRZ Q,PK.TCP(A)	; Get addr of TCP header
+	CAIL Q,(T)		; Header better be less than BP!
+	 JRST TCPIB2
+	TRZ Q,PKBSIZ-1		; Get addr of start of buffer
+	CAILE T,PKBSIZ(Q)	; BP should be within or just past end.
+TCPIB2:	 BUG HALT,[TCP: IOTI BP incons]
+
+	; Okay, end of paranoia, just flush the buffer.
+	LDB T,[PK$TDL (A)]	; Find # chars we read
+	MOVN T,T
+	ADDM T,XBINBS(I)	; Update # chars avail for input.
+	CALL PKTRT		; Return packet to freelist.
+	SOSGE T,XBINPS(I)	; Decrement count of segs on input queue
+	 BUG CHECK,[TCP: Input Q count incons]
+	CAIL T,%TCPMI/2		; If we are now handling past 50% input,
+	 JRST [	MOVSI T,(TC%ACK)	; Make sure we send an ACK
+		IORM T,XBSTAT(I)	; so new rcv window is reported.
+		JRST .+1]
+	CONO PI,NETOFF
+	CALL TCPRWS		; Set new receive window
+	CALL TXBIST		; Get new input chan state
+	HRLM T,XBSTAU(I)	; Set it.  Note interrupt is avoided here.
+	CONO PI,NETON
+	SETZM XBIBP(I)
+	SETZM XBIBC(I)
+	RET		; Always return with simple POPJ
+
+TCPRWS:	MOVEI T,%TCPMI
+	SUB T,XBINPS(I)		; Find # segs we can still queue up
+	CAIGE T,1		; If no full segs left,
+	 TDZA T,T		; Zero the window, no more segs allowed
+	  IMUL T,XBRMSS(I)	; Else will take N * MSS bytes
+TCPRW3:	MOVEM T,XBRWND(I)
+	RET
+
+IFN 0,[
+	; This code turns out to lose because the code at TCPIS only
+	; checks XBRWND to see whether to compact input or not, and as
+	; long as XBRWND is non-zero, stuff will always be added to queue,
+	; using up all the packet buffers.
+	; Basically it's a question of whether or not to allow more input,
+	; up to limits of last queued buffer, if the queue has too many
+	; buffers on it.  Metering will show whether most other implementations
+	; win or lose with our buffer-alloc type windowing.
+TCPRW2:	HLRZ Q,XBITQH(I)	; Find # chars room in last seg
+	LDB T,[PK$TDL (Q)]
+	LDB Q,[PK$TDO (Q)]
+	ADDI Q,(T)
+	MOVEI T,576.
+	SUBI T,(Q)
+	CAIGE T,
+	 SETZ T,
+	MOVEM T,XBRWND(I)
+	RET
+]
+
+; TCPIBG - Get new input buffer (invoked by I/O, after TCPIBD)
+; Return .+1 if can't get new buffer, must wait (Never, we do waiting)
+; Return .+2 if OK, new BP and count set up.
+; Return .+3 if "EOF", transfer complete
+
+TCPIBG:	SKIPE XBIBP(I)	; Shouldn't be anything already there.
+	 BUG HALT,[TCP: IOTI buf incons]
+TCPIB3:	SKIPN A,XBITQH(I)	; See if anything in input queue
+	 JRST TCPIB5		; No, go handle EOF.
+	LDB T,[PK$TDL (A)]	; Find # bytes input for this segment
+	CAIN T,			; Something probably shd be there.
+	 BUG HALT,[TCP: IOTI null seg]
+	MOVEM T,XBIBC(I)	; Store as new # bytes
+	LDB T,[PK$TDO (A)]	; Get offset from start of header
+	HLRZ Q,PK.TCP(A)	; Get addr of TCP header
+	ROT T,-2		; Divide offset by 4
+	ADDI Q,(T)		; Point to right word
+	LSH T,-34.		; Right-justify the low 2 bits
+	HRL Q,(T)[441000 ? 341000 ? 241000 ? 141000]	; Get right LH for BP
+	MOVEM Q,XBIBP(I)	; Now store BP!
+	JRST POPJ1		; Say ready to go again...
+
+	; No input available.  First check to see if there will ever
+	; be any more (FIN seen?), then whether to return right away or
+	; hang.
+TCPIB5:	CONO PI,NETOFF		; Avoid timing inconsistencies
+	SKIPE A,XBITQH(I)	; Check again
+	 JRST [	CONO PI,NETON	; Got some??
+		JRST TCPIB3]	; Try again.
+	SKIPN XBINPS(I)		; No, should also have no segments
+	 SKIPE XBINBS(I)	; and no bytes
+	  BUG HALT,[TCP: IOTI count incons]
+	MOVE A,XBRWND(I)	; Save value of rcv window
+	CALL TCPRWS		; Then reset the window
+	CAME A,XBRWND(I)	; Was previous value correct?
+	 METER("TCP: RCV.WND out of synch")
+	MOVE T,XBSTAT(I)	; Get flags
+	CONO PI,NETON
+	TLNE T,(%XBFIN)		; FIN seen, and input queue empty?
+	 JRST TCPIB6		; Yes, true EOF now.
+
+	MOVE T,CTLBTS(U)	; See if call had "don't-hang" bit set
+	TRNE T,10
+	 JRST TCPIB7		; No, return EOF.
+	SKIPN XBITQH(I)		; Wait until input queue has something.
+	 CALL UFLS		
+	JRST TCPIBG		; Then call again.
+
+TCPIB6:
+TCPIB7:	CALL TCPUSI		; Adjust user state.
+	JRST POPJ2		; and return "EOF"
+
+
+SUBTTL TCP Main Program Output
+
+; Output IOT - from IOTTB
+; Output segments are chained together from XBORTQ, which is
+; the "retransmit queue".
+; The queue only contains segments which occupy sequence space, since
+; these are the only ones which require ACKs and possible retransmit.
+; All others are sent directly to the IP output queue.
+; While the transmit connection is open,
+;	Segments are only added by MP level IOTs, at the end of the queue.
+;	Segments are only removed by PI level ACKs, at the start of the queue.
+
+; Main program I/O is done into the "Current Output Segment", which is NOT
+; on the retransmit queue.  There are three variables related to this COS.
+; 	XBOCOS - <original # bytes XBOBC started with>,,<PE ptr to COS>
+;	XBOBP - BP into the COS, for MP IOT writing.
+;	XBOBC - Count of # bytes left that MP IOT can deposit into.
+; Note that the maximum possible size of the buffer is kept in PK$TDL
+; (TCP segment Data Length).  For windowing reasons it may be necessary
+; to restrict the amount of space actually used, thus the initial value
+; of XBOBC may be less than PK$TDL.  This is why the initial value is also
+; copied into the RH of XBOCOS, so that when XBOBC counts out we know
+; exactly how much of the buffer was actually used.  It is possible for
+; XBOBC to be increased by interrupt level window processing, in order
+; to increase utilization of the buffer.
+; States:
+;	If XBOCOS is zero, XBOBP and XBOBC must also be zero; there is
+;		no COS.
+;	If XBOCOS is non-zero (a current output seg exists), then:
+;		if LH(XBOCOS) is zero, the segment hasn't yet been written
+;			into, and needs to be set up.
+;			XBOBP and XBOBC should be zero!
+;		else the segment is set up for writing.  XBOBP should be set!
+;			If XBOBC is zero it means the segment now contains
+;			LH(XBOCOS) bytes of data.  If this number is less
+;			than PK$TDL (max possible seg data) then the count
+;			may be reset to allow further output into this
+;			segment, or it may simply be sent as is.
+;
+; The current segment is put on the retransmit queue (and IP output queue)
+; when:
+;	PI level (eg clock) decides it's time to send an ACK or do a FORCE.
+;	MP level IOT fills up the segment completely.
+;	MP level FORCE or CLOSE is invoked.
+; The current segment is locked down during MP IOT, to keep PI level
+; from ripping it away (which would leave entrails dangling).
+; PCLSR'ing will clear this lock.  If TCP flushes the TCB at PI level
+; for some reason, XBOCOS will be freed unless locked.  XBOBC and XBOBP
+; will still be cleared even if locked, so as to cause a call to TCPOBW
+; which will notice the condition and free the COS itself.
+
+	SKIPA A,[SIOKT]		; Come here for SIOT entry
+TCPW:	 MOVEI A,CHRKT
+	METER("TCP: syscal out")
+	HLRZ I,(R)		; Get TCB index from IOCHNM wd
+
+	; Verify state, do misc setup for writing, lock segment.
+	CONO PI,NETOFF
+	HRRZ B,XBSTAU(I)	; Get output chan state
+	SKIPG TCPTBO(B)		; See if meta-state allows writing
+	 JRST IOCR10		; Can't, say "chan not open" (ugh)
+	MOVSI B,(XB%STY)
+	TDNE B,XBUSER(I)	; Also can't if direct-connected to STY.
+	 JRST IOCR10
+	MOVSI B,(%XBMPL)	; Set locked flag (must be sign bit!)
+	IORM B,XBSTAT(I)
+	CONO PI,NETON		; Okay, we've got it.
+	CALL SGNSET		; Set PCLSR routine to unlock flag.
+	    XBSTAT(I)
+	SKIPN XBOCOS(I)		; If no COS there,
+	 SETZM XBOBC(I)		; make SURE count is zapped so refill invoked.
+	MOVE E,[441000,,4]	; 8-bit bytes, 4 to a word
+	MOVEI B,[
+		SETZ XBOBP(I)	; Output BP found here (sign sez is output)
+		XBOBC(I)	; # bytes of room remaining
+		TCPOBG		; Routine to get another buffer (not used)
+		TCPOBW		; Buffer full, routine to send it.
+		0		; Not used
+		TRNA]		; Negative - TCPOBG and TCPOBW will do waiting.
+	CALL (A)
+	 CAIA
+	  AOS (P)		; Pass on a skip return.
+
+	; User IOT is done, now unlock the segment.
+	; We also check for wanting to do an immediate ACK and if needed
+	; ship out the current buffer right now, without waiting
+	; for the 1/2-sec clock to do it.
+	SKIPN A,XBSTAT(I)	; See if XBSTAT is still set
+	 JRST IOCR10		; No, take IOC error return!
+	CAIL A,			; It better still be locked!
+	 BUG CHECK,[TCP: Output not locked]
+	CALL LSWPOP		; Clear the lock flag
+	TLNN A,(%XBNOW)		; Was "immediate-send" flag set?
+	 RET			; Nope, can just return.
+	METER("TCP: TCPW exit force")
+	CONO PI,NETOFF
+	MOVSI T,(TC%PSH)	; Hmm, set up and shove out.
+	CALL TCPOFR		; and force out current output segment.
+	CONO PI,NETON
+	RET
+
+TCPOBG:	BUG CHECK,[TCP: IOT called wrong rtn (TCPOBG)]
+	AOS (P)		; If proceeded, can still win.  Make skip return
+			; and drop through to TCPOBW.
+
+; TCPOBW - Write/Get output buffer, invoked by SIOKT/CHRKT when the
+;	buffer count (XBOBC) is zero.  This routine can figure out
+;	whether it needs to ship out a full buffer, or get a new
+;	output buffer, or both.  Always returns with XBOBP and
+;	XBOBC set up for additional output (otherwise it hangs and
+;	can be PCLSR'd)
+
+TCPOBW:	SKIPE R,XBOCOS(I)	; Get PE ptr to COS
+	 JRST [	HLRZ A,R	; Got a COS, see if already set up
+		JUMPN A,TCPOB5	; Jump if so.
+		JRST TCPOB2]	; Else must set it up.
+
+	; No current segment, must get a new one.
+	HRRZ T,XBSTAU(I)	; First ensure output state is OK.
+	SKIPG TCPTBO(T)		; Skip if still OK to output.
+	 JRST IOCR10		; Blooie, say "Chan not open".
+	CALL PKTGF		; Get one, hang until we succeed.
+	MOVEI R,(A)		; Set up in std AC
+	TRCPKT R,"TCPOBW Alloc for IOT output buffer"
+	HRRZM R,XBOCOS(I)	; Store ptr
+
+	; Set up segment for IOT to deposit into.
+TCPOB2:	MOVEI T,%TCPMO		; Get max # segments allowed on queue
+	CAMG T,XBORTL(I)	; Hang until we have less than this.
+	 CALL UFLS		; Note that conn closure will unhang too,
+				; because it flushes output queue.
+	CALL TSOINI		; Initialize the segment (set up W, H)
+	LDB A,[PK$TDO (R)]	; Find offset data should start at.
+	TRNE A,3
+	 BUG HALT		; Should always start at wd boundary!
+	LSH A,-2		; Find # words
+	ADDI A,(H)		; Add address of TCP header,
+	HRLI A,441000		; and now we have our initial BP.
+	MOVEM A,XBOBP(I)	; Set it up.
+	LDB A,[PK$TDL (R)]	; Get max length avail in this segment
+
+	; Now have a fresh buffer and nothing else to wait for.
+	; Freeze the world, make sure it's still OK to output, and find
+	; out how big an output segment we can allow.
+TCPOB4:	CONO PI,NETOFF
+	HRRZ T,XBSTAU(I)	; Still OK to output?  Check again.
+	SKIPG TCPTBO(T)
+	 JRST [	MOVEI A,(R)	; Bah, must return buffer.
+		CALL PKTRTA
+		SETZM XBOCOS(I)
+		CONO PI,NETON
+		JRST IOCR10]	; Barf "Chan not open".
+	MOVEI T,(I)		; Get index in T for PCLSRing.
+	CALL TCPOB9		; Check available window
+	 JRST [	CONO PI,NETON	; Window too small, allow ints
+		CALL TCPOB9
+		 CALL UFLS
+		JRST TCPOB4]	; Big enough, go back and re-try stuff.
+	LDB Q,[PK$TDL (R)]	; Get max # bytes available
+	CAMLE Q,XBSAVW(I)	; Greater than window?
+	 MOVE Q,XBSAVW(I)	; Yeah, truncate down to this size.
+	HRLM Q,XBOCOS(I)	; Store original # bytes in LH of XBOCOS
+	MOVEM Q,XBOBC(I)
+	CONO PI,NETON
+	RET			; Okay, all set up, return.
+
+TCPOB9:	MOVE A,XBSWND(T)
+	LSH A,-2		; Get 25% offered window
+	CAML A,XBSAVW(T)	; If 25% offered > avail window,
+	 RET			; punt and wait for better stuff.
+	JRST POPJ1
+
+	; Here when we were all set up, and output has used up all
+	; of the buffer space initially available.  Check to make sure
+	; there isn't more we can fill out, and if not then fire off
+	; the segment.
+TCPOB5:	HLRZ T,XBOCOS(I)	; Get # bytes we originally had
+	CONO PI,NETOFF		; Avoid magic changes in send window
+	CAML T,XBSAVW(I)	
+	 JRST TCPOB6		; Send window same or smaller (!), send seg.
+	MOVE Q,XBSAVW(I)	; Send window is bigger!  Get new size
+	LDB A,[PK$TDL (R)]	; Get max size
+	CAMLE A,Q
+	 MOVEI A,(Q)		; Use minimum of max size and send window.
+	MOVEI Q,(A)		; Save result
+	SUBI A,(T)		; Find # more bytes we can hack
+	CAIG A,			; If there's no more,
+	 JRST TCPOB6		; Just send it off anyway.
+	HRLM Q,XBOCOS(I)	; Hurray, got more!  Store new original #
+	MOVEM A,XBOBC(I)	; And set up new count
+	CONO PI,NETON
+	RET			; And return happily.
+
+TCPOB6:	TRCPKT R,"TCPOB6 IOT Send"
+	CALL TCPOB7
+	JRST TCPOBW
+
+TCPOB7:	DPB T,[PK$TDL (R)]	; Okay, say this many bytes of data are in seg
+	PUSH P,B
+	PUSH P,C
+	PUSH P,E
+	MOVSI T,(TC%PSH)	; Ensure seg is pushed out.
+	IORM T,XBSTAT(I)
+	CALL TSOSND		; Send data segment (# bytes in PK.TCI)
+				; This clobbers a lot of ACs!
+	SETZM XBOCOS(I)	; No current output segment now.
+	CONO PI,NETON
+	SETZM XBOBP(I)
+	SETZM XBOBC(I)
+	POP P,E
+	POP P,C
+	POP P,B
+	RET
+
+; TCPOFR - Force out partially-filled current output segment
+;	Must have NETOFF.
+;	Called by FORCE and CLOSE at MP level
+;	by TCPCLK at PI clock level
+;	Note that we try to never have stuff in the COS which would
+;	over-run our send window, by hanging in MP IOT.  This will
+;	be slightly screwed up if the receiver suddenly decreases the window
+;	size, since this routine always sends the whole thing anyway,
+;	but it's probably OK (helps avoid SWS)
+;	I/ TCB index
+;	T/ additional flags to use (PUSH, URG, FIN)
+;	Clobbers R and everything that TSOSND does (a lot!)
+
+TCPOFR:	MOVE A,XBSTAT(I)	; Get flags for connection
+	TLNE A,(%XBCTL)		; Wants anything added on?
+	 IOR T,A		; Yes, OR the bits in.
+	JUMPL A,TCPOF6		; If locked at MP level, don't send it!
+	SKIPN R,XBOCOS(I)	; See if current output seg exists
+	 JRST TCPOF5		; No, can't hack now.
+	HLRZ TT,R		; Get # bytes of original buffer size
+	JUMPE TT,TCPOF5		; If none, nothing to hack.
+	SUB TT,XBOBC(I)		; Subtract # left, to get # bytes data
+	CAIG TT,
+	 JRST [	SETZ TT,	; No data, see if a flag wants to be sent.
+		TLNN T,(TC%FIN+TC%ACK+TC%SYN)	; Any of these are impt.
+		 JRST TCPOF9	; Nope, do nothing.
+		JRST .+1]	
+	DPB TT,[PK$TDL (R)]	; Store back # bytes of real data
+	AND T,[TH%CTL]		; Mask off the flags
+	IORM T,XBSTAT(I)	; Stuff in as requests
+	TRCPKT R,"TCPOFR Force send"
+	CALL TSOSND		; Send out the stuff
+	SETZM XBOCOS(I)
+	SETZM XBOBP(I)
+	SETZM XBOBC(I)
+TCPOF9:	RET
+
+	; No current output segment, so no data to send.  Check, though,
+	; to see if any flags need sending.
+TCPOF5:	TLNN T,(TC%SYN+TC%ACK+TC%FIN)
+	 RET			; Nope, just return.
+	MOVE E,T		; They do!  Save em against smashage
+	CALL PKTGFI		; Try to get a buffer (clobbers T,Q)
+	 JRST TCPOF6		; Ugh, failed, see about setting flags.
+	MOVEI R,(A)
+	TRCPKT R,"TCPOF5 Alloc and send flags only in TCPOFR"
+	MOVE T,E		; Restore flags
+	CALL TSOSNR		; Set up the packet and send it!
+	RET
+
+	; Can't get packet now, so set up the request flags for later hacking.
+	; Also comes here when current output seg is locked at MP level.
+TCPOF6:	AND T,[%XBCTL]		; Clear out extraneous bits
+	TLO T,(%XBNOW)		; Ask to send stuff immediately
+	IORM T,XBSTAT(I)	; and set flags back.
+	RET
+
+; TCPOSB - Routine similar to TCPOBW, except that it doesn't hang,
+;	so that it is suitable for calling at PI level (by STYNTC esp)
+; Returns .+1 if can't set up output buffer for writing.
+; Returns .+2 if output buff is all set up, with non-zero XBOBC.
+
+TCPOSB:	SKIPE R,XBOCOS(I)
+	 JRST [	HLRZ A,R	; Have COS, see if already set up
+		JUMPN A,TCPOS5	; Jump if so.
+		JRST TCPOS2]	; Else just set it up.
+	
+	; No current segment, get a new one.
+	HRRZ T,XBSTAU(I)	; First ensure output state is OK.
+	SKIPG TCPTBO(T)		; Skip if still OK to output.
+	 RET			; Blooie.
+	CALL PKTGFI		; Get one, skip if successful
+	 RET			; Sigh...
+	MOVEI R,(A)		; Set up in std AC
+	TRCPKT R,"TCPOSB Alloc for STYNET output data"
+	HRRZM R,XBOCOS(I)	; Store ptr
+
+	; Set up segment for IOT to deposit into.
+TCPOS2:	MOVEI T,%TCPMO		; Get max # segments allowed on queue
+	CAMG T,XBORTL(I)	; Fail if we have more than this.
+	 RET
+	CALL TSOINI		; Initialize the segment (set up W, H)
+	LDB A,[PK$TDO (R)]	; Find offset data should start at.
+	TRNE A,3
+	 BUG HALT		; Should always start at wd boundary!
+	LSH A,-2		; Find # words
+	ADDI A,(H)		; Add address of TCP header,
+	HRLI A,441000		; and now we have our initial BP.
+	MOVEM A,XBOBP(I)	; Set it up.
+	LDB A,[PK$TDL (R)]	; Get max length avail in this segment
+
+	; Now have a fresh buffer and nothing else to wait for.
+	; Freeze the world, make sure it's still OK to output, and find
+	; out how big an output segment we can allow.
+TCPOS4:	CONO PI,NETOFF
+	HRRZ T,XBSTAU(I)	; Still OK to output?  Check again.
+	SKIPG TCPTBO(T)
+	 JRST [	MOVEI A,(R)	; Bah, must return buffer.
+		CALL PKTRTA
+		SETZM XBOCOS(I)
+		CONO PI,NETON
+		RET]		; Barf "Chan not open".
+	MOVEI T,(I)		; Get index in T for testing (no PCLSR)
+	CALL TCPOB9		; Check available window
+	 JRST NETONJ		; Window too small, just return
+
+	LDB Q,[PK$TDL (R)]	; Get max # bytes available
+	CAMLE Q,XBSAVW(I)	; Greater than window?
+	 MOVE Q,XBSAVW(I)	; Yeah, truncate down to this size.
+	HRLM Q,XBOCOS(I)	; Store original # bytes in LH of XBOCOS
+	MOVEM Q,XBOBC(I)
+	CONO PI,NETON
+	AOS (P)
+	RET			; Okay, all set up, return.
+
+	; Here when we were all set up, and output has used up all
+	; of the buffer space initially available.  Check to make sure
+	; there isn't more we can fill out, and if not then fire off
+	; the segment.
+TCPOS5:	HLRZ T,XBOCOS(I)	; Get # bytes we originally had
+	CONO PI,NETOFF		; Avoid magic changes in send window
+	CAML T,XBSAVW(I)	
+	 JRST TCPOS6		; Send window same or smaller (!), send seg.
+	MOVE Q,XBSAVW(I)	; Send window is bigger!  Get new size
+	LDB A,[PK$TDL (R)]	; Get max size
+	CAMLE A,Q
+	 MOVEI A,(Q)		; Use minimum of max size and send window.
+	MOVEI Q,(A)		; Save result
+	SUBI A,(T)		; Find # more bytes we can hack
+	CAIG A,			; If there's no more,
+	 JRST TCPOS6		; Just send it off anyway.
+	HRLM Q,XBOCOS(I)	; Hurray, got more!  Store new original #
+	MOVEM A,XBOBC(I)	; And set up new count
+	CONO PI,NETON
+	AOS (P)
+	RET			; And return happily.
+
+TCPOS6:	TRCPKT R,"TCPOS6 STYNET Send"
+	CALL TCPOB7
+	JRST TCPOSB
+
+TCPBI:
+TCPBO:	RET		; No-ops, labels left in case want to use.
+
+; STATUS - from LH(DTSTB)
+;	Must return status in LH(D).  Must not smash C,R.
+;	R/ addr of IOCHNM word
+
+TCPSTA:	HLRZ I,(R)	; Get TCB index
+	SKIPN XBUSER(I)	; Probably an error if this is zero.
+	 BUG CHECK,[TCP: STATUS on unused conn ],OCT,I
+	SETZ D,
+	SKIPN XBSTAT(I)
+	 RET
+	HRRZ A,(R)	; Find whether input or output
+	CAIN A,TCPDUI
+	 SKIPA T,[TXBIST]
+	  MOVEI T,TXBOST
+	CALL (T)
+	DPB T,[140600,,D]
+	RET
+
+
+TXBIST:	HRRZ T,XBSTAT(I)
+	CAIL T,.XSTOT
+	 BUG HALT
+	SKIPGE T,XBCTBI(T)	; Get conversion
+	 JRST [	SKIPN XBITQH(I)	; Must test for input avail - any segs?
+		 SKIPA T,(T)	; None avail, use standard
+		  MOVE T,1(T)	; Have some waiting, use alternate state
+		RET]
+	RET
+XBCTBI:	OFFSET -.
+.XSCLS:: SETZ [%NTCLS ? %NTCLI]	; 0 Closed 
+.XSSYQ:: 0			; Technically this is an impossible state...
+.XSLSN:: %NTLSN			; 1 Listen
+.XSSYN:: %NTSYN			; 4 Syn-Sent
+.XSSYR:: %NTSYR			; 2 Syn-Rcvd
+.XSOPN:: SETZ [%NTOPN ? %NTINP]	; 5/11 Established (open)
+.XSFN1:: SETZ [%NTOPN ? %NTINP]	; 7 Fin-Wait-1
+.XSFN2:: SETZ [%NTOPN ? %NTINP]	; 7 Fin-Wait-2
+.XSCLW:: SETZ [%NTCLU ? %NTCLI]	; 3/10 Close-Wait
+.XSCLO:: SETZ [%NTCLS ? %NTCLI]	; 7/10 Closing
+.XSCLA:: SETZ [%NTCLS ? %NTCLI]	; 7 Last-Ack
+.XSTMW:: SETZ [%NTCLS ? %NTCLI]	; 7 Time-Wait
+.XSTOT:: OFFSET 0
+
+
+TXBOST:	HRRZ T,XBSTAT(I)
+	CAIL T,.XSTOT
+	 BUG HALT
+	SKIPGE T,XBCTBO(T)	; Get conversion
+	 JRST [	SKIPN XBORTQ(I)	; Must test for output queued
+		 SKIPA T,(T)	; None, use standard
+		  MOVE T,1(T)	; Have some output waiting, use alternate state
+		RET]
+	RET
+XBCTBO:	OFFSET -.
+.XSCLS:: %NTCLS		; 0 Closed 
+.XSSYQ:: 0		; Technically this is an impossible state...
+.XSLSN:: %NTLSN		; 1 Listen
+.XSSYN:: %NTSYN		; 4 Syn-Sent
+.XSSYR:: %NTSYR		; 2 Syn-Rcvd
+.XSOPN:: SETZ [%NTOPN ? %NTWRT]		; 5/6 Established (open)
+.XSFN1:: %NTCLX		; 7 Fin-Wait-1
+.XSFN2:: %NTCLX		; 7 Fin-Wait-2
+.XSCLW:: SETZ [%NTOPN ? %NTWRT]		; 5/6 Close-Wait
+.XSCLO:: %NTCLX		; 7 Closing
+.XSCLA:: %NTCLX		; 7 Last-Ack
+.XSTMW:: %NTCLX		; 7 Time-Wait
+.XSTOT:: OFFSET 0
+
+
+
+; WHYINT - from RH(DTSTB)
+; Results are:
+;	A/ %WYTCP
+;	B/ <state>
+;	C/ input  - # bytes in input buff
+;	   output - # bytes of room avail in output buff
+;	D/ Close reason (only valid if state %NTCLS)
+
+TCPWHY:	HLRZ I,(R)		; Get TCB index
+	METER("TCP: syscal whyint")
+	CAIL I,XBL
+	 BUG HALT,[TCP: WHY idx bad]
+	CALL TCPSTA
+	LDB B,[140600,,D]	; Get state for channel
+	HRRZ A,(R)		; Find whether input or output
+	CAIN A,TCPDUI
+	 JRST [	HLRZ D,XBCLSU(I)	; Get input close reason
+		MOVSI C,(XB%STY)
+		TDNE C,XBUSER(I)	; No input avail if direct-conn to STY
+		 JRST [	SETZ C, ? JRST TCPWH5]
+		SKIPLE C,XBINBS(I)
+		 JRST TCPWH5
+		SKIPN C,XBITQH(I)
+		 JRST TCPWH5
+		LDB C,[PK$TDL (C)]
+		JRST TCPWH5]
+	HRRZ D,XBCLSU(I)	; Get output close reason
+	SKIPN C,XBOBC(I)	; Get # bytes of room left in current pkt
+	 JRST [	MOVEI C,%TCPMO	; If none, return total queue space instead
+		SUB C,XBORTL(I)
+		IMUL C,XBSMSS(I)
+		CAIG C,
+		 SETZ C,
+		JRST .+1]
+TCPWH5:	MOVEI A,%WYTCP
+	JRST POPJ1
+	
+
+
+; RFNAME - from LH(DRFNTB)
+;	A/ LH of IOCHNM word for channel.
+
+TCPRCH:	MOVEI I,(A)
+	LDB B,[.BP TH%DST,XBPORT(I)]
+	LDB C,[.BP TH%SRC,XBPORT(I)]
+	MOVE D,XBHOST(I)
+	MOVEI W,4
+	POPJ P,
+
+; RFPNTR - from RH(DRFNTB)
+TCPRFP:	JRST OPNL34
+
+; IOPUSH/POP - from LH(RSTBI)
+TCPIOP:	HRRZ T,R
+	SUBI T,IOCHNM(U)
+	CAIN I,
+	 SKIPA T,[77]	; IOPUSH, use 77
+	  ADDI T,1	; IOPOP, use chan+1
+	HLRZ I,(R)	; Get TCB index
+	HRRZ B,(R)	; Get direction
+	CAIN B,TCPDUI	; as a BP to chan #
+	 SKIPA B,[XB$ICH (I)]
+	  MOVE B,[XB$OCH (I)]
+	DPB T,B		; Store new saved channel #
+	POPJ P,
+
+; RESET - from RH(RSTBI)
+;	This doesn't have to do anything for a while yet.
+TCPRST:
+	POPJ P,
+
+; FORCE - from LH(DFRCTB)
+;	Should force out the TCP segment currently being written,
+;	and give it a good shove (ie PUSH).
+;	A/ LH of IOCHNM word, in RH.
+;	H/ IOCHNM word
+;	R/ <LH of CLSTB entry>,,<addr of IOCHNM word>
+TCPFRC:	METER("TCP: syscal force")
+	HRRZ B,(R)		; This should be a TCP output channel.
+	CAIE B,TCPDUO		; If not output, must be input, so
+	 JRST OPNL2		; say "wrong direction".
+	HLRZ I,(R)		; Get TCB index
+	CAIL I,XBL		; Ensure validity
+	 BUG HALT,[TCP: FRC bad idx]
+
+	; Ensure that state allows sending anything.
+	CONO PI,NETOFF		; So state doesn't change while we think.
+	HRRZ J,XBSTAT(I)
+	CAIE J,.XSOPN
+	 CAIN J,.XSCLW
+	  CAIA
+	   JRST OPNL7		; Bad state, say "device not ready".
+	
+	PUSH P,R
+	MOVSI T,(TC%PSH)	; Set PUSH flag (but not ACK, to avoid 
+				; forcing send of empty buffer)
+	CALL TCPOFR		; Force out!  Clobber many ACs.
+	CONO PI,NETON
+	POP P,R
+	JRST POPJ1
+
+
+; FINISH - from RH(DFRCTB)
+;	We already know that R is OK since FORCE looked at it first.
+;	In fact, I is still set up.
+;	R/ addr of IOCHNM word
+
+TCPFIN:	METER("TCP: syscal finish")
+	MOVSI T,(%XBNOW)
+	TDNE T,XBSTAT(I) ; Wait until this bit is off (XBOCOS put on Q)
+	 CALL UFLS
+	SKIPE XBORTQ(I)	; Hang until retransmit queue is empty.
+	 CALL UFLS
+	JRST POPJ1
+
+SUBTTL TCP STY connection routines
+
+; STYTCP - invoked by STYNTC routine during 1/2 sec clock, for
+;	STYs connected to TCP channels.
+;	R/ TTY #
+
+STYTCP:	MOVE I,STYNTI-NFSTTY(R)	; Get TCB index for connection
+	LDB TT,[XB$STY (I)]	; Verify that TCB thinks we're hooked up
+	CAIE TT,(R)
+	 BUG			; It doesn't??
+
+	; First, check for and transfer any input for the STY.
+	HLRZ T,XBSTAU(I)	; Get input state
+	SKIPG TCPTBI(T)		; Make sure we can do input.
+	 JRST STYTC9		; Nope, must disconnect.
+STYTC1:	SOSGE XBIBC(I)
+	 JRST [	CALL TCPIBD	; Discard input buffer if any
+		HRRZ A,XBITQH(I) ; Any more input avail?
+		JUMPE A,STYTC5	; No, done, check for output.
+		CALL TCPIBG	; Have some!  Set it up.  Shd never hang.
+		 JFCL
+		JRST STYTC1]
+	ILDB A,XBIBP(I)		; Get the byte
+	TRNE A,200		; Special char?
+	 JRST [	AOS XBIBC(I)	; Ugh, must back up and get user's attention
+		MOVSI B,8._14	; Back up both count and 8-bit byte pointer
+		ADDM B,XBIBP(I)	; by adding to P field of BP
+		JRST STYTC9]	; Go disconnect.
+	EXCH R,I	; I gets TTY #, R gets TCB index
+	PUSH P,R
+	PUSH P,I
+	CONO PI,TTYOFF
+	CALL NTYI5	; Give the char to TTY input interrupt level
+	CONO PI,TTYON
+	POP P,R		; Note reverse order, so R gets TTY #
+	POP P,I		; and I gets TCB index again.
+	JRST STYTC1	; Try for more input.
+
+	; Transfer chars from STY output to TCP connection
+STYTC5:	SKIPGE TTYOAC(R)	; Do we have any output?
+	 JRST STYTC7		; No, all's done, force out what we did.
+	HRRZ A,XBSTAU(I)	; Check output state
+	SKIPG TCPTBO(A)		; to verify that TCB is healthy.
+	 JRST STYTC9		; Ugh, go disconnect STY.
+	MOVSI A,(%XBMPL)
+	IORM A,XBSTAT(I)	; Lock COS against PI level snarfing
+
+	SKIPE XBOCOS(I)
+	 SKIPG E,XBOBC(I)	; Get # bytes room in output buff
+	  JRST [
+		; Set up buffer, etc, possibly forcing out existing buff.
+		PUSH P,R
+		CALL TCPOSB	; Invoke special hang-less routine.
+		 JRST [POP P,R	; If can't get any more room, jump to STYTC6
+			JRST STYTC6]
+		POP P,R
+		SKIPG E,XBOBC(I)	; OK, should have bytes now.
+		 BUG
+		JRST .+1]
+	SKIPN D,XBOBP(I)	; Get BP into buffer
+	 BUG
+	EXCH R,I
+	CONO PI,TTYOFF
+	MOVEM D,DBBBP		; Set up buffer for TTY output interrupt level
+	MOVEM E,DBBCC
+	MOVEM E,DBBCC1
+	PUSH P,R
+	SETOM TYPNTF
+	PUSHJ P,TYP		; Generate output
+	SETZM TYPNTF
+	POP P,R
+	EXCH R,I		; Restore I/ TCB #, R/ TTY #
+	MOVE D,DBBBP		; Advance pointers
+	MOVEM D,XBOBP(I)
+	MOVE E,DBBCC
+	SUB E,DBBCC1		; Minus # chars output generated
+	CONO PI,TTYON
+	ADDM E,XBOBC(I)
+	JRST STYTC5		; Check for more output
+
+	; No more output or we can't get more room, force out what
+	; we've currently got.
+STYTC6:	CALL TCPUII		; Reactivate STY (expensive crock, but...)
+STYTC7:	MOVSI A,(%XBMPL)	; Unlock the COS
+	ANDCAM A,XBSTAT(I)
+	MOVSI T,(TC%PSH)	; PUSH this stuff
+	CALL TCPOFR		; Force out buffer
+	JRST STYNT8		; Then go check other STYs.
+
+
+	; Disconnect STY and get user's attention.  Note this may be
+	; buggy in that STY output has not yet been transferred to the
+	; net by the time we get here, if we're here due to a 200 char.
+STYTC9:	PUSH P,I
+	MOVEI I,(R)	; Set up I/ TTY #
+	CALL NSTYN0	; Disconnect it
+	 BUG
+	POP P,I
+	CALL TCPUII	; Wake up the user program
+	JRST STYNT8	; Go handle other STYs.
+
+IFN 0,[
+;CALLED AT CLOCK LEVEL FROM STYNTC WHEN A CHAOS STY IS ENCOUNTERED
+;TTY NUMBER IN I & R
+STYCHA:	MOVE I,STYNTI-NFSTTY(R)	;GET CHAOS INDEX
+	MOVE TT,CHSSTA(I)
+	TLNN TT,%CFSTY
+	 JRST 4,.		;CHAOS CONNECTION CLAIMS NOT BE CONNECTED?
+	JUMPL TT,STYCH9 .SEE %CFOFF	;OK TO USE?  IF NOT, DISCONNECT
+	SKIPGE TTYOAC(R)	;ANY OUTPUT?
+	 JRST STYCH1		;NO, CHECK FOR INPUT
+	SKIPN D,CHSOBP(I)	;IF BUFFER ALLOCATED, USE IT
+	 JRST [	SKIPG CHSNOS(I)	;OTHERWISE ALLOCATE ONE
+		 JRST STYCH1	;WINDOW FULL, WAIT UNTIL REACTIVATED
+		PUSHJ P,CHABGI
+		 JRST STYCH3	;NO CORE, WAIT ONE CLOCK TICK
+		MOVEI D,%CPKDT(A)
+		HRLI D,440800
+		MOVEM D,CHSOBP(I)
+		MOVEI E,%CPMXC
+		MOVEM E,CHSOBC(I)
+		JRST .+3 ]
+	  SKIPG E,CHSOBC(I)
+	   JRST STYCH4		;BUFFER FULL, FORCE IT
+	EXCH R,I		;I GETS TTY, R GETS CHAOS
+	CONO PI,TTYOFF
+	MOVEM D,DBBBP		;SET UP BUFFER FOR TTY OUTPUT INTERRUPT LEVEL
+	MOVEM E,DBBCC
+	MOVEM E,DBBCC1
+	PUSH P,R
+	SETOM TYPNTF
+	PUSHJ P,TYP		;GENERATE OUTPUT
+	SETZM TYPNTF
+	POP P,R
+	EXCH R,I		;I GETS CHAOS, R GETS TTY
+	MOVE D,DBBBP		;ADVANCE POINTERS
+	MOVEM D,CHSOBP(I)
+	MOVE E,DBBCC
+	SUB E,DBBCC1		;MINUS # CHARS OUTPUT GENERATED
+	CONO PI,TTYON
+	ADDM E,CHSOBC(I)
+STYCH4:	PUSHJ P,CHAFC1		;FORCE THE BUFFER
+	JRST STYCHA		;CHECK FOR MORE OUTPUT
+
+STYCH3:	PUSHJ P,CHINTI		;REACTIVATE SO WILL COME BACK ON NEXT CLOCK TICK
+STYCH1:	SOSGE CHSIBC(I)		;GET INPUT, IF ANY
+	 JRST [	PUSHJ P,CHAIBD	;DISCARD EXHAUSTED INPUT BUFFER, IF ANY
+		HLRZ A,CHSIBF(I)
+		JUMPE A,STYNT8	;NONE, RETURN TO STYNTC
+		LDB TT,[$CPKOP(A)]
+		CAIE TT,%CODAT
+		 JRST STYCH9	;RANDOM PACKET, DISCONNECT
+		PUSHJ P,CHPKIA	;ACKNOWLEDGE GOBBLING OF THIS PACKET
+		SOS CHSNBF(I)	;REMOVE BUFFER FROM RECEIVE LIST
+		MOVEI Q,CHSIBF(I)
+		PUSHJ P,CHAQGF
+		LDB E,[$CPKNB(A)]	;SET UP FOR BYTE STREAM INPUT
+		MOVEM E,CHSIBC(I)
+		MOVEI D,%CPKDT(A)
+		HRLI D,440800
+		MOVEM D,CHSIBP(I)
+		JRST STYCH1 ]
+	ILDB A,CHSIBP(I)	;GET CHARACTER OF INPUT
+	TRNE A,200
+	 JRST [	AOS CHSIBC(I)	;WOOPS, SPECIAL CHARACTER, NEEDS USER ATTENTION
+		MOVSI A,8_14	;SO PUT IT BACK AND DISCONNECT
+		ADDM A,CHSIBP(I)
+		JRST STYCH9 ]
+	EXCH R,I		;I GETS TTY, R GETS CHAOS
+	PUSH P,R
+	PUSH P,I
+	CONO PI,TTYOFF
+	PUSHJ P,NTYI5		;GIVE CHARACTER TO TTY INPUT INTERRUPT LEVEL
+	CONO PI,TTYON
+	POP P,R
+	POP P,I			;I GETS CHAOS, R GETS TTY ((POP IN REVERSE ORDER))
+	JRST STYCH1		;TRY FOR MORE INPUT
+
+STYCH9:	PUSH P,I
+	MOVE I,R		;I GETS TTY
+	PUSHJ P,NSTYN0		;DISCONNECT THE STY
+	 JRST 4,.
+	POP P,I			;I GETS CHAOS
+	PUSHJ P,CHINTI		;WAKE UP THE TELNET SERVER
+	JRST STYNT8		;GO HANDLE OTHER STYS
+] ;ifn 0
+
+SUBTTL Other TCP system call functions
+
+; TCPRQ - Handle .CALL NETRFC, return port # of next pending
+;	request for connection (SYN).
+;	Perhaps return a uniquizer in LH, so know when see
+;	the same request again?
+
+TCPRQ:	TRNE C,%NQREF		; Skip if just getting, not flushing.
+	 JRST TCPRQ5
+	METER("TCP: syscal netrfc get")
+	CONO PI,NETOFF		; In case a RST comes for it or something.
+;	MOVE I,TCPRQL		; Get last thing stored on queue
+	SETOB B,D		; Look for any match
+	CALL TCPRQS		; Search the queue...
+	JUMPL A,OPNL4		; None, say "file not found".
+	MOVEI I,(A)
+	LDB A,[.BP TH%DST,XBPORT(I)]	; Get local port # for the SYN
+	HRLI A,(I)		; And put index in LH as uniquizer.
+	CONO PI,NETON
+	JRST POPJ1
+
+TCPRQ2: BUG CHECK,[TCP: Pending SYN smashed!]
+	RET
+
+	; Refuse indicated connection.
+TCPRQ5:	METER("TCP: syscal netrfc ref")
+	CAIGE W,2		; Must have 2 args
+	 JRST OPNL30		; "Too few args"
+	HLRE D,A		; Get identifier
+	HRRE B,A
+	CONO PI,NETOFF
+	CALL TCPRQS		; Search for the queued SYN
+	JUMPL A,OPNL4
+
+	; Now must refuse connection.
+	MOVEI I,(A)
+	MOVEI Q,XBITQH(I)
+	CALL PKQGF(PK.TCP)	; Get queued SYN segment 
+	SKIPN XBITQH(I)		; Should have been only one
+	 SKIPG R,A		; and should have been one!
+	  BUG HALT
+	CALL TXBFLS		; Flush the TCB.
+	SOSGE TCPRQN		; Decrement count of queued SYNs
+	 BUG HALT
+	HLRZ W,PK.IP(R)		; Move all this setup somewhere modular.
+	HLRZ H,PK.TCP(R)
+	LDB TT,[PK$TDL (R)]
+	MOVE E,TH$CTL(H)
+	TLNE E,(TC%SYN)
+	 ADDI TT,1
+	TLNE E,(TC%FIN)
+	 ADDI TT,1
+	CALL TSISLR		; Respond to this req with RST+ACK
+	CONO PI,NETON
+	JRST POPJ1
+
+; TCPRQS - Search pending-RFC queue.  Must be called with NETOFF!!
+;	B/ local port # (-1 for any)
+;	D/ Index #, -1 for any (searches back from last one stored)
+; Clobbers T,Q
+; Returns
+;	A/ Index to matching SYN (-1 if no match)
+
+TCPRQS:	JUMPGE D,TCPRQ7
+	MOVE A,TCPRQL
+	MOVEI C,1
+TCPRQ6:	HRRZ T,XBSTAT(A)	; See if right state
+	CAIN T,.XSSYQ
+	 JRST [	LDB T,[.BP TH%DST,XBPORT(A)]
+		CAIL B,
+		 CAMN T,B
+		  RET
+		JRST .+1]
+	SOJGE A,TCPRQ6
+	MOVEI A,XBL-1
+	SOJGE C,TCPRQ6
+TCPRQ9:	SETO A,
+	RET
+
+TCPRQ7:	SKIPL A,D
+	 CAIL D,XBL
+	  JRST TCPRQ9
+	HRRZ T,XBSTAT(A)	; Verify state
+	CAIE T,.XSSYQ
+	 JRST TCPRQ9
+	LDB T,[.BP TH%DST,XBPORT(A)]	 ; Got one!  Get local port #
+	CAIL B,
+	 CAIN T,(B)	; Must match given arg unless -1
+	  RET		; Won!
+	JRST TCPRQ9
+
+ifn 0,[
+TCPRQS:	MOVEI A,TCPRQH-PK.TCP
+TCPRQ6:	MOVEI Q,(A)		; Save ptr to prev node
+	HRRZ A,PK.TCP(A)	; Get ptr to next PE
+	JUMPE A,TCPRQ8		; If not there, return 0 as error.
+	JUMPL D,TCPRQ7
+	CAIE A,(D)		; See if identifier matches
+	 JRST TCPRQ6		; Jump if not.
+TCPRQ7:	HLRZ T,PK.TCP(A)	; Yes, verify port number
+	CAIN T,			; Ensure ptr to TCP header exists.
+	 BUG HALT
+	LDB T,[TH$DST (T)]
+	CAIE T,(B)
+	 JRST TCPRQ6		; Nope, get next thing.
+
+	; Found it!  Take off list, a bit tricky.
+	SOSGE TCPRQN		; Decrement count of entries
+	 BUG HALT
+	MOVSI T,(%PQFL2)	; Clear the on-list flag for PK.TCP
+	ANDCAM T,PK.FLG(A)
+IFN 2-PK.TCP,.ERR TCPRQS must fix %PQFL2 to match PK.TCP
+	HRRZ T,PK.TCP(A)	; Get its next-ptr
+	HRRM T,PK.TCP(Q)	; Store in node previous to this one.
+	JUMPN T,TCPRQ8		; If wasn't last thing, all's well.
+	CAIN Q,TCPRQH-PK.TCP	; Last thing.  If prev was actually hdr,
+	 SETZ Q,		; must store zero.
+	HRLM Q,TCPRQH		; Set new "last" ptr in hdr.
+TCPRQ8:	
+	RET
+
+] ;ifn 0
+
+; TSOINI - set up a raw PE for use as a TCP output segment.  Means
+;	setting IP, TCP header pointers properly, so that all fields
+;	are contiguous.  Note that PK.TCI is set to indicate XBSMSS(I)
+;	bytes of (available) data storage!
+;	Sets up PK.IP, PK.TCP, and PK.TCI.
+;	R/ PE ptr
+;	I/ TCB connection index (val put into PK.TCI)
+; Returns with R, W, H pointing to PE, IP hdr, and TCP hdr.
+;	
+; TSOINA - Ditto, but takes arg in A and only clobbers T (doesn't set W, H)
+
+
+TSOINI:	HRRZ W,PK.BUF(R)	; Get addr of buffer
+	HRLM W,PK.IP(R)		; Store as IP header addr
+	MOVEI H,(I)		; Set up TCI with all fields.
+	ANDI H,PK%TCB
+	IOR H,[<<%TCPHL*4>_<.TZ PK%TDO,>>]
+	MOVEM H,PK.TCI(R)	; 
+	MOVE H,XBSMSS(I)	; Allow XBSMSS(I) bytes with assumed offset.
+	DPB H,[PK$TDL (R)]
+	MOVEI H,%TCPHL(W)	; For now, this will do.
+	HRLM H,PK.TCP(R)	; Store as TCP header addr
+	RET
+
+TSOINA:	HRRZ T,PK.BUF(A)	; Get addr of buffer
+	HRLM T,PK.IP(A)		; Store as IP header addr
+	ADDI T,%TCPHL		; For now, this will do to get TCP hdr.
+	HRLM T,PK.TCP(A)	; Store as TCP header addr
+	MOVEI T,(I)		; Set up TCI with all fields.
+	ANDI T,PK%TCB
+	IOR T,[<<%TCPHL*4>_<.TZ PK%TDO,>>]
+	MOVEM T,PK.TCI(A)	; Set up index and header length fields
+	MOVE H,XBSMSS(I)	; Allow XBSMSS(I) bytes with assumed offset.
+	DPB H,[PK$TDL (R)]
+	RET
+
+; TCPUSI - TCP User State-change Interrupt.  Called each time connection
+;	changes state (.XSnnn) or I/O queues start/end.  Always tries
+;	to interrupt user, except for change %NTWRT->%NTOPN on output
+;	and %NTINP->%NTOPN on input.
+;	Moon: Interrupt when input rcvd and buff empty, or output full
+;		and becomes reasonably non-full.
+; Clobbers T, Q
+
+TCPUSI:	METER("TCP: tcpusi called")
+	CALL TXBIST		; Check input state
+	HLRZ Q,XBSTAU(I)
+	CAIE T,(Q)		; New state?
+	 JRST TCPUS3		; Yes, go handle.
+TCPUS2:	CALL TXBOST
+	HRRZ Q,XBSTAU(I)
+	CAIN T,(Q)
+	 RET
+
+	; Output channel state change
+	; Q/ old state, T/ new state  (%NT values, not .XS)
+	HRRM T,XBSTAU(I)	; Store new state (old in Q)
+	CAIN Q,%NTOPN		; If was open
+	 CAIE T,%NTWRT		; Changing to buff-full
+	  CAIA
+	   RET			; Then don't interrupt.
+	MOVE Q,TCPTBO(Q)
+	CAMN Q,TCPTBO(T)	; See if meta-state change
+	 RET			; Nope, ignore.
+	LDB Q,[XB$OCH (I)]	; Yes, get channel #
+	METER("TCP: User O ints")
+	CALRET TCPUS5
+
+	; Input channel state change
+TCPUS3:	HRLM T,XBSTAU(I)	; Store new state (old in Q)
+	CAIN Q,%NTINP		; If was input avail
+	 CAIE T,%NTOPN		; Changing to plain open
+	  CAIA
+	   JRST TCPUS2		; Then don't interrupt.
+	MOVE Q,TCPTBI(Q)
+	CAMN Q,TCPTBI(T)	; See if meta-state change
+	 JRST TCPUS2		; No
+				; Drop thru to interrupt
+
+	; Give input channel interrupt
+TCPUII:	METER("TCP: User I ints")
+	LDB Q,[XB$STY (I)]	; See if hooked to STY
+	JUMPN Q,TCPUSS		; Jump to handle STY stuff if so.
+	LDB Q,[XB$ICH (I)]	; No, just get input chan
+	CALL TCPUS5
+	JRST TCPUS2
+
+	; Give interrupt to STY that TCB is connected to.
+	; Q/ TTY #
+TCPUSS:	CONO PI,PIOFF		; Protect list hacking
+	SKIPL STYNTL-NFSTTY(Q)	; Don't put on list twice
+	 JRST PIONJ
+	MOVE T,STYNTA		; Add to list
+	MOVEM T,STYNTL-NFSTTY(Q)
+	MOVEM Q,STYNTA
+	JRST PIONJ
+
+	; Interrupt on channel in Q.
+TCPUS5:	JUMPE Q,CPOPJ		; May be no channel there.
+	PUSH P,U
+	SKIPN U,XBUSER(I)
+	 BUG HALT		; Jumpe above should catch this.
+	MOVSI T,(SETZ)
+	IORM T,PIRQC(U)
+	CAIN Q,77		; If IOPUSH'ed, no interrupt.
+	 JRST POPUJ
+	MOVE T,CHNBIT-1(Q)	; Q is -1 based.
+	AND T,MSKST2(U)
+	IORM T,IFPIR(U)
+	POP P,U
+	RET
+
+	; Input chan state type.  Pos # means can read.
+	; 0 is pre-open, 1 is open, 2 is input avail, -1 is post-open.
+TCPTBI:	OFFSET -.
+%NTCLS:: 0	; 0 CLS
+%NTLSN:: 0	; 1 LSN
+%NTSYR:: 0	; 2 RFC
+%NTCLU:: -1	; 3 RCL?
+%NTSYN:: 0	; 4 RFS
+%NTOPN:: 1	; 5 OPN
+%NTWRT:: 1	; 6 RFN
+%NTCLX:: -1	; 7 CLW
+%NTCLI:: 1	; 10 CLI
+%NTINP:: 2	; 11 INP
+	OFFSET 0
+
+	; Output chan state type. Pos # means can write.
+	; 0 is pre-open, 1 is open, 2 is buff full, -1 is post-open.
+TCPTBO:	OFFSET -.
+%NTCLS:: 0
+%NTLSN:: 0
+%NTSYR:: 0
+%NTCLU:: 1
+%NTSYN:: 0
+%NTOPN:: 1
+%NTWRT:: 2
+%NTCLX:: -1
+%NTCLI:: 1
+%NTINP:: 1
+	OFFSET 0
+
+
+SUBTTL TCP Input Interrupt Level
+
+; TCPIS - Process TCP Input Segment (PI level)
+;	R/ PE ptr to packet, not on any list.
+;		PK.BUF is set, ditto IP/TCP header pointers.
+;	W/ addr of IP header
+;	H/ addr of IP data (start of TCP header)
+;	J/ host-table index for address datagram received from.
+; Can clobber all ACs except P, returns with POPJ.
+; AC usage during incoming segment processing:
+;	R/ PE ptr to packet
+;	W/ addr of IP header
+;	H/ addr of TCP header
+;	I/ TCB index (if any)
+;	J/ TCB connection state
+;	TT/ # bytes of TCP data in segment
+;	E/ <seg control bits>,,<temp flags>
+;	D/ Segment Sequence no.
+; Flags for RH of E
+%TSISL==1	; Seq starts to left of rcv.nxt
+%TSISR==2	; Seq starts to right of  "  ; if neither on, is = rcv.nxt
+%TSIFL==4	; Bad seq, flush after handling RST/ACK/URG
+
+TCPIS:	METER("TCP: Segs rcvd")
+	SKIPN TCPUP	; Unless TCP claims to be up,
+	 JRST TSIFL	; Throw it away, no TCP yet, sigh.
+
+	; First verify that this is a valid TCP segment, by
+	; checksumming it (sigh!).  TT gets total # bytes in TCP segment.
+	CALL THCKSI		; Get checksum in A for segment
+	LDB B,[TH$CKS (H)]	; Get segment's checksum
+	CAME A,B		; Should match.
+	 JRST TSIF01		; Failed, go bump err count and flush it.
+	LDB T,[TH$THL (H)]	; Find TCP header length in words
+	LSH T,2			; Make it in octets
+	SUBI TT,(T)		; TT now has # octets of segment data.
+
+	; Contents of segment have been validated (more or less),
+	; now set up convenient context values
+	;	PK.TCI contents
+	;	E/ Segment control flags (in LH)
+	;	TT/ SEG.LEN
+	HLLZ E,TH$CTL(H)	; Get word with segment control flags
+	DPB T,[PK$TDO (R)]	; Store offset of data (from THCKSI)
+	DPB TT,[PK$TDL (R)]	; Store length of data
+	TLNE E,(TC%SYN)		; Note that SYN counts in seg.len
+	 ADDI TT,1		;  so allow for it
+	TLNE E,(TC%FIN)		; And do same thing for FIN.
+	 ADDI TT,1		;  Either way, get SEG.LEN set up in TT.
+
+	; Then see if any TCB exists for this segment.
+	SKIPE A,TH$SRC(H)	; Get source/dest port word
+	 SKIPN B,IP$SRC(W)	; Get source addr from IP header
+	  JRST TSIF02		; Flush anything with zero field.
+	LSH B,-4		; Right-justify the addr
+	MOVSI I,-XBL
+TSI02:	CAMN A,XBPORT(I)	; Loop til we find it
+	 CAME B,XBHOST(I)
+TSI03:	  AOBJN I,TSI02
+	JUMPL I,TSI05		; Jump if found existing connection
+	JRST TSISQ		; Jump if no existing connection.
+
+TSI04:	SKIPE XBSTAT(I)		; Found "closed" connection????
+	 JRST TSI02		; LH must have crud still set, ignore for now
+	BUG CHECK,[TCP: Clsed TCB has active port/host]	; Shouldn't happen!
+	SETZM XBHOST(I)		; If continued, fix up.
+	JRST TSI02
+
+	; Connection exists, TCB index now in I.
+	; Set up a little more context (PK.TCI and J)
+TSI05:	DPB I,[PK$TCB (R)]	; Store TCB index in packet info
+	MOVEM J,XBNADR(I)	; Save host-table idx of addr this seg is from.
+	HRRZ J,XBSTAT(I)	; Get connection state
+	CAIL J,.XSTOT		; Highest possible state.
+	 BUG HALT,[TCP: Bad conn state]
+	METER("TCP: IS all states")
+	XCT XSMTRS(J)		; Bump meter for each state
+	CAIG J,.XSSYN		; If it's CLS, SYQ, LSN or SYN-SENT
+	 JRST @(J)[		; then process specially.
+		TSI04		; Closed???
+		TSISQQ		; Syn-Queued?  (Probably re-trans)
+		TSILS		; Listen
+		TSISS]		; Syn-sent
+	; Drop through to perform general sequence-number checking.
+
+	; Check Sequence Number!!!
+	; This code doesn't do two things:
+	;	1) it doesn't keep around stuff that arrives to the
+	;		right of rcv.nxt.
+	;	2) for situation where seg.seq number is valid,
+	;		(i.e. seq =< rcv.nxt) the code punts if
+	;		end of seg is out of window.  It should simply
+	;		expand the window!
+	LDB D,[TH$SEQ (H)]	; Get sequence number
+	JUMPG TT,TSI10		; Jump if data present.
+	JUMPL TT,TSIF03		; No data.  Jump if error (neg data!)
+
+	; No data in this segment, it is probably a simple ACK.
+	CAME D,XBRNXT(I)	; Seg.seq == snd.nxt (as expected?)
+	 JRST TSI01
+	METER("TCP: 0-len seg seq match")
+	JRST TSI20		; Yep, seg is acceptable instantly!
+
+TSI01:	SKIPN C,XBRWND(I)	; Have some receive window?
+	 JRST TSI09
+	ADD C,XBRNXT(I)		; Get nxt+wnd
+	TLZ C,%MOD32		; all arith mod 32
+	CMPSEQ XBRNXT(I),=<,D,<,C,TSI07,TSI08
+	JRST TSI20		; Within rcv window, buy it
+
+TSI07:	METER("TCP: 0-len seg before rcv window")
+	JRST TSISNE
+
+TSI08:	METER("TCP: 0-len seg after rcv window")
+	JRST TSISNE
+
+	; 0-data, 0-window, and SEG.SEQ != RCV.NXT
+TSI09:	METER("TCP: Ifl 0-len 0-window seqerr")
+	JRST TSISNE		; Sigh, flush it.
+
+	; Seq number check when data present.
+TSI10:	CAME D,XBRNXT(I)	; Is seq # what we expect (seq = nxt)?
+	 JRST TSI11
+	SKIPE C,XBRWND(I)	; Yes!  And is our window open?
+	 JRST TSI20		; Yes!  Fast dispatch!
+
+	; Data segment, with valid sequence number, but our window is
+	; zero.  See if there's some way we can avoid throwing away the
+	; segment... if we can't take it then still must handle
+	; ACK/URG/RST flags.  For now, we really handle this at TSI70.
+TSI12:	METER("TCP: 0-wnd data seg")
+	JRST TSI20
+
+	; Sequence # isn't exactly what we hoped for, see if the
+	; segment overlaps a valid portion of sequence space.
+TSI11:	SKIPN C,XBRWND(I)	;#3: Get window, is it zero?
+	 MOVEI C,512.		; If zero, substitute a dummy window.
+
+	; Both len>0 and wnd>0.
+	ADD C,XBRNXT(I)		; Get nxt+wnd
+	TLZ C,%MOD32		; all arith mod 32
+				;#4a: nxt =< seq < nxt+wnd
+	CMPSEQ XBRNXT(I),=<,D,<,C,TSI13	; Jump if fail this test, try 4b.
+
+	; Come here when sequence # is OK, but segment starts farther on
+	; than we want, i.e. there is a "hole" between rcv.nxt and seg.seq.
+	; Eventually we could keep this segment around, to speed up
+	; throughput for nets that get packets out of order, but for
+	; now we'll just flush it and force a retransmit.
+	METER("TCP: Iseg hole")
+	TRO E,%TSISR+%TSIFL	; Say starts to right, and flush later.
+	JRST TSI20		; Go process RST/ACK/URG etc.
+
+TSIF12:	METER("TCP: Ifl seq dup")	; Segment falls in prev rcvd data.
+	MOVE D,XBRNXT(I)		; Fake out, say seq # OK
+	TRO E,%TSIFL			; and don't process data.
+	JRST TSI20			; Go handle RST/ACK/URG.
+
+TSIF13:	METER("TCP: Ifl seq int err")	; Shouldn't ever happen, due to
+	JRST TSISNE			; right-bound check code above.
+TSIF14:	METER("TCP: Ifl seq old")
+	JRST TSISNE
+TSIF15:	METER("TCP: Ifl monster seg")	; Impossible error
+	JRST TSISNE
+
+	; Segment does not overlap window to right, so see if it
+	; overlaps to left, i.e. sequence # falls within data we have
+	; already received.
+TSI13:	MOVE A,XBRNXT(I)
+	SUBI A,%TCPMB		; Make a fictional lower bound
+	CAIGE A,
+	 ADD A,[1_32.]		; Keep bound mod 2^32
+	CMPSEQ A,=<,D,=<,XBRNXT(I),TSIF14,TSIF13
+
+	; Yep, falls within received data.  It's probably a duplicate
+	; retransmitted segment; see if there's any new data on right side.
+	; Note that we are not using XBRWND here, because as long as we
+	; have a non-zero window we will always accept everything in the
+	; segment.  So we create another fictional bound to the right.
+	ADD A,[%TCPMB*2]	; Get back to other side of rcv.nxt
+	TLZ A,%MOD32		; Keep mod 2^32
+	MOVE C,D
+	ADDI C,-1(TT)		; Get seq+len-1
+	TLZ C,%MOD32
+				;#4b: nxt =< seq+len-1 < nxt+wnd?
+	CMPSEQ XBRNXT(I),=<,C,=<,A,TSIF12,TSIF15 ; If fail this too, error.
+
+	; Aha, have some new data in spite of being overlapped with some
+	; previously received data!  Here, we
+	; twiddle things so that it appears to start properly at
+	; rcv.nxt.  This is done without touching the segment contents
+	; at all, just modifying the packet entry info.
+	METER("TCP: Iseg ovlap")
+	MOVE A,XBRNXT(I)	; Get rcv.nxt
+	CAMGE A,D		; Make sure it's greater than seg.seq
+	 TLO A,(1_32.)		; Mod 2^32 screw, make it greater (add 33d bit)
+	SUB A,D			; Find # octets of sequence space diff
+	CAMLE A,TT		; Shouldn't be greater than seg.len!!
+	 BUG CHECK,[TCP: Trim error]
+	SUBI TT,(A)
+	JUMPLE TT,TSIF12	; If nothing left, drop this segment.
+	TLZE E,(TC%SYN)		; Clear SYN since it's at front.
+	 SUBI A,1		;  If it was set, reduce cnt of actual data
+	LDB T,[PK$TDL (R)]	; that we're going to flush.  Get cnt
+	SUBI T,(A)		; Decrement # valid data bytes in segment
+	DPB T,[PK$TDL (R)]	; Put back
+	LDB T,[PK$TDO (R)]	; Also adjust offset to valid data
+	ADDI T,(A)		; Increment to point at new data
+	DPB T,[PK$TDO (R)]	; Put back
+	MOVE D,XBRNXT(I)	; Now say seg.seq = rcv.nxt!
+				; Segment sanitized, drop through.
+	SKIPN XBRWND(I)		; Only proceed if our window not zero.
+	 JRST TSI12		; It's zero!  May have to flush it...
+
+	; Fall through to TSI20 for RST/ACK/URG processing.
+
+	; Now check RST
+TSI20:	TLNE E,(TC%RST)		; RST bit set?
+	 JRST TSIRST		; Yeah, go process it.
+
+	; Now check security/precedence
+	JFCL			; ho ho ho
+
+	; Now check SYN bit
+TSI40:	TLNE E,(TC%SYN)		; SYN bit set?
+	 JRST TSISYN		; Yeah, go process it (basically error)
+
+	; Now check ACK bit
+TSI50:	TLNN E,(TC%ACK)		; ACK bit set?
+	 JRST TSIF50		; No, error.  Drop segment.
+	JRST @TSI51(J)		; Yes, dispatch depending on state.
+TSI51:	OFFSET -.
+.XSCLS:: [JRST 4,TSI51]	; Closed
+.XSSYQ:: [JRST 4,TSI51]	; ITS: Syn-Queued
+.XSLSN:: [JRST 4,TSI51]	; Listen
+.XSSYN:: [JRST 4,TSI51]	; Syn-Sent
+.XSSYR:: TSI53		; Syn-Rcvd
+.XSOPN:: TSI54		; Established (open)
+.XSFN1:: TSI54		; Fin-Wait-1
+.XSFN2:: TSI54		; Fin-Wait-2
+.XSCLW:: TSI54		; Close-Wait
+.XSCLO:: TSI54		; Closing
+.XSCLA:: TSI54		; Last-Ack
+.XSTMW:: TSIATW		; Time-Wait
+.XSTOT:: OFFSET 0
+
+
+	; SYN-RCVD state, handling ACK.
+TSI53:	LDB A,[TH$ACK (H)]	; Get ACK field
+	MOVE B,XBSUNA(I)	; Need one CMPSEQ arg in AC
+				; Test: snd.una =< seg.ack =< snd.nxt
+	CMPSEQ B,=<,A,=<,XBSNXT(I),TSISRA	; Jump if fail
+	MOVEI J,.XSOPN		; ACK wins, we're now open!
+	HRRM J,XBSTAT(I)	; Set new state, fall through to handle.
+	CALL TCPUSI		; Adjust user state.
+	; Must initialize SND.WL1, SND.WL2, and SND.WND.
+	; Maybe later merge this with TSI55.
+	MOVEM A,XBSWL2(I)	; Yes!  Update send window, set WL2 to ACK
+	MOVEM D,XBSWL1(I)	; and WL1 to SEQ
+	LDB B,[TH$WND (H)]
+	MOVEM B,XBSWND(I)	; and snd.WND to seg.WND.
+	MOVEM B,XBSAVW(I)	; and make avail window be same as send wind.
+	JRST TSI54X		; Skip repeating the ACK test.
+
+	; Handle ACK while in open state (also other receive-OK states)
+TSI54:	LDB A,[TH$ACK (H)]	; Get ACK field
+	MOVE B,XBSUNA(I)	; Need one CMPSEQ arg in AC
+		; Test: snd.una =< seg.ack =< snd.nxt
+		; If seg.ack < snd.una, go to TSI60 and ignore the ACK.
+		; If seg.ack > snd.nxt, go to TSISAK to drop segment (ACKing)
+	CMPSEQ B,=<,A,=<,XBSNXT(I),TSI60,TSISAK	; Jump if fail
+
+	; ACK is fine.  Update SND.UNA and clean up retransmit queue.
+TSI54X:	MOVEM A,XBSUNA(I)	; Update snd.una
+	
+	; Must check retransmit queue slowly to find right place to flush,
+	; if any.
+	; Procedure is: (1) pull off 1st thing on queue.
+	; (2) If the new 1st thing has a seq # =< snd.una,
+	;	then can flush what we pulled off, and try again.
+	; (3) otherwise put it back on at front.
+TSI54A:	MOVE C,A		; Save ACK # in C
+TSI54B:	MOVEI Q,XBORTQ(I)	; Get pointer to retrans q
+	CALL PKQGF(PK.TCP)	; Get 1st thing on queue
+	JUMPE A,TSI54Z		; None left?  Win!
+	TRCPKT A,"TSI54B Mabye flush from rexmit Q"
+	MOVE T,PK.FLG(A)	; Check packet flags,
+	TLNN T,(%PKODN)		; to make sure output was completed.
+	 JRST TSI54Y		; Not done yet, so don't flush yet.
+	HRRZ B,XBORTQ(I)	; Get pointer to next thing
+	JUMPE B,[CAMN C,XBSNXT(I) ; No next thing, compare with snd.nxt
+		 JRST TSI54D	; Equal, can flush!
+		JRST TSI54Y]	; If not equal, must have ack < snd.nxt
+				; so previous segment can't be flushed.
+	HLRZ B,PK.TCP(B)	; Get addr of TCP hdr for 2nd queued segment
+	LDB B,[TH$SEQ (B)]	; Get sequence # for it
+TSI54C:	CMPSEQ B,=<,C,=<,XBSNXT(I),TSI54Y ; See if ACK comes after that #
+
+	; Hurray, matches or exceeds this seq #,
+	; So we can flush the seg we pulled off!
+TSI54D:	TRCPKT A,"TSI54D Flushing from Q"
+	TLO T,(%PKFLS)		; Tell IP to forget it if queued
+	MOVEM T,PK.FLG(A)
+	CALL PKTRT		; Flush if not otherwise occupied
+TSI54E:	MOVE A,TIME		; Crock crock, set up new timeout.
+	ADD A,TCPTMO
+	MOVEM A,XBORTT(I)
+	SETZM XBORTC(I)		; Reset retry counts
+	SOSGE XBORTL(I)		; Decrement # segments on retrans q.
+	 BUG HALT,[TCP: Retrans Q count error]
+	JRST TSI54B		; Keep going as long as we can.
+
+TSI54Y:	MOVEI Q,XBORTQ(I)
+	CALL PKQPF(PK.TCP)	; Put back on front of queue
+TSI54Z:	MOVE A,C		; Restore ACK # to A.
+
+	; Now see if send window should be updated.
+	CAMN D,XBSWL1(I)	; Fast check first, WL1 = SEQ?
+	 JRST TSI55C		; Yes, go check ACK then
+	MOVE T,XBSWL1(I)
+	ADDI T,-1
+	TLZ T,%MOD32
+	CMPSEQ XBSWL1(I),<,D,<,T,TSI56	; Check if wl1 < seq < wl1+xxx
+	JRST TSI55			; Yes, must update window.
+TSI55C:	MOVE T,XBSWL2(I)
+	ADDI T,-1
+	TLZ T,%MOD32
+	CMPSEQ XBSWL2(I),=<,A,=<,T,TSI56 ; Fall-thru win if snd.wl2 =< seg.ack
+
+TSI55:	MOVEM A,XBSWL2(I)	; Yes!  Update send window, set WL2 to ACK
+	MOVEM D,XBSWL1(I)	; and WL1 to SEQ
+	LDB B,[TH$WND (H)]
+	MOVEM B,XBSWND(I)	; and snd.WND to seg.WND.
+				; Drop thru
+
+	; Either SND.UNA or SND.WND was probably updated, so lets update
+	; SND.AVW also (available window).  The following computes
+	; WND - (NXT - UNA) and assumes UNA =< NXT.
+TSI56:	MOVE A,XBSNXT(I)
+	CAMGE A,XBSUNA(I)	; If need mod 32 wrap,
+	 TLO A,(1_32.)		; wrap up the number that should be higher.
+	SUB A,XBSUNA(I)		; Find NXT-UNA (# bytes not yet acked)
+	CAIL A,0
+	 CAILE A,177777		; Make simple check
+	  BUG INFO,[TCP: Bad AVW calc, UNA=],OCT,XBSNXT(I),[NXT=],OCT,XBSUNA(I)
+	MOVE B,XBSWND(I)
+	SUBI B,(A)		; Find # bytes we can still send
+	CAIGE B,		; Make sure it's not negative!
+	 SETZ B,
+	MOVEM B,XBSAVW(I)
+
+	; Done with ACK processing for OPEN state, see if must handle
+	; idiosyncracies of other states.
+TSI57:	CAIN J,.XSOPN		; Skip other checks if state is OPEN (normal)
+	 JRST TSI60		; Go check for URG etc.
+	CAIN J,.XSCLW
+	 JRST TSI80
+	CAIN J,.XSFN1
+	 JRST [	SKIPE XBORTQ(I)	; If our FIN is ACK'd, enter FIN-WAIT-2
+		 JRST TSI60	; Not yet.
+		MOVEI J,.XSFN2	; Yes, FIN was ACKed, change state.
+		HRRM J,XBSTAT(I)
+		CALL TCPUSI	; Call this for any state change.
+		LDB T,[XB$ICH (I)]	; Do we have an input chan?
+		JUMPN T,TSI60		; If so, CLOSE will handle the wrapup.
+		MOVE T,TIME	; No, must set timeout.
+		ADDI T,2*60.*30.	; Use 2*MSL
+		MOVEM T,XBORTT		; set timeout.
+		JRST TSI60]
+	CAIN J,.XSFN2
+	 JRST [		; If retrans queue empty, transmit-chan CLOSE done.
+		JRST TSI60]
+	CAIN J,.XSCLO
+	 JRST [	SKIPE XBORTQ(I)	; If our FIN is ACK'd,
+		 JRST TSIF55	;  No-- flush the segment.
+		CALL TSITMW	; then enter TIME-WAIT state, start timeout.
+		JRST TSI80]	; Then go check for FIN, etc.
+	CAIN J,.XSCLA		; LAST-ACK waiting for ACK of our FIN.
+	 JRST [	SKIPE XBORTQ(I)	; If our FIN has been ACK'd,
+		 JRST TSIF56	;  No-- flush the segment.
+		METER("TCP: FIN acked in .XSCLA")
+		CALL TXBFLP	; Flush the TCB immediately, PI level
+		JRST TSIFL]	; then flush the segment.
+	BUG CHECK,[TCP: Bad ACK state]
+
+	; Check the URG bit.  The only states which get to this
+	; point are OPEN, FIN-WAIT-1, and FIN-WAIT-2.
+TSI60:	TLNN E,(TC%URG)		; Segment has urgent pointer set?
+	 JRST TSI70		; Nope, on to next step.
+	LDB A,[TH$UP (H)]	; Get SEG.UP (urgent ptr from segment)
+
+	; This is where URGENT should be handled!!!!
+				; Drop through
+
+	; Finally process segment text!
+	; Only states OPEN, FIN-WAIT-1 and FIN-WAIT-2 can get here.
+TSI70:	TRNE E,%TSIFL		; If segment being flushed after ACK/URG,
+	 JRST TSIF70		; flush it now!
+
+	LDB A,[PK$TDL (R)]	; Find # bytes of real data in segment
+	JUMPLE A,TSI80		; If none, no text processing.
+
+	TLNE E,(TC%FIN)		; Check that # bytes data == seg.len
+	 JRST [	CAIE A,-1(TT)	; Must allow for funny non-data FIN.
+		 JRST TSI71	; Nope
+		JRST TSI72]	; Yep
+	CAIE A,(TT)		; # bytes data should == seg.len
+TSI71:	 BUG CHECK,[TCP: seglen error]
+TSI72:	SKIPE D,XBRWND(I)	; Note D used for flag,
+	 JRST TSI75		; and is non-zero if no compaction done.
+
+	; Our window is zero, and technically we should throw away the
+	; data now that all RST/ACK/URG processing has been done.  However,
+	; we try to see if we can possibly do a little compaction, since
+	; the overhead of doing this is a lot less than the overhead
+	; of re-processing the re-transmitted segment!
+	MOVE A,XBINPS(I)	; Check length of input queue
+	CAIL A,2		; Must be at least 2
+	 SKIPN XBITQH(I)
+	  BUG CHECK,[TCP: Wind & Queue both 0]
+
+	; See if it's worth trying to compact the input seg into the
+	; last one received (which hasn't yet been seen by MP level)
+	HLRZ A,XBITQH(I)	; Get ptr to last input seg on queue
+	LDB B,[PK$TDO (A)]	; Get offset to data in old seg
+	LDB C,[PK$TDL (A)]	; See how much data is there
+	LDB T,[PK$TDL (R)]	; Find # bytes in new segment
+	ADDI B,(C)		; Get offset to end of data
+	MOVEI D,(B)
+	ADDI D,(T)		; Get projected total offset
+	CAML D,XBRMSS(I)	; Crock method of ensuring enuf room.
+	 JRST TSI17		; Not enough, we lose.  Lose.  Lose.
+
+	; Win!  We're gonna compact!
+	METER("TCP: Iseg cmpct")
+	ADDI C,(T)		; Get new # bytes for prev seg
+	DPB C,[PK$TDL (A)]	; Store it in advance.
+	HLRZ D,PK.TCP(A)	; Find addr of TCP header in prev seg
+	IDIVI B,4
+	ADDI D,(B)		; Get addr for BP to end of data
+	HRL D,(C)[441000 ? 341000 ? 241000 ? 141000]	; Make LH
+	LDB B,[PK$TDO (R)]	; Get data offset for new segment
+	IDIVI B,4
+	ADDI B,(H)		; Get addr for BP to start of new data
+	HRL B,(C)[441000 ? 341000 ? 241000 ? 141000]	; Make LH
+	; B/ BP to new data
+	; D/ BP to end of old data
+	; T/ # bytes of new data
+	MOVEI A,(T)		; Save # added data in A
+TSI74:	ILDB C,B
+	IDPB C,D
+	SOJG T,TSI74
+	SETZ D,			; Clear D to indicate compaction done.
+	JRST TSI75
+
+	; Can't accept segment data, period.
+TSI17:	METER("TCP: Ifl 0-wnd")
+	JRST TSIFL		; Flush the seg, sob.
+
+TSI75:	MOVEI B,(TT)
+	ADDB B,XBRNXT(I)	; Update rcv.nxt value by adding seg.len
+	TLZE B,%MOD32
+	 MOVEM B,XBRNXT(I)	; Updated!
+	LDB B,[XB$ICH (I)]	; See if we have an input channel #
+	JUMPE B,[METER("TCP: IS fl no chan")
+		JRST TSI78]	; No input channel, so just throw away.
+	MOVEI C,(A)		; Save # bytes data.
+	ADDM A,XBINBS(I)	; Add new bytes to # bytes in input queue
+	JUMPE D,TSI78		; If compaction done, that's all...
+	SKIPE B,XBINPS(I)	; If no segments previously on queue,
+	 MOVE B,XBIBC(I)	; or current input buff has zero cnt,
+				; then will definitely interrupt user later.
+	AOS XBINPS(I)		; Bump # segments on queue
+
+	; Check to see how much to reduce window by.
+	; Amount is in C (defaults to amount we just received)
+	CALL TCPRWS		; Set receive window
+
+	; Finally add segment to queue!
+	MOVEI A,(R)		; Set up pointer to packet/segment
+	MOVEI Q,XBITQH(I)	; Point to TCP input queue
+	CALL PKQPL(PK.TCP)	; Add to end of queue, using TCP links.
+	JUMPN B,TSI78		; Check, jump unless had no input before
+	CALL TXBIST		; If none, then must definitely change state!
+	HRLM T,XBSTAU(I)	; 
+	CALL TCPUII		; And always give an input-avail int!
+
+	; Now must send an ACK, or rather arrange for one to be
+	; sent soon.  FIN is also checked here, so as to bypass the
+	; code which assumes that XBRNXT hasn't been updated (if we are
+	; here, it certainly has!)
+TSI78:	MOVSI A,(TC%ACK)	; Set bit asking for ACK to be sent.
+	IORM A,XBSTAT(I)
+	TLNN E,(TC%FIN)		; Perform FIN-bit check
+	 JRST TSI90		; None, all done with segment!
+	JRST TSI82		; FIN exists, handle it (bypass bump of XBRNXT)
+
+	; Lastly check the FIN bit.
+	; Connection states which do not expect to receive data come here
+	; directly from ACK processing.
+TSI80:	TRNE E,%TSIFL		; If duplicate segment being flushed after
+	 JRST TSIF70		; ACK/URG, flush it now!
+	TLNN E,(TC%FIN)
+	 JRST TSI90
+	CAIG J,.XSSYN
+	 JRST TSIF80		; Flush if CLOSED, LISTEN, SYN-SENT
+
+	; Advance RCV.NXT over the FIN
+	AOS A,XBRNXT(I)
+	TLZE A,%MOD32
+	 MOVEM A,XBRNXT(I)
+
+	; Rest of FIN processing, after processing new data in packet.
+	; Ack FIN, update connection state, inform user.
+TSI82:	MOVSI A,(TC%ACK+%XBFIN)	; Set bit asking that ACK be sent, and FIN 
+	IORM A,XBSTAT(I)	; was seen.
+	MOVEI T,.XCFRN		; Say foreign host closed input side.
+	CALL TCPUCI
+
+	; Now effect some state changes
+	CAIE J,.XSOPN		; If OPEN
+	 CAIN J,.XSSYR		; or SYN-RCVD
+	  JRST [MOVEI J,.XSCLW	; Change state to CLOSE-WAIT
+		JRST TSI85]
+	CAIN J,.XSFN1
+	 JRST [	SKIPN XBORTQ(I)	; If our FIN was ACK'd,
+		 JRST TSI84	; Go enter TIME-WAIT state
+		MOVEI J,.XSCLO	; Otherwise enter CLOSING state.
+		JRST TSI85]
+	CAIE J,.XSFN2
+	 CAIN J,.XSTMW
+	  JRST TSI84		; Go to TIME-WAIT
+	JRST TSI90		; Any other states just do nothing.
+
+TSI84:	CALL TSITMW		; Enter TIME-WAIT state, starting 2-MSL timeout
+	JRST TSI90
+TSI85:	HRRM J,XBSTAT(I)	; Set new state and fall through.
+	CALL TCPUSI		; Set user state.
+
+	; Done.  Finally decide whether to keep segment around or not.
+TSI90:	HLRZ A,XBITQH(I)	; Get ptr to last thing on input queue
+	CAIN A,(R)		; Same as current seg (ie it was queued?)
+	 RET			; Yes, just return!
+	JRST TSIF90		; Else drop through to flush the segment.
+
+XSMTRS:	OFFSET -.
+.XSCLS:: METER("TCP: state CLS")
+.XSSYQ:: METER("TCP: state SYQ")
+.XSLSN:: METER("TCP: state LSN")
+.XSSYN:: METER("TCP: state SYN")
+.XSSYR:: METER("TCP: state SYR")
+.XSOPN:: METER("TCP: state OPN")
+.XSFN1:: METER("TCP: state FN1")
+.XSFN2:: METER("TCP: state FN2")
+.XSCLW:: METER("TCP: state CLW")
+.XSCLO:: METER("TCP: state CLO")
+.XSCLA:: METER("TCP: state CLA")
+.XSTMW:: METER("TCP: state TMW")
+.XSTOT:: OFFSET 0
+
+
+TSIF01:	METER("TCP: ISeg cksm errs ")
+	JRST TSIFL
+TSIF02:	METER("TCP: IS zero port/addr")
+	JRST TSIFL
+TSIF03:	METER("TCP: IS fl neg data")
+	JRST TSIFL
+;TSIF10:	; Flush this later (retain til get new .METER LIST)
+	METER("TCP: IS fls Seq # err")
+	JRST TSIFL
+TSIF50:	METER("TCP: IS fls Seq no ACK ")
+	JRST TSIFL
+TSIF55:	METER("TCP: IS fls CLO & FIN not ACKed")
+	JRST TSIFL
+TSIF56:	METER("TCP: IS fls CLA & FIN not ACKed")
+	JRST TSIFL
+TSIF70:	METER("TCP: IS fls seqerr processed A/U/R")
+	JRST TSISNE		; Go respond with ACK
+TSIF80:	METER("TCP: IS fls FINchk state")
+	JRST TSIFL
+TSIF2A:	METER("TCP: IS fls random RST")
+	JRST TSIFL
+TSIF2B:	METER("TCP: IS fls Fresh SYN already on SYNQ")
+	JRST TSIFL
+
+TSIF90:	METER("TCP: IS fls processed seg")
+	JRST TSIFL
+
+	; Come here to flush the datagram/segment and return.
+TSIFL:	METER("TCP: Isegs flushed")
+	MOVEI A,(R)
+	CALRET PKTRT
+
+; TSITMW - Routine to enter TIME-WAIT state.
+; TSITM2 is entry point when already in that state.
+; Clobbers T, Q
+TSITMW:	MOVEI J,.XSTMW
+	HRRM J,XBSTAT(I)
+	CALL TCPUSI		; Alert user if necessary.
+TSITM2:	SKIPE XBORTQ(I)		; Unless retransmit still hogs timeout
+	 RET			; (if so, return)
+	MOVE T,TIME		; then set up 2-MSL timeout.
+	ADDI T,30.*2.*60.
+	MOVEM T,XBORTT(I)
+	RET
+
+; TSISNE - Sequence number error, segment not acceptable,
+;	return an ACK unless RST was set.
+
+TSISNE:	METER("TCP: IS NE seqerr")
+	TLNE E,(TC%RST)
+	 JRST TSIFL		; Flush segment if RST was set
+
+	; Send an immediate ACK without data, re-using the
+	; packet/segment that R points to.
+TSOACK:	MOVSI T,(TC%ACK)	; Send an ACK immediately
+	TRCPKT R,"TSOACK return ACK in response to out-of-seq ACK"
+	CALL TSOSNR
+	RET
+
+; TSISQ - Jumped to from TCPIS when TCP segment is received that matches
+;	no existing connection.  Check to see if it's a valid connection
+;	request.  If so,
+;	(1) see if it matches any wild listens; if so, process.
+;	(2) see if it's OK to start up a server for it; if so, process.
+
+TSISQ:	TLNE E,(TC%RST)	; If it has RST set,
+	 JRST TSIF2A	;  Go drop it quietly.
+	TLNE E,(TC%ACK)	; If ACK, can't be a valid request either
+	 JRST TSISAR	;  Go send a RST in response (with SEQ=SEG.ACK)
+	TLNN E,(TC%SYN)	; Anything else had better have a SYN
+	 JRST TSISLR	;  otherwise send RST with SEQ=0,ACK=SEQ+LEN
+
+	; Okay, we have a promising SYN.  See if it matches any
+	; "wild" listens.
+	METER("TCP: Fresh SYN")
+	LDB B,[TH$DST (H)]	; Get desired port #
+	LDB C,[TH$SRC (H)]	; Find port it's from 
+	LDB D,[IP$SRC (W)]	; and host it's from.
+	MOVSI I,-XBL
+TSISQ2:	HRRZ J,XBSTAT(I)	; Get state for TCB
+	CAIE J,.XSLSN		; We're hunting for LISTEN
+TSISQ3:	 AOBJN I,TSISQ2
+	JUMPGE I,TSISQ5		; Jump if no match.
+	LDB A,[.BP TH%DST,XBPORT(I)]	; Get our local port (never wild)
+	CAIE A,(B)		; It must match desired "dest port"!
+	 JRST TSISQ3		; Nope, doesn't want this one.
+	SKIPL XBHOST(I)		; Aha, very likely will match. Follow thru.
+	 CAMN D,XBHOST(I)
+	  CAIA
+	   JRST TSISQ3		; Host didn't match.
+	MOVE A,XBPORT(I)	; Check remote port field
+	TRNE A,17		; Low 4 bits are non-zero if remote wild.
+	 JRST TSISQ4		; Won!
+	LDB A,[.BP TH%SRC,A]	; Not wild, see if it matches request.
+	CAIE A,(C)		; Compare our remote with its source.
+	 JRST TSISQ3		; No, no match here.
+
+	; Matched a wild listen!  Must fill in various stuff.
+TSISQ4:	MOVEI A,17
+	ANDCAM A,XBPORT(I)	; Clear wild bits
+	DPB C,[.BP TH%SRC,XBPORT(I)]	; Set remote port #
+	MOVEM D,XBHOST(I)		; Set remote host addr
+	LDB D,[IP$DST (W)]	; Set local address to whichever address other guy knows
+	MOVEM D,XBLCL(I)
+	DPB I,[PK$TCB (R)]	; Finish setting up context for dispatch
+	CALL TCPMSS		; Correct MSS values for specified foreign host
+	CALL TCPRWS		; Open up a receive window
+	JRST TSILS		; Go handle SYN rcvd for LISTEN.
+
+	; No outstanding listens.  Check the port number, to
+	; see if it's something we are likely to service.
+TSISQ5:	LDB A,[TH$DST (H)]	; Get destination port #
+	CAILE A,%TCPMP		; Fits max port # for RFC service?
+	 JRST TSISLR		; Naw, barf about it (send RST).
+	
+	; See if we're actually willing to start up a job...
+	LDB A,[IP$SRC (W)]	; See who it's from
+	JSP T,IPLCLH		; Ask IP if this is one of us
+	 SKIPL TCPUSW		; It isn't, so make sure we're open for biz
+	  CAIA
+	   JRST TSISLR		; Sorry charlie (send RST)
+
+	; Okay, we'll take it as SYN-QUEUED!  We know this is a new
+	; request, otherwise it would have been matched at TSI02 and
+	; dispatched to TSISQQ instead.
+
+ifn 0,[
+	;   first see if it's already on the queue!
+	; Note that we still have remote host # in D.
+	SKIPN Q,TCPRQH		; Get pointer to 1st item on queue
+	 JRST TSISQ7		; No queue, so not on.
+	MOVE B,TH$SRC(H)	; Get req's source/dest ports
+	MOVE D,IP$SRC(W)	; and its source addr
+TSISQ6:	HLRZ T,PK.TCP(Q)	; Get addr of TCP header from queue
+	HLRZ C,PK.IP(Q)		; and addr of IP header
+	CAIE T,
+	 CAIN C,
+	  BUG CHECK,[TCP: SYNQ smashed]
+	CAMN B,TH$SRC(T)	; Same ports?
+	 CAME D,IP$SRC(C)	; Same host?
+	  CAIA			; No
+	   JRST TSIF2B		; Yes, assume SYN is a dup, ignore it.
+	HRRZ Q,PK.TCP(Q)	; Get next thing on pending queue
+	JUMPN Q,TSISQ6
+
+	; Not on queue, let's try to add it.
+TSISQ7:	MOVE A,TCPRQN		; Find # of things on queue already
+	CAIL A,%TCPMQ		; Keep its length reasonable
+	 JRST TSISQ8		; Sigh, ran out.
+	HRROI T,NTSYNL		; OK, now try loading job up!
+	CALL NUJBST		; Queue request for job TCPRFC
+	 JRST TSISLR		; Bah, no job slots or something!
+	MOVEI A,(R)		; It's on the way!  Queue the SYN now.
+	MOVEI Q,TCPRQH
+	CALL PKQPL(PK.TCP)	; Add onto end of pending-RFC queue.
+] ;ifn 0
+
+	MOVSI I,-XBL
+TSISQ6:	SKIPN XBUSER(I)
+	 SKIPE XBSTAT(I)
+	  AOBJN I,TSISQ6
+	JUMPGE I,TSISQ8		; Jump if no free slots.
+	CALL TXBINI		; Got one, might as well verify it's cleared.
+	MOVE A,TCPRQN		; Find # of things on queue already
+	CAIL A,XBL/2		; Keep number reasonable
+	 JRST TSISQ8		; Sorry, too many.
+	HRROI T,NTSYNL		; Now see if we can load up handler job.
+	CALL NUJBST		; Do it
+	 JRST TSISLR		; Ugh, couldn't start new job...
+	MOVEI J,.XSSYQ
+	MOVEM J,XBSTAT(I)	; Set state SYN-QUEUED
+	LDB A,[IP$SRC (W)]
+	MOVEM A,XBHOST(I)	; Set up host #
+	MOVE A,TH$SRC(H)	; and ports
+				; Don't need to set XBLCL, won't be looked at
+	MOVEM A,XBPORT(I)	; That's all we need for now.
+	CALL TCPMSS		; Might as well keep these right even though
+	CALL TCPRWS		;  this TCB will be flushed when conn opens.
+	MOVE A,TIME
+	ADDI A,10.*30.		; Let it stay queued for 10 seconds.
+	MOVEM A,XBORTT(I)
+	MOVEI Q,XBITQH(I)	; Put the segment on input queue for slot.
+	MOVEI A,(R)
+	CALL PKQPF(PK.TCP)
+
+	HRRZM I,TCPRQL		; Save # of last SYN queued.
+	AOS TCPRQN		; And increment count of entries.
+	METER("TCP: Srvjob starts")
+	RET			; All done!
+
+TSISQ8:	BUG INFO,[TCP: SYN queue full]
+	JRST TSISLR		; Sigh.
+
+
+; TSISQQ - Come here when segment received that matches an
+;	existing port/host which is in SYN-QUEUED state.
+
+TSISQQ:	TLNE E,(TC%RST)		; Is it an RST?
+	 JRST [	CALL TSISQF	; Yeah, flush the queued SYN.
+		JRST TSIFL]	; and drop segment.
+	TLNE E,(TC%ACK)		; An ACK?  That's illegal etc...
+	 JRST [	CALL TSISQF	; Flush the queued SYN,
+		JRST TSISAR]	; and send a RST in response.
+	TLNN E,(TC%SYN)		; Anything else better be a SYN
+	 JRST [	CALL TSISQF	; else send RST.
+		JRST TSISLR]
+	JRST TSIF2B		; Most likely a duplicate SYN, so just
+				; flush it and return.
+
+	; Flush TCB for a queued SYN.
+TSISQF:	SETZM XBSTAT(I)
+	SETZM XBPORT(I)
+	SETZM XBHOST(I)
+	SETZM XBORTT(I)
+	SKIPE XBITQH(I)
+	 CALL TXBIFL
+	SOSGE TCPRQN
+	 BUG HALT
+	RET
+
+
+; TSISAR - Respond to current segment by sending a RST with
+;	SEQ=SEG.ACK.  Re-uses the current segment's packet buffer.
+;	R, W, H set up for PE, IP, and TCP.
+;	E has seg flags.  May not be anything in I, so re-use fields
+;	from given packet!
+; TSISAQ - like TSISAR but just drops segment if it has RST in it.
+; TSISLR - like TSISAR, but SEQ=0, ACK=SEG.SEQ+SEG.LEN
+;	This is used when responding to segments without an ACK, i.e.
+;	initial SYNs.
+
+TSISLR:	METER("TCP: times at TSISLR")
+	LDB A,[TH$SEQ (H)]	; Get SEQ.  Assume TT still valid.
+	ADDI A,(TT)		; ACK=SEG.SEQ+SEG.LEN
+	LSH A,4			; Left justify it.
+	SETZ D,			; SEQ=0
+	MOVSI T,(TC%RST+TC%ACK)
+	JRST TSISA2
+
+TSISAQ:	TLNE E,(TC%RST)		; Here, if incoming seg was RST,
+	 JRST TSIFL		; just ignore, don't respond.
+TSISAR:	METER("TCP: times at TSISAR")
+	MOVE D,TH$ACK(H)	; Use SEG.ACK for SEQ
+	MOVSI T,(TC%RST)
+
+	; Here, A, D, and T must be set up.
+TSISA2:	SETZ B,
+	LDB C,[TH$SRC (H)]	; Get source port
+	DPB C,[.BP TH%DST,B]	; Use as dest port
+	LDB C,[TH$DST (H)]	; Get dest
+	DPB C,[.BP TH%SRC,B]	; Use as... you guessed it.
+	PUSH P,IP$DST(W)	; Which of my addresses to claim to be from
+	MOVE C,IP$SRC(W)
+
+;	A/ ACK field (left justified)
+;	B/ <loc port><rem port> (left justified)
+;	C/ remote host (left justified)
+;	D/ SEQ field (left justified)
+;	R/ PE ptr to packet responding to
+;	T/ flags to use
+
+
+	SETZ I,
+	CALL TSOINI		; Initialize W,H,PK.IP(R),PK.TCP(R),PK.TCI(R)
+				; Note everything in PK.TCI will be wrong.
+	MOVEM C,IP$DST(W)	; Store remote host
+	MOVEM B,TH$SRC(H)	; Store loc/rem ports
+	MOVEM D,TH$SEQ(H)	; Deposit new SEQ field
+	TLNN T,(TC%ACK)		; If sending an ACK
+	 SETZ A,
+	MOVEM A,TH$ACK(H)	; Deposit ACK field.
+	TLO T,240000		; Set IHL
+	MOVEM T,TH$CTL(H)	; Deposit segment flags
+	MOVEI A,5*4
+	DPB A,[IP$TOL (W)]	; Say length just a std TCP header.
+	POP P,IP$SRC(W)
+	CALL THCKSM		; Figure TCP checksum
+	DPB A,[TH$CKS (H)]	; Deposit in
+	CALL IPKSND		; Put this buffer on IP output queue!
+	RET
+
+
+; TSILS - Segment received for this connection while in LISTEN state.
+;	
+TSILS:	METER("TCP: Segs rcvd in LSN")
+	TLNE E,(TC%RST)		; Ignore any RSTs.
+	 JRST TSIFL
+	TLNE E,(TC%ACK)		; ACKs are bad too.
+	 JRST TSISAR		;  Respond with a RST to them.
+	TLNN E,(TC%SYN)		; It should be a SYN.
+	 JRST TSIFL		;  If not, just flush.
+
+	; We've received a SYN that should be valid.  Set up for
+	; SYN-RCVD state.  Note that we ignore security/precedence
+	; except to remember it so our transmits look OK.
+	; NOTE!!! TSILSX is an entry point from MP level TCPOPN call,
+	; which is used to hook up a user OPEN to a matching SYN on
+	; the pending-RFC queue!
+	METER("TCP: SYN in LSN")
+TSILSX:	LDB D,[TH$SEQ (H)]	; Get sequence number
+	LDB A,[TH$WND (H)]
+	MOVEM A,XBSWND(I)	; Initialize send window
+	MOVEM A,XBSAVW(I)	; and available window
+	MOVEM D,XBSWL1(I)	; Save seg.seq used for last window update
+	LDB A,[TH$ACK (H)]
+	MOVEM A,XBSWL2(I)	; Save seg.ack used for last window update
+	ADDI D,1
+	TLZ D,%MOD32		; Get seg.seq+1
+	MOVEM D,XBRNXT(I)	; Store as initial RCV.NXT
+	CALL TCPISS		; Select a new ISS in A (Initial Send Seq#) 
+	MOVEM A,XBSUNA(I)	; Set SND.UNA to ISS
+;	ADDI A,1
+;	TLZ A,%MOD32
+	MOVEM A,XBSNXT(I)	; And SND.NXT also; assume that process of
+				; sending it will increment by 1.
+
+	; Check for TCP options at this point, and process if present
+	LDB A,[TH$THL (H)]	; TCP header length
+	CAILE A,%TCPHL		; If default, no options present
+	 CALL TCPPIO		; Else, process input options
+
+	; Nasty business - put together and send a segment with
+	; seq=ISS,ack=RCV.NXT,ctl=SYN+ACK.
+	; For now we can assume that initial SYNs will never
+	; contain text, and so we don't have to queue it up.
+	; Alternatively can hope that remote site is clever about
+	; retransmitting!
+	; This is because if we don't need to keep received segment
+	; around, can just re-use it.
+	MOVSI T,(TC%SYN+TC%ACK)
+	TRCPKT R,"TSISLX Reflecting incoming SYN with SYN"
+	CALL TSOSSN		; Fire off SYN. Sends MSS option too.
+	MOVEI J,.XSSYR		; Change state to SYN-RCVD.
+	HRRM J,XBSTAT(I)
+	CALL TCPUSI		; Set user state.
+	RET
+
+; TCPISS - Select new ISS, return in A
+
+TCPISS:	MOVE A,TIME
+	LSH A,13.
+TCPIS2:	TLZ A,%MOD32
+	CAMN A,TISSLU	; Same as last used?
+	 JRST [	AOS A,TISSC
+		ANDI A,17
+		LSH A,9.
+		ADD A,TISSLU
+		JRST TCPIS2]	; Jump to mask off and test again.
+	MOVEM A,TISSLU
+	RET
+
+; TCPPIO - Process TCP options from incoming segment.
+;	This is only checked for SYN segments because the only interesting
+;	option (Max Segment Size) is only sent with SYN segments
+;
+;	R/ Pkt buffer
+;	I/ TCB Index
+;	H/ TCP Header
+;	A/ TCP header size in 32-bit words
+
+TCPPIO:	SUBI A,%TCPHL
+	LSH A,2			; Options length in bytes
+	MOVE B,[TH$OPT (H)]	; BP to start of options
+TCPPIL:	SKIPG A			; Anything left?
+	 RET			; Nope, done
+	ILDB C,B		; Get option type
+	CAIL C,TCPPIS		; In range?
+	 RET			; Have to give up if unknown option
+	JRST @TCPPIT(C)
+
+TCPPIT:	TCPPI0
+	TCPPI1
+	TCPPI2
+TCPPIS==.-TCPPIT
+
+	;End of option list
+TCPPI0:	RET
+
+	;NOP
+TCPPI1:	SOJA A,TCPPIL		; Decrement length and loop
+
+	;Max Seg Size	TYPE ? LENGTH ? MSB ? LSB
+TCPPI2:	ILDB C,B		; Get length
+	SUB A,C			; Count it
+	ILDB C,B		; Get 16-bit quantity, updating B
+	LSH C,8.
+	ILDB D,B
+	ADD C,D			; Now contains foreign MSS request
+	CAMGE C,XBSMSS(I)	; Don't exceed our own limits!
+	 MOVEM C,XBSMSS(I)	; Set new value in TCB
+	JRST TCPPIL
+
+
+; TSISS - Segment received while in SYN-SENT state.
+;	Note that being in this state implies that there is one
+;	segment on the retransmit queue, which must be the initial SYN
+;	that we sent.
+
+TSISS:	METER("TCP: Segs rcvd in SYN-SENT")
+	LDB D,[TH$SEQ (H)]	; Get SEG.SEQ
+	TLNN E,(TC%ACK)		; Has an ACK?
+	 JRST TSISS2		; Nope, it better be RST or SYN.
+
+	; See if our SYN has been ACKed. Since we only send SYNs
+	; without data, this just means a test for SEG.ACK = SND.NXT.
+	LDB B,[TH$ACK (H)]	; Have ACK. Get ack field
+	CAME B,XBSNXT(I)	; It should ACK our initial SYN
+	 JRST TSISAQ		; If not, send a RST.
+;	MOVE A,XBSUNA(I)	; snd.una =< seg.ack =< snd.nxt ?
+;	CMPSEQ A,=<,B,=<,XBSNXT(I),TSISAQ	; If not good, send RST.
+
+TSISS2:	TLNE E,(TC%RST)		; Check for RST
+	 JRST [	TLNN E,(TC%ACK)	; Ugh, have RST.  Did we also get good ACK?
+		 JRST TSIFL	; No, can just flush this segment.
+		MOVEI T,.XCRFS	; Yeah, our SYN is being refused, so
+		CALL TCPUC	; say this is close-reason.
+		JRST TSIRST]	; Then must go abort connection.
+
+	; Here we get to check security/precedence.  Hurray.
+	; We should just copy the seg values, so as to fake sender out.
+
+	; Now finally check the SYN bit!
+	TLNN E,(TC%SYN)		; Must be set
+	 JRST TSIFL		; Neither RST nor SYN?  Flush it.
+
+	; It's a SYN.  Update our send params from its values.
+	; We will either send an ACK or another SYN; in both cases the
+	; SYN segment currently on the retransmit queue should be flushed.
+	MOVEI Q,XBORTQ(I)	; Point to retrans q
+	CALL PKQGF(PK.TCP)	; Pluck off 1st thing
+	SOSN XBORTL(I)		; Verify none left on queue
+	 CAIN A,		; and something was there!
+	  BUG CHECK,[TCP: SYN-SENT retrans Q bad]
+	JUMPE A,TSISS3		; Just for robustness
+	TRCPKT A,"TSISS2 Flushing our SYN from rexmit Q"
+	MOVE T,PK.FLG(A)
+	TLO T,%PKFLS		; Tell IP to flush packet if seen
+	MOVEM T,PK.FLG(A)
+	CALL PKTRT		; Flush SYN packet if not otherwise busy
+	SETZM XBORTT(I)		; and flush timeout.
+
+TSISS3:	LDB A,[TH$WND (H)]
+	MOVEM A,XBSWND(I)	; Initialize send window
+	MOVEM A,XBSAVW(I)	; and available window
+	MOVEM D,XBSWL1(I)	; Save seg.seq used for last window update
+	LDB A,[TH$ACK (H)]
+	MOVEM A,XBSWL2(I)	; Save seg.ack used for last window update
+	ADDI D,1
+	TLZ D,%MOD32
+	MOVEM D,XBRNXT(I)	; Set RCV.NXT to SEQ+1
+
+	; Process segment options in case sender specified MSS
+	LDB A,[TH$THL (H)]	; TCP header length
+	CAILE A,%TCPHL		; If default, no options present
+	 CALL TCPPIO		; Else, process input options
+
+	TLNN E,(TC%ACK)
+	 JRST TSISS4
+	LDB A,[TH$ACK (H)]	; If ACK also present, (known acceptable)
+	MOVEM A,XBSUNA(I)	; Set SND.UNA to SEG.ACK.
+
+	; Here must test if SND.UNA > ISS (our SYN has been ACKed).
+	; But this was already checked just before TSISS2.
+	MOVSI T,(TC%ACK)	; Hurray, we're open!  Must ACK the SYN
+	TRCPKT R,"TSISS3 ACK SYN to open conn"
+	CALL TSOSNR		; (Re-using its segment)
+	MOVEI J,.XSOPN		; Hurray, we're open now!
+	HRRM J,XBSTAT(I)
+	CALL TCPUSI		; Update user state
+	RET
+
+	; Our SYN not ACKed yet, so enter SYN-RCVD state.
+TSISS4:
+	; Must go send seq=ISS,ack=RCV.NXT,ctl=SYN+ACK
+	LDB D,[TH$SEQ (H)]	; Get sequence number
+	ADDI D,1
+	TLZ D,%MOD32		; Get seg.seq+1
+	MOVEM D,XBRNXT(I)	; Store as initial RCV.NXT
+	SOSGE A,XBSUNA(I)	; Set SND.UNA to ISS
+	 JRST [	MOVEI A,1
+		MOVEM A,XBSUNA(I)
+		JRST .+1]
+	MOVEM A,XBSNXT(I)	; And SND.NXT also; assume that process of
+				; sending it will increment by 1.
+	MOVSI T,(TC%SYN+TC%ACK)
+	TRCPKT R,"TSISS4 ACK and re-SYN SYN-SENT conn"
+	CALL TSOSSN		; Fire off SYN/ACK with MSS option included.
+	MOVEI J,.XSSYR		; Change state to SYN-RCVD.
+	HRRM J,XBSTAT(I)
+	CALL TCPUSI		; Set user state.
+	RET
+
+; TSIRST - valid RST segment received (not in LISTEN).
+;	Basically must flush the connection, signal user, etc.
+
+TSIRST:	METER("TCP: Valid RSTs")
+	CALL TXBFLP		; Flush the TCB immediately, PI level
+	MOVEI T,.XCRST		; Say fgn host reset stuff
+	CALL TCPUC		; as "close reason"
+	CALRET TSIFL		; Flush segment.
+
+; TSISYN - SYN segment received.
+;	If in window, error - send a RST and close things up.
+;	If not in window, return an ACK as for TSISNE.
+
+TSISYN:	METER("TCP: Random SYN")
+
+	CALRET TSIFL
+
+; TSISRA - Bad ACK seen while in SYN-RCVD state,
+;	send a RST.
+
+TSISRA:	METER("TCP: Bad ACK in SYR")
+	CALRET TSIFL
+
+; TSISAK - Received ACK for something not yet seen, send ACK and
+;	drop segment.
+TSISAK:	METER("TCP: ACK for nxm")
+	CALRET TSIFL
+
+; TSIATW - Received ACK while in TIME-WAIT state.  This should be
+;	a re-transmit of the remote FIN.  ACK it, and restart
+;	2-MSL timeout.
+
+TSIATW:	METER("TCP: ACK in .XSTMW")
+	MOVSI T,(TC%ACK)
+	TRCPKT R,"TSIATW ACK send in TIME-WAIT"
+	CALL TSOSNR		; Send simple ACK in response.
+	JRST TSITM2		; and restart 2-MSL timeout.
+
+SUBTTL TCP Send output segment
+
+; Send TCP output segment.
+; Send output (usually data) segment, for connection indexed by I.
+; Note this differs from TSISAR etc. which don't have any active connection,
+; thus no valid I.  As much context as possible is taken from the
+; TCB tables indexed by I.
+; In particular, the %XBCTL flags are examined to see if anything should
+; be added to the outgoing segment, other than what was requested in the
+; call.
+
+; Sequence space variables are updated.
+; The following possibilities are independently possible:
+;	Re-using packet / using fresh packet
+;	Uses seq space (must retrans) / no seq space used
+;
+; TSOSND - send output segment while connection established
+;	R/ PE ptr to packet,
+;		PK.BUF, PK.IP and PK.TCP must be set.
+;		If these were not initialized by TSOINI so as to get
+;		the right offsets, you will probably lose.
+;		PK.TCI should have the # bytes of data and offset.
+;	I/ TCB index
+; Clobbers A,B,C,D,E,W,H,Q,T,TT
+
+; TSOSNR - Just sends a data-less "reply" type segment using
+;	TCB's sequence space vars.  Seq=snd.nxt, ack=rcv.nxt, etc.
+;	R/ PE ptr to packet (packet will be smashed and re-used)
+;	I/ TCB index
+;	T/ flags to use (Neither ACK nor %XBCTL will be added automatically!)
+
+; Clobbers A,B,C,D,E,W,H,Q,T,TT
+
+TSOSNR:	CALL TSOINI	; Initialize (sets up W,H PK.IP,PK.TCP,PK.TCI)
+	SETZ TT,	; Say zero bytes of real data
+	DPB TT,[PK$TDL (R)]	; and make sure packet entry reflects this.
+	JRST TSOSN	; Jump in to do it.
+
+
+; TSOSSN - Send an initial SYN segment. No data, but add a TCP
+;	MSS option set from XBRMSS(I), and using TCB's sequence space
+;	vars.  Seq=snd.nxt, ack=rcv.nxt, etc.
+;	R/ PE ptr to packet (packet will be smashed and re-used)
+;	I/ TCB index
+;	T/ flags to use (None, including SYN, will be added automatically)
+
+; Clobbers A,B,C,D,E,W,H,Q,T,TT
+
+TSOSSN:	CALL TSOINI		; Initialize (sets up W,H PK.IP,PK.TCP,PK.TCI)
+	MOVE TT,XBRMSS(I)	; Max seg size we would like
+	LSH TT,4		; 32-bit option
+	IOR TT,TSOMSO		; Add in type and length fields of option
+	MOVEM TT,TH$OPT(H)	; Write it. Damn well better be first option.
+	LDB TT,[PK$TDO (R)]	; Get current TCP header size
+	ADDI TT,4		; Adding 4-byte option
+	DPB TT,[PK$TDO (R)]
+	SETZ TT,		; Say zero bytes of real data
+	DPB TT,[PK$TDL (R)]	; and make sure packet entry reflects this.
+	JRST TSOSN		; Jump in to do it.
+
+TSOMSO:	.BYTE 8 ? 2 ? 4 ? 0 ? 0 ? .BYTE	; Option 2, length 4, two data words
+
+TSOSND:	MOVSI T,(TC%ACK)	; Simple data segment
+	IOR T,XBSTAT(I)		; Plus whatever is being requested.
+	HLRZ W,PK.IP(R)		; Get ptr to IP header
+	HLRZ H,PK.TCP(R)	; and TCP header
+	LDB TT,[PK$TDL (R)]	; Get # bytes of data
+;	LDB A,[PK$TDO (R)]	; Get offset of data
+;	ADDI TT,(A)		; Now have # bytes past std hdr length.
+
+; TSOSN - Entry point if W, H, and TT already set up.
+;	I/ TCB index
+;	T/ flags for segment
+;	R/ PE ptr (PK.BUF, PK.IP, PK.TCP, PK.TCI must all be set)
+;	W/ IP header ptr
+;	H/ TCP header ptr
+;	TT/ # bytes of data (real data, not including header or SYN/FIN)
+; Clobbers A,B,C,D,E,TT,T,Q and updates various TCB data.
+
+; This code assumes TT is the bytes of DATA only.
+; Must store the out-of-TCP info in the IP header field, so that
+; the checksum and IPKSND routines will find it there.
+; This info consists of:
+;	IP$SRC - Source address
+;	IP$DST - Dest address
+;	IP$TOL - TCP segment length including header
+;	IP$PTC - Protocol number (needn't set, assumes %PTCTC always)
+
+TSOSN:	METER("TCP: Out segs")
+	AND T,[TH%CTL]		; Ensure non-flag bits are flushed.
+	MOVE A,T
+	ANDCAB A,XBSTAT(I)		; Turn off these request bits
+	TLNE A,(TH%CTL)			; Any request bits left?
+	 JRST TSOSN2			; Yeah, can't turn off "now" bit.
+	MOVSI A,(%XBNOW)		; Satisfied everything, so flush
+	ANDCAM A,XBSTAT(I)		; the send-immediately bit.
+
+TSOSN2:	LDB A,[PK$TDO (R)]		; Bytes of header
+	ADDI A,(TT)			; Add bytes of data
+	DPB A,[IP$TOL (W)]		; Store in IP length field
+	MOVE A,XBLCL(I)
+	LSH A,4
+	MOVEM A,IP$SRC(W)		; Set source host
+	MOVE A,XBHOST(I)
+	LSH A,4
+	MOVEM A,IP$DST(W)		; Set dest host
+
+	; Out-of-TCP info set up, now build the real TCP header.
+	LDB A,[.BP TH%DST,XBPORT(I)]	; Get port sending from (local)
+	DPB A,[TH$SRC (H)]
+	LDB A,[.BP TH%SRC,XBPORT(I)]	; Get port to send to
+	DPB A,[TH$DST (H)]
+	MOVE A,XBSNXT(I)		; Get sequence number to use
+	LSH A,4
+	MOVEM A,TH$SEQ(H)		; Set SEQ field
+	TLNN T,(TC%ACK)			; Check flags, sending ACK?
+	 TDZA A,A			;   If not, use zero field anyway.
+	  MOVE A,XBRNXT(I)		; Get ack number to use
+	LSH A,4
+	MOVEM A,TH$ACK(H)		; Set ACK field
+
+	SKIPE A,XBSUP(I)		; Urgent data being sent?
+	 JRST [	TLO T,(TC%URG)		; Yes!  Say urgent pointer signif
+		METER("TCP: Urgent dgms")
+		MOVNI B,(TT)
+		ADDB B,XBSUP(I)		; Adjust pointer as result of data sent
+		CAIGE B,
+		 SETZM XBSUP(I)
+		LSH A,4
+		JRST .+1]
+	MOVEM A,TH$UP(H)		; Set urgent pointer if any
+
+	MOVE A,XBRWND(I)		; Get our current receive window
+	LSH A,4
+	IOR A,T				; Add in caller's flags
+	LDB B,[PK$TDO (R)]		; Header length in bytes
+	LSH B,-2			; TCP wants length in 32-bit words
+	DPB B,[<.BP TH%THL,A>]
+	MOVEM A,TH$THL(H)		; Store header len, flags, window
+
+	PUSH P,TT			; Goddam checksum clobberage
+	CALL THCKSM			; Now figure out checksum
+	POP P,TT
+	DPB A,[TH$CKS (H)]
+
+	; TCP header set up.  Now update our TCB connection vars to
+	; account for the stuff we're sending.
+	TLNE T,(TC%SYN)			; Now find new seq # (SND.NXT)
+	 ADDI TT,1			; SYN counts as 1 octet
+	TLNE T,(TC%FIN)			; So does a FIN
+	 ADDI TT,1
+	JUMPLE TT,TSOSN8		; If not actually using seq space, skip
+					; a bunch of update/retrans stuff.
+
+	; We're using up some sequence space!  Must update avail window,
+	; and put the segment on retransmit queue.
+	MOVE A,XBSAVW(I)		; Must update avail send window
+	SUBI A,(TT)
+	CAIGE A,			; If window becomes negative,
+	 SETZ A,			; keep it at zero.
+	MOVEM A,XBSAVW(I)
+	ADD TT,XBSNXT(I)		; Get new SND.NXT
+	TLZ TT,%MOD32
+	MOVEM TT,XBSNXT(I)
+	SKIPN XBORTT(I)			; Retrans timeout already set?
+	 JRST [	MOVE A,TIME
+		ADD A,TCPTMO		; Make it 5 sec for now.
+		MOVEM A,XBORTT(I)
+		SETZM XBORTC(I)		; Clear count of retries.
+		JRST .+1]
+	TRCPKT R,"TSOSND Pkt w/seq space added to retransmit queue"
+	MOVEI A,(R)			; Arg to PKQPL, A/ PE ptr
+	MOVEI Q,XBORTQ(I)		; Arg to PKQPL, Q/ queue hdr ptr
+	CALL PKQPL(PK.TCP)		; Put on TCP retrans queue
+	AOS XBORTL(I)			; Bump count of segs on queue
+
+TSOSN8:	CALL IPKSND			; Put on IP output queue
+	RET
+
+SUBTTL TCP Retransmit and Timeout
+
+Comment |
+	The following things in TCP need some sort of timeout:
+	Retransmit output segment if not ACKed (removed) within RT sec
+	Timeout to abort connection if retransmission fails for UT sec
+	Timeout to ACK incoming data (ie avoid ACKing immediately,
+		wait for more output or input).
+	Timeout during TIME-WAIT to flush connection.
+|
+
+; TCPCLK - This routine is called by 1/2-sec "slow" clock.  What it has to do
+;	is scan all active TCB's for the following conditions:
+;	(1) Retransmit timeout has expired, must resend something.
+;		or TIME-WAIT timeout has expired.
+;	(2) An ACK must be sent, either by sending the current output
+;		buffer, or by generating an ACK without data.
+
+EBLK
+TCLKRC:	0		; Count of segs compacted in pass over a retrans Q
+BBLK
+
+TCPCLK:	SKIPN TCPUP		; Do nothing if turned off.
+	 RET
+	MOVSI I,-XBL
+	CONO PI,NETOFF
+	SKIPA A,TIME
+TCLK05:	 SKIPA A,TIME
+
+TCLK10:	SKIPN B,XBSTAT(I)
+	 JRST TCLK15
+	SKIPE C,XBORTT(I)
+	 CAMG A,C
+	  CAIA
+	   JRST TCLK20		; Retrans timeout
+TCLK12:	TLNE B,(TH%CTL+%XBNOW)	; Any flags set?
+	 JRST TCLK50		; Wants ACK sent
+TCLK15:	AOBJN I,TCLK10
+	CONO PI,NETON
+	RET
+TCLK16:	MOVE A,TIME
+	AOBJN I,TCLK10
+	CONO PI,NETON
+	RET
+
+	; Come here for timeout of some sort.
+TCLK20:	SKIPE XBORTQ(I)		; If a retrans queue exists,
+	 JRST TCLK22		; then assume it was a retrans timeout.
+	MOVEI C,(B)		; No retrans Q, probably a TIME-WAIT one?
+	CAIN C,.XSTMW		; State TIME-WAIT?
+	 JRST [	METER("TCP: Time-Wait timeout")
+		CALL TXBFLP	; Flush the TCB completely, PI level
+		JRST TCLK16]
+	CAIN C,.XSSYQ		; State SYN-QUEUED?
+	 JRST [	METER("TCP: SYQ timeout")
+		CALL TSISQF	; Flush the queued SYN.
+		JRST TCLK16]
+	CAIN C,.XSFN2		; State FIN-WAIT-2?
+	 JRST TCLK21
+	METER("TCP: Random timeout")	; Sigh.
+	SETZM XBORTT(I)			; Flush whatever it was.
+	JRST TCLK16
+
+TCLK21:	METER("TCP: FN2 timeout")
+	CALL TXBFLP	; Flush the TCB completely, PI level
+	SKIPE XBUSER(I)	; Shouldn't still have anything open.
+	 BUG CHECK,[TCP: FN2 timo with active user]
+	JRST TCLK16
+
+TCLK22:	METER("TCP: Retrans")
+	AOS C,XBORTC(I)		; Retrans timeout.  Send it again.
+	SKIPE D,XBORTP(I)	; Has user set any retrans params?
+	 JRST [ JRST TCLK25]	; Yes! For now, non-Z means skip abort check.
+	CAILE C,%TCPMR		; Tried too many times?
+	 JRST TCLK80		; Ugh, abort the connection!
+	SKIPN R,XBORTQ(I)
+	 JRST [	SETZM XBORTT(I)	; If nothing on queue,
+		JRST TCLK12]	; just reset the timeout to nothing.
+	SKIPGE A,PK.FLG(R)	; Ensure that packet isn't being output now
+	 JRST TCLK25		; Still being output??  Reset timeout.
+	; Note that we don't check to see whether segment has already
+	; been transmitted, on the theory that compaction is going to
+	; pay off anyway.
+	HLRZ W,PK.IP(R)
+	HLRZ H,PK.TCP(R)
+	SETZM TCLKRC		; Clear compaction count.
+
+	; Looks like we have to retransmit.  Try to compact up as much
+	; stuff as possible into a single segment; this gets a bit
+	; hairy.  Note that we compact as much as we can, ignoring the
+	; %PKPIL and %PKODN bits (except for setting the appropriate flush
+	; flags).
+	TRCPKT R,"TCLK30 Segment being retransmitted"
+TCLK30:	HRRZ J,PK.TCP(R)	; Get pointer to succeeding segment
+	JUMPE J,TCLK39		; If none following, can't compact (ignore
+				; possibility of adding XBOCOS for now)
+	LDB B,[PK$TDO (R)]	; Get 1st offset
+	LDB C,[PK$TDL (R)]	; Get 1st length
+	LDB T,[PK$TDL (J)]	; Get 2nd length
+	ADDI B,(C)		; Find offset to end of 1st data
+	MOVEI D,(B)
+	ADDI D,(T)		; Find total length after compaction
+	CAILE D,576.-<5*4>	; Hack hack hack!  Limit to 556. so std
+				; IP datagram is limited to 576.
+	 JRST TCLK39		; If too big, don't compact.
+
+	; Compact two segments into one!
+	; R/ 1st seg	D/ offset to end of data
+	; J/ 2nd seg	T/ len of 2nd data
+	METER("TCP: Retrans compact")
+	TRCPKT J,"TCLK30 Segment being compacted into previous seg for rexmit"
+	ADDI C,(T)		; Get new # bytes for 1st seg
+	DPB C,[PK$TDL (R)]	; Store it in advance.
+;	HLRZ D,PK.TCP(R)	; Find addr of TCP header in 1st seg
+	MOVEI D,(H)
+	IDIVI B,4
+	ADDI D,(B)		; Get addr for BP to end of data
+	HRL D,(C)[441000 ? 341000 ? 241000 ? 141000]	; Make LH
+	LDB B,[PK$TDO (J)]	; Get data offset for 2nd seg
+	IDIVI B,4
+	HLRZ A,PK.TCP(J)	; Get addr for BP to start of 2nd data
+	ADDI B,(A)
+	HRL B,(C)[441000 ? 341000 ? 241000 ? 141000]	; Make LH
+	; B/ BP to 2nd data
+	; D/ BP to end of 1st data
+	; T/ # bytes of 2nd data
+	LDB A,[IP$TOL (W)]	; Get current length of whole datagram
+	ADDI A,(T)		; Increment by length of added stuff
+	DPB A,[IP$TOL (W)]	; Store back
+	ADDI A,3
+	LSH A,-2
+	HRLM A,PK.BUF(R)	; Set up new count of # words in datagram.
+TCLK32:	ILDB C,B
+	IDPB C,D
+	SOJG T,TCLK32
+
+	; Data copied over, now update flags and stuff.
+	HLRZ D,PK.TCP(J)
+	MOVE A,TH$CTL(D)	; Get flags for 2nd seg
+	AND A,[TH%CTL]		; Mask off just flags
+	IORM A,TH$CTL(H)	; Add them to flags for 1st seg
+	TLNE A,(TC%URG)		; If URGENT bit set,
+	 JRST [	LDB B,[TH$UP (D)]	; Get pointer from 2nd seg
+		LDB C,[PK$TDL (R)]	; Sigh, get new len of 1st seg
+		ADDI B,(C)		; Adjust for bytes in front
+		LDB C,[PK$TDL (J)]	; But have to subtract length
+		SUBI B,(C)		; of 2nd seg (already in 1st len)
+		DPB B,[TH$UP (H)]	; Store ptr back in 1st seg
+		JRST .+1]
+
+	; Compaction done!  Now have to remove 2nd seg from queue.
+	HRRZ B,PK.TCP(J)	; Get pointer to 3rd seg
+	HRRM B,PK.TCP(R)	; Point 1st at it
+	CAIN B,			; If 2nd was the last one,
+	 HRLM R,XBORTQ(I)	; must update "last" ptr in queue header.
+	MOVE A,PK.FLG(J)	; Get flags
+IFN PK.TCP-2,.ERR %PQFL flag must match PK.TCP
+	TLZ A,(%PQFL2)		; Say it's off the TCP list, to allow
+				; flushing from IP queue.
+	TLO A,(%PKFLS)		; In fact, require it
+	MOVEM A,PK.FLG(J)	; Store flags back
+	JUMPGE A,[MOVEI A,(J)	; If not locked by PI output,
+		TRCPKT A,"TCLK32 Seg flushed from rexmit by compaction"
+		CALL PKTRT	; try to flush it now.
+		JRST .+1]
+	SOSGE XBORTL(I)		; Decrement count of retrans queue segs
+	 BUG HALT
+	AOS TCLKRC		; Bump count of recompacts done
+	JRST TCLK30		; OK, try to recompact next seg!
+
+	; Note one possible problem with following code; although
+	; the segment being re-trans'd is given latest poop (ACK, WND),
+	; the ones following are not.  This is usually OK as we assume
+	; that following segs have actually been sent out, but if it
+	; happens that they HAVEN'T (i.e. %PKODN not set) then their
+	; info is going to be a little out of date.  This shouldn't
+	; screw things too much, however.
+TCLK39:	MOVE D,XBRNXT(I)	; Get latest ACK value
+	LSH D,4
+	MOVEM D,TH$ACK(H)	; Set it
+	MOVE D,XBRWND(I)	; And latest window
+	DPB D,[TH$WND (H)]
+	CALL THCKSI		; Compute checksum for it (note not THCKSM)
+	DPB A,[TH$CKS (H)]
+	SKIPE TCLKRC		; Was any recompaction done?
+	 CALL IPKHD2		; Yes, must recompute IP header (checksum etc)
+	MOVE A,PK.FLG(R)
+	TLNN A,(%PKODN)		; Has segment already been tried once?
+	 JRST [		; No, don't put on output queue twice!!
+		TRCPKT R,"TCLK39 Rexmit skipped because seg not yet output"
+		METER("TCP: Pretrans compact")
+		JRST TCLK25]
+	TLO A,(%PKRTR)		; Set flag saying this is a retransmit
+	MOVEM A,PK.FLG(R)
+	MOVEI A,(R)
+	CALL IPKSNQ		; Put back on IP output queue
+				; Note PK.BUF shd still be set up right.
+TCLK25:	MOVE A,TIME
+	HRRZ B,XBORTP(I)	; If RH set, use it for new timeout.
+	CAIN B,
+	 MOVE B,TCPTMO		; Use timeout default.
+	ADD B,A
+	MOVEM B,XBORTT(I)
+	JRST TCLK79
+
+	; Here when need to send an ACK.  First see if we can
+	; make use of existing output buffer.
+TCLK50:	METER("TCP: slow ACKs")
+	TLNE B,(TC%SYN+TC%RST)
+	 BUG CHECK,[TCP: SYN or RST set in XBSTAT clock req]
+	SKIPE R,XBOCOS(I)	; Ensure there is one.
+	 TLNE B,(%XBMPL)	; and that it isn't locked.
+	  JRST TCLK60		; Sigh, can't use it.
+
+	; There is an output buffer, and it's not locked, so use that
+	; to send stuff out!
+	TRCPKT R,"TCLK50 COS used to send clock level ACK"
+	MOVSI T,(TC%PSH)
+	CALL TCPOFR		; Force it out.
+	JRST TCLK16
+
+	; Come here when we have to generate a new segment for ACK.
+TCLK60:	TLNN B,(%XBNOW)		; Insisting that we ACK?
+	 JRST TCLK65		; No, can semi-punt.
+	CALL PKTGFI		; Get buffer
+	 JRST TCLK65		; and forget about ACKing if we cant get one
+	METER("TCP: Clk ACK")
+	MOVEI R,(A)
+	MOVE T,B		; Use request flags in segment.
+	TRCPKT R,"TCLK60 Alloc and send ACK from clock level"
+	CALL TSOSNR		; Send a simple ACK
+	JRST TCLK16
+
+TCLK65:	MOVSI A,(%XBNOW)	; No, so just set insist flag
+	IORM A,XBSTAT(I)	; and wait a bit longer.
+	JRST TCLK16
+
+TCLK79:
+	JRST TCLK16
+
+	; Abort the connection, timed out.
+TCLK80:	METER("TCP: Timeout abort")
+	CALL TXBFLP		; This is pretty drastic... flush, PI level.
+	MOVEI T,.XCINC		; Say "incomplete transmission"
+	CALL TCPUC		; as close reason.
+	JRST TCLK16
+
+TCLK90:	CONO PI,NETON
+	RET
+
+
+; Checksum cruft.
+
+; THCKSM - Figures TCP segment checksum, IP$TOL has TCP segment length.
+; THCKSI - Figures TCP segment checksum, IP$TOL has IP header plus TCP seg.
+;	W/ addr of IP header
+;	H/ addr of TCP header
+;	Note that the following out-of-TCP values are looked up
+;	from the IP header in order to compute sum for the "pseudo header".
+;		IP$SRC - source host
+;		IP$DST - dest host
+;		IP$TOL - # octets in TCP segment (plus IP header)
+;	Finally,
+;		%PTCTC - Assumed value
+;	
+; Clobbers B,C,D,E
+; Returns
+;	A/ checksum
+;	TT/ Total # bytes in TCP segment
+
+THCKSM:	TDZA C,C		; Compute as if IHL=0
+THCKSI:	 MOVNI C,5*4
+	; First compute pseudo header
+	LDB A,[IP$SRC (W)]	; Source addr
+	LDB B,[IP$DST (W)]	; Dest addr
+	ADD A,B
+	ADDI A,%PTCTC		; Add TCP protocol number
+	LDB TT,[IP$TOL (W)]	; Get total length in octets
+	JUMPE C,THCKS2
+	LDB B,[IP$IHL (W)]	; Find IP header length in 32-bit wds
+	LSH B,2			; mult by 4 to get # octets
+	SUBI TT,(B)		; Find # octets of IP data (TCP segment)
+THCKS2:	ADDI A,(TT)		; Add in.
+	MOVEI C,-<5*4>(TT)	; Get # bytes in segment after 1st 5 wds
+
+	; Done with pseudo header (not folded yet, though).
+	LDB B,[044000,,0(H)]	; Get wd 0 (src/dest)
+	ADD A,B
+	LDB B,[TH$SEQ (H)]	; Get wd 1 (seqno)
+	ADD A,B
+	LDB B,[TH$ACK (H)]	; wd 2
+	ADD A,B
+	LDB B,[044000,,3(H)]	; wd 3
+	ADD A,B
+	LDB B,[TH$UP (H)]	; wd 4 (part of)
+	ADDI A,(B)
+
+	LSHC A,-16.
+	LSH B,-<16.+4>
+	ADDI A,(B)		; Now have it folded up.
+	JUMPLE C,THCKS7		; If nothing more, can leave now.
+	MOVEI E,5(H)
+	HRLI E,442000		; Set up 16-bit byte ptr to options/data
+	LSHC C,-1
+	JUMPLE C,THCKS6
+THCKS5:	ILDB B,E
+	ADDI A,(B)
+	SOJG C,THCKS5
+THCKS6:	JUMPL D,[		; Jump if odd byte left.
+		ILDB B,E	; get it
+		ANDCMI B,377	; mask off low (unused) byte.
+		ADDI A,(B)	
+		JRST .+1]
+%CKMSK==<-1#177777>		; Mask for stuff above 16 bits
+THCKS7:	TDNE A,[%CKMSK]		; If any carries, add them in.
+	 JRST [	LDB B,[.BP %CKMSK,A]
+		TDZ A,[%CKMSK]
+		ADD A,B
+		JRST THCKS7]
+	ANDCAI A,177777		; Complement sum and mask off.
+	RET
+
+
+MTRCOD		; Last stuff -- expand meter tables.
+TRCCOD		; Expand trace tables

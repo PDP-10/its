@@ -12,5 +12,12 @@ to operate ITS systems to this day.
 This repository contains source code, tools, and scripts to build ITS
 from scratch.
 
-...or at least, that's the plan.  There will be some initial
-experimentation in the [`test` branch](http://github.com/PDP-10/its/tree/test).
+1. First, magnetic tape images are created from files in `src` and
+   `bin`.  There are two bootable tapes, and one tape with files in
+   DSKDMP backup format.
+
+2. Then the tapes are used to create a file system on an RP06 disk and
+   populate it with a minimal system, and also source code.
+
+3. Finally, the system is booted from the disk, and MIDAS is invoked
+   to assemble ITS from source code.

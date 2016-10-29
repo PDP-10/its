@@ -1,0 +1,501 @@
+;; For ITS network stuff, the following parameters are defined:
+;
+; NETP - General network code (net independent, both CHAOS, NCP, TCP, etc)
+; INETP - Internet Protocol code.  Must have IMPP or some other device.
+; NCPP - Include NCP code (IMPP must be on)
+; TCPP - Include TCP code (INETP must be on)
+
+; CHAOSP - Include CHAOS net code
+; - other CHAOS stuff, all independent of internet stuff.
+
+NE%UNT==:<1_32.>	; Escape bit indicating non-Internet address
+NW$BYT==:301400		; Byte pointer to network number (approx!)	
+NE%STR==:<1_33.>	; Escape bit indicating string-type address
+
+DEFINE HOSTN A,B,C,D
+.RADIX 10.,<<<<<A_8>+B>_8>+C>_8>+D,!TERMIN
+
+; HOSTS3 full word network # values for certain networks
+
+NW%CHS==:<NE%UNT+<7_24.>>
+NW%ARP==:<12_24.>
+NW%LCS==:<22_24.>
+NW%AI==:HOSTN 128,52,0,0
+
+DEFINE GETNET AC,(ADDR)		; Macro to extract net number
+IFNB [ADDR] MOVE AC,ADDR
+	TLNN AC,(17_32.)	; Check for non-Internet type addrs
+	 TLNN AC,(1_31.)	;  Internet address, see if class A net
+	  TDZA AC,[77,,-1]	;   Unternet or class A, zap low 3 octets
+	TLNN AC,(1_30.)		; Class B or C, see which.
+	 TRZA AC,177777		;  Class B network, zap low 2 octets
+	  TRZ AC,377		;   Class C net, only zap 1 low octet
+TERMIN
+
+;;; Misc defs
+CALL==<PUSHJ P,>
+RET==<POPJ P,>
+CALRET==<JRST>
+
+	OVHMTR NET
+
+IFN IMPP,[	; ARPAnet IMP interface code
+IFN KAIMP,[
+$INSRT IMPOLD
+]
+IFN KSIMP,[
+$INSRT IMP
+]
+]
+
+	OVHMTR NET
+
+IFN NCPP,[	; Old Arpanet NCP protocol code
+$INSRT NCP
+]
+	OVHMTR NET
+
+IFN INETP,[	; Internet Protocol code
+$INSRT INET
+]
+
+	OVHMTR NET
+
+IFN TCPP,[	; Transmission Control Protocol code
+$INSRT TCP
+]
+
+	OVHMTR UUO
+
+IFN CHAOSP,[	; CHAOSnet interface and protocol code
+$INSRT CHAOS
+]
+	OVHMTR UUO
+
+SUBTTL	General Network System Calls
+
+; .CALL NETRFC - Get a pending Request For Connection for a specific network
+;	Arg 1 - SIXBIT name of network
+;	Arg 2 - optional network-dependent arg
+;		(for CHAOS, points to packet buffer)
+;	Val 1 - network-dependent value
+;		For TCP and ARPNCP, this is <id>,,<port/socket #>
+; Control bits:
+	%NQREF==:1	; Arg 2 is previously returned identifier,
+			; refuse connection and flush from queue.
+
+NETRFC:	MOVE C,CTLBTS(U)	; Set up control bits in C
+IFN TCPP,[
+	CAMN A,[SIXBIT /TCP/]
+	 JRST TCPRQ
+]
+IFN CHAOSP,[
+	CAMN A,[SIXBIT /CHAOS/]
+	 JRST [	TRNE C,%NQREF	; If refusing conn,
+		 JRST OPNL12	; Ignore, can't handle yet.  "Mode not avail"
+		CAIGE W,2	; Must have a 2nd arg
+		 JRST OPNL30	; "Too few args"
+		MOVE A,B	; Fake out old CHAOSQ call
+		JRST CHAOSQ]
+]
+IFN NCPP,[	; NOP for now
+;	CAMN A,[SIXBIT /ARPNCP/]
+;	 JRST IMPRQ
+]
+	JRST OPNL33		; No match, say "meaningless args".
+
+; .CALL NETBLK	- Wait for net channel state to change, or time out.
+;	Arg 1 - Channel (comes in R)
+;	Arg 2 - Undesired state
+;	Arg 3 - Optional timeout (as in .SLEEP), written back unless immediate
+;	Val 1 - New state
+;	Val 2 - Time left
+
+NETBLK:	HRRZ T,(R)		; Get IOCHNM RH = device index
+	HLRZ I,(R)		; Get LH = often connection index
+IFN NCPP,[
+	CAIL T,NETDUI
+	 CAILE T,NETDBO
+	  CAIA
+	   JRST [MOVE T,[HRRZ A,IMSOC4]
+		JRST NETBLI]
+] ;NCPP
+IFN CHAOSP,[
+	CAIE T,CHAIDN
+	 CAIN T,CHAODN
+	  JRST [MOVE T,[HRRZ A,CHSSTA]
+		JRST NETBLI]
+] ;CHAOSP
+IFN TCPP,[
+	CAIN T,TCPDUI
+	 JRST [	MOVE T,[HLRZ A,XBSTAU]
+		JRST NETBLI]
+	CAIN T,TCPDUO
+	 JRST [	MOVE T,[HRRZ A,XBSTAU]
+		JRST NETBLI]
+] ;TCP
+	JRST OPNL34	; Not a net chan, say "Wrong Type Device".
+
+
+; T/ Instruction to XCT (not indexed) to get state in A
+; Entry at NETBLI adds (I) to the instruction.
+
+NETBLI:	ADDI T,(I)		; Provide "index" for instruction.
+NETBL0:	CAIGE W,3
+	 JRST [	HRLOI D,377777	; No time given, use infinity
+		JRST NETBL4 ]
+	TLNE C,1000		; Skip if pointer rather than immediate
+	 JRST [	HRRZ D,C	; Get immediate time
+		ADD D,TIME
+		JRST NETBL4 ]
+	XCTR XRW,[MOVES D,(C)]	; Get time, check writeability
+	JUMPGE D,[ MOVNS D	; Relative time, make negative absolute
+		   SUB D,TIME
+		   JRST .+1 ]
+	UMOVEM D,(C)		; Store back absolute time
+	MOVNS D			; Make positive
+NETBL4:	MOVEM D,AC0S+D(U)	; Save absolute time to wait until
+	MOVEM B,AC0S+B(U)	; Save undesired state
+	PUSHJ P,NETBL2		; Skip if state change or timeout
+	 PUSHJ P,UFLS
+	MOVE B,D
+	SUB B,TIME		; How much used?
+	XCT T			; Return new state
+	JRST POPJ1
+
+NETBL2:	XCT T			; Get current state
+	CAME A,AC0S+B(U)	; Skip if still match
+	 JRST POPJ1
+	MOVE A,AC0S+D(U)	; Timeout time
+	CAMG A,TIME
+	 AOS (P)
+	POPJ P,
+
+SUBTTL Utilities - CVTH2A, CVTH3A
+
+
+; CVH2NA - Convert network host address in A to HOSTS2 format.
+;	A/ net address (any format)
+; Returns A
+
+CVH2NA:	PUSH P,B
+	LDB B,[301400,,A]	; Get high 12 bits of net address
+	CAIGE B,70		; If less than lowest HOSTS2-fmt value
+	 JUMPN B,CVH2N3		; then must be HOSTS3, go convert.
+	CAIL B,1000		; If any of high 3 bits set,
+	 JRST CVH2N3		;  then it's a HOSTS3 strange-fmt number.
+	JUMPN B,CVH2N2
+	CAILE A,377		; Zero network, so must be ARPA net
+	 JRST CVH2N1		; Not just 8 bits, just add net number.
+
+	; Old-style 8-bit Arpanet host number
+	LSHC A,-6.
+	ROT B,6.
+	DPB B,[112000,,A]
+CVH2N1:	TLO A,(12_33)
+	JRST POPBJ
+
+	; Probably HOSTS2 format number
+CVH2N2:	JRST POPBJ		; For now, that's good enough.
+
+	; HOSTS3 format number, convert it.
+CVH2N3:	CAIN B,12		; Arpa net?
+	 JRST [	LSHC A,-16.
+		ANDI A,377
+		ROT B,16.
+		DPB B,[112000,,A]
+		TLO A,(12_33)
+		JRST POPBJ]
+	CAIN B,7+<NE%UNT_-24.>	; Chaos net?
+	 JRST [	ANDI A,177777	; Yup, fix it up.
+		TLO A,(7_33)
+		JRST POPBJ]
+	CAIN B,22		; LCS net?
+	 JRST [	LSHC A,-8.
+		ANDI A,-1
+		LSH A,2
+		LSHC A,8.
+		TLO A,(22_33)
+		JRST POPBJ]
+
+	; Not a known net, but try to do something plausible.
+	ANDCM A,[-1_24.]	; Preserve low 24 bits
+	DPB B,[331100,,A]	; put net # into HOSTS2 field.
+	POP P,B
+	RET
+
+; CVH3NA - Convert network host address in A to HOSTS3 (Internet) format.
+;	A/ net address (any format)
+; Returns A
+
+CVH3NA:	PUSH P,B
+	LDB B,[301400,,A]	; Get high 12 bits of net address
+	CAIGE B,70		; If less than lowest HOSTS2 value,
+	 JUMPN B,CVH3N3		; it's already HOSTS3 format!  (unless zero)
+	CAIL B,1000		; If any of high 3 bits were set,
+	 JRST CVH3N3		;  it must be a HOSTS3 strange-fmt addr.
+	JUMPN B,CVH3N2		; If not zero, then must assume HOSTS2 fmt.
+
+	; Old-format 8-bit Arpanet host number, or HOSTS2 with zero net.
+	CAILE A,377
+	 JRST CVH3N6	; If greater than 8 bits, assume HOSTS2, zero net.
+	LSHC A,-6	; Put 10 bits spacing between host/imp #s.
+	LSH B,-<2+8.>
+	LSHC A,<2+8.+6>
+	TLO A,(12_24.)	; and add ARPA network number.
+	JRST CVH3N3
+
+	; HOSTS2 format number
+CVH3N2:	TRZE B,7	; Zap low 3 bits to ensure correct comparison
+	 JRST CVH3N5	; If any were set, can't be Chaosnet.
+	CAIN B,7_3		; Chaos net?
+	 JRST [	ANDI A,177777		; Yes, kill all but bottom 16 bits
+		TLO A,(NE%UNT+<7_24.>)	; Add Chaos net #
+		JRST CVH3N3]
+CVH3N5:	CAIN B,12_3		; Arpa net?
+CVH3N6:	 JRST [	LSHC A,-9.
+		ANDI A,177777
+		ROT B,9.
+		DPB B,[201000,,A]
+		TLO A,(12_24.)
+		JRST CVH3N3]
+	CAIN B,22_3		; LCS net?
+	 JRST [	LSHC A,-8.
+		LSH A,-2
+		ANDI A,377
+		LSHC A,-8.
+		TLO A,(22_24.)
+		JRST CVH3N3]
+
+	; No match, assume it's HOSTS3.
+
+CVH3N3:	POP P,B
+	RET
+
+;.CALL STYNET
+;ARG 1 - STY CHANNEL
+;ARG 2 - NET INPUT CHANNEL TO CONNECT STY OUTPUT TO, OR -1 TO DISCONNECT
+;ARG 3 - NET OUTPUT CHANNEL TO CONNECT STY INPUT TO
+;ARG 4 - CHARS TO SEND WHEN OUTPUT .RESET HAPPENS ON STY'S TTY
+;	   UP TO 3 8-BIT CHARACTERS, LEFT JUSTIFIED.
+
+NSTYNT:	TLNN R,%CLSST
+	 JRST OPNL34		;1ST ARG NOT A STY CHANNEL.
+	HLRZ I,(R)		;GET TTY # OF STY
+	HRRES B			;ALLOW IMMEDIATE -1
+	JUMPGE B,NSTYN2		;JUMP IF CONNECTING.
+	PUSHJ P,NSTYN0		;DISCONNECT
+	 JRST OPNL41		;WASN'T CONNECTED
+	JRST POPJ1
+
+;VARIOUS ROUTINES CALL HERE WITH THE TTY# OF A STY IN I, TO DISCONNECT THE
+; STY FROM THE NETWORK.  NOTE THIS ROUTINE MUST NOT CHANGE U AND MUST NOT
+; LSWCLR, SINCE IT COULD BE CALLED FROM IODCL VIA STYCLS OR NETCLS.
+
+NSTYN0:	MOVSI B,%SSNET		;DISCONNECTING BOTH SIDES.
+	CONO PI,NETOFF
+	TDNN B,STYSTS-NFSTTY(I)
+	 POPJ P,			;THIS STY NOT CONNECTED?
+	ANDCAB B,STYSTS-NFSTTY(I)	;MARK AS NO LONGER CONNECTED
+	MOVE C,STYNTL-NFSTTY(I)		;REMOVE THIS STY FROM ACTIVATION LIST
+	MOVEI D,STYNTA-STYNTL+NFSTTY
+NSTYN1:	CAMN I,STYNTL-NFSTTY(D)		;FIND THE STY THAT POINTS TO THIS ONE,
+	 MOVEM C,STYNTL-NFSTTY(D)	;AND PATCH US OUT OF THE LIST.
+	SKIPE D,STYNTL-NFSTTY(D) 	;SEARCH WHOLE LIST TILL FIND WHO POINTS TO US.
+	 JRST NSTYN1
+	SETOB C,STYNTL-NFSTTY(I)
+	EXCH C,STYNTI-NFSTTY(I)	;MARK THIS STY AS HAVING NO CONNECTION, GET SOCKET INDICES
+IFN CHAOSP,[
+	TLNE B,%SSCHA
+	 JRST [	MOVSI B,%SSCHA	;DISCONNECT FROM CHAOS NET
+		ANDCAM B,STYSTS-NFSTTY(I)
+		MOVSI B,%CFSTY
+		TDNN B,CHSSTA(C)
+		 JRST 4,.	;CHAOS DOESN'T THINK IT WAS CONNECTED?
+		ANDCAM B,CHSSTA(C)
+		JRST NETOJ1 ]
+];CHAOSP
+IFN TCPP,[
+	TLNE B,%SSTCP
+	 JRST [	MOVSI B,%SSTCP		; Disconnect from TCP connection
+		ANDCAM B,STYSTS-NFSTTY(I)	; Flush STY's "connect" bit
+		MOVSI B,(XB%STY)
+		TDNN B,XBUSER(C)	; Make sure TCP thinks connected
+		 BUG			; It isn't??
+		ANDCAM B,XBUSER(C)
+		JRST NETOJ1]
+] ;TCPP
+IFN NCPP,[
+	MOVE B,[40000,,777]
+	TDNN B,IMSOC5(C)
+	 JRST 4,.		;SOCKET DOESN'T THINK IT WAS CONNECTED?
+	ANDCAM B,IMSOC5(C)	;AND MARK SOCKETS WE WERE CONNECTED TO AS DISCONNECTED
+	MOVSS C
+	TDNN B,IMSOC5(C)
+	 JRST 4,.		;SOCKET DOESN'T THINK IT WAS CONNECTED?
+	ANDCAM B,IMSOC5(C)
+	JRST NETOJ1
+] ;NCPP
+.ELSE	BUG
+
+; Here to set up STY connection.
+
+NSTYN2:	MOVE Q,I		;SAVE TTY # OF STY
+	MOVEI E,1
+	MOVE A,B		;DECODE THE NETWORK INPUT CHANNEL
+	JSP T,CHNDCD
+	HRRZ A,(R)
+IFN CHAOSP,[
+	CAIE A,CHAIDN
+	 CAIN A,CHAODN
+	  JRST [ HLRZ I,(R)	;CONNECT TO CHAOS NET
+		 CONO PI,NETOFF
+		 MOVSI B,%CFSTY
+		 TDNE B,CHSSTA(I)
+		  JRST OPNL23	;ALREADY CONNECTED, FILE LOCKED
+		 MOVSI C,%SSNET+%SSCHA
+		 TDNE C,STYSTS-NFSTTY(Q)
+		  JRST OPNL23	;ALREADY CONNECTED, FILE LOCKED
+		 IORM B,CHSSTA(I)	;OK, HOOK UP
+		 DPB Q,[$CFTTN,,CHSSTA(I)]
+		 JRST NSTYN3 ]
+];CHAOSP
+IFN TCPP,[
+	CAIE A,TCPDUI
+	 CAIN A,TCPDUO
+	  JRST [HLRZ I,(R)	; Connect to TCP, get TCB index
+		CONO PI,NETOFF
+		MOVSI B,(XB%STY)
+		TDNE B,XBUSER(I)
+		 JRST OPNL23	; TCB Already connected, say "File Locked"
+		MOVSI C,%SSNET+%SSTCP
+		TDNE C,STYSTS-NFSTTY(Q)
+		 JRST OPNL23	; STY already connected, say "File Locked"
+		DPB Q,[XB$STY (I)]	; Store TTY # to connect TCB.
+		JRST NSTYN3]
+] ;TCPP
+IFN NCPP,[
+	JSP T,NETCHK	;TEST LEGALITY;  OPNL IF LOSES
+	TDNE E,IMSOC2(I)
+	 JRST OPNL2		;WRONG DIRECTION IF IT'S AN OUTPUT CHANNEL
+	MOVE B,I		;SAVE INPUT IMSOC INDEX
+	MOVE A,C		;DECODE OUTPUT CHANNEL
+	JSP T,CHNDCD
+	JSP T,NETCHK
+	TDNN E,IMSOC2(I)
+	 JRST OPNL2		;WRONG DIRECTION IF INPUT SOCKET
+	CONO PI,NETOFF
+	MOVE E,[40000,,777]
+	TDNN E,IMSOC5(B)	;ERROR IF EITHER CHANNEL ALREADY CONNECTED
+	 TDNE E,IMSOC5(I)
+	  JRST OPNL23		;"FILE LOCKED"
+	MOVSI C,%SSNET
+	TDNE C,STYSTS-NFSTTY(Q)
+	 JRST OPNL23		;SIMILAR ERROR IF STY ALREADY CONNECTED
+	HRR E,Q			;GET 40000,,TTY #
+	IORM E,IMSOC5(I)
+	IORM E,IMSOC5(B)	;MARK SOCKETS AS CONNECTED
+] ;NCPP
+
+NSTYN3:	SKIPGE STYNTL-NFSTTY(Q)	;HALT IF STY'S VARS ARE NOT CORRECT FOR A 
+	 SKIPL STYNTI-NFSTTY(Q)	;NON-CONNECTED STY.
+	  JRST 4,.
+	IORM C,STYSTS-NFSTTY(Q)	;ALL ERROR CAUGHT, SO MARK STY CONNECTED.
+	HRL B,I			;PUT INPUT IMSOC IDX,, OUTPUT IMSOC IDX
+	MOVSM B,STYNTI-NFSTTY(Q) ;INTO THE STY
+	TRZ D,7777		;STORE THE OUTPUT RESET CHARACTERS - AT MOST 3
+	MOVEM D,STYORC-NFSTTY(Q)
+
+	;ACTIVATE IN CASE HAS UNREAD INPUT
+IFN NCPP,[
+	TLNN C,%SSCHA+%SSTCP
+	 PUSHJ P,IMPUIN
+] ;NCPP
+IFN CHAOSP,[
+	TLNE C,%SSCHA
+	 PUSHJ P,CHINTI
+];CHAOSP
+IFN TCPP,[
+	TLNE C,%SSTCP
+	 PUSHJ P,TCPUII
+] ;TCPP
+	JRST NETOJ1
+
+SUBTTL	Clock interrupt level code
+
+; NETCLK - Slow net clock.  Called at clock level every 1/2 sec.
+;	Can clobber all ACs
+
+NETCLK:
+IFN CHAOSP, PUSHJ P,CHACLK	; Run Chaos net 1/2-second clock
+IFN TCPP, PUSHJ P,TCPCLK	; Run TCP 1/2-sec clock
+	SETCMB A,NETCL1		; Flip the 1 sec switch
+	JUMPE A,CPOPJ		; Return unless time for 1-sec clock
+IFN INETP,CALL IPFCLK		; Run IP reassembly timeout every 1 sec
+	RET
+EBLK
+NETCL1:	0		; Flip-flop to get 1-sec ticks
+BBLK
+
+; STYNTC - Called at clock level every 1/60 sec to process all
+;	necessary transfers of data between STYs and associated
+;	net connections
+
+STYNTC:	CONO PI,NETOFF
+	SKIPN I,STYNTA		;GET HEAD OF ACTIVATE LIST
+	 JRST NETONJ		;EMPTY
+	SETZM STYNTA		;COPY LIST IN CASE A STY IS PUT BACK ON
+	CONO PI,NETON
+STYNT7:	MOVE A,STYNTL-NFSTTY(I)	;GET NEXT ON LIST
+	MOVEM A,STYNTB		;SAVE FOR NEXT TIME AROUND LOOP
+	SETOM STYNTL-NFSTTY(I)	;THIS ONE IS NO LONGER ON ACTIVATE LIST
+	MOVE A,STYSTS-NFSTTY(I)
+	TLNN A,%SSNET
+	 JRST 4,.		;STY CLAIMS NOT TO BE CONNECTED??
+	MOVE R,I		;SAVE TTY #
+
+IFN CHAOSP,[
+	TLNE A,%SSCHA
+	 JRST STYCHA		;CONNECTED TO CHAOS NET
+];CHAOSP
+IFN TCPP,[
+	TLNE A,%SSTCP
+	 JRST STYTCP
+] ;TCPP
+IFN NCPP,[
+	JRST STYNCP
+];NCPP
+
+STYNT8:	SKIPE I,STYNTB		;GET NEXT STY FROM COPIED ACTIVATION LIST
+	 JRST STYNT7
+	POPJ P,
+
+;SUBROUTINE TO STANDARDIZE HOST NUMBER, OPNL25 IF NO GOOD
+;PROCESSES HOST NUMBER IN T, MUNGS H, CALLED BY JSP J,STDHST
+STDHST:
+IFN 1,[
+	EXCH A,T
+	CALL CVH3NA		; Convert # to HOSTS3 fmt
+	EXCH A,T
+	LDB H,[301400,,T]	; Get high 12 bits (net #)
+	CAIE H,12		; Should be ARPA net
+	 JRST OPNL25
+	TDZ T,[NW%ARP+<377_8.>]	; Flush the net # and logical host field
+	JRST (J)
+] ;IFN 1
+IFN 0,[
+	LDB H,[331000,,T]	;GET NETWORK-NUMBER FIELD
+	CAIE H,12		;ONLY 12 OR 0 IS ACCEPTABLE
+	 JUMPN H,OPNL25
+	TDNE T,[400600,,400]	;MAKE SURE OTHER RANDOM BITS AREN'T ON
+	 JRST OPNL25
+	TLZ T,777000		;CLEAR NETWORK NUMBER
+	JUMPE T,OPNL25		;0 IS NOT ACCEPTABLE
+	CAIL T,400		;SKIP IF OLD-STYLE HOST NUMBER
+	 JRST (J)
+	LDB H,[060200,,T]	;GET HOST FIELD
+	ANDI T,77		;GET IMP FIELD
+	EXCH H,T
+	DPB H,[112000,,T]	;RECOMBINE
+	JRST (J)
+] ;IFN 0

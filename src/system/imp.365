@@ -1,0 +1,931 @@
+;;; -*- Mode:MIDAS -*- 
+
+IMPVRS==.IFNM2	; Version of IMP code
+
+IFN NCPP,.FATAL IMP Code doesn't support NCP any more!
+IFE KSIMP,.FATAL Wrong IMP driver file included!
+
+OVHMTR IMP	;Charge all this stuff to the IMP
+
+$INSRT LHDH
+
+; IMP 1822 PROTOCOL INFORMATION (EXTENDED-LEADER VERSION)
+
+; The IMP leader is 96 bits long, usually organized as 3 words of 32 bits.
+; For further details, these documents are available from the Network
+; Information Center:
+;	IMP-HOST protocol: BBN Report No. 1822
+;	NCP protocol: NIC 8246, Host-to-Host Protocol for the ARPANET
+;	IP, TCP: Internet Protocol Transition Workbook, and
+;		 Internet Protocol Implementor's Guide
+;
+; Here is the leader format used by the IMP code. This format uses
+; no IMP padding, assumes IP only, and expects all IMP<->HOST data
+; transfers in 32-bit mode.
+;
+; Previous versions of this code which supported NCP used a much more
+; complicated leader formatting scheme based on 36 bit transfers and
+; IMP padding. That scheme is dead, see SYSTEM;IMPOLD WTHNCP for details.
+;
+; All data from the IMP interface ends up in the -10 as left-justified
+; 32-bit words. Objects of less than 32 bits length, such as IP octets,
+; are stored in PDP10 ILDB byte order.
+;
+;------------------------------------------------------------------------
+;1:  4.9-4.6 not used (0)
+;    4.5-4.2 all 1's for new format, else old msg type (4=old nop)
+;    4.1-3.3 network number (0)
+;    3.2-2.8 not used (0)
+;        2.7 trace (ignored)
+;    2.6-2.4 leader flags (2.6 is to be ignored, 2.5-2.4 are not used!)
+;    2.3-1.5 message type
+;
+;2:  4.9-4.2 Handling type (7 for big buffers, 4 for small buffers,
+;			    0 for the control link)
+;    4.1-3.3 Host number on IMP
+;    3.2-1.5 IMP number
+;
+;3:  4.9-4.2 Link Number (High 8 bits of Message ID)
+;    4.1-3.7 Low 4 bits of Message ID (0) 
+;    3.6-3.3 Sub-type
+;    3.2-1.5 Message length
+;------------------------------------------------------------------------
+;4:  4.9-1.5 First word of IP datagram
+;    ....
+;------------------------------------------------------------------------
+;
+;In message types 2 and 6, the going-down status 16-bit word is
+;in word 3 bits 4.9-3.3.
+
+;3.6-3.3 of word 3 are the padding count for type 4 (nop) from host.
+;This is currently 0 (none).  Padding is only put on type-0 messages.
+
+IMPLDS==3			;IMP local leader size
+
+				;Byte pointers to fields of input leader
+IMOTBP:	340400,,IMPILB+0	;Message format type
+IMTBP:	041000,,IMPILB+0	;Message type field
+IMSABP:	043000,,IMPILB+1	;Source address field (host+IMP)
+IMSHBP:	241000,,IMPILB+1	;Source host field
+IMSIBP:	042000,,IMPILB+1	;Source IMP field
+IMLNBP:	341000,,IMPILB+2	;Link number field
+IMSTBP:	240400,,IMPILB+2	;Subtype field
+IMMLBP:	042000,,IMPILB+2	;Message length field
+
+
+
+SUBTTL	ARPANET VARIABLES AND TABLES
+
+EBLK
+
+%IMXLN==:<<8159.-96.>+31.>/32.	; Max # of 32-bit words in IMP regular msg,
+		; exclusive of leader and leader padding.  = 252.
+
+%IMMTU==:251.*4	; Used by IP/TCP. Driver currently rounds to PDP10 words,
+		; forcing this to be 1004 instead of 1007.
+
+; ACTIVE HOST TABLE.  Entries herein are allocated as needed, using garbage
+; collection.  Most "host number" fields are really indices into this table.
+;
+LIMPHT==<XBL+10.>	; TCP conns plus a few extra
+
+IMPHTF:	-1	;Host table free list, threaded through IMPHTB, end with -1
+
+IMPHTS:			;Start of table area
+IMPHTN:	BLOCK LIMPHT	; Host number.  1.1-1.8 HOST, 2.1-3.7 IMP
+IMPHTB:	BLOCK LIMPHT	;Bits:
+			;4.9 		UNUSED
+			;4.8 		GC MARK BIT
+			;4.7-4.3 	UNUSED
+			;4.2-4.1 	STATUS OF HOST 0 DOWN, 1 RST SENT, 2 UP
+			;3.9-3.1 	UNUSED
+	.SEE IMPHDS	;RH   Last message from IMP about "host dead status"
+IMPHTC:	BLOCK LIMPHT	; # active messages outstanding for host (8 max)
+IMPHTT:	BLOCK LIMPHT	; Time of last RFNM received
+IMPHTE==.-1		;Last location in table
+
+;Status variables
+;
+IMPUP:	-1	;0 => IMP up  ;-1 => down  ;-2 => coming up, PI  still off
+		;1 => down for good, until next time IMP ready line changes
+IMPTCU:	0	;0 IMP up/down status not changing
+		;>0 Trying to reinitialize, SYSJOB hasn't done so yet
+		;-1 Has been reinitialized, haven't exchanged NOPs yet
+IMPUCT:	0	;IMP coming up timeout, if 4 NOPs don't go through promptly.
+IMPDWN:	BLOCK 3	;Last message from IMP that it is going down
+		;WD0: "Reason" claimed by IMP (see ch 3 of BBN report 1822)
+		;WD1: Time when expected down
+		;WD2: Time when expected up (SYS time=1/30 sec since up)
+
+IMERCN:	-1	;CONI into here when net goes down
+
+BBLK
+
+EBLK
+
+;Input side variables
+;
+IMPILB:	BLOCK IMPLDS	;Input leader buffer
+IMPCSH:	-1	;Current source host (IMPHTB index).  -1 when idle.
+IMPCLN:	0	;Current link number
+IMIFLS:	0	;Flushing output at interrupt handler
+IMPIEC:	0	;Count of input errors while down.
+IMPIBC: 0	;Count of words available in DMA input buffer
+IMPIBP: 0	;Pointer into DMA input buffer
+
+;Output side variables
+;
+		;Output leader buffer
+IMOLDR:	<17_10.>,,0	;Regular new-format message
+IMOLAD:	0		;Filled in with destination IMP address
+	<233_10.>,,0	;IP link field
+
+IMNOPC:	0	;< 0 => Send NOPs
+IMPOAC:	-1	;>= 0 => Output active, don't restart
+IMPBZY: 0	;-1 == Waiting for output interrupt
+IMPODP:	0	;Pointer to IP datagram being output at PI level
+IMPOS:	0	;Output state
+ %ISODL==:0	; Not expecting output done (i.e. between messages)
+ %ISONP==:1	; Sending NOP
+ %ISOID==:2	; Sending IP Datagram
+
+;Meters
+
+;IP meters
+IMNIPI:	0	; # of IP datagrams input (rcvd)
+IMNIPF:	0	; # of IP datagrams flushed (input threw away)
+IMNIPO:	0	; # of IP datagrams output (sent)
+IMNIPR:	0	; # of IP RFNMs received
+IMNIP7:	0	; # of IP Type 7 (Dest Host Dead) messages received
+IMNIP8:	0	; # of IP Type 8 (Error) msgs rcvd
+IMNIP9:	0	; # of IP Type 9 (Incomplete Transmission) msgs rcvd
+IMNWIG:	0	; # words ignored by "Ignore" state (%ISIGN)
+IMNWIF:	0	; # words flushed by IMPRM5
+
+;IMP meters
+IMNSRF:	0	;Number of spurious RFNMs on non-IP links
+IMNBLK:	0	;Number of times blockage avoided (output held up by ITS)
+
+IMPMSR:	BLOCK 20;Count of IMP messages rcvd
+IMPM1S:	BLOCK 4	; # Type 1 (Error in Leader) subtype msgs
+IMPM9S:	BLOCK 2	; # Type 9 (Incomplete Transmission) subtype msgs
+IMPMSS:	BLOCK 1	;Count of IMP msg sent (we only send regular msgs)
+IMCT1:	0	;# Unvectored interrupts
+IMCT2:	0	;# Valid input interrupts
+IMCT3:	0	;# Valid output interrupts
+BBLK
+
+SUBTTL	ARPANET MAIN-PROGRAM LEVEL
+;IMPIBF, IMPOBF defined as low-memory buffer page in ITS
+IF2,IFN IMPIBF&777,.FATAL IMPIBF not on DEC page boundary
+
+;(Re)Start IMP. Called from SYSJOB to start IMP, or on error or
+; user requested cycle through LOCK
+;
+IMPINI:	SETOM IMPUP		;Not up yet,
+	SETOM IMPTCU		; but thinking about it.
+	MOVEI A,IMPIBF_-9.	;DEC page # of IMP buffer page
+	TRO A,%UQ16B\%UQVAL	;Valid mapping, 16 bit device
+	IOWRI A,UBAPAG+IUIMPG_1	;Set up 1 DEC page of UBA mapping. Note that
+				; the second half of IUIMPG isn't mapped at all
+	CONO PI,NETOFF		;Freeze things while IMP bashing occurs
+	MOVEI A,%LHRST
+	IOWRI A,%LHOCS		;Reset output side
+	IOWRI A,%LHICS		;Reset Input side
+
+	;IMP now shut down. Reset variables
+	SKIPE A,IMPODP		;Have an output datagram ?
+	 PUSHJ P,IPIODN		;Yep, release it.
+	SETZM IMPODP		;No output datagram
+	SETZM IMPOS		;Output idle
+	SETOM IMPOAC		;Output interrupt level inactive
+	SETZM IMPBZY		;No pending output interrupt
+
+	SETZM IMPIBC		;No input available
+	SETZM IMPIEC		;No input errors yet
+	SETZM IMIFLS		;Not flushing input at interrupt level
+	SETOM IMPCSH		;No current host table index
+	SETOM IMPDWN+1		;Time for IMP to go down, not known
+	CONO PI,NETON		;Allow interrupts again
+
+	;Wait one sec for IMP to notice rdy line drop
+	MOVE T,TIME
+	ADDI T,30.
+	CAMLE T,TIME
+	 PUSHJ P,UFLS
+
+	MOVNI A,30.		;Allow 15 seconds to come up
+	MOVEM A,IMPUCT
+	MOVE T,TIME		;Note when we last started IMP
+	MOVEM T,LNETIM
+	PUSHJ P,IMPHRS		;Set host ready
+	PUSHJ P,IMPIST		;Start input
+
+	MOVE T,TIME
+	ADDI T,15.		;Wait 1/2 sec before we try to output
+	CAMLE T,TIME
+	 PUSHJ P,UFLS
+	MOVNI A,4
+	MOVEM A,IMNOPC		;Send 4 NOPs to start
+	;Falls through to start output
+
+;Start IMP output
+;
+IMPOST:
+IMPIOS:	CONO PI,PIOFF		;Freeze.
+	AOSE IMPOAC		;Do nothing if output already active.
+	 JRST PIONJ
+	SETOM IMPBZY		;Note we want an IMP interrupt
+	CONO PI,NETRQ		;Force nonvectored IMP interrupt
+	 JRST PIONJ
+
+;Check if IMP ready line is set
+; Called from SYSJOB.
+; Return +1 if IMP not ready, +2 if so
+;
+IMPCKR:	IORDI A,%LHICS		;Get input CSR
+	TRNN A,%LHINR		;Skip if IMP not ready
+	 AOS (P)		;Return +2 if ready
+	POPJ P,			;That's all
+
+;Set HOST READY. From SYS job only, please, loops waiting.
+;
+IMPHRS:	IORDI T,%LHICS
+	TRNN T,%LHRDY		;Can we mung?
+	 BUG
+	IORI T,%LHHRC\%LHSE	;Turn on HR. SE prevents dropping messages
+	IOWRI T,%LHICS
+	MOVEI A,777777		;I don't know why this takes so long.
+IMPHR1:	IORDI T,%LHICS		;Get the bits back
+	TRNE T,%LHHR		;LHDH thinks host ready is ready
+	 RET			;HR line set
+	SOJG A,IMPHR1		;Timed out yet?
+	 BUG CHECK,[IMP: Timed out setting Host Ready]
+	RET
+
+SUBTTL	HOST-TABLE MANAGEMENT
+
+;IMPHTI - Initialize host table
+; Performed whenever IMP announces that it has been reset
+;
+IMPHTI:	SETOM IMPHTF		;Force GC of IMPHTB on first reference
+	SETZM IMPHTS		;Clear table of old information
+	MOVE A,[IMPHTS,,IMPHTS+1]
+	BLT A,IMPHTE
+	POPJ P,
+
+; FNDHST - Look up host-table index for a given IMP host address.
+;	Call with NETOFF or NETCHN PI in progress.
+;	T/ IMP host address (maybe someday other nets?)
+; Returns .+1 if failed (no room in table)
+; Returns .+2
+;	H/ host-table index
+; Smashes W.
+
+FNDHST:	MOVEI H,LIMPHT-1	;Search for an entry for this host
+	CAME T,IMPHTN(H)
+	 SOJGE H,.-1
+	JUMPGE H,POPJ1		;Found
+	SKIPGE H,IMPHTF		;Not found, cons one off free list
+	 JRST FNDHS1		;Oops, must garbage collect
+	MOVE W,IMPHTB(H)
+	CAIGE H,LIMPHT		;Make sure H is valid idx
+	 CAIL W,LIMPHT		;ditto W
+	  BUG HALT,[NET: FNDHST idx clobbered!!!]
+	MOVEM W,IMPHTF
+	MOVEM T,IMPHTN(H)
+	SETZM IMPHTB(H)		;Nothing is known about this host
+	SETZM IMPHTC(H)		;Assume no RFNMs outstanding
+	SETZM IMPHTT(H)		;Clear out time of last RFNM.
+	JRST POPJ1
+
+; Host-Table full, attempt to GC it and flush unused entries, by
+; scanning all possible pointers into table.
+;	IMP pointers are IMPCSH and IMPHTC(H)
+;	TCP pointers are XBNADR(I)
+
+; GC mark phase - mark entries in use
+FNDHS1:	PUSH P,I
+	MOVSI W,200000		;Mark bit
+	MOVEI H,LIMPHT-1	;Clear all mark bits
+	ANDCAM W,IMPHTB(H)
+	SOJGE H,.-1
+	SKIPL H,IMPCSH		;Mark from IMPCSH
+	 IORM W,IMPHTB(H)
+IFN TCPP,[
+	MOVEI I,XBL-1
+	SKIPL H,XBNADR(I)	; See if TCP conn has a net addr specified
+	 IORM W,IMPHTB(H)	; Yes, set the mark bit.
+	SOJGE I,.-2
+] ;IFN TCPP
+
+; GC sweep phase - free all unmarked entries
+	SETO I,			;Free pointer
+	MOVEI H,LIMPHT-1
+	MOVSI W,601000		;Protect if RFNM-WAIT, RST-WAIT, or marked
+FNDHS4:
+	SKIPG IMPHTC(H)		;Also protect if any outstanding RFNMs
+	 TDNE W,IMPHTB(H)
+	  SOJGE H,FNDHS4
+	JUMPL H,FNDHS5
+	SETZM IMPHTN(H)		;Don't belong to any host
+	MOVEM I,IMPHTB(H)	;Cons onto free list
+	MOVE I,H
+	SOJGE H,FNDHS4
+FNDHS5:	MOVEM I,IMPHTF		;Free list
+	POP P,I
+	SKIPGE IMPHTF
+	 POPJ P,		;GC-overflow
+	JRST FNDHST		;Try again, should win
+
+;See if IMP code is willing to handle a particular datagram right now.
+; A/ IP DGM pointer
+; C/ Immediate destination address
+; Returns +1, can't send right now, +2, OK to send
+;
+IMPCTS:	MOVE T,C		;Set up for FNDHST
+	AND T,[<377_16.>+377]	;Mask out all but host and IMP field
+	CALL FNDHST		;Get host index in H
+	 POPJ P,		;No host entry, don't send
+	JSP T,IMPBLI		;See if OK to send
+	 POPJ P,		;IMP wants to block, no send
+	JRST POPJ1		;Skip return if OK to send.
+
+
+;;; IMP Blockage avoidance
+;	The current IMP software will not accept more than 8 active
+; messages to a single host; attempting to send a 9th message will block
+; ALL output to the interface, until the first message has been ack'd
+; by means of one of the following message types:
+;	Type 5, RFNM - Message delivered OK
+;	Type 7, Host dead - transmit failed ("permanent")
+;	Type 8, Error in data - interface spazzed
+;	Type 9, Incomplete Transmission - temporary failure
+; If for some reason the first message simply becomes lost, the IMP timeout
+; (and blockage) can last for up to 30-45 seconds.
+; More details in BBN Report 1822.
+;	ITS attempts to fix this by keeping a count of active un-ACKed
+; messages for each host it is communicating with.  A timeout is also
+; associated with each host; if output to a given host is blocked by ITS
+; because there are 8 active messages, trying to send a 9th message
+; will check the last-RFNM-received time and if this was more than
+; 30 or so seconds then the IMP is probably not giving us what it should
+; and we should reset things for that host.
+
+%IMPMA==:8.	; # of maximum active IMP messages allowed
+
+; IMPBLI, IMPBLD - routines to hack active-message counts, called via JSP T,
+;	IMPBLD decrements count.
+;	IMPBLI increments count and skips if successful (else failed,
+;		and must NOT output another message to this host!)
+;		Also clobbers Q.
+;
+IMPBLI:	AOS Q,IMPHTC(H)
+	CAIGE Q,%IMPMA		;Trying to send max or more messages?
+	 JRST 1(T)		;No, can return safely.
+	CAIG Q,%IMPMA		;Is this the maximum # allowed?
+	 JRST [	MOVE Q,TIME	;Yes, set up blockage timeout
+		ADDI Q,60.*30.	; for one minute.
+		MOVEM Q,IMPHTT(H)
+		JRST 1(T)]	;And allow this one to be sent
+
+	; Trying to send too many messages, block it (check for timeout though)
+	SOS IMPHTC(H)		;Restore original count
+	AOS IMNBLK		;Increment # of times softwarily blocked.
+	MOVE Q,IMPHTT(H)
+	CAML Q,TIME		;See if timeout still in the future
+	 JRST (T)		;Yes, just take failure-return to block.
+	BUG INFO,[IMP: RFNM-wait timeout! Hst=],OCT,IMPHTN(H)
+	SETZM IMPHTC(H)		;This may be dangerous... oh well.
+	SETZM IMPHTT(H)
+	JRST (T)		;Block one last time, next try will win.
+
+;Decrement block count on receipt of any kind of ACK
+;
+IMPBLD:	SOSL Q,IMPHTC(H)
+	 JRST IMPBL2
+	BUG INFO,[IMP: negative RFNM-wait cnt, Hst=],OCT,IMPHTN(H)
+	SETZB Q,IMPHTC(H)
+IMPBL2:	CAIL Q,%IMPMA-1		;If we were blocking on this host,
+	 PUSHJ P,IMPIOS		;Ensure IMP output started up so blocked stuff
+	JRST (T)		; gets sent promptly.
+
+
+SUBTTL	ARPANET INPUT INTERRUPT LEVEL
+
+;First level interrupt handling for input side. Here from UBA vector hardware.
+
+IFN NETCHN-UTCCHN,.ERR NETCHN assumed == UTCCHN at IMPIBK
+
+	EBLK
+IMPIBK:	0
+	BBLK
+	JSR UTCSAV		;Save AC's, get a stack
+	AOS IMCT2		;Count input interrupts
+	IORDI TT,%LHICS		;Get CS register
+	TRNE TT,%LHERR\%LHNXM
+	 JRST IMPRST		;Try resetting the IMP
+	TRNE TT,%LHMRE		;Ready line flapped
+	 JRST IMPIER		;Go directly to error routine
+	TRNN TT,%LHRDY		;Device ready for new operation?
+	 JRST IMPRST		;Try resetting. 
+	TRNN TT,%LHEOM		;Saw EOM from IMP?
+	 JRST IMPIB1		;No, word count ran out before message
+	SKIPGE IMIFLS		;Flushing output?
+	 JRST [ SETZM IMIFLS	;Not any more!
+		JRST IMPIRT ]	;But flush last piece by queueing new request
+	IORDI A,%LHIWC		;End of message. Get remaining UB word count
+	SKIPE A			;This would be a surprise, really
+	 TDO A,[-1,,600000]	;36bit number of UBA words remaining in bfr
+	IDIVI A,2		;Number of PDP10 words (cleverly rounded)
+	ADDI A,IMPBFS		;Number of PDP10 words of message
+	MOVEM A,IMPIBC		;Set current count of available data words
+	MOVEI A,IMPIBF
+	MOVEM A,IMPIBP		;Set pointer to available data words
+	JRST IMPLDD		;Go process input message
+
+;Here when finished processing current message.
+IMPIRT:	SETOM IMPCSH		;Note no current host
+	PUSHJ P,IMPIST		;Restart input listener
+	JRST IMPEX
+
+;Message didn't fit in input buffer. Shouldn't ever get here, but
+;might if messages concatenated due to ready line randomness
+;
+IMPIB1:	BUG INFO,[IMP: Huge message]
+	SETOM IMIFLS		;Say we are flushing output
+	JRST IMPIRT		;And go queue up another read
+
+;Here if error during IMP message transfer
+; Currently the only error handled is the IMP going non-ready
+
+IMPIER:	SKIPE IMPUP		;Is the IMP supposed to be up?
+	 JRST IMPIE1		;No, handle errors differently
+	BUG INFO,[IMP: Input Ready Error]
+	JRST IMPRST		;Ready line flapped while up, cycle interface
+
+IMPIE1:	AOS T,IMPIEC
+	CAIG T,10.		;Huge number of errors while down?
+	 JRST IMPIRT		;No, just ignore this input and start another
+	SETZM IMPIEC		;Reset
+	BUG INFO,[IMP: Excessive input errors while down]
+	JRST IMPRST		;Cycle the interface
+
+IMPRST:	IORDI T,%LHICS		;Record IMP status for sysjob
+	HRLZM T,IMERCN
+	IORDI T,%LHOCS
+	HRRM T,IMERCN
+	MOVEI A,%LHRST		;Avoid randomness by resetting HW now.
+	IOWRI A,%LHOCS		;Reset output side
+	IOWRI A,%LHICS		;Reset Input side
+	SETOM IMPUP		;IMP is down
+	MOVEI T,1
+	MOVEM T,IMPTCU		;But trying to come up (sysjob poked)
+	MOVSI J,SCLNET		;Ask SYSJOB to cycle the IMP
+	IORM J,SUPCOR
+	JRST IMPEX
+
+	SUBTTL IMP leader dispatch handling
+
+IMPLDD:	SKIPG B,IMPIBC		;Get count of available data
+	 POPJ P,		;None, nothing to do.
+	CAILE B,IMPLDS		;More than a leader worth?
+	 MOVEI B,IMPLDS		;Yep, only want leader now
+	MOVS A,IMPIBP		;Copy and reformat leader to IMPILB
+	HRRI A,IMPILB
+	BLTUB A,IMPILB-1(B)
+	ADDM B,IMPIBP		;Increment buffer pointer,
+	MOVN C,B
+	ADDM C,IMPIBC		; and decrement count
+
+	LDB T,IMOTBP		;Examine new-format flag bits of leader
+	CAIL B,IMPLDS		;Large enough to be a valid leader?
+	 CAIE T,17		;Verify that leader is "new" 96-bit fmt.
+	  JRST IMPLDE		;Go process error in leader
+
+	LDB T,IMLNBP		;Extract link number (high 8 bits of msg-id)
+	MOVEM T,IMPCLN		;Save link message arrived on
+	LDB T,IMSABP		;Get arpanet address (source host+imp)
+IFN 0,[	
+	LDB T,IMSHBP		;Source host
+	LDB A,IMSIBP		;Source imp
+	DPB A,[112000,,T]	;Form host address
+];IFN 0
+	PUSHJ P,FNDHST		;H gets host table index
+	 JRST IMPLHE		;Host table full
+	MOVEM H,IMPCSH		;Save current host
+	LDB A,IMTBP		;Get message type in A
+	CAIL A,IMTDTS
+	 JRST IMPUN		;Unknown type?
+	AOS IMPMSR(A)		;Count IMP msgs rcvd
+	JRST @IMTDT(A)		;Dispatch
+
+IMTDT:	IMPRM	; 0 Regular Message
+	IMPBE1	; 1 Error in Leader (no msg-id)
+	IMPGD	; 2 IMP Going Down
+	IMPUN	; 3  -
+	IMPIN	; 4 NOP
+	IMPRFN	; 5 RFNM - Ready For Next Message (transmit succeeded)
+	IMPHDS	; 6 Host Dead Status (general info)
+	IMPDHD	; 7 Destination Host Dead (transmit failed)
+	IMPBE8	; 8 Error in Data (has msg-id)
+	IMPINC	; 9 Incomplete Transmission (transmit failed temporarily)
+	IMPIRS	;10 Interface Reset - IMP dropped its ready line
+IMTDTS==.-IMTDT
+
+IMPLHE:	BUG INFO,[IMP: Message discarded due to host table full],OCT,IMPILB,OCT,IMPILB+1,OCT,IMPILB+2
+	JRST IMPIRT
+
+;Here if leader is too short or of wrong format.
+; B/ Leader length
+IMPLDE:	SKIPE IMPUP		;If IMP is not up, we'll take anything.
+	 JRST IMPIRT
+	CAIGE B,IMPLDS		;Announce short leader if so.
+	 BUG INFO,[IMP: Short leader, ],DEC,B,[wds. WD1=],OCT,IMPILB,[WD2=],OCT,IMPILB+1
+	LDB A,IMOTBP		;Get message format type
+	CAIN A,4		;Old-type NOP?
+	 JRST IMPIRT		; Just ignore it.
+IFN 0,[	;;For the moment this is a problem because the IMP is marked
+	;;up too soon, before all incoming NOPS are received.
+	CAIN A,16		;Is it 1822L format?
+	 BUG INFO,[IMP: 1822L leader],OCT,IMPILB
+	CAIE A,17		;Is it not the long-leader format?
+	 BUG INFO,[IMP: Old-type leader],OCT,IMPILB
+]
+	JRST IMPIRT		;Ignore rest of message, if any
+
+;;; IMP->Host Type X (e.g. 3, 11-255) - bad type
+
+IMPUN:	BUG INFO,[IMP: Unknown msg type ],OCT,A,[ leader ],OCT,IMPILB,OCT,IMPILB+1,OCT,IMPILB+2
+	JRST IMPIRT
+
+;;; IMP->Host Type 1 - Error in leader (msg-id not given)
+;;; IMP->Host Type 8 - Error in data  (msg-id given)
+
+IMPBE1:	LDB T,IMSTBP		;Get subtype (4 bits)
+	ANDI T,3		;Only 2 bits should be used
+	AOS IMPM1S(T)		;Increment count of Type 1 subtype messages
+IMPBE8:	SKIPN IMPUP		;Ignore error during initial syncronization
+	 BUG INFO,[IMP: Type ],DEC,A,[err msg, leader],OCT,IMPILB,OCT,IMPILB+1,OCT,IMPILB+2
+	MOVE B,IMPCLN		;Get link msg came in on
+	CAIN B,233		;Internet link?
+	 AOS IMNIP8		;Yes, count IP meter
+	CAIN A,8.		;Error identified with a particular message?
+	 JSP T,IMPBLD		;Decrement count of active messages
+	JRST IMPIRT
+
+;;; IMP->Host Type 2 - IMP going down
+
+IMPGD:	LDB B,[420200,,IMPILB+2]	;Reason (see 1822)
+	MOVEM B,IMPDWN
+	LDB B,[360400,,IMPILB+2]	;How soon going down * 5 mins
+	MOVE H,B
+	IMULI B,5*60.*30.	;Ticks in 5 mins
+	ADD B,TIME
+	MOVEM B,IMPDWN+1
+	LDB C,[241200,,IMPILB+2]	;How long to be down * 5 minutes
+	MOVE Q,C
+	IMULI C,5*60.*30.	;Downtime in ticks
+	ADD C,B			;Add to time down
+	MOVEM C,IMPDWN+2	;Store time when will be up
+	IMULI H,5		;Minutes
+	IMULI Q,5
+	BUG INFO,[IMP: Going down in ],DEC,H,[mins for ],DEC,Q,[mins, reason],DEC,IMPDWN
+	JRST IMPIRT
+
+;;; IMP->Host Type 4 - NOP
+
+IMPIN:	JRST IMPIRT		;One more NOP from IMP
+
+;;; IMP->Host Type 5 - RFNM (Ready For Next Message)
+
+IMPRFN:	JSP T,IMPBLD		;Decrement outstanding message count for host
+	MOVE A,IMPCLN		;Get link #
+	CAIE A,233		;IP link number?
+	 JRST IMRFNX		;No, skip IP code
+	AOS IMNIPR		;Bump count of IP RFNMs received
+	JRST IMPIRT		; and do nothing else about it, ugh.
+
+IMRFNX:	BUG INFO,[IMP: Spurious RFNM from ],OCT,IMPHTN(H),[link],OCT,IMPCLN
+	AOS IMNSRF
+	JRST IMPIRT
+
+;;; IMP->Host Type 6 - Host Down Status
+;	H/ host index
+
+IMPHDS:	LDB A,[301400,,IMPILB+2];Bits 65-76 of leader, 4.9-3.7 3rd word
+	HRRM A,IMPHTB(H)	;Store, hope user read RFC 611
+	JRST IMPIRT
+
+;;; IMP->Host Type 7 - Destination Host Dead
+
+IMPDHD:	MOVEI E,%NCDED
+	JRST IMPHNR
+
+;;; IMP->Host Type 9 - Incomplete Transmission
+
+IMPINC:	LDB T,IMSTBP		;Get subtype field (4 bit reason for failure)
+	AOS IMPM9S(T)		;Bump count of subtypes
+	MOVEI E,%NCINC		;This is an incomplete msg response
+
+IMPHNR:	JSP T,IMPBLD		;Decrement active IMP msg count for this host
+	MOVE A,IMPCLN		;Link for this message?
+	CAIE A,233		;IP Link?
+	 JRST IMPHN1
+	CAIN E,%NCINC		;Yes, count IP meters
+	 AOS IMNIP9
+	CAIN E,%NCDED
+	 AOS IMNIP7
+	JRST IMPIRT
+
+IMPHN1:	BUG INFO,[IMP: DHD or IT msg rcvd on non-IP link]
+	JRST IMPIRT
+
+;;; IMP->Host Type 10 - Interface Reset
+
+IMPIRS:	PUSHJ P,IMPHTI		;Initialize host table
+	BUG INFO,[IMP: Interface reset]
+	JRST IMPIRT
+
+
+;;; IMP->Host Type 0 - Regular Host-Host message
+; Unless the source host screwed up and sent a dataless message,
+; there is at least one word waiting to be read in the buffer.
+;
+IMPRM:	SKIPG A,IMPIBC		;Get available input word count
+	 JRST IMPIRT		;None left, just ignore message
+	MOVE B,IMPCLN		;Is link number the magic cookie for IP?
+	CAIE B,233
+	 JRST IMPIRT		;No, ignore it
+
+;IP datagram. Copy into IP buffer and pass it up.
+;
+	AOS IMNIPI		;Bump count of IP datagrams received
+	PUSHJ P,IPGIPT		;Ask IP for buffer of size (A)
+	 JRST [	AOS IMNIPF	;Punted, bump cnt of datagrams lost
+		JRST IMPIRT ]	;Flush this message (err msg already printed)
+	MOVE B,PK.BUF(A)	;Destination
+	HRL B,IMPIBP		;Source
+	MOVE C,IMPIBC		;Input words available
+	ADDI C,-1(B)		;Last destination address
+	BLTUB B,(C)		;Copy and reformat data to IP buffer
+	MOVE B,IMPIBC		;Get word count back to B
+	SETZB C,IMPIBC		;Say zero offset to IP header, and clear count.
+	MOVE J,IMPCSH		;Set idx to host-table entry dgm received from.
+	PUSHJ P,IPRDGM		;Hand off rcvd datagram to IP
+	JRST IMPIRT		;Return from PI level, setting up for next msg
+
+;Start listening for new input from IMP
+;
+IMPIST:	HRREI T,-IMPBFS*2
+	IOWRI T,%LHIWC		;Read up to a buffer full of data
+	MOVEI T,<IUIMPG_12.>+<4*<IMPIBF&777>>
+	IOWRI T,%LHICA		;Read data to here
+	MOVEI T,%LHIE\%LHHRC\%LHSE\%LHGO ;Interrupt, store data, go
+	IOWRI T,%LHICS		;Start read
+	RET
+
+
+SUBTTL	ARPANET OUTPUT INTERRUPT LEVEL
+
+;Here on unvectored interrupt caused by call to IMPIOS
+
+IMPINT:	AOS IMCT1		;Count unvectored interrupts
+	JRST IMPOBZ		;Go try to start output
+				;Returns directly to interrupt dispatcher
+
+;First-level interrupt handling, from hardware dispatch.
+; Crash on severe interface errors
+; Restart IMP on ready line flappage.
+; Else, go look for more output to send.
+
+IFN NETCHN-UTCCHN,.ERR NETCHN assumed == UTCCHN at IMPOBK
+
+	EBLK
+IMPOBK:	0
+	BBLK
+	JSR UTCSAV		;Save AC's, get a stack
+	AOS IMCT3		;Count output interrupts
+	IORDI TT,%LHOCS		;Get CS register
+	TRNE TT,%LHERR\%LHNXM	;Interface lost?
+	 JRST IMPOEC		;Try cycling
+	TRNE TT,%LHMRE		;Somebody bounce a ready line?
+	 JRST IMPOER
+IMPOBE:	TRNN TT,%LHRDY		;Device ready for new operation?
+	 JRST IMPOEC		;Try cycling
+	PUSHJ P,IMPOBZ		;No IMP error. Perform planned action.
+	JRST IMPEX		;Dismiss interrupt.
+
+;Error while outputting datagram. Currently, just means ready line flapped.
+; If IMP was up, finish up IP output if necessary to free buffer, then
+;  cycle the interface.
+; If trying to send NOPS to come up, just send a few more to resynch.
+;
+IMPOER:	SKIPE IMPUP		;IMP up?
+	 JRST IMPOE1		;Not running normally, maybe OK.
+	BUG INFO,[IMP: Output RDY error]
+IMPOEC:	SKIPE A,IMPODP		;Have an output datagram ?
+	 PUSHJ P,IPIODN		;Yep, release it.
+	SETZM IMPOS		;Doing nothing useful
+	JRST IMPRST		;Go poke SYSJOB to cycle the IMP
+
+;Here if interface wasn't fully up. 
+IMPOE1:	MOVE T,IMPOS
+	CAIE T,%ISONP		;Were we sending a NOP?
+	 BUG CHECK,[IMP: Confusing output error]
+	SOS IMNOPC		;Add another NOP to make up for this one
+	SETZM IMPOS		;NOt doing anything anymore
+	JRST IMPOBE		;Go continue processing.
+
+;IMPOBZ - Toplevel output processing routing.
+; Called from output done interrupt handler or from MP/CLOCK level with
+; NETOFF to start output.
+
+IMPOBZ:	SKIPL B,IMPOS
+	 CAIL B,IMPODL
+	  BUG HALT,[IMP: Bad output state]
+	JRST @IMPODT(B)
+
+IMPODT:	OFFSET -.
+%ISODL::	IMPOB0	; 0 Idle, look for something to send
+%ISONP::	IMPOB1	; 1 Finished NOP
+%ISOID::	IMPOB2	; 2 Finished IP datagram messge
+IMPODL::OFFSET 0
+
+;Here when interrupt has finished processing a complete message.
+; Attempt to find something else to do.
+;
+IMORET:	
+	;JRST IMPOB0		;Fall through to try for more
+
+; Idle - Look for output to send.  First ensure we can send stuff,
+;	then try things in the order:
+;	(1) Send NOP if net coming up
+;	(2) Check IP datagram queue
+;
+IMPOB0:	HRRZ T,IMPUP		;Get current IMP state.
+	CAIE T,-2		;Don't say it's up when it's still going down
+	 CAIN T,1		;or when it is broken
+	  JRST IMPOBN
+
+	; First check to see if NOP needs to be sent.
+	AOSG IMNOPC		;Check to see if sending NOPs
+	 JRST IMONOP		;Output a NOP
+	SETZM IMPUP		;Say IMP is up
+	SETZM IMPTCU		;Say no longer trying to come up
+
+	; Now see if there is any real traffic to send
+	PUSHJ P,IPGIOQ		;Check IP. Get IP IMP output queue entry if any
+	 JRST IMPOBN		;Nothing there, we're done.
+
+	; Returns A/ ptr to IP dgm struct
+	;	  B/ BLKO pointer to 32-bit words (unused)
+	;	  C/ Arpanet address
+	;
+	;Build an IMP-format datagram at IMPOBF.
+	; Set correct address in prototype leader.
+	; BLT and reformat leader to IMPOBF.
+	; BLT and reformat datagram to IMPOBF + leader size.
+
+	MOVEM A,IMPODP		;Save ptr to datagram being output
+	AOS IMNIPO		;# of IP datagrams sent
+
+	;Put together the IMP leader in IMOLDR.
+IFN 0,[	;First and third word initialized at assembly time
+	MOVE B,[17_10.,,0]	;Regular message
+	MOVEM B,IMOLDR
+	MOVSI B,233_10.		;IP link # in left 8 bits
+	MOVEM B,IMOLDR+2	;Set up third word
+]
+	AND C,[<377_16.>+377]	;Mask out all but host and IMP field
+	LSH C,4.		;Move net address to correct field
+	MOVEM C,IMOLAD		;set up second word of leader
+	
+	;Copy leader and datagram to IMPOBF
+	MOVE B,[IMOLDR,,IMPOBF]
+	BLTBU B,IMPOBF+IMPLDS-1	;Move IMP leader into place
+	MOVS B,PK.BUF(A)	;SOURCE,,COUNT
+	MOVEI A,IMPLDS(B)	;Size including leader to A
+	HRRI B,IMPOBF+IMPLDS	;Put d'gram immediately after leader.
+	BLTBU B,IMPOBF-1(A)
+	PUSHJ P,IMPSOH		;Go start hardware
+	MOVEI C,%ISOID		;Remember we are outputting IP leader
+	MOVEM C,IMPOS
+	POPJ P,
+
+
+
+;Here if nothing to output.
+; Flag output inactive and disable interface
+;
+IMPOBN:	SETOM IMPOAC		;No more output
+	IORDI TT,%LHOCS
+	TRZ TT,%LHIE\%LHGO	;Deactivate interface for a bit
+	IOWRI TT,%LHOCS
+	POPJ P,
+
+;IMONOP - Send a NOP, here from IMPOBZ only.
+;
+IMONOP:	MOVEI A,IMPNOS		;Length of NOP message
+	MOVE B,[IMPNOP,,IMPOBF]	;BLT (and reformat) NOP to output buffer
+	BLTBU B,IMPOBF-1(A)
+	PUSHJ P,IMPSOH		;Start output of (A) words from IMPOBF to IMP
+	MOVEI C,%ISONP		;Set correct output FSM state
+	MOVEM C,IMPOS
+	POPJ P,
+
+;Prefabricated NOP Host-IMP leader
+IMPNOP:	17_10.,,4_4		;New format, type 4 = NOP
+	0
+	0			;No padding required on regular messages
+IMPNOS==.-IMPNOP
+
+;Finished sending NOP, from IMPOBZ
+;
+IMPOB1:	SETZM IMPOS		;Reset state
+	JRST IMORET		;Go look for something else to do.
+
+;Was sending IP datagram, from IMPOBZ
+;
+IMPOB2:	SETZB A,IMPOS		;Reset output state.
+	EXCH A,IMPODP		;Get active datagram and reset pointer
+	PUSHJ P,IPIODN		;Tell IP level that datagram was output
+	JRST IMORET		;Go see if there is anything else to do.
+
+;Start output hardware.
+; A/ Count of PDP10 words to write to net.
+; Data to output in IMPOBF.
+; Must be NETOFF or at NETCHN interrupt level. Bashes A only.
+
+IMPSOH:	ASH A,1			;Convert PDP10 word count to...
+	MOVNS A			; negative unibus word count.
+	IOWRI A,%LHOWC		;Tell the interface
+	MOVEI A,<IUIMPG_12.>+<4*<IMPOBF&777>>
+	IOWRI A,%LHOCA		;Unibus address of output buffer
+	MOVEI A,%LHIE\%LHELB\%LHGO ;Enable interrupts, send EOM, GO
+	IOWRI A,%LHOCS		;Start DMA transfer
+	POPJ P,			;And forget it.
+
+SUBTTL	ARPANET CLOCK LEVEL
+
+IMRSTO:	RET			;Nothing to do any more?
+
+OVHMTR UUO
+
+;NETHST (HOST INFO)
+; ARG 1 - HOST => VAL 1 - STATUS, VAL 2 - HOST NUMBER
+; ARG 1 - -1 => VAL 1 - (STATUS), VAL 2 - OUR HOST NUMBER
+;NOT CURRENTLY IMPLEMENTED- ARG 1 - -1, ARG 2 - OUR GOING-DOWN REASON
+;
+ANETHST:HRRE T,A		;Let immediate -1 win (777777 not a valid host)
+	AOJE T,ANETH2		;Jump if want local status and host number
+	MOVE T,A
+	JSP J,STDHST		;Standardize and error-check host number
+	MOVE B,T		;Return new format
+	TLO B,(NW%ARP)
+	MOVEI H,LIMPHT-1
+	CONO PI,NETOFF		;Do we have status for this host?
+	CAME T,IMPHTN(H)	;Scan table
+	 SOJGE H,.-1
+	JUMPGE H,ANETH1		;Yes, return it
+	CONO PI,NETON		;No, have to go get it
+	MOVEM T,SRN3(U)
+	POPJ P,			;Oh, too bad
+
+;Here to return status of foreign ARPAnet host
+ANETH1:	MOVE A,IMPHTB(H)	;Get status
+	CONO PI,NETON
+	EXCH A,B
+	CALL CVH2NA		;Convert to HOSTS2 for compat
+	EXCH A,B
+	JRST LSWCJ1		;Return IMSOC, NETLST if not done already
+
+;Here to return our status, host
+ANETH2:
+REPEAT 0,[
+	CAIL W,2		;(This is a crock)
+	 MOVEM B,NTHDSW		;If 2 args, set our reason for going down.
+]
+	SKIPE IMPUP		;Fake up our status
+	 TDZA A,A		;We're down
+	  MOVSI A,2000		;We are up
+	MOVEI B,IMPUS		;And our host umber
+	JRST POPJ1
+
+
+;NETIMP (REASON,TIMEDOWN,TIMEUP)  READ/SET
+;
+ANETIM:	JUMPLE W,ANETM1		;No args, return current data
+	CAIGE W,3		;Must have 3 args if any
+	 JRST OPNL30
+	MOVEM A,IMPDWN		;Set data
+	MOVEM B,IMPDWN+1
+	MOVEM C,IMPDWN+2
+	JRST POPJ1
+
+ANETM1:	MOVE A,IMPDWN		;Get data to return
+	MOVE B,IMPDWN+1
+	MOVE C,IMPDWN+2
+	SKIPE IMPUP		;Note current condition of IMP, too
+	 TLO A,400000
+	JRST POPJ1

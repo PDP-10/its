@@ -1,0 +1,575 @@
+COMMENT |
+
+Notes on TCP input and output buffers
+
+Ideally the TCP segment queues should be logically separate from the IP
+datagram queues, but for efficiency it should be possible to have them
+both together.
+
+Input buffers are expected to be lists of datagrams/segments.
+This is reasonably simple, since pointers (in known places) can just be
+set up to the data (whereever it is in the datagram/segment).
+There is a problem with allocation/windows in this scheme, since it
+is possible to run out of datagram buffers before running out of window,
+if the remote site becomes cretinous about it and sends only a few
+bytes per dgram very fast.  But in that case re-transmission can just
+force it to buffer up its output, so that future dgrams will be somewhat
+more filled, so it is probably OK.  If this does become a screw, can
+add code to do compaction at clock level.
+
+Output buffers are a little more uncertain.  Could have simple
+circular buffer, with appropriate pointers set up so that IMP output
+message is read directly from the buffer (same as NCP).  Alternatively
+could have queue of segments/datagrams all ready to go.  Guess I'd
+like to try doing the latter, to keep things "simple" by minimizing
+the number of kinds of things floating around.
+
+Problem with putting output datagram together: can't always predict
+ahead of time how big the leaders are going to be!  Especially true
+for IP level, which TCP is not supposed to know too much about.  Thus
+if not careful, it could happen that output is put into a segment too
+close to the start of the buffer, so that there is not enough room for
+the TCP and IP headers to fit in.  Have to look at this; may need to
+give up notion of keeping all the packet internals nicely contiguous.
+Maximum IP header length is set at 60 bytes (15 words).  The maximum
+TCP header length is also 15 words.
+Looking at the currently defined options, it seems unlikely that ITS
+will use any of them, and if so, they can be predicted fairly easily on
+a per-connection basis, so things should work out okay.  Note that
+the IP level can always simply fragment stuff if it really wants to be
+that complex.
+
+It would be nice to be able to keep track of stuff which is on the
+device (IMP) output queue but hasn't yet gone out, in order to add
+last-minute bits (like ACK) or even some more data.  Idea: output "queue"
+is just a list of TCP connections that need attention, so can always
+go in and mung stuff (even change mind about outputting) just by playing
+with connection flags/lists.  This is basically how NCP does it.
+
+Re packet buffer design:
+	Somewhat more hypothetical is the notion of keeping a "usage
+count" for each buffer, so that pointers from the packet table entries
+can point to several different buffers and not just one.  When a usage
+count hits zero, put the buffer on the freelist.  Actually this is not
+really needed for the case of a table entry pointing to more than one
+buffer, but it IS needed for the case of more than one table entry
+pointing to the same buffer.  This might happen, for example, if 
+an internet bypass were set up so that datagrams going to ourselves
+were simply vectored directly to the input queues.  But for the
+time being, it probably isn't too outrageous to simply re-copy the
+datagram in question.  (Also better emulates a fake network device).
+
+Suggest that lists point directly to themselves rather than
+to start of entry; this allows low-level list routines to be used
+on all lists.  The higher-level routines of course have to know what
+offsets to use for a specific list.  Alternatively provide different routines
+for each offset needed, and equate references to the appropriate routine
+for each use.  (This is what I'm trying at the moment, hence the IRPS)
+
+May want to use format <head>,,<list ptr> where <head> is the addr
+of the initial pointer (not initial node).  This allows backtracking
+to figure out what TCP connection or IP queue a packet belongs to.
+Brute force approach is to simply have another word for the TCB index, etc.
+
+If this stuff is general enough it could be used for CHAOS packets also.
+|
+
+COMMENT |
+
+-- Lots of this is wrong now... --
+
+Buffers are all 256 (400 octal) words long, and 4 of them fit on one
+ITS page.  This size was chosen because the maximum length of an IMP
+message (not counting IMP-Host padding) is 255 words of 4 8-bit bytes
+per word.  This allows one extra word; not much.  Taking away the
+3 IMP leader words (which has to be done anyway for NCP to continue
+working) gives us 4 spare words per buffer.
+
+This still may not be enough.  Rather than shoe-horn some clever stuff
+into each buffer header, I am opting to maintain "Packet Entries" in a
+"Packet Table" separate from the "Packet Buffers" themselves.  All
+messages/datagrams/segments/packets are identified by a pointer
+into the table. (Could use index, as for sockets/TCBs, but this is
+awkward for lists).  The entry identified by the pointer will contain
+the actual pointers into the buffer associated with that packet.
+[NOTE: may want to have these pointers point into various places, not
+necessarily all the same buffer.  Must think about this.]
+
+Free buffers are linked by a freelist pointer in their first word,
+with an identifier in the second word to help GC.  The only design
+issue for the buffers themselves is how to set things up so that it is
+easy to GC a large freelist, i.e.  identify pages that have nothing
+but free buffers in them and thus can be removed from the system's
+address space.  Currently I have simply adopted the strategem used for
+CHAOS buffers (at CHCLN) to have the core job snuffle over the freelist.
+
+Note that the low-level routines for manipulating lists are actually
+referenced via macros which are given an offset as argument.  This
+offset refers to the offset between the node pointer and the location
+of the "next" pointer in the node; the macro will assemble into a
+call to the right routine for that offset.  Currently only offsets
+up to 2 are supported; any lists that the packet is put on must
+be threaded through the first 3 words of the node, and the macros check
+for this.
+|
+
+	SUBTTL Packet Tracing Code
+
+IFNDEF PKTTRC,PKTTRC==:0 	; Nonzero turns tracing code on
+IF1,IFN PKTTRC,.ERR IP packet tracing code included.
+
+COMMENT |
+
+This code can be used to keep a history of what happens to a packet.
+The history is stored in the packet buffer as a series of indexes
+into a table of named events.
+
+To trace a particular event use the TRCPKT macro.
+
+	TRCPKT(REG,"String")
+
+REG is the register which currently contains an index to the packet
+buffer table. The code is more efficient if the register is R. String
+is the description of the event.
+
+To generate the event table, you must call the TRCCOD macro somewhere
+after the last call to TRCPKT.
+
+|
+
+%NTRCE==:77	; Allow this many trace events. Value must be a bit mask (all
+		; ones) to work right. If you make it bigger than 77
+		; you have to change the "TRC%" in the macros to something
+		; shorter, too.
+
+%%%TRC==1
+
+; TRCCOD generates TRCTBL, which holds <code address,,address of event string>
+; for each trace event.
+DEFINE TRCCOD
+IFN PKTTRC,[
+TRC%0==:<0,,[ASCIZ /Null event/]>
+TRCTBL: REPEAT %%%TRC,CONC TRC%,\.RPCNT
+IF2,	REPEAT %%%TRC,CONC EXPUNGE TRC%,\.RPCNT
+]
+TERMIN
+
+DEFINE TRCPKT REG,&(EVENT)
+IFN PKTTRC,[
+IFG %%%TRC-%NTRCE,.ERR Too many packet trace events!
+CONC TRC%,\%%%TRC,==:<.,,[ASCIZ EVENT]>
+ IFN REG-R,[
+	PUSH P,R
+	MOVE R,REG
+ ]
+	PUSH P,TT
+	MOVEI TT,%%%TRC
+	PUSHJ P,PKTPTS
+	POP P,TT
+ IFN REG-R,[
+	POP P,R
+ ]
+%%%TRC==%%%TRC+1
+]
+TERMIN
+
+IFN PKTTRC,[
+
+; Store information in the packet history data buffer
+;  "Information" is a 6-bit quantity which indexes into a table
+;  of strings.
+;   TT/ Reason index
+;   R/ Pkt Buffer index
+
+PKTPTS:	CONO PI,PIOFF		; Freeze machine
+	DPB TT,PK.HSP(R)	; Store trace info
+	IBP PK.HSP(R)		; Bump BP
+	HRRZ TT,PK.HSP(R)	; Pick up history byte ref (address only)
+	CAIL TT,PK.HSP(R)	; If we've gotten to the bottom,
+	 JRST [	MOVEI TT,PK.HST(R) ;Wrap around
+		HRLI TT,(<.BP %NTRCE_30.>) ; BP to left 6 bits
+		MOVEM TT,PK.HSP(R) ;Reset it to top
+		JRST .+1 ]
+	CONO PI,PION
+	POPJ P,
+]
+
+;;; Packet Table Entries
+
+EBLK
+IFNDEF PKBSIZ,PKBSIZ==1000	; 512. words per packet buffer (2048 byte MTU)
+IFNDEF NPKPGS,NPKPGS==40.	; # pages OK to use for packet buffers
+NPKB==:<NPKPGS*<2000/PKBSIZ>>	; # packet buffers available
+NPKE==:NPKB			; # packet entry nodes.
+IFN NPKB-NPKE,.ERR You must fix the UFLS at PKTGF.
+
+PKETBL:	OFFSET -.
+	; General (device driver, etc)
+PK.FLG:: 1,,PKETBL+PK.L	; General - <flags>,,<PE freelist or dev driver list>
+	%PKPIL==:<SETZ>	; Packet locked at PI level, being output
+	%PKODN==:<1000,,> ; Packet has been output (else not yet)
+;;;	%PKNOF==:<2000,,> ; Packet should not be freed when output done.
+	%PKFLS==:<4000,,> ; Flush pkt if seen on output queue (ie dont output)
+	%PKRTR==:<10000,,> ; Packet is being re-transmitted by TCP
+	.SEE %PQFLX		; Low bits of LH used for on-list flags.
+
+PK.IP::	0	; IP Datagram - <IP Header ptr>,,<IP Datagram list>
+		;	May be strung on Internet Queue, IP output queue
+PK.TCP:: 0	; TCP Segment - <TCP Header pointer>,,<TCP Segment list>
+		;	May be strung on TCB input Q, output retransmit Q
+PK.TCI:: 0	; TCP Segment - <# bytes data><# bytes offset><TCB index>
+	PK%TDL==:<777700,,0>	  ; # octets of data in TCP segment
+	PK%TDO==:<    77,,770000> ; # octets data is offset from TCP header
+	PK%TCB==:<      ,,007777> ; TCB connection index 
+	PK$TDL==:<.BP PK%TDL,PK.TCI>
+	PK$TDO==:<.BP PK%TDO,PK.TCI>
+	PK$TCB==:<.BP PK%TCB,PK.TCI>
+PK.BUF:: 0	; General - <# wds>,,<addr of buffer>
+PK.TIM:: 0	; General - Time sent or received, int level (Sys time)
+PK.DST:: 0	; Immediate destination address if on output queue
+PK.HWI:: 0	; Hardware Information - currently KS Unibus address
+
+IFN PKTTRC,[
+PK.HST:: BLOCK 3 ; Packet trace history buffer
+PK.HSP:: 0	; Packet trace history pointer
+]
+
+PK.L::	OFFSET 0 ; Length of a Packet-Entry (PE) node
+	REPEAT <NPKE-1>,[
+		IFN .RPCNT-<NPKE-2>, 1,,.+PK.L	; Build initial freelist
+		.ELSE 1,,0
+		BLOCK PK.L-1
+	]
+PKETBE==:.-PK.L	; Last legal PE pointer value
+
+PKEQHF:	PKETBE,,PKETBL	; Header for Packet-Entry node freelist
+
+BBLK
+
+; A "queue" is a list of nodes pointed to by a "queue header" word
+; of format <last node>,,<first node>.  Each node pointer points to
+; the next node pointer (or zero if no more).
+; There is a set of flags in the LH of a certain word, at offset
+; PQ.FLG, that indicate which lists a node is currently on.
+
+PQ.FLG==:PK.FLG		; Offset of word list-flags are in.
+%PQFLX==0		; Initial val
+IFNDEF %%%QOF,%%%QOF==0	; This gets set to highest offset supported
+
+IRPS PKQGF,,[PKQGF0:PKQGF1:PKQGF2:]PKQPL,,[PKQPL0:PKQPL1:PKQPL2:]PKQPF,,[PKQPF0:PKQPF1:PKQPF2:]%PQFL,,[%PQFL0:%PQFL1:%PQFL2:]
+IFG .IRPCNT-%%%QOF,%%%QOF==.IRPCNT
+
+	%PQFL==:<1_.IRPCNT,,>	; Def a flag in LH at offset PQ.FLG
+	%PQFLX==%PQFLX\%PQFL	; Mask of all list-flags def'd.
+
+; PKQGF - Get first node from queue
+;	Q/ addr of queue header
+;	A/ addr of node (zero if none)
+
+PKQGF:	CONO PI,PIOFF		; Work at all levels
+	HRRZ A,(Q)		; Get 1st from queue header word
+	JUMPE A,PIONJ		; None, so return zero.
+	MOVSI T,(%PQFL)		;   Now clear appropriate flag for list
+	XORB T,PQ.FLG(A)	;   to indicate it's not on it any more.
+	TLNE T,(%PQFL)		;   Paranoia plus
+	 BUG HALT,[PK: GF node wasnt on list]
+	HRRZ T,.IRPCNT(A)	; Get 2nd
+	HRRM T,(Q)		; Make it 1st
+	CAIN T,			; If all's well, done.
+	 SETZM (Q)		; Else must clear whole header
+IFNDEF PIONJ,PIONJ:
+	CONO PI,PION
+	POPJ P,
+
+; PKQPL - Put node on queue as last thing.
+;	Q/ addr of queue header
+;	A/ addr of node
+PKQPL:	TRNN A,-1		; More paranoia
+	 BUG HALT,[PK: zero node ptr]
+	HLLZS .IRPCNT(A)	; Say this node is last one
+	CONO PI,PIOFF		; Work at all levels
+	MOVSI T,(%PQFL)		; Paranoia: Set appropriate flag for list
+	XORB T,PQ.FLG(A)	;    to indicate it's on it now.
+	TLNN T,(%PQFL)		;    plus check...
+	 BUG HALT,[PK: node already on list]
+	HLRZ T,(Q)		; Get last node
+	HRLM A,(Q)		; Point to new last node
+	JUMPN T,[HRRM A,.IRPCNT(T)	; Make prev last node point to new last
+		JRST .+2]		; Skip over next instr!!
+	 HRRM A,(Q)		; Queue was empty, make this the new first too
+	CONO PI,PION
+	POPJ P,
+
+; PKQPF - Put node on queue as first thing.
+;	Q/ addr of queue header
+;	A/ addr of node
+PKQPF:	TRNN A,-1		; Yes more paranoia
+	 BUG HALT,[PK: zero node ptr]
+	CONO PI,PIOFF
+	MOVSI T,(%PQFL)		; Paranoia: Set appropriate flag for list
+	XORB T,PQ.FLG(A)	;    to indicate it's on it now.
+	TLNN T,(%PQFL)		;    check...
+	 BUG HALT,[PK: node already on list]
+	HRRZ T,(Q)		; Get first thing
+	CAIN A,(T)		; paranoia, avoid loops to self
+	 BUG
+	HRRM T,.IRPCNT(A)	; Make it second thing
+	HRRM A,(Q)		; Make new first thing
+	CAIN T,
+	 HRLM A,(Q)		; Was empty, also make it last thing.
+	CONO PI,PION
+	POPJ P,
+TERMIN
+
+; Define PKQGF, etc so that they actually reference PKQGF0, etc as
+; appropriate for the given offset.
+IRP RTN,,[PKQGF,PKQPF,PKQPL]
+DEFINE RTN ?OFFST=0,
+CONC RTN,\OFFST
+IFG OFFST-%%%QOF,.ERR RTN used with bad offset
+TERMIN
+TERMIN
+
+
+; PKEGF - Get a free Packet-Entry node
+;	Clears node contents.
+;	Clobbers Q,T
+; Returns A/ PE ptr (0 if none)
+
+PKEGF:	MOVEI Q,PKEQHF
+IFE PKTTRC,[
+	CALRET PKQGF	; Get a node
+]
+IFN PKTTRC,[
+	CALL PKQGF
+	JUMPE A,CPOPJ		; No packet
+	SETZM PK.HST(A)
+	SETZM PK.HST+1(A)
+	SETZM PK.HST+2(A)
+	MOVEI Q,PK.HST(A)	; Build byte ref to history trail
+	HRLI Q,(<.BP %NTRCE_30.>) ; (dpb ref)
+	MOVEM Q,PK.HSP(A)	; save ref
+	POPJ P,
+]
+
+; PKERT - Return a Packet-Entry node to freelist
+;	A/ PE ptr to node
+;	Clobbers Q,T
+
+PKERT:	MOVEI Q,PKEQHF	; Use Packet-Entry freelist
+	CALRET PKQPF	; Put back on start of list.
+
+; Note that all MP calls to the routines below which allocate or free
+; entries/buffers must be sure not to block (page fault or UFLS)
+; while any "loose" entries/buffers exist (not pointed to by any list)
+; unless there something on the PCLSR locked-switch list which will return the
+; currently "loose" entry/buffer to its freelist -- otherwise
+; it is possible for "loose" stuff to slowly accumulate.
+
+; PKTGF - Get a free Packet-Entry node and Packet Buffer.  Hangs until
+;	it wins.  Note that it depends on fact there is one PE node
+;	for every packet buffer, and vice versa!  If this becomes untrue
+;	then the way it UFLSes should be fixed up.
+; PKTGFI - version that skips if wins, doesn't hang.
+; Returns A/ PE ptr	Clobbers Q,T
+
+PKTGF:	SKIPN PKEQHF	; Fast check, see if any packet entries/buffers free
+	 CALL UFLS	;  Nope, hang until something turns up.
+	CALL PKTGFI	; Get a entry/buffer!
+	 JRST PKTGF	; None?  Sigh, go hang.
+	RET
+
+PKTGFI:	CALL PKEGF	; Get a free node
+	JUMPE A,CPOPJ
+	PUSH P,A	; Save pointer to it
+PKTGF1:	CALL PKBGF	; Get a free buffer
+	JUMPN A,PKTGF8	; Jump if found one right away!
+	CALL PKBAL	; None left on freelist, try to allocate more.
+	 CAIA		;  Sigh, failed.
+	  JRST PKTGF1	; Won, go pluck a buffer from freelist.
+
+	; Lost, can't get any more buffers.
+	POP P,A		; None available, take non-skip return
+	CALRET PKERT	; Put PE node back on its freelist.
+	
+	; Won, store buffer pointer in PE.
+PKTGF8:	MOVE T,A
+	POP P,A		; Restore PE ptr
+	MOVEM T,PK.BUF(A)
+	MOVE T,PQ.FLG(A)	; Paranoia dept, verify not on any lists.
+	TLNE T,(%PQFLX)
+	 BUG HALT,[PK: Freelist node not free!]
+	SETZM PK.FLG(A)	; Zap all other entries in packet node.
+	SETZM PK.IP(A)
+	SETZM PK.TCP(A)
+	SETZM PK.TCI(A)
+	SETZM PK.TIM(A)
+	AOS (P)		; Win, skip on return!
+	RET
+
+; PKTRT - Return both a Packet-Entry and its associated buffer to freelist
+;	only if check shows that it doesn't belong to any lists.
+; PKTRTA - Always return to freelist.  If check shows that it is still
+;	on some list, bad error!
+;	Clobbers A,Q,T
+;	A/ PE ptr (must be off all lists)
+
+PKTRTA:	CAIL A,PKETBL		; Paranoia check for legal pointers
+	 CAILE A,PKETBE
+	  BUG HALT,[PK: Bad PE pointer]
+	MOVE T,PQ.FLG(A)
+	TLNE T,(%PQFLX\%PKPIL)	; On list or locked at I/O PI level?
+	 BUG HALT,[PK: Freeing packet still in use!]
+	JRST PKTRTX		; Nope, can proceed to put on freelist.
+	
+PKTRT:	CAIL A,PKETBL		; Paranoia check for legal pointers
+	 CAILE A,PKETBE
+	  BUG HALT,[PK: Bad PE pointer]
+	MOVE T,PQ.FLG(A)
+	TLNE T,(%PQFLX\%PKPIL)	; On a list or locked by interface PI level?
+	 RET			; Yes, don't return to freelist yet.
+PKTRTX:	PUSH P,A		; Save PE ptr
+	SKIPE A,PK.BUF(A)	; Get buffer pointer associated with PE
+	 CALL PKBRT		; Return the buffer
+	POP P,A
+	SETZM PK.BUF(A)		; Ensure buffer pointer zapped.
+	CALRET PKERT		; Then return the packet entry
+
+; PKTPCL - Return a packet entry/buffer while PCLSR'ing.
+;	This is the standard LOSSET routine to use.
+;	A must hold the PE ptr at time of the block (which we are backing
+;	out of).
+;	Must only clobber A and T!!
+
+PKTPCL:	MOVE A,AC0S+A(U)	; Get ac A at time of the block
+	PUSH P,Q		; Mustn't clobber Q
+	CALL PKTRT		; Return the entry/buffer (clobbers Q,T)
+	JRST POPQJ
+
+
+EBLK
+PKBNF:	0	; # free Packet Buffers
+PKBNT:	0	; # total Packet Buffers
+PKBCTM:	0	; Time of last no-more-core complaint
+PKBQHF:	0	; Queue Header for buffer freelist
+PKBQHC:	0	; Queue Header for core job cleanup
+BBLK
+
+; PKBGF - Get a free Packet Buffer
+;	Clobbers Q,T
+; Returns A/ PB ptr (0 if none)
+
+PKBGF:	MOVEI Q,PKBQHF	; Point to buffer freelist
+	CALL PKQGF	; Get first thing off it
+	JUMPE A,CPOPJ	; If got nothing, just return.
+	SETZM 1(A)	; Aha, got it!  Flush free-buffer identifier.
+	SOS PKBNF	; Decrement # free packet buffers.
+	RET
+
+; PKBRT - Return a Packet Buffer to freelist.  Puts back at END of freelist,
+;	as PKBCLN clean-up depends on this.
+;	Clobbers Q,T
+PKBRT:	SETZM (A)	; Paranoia aid - clear "flags" in LH of 1st wd.
+			; Otherwise PKQ routines complain.
+	MOVE T,[SIXBIT /BRUNCH/]
+	MOVEM T,1(A)	; Set up free-buffer identifier
+	AOS PKBNF	; Increment # free packet buffers.
+	MOVEI Q,PKBQHF	; Point to buffer freelist
+	CALRET PKQPL	; Put it back on, at end.
+
+; PKBRTL - Return a list of Packet Buffers to freelist
+;	Q/ ptr to queue header of list
+;	Clobbers A,T
+PKBRTL:	CALL PKQGF	; Get first thing off list
+	JUMPE A,CPOPJ
+	PUSH P,Q
+	CALL PKBRT	; Return it to buffer freelist
+	POP P,Q
+	JRST PKBRTL
+
+; PKBAL - Allocate more Packet Buffers
+;	Clobbers A,Q,T
+; Returns .+1 if lost
+;	.+2 if won (must still call PKBGF to get a buffer from list)
+
+PKBAL:	PUSH P,B
+	CONI PI,Q		; Save PI channel-on status
+	ANDI Q,177
+	CONO PI,UTCOFF		; Make the world safe for IOMQ
+	MOVE B,PKBNT		; Check total # of buffers so far
+	CAIL B,NPKB		; Make sure we're not already using max allowed
+	 JRST PKBAL4		;  Ugh, already at max!  Go complain.
+	PUSHJ P,IOMQ		; Get 1K of memory
+	 JRST PKBAL3		; Mem not available, fail
+	CONO PI,PICON(Q)	; Won, restore PI status
+	MOVEI B,MUPKT		; Set page type = packet
+	DPB B,[MUR,,MEMBLT(A)]
+	LSH A,10.		; Turn allocated page # into mem address
+	HRLI A,-<2000/PKBSIZ>	; Make AOBJN into page (# buffers per page)
+PKBAL2:	PUSHJ P,PKBRT		; Put them all on free list
+	ADDI A,PKBSIZ-1
+	AOBJN A,PKBAL2
+	MOVEI B,<2000/PKBSIZ>	; This many more buffers have been created
+	ADDM B,PKBNT		; Increase total (PKBNF bumped by PKBRT)
+	POP P,B
+	AOS (P)			; Take win return.
+	RET
+
+	; Here if packet stuff trying to use up too much core
+PKBAL4:	MOVE B,PKBCTM	; Don't complain too often
+	ADDI B,60.*30.	; Just once a minute
+	CAMLE B,TIME
+	 JRST PKBAL3
+	BUG CHECK,[PACKET NET ATTEMPTING TO USE TOO MUCH CORE]
+	MOVE B,TIME
+	MOVEM B,PKBCTM
+PKBAL3:	CONO PI,PICON(Q)	; Lost, restore PI status
+	POP P,B
+	POPJ P,			; and take error return.
+
+
+; PKBCLN - Called only by core job, to clean up packet buffers.  
+;	Smashes all ACs.
+
+PKBCLN:	SKIPE A,PKBNT		; See if 2/3 or more of buffers free
+	 SKIPN B,PKBNF
+	  POPJ P,		; No buffers or none free, nothing to do
+	SUBM A,B
+	IDIV A,B		; Get ratio of total to used
+	CAIGE A,3		; Note if B is zero, A is unchanged
+	 POPJ P,		;  and at least 32.
+IFL TSYSM-256.,	MOVEI D,TSYSM-1	; Scan memory for packet buffer pages
+.ELSE	MOVEI D,255.
+PKBCL0:	LDB A,[MUR,,MEMBLT(D)]
+	CAIE A,MUPKT
+PKBCL4:	 SOJGE D,PKBCL0
+	JUMPL D,CPOPJ
+	MOVE A,D		; Quickly determine if any non-free buffers
+	LSH A,10.		;  on this page
+	HRLI A,-<2000/PKBSIZ>
+	MOVE T,[SIXBIT/BRUNCH/]
+PKBCL5:	CAME T,1(A)
+	 JRST PKBCL4		; Not free, don't bother with slow stuff
+	ADDI A,PKBSIZ-1
+	AOBJN A,PKBCL5
+	SETZB C,PKBQHC		; Collect all free buffers on this page
+	MOVE E,PKBNF	; Loop about as many times as there are free buffers
+PKBCL1:	PUSHJ P,PKBGF		; Get next free buffer
+	JUMPE A,PKBCL2
+	LDB B,[121000,,A]
+	CAMN B,D
+	 JRST [ MOVEI Q,PKBQHC	; This one's on the page, save it
+		PUSHJ P,PKQPL
+		AOJA C,.+2 ]	; Count them
+	  PUSHJ P,PKBRT		; Not on the page, put back. This depends on
+				; the fact PKBRT puts back at END of list!
+	SOJG E,PKBCL1
+PKBCL2:	CAIE C,<2000/PKBSIZ>	; Did we get the whole page?
+	 JRST [	MOVEI Q,PKBQHC	; No, must punt this one, and
+		PUSHJ P,PKBRTL	; return all the buffers we saved up.
+		JRST PKBCL4]
+	MOVNS C			; Yes, get rid of these buffers
+	ADDM C,PKBNT		; Decrement total # of buffers in use
+	MOVE A,D
+	PUSHJ P,MEMR		; Flush the page from addr space
+	JRST PKBCLN		; Back to flush more, until quota done.

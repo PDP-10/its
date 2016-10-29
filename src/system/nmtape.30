@@ -1,0 +1,2432 @@
+;********************************
+;**
+;** TO BE DONE:
+;**
+;** RECORDS LONGER THAN 1K
+;** AUTOMATIC DETERMINATION OF DENSITY AND RECORD LENGTH WHEN READING
+;** ALLOW CLOSE WHEN TAPE HAS BEEN TAKEN OFF
+;** BE MORE FORGIVING OF CONTROLLER LOSSAGE
+;** PASS .MTAPE TO JOB DEVICE
+;** HAVE AN IGNORE ERRORS SWITCH
+;** THIS HORRIBLE BLETCHEROUS IOT CODE SHOULD BE REDESIGNED
+;**
+;********************************
+
+;Do not be deceived by the TM10 conditionals. This file is only good
+; for a TM03/RH11 on a KS10. See MTAPE for anything else. Barf.
+
+IFE TM10A+TM10B+TM03S,.ERR NO MAGTAPE CONTROLLER TYPE SELECTED
+IFN TM10A,INFORM IO BUSS MAG TAPE,1
+IFN TM10B,INFORM DATA CHANNEL MAG TAPE,1
+IFN TM03S,INFORM RH11/TM03 MAG TAPE,1
+
+IFN TM10P,[
+$INSRT TM10
+]
+IFN TM03S,[
+$INSRT TM03S
+]
+$INSRT T20MAC
+
+MSCBL==8			;Command buffer length
+MGQDLL==10.			;PI level PDL length
+IF2 IFN MNUMB-140600, .ERR IMPLICIT DEPENDENCY ON MNUMB
+MSEOFP==210100			;High bit of MNUMB in MEMBLT is EOF flag
+MSCHN==140500			;Other 5 bits of MNUMB is drive number
+
+MTXP==410300,,			;BP to set/get transport number from IOCHNM
+MUNITF==170300			;BP to set/get unit field in MTC CONI
+
+IFN TM10P,[
+;Tape controller commands
+MNOPIN==10000			;NOP and interrupt when idle
+MWRITE==4000			;Write data
+MW3IN==14000			;Write data and long EOR gap
+MSPRR==7000			;Space in reverse direction
+MREAD==2000			;Read data
+MSPFR==6000			;Space in forward direction
+MSPFF==16000			;Space forward to EOF
+MSPRF==17000			;Space reverse to EOF
+MREWND==1000			;Rewind
+MRWNDD==11000			;Rewind and unload
+MWEOF==5000			;Write EOF mark
+]
+
+MGNRTY==10.			;Number of retries on read
+
+;Modes in OPEN call
+;
+%MMOUT==1,,0			;Open for output, 0=>input
+%MMBLK==2,,0			;Block mode, 0=>unit mode
+%MMIMG==4,,0			;Image mode, 0=>Ascii
+%MMCNK==10,,0			;"Chunk" mode, 0=>stream mode
+%MMNSE==20,,0			;No skip to EOF on close, 0=>do skip
+%MMEP==40,,0			;Even parity, 0=>odd
+%MMDEN==300,,0			;Density select
+				; 00=> "Default" - 1600 for KS/TU77
+				; 01=> 800 BPI
+				; 10=> 1600 BPI
+				; 11=> 6250 BPI
+%MM32B==400,,0			;"IBM" mode, write 8-bit bytes from LH 32 bits
+				; 0=> core dump
+%MMRSZ==7000,,0			;Record Size
+				; Ranging binarily from 0=>1024. to 7=>8. bytes
+
+
+EBLK
+
+SUBTTL MAG TAPE STORAGE AREA
+
+MGVTC:	0			;Scratch word for virgin tape check
+MGJDTI:	0			;"Wait for job done" time out value
+MGNWRD:	0			;Number of words read in a PI level read
+MGTBZY:	-1			;Flag to get interrupt started
+MGSFTI: 0			;Software interrupt in progress
+MGUNIT:	-1			;Unit expecting interrupt
+MGWCW:	0			;"Wait for control word written" flag
+LMIOWD:	0			;Last MIOWD
+
+MSRAC:	BLOCK NMTCS		;Transport software status flags
+ %MA==1,,525252
+ %MAEOF==400000			;4.9 EOF seen on read - must be 4.9
+ %MAETR==200000			;4.8 EOT on internal read
+ %MAETW==100000			;4.7 EOT on write
+ %MAERR==040000			;4.6 PI level got an error
+ %MARCE==020000			;4.5 Read compare error
+ %MACTH==014000			;4.4 Core allocator says stop
+				;4.3 "  (WHY 2 BITS?)
+ %MASTP==002000			;4.2 Stop read ahead
+ %MANWT==001000			;4.1 Nothing written on tape yet
+ %MAEFA==000400			;3.9 EOF seen on read-ahead, user hasn't seen
+ %MAESO==000200			;3.8 EOF read since open
+ %MAMSO==000100			;3.7 Tape moved since first open
+ %MAREW==000040			;3.6 "Tape is rewinding" flag
+ %MARAC==000020			;3.5 Read active flag
+ %MAMOL==000010			;3.4 Transport on line
+ %MAWSW==000004			;3.3 Wants software (timing) interrupts
+MGERRC:	BLOCK NMTCS		;Error count
+MTCEFW:	BLOCK NMTCS		;Number of EOF's written at close
+MGEOFR:	BLOCK NMTCS		;Number of EOF's since last read
+MTPSAV:	BLOCK NMTCS		;Storage to restore P on EOF
+MSCMDC:	REPEAT NMTCS,0		;Number of commands in command list
+MGSPCD:	BLOCK NMTCS		;Spacing operation command
+MGSCNT: BLOCK NMTCS		;Spacing operation count
+MGEOTT:	BLOCK NMTCS		;Timeout for detecting virgin tape
+MSBUFP:	REPEAT NMTCS,0		;Mag tape MP<->PI buffer queue  in,,out
+MSNBOL:	BLOCK NMTCS		;Number of buffers on list
+MSCRW:	BLOCK NMTCS		;R/W flag, -1=>output 0=>input
+MSMPRC:	BLOCK NMTCS		;Words left in buffer
+MSMPRP:	BLOCK NMTCS		;Next word in buffer
+MTMDN:	REPEAT NMTCS,-1		;Block active at MP
+MGCABN:	REPEAT NMTCS,-1		;Buffer active at PI level
+MTUSE:	REPEAT NMTCS,-1		;Number of channels open on this transport
+MTUSR:	REPEAT NMTCS,-1		;User index of transport user
+MTBLKS:	BLOCK NMTCS		;If write, buffer size
+				;If read, size of last record read
+MTMFNC:	BLOCK NMTCS		;.MTAPE function storage
+MTMCNT:	BLOCK NMTCS		;.MTAPE count
+MTMTAP:	BLOCK NMTCS		;MTAPE call word
+
+MGCMTS:	BLOCK NMTCS		;PI level status info (CONI MTS or similar)
+MGCMTC:	BLOCK NMTCS		;PI level controller info (CONI MTC or similar)
+
+ IFN TM10P,[
+MTCONO:	REPEAT NMTCS,\.RPCNT_17+20 ;Prototype CONO word for each transport
+ ]
+ IFN TM03S,[
+MTSELW: BLOCK NMTCS		;Select word (TC reg val) for each transport
+ MTSELM==3777			;density/format/parity/unit bits mask
+MTWTFC:	BLOCK NMTCS		;-10 word count to tape frame conversion factor
+ ]
+
+;Build table of QDL (PI level stack) pointers
+MGQDLP:	REPEAT NMTCS,-MGQDLL,,CONC MGQD,\.RPCNT,-1
+
+;Built storage for command lists and PI level stacks
+REPEAT NMTCS,[
+	CONC MSCB,\.RPCNT,:
+		BLOCK MSCBL	;Space for command list
+		MGRCV		;Fake "command", causes list to wrap around
+
+		MGNCMD		;Function on botton of Q PDL, gets new command
+	CONC MGQD,\.RPCNT,:
+		BLOCK MGQDLL	;Space for PI level stack
+
+	IFE .RPCNT,MSLCTB==.-MSCB0	;Length of each table
+]
+
+;Build table of pointers for adding commands to command list
+MTCMBP:	REPEAT NMTCS,-MSCBL-1,,CONC MSCB,\.RPCNT,-1
+
+;Build table of bytepointers for removing commands from command list
+MGCMBP:	REPEAT NMTCS,4400,,CONC MSCB,\.RPCNT,-1
+
+;It is depressing to discover that the DUMP program sucks these directly
+; out of the running ITS. If you change what's in here fix DUMP too.
+
+MGEMTC:	0			;CONI MTC, at last error
+MGEMTS:	0			;CONI MTS, at last error
+
+IFE TM10B,[
+MIOWD: BLOCK 2			;Channel program
+]
+IFN TM10A,[
+MGDBRK:	0
+	CONO MTS,1
+	JRST 12,@MGDBRK
+];TM10A
+
+BBLK
+
+
+;Random Macros
+
+;Enqueue and Dequeue buffers from the lists used to pass buffers between
+; main program and PI level. Assumes W has a valid transport number...
+
+DEFINE MTENQB REG,TEMP=TT
+	SKIPG MSNBOL(W)		;;Any buffers on list already?
+	IFSKP.
+	 HLRZ TEMP,MSBUFP(W)	;;Yes, get old tail pointer
+	 DPB REG,[MLO,,MEMBLT(TEMP)]	;;Add new one onto end of list
+	ELSE.
+	 HRRM REG,MSBUFP(W)	;;No, make new buffer head of list
+	ENDIF.
+	HRLM REG,MSBUFP(W)	;;New buffer is tail in any event
+	SETZM TEMP
+	DPB TEMP,[MLO,,MEMBLT(REG)]	;;Indicate end of list
+	AOS MSNBOL(W)		;;Increment count of buffers on list
+TERMIN
+
+DEFINE MTDEQB REG,TEMP=TT
+	HRRZ REG,MSBUFP(W)	;;Get head of buffer list
+	HLRZ TEMP,MSBUFP(W)	;;Get tail
+	CAMN REG,TEMP		;;Tail == head?
+	IFSKP.
+	 LDB TEMP,[MLO,,MEMBLT(REG)]	;;No, get next buffer on list
+	 HRRM TEMP,MSBUFP(W)	;;Make it the new head of list
+	ELSE.
+	 SETZM MSBUFP(W)	;;Only one buffer, list is now empty
+	ENDIF.
+	SOS MSNBOL(W)		;;Decrement count of buffers on list
+TERMIN
+
+IFN TM03S,[
+;Macros for testing various status bits as set up by MGGXPT and friends
+IRP OP,,[NN,NE,NA,O,OE,ON,OA,Z,ZE,ZN,ZA,C,CE,CN,CA]
+  DEFINE TT!OP REG,#MSK
+    ...TSF==0
+    IFSE REG,CS1,[
+	TL!OP I,MSK
+	...TSF==-1
+	]
+    IFSE REG,CS2,[
+	TR!OP I,MSK
+	...TSF==-1
+	]
+    IFSE REG,FS,[
+	TL!OP J,MSK
+	...TSF==-1
+	]
+    IFSE REG,ERR,[
+	TR!OP J,MSK
+	...TSF==-1
+	]
+    IFE ...TSF,.ERR Invalid register name REG given in TTxxx macro
+  TERMIN
+TERMIN
+];IFN TM03S
+SUBTTL MAG TAPE OPEN ROUTINE
+
+;	C/	MODE,,DEV
+;	D/	MODE (ROT 1) 4.9=1=>OUTPUT
+;	I/	DEVICE NUMBER
+;	R/	IOCHNM WORD POINTER
+
+MAGTO:	SKIPL W,I		;Get device
+	 CAIL W,NMTCS		;Too big?
+	  JRST OPNL1		;No such device
+	MOVSI T,%MAREW
+	TDNE T,MSRAC(W)		;Rewinding?
+	 PUSHJ P,UFLS		;Yes, wait for completion
+	CONO PI,CLKOFF		;Don't want transport status changed under me
+	SKIPL MTUSE(W)		;See if we are the first opener
+	IFSKP.			;First opener. Initialize database for device
+	 SETZM MSBUFP(W)	;Indicate no buffers on chain
+	 SETZM MSNBOL(W)	;Another way of saying above
+	 SETZM MSMPRC(W)	;Buffer words remaining
+	 SETZM MSMPRP(W)	;Pointer to buffers
+	 SETOM MTMDN(W)		;No buffer at MP level
+	 SETOM MGCABN(W)	;No buffer owned by PI code
+	 SETZM MSRAC(W)		;Initialize transport software status word
+	 MOVEI A,2
+	 MOVEM A,MTCEFW(W)	;Number of EOF's written
+	 MOVSI A,%MANWT
+	 IORM A,MSRAC(W)	;Indicate nothing written on tape
+	ELSE.			;Not first opener. Check legality of this open
+	 CAME U,MTUSR(W)	;Same user as previous open?
+	  JRST OPNL10		;Different user, report error
+	 MOVE B,D		;Check direction of open
+	 EQV B,MSCRW(W)		;Same as previous direction?
+	 SKIPL B		;Yes, OK
+	  JRST OPNL2		;No, wrong direction
+	ENDIF.
+	MOVEM U,MTUSR(W)	;Store user
+	SETZM MSCRW(W)		;Indicate read until found to be otherwise
+	TLNE C,1		;Read or write?
+	 SETOM MSCRW(W)		;Indicate write
+	AOS MTUSE(W)		;Indicate 1 more user
+	PUSHJ P,SOSSET
+	    MTUSE(W)		;SOS if PCLSR'd
+	CONO PI,CLKON		;Let um (em?) get me (who's em?)
+	PUSHJ P,MTSTAT		;Get transport status in standard form
+	MOVE A,MSRAC(W)
+	TLNE A,%MAERR		;PI error means device not there
+	 JRST MTODNP		;Go report error
+IFN TM03S,[
+	TTNN FS,%TMSFP		;Formatter present?
+	 JRST MTODNP		;No, can't win
+	TTNN FS,%TMSOL		;Slave on line?
+	 JRST MTODOL		;No, lose
+]
+IFN TM10P,[
+	TXNN J,%T1STH		;Transport hung, by chance?
+	 JRST MTOW1		;No, proceed
+	TXNN J,%T1SRW		;OK if rewinding
+	 JRST OPNL7		;Device not working
+]
+MTOW1:	SKIPN MSCRW(W)		;Writing?
+	 JRST MTOW2		;No...
+IFN TM10P,TXNE J,%T1SWL		;Yes. Write locked?
+IFN TM03S,TTNE FS,%TMSWL
+	 JRST OPNL26		;Yes, device writelocked error
+IFN TM10P, TXNN J,%T1SET	;At EOT?
+IFN TM03S, TTNN FS,%TMSET
+	  JRST MTOW2		;No
+	MOVSI A,%MAETW+%MAERR	;If write and EOT, make .IOT give IOC error,
+				;  but let open win
+	IORM A,MSRAC(W)
+
+MTOW2:	TXNE C,%MMDEN		;Density specified explicitly?
+	 JRST MTOW3		;Yes, go check for validity
+IFN TM10P,MOVEI A,1		;No, pick one. Use 800 for TM10
+IFN TM03S,MOVEI A,2		;Use 1600 for TM03
+	DPB A,[.BP %MMDEN,C]	;Set value
+	JRST MTOW4		;Done and assumed correct
+
+MTOW3:	LDB A,[.BP %MMDEN,C]	;Get density from open
+IFN TM10P,[
+	CAIE A,1		;800 is the only currently OK speed for TM10
+	 JRST OPNL12
+ IFN 0,[
+;You need something like this if you arrange to allow non-800 TM10 speeds
+	TXNN C,%MM32B		;32-bit compatible mode requested?
+	 JRST MTOW4		;No, core dump
+	CAIN A,1		;Density specified as 800?
+	 JRST MTOW4		;Yes, we can do that
+	JRST OPNL12		;32-bit and not 800BPI, controller can't do it
+ ]
+];IFN TM10P
+IFN TM03S,[
+	CAIN A,3		;Specified 6250?
+	 JRST OPNL12		;Yep, loser. Else OK
+]
+
+;Here on successful open.
+; Set up CONO or select word, IOCHNM word, blocksize
+;
+MTOW4:	PUSHJ P,LSWDEL		;Release MTUSE switch
+IFN TM10P,[
+	MOVEI A,MTCCHN_3	;Start building CONO word. Set control PI level
+IFN TM10A,TRO A,1		;Add in data PI level for non-DF10 controller
+	LDB B,[.BP %MMDEN,C]	;Get density from open
+	CAIE B,1		;800 BPI
+	 BUG INFO,[ILLEGAL TM10 TAPE SPEED SETTING, USING 800BPI]
+	MOVEI B,%T1D80		; Yep.	
+	DPB B,[.BP %T1CDS,A]	;Set density field of CONO word
+	TXNN C,%MM32B		;32-bit mode specified?
+	 TXO A,%T1CCD		;No, set core dump mode in CONO
+	TXNN C,%MMEP		;User wants even parity?
+	 TXO A,%T1COP		;No, set odd parity
+	DPB W,[.BP %T1CNU,A]	;Set unit number field of CONO
+	MOVEM A,MTCONO(W)	;Save assembled CONO word
+];IFN TM10P
+IFN TM03S,[
+	MOVE A,W		;Get unit number being initialized
+	TXNN C,%MM32B		;User asked for industry compatible?
+	IFSKP.			;Yes...
+	 MOVEI B,4		;Set word-to-frame conversion factor
+	 MOVEM B,MTWTFC(W)
+	 MOVEI B,%TMFIC		;Set mode in budding select word
+	ELSE.			;Core dump...
+	 MOVEI B,5		; takes 5 tape frames per word
+	 MOVEM B,MTWTFC
+	 MOVEI B,%TMFCD		;Set CD format in select word
+	ENDIF.
+	DPB B,[.BP %TMTFS,A]	;Set format in select word
+	TXNE C,%MMEP		;User wants even parity?
+	 TXO A,%TMTEP		;Yes, set even parity flag
+	LDB B,[.BP %MMDEN,C]	;Get density from open	
+	CAIE B,1		;800 BPI specified?
+	 SKIPA B,[%TMD16]	;Anything else, use 16
+	  MOVEI B,%TMD08	;800, use that
+	DPB B,[.BP %TMTDS,A]	;Set density in select word
+	MOVEM A,MTSELW(W)	;Set select word for this unit
+];IFN TM03S
+	LDB B,[.BP %MMRSZ,C]	;Get record size from open call
+	TRC B,7			;Convert to power of two
+	MOVEI A,10		;Minimum record size is 10 (8.) words 
+	LSH A,(B)		;Blocksize = minimum * 2^power
+	MOVEM A,MTBLKS(W)	;Save blocksize in words
+	LDB A,[.BP <%MMBLK\%MMIMG>,C]
+				;Use unit/block and ascii/image bits as index
+	HLR C,MTOPTB(A)		;Get input dispatch routine from table
+	TLNE D,400000		;Remember D? Skip if user opened in input mode
+	 HRR C,MTOPTB(A)	;OK, get output dispatch routine instead
+	MOVEM C,(R)		;Save routine in IOCHNM word
+	DPB W,[MTXP(R)]		;Set transport number in IOCHNM word
+	JRST POPJ1		;Skip return means success
+
+;Here if device is not present
+MTODNP:	SETZM MSRAC(W)	;Too bad. Clear status word and report error
+	JRST OPNL1
+
+;Here if device off line
+MTODOL:	SETZM MSRAC(W)
+	JRST OPNL7
+
+;Table of I/O routines
+;
+MTOPTB:	MTUAIX,,MTUAOX		;Unit Ascii
+	MTBIX,,MTBOX		;Block Ascii
+	MTUIIX,,MTUIOX		;Unit Image
+	MTBIX,,MTBOX		;Block Image
+
+
+
+SUBTTL MAG TAPE CLOSE ROUTINES
+
+;MTOCL - CLOSE TAPE OPEN FOR OUTPUT
+
+MTOCL:	LDB W,[MTXP(R)]		;Set up transport number
+	SOSL MTUSE(W)		;Decrement transport use counter
+	 POPJ P,		;Not only channel open, all done
+	AOS MTUSE(W)		;Consistant state in case PCLSR'd
+	MOVSI A,%MAERR
+	TDNE A,MSRAC(W)		;See if error has occurred
+	 PUSHJ P,MTOCL3		;Yes, clean up a few things
+
+	SKIPL MTMDN(W)		;Is there a partially processed buffer?
+	 PUSHJ P,MTWBFD		;Yes, write it to tape
+
+	MOVEI B,MGMEOT		;Queue a "Write EOT" command to PI level
+	PUSHJ P,MTCMD
+	SKIPLE MSCMDC(W)
+	 PUSHJ P,UFLS		;Wait till done. 
+	MOVEI A,1
+	MOVEM A,MGEOFR(W)
+	SKIPGE MTMDN(W)		;Active buffer at MP level?
+	IFSKP.
+	 MOVE A,MTMDN(W)
+	 BUG PAUSE,[MT: MP BUF REMAINS AT CLOSE],OCT,A
+	 PUSHJ P,MEMR
+	ENDIF.
+	SKIPGE MGCABN(W)		;Active buffer at PI level?
+	IFSKP.
+	 MOVE A,MGCABN(W)
+	 BUG PAUSE,[MT: PI BUF REMAINS AT CLOSE],OCT,A
+	 PUSHJ P,MEMR
+	ENDIF.
+	SKIPN MSNBOL(W)		;Any buffers on buffer queue?
+	IFSKP.
+	 BUG PAUSE,[MT:],DEC,MSNBOL(W),[BFRS QUEUED AT CLOSE]
+	 PUSHJ P,MTCBFF
+	ENDIF.
+	SETOM MTUSE(W)		;Nobody is using this transport
+	SETOM MTUSR(W)		;No user associated with this transport
+	SETZM MSRAC(W)		;reset transport software status word
+	POPJ P,
+
+MTOCL3:	SKIPL A,MTMDN(W)	;Have a buffer active at MP level?
+	 PUSHJ P,MEMR		;Flush it if so
+	SETOM MTMDN(W)
+	SETZM MSMPRC(W)		;Say no words left in current buffer
+	POPJ P,
+
+;Close routine for MT open for input
+
+MTICL:	LDB W,[MTXP(R)]		;Set up channel data pointer
+	SOSL MTUSE(W)		;Last user?
+	 POPJ P,		;No, nothing to do
+	AOS MTUSE(W)		;Yes, save state for possible PCLSR
+	MOVEI T,1		;This crock is because we want to allow
+	CAMGE T,MSCMDC(W)	; one outstanding command if rewinding
+	 PUSHJ P,UFLS		;Wait till one or less outstanding command
+	MOVE T,MSRAC(W)		;Get transport software status
+	TLNE T,%MAREW		;Is it rewinding?
+	IFSKP.
+	 SKIPLE MSCMDC(W)	;No, wait till no outstanding commands
+	  PUSHJ P,UFLS
+	ENDIF.
+	SKIPGE MGCABN(W)	;Any PI-level buffers left?
+	IFSKP.
+	 MOVE A,MGCABN(W)	 
+	 BUG PAUSE,[MT: PI INPUT BUF LEFT AT CLOSE],OCT,A
+	 PUSHJ P, MEMR
+	ENDIF.
+	PUSHJ P,MTRBD		;Release any MP-level buffers
+	SETOM MTUSR(W)		;Reset user identifier
+	PUSHJ P,MTCBFF		;Free some buffers ?whose+++
+	SOS MTUSE(W)		;Decrement use count
+	MOVE T,MSRAC(W)		;Get transport software status again
+	TLNE T,%MAREW		;Are we rewinding?
+	 JRST MTICL2		;Yes, don't have to skip to EOF
+	MOVSI A,(%MMNSE)
+	TDNE A,(R)		;Check if user wants skip to EOF
+	 JRST MTICL2		;No, forget it
+	MOVSI A,%MAMSO
+	TDNN A,MSRAC(W)		;Has tape moved at all since open?
+	 JRST MTICL2		;No...
+	SKIPE MGEOFR(W)		;
+	 JRST MTICL2		;Note that this disposes of a read-ahead EOF.
+	PUSHJ P,MTSTAT
+IFN TM10P,[
+	MOVE B,MGCMTS(W)
+	TXNE B,%T1SBT		;BOT?
+	 JRST MTICL2
+]
+IFN TM03S,[
+	TTNN FS,%TMSOL		;Still online?
+	 JRST MTICL2		;No, can't very well skip to EOF
+	TTNE FS,%TMSBT
+	 JRST MTICL2
+]
+	MOVEI B,MGSPFF		;Space forward to end of file
+	PUSHJ P,MTCMD
+	SKIPLE MSCMDC(W)	;Wait till command done
+	 PUSHJ P,UFLS
+
+MTICL2:	MOVSI T,%MAREW
+	ANDM T,MSRAC(W)		;Clear all software status except rewinding
+	POPJ P,			;Done
+
+;Free a chain of IO buffers pointed to by MSBUFP(W)
+; Count of buffers is in MSNBOL(W)
+;
+MTCBFF:	SKIPN MSNBOL(W)		;Any buffers on chain?
+	 POPJ P,		;No, fine
+	DO.
+	 HRRZ A,MSBUFP(W)	;Yes, get pointer
+	 LDB T,[MLO,,MEMBLT(A)]	;Get pointer to next buffer
+	 HRRM T,MSBUFP(W)	;Write that in chain header
+	 PUSHJ P,MEMR		;Return buffer to IO pool
+	 SOSLE MSNBOL(W)	;Any more to do?
+	  JRST TOP.		;Yes, loop back for more
+	ENDDO.
+	SETZM MSBUFP(W)		;Zero buffer list pointer
+	POPJ P,
+
+
+
+SUBTTL MAG TAPE INPUT .IOT ROUTINES
+
+	SKIPA B,[SIOKT]
+MTUAI:	 MOVEI B,CHRKTI		;Unit ASCII input
+	MOVE E,[440700,,5]
+	JRST MTREAD
+
+	SKIPA B,[SIOKT]
+MTUII:	 MOVEI B,CHRKTI		;Unit image input
+	MOVE E,[444400,,1]
+	JRST MTREAD
+
+MTBI:	MOVE E,[444400,,1]	;Block input
+	MOVEI B,BLKT
+
+MTREAD:	LDB W,[MTXP(R)]		;W <= Transport number
+	PUSHJ P,MTIECK		;Check for tape errors first
+	MOVEM P,MTPSAV(W)	;Save P for EOF return
+	JSP B,(B)		;IO Routine. BLKT,CHRKT,SIOKT
+	    MSMPRP(W)		;Pointer to next word
+	    MSMPRC(W)		;Count of words remaining
+	    SETZ MTRBG		;Get new buffer (SETZ for CHRKT return on EOF)
+	    MTRBD		;Discard buffer
+	    JRST 4,.		;Unused
+	    PUSHJ P,MTRBFW	;Code to wait for new buffer from PI level
+
+;Get a new buffer for I/O code.
+; This routine assumes that there is a buffer ready to get
+; (i.e. MTRBFW was called)
+;
+MTRBG:	SKIPG MSNBOL(W)		;Any buffers on list?
+	 JRST MTRBG3		;No, must be error or EOF
+	CONO PI,UTCOFF		;Stop I/O for a bit
+	MTDEQB TT,A		;Dequeue buffer into TT using A as temp
+	MOVEM TT,MTMDN(W)	;Remember buffer active at MP level
+	CONO PI,UTCON		;Turn I/O back on
+	LDB J,[MWC,,MEMBLT(TT)]	;Get word count from buffer
+	MOVEM J,MTBLKS(W)	;Save for .MTAPE 13
+	LSH TT,10.		;Convert buffer number into address
+	JRST SIOBGX		;TT/address, J/word count /E unchanged
+
+;Here if no buffer ready, error or EOF assumed
+;
+MTRBG3:	SKIPL MSRAC(W) .SEE %MAEOF	;EOF flag set in transport status?
+	IFSKP.
+	 MOVSI T,%MAEFA		;The EOF is now no longer read-ahead
+	 ANDCAM T,MSRAC(W)	;So remember that fact
+	 JRST POPJ2		;Double skip to tell I/O code about EOF
+	ENDIF.
+	PUSHJ P,MTIECK		;Not EOF. Check for error conditions
+	BUG HALT,[TAPE READ BUFFER VANISHED] ;No error, shoulda been a buffer
+
+;MAG TAPE READ BUFFER DISCARD ROUTINE
+MTRBD:	SKIPGE A,MTMDN(W)	;Have an active MP buffer?
+	 JRST MOVTWJ		;Set up T for buffer wait, return
+	CONO PI,UTCOFF		;Stop IO for a bit
+	SETOM MTMDN(W)		;No active MP buffer
+	SETZM MSMPRC(W)		;No data in nonexistant buffer
+	LDB TT,[MSEOFP,,MEMBLT(A)]	;Get EOF flag from PI level
+	PUSHJ P,MGMEMR		;Return buffer, enable UTC
+	JUMPN TT, [ MOVSI A,%MAEOF	;EOF seen?
+		    IORM A,MSRAC(W)	;Record EOF in software status
+		    JRST .+1 ]
+MOVTWJ:	MOVE T,W		;T gets transport number for bfr wait UFLS
+	POPJ P,			;Also MTRBG, MTRBFW rely on this setting T
+
+
+;MAG TAPE READ WAIT FOR DATA ROUTINE
+; Called under a UFLS by system IO code to wait for data to arrive.
+; Note T, not W, has transport number. T must be set up by some
+; previous routine
+;
+MTRBFW:	MOVE TT,MSRAC(T)	;Get software status of transport
+	TLNN TT,%MAEOF\%MAERR	;PI code reports EOF or error?
+	SKIPLE MSNBOL(T)	;Or are any buffers available for reading?
+	 JRST POPJ1		;SOme interesting condition, unhang
+	TLNE TT,%MARAC		;Have we asked for a tape read yet?
+	 POPJ P,		;Yes, nothing to do but wait, wait, wait
+	PUSH P,W		;This being done under a UFLS. only T good
+	PUSH P,B
+	MOVE W,T		;Set up transport number in usual place
+	MOVEI B,MGREAD		;What we want the PI level to do
+	MOVEI T,MSCBL		;Make sure that there is room in command list
+	CAMG T,MSCMDC(W)	;If there is room,
+	IFSKP.			; we will request a read operation
+	 MOVSI TT,%MARAC
+	 IORM TT,MSRAC(W)	;Read is active now, or will be shortly
+	 PUSHJ P,MTCMD1		;Queue up command request for PI level
+	ENDIF.			;If no room for command, all we can do is wait
+	MOVE T,W		;Fix up T for UFLS
+	POP P,B			;Clean up everything else
+	POP P,W
+	POPJ P,
+
+SUBTTL MAG TAPE OUTPUT .IOT ROUTINES
+
+	SKIPA B,[SIOKT]
+MTUAO:	 MOVEI B,CHRKT		;Unit ASCII output
+	MOVE E,[440700,,5]
+	JRST MTWRIT
+
+	SKIPA B,[SIOKT]
+MTUIO:	 MOVEI B,CHRKT		;Unit image output
+	MOVE E,[444400,,1]
+	JRST MTWRIT
+
+MTBO:	MOVE E,[444400,,1]	;Block output
+	MOVEI B,BLKT
+
+MTWRIT:	LDB W,[MTXP(R)]		;Get transport number
+	PUSHJ P,MTIECK		;Check for tape errors first
+	HRLZI A,%MAETW
+	TDNE A,MSRAC(W)		;PI code think it hit EOT?
+	 JRST IOCER9		;Yep, go lose
+	JSP B,(B)
+	    SETZ MSMPRP(W)	;Pointer to next word
+	    MSMPRC(W)		;Count
+	    SETZ MTWBFG		;Get new buffer
+	    MTWBFD		;Write out buffer to tape
+	    JRST 4,.
+	    TRNA		;No wait for buffer routine needed
+
+;MAG TAPE WRITE - BUFFER GET ROUTINE
+
+MTWBFG:	PUSHJ P,MTIECK		;Check for tape errors
+	PUSHJ P,TCALL		;Turn off UTC
+	    JRST IOMQ		;Try to get buffer
+	 POPJ P,		;Return noskip if no buffers available
+	MOVEM A,MTMDN(W)	;Store active buffer number
+	MOVEI T,MUMGB
+	DPB T,[MUR,,MEMBLT(A)]	;Tell world that it is a mag tape buffer
+	DPB W,[MSCHN,,MEMBLT(A)] ;Store channel number in buffer header
+	SETZM TT
+	DPB A,[121000,,TT]	;Convert block number in A to address in TT
+	MOVE J,MTBLKS(W)	;Get block size of write
+	JRST SIOBGX
+
+;MAG TAPE WRITE - BUFFER FINISHED ROUTINE
+; General IO code has filled a buffer or otherwise finished with it.
+; Queue the buffer for writing if there is anything in it.
+
+MTWBFD:	PUSHJ P,MTIECK		;Check for tape errors
+	SKIPGE A,MTMDN(W)	;Have an active buffer?
+	 POPJ P,		;No, nothing to do
+	MOVEI T,MSCBL		;See if there is any room in command list
+	CAMG T,MSCMDC(W)
+	 PUSHJ P,UFLS		;Wait for room in command list
+	MOVE T,MTBLKS(W)	;Get blocksize we are writing
+	SUB T,MSMPRC(W)		;Subtract number of words remaining in buffer
+	CONO PI,UTCOFF		;Lock up while frobbing buffer lists
+	SETOM MTMDN(W)		;Clear active buffer
+	SETZM MSMPRC(W)		;Clear free word in buffer count
+	JUMPE T,MEMR		;Nothing in buffer, just return block
+	DPB T,[MWC,,MEMBLT(A)]	;Store word count
+	MTENQB A		;Queue buffer on to-PI list
+	CONO PI,UTCON		;Finished mucking with buffer list
+	PUSH P,B
+	MOVEI B,MGWRIT		;Issue a write request to PI level
+	PUSHJ P,MTCMD
+	MOVSI B,%MANWT
+	ANDCAM B,MSRAC(W)	;Note that we have written something to tape
+	SETZM MTCEFW(W)		;Note no EOF's written at end of tape
+	JRST POPBJ		;Restore B and return
+
+SUBTTL MTCMD - GIVE COMMAND TO PI LEVEL
+
+;PUSHJ P,MTCMD
+	;RH(W) has transport number
+	;RH(B) has address of PI level routine to execute
+
+MTCMD:	MOVEI T,MSCBL		;Pending command list length
+	CAMG T,MSCMDC(W)	;Count of commands currently in list
+	 PUSHJ P,UFLS		;Wait for room in pending command list 
+	CONO PI,UTCOFF		;Grab machine, keep count accurate
+MTCMD1:	MOVE T,MTCMBP(W)	;Get pointer to next slot in command list
+	AOBJN T,MTCMD2		;Increment slot and check for wraparound
+	 SUB T,[MSCBL,,MSCBL]	;Reached end of list, ring it
+MTCMD2:	MOVEM B,(T)		;Store new command
+	MOVEM T,MTCMBP(W)	;Store new pointer
+	AOS MSCMDC(W)		;Indicate one more command in list
+	JRST MSTRTR		;Go start up PI routine
+
+SUBTTL MTIECK - CHECK FOR IOC ERROR
+
+;PUSHJ P,MTIECK
+	;Returns +1 if no error
+	;Gives IOC error to user if error - never returns.
+
+MTIECK:	PUSH P,A
+	MOVE A,MSRAC(W)		;Get transport software status
+	TLNN A,%MAERR		;PI level report an error?
+	 JRST POPAJ		;No, all is OK
+	SKIPLE MSCMDC(W)	;Wait for PI level to finish cleaning up
+	 PUSHJ P,UFLS		; before throwing away buffers
+	SKIPL A,MTMDN(W)	;Have an active MP-level buffer?
+	 PUSHJ P,MEMR		;Yes, throw it away
+	SETOM MTMDN(W)		;No active MP buffer
+	SETZM MSMPRP(W)		;No place to get/put next character
+	SETZM MSMPRC(W)		;No room to do it anyway
+	PUSHJ P,MTCBFF		;Free any buffers waiting for MP processing
+	POP P,A
+	MOVE T,MGCMTS(W)	;Get transport status data from PI level
+IFN TM10P,[
+	TRNE T,%T1STH\%T1SIO	;Transport hung or illegal operation?
+	 JRST IOCER1		;Yes, report device error
+	TRNE T,%T1SPE\%T1SRC\%T1SRL\%T1SDL\%T1SBT	;Gruesome errors
+	 JRST IOCER3		;Report irrecoverable data error
+	TRNE T,%T1SET		;(Real) End of Tape?
+	 JRST IOCER9		;Device Full error
+];IFN TM10P
+IFN TM03S,[
+	MOVE I,MGCMTC(W)	;Get controller transport status from PI level
+	MOVE J,MGCMTS(W)
+	TTNE CS1,%TM1MP		;Control bus parity error?
+	 JRST IOCER1
+	TTNN CS1,%TM1TE		;Transfer error? Could be TM03 or RH11
+	IFSKP.
+	 TTNE CS2,%TM2DL\%TM2UP\%TM2NF\%TM2NM\%TM2PE\%TM2MT\%TM2MP
+	  JRST IOCER1		;Non-data errors
+	 TTNN FS,%TMSES		;Formatter error?
+	 IFSKP.
+	  TTNE ERR,%TMEUS\%TMECT\%TMENX\%TMEMD\%TMEFS\%TMEMC\%TMERM\%TMEIR\%TMEIF
+	   JRST IOCER1		;Fatal formatter errors
+	  TTNE ERR,%TMECE\%TMECS\%TMEFC\%TMENG\%TMEFL\%TMEIC
+	   JRST IOCER3		;Non-recoverable data errors
+	 ENDIF.
+	ENDIF.
+	TTNE FS,%TMSET		;End of tape?
+	 JRST IOCER9
+];IFN TM03S
+	MOVE A,MGEOFR(W)	;Check for logical EOT
+	CAIL A,2		;Read two EOF's since last record?
+	 JRST IOCER9		;Yes, report EOT
+	JRST IOCER3		;No, give irrecoverable data error for now
+
+SUBTTL MAG TAPE .STATUS ROUTINE
+;Building a status word in D.
+;Routine sets:
+; 1.7-1.9 open modes
+; 2.3 BOT
+; 2.4 EOT
+; 2.5 9 track (0 = 7 track)
+; 2.6 IBM mode (0 = coredump)
+; 2.7 Transport idle (no pending command)
+; 2.8 EOF (last thing seen was a tape mark)
+;
+STAMTC:	
+;Open modes
+	LDB W,[MTXP(R)]		;Get transport number
+	DPB A,[60300,,D]	;Open mode
+	PUSHJ P,MTSTAT		;Get tape status from transport
+;EOT?
+	LDB A,[.BP %MAETW_22,MSRAC(W)]	;EOT on write
+	LDB B,[.BP %MAETR_22,MSRAC(W)]	;EOT on read
+	IOR A,B
+	DPB B,[140100,,D]	;Tape at EOT?
+IFN TM10P,[
+;7 or 9 track drive?
+	LDB A,[20100,,J]	;Get 7/9 track bit
+	TRC A,1
+	DPB A,[150100,,D]	;7 or 9 track drive
+	.ERR Missing TM10 .STATUS code at STAMTC
+]
+IFN TM03S,[
+;A bunch of new stuff. BOT?
+	SETZ A,
+	TTNE FS,%TMSBT		;Transport is at BOT?
+	 SETO A,
+	DPB A,[130100,,D]	;BOT.
+;7 or 9 track drive?
+	SETOM A			;TM03 is always 9-track
+	DPB A,[150100,,D]	;7 or 9 track drive
+;Core dump or 32 bit mode?
+	MOVE A,MTWTFC(W)	;Get word to frame conversion. 4 or 5
+	TRC A,1			;Flip last bit. Last bit now on iff 32bit mode
+	DPB A,[160100,,D]	;Sorry.
+;Formatter busy?
+	SETO A,
+	SKIPLE MSCMDC(W)	;Idle if no pending commands
+	 SETZ A,
+	DPB A,[170100,,D]
+;EOF last thing seen?
+	SETZ A,
+	TTNE FS,%TMSTM		;Last thing seen was a tape mark?
+	 SETO A,
+	DPB A,[200100,,D]	;EOF. 
+];IFN TM03S
+	POPJ P,
+
+;RCHST ROUTINE FOR MAG TAPE
+
+RCHMGT:	HLRZ E,(R)		;Get open mode from IOCHNM word
+	LDB J,[MTXP(R)]		;Get the mag tape drive number
+	MOVSI J,'MT0(J)		;Return that drive's device name
+	TRZ E,(.BM MTXP)	;Clear drive # field in OPEN modes
+	JRST POPJ1		;Skip so that J overrides built-in device name
+
+
+SUBTTL MAG TAPE PI LEVEL
+
+;Request magtape interrupt from MP-level software
+; Must be called with I/O interrupts off (CONO PI,UTCOFF)
+; This is called every 1/2 second by the ITS slow clock routine
+; 
+MSTRTR:	SETZM MGTBZY		;No busy tapes, flag software interrupt
+	CONO PI,MTCRQ		;Request interrupt on magtape channel
+	CONO PI,UTCON		;Reenable IO interrupt system
+	POPJ P,			;That is all
+
+;Handle tape interrupt requested by software or other nonspecific cause
+; Get here via non-vectored MTCCHN interrupt on the KS
+;
+MGSBRK:	AOS MGTBZY		;Note interrupt level is busy
+	SETOM MGSFTI		;Note software interrupt in progress
+	MOVEI B,NMTCS-1		;Loop over all transports
+	SKIPG MSCMDC(B)		;Any commands in command list?
+MGSBK1:	 SOJGE B,.-1		;No, try next transport
+	SKIPGE B		;Found command or finished scan. Which?
+	 JRST MGSBK2		;Finished scanning. Go check other things
+	MOVE W,B		;Have a command. Set up transport number
+	PUSH P,B		;Save B over call to command routine
+	MOVSI B,%MACTH
+	TDNN B,MSRAC(W)		;Core allocator saying go away?
+	 PUSHJ P,MGXGO		;No, go start requested routine
+	POP P,B			;Restore transport count
+	JRST MGSBK1		;Loop back for another transport
+
+MGSBK2: SETZM MGSFTI		;Clear software interrupt flag
+	JRST MGEX		;That's all for now
+;This probably should check for lost IE bits on TM03
+
+;Handle interrupt caused by specific hardware conditions
+; Get here via vectored interrupt on the KS
+;
+
+IFN TM10P,[
+; A - result of CONI MTC,
+; C - result of CONI MTS,
+;
+MGHBRK:	SKIPGE W,MGUNIT		;Get unit we are expecting interrupt on
+	 JRST MGUBRK		;None? Probably MP level bailed out. Punt.
+	LDB B,[MUNITF,,A]	;Get unit that controller is squacking about
+	CAME W,B		;Same unit?
+	 BUG HALT,[MT PI CODE LOST TRANSPORT]
+	MOVE J,C
+	PUSH P,[MGEX]		;Cause POPJ P, in handler to dismiss interrupt
+IFN TM10B,[
+	TXNE C,%T1SCP\%T1SNM\%T1SDP	;Check for DF10 errors
+	 JRST MGERR		;Yes, go to error routine
+];TM10B
+	TXNE C,%T1SIO		;Illegal operation error?
+	 JRST MGERR		;Yes, go to error routine
+	JRST MGXGO		;No, go handle interrupt
+
+;Here to unbreak on unexpected hardware interrupt
+;
+MGUBRK:	LDB W,[MUNITF,,A]	;Who's the loser, anyway
+	MOVE B,MTCONO(W)	;Get prototype CONO word for that transport
+	CONO MTC,(B)		;Select offending unit
+	CONO MTS,31		;Clear interrupt, DF10, stop any op in progress
+	JRST MGEX		;Go dismiss interrupt
+];IFN TM10P
+
+IFN TM03S,[
+;Check for active unit. If none, go directly to inactive slave
+;polling code. If active unit,check that controller is talking about
+;this unit, then jump to its routine (MGXGO). When that finishes,
+;see if controller is still showing attention, and check status
+;of other transports if so.
+;
+;Well, almost.
+
+	EBLK
+MGHBRK:	0
+	BBLK
+	JSR UTCSAV		;Save AC,s set up interrupt P PDL
+	AOS MGTBZY		;Note interrupt level is alive
+	SKIPGE W,MGUNIT		;Some transport waiting for an interrupt?
+	 JRST MGNOUW		;Nope, either Slave Status Change or lossage
+	IORDI B,%TMTC		;Get transport the TM03 is thinking about
+	ANDI B,7
+	CAME B,W		;Same as the one we were waiting for?
+	 BUG HALT,[MT PI CODE LOST TRANSPORT]
+	PUSHJ P,MGXGO		;Go jump into this unit's handler
+
+MGNOUW:
+IFN NMTCS-1,[
+.ERR Missing multi-transport code at MGNOUW!
+If more than one unit, have to see if this is an interrupt caused by a
+SSC (slave status change), and if so poll all the inactive units and
+update their software status (rewinding, on/off line, etc.) With only
+one transport we currently avoid this by keeping the unit active
+(MGUNIT set) as long as it is doing *anything*, and giving it all the
+hardware interrupts. See rewind code, too.
+];IFN NMTCS-1
+	JRST MGEX		;Go dismiss interrupt
+];IFN TM03S
+
+;Interrupt level control flow
+;
+; Each transport maintains the current state of its PI-level action
+; routines on a seperate (per-transport) PDL with its SP in Q. This
+; allows you to save the current state, dismiss the interrupt, and
+; resume where you left off when the next interrupt for this transport
+; arrives.
+; 
+; Subroutine linkage between routines handling a per-drive PI-level
+; action is with PUSHJ Q,xxx and POPJ Q,
+;
+; The MP level queues commands for the PI level to process on a per-
+; transport queue at MGSBx (x=unit number)
+;
+; Ths general interrupt code transfers to the per-drive actions by
+; jumping to MGXGO, which will load Q from the saved state of the
+; current drive and start up whatever it finds there. This may be
+; the MGNCMD routine, which will start a new command, or it may be
+; the middle of an in-progress PI-level command handler.
+;
+; PI-level action routines can relinquish control in several ways:
+;
+;  PUSHJ Q, CPOPJ will dismiss the current interrupt, arranging for
+;  control to return to the instruction following the PUSHJ when the
+;  next interrupt for this unit occurs.
+;
+;  JRST MGOVER will dismiss the current interrupt, arranging for the
+;  currently executing subroutine to be restarted "from the top" when
+;  the next interrupt for this unit occurs.
+;
+;  A simple POPJ P, will dismiss the current interrupt, arranging for
+;  the routine that called this one to be started at the point immediately
+;  after the call when the next interrupt comes in. This is generally not
+;  useful except from first-level action routines, where a POPJ P, will
+;  indicate that you have finished handling the current command and cause
+;  the next interrupt to fetch and start execution of a new command from the
+;  queued command list by transferring to MGNCMD. Got that?
+
+;Transfer control to whatever the per-transport code wants to do.
+;
+MGXGO:	MOVE Q,MGQDLP(W)	;Getsaved Q PDL pointer for current transport
+	PUSHJ P,QPOPJ		;"Return" to whatever is on top of Q PDL,
+				; arranging for POPJ P, to return to here
+
+	MOVEM Q,MGQDLP(W)	;Save current Q PDL for next time
+	POPJ P,			;Return, dismissing this interrupt
+
+;Dismiss interrupt, arranging for next interrupt to restart routine
+; we are currently executing (rather than either continuing here or
+; starting a new command)
+;
+MGOVER:
+IFN TM10P,[
+	CONSZ MTS,%T1STH\%T1SIO\%T1SCE	;Tape hung/ill op/DF10 error, 
+	 JRST MGERR		; go handle error condition
+]
+	SOS (Q)			;Decrement address at top of Q PDL, now
+				; points to PUSHJ Q, <us> instruction so
+				; that we will get called again from MGXGO
+				; at next interrupt dispatch
+	POPJ P,			;Return to P PDL caller, dismissing interrupt
+
+
+;This routine is always the last "command" in a transport command list
+; Wraps the command list BP around the the beginning of the list,
+; then gets and executes the next command.
+;
+MGRCV:	MOVNI A,MSCBL+1		;Get negative length of command list
+	ADDM A,MGCMBP(W)	;Wrap command extraction pointer back to start
+MGNCM1:	ILDB B,MGCMBP(W)	;Get new command from list
+	JRST (B)		;And jump to it
+
+;This code is always the first (bottom) thing in a transport's Q PDL
+; It is therefore executed whenever MGXGO transfers control to the
+; Q PDL and there is no command in progress.
+;
+MGNCMD:	AOBJN Q,MGNCM1		;Got here w/ POPJ Q,. Fake PUSHJ to restore Q,
+				; then go get the next command
+	
+	BUG			;Q PDL pointer clobbered
+
+QPOPJ1:	AOS (Q)
+QPOPJ:	POPJ Q,
+
+
+;WAIT FOR JOB DONE BIT TO SET
+; Called from PI-level command routines to wait for end of command.
+; Called with PUSHJ Q,MGWTJD
+;
+; Returns +1 to caller if unusual termination
+;         +2 to caller if operation terminated normally
+; 
+;	I,J contain tape status:
+;	 On TM10, I=CONI MTC,
+;		  J=CONI MTS
+;	 On TM03S, I=%TMCS1,,%TMCS2 (controller status),
+;		   J=%TMFS,,%TMERR (formatter status)
+
+IFN TM10P,[
+MGWTJD:	CONI MTS,J		;Get transport status
+	TXNE J,%T1STH\%T1SIO	;Transport hung or Illegal operation?
+	 JRST MGERR		;Yes, job-done isn't ever going to get set
+MGWJD1:	CONI MTS,J		;Get status again
+	SKIPN MGJDTI		;Is there a time out set?
+	IFSKP.
+	 MOVE T,TIME		;Yes, check it. Get current time
+	 CAML T,MGJDTI		;Smaller than specified timeout time?
+	  JRST MGERR		;No, lose
+	ENDIF.
+	TXNN J,%T1SJD		;JOB-DONE bit set?
+	 JRST MGOVER		;No, we want to wait for it
+	CONI MTS,J		;Job Done. Get status
+	CONI MTC,I		;Get CONI MTC
+	MOVEM J,MGCMTS(W)	;Save for MP level
+	MOVEM I,MGCMTC(W)
+IFN TM10B,[
+	SKIPE MGWCW		;Want to wait for control word?
+	 PUSHJ Q,MGWCWC		;Check to see if it is written
+	SETZM MGWCW		;Clear wait-for-control-word request flag
+]
+	CONO MTS,30		;Clear channel conditions
+	MOVE B,MTCONO(W)
+	CONO MTC,(B)		;Release mtc, clear job done bit
+IFN TM10B,[
+	TXNE J,%T1SCP\%T1SNM\%T1SDP	;Check for channel errors
+	 POPJ Q,		;Channel error, return nonskip
+]
+	TXNE J,%T1STH\%T1SIO\%T1SPE\%T1SRC%\T1SRL\%T1SDL\%T1SBT
+	 POPJ Q,		;Random other things, not necessarily errors
+	JRST QPOPJ1		;Success
+];IFN TM10P
+IFN TM03S,[
+MGWTJD:	
+MGWJD1:	IORDI T,%TMCS1		;Get controller status
+	TXNN T,%TM1GO		;Go bit still set?
+	 JRST MGWJD2		;No, command is finished. Go check errors
+	SKIPE T,MGJDTI		;Is there a time out set? Get it if so.
+	 CAML T,TIME		;Past timeout time
+	  JRST MGOVER		;No timeout or not timed out yet, go wait
+	JRST MGERR		;Timed out. Go check transport
+
+;Here if action has terminated. Set up status bits before returning
+MGWJD2:	HRLZ I,T		;%TMCS1,,?
+	IORDI T,%TMCS2
+	HRR I,T			;I = %TMCS1,,%TMCS2
+	IORDI J,%TMERR
+	IORDI T,%TMFS
+	HRL J,T			;J = %TMFS,,%TMERR - I,J now in standard form
+	MOVEM J,MGCMTS(W)	;Save for MP level
+	MOVEM I,MGCMTC(W)
+	TTNE CS1,%TM1MP		;Massbus control parity error
+	 JRST MGERR		;Who knows what the transport is doing
+	TTNN CS1,%TM1TE		;Controller error?
+	 TTNE FS,%TMSES		;Formatter error?
+	  POPJ Q,		;Yes, return +1 for closer examination
+	JRST QPOPJ1		;Success
+];IFN TM03S
+
+;Select the transport given by W
+; Returns +1 with transport selected, status in I,J
+; May dismiss and wait for a while first
+;
+MGGXPT:	
+IFN TM10P,[
+	CONSO MTS,%T1SNU	;Can controller select new unit right now?
+	 JRST MGOVER		;No, wait for it
+	MOVE T,TIME
+	ADDI T,10.*30.		;Time out in 10. seconds
+	MOVEM T,MGJDTI		;Set up job-done timeout
+	MOVEM W,MGUNIT		;Note unit waiting for hardware interrupt
+	MOVE B,MTCONO(W)	;Get CONO word for new unit
+	CONO MTC,MNOPIN(B)	;NOP, but interrupt when new drive is ready
+	PUSHJ Q,MGWJD1		;Wait for job done
+	 JFCL			;Ignore any errors
+	SETZM MGJDTI		;No more timeout
+	SETOM MGUNIT		;Not waiting any more
+	POPJ Q,			;Return to caller
+];IFN TM10P
+IFN TM03S,[
+	IORDI T,%TMFS		;Get current formatter status
+	TXNN T,%TMSES\%TMSSC	;Showing error or slave status change?
+	IFSKP.			;Yes, clear errors before going ahead
+	 IOWRI W,%TMTC		;Select slave
+	 MOVEI A,10.		;Try 10 times to clear drive
+	 MOVEI B,%TMCLR
+	 DO.
+	  IOWRI B,%TMCS1	;Write drive clear command
+	  IORDI T,%TMFS		;Get status
+	  TXNN T,%TMSES		;Still have error
+	   JRST ENDLP.		;No, done
+	  SOJG A,TOP.		;Retry up to 10 times
+	  JRST MGERR		;Else give up
+	 ENDDO.
+	ENDIF.
+	MOVE T,MTSELW(W)	;Get desired settings
+	IOWRI T,%TMTC		;Tell TM03
+	MOVEI T,%TMNOP		;You may need this to set status values
+	IOWRI T,%TMCS1		; but I'm not really sure
+	IORDI T,%TMCS1
+	PUSHJ Q,MGWJD2		;Go set status registers appropriately
+	 JFCL			;Maybe should check non-existant slave?
+	POPJ Q,
+];IFN TM03S
+
+;MGERR - HANDLE TAPE ERROR
+;
+;Called from PI level command routines which detect a tape or controller error
+; Flags error in software status word, records error status in MGExxx.
+; Flushes command in progress by resetting Q PDL to base.
+; Flushes commands in PI-level command queue by resetting queue pointers.
+; Flushes any buffers which might be queued for writing.
+; Returns to P PDL, to wait for new commands.
+
+MGERR:
+IFN TM10P,[
+	CONI MTS,MGEMTS		;Get transport status for MP level analysis
+	CONI MTC,MGEMTC
+]
+IFN TM03S,[
+	IORDI T,%TMCS1		;Get controller and transport status into
+	HRLM T,MGEMTC		; standard form
+	IORDI T,%TMCS2
+	HRRM T,MGEMTC
+	IORDI T,%TMFS
+	HRLM T,MGEMTS
+	IORDI T,%TMERR
+	HRRM T,MGEMTS
+	MOVE I,MGEMTC		;Get status to standard place for macros
+	MOVE J,MGEMTS
+];IFN TM03S
+	MOVSI T,%MARAC		;Read not active, for sure
+	ANDCAM T,MSRAC(W)
+	SETZM MSCMDC(W)		;No commands active
+	SETOM MGUNIT		;Clear unit wait flag
+	SETZM MGJDTI		;No job-done timeout
+IFN TM10B,[
+	TXNE J,%T1SCP\%T1SNM\%T1SDP	;Channel error?
+	 BUG PAUSE,[MTAPE: CHANNEL ERROR, STATUS=],OCT,J,[MICWA+1=],OCT,MICWA+1,[MIOWD=],OCT,MIOWD
+];TM10B
+IFN TM03S,[
+	.ERR UBA errors? More gentle cleanup? 
+	TTNE CS1,%TM1MP\%TM1TE	;Cbus parity or transfer error?
+	 TTNE FS,%TMSES		;And no formatter error?
+	  SKIPA			;Yes and yes (no) (what?). Controller error
+	   BUG INFO,[MTAPE: RH11 ERROR, STATUS=],OCT,MGEMTC,[TM STATUS=],OCT,MGEMTS
+	TTNE FS,%TMSES		;Formatter error?
+	 BUG INFO,[MTAPE: FORMATTER ERROR, STATUS=],OCT,MGEMTS
+	PUSHJ P,TMINIC		;Go reinit controller
+];IFN TM03S
+	SKIPL A,MGCABN(W)	;Any buffers owned by PI routines?
+	 PUSHJ P,IMEMR		;Yes, give them back to system
+	SETOM MGCABN(W)		;No PI buffer any more
+	HRLZI B,%MAERR		;Flag error detected by PI level
+	IORM B,MSRAC(W)		;Store in transport status word
+	MOVE Q,[-MGQDLL,,MGQD0-1];Reset Q PDL to base of this unit's stack,
+	MOVE T,MSLCTB		; thus flushing whatever command is in progress
+	IMUL T,W		;Find offset to base of Q PDL for this unit
+	ADD Q,T			;Add to prototype unit 0 QDP pointer,
+	PUSH P,Q		; and save it away
+	MOVE Q,[-MSCBL-1,,MSCB0-1]	;Get command list input pointer
+	ADD Q,T			;Offset it to this unit's command queue,
+	MOVEM Q,MTCMBP(W)	;And save it as new MP (input) queue pointer
+	MOVE Q,[4400,,MSCB0-1]	;Get new command list output pointer
+	ADD Q,T			;Offset correctly for this unit,
+	MOVEM Q,MGCMBP(W)	;And save as PI (output) command queue pointer
+	MOVSI B,%MAREW		;Does initting xport stop TM03 rewind?
+	ANDCAM B,MSRAC(W)	;Say not rewinding
+	SKIPN MSCRW(W)		;If reading,
+	 JRST POPQJ		; we're done. Restore Q and exit
+	SKIPN MSNBOL(W)		;Writing. Any buffers on list?
+	 JRST POPQJ		;No, restore Q and exit
+	DO.			;Here to free buffers on IO list
+	 HRRZ A,MSBUFP(W)	;Get buffer pointer from head of chain
+	 LDB T,[MLO,,MEMBLT(A)]	;Get back pointer (next buffer)
+	 HRRM T,MSBUFP(W)	;Make next buffer head of chain
+	 PUSHJ P,IMEMR		;Free current buffer
+	 SOSLE MSNBOL(W)	;Decrement count, check for more
+	 JRST TOP.		;More, loop back
+	ENDDO.
+	SETZM MSBUFP(W)		;Mark list as empty
+	JRST POPQJ		;Restore Q and return
+
+IFN TM10B,[
+;Wait for control word to get written
+;
+MGWCWC:	SKIPE MICWA+1		;Control word written?
+	 POPJ Q,		;Yes, return to caller
+	CONO MTS,4		;No, tell DF10 to write it
+MGWCW1:	SKIPE MICWA+1		;Written yet?
+	 JRST MGWCW2		;Good, done
+	PUSHJ Q,CPOPJ		;Not written. Dismiss interrupt and wait
+	JRST MGWCW1		;We're back. See if written yet.
+
+MGWCW2:	MOVE I,MGCMTC(W)
+	MOVE J,MGCMTS(W)	;Restore status
+	TLO J,10		;Set control word written
+	POPJ Q,			;Return to caller
+];IFN TM10B
+
+IFN TM10A,[
+MGDCSI:	SKIPA A,[BLKI MTC,MIOWD]
+MGDCSO:	 MOVE A,[BLKO MTC,MIOWD]
+	MOVEM A,MAGLOC
+	MOVE A,[JSR MGDBRK]
+	MOVEM A,MAGLOC+1
+	POPJ Q,
+];IFN TM10A
+
+IFN TM03S,[
+;Note this one's called on P PDL
+TMINIC:	IORDI A,%TMTC		;Get TC reg value
+	ANDI A,MTSELM		;Keep interesting bits only
+	IORDI B,%TMCS2		;Get CS2
+	ANDI B,7		;Keep selected "drive" (TM03) number only
+	MOVEI T,%TM2CC
+	IOWRI T,%TMCS2		;Clear controller logic
+	IOWRI B,%TMCS2		;Reselect TM03
+	IOWRI A,%TMTC		;Reselect transport
+	MOVX T,%TMCLR		;Do a formatter clear command
+	IOWRI T,%TMCS1
+	POPJ P,
+];IFN TM03S
+
+
+SUBTTL MAG TAPE PI LEVEL WRITE
+
+MGWRIT:	PUSHJ Q,MGGXPT		;Select desired transport
+IFN TM10P,[
+	TXNE J,%T1STH\%T1SRW\%T1SWL	;Write locked, hung or rewinding?
+	 JRST MGERR		;Not a good thing
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line?
+	  JRST MGERR		;No or no, can't do operation
+	TTNE FS,%TMSWL		;Transport write locked?
+	 JRST MGERR		;Shouldn't happen, we checked at open.
+]
+	MOVSI A,%MACTH
+	TDNE A,MSRAC(W)		;Core alloc want quit temporarly?
+	 JRST [	PUSHJ Q,CPOPJ	;OK, wait a while
+		JRST MGWRIT ]	;Then go back and try again
+	MOVEM W,MGUNIT		;Set unit
+	HRREI B,-MGNRTY		;Number of retries
+	MOVEM B,MGERRC(W)	;Store error count
+	MTDEQB A		;Get buffer to write off list
+	MOVEM A,MGCABN(W)	;Note this buffer active at PI
+	LDB B,[MWC,,MEMBLT(A)]	;Get word count from buffer
+	MOVNS B			;B -> -COUNT
+	HRLZS B			;B -> -COUNT,,0
+IFN KL10P,LSH B,4		;Shift if KL10 data channel
+IFN KL10P,MOVE R,A		;Save core page number for cache sweep
+IFE TM03S,[			;TM03S IOWD is -COUNT,,ITS PAGE
+	LSH A,10.		;Convert buffer number to memory address
+	SUBI A,1		;Address - 1
+]
+	HRRM A,B		;B -> -COUNT,,ADDRESS-1; an IO word
+IFN TM10B,DATAO MTS,[MICWA]	;Tell DF10 where IO channel program is
+IFN TM10A,PUSHJ Q,MGDCSO	;
+	MOVEM B,MIOWD		;Put IO word where controller looks
+	MOVEM B,LMIOWD		;Remember what we're about to do
+IFN TM10P,SETZM MIOWD+1		;Stop after one operation
+IFN KL10P,[
+	PUSHJ P,CSHSWP		;Unload buffer from cache into core
+	  CAI
+]
+MGWRT2:
+IFN TM10P,[
+	MOVE B,MTCONO(W)	;Get prototype CONO word
+	CONO MTC,MWRITE(B)	;Perform WRITE operation
+]
+IFN TM03S,[
+	HLRE A,MIOWD		;Get PDP10 word count
+	ASH A,1			; * 2
+	IOWRI A,%TMWC		; = number of unibus words to transfer
+	HLRE A,MIOWD		;Get PDP10 word count again
+	IMUL A,MTWTFC(W)	;Convert to tape frame count
+	IOWRI A,%TMFC		;Set tape frames to write
+	HRRZ A,MIOWD		;Get ITS page to transfer to
+	LSH A,1			;Convert ITS pg # to DEC pg #
+	TXO A,%UQVAL		;Valid mapping, I should hope
+	IOWRI A,UBAPAG+IUTPG_1	;Set up first half of UBA mapping
+	TXO A,1			;Next DEC page number
+	IOWRI A,UBAPAG+IUTPG_1+1	;Set second half of UBA mapping
+	MOVEI A,IUTPG_14		;Unibus address to DMA to
+	IOWRI A,%TMBA		;Tell controller
+	MOVX A,%TM1IE\%TMWRT	;Write, enable interrupts
+	IOWRI A,%TMCS1		;Start controller
+]
+	PUSHJ Q,MGWTJD		;Wait for job done
+	 JRST MGWERR		;Error, go attempt to repair
+
+;Here if tape written OK
+MGWRT3:	MOVE A,MGCABN(W)	;Get buffer number
+	HRLZI B,%MAETW+%MAERR	;End of tape check
+IFN TM10P,TXNE J,%T1SET		;Controller says we're at EOT?
+IFN TM03S,TTNE FS,%TMSET
+	 IORM B,MSRAC(W)	;Tell MP
+	LDB T,[MUR,,MEMBLT(A)]	;Get buffer flavor from buffer
+	CAIE T,MUMGB		;Still a magtape buffer?
+	 BUG HALT,[MT BUF CHANGED INTO SOME OTHER KIND??]
+	SETOM MGCABN(W)		;No buffer active at PI anymore
+	PUSHJ P,IMEMR		;Return buffer to system
+	MOVSI A,%MAMSO		;Note tape has moved since open
+	IORM A,MSRAC(W)
+	;JRST MGCMDR ;Falls through
+
+;General exit routine for most PI-level command handlers
+; Check command queue for more commands.
+;  If no further commands, dismiss interrupt.
+;  If further commands queued, wait for this one to finish, then fetch
+;   and begin processing of next command.
+;
+MGCMDR:	SOS MSCMDC(W)		;Decrement command count
+	SETOM MGUNIT		;Reset active unit
+	SKIPG MSCMDC(W)		;Any more commands?
+	 JRST MGCMR1		;No. Go see about other units
+IFN TM10P,[
+	MOVE B,MTCONO(W)
+	CONO MTC,MNOPIN(B)	;Tell controller to interupt when unit ready
+	MOVEM W,MGUNIT		;Set up unit number again for MGWTJD
+	PUSHJ Q,MGWTJD		;Go wait for unit to finish current command
+	 JRST MGERR		;Oops
+	SETOM MGUNIT		;No unit waiting any more
+];IFN TM10P
+	POPJ Q,			;Return on Q PDL. Most likely this will
+				; transfer control to MGNCMD routine at
+				; base of PDL, which will fetch and execute
+				; next command.
+
+MGCMR1:
+IFN NMTCS-1,[
+;Ought to check other transports for commands to start.
+; For now, will get started by 1/2 second timeout, if nothing else.
+	.ERR Unfinished multi-transport code at MGCMR1
+];IFN NMTCS-1	
+	POPJ P,			;No more, return on P to dismiss interrupt
+
+
+
+;CONTROLLER DETECTED ERROR ON WRITE OPERATION
+; Retry, or give up, or write some blank tape and then try again, 
+; depending on the type of error.
+;
+MGWERR:
+IFN TM10P,[
+IFN TM10B,SETZM MIOWD		;Seems to do one record anyway
+IFN TM10A,[	
+	MOVE A,[-1,,MGVTC-1]
+	MOVEM A,MIOWD		;Specify one record to space back cmd.
+]
+	TXNE J,%T1STH\%T1SRW\%T1SIO\%T1SET\%T1SWL	;Bad types of errors
+	 JRST MGERR		;OK, give up
+	AOSL MGERRC(W)		;Still retrying?
+	 JRST MGERR		;No, give up
+	MOVE B,MTCONO(W)
+	CONO MTC,MSPRR(B)	;Space reverse one record
+	PUSHJ Q,MGWTJD		;Wait for job done
+	 JRST MGERR		;Error
+	MOVE B,LMIOWD		;Get last operation's IOWD
+	MOVEM B,MIOWD		;We're going to try it again
+	MOVE B,MTCONO(W)	;Get prototype CONO
+	CONO MTC,14000(B)	;Write with extended EOR gap
+	PUSHJ Q,MGWTJD		;Wait for completion
+	 JRST MGWBT		;Lost again, retry some more
+	JRST MGWRT3		;Worked, return to normal write sequence
+];IFN TM10P
+IFN TM03S,[
+	TTNE ERR,%TMERM\%TMEUS\%TMEFS\%TMEIR\%TMEIF\%TMEMC\%TMECT\%TMENX\%TMEOI
+	 JRST MGERR		;Fatal errors
+	TTNN FS,%TMSOL		;On line?
+	 JRST MGERR		;This isn't so good either
+	TTNE ERR,%TMEFC\%TMENG\%TMEMD\%TMEIC\%TMECE\%TMECS\%TMEFL
+	 JRST MGWER1		;Error which retrying might fix
+
+;Formatter seems happy. Check channel status before returning
+; Currently this only catches the case where there was an RH11 error
+; but no TM03 error, and thus should always end up jumping to MGERR.
+; Formatter errors on which it might be OK to get here are %TMECE,
+; %TMECS, %TMEFL, but someone needs to test this...
+	TTNE CS1,%TM1TE		;Transfer error?
+	 TTNE FS,%TMSES		;And not formatter error?
+	  CAIA
+	   JRST MGERR		;Just lose for now
+	BUG INFO,[MT: ACCEPTING QUESTIONABLE WRITE OPERATION]
+	JRST MGWRT3
+
+;Retry errors
+MGWER1:	AOSL MGERRC(W)		;Still retrying?
+	 JRST MGERR		;No, give up
+	BUG INFO,[MT: RETRYING WRITE OPERATION]
+	PUSHJ P,TMINIC		;Hit controller with hammer
+	MOVEI B,1
+	MOVEM B,MGSPCD(W)	;1 record
+	PUSHJ Q,MGSPCR		;Reselect transport space back a record
+	TTNE FS,%TMSTM		;Stopped on EOF?
+	 SOSGE MGEOFR(W)	;Yes, one less EOF in front of us
+	  SETZM MGEOFR(W)	;But never less than zero
+	PUSHJ P,TMINIC		;Hit controller with hammer again
+	PUSHJ Q,MGGXPT		;Set up transport again
+	MOVEI B,%TMER3\%TM1IE
+	IOWRI B,%TMCS1		;Erase a few inches of tape
+	PUSHJ Q,MGWTJD		;Wait for job done
+	 JRST MGERR		;Can't get anything right...
+	MOVE B,LMIOWD		;Get last operation's IOWD
+	MOVEM B,MIOWD		;We're going to try it again
+	JRST MGWRT2		;Go back to write code and retry operation
+];IFN TM03S
+
+
+SUBTTL MAG TAPE PI LEVEL READ
+
+MGREAD:	PUSHJ Q,MGGXPT		;Select desired transport
+MGRD0:	
+IFN TM10P,[
+	TXNE J,%T1STH\%T1SRW\%T1SET	;Unit hung, rewinding, or EOT
+	 JRST MGERR		;Seems so, report error
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+]
+	MOVE B,MGEOFR(W)	;EOF's seen since last read
+	CAIL B,2		;Apparent logical EOT?
+	 JRST MGERR		;Yes, can't read anything
+	SKIPE MSCRW(W)		;Make sure open for reading
+	 BUG HALT,[MT: CHN NOT OPEN FOR READING]
+	MOVSI B,%MACTH		;Core allocator wants to wait?
+	TDNN B,MSRAC(W)		;Check in status word
+	 PUSHJ P,IOMQ		;No, get a buffer
+	  JRST [PUSHJ Q,CPOPJ	;Wanted to wait some or failed,
+		JRST MGREAD ]	; wait a while, then start over
+	MOVEM A,MGCABN(W)	;Note active buffer at PI level
+	MOVEI B,MUMGB
+	DPB B,[MUR,,MEMBLT(A)]	;Note buffer belongs to mag tape code
+	MOVEM W,MGUNIT		;Set active unit number
+	HRREI B,-MGNRTY		;Number of retries
+	MOVEM B,MGERRC(W)	;Store error count
+IFN KL10P, MOVE R,A		;Get page for cache flush routine
+IFE TM03S,[			;TM03S IOWD is -COUNT,,ITS PAGE
+	LSH A,10.		;Convert buffer number to memory address
+	SUBI A,1		;address-1
+]
+IFE KL10P,HRLI B,-2000		;Get count half of IOWD
+IFN KL10P,HRLI B,-2000_4	;The KL is, of course, different
+	HRR B,A			;-count,,address-1
+	MOVEM B,LMIOWD		;Remember IOWD for possible retry
+IFN TM10B,[
+	DATAO MTS,[MICWA]	;Tell DF10 where the channel program is
+	SETZM MICWA+1		;Stop after one operation
+]
+IFN TM10A,PUSHJ Q,MGDCSI
+IFN TM10P,SETZM MIOWD+1
+MGRD1:	MOVEM B,MIOWD		;Save IOWD where channel expects it
+	MOVEI B,2000		;Assume for now that the record has 2K words
+	MOVEM B,MGNWRD		;Set up word count
+IFN KL10P,[
+	PUSHJ P,CSHSWP		;Ensure no residue of this page in cache
+	    CAIA
+]
+IFN KS10P,CLRCSH		;KS needs cache invalidated on read
+IFN TM10P,[
+	MOVE B,MTCONO(W)	;Get prototype CONO word
+	CONO MTC,MREAD(B)	;Issue READ command
+]
+IFN TM03S,[
+	HLRE A,MIOWD		;Get PDP10 word count
+	ASH A,1			; * 2
+	IOWRI A,%TMWC		; = number of unibus words to transfer
+	SETZ A,			;Set FC to zero
+	IOWRI A,%TMFC		;Set tape frames to write
+	HRRZ A,MIOWD		;Get ITS page to transfer to
+	LSH A,1			;Convert ITS pg # to DEC pg #
+	TXO A,%UQVAL
+	IOWRI A,UBAPAG+IUTPG_1	;Set up first half of UBA mapping
+	TXO A,1			;Next DEC page number
+	IOWRI A,UBAPAG+IUTPG_1+1	;Set second half of UBA mapping
+	MOVEI A,IUTPG_14	;Unibus address for DMA
+	IOWRI A,%TMBA		;Tell controller
+	MOVX A,%TM1IE\%TMRDF	;Read forward, enable interrupts
+	IOWRI A,%TMCS1		;Start controller
+];IFN TM03S
+IFN TM10B,SETOM MGWCW		;Tell MGWTJD to wait for control word written
+	PUSHJ Q,MGWTJD		;Wait for command to complete
+	 JRST MGRERR		;Error, go do something. May be retry, correct
+				; MGNWRD if frame count error, or give up
+IFN TM03S,[
+;Get true record size for TM03, which doesn't give a FC error on READ
+MGRD1A:	TTNE FS,%TMSTM		;Read a tape mark?
+	 JRST [	SETZM MGNWRD	;Read a tape mark. No data, just EOF
+		JRST MGRD2 ]
+	IORDI A,%TMFC		;Get record size in tape frames
+	ADD A,MTWTFC(W)		;Round up to PDP10 words.
+	SUBI A,1		;Add frames_per_word - 1
+	IDIV A,MTWTFC(W)	;Get record size in PDP10 words
+	MOVEM A,MGNWRD
+];IFN TM03S
+;Here if OK or error handler has fixed things up
+MGRD2:	MOVE A,MGCABN(W)	;Get buffer we just wrote
+	SETOM MGCABN(W)		;No buffer active at PI level
+	MTENQB A		;Queue buffer up for MP level
+	MOVE B,MGNWRD		;Get number of words we read
+	DPB B,[MWC,,MEMBLT(A)]	;Set number of words in buffer
+IFN TM10P,TXNE J,%T1SEF		;Read an EOF?
+IFN TM03S,TTNE FS,%TMSTM	; i.e. a tape mark?
+	IFSKP.
+	 SETZM MGEOFR(W)	;No. Note no EOFs read since last record
+	ELSE.
+	 MOVSI B,%MAESO+%MAEFA	;EOF seen since open, EOF read ahead
+	 IORM B,MSRAC(W)	;Note this in transport status word
+	 SETO B,
+	 DPB B,[MSEOFP,,MEMBLT(A)]	;Set EOF flag in this buffer
+	 AOS A,MGEOFR(W)	;Count EOFs
+	 CAIL A,2		;Enough for EOT?
+	  JRST MGRD4		;Logical EOT, space back over it
+	ENDIF.
+	MOVSI A,%MAMSO
+	IORB A,MSRAC(W)		;Note tape movement
+IFN TM10P,TXNE J,%T1SET		;Real EOT reached?
+IFN TM03S,TTNE FS,%TMSET
+	 JRST MGRD3
+	MOVE C,MSNBOL(W)	;Get count of buffers on list
+IFN TM10P,TXNN J,%T1SEF		;EOF?
+IFN TM03S,TTNN FS,%TMSTM
+
+;	 CAIL C,6		; or read ahead six records?
+	JFCL			;Or just for the hell of it
+
+	  JRST MGRD5		;Yes, stop reading
+	TLNN A,%MASTP		;Somebody request we stop?
+	 JRST MGRD0		;No, go back and read another record
+				;Yes, fall through to terminate read
+;Here to terminate read command
+;
+MGRD5:	MOVSI A,%MASTP+%MARAC	;Clear read active, any read stop request
+	ANDCAM A,MSRAC(W)
+	JRST MGCMDR		;Go to standard command return routine
+
+;Controller saw a real EOT
+;
+MGRD3:	DPB B,[MSEOFP,,MEMBLT(A)]	;Fake EOF
+	DPB B,[420100,,MSRAC(W)] .SEE %MAETR	;Indicate EOT on read
+	JRST MGRD5		;Terminate read
+
+;Here if logical EOT (two EOF's in a row)
+; Back up till between the two EOF's
+;
+MGRD4:	MOVSI A,%MAESO+%MARAC+%MASTP	;SECOND EOF, LOGICAL EOT
+	ANDCAM A,MSRAC(W)
+	JRST MGSPRF		;Space reverse one file
+
+;Error detected on read.
+; Analyze error, retry read if it might help
+;
+MGRERR:
+IFN TM10P,[
+ IFN TM10B,[
+	TXNE J,%T1SCP\%T1SNM\%T1SDP
+	 JRST MGERR		;Channel error, forget it
+ ]
+	TXNE J,%T1STH\%T1SRW\%T1SIO\%T1SRC	;Hard error?
+	 JRST MGERR		;Yes, abandon read
+	TXNE J,%T1SPE\%T1SDL%T1SBT	;Parity, data-late, or bad tape?
+	 JRST MGMRT		;Yes, a read retry might fix it
+	TXNN J,%T1SRL		;Record length error?
+	 JRST MGERR		;No, who knows what is going on
+
+;Here if record length error. Adjust MGNWRD to reflect data actually read
+;
+IFN TM10B,HRRZ A,MICWA+1
+IFN TM10A,HRRZ A,MIOWD		;Get final control word
+	HRRZ B,LMIOWD		;Get original IOWD
+	SUB A,B			;Calculate words read
+IFN TM10B,SOS A			;Channel funnyness
+	CAIE A,1		;Length of 1 may just be EOF indication
+	IFSKP.
+	 TXNE J,%T1SEF\%T1SET	;1 word, EOF? EOT?
+	  SETZM A		;Yes, zero length record, just carries MSEOFP
+	ENDIF.
+	MOVEM A,MGNWRD		;Save new record length
+	JRST MGRD2		;Go process as potentially correctly read data
+];IFN TM10P
+IFN TM03S,[
+	TTNE ERR,%TMERM\%TMEUS\%TMEFS\%TMEIR\%TMEIF\%TMEMC\%TMECT\%TMENX
+	 JRST MGERR		;Fatal errors
+	TTNN FS,%TMSOL		;On line?
+	 JRST MGERR		;This isn't so good either
+	TTZ ERR,%TMEFC\%TMENG	;Ignore NSG, Frame count error
+	TTNE FS,%TMSPE		;Phase encoded (1600BPI) mode?
+	 TTZ ERR,%TMECE\%TMECS	;If so, ignore errors hardware already fixed
+	TTZN ERR,%TMECE\%TMECS\%TMEFC\%TMENG\%TMEFL\%TMEMD\%TMEIC ;Retryable?
+	 JRST MGRER1		;Nothing retrying will help
+	TTNE FS,%TMSTM		;Tape mark?
+	 JRST MGRER2		;Yes, no point in retrying
+	JRST MGMRT		;OK, go retry read
+
+;Formatter seems happy. Check channel status before returning
+MGRER1:	TTNE ERR,177777		;Sanity check. Shouldn't be any errors left
+	 JRST MGERR
+	TTNE CS1,%TM1TE		;Transfer error?
+	 TTNE FS,%TMSES		;And not formatter error?
+	  CAIA
+	   JRST MGERR		;Just lose for now
+MGRER2:	JRST MGRD1A
+
+];IFN TM03S
+
+
+;Retry a read operation
+;
+MGMRT:	AOSL MGERRC(W)		;Still retrying?
+	 JRST MGERR		;No, give up
+IFN TM10P,[
+ IFN TM10B,SETZM MIOWD
+ IFN TM10A,[
+	MOVE A,[-1,,MGVTC-1]
+ ]
+	MOVEM A,MIOWD		;One record
+	PUSHJ Q,MGDCSO
+	MOVE B,MTCONO(W)
+	CONO MTC,MSPRR(B)	;Back up one record
+	PUSHJ Q,MGWTJD		;Wait till done
+	 JRST MGERR		;No errors allowed
+ IFN TM10A,PUSHJ Q,MGDCSI	;Put back PI 1 BLKI
+];IFN TM10P
+IFN TM03S,[
+;This could be more refined
+	PUSHJ P,TMINIC		;Hit controller with hammer
+	PUSHJ Q,MGGXPT		;Set up transport again
+	SETO A,
+	IOWRI A,%TMFC		;1 record
+	MOVEI A,%TM1IE\%TMSPR	;Space backwards command
+	IOWRI A,%TMCS1		;Do it
+	PUSHJ Q,MGWTJD		;Wait till finished
+	 JRST MGERR		;Give up if error
+];IFN TM03S
+	MOVE B,LMIOWD		;Get IOWD from last command
+	JRST MGRD1		;Try operation again
+
+
+SUBTTL MAG TAPE PI LEVEL SPACING COMMANDS
+;Space forward and space reverse are completely under conditionals
+
+IFN TM03S,[
+
+;Space forward MGSPCD(W) records
+MGSPCF:	PUSHJ Q,MGGXPT		;Acquire transport
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+	MOVEM W,MGUNIT		;Note active transport
+	MOVN A,MGSPCD(W)	;Get -count
+	IOWRI A,%TMFC		;Tell controller
+	MOVEI A,%TMSPF		;Get command
+	TXO A,%TM1IE		;Turn on interrupts
+	IOWRI A,%TMCS1		;Start controller
+	PUSHJ Q,MGWTJD		;Wait till command completes
+	IFNSK.			;Error?
+	 TTNE CS1,%TM1MP	;Control parity err?
+	  JRST MGERR		;Yes, nothing else valid
+	 TTNE FS,%TMSES		;Formatter errors?
+	 IFSKP.
+	  PUSHJ P, TMINIC	;No formatter errors, ignore RH errors
+	 ELSE.
+	  TTNN ERR,%TMEFC	;Frame count error?
+	   JRST MGERR		;Nope, must be important
+	  PUSHJ P,TMINIC
+	 ENDIF.
+	ENDIF.
+	POPJ Q,
+
+;Space forward record
+MGSPFR:	MOVEI B,1		;Do one record
+	MOVEM B,MGSPCD(W)	;Set count
+	MOVSI B,%MAMSO		;Note this command causes tape movement
+	IORM B,MSRAC(W)		;Set in transport software status
+	PUSHJ Q,MGSPCF		;Do spacing op
+	TTNN FS,%TMSTM
+	 SETZB B,MGEOFR(W)	;Count EOFs since last record. None here
+	TTNE FS,%TMSTM
+	 AOS B,MGEOFR(W)	;Saw one.
+	CAIL B,2		;Saw two?
+	 JRST MGSPRR		;Back up over last one...
+	JRST MGCMDR		;Clean up and leave
+
+;Space forward file
+MGSPFF:	MOVSI B,%MAESO		;See if tape has already read ahead to EOF
+	TDZE B,MSRAC(W)
+	 JRST MGCMDR		;EOF already read during the read, done
+	MOVEI B,1		;Do one record
+	MOVEM B,MGSPCD(W)	;Set count
+	MOVSI B,%MAMSO		;Note this command causes tape movement
+	IORM B,MSRAC(W)		;Set in transport software status
+	PUSHJ Q,MGSPCF		;Space forward one record
+	TTNN FS,%TMSTM
+	IFSKP.			;Saw a TM
+	 AOS B,MGEOFR(W)	;Saw one.
+	 CAIL B,2		;Saw two?
+	  JRST MGSPRR		;Yes, back up over last one, and leave
+	 JRST MGCMDR		;No, OK, but we're done
+	ENDIF.
+	SETZB B,MGEOFR(W)	;No tape mark, reset count of EOFs seen
+MGSPF1:	MOVEM B,MGSPCD(W)	;Set count to 0 (B zero from above)
+	PUSHJ Q,MGSPCF		;Do it
+	TTNE FS,%TMSTM		;Saw a EOF?
+	IFSKP.			;No..
+	 TTNE FS,%TMSET		;Saw an EOT?
+	  JRST MGERR		;Really shouldn't happen
+	 JRST MGSPF1		;Else go look for TM again
+	ENDIF.
+	AOS MGEOFR(W)		;Saw one.
+	JRST MGCMDR		;EOF read. done
+
+;Space reverse MGSPCD(W) records
+MGSPCR:	PUSHJ Q,MGGXPT		;Set up transport and get status
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+	TTNE FS,%TMSBT		;At BOT?
+	 POPJ Q,
+	MOVEM W,MGUNIT		;Save selected transport
+	MOVN A,MGSPCD(W)	;Get -count
+	IOWRI A,%TMFC		;Tell controller
+	MOVEI A,%TMSPR		;Space Reverse command
+	TXO A,%TM1IE		;Turn on interrupts
+	IOWRI A,%TMCS1		;Start controller
+	PUSHJ Q,MGWTJD		;Wait till command completes
+	IFNSK.			;Error?
+	 TTNE CS1,%TM1MP	;Control parity err?
+	  JRST MGERR		;Yes, nothing else valid
+	 TTNE FS,%TMSES
+	 IFSKP.
+	  PUSHJ P,TMINIC
+	 ELSE.
+	  TTNN ERR,%TMEFC	;Frame count error?
+	   JRST MGERR		;Nope, must be important
+	  PUSHJ P,TMINIC
+	 ENDIF.
+	ENDIF.
+	POPJ Q,
+
+;Space reverse one record
+MGSPRR:	MOVEI B,1
+	MOVEM B,MGSPCD(W)	;1 record
+	MOVSI B,%MAMSO		;Note this command causes tape movement
+	IORM B,MSRAC(W)		;Set in transport software status
+	PUSHJ Q,MGSPCR
+	TTNE FS,%TMSTM		;Stopped on EOF?
+	 SOSGE MGEOFR(W)	;Yes, one less EOF in front of us
+	  SETZM MGEOFR(W)	;But never less than zero
+	JRST MGCMDR		;Leave through general exit	
+
+;Space reverse fill
+MGSPRF:	MOVSI B,%MAESO		;See if tape has already read ahead to EOF
+	TDNN B,MSRAC(W)
+	 JRST MGSPR2		;No, we can just do command
+MGSPR1:	MOVEI B,1
+	MOVEM B,MGSPCD(W)
+	PUSHJ Q,MGSPCR		;Skip back 1 record, should backup over EOF
+	TTNN FS,%TMSTM		;Tape mark seen?
+	 JRST MGSPR1		;Well, apparently not
+	MOVSI B,%MAESO
+	ANDCAM B,MSRAC(W)	;Turn off EOF-read-ahead flag
+MGSPR2:	SETZ B,
+	MOVEM B,MGSPCD(W)	;Space backwards the maximum number of records
+	PUSHJ Q,MGSPCR		;Do it
+	TTNN FS,%TMSBT		;BOT?
+	 TTNE FS,%TMSTM		;Tape mark seen?
+	  JRST MGCMDR		;Yes or Yes, all done
+	JRST MGSPR2		;No, go back and try to find one.
+
+];End TM03S way back
+
+;Rewind commands
+;
+MGRWND:
+IFN TM10P,MOVEI B,MREWND	;Normal rewind
+IFN TM03S,MOVEI B,%TMREW
+	CAIA
+MGRWDM:
+IFN TM10P, MOVEI B,MRWNDD	;Rewind and dismount
+IFN TM03S, MOVEI B,%TMUNL
+	MOVEM B,MGSPCD(W)	;Set up command
+	PUSHJ Q,MGRWD1		;Call action routine
+	JRST MGCMDR
+
+;Action routine for rewind commands
+MGRWD1:	PUSHJ Q,MGGXPT
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+]
+	MOVEM W,MGUNIT
+	MOVE B,MGSPCD(W)	;Get desired command
+IFN TM10P,[
+	ADD B,MTCONO(W)
+	CONO MTC,(B)
+]
+IFN TM03S,[
+	TXO B,%TM1IE
+	IOWRI B,%TMCS1
+]
+	PUSHJ Q,MGWTJD		;Start controller and wait till done
+	IFNSK.
+	 TTNE FS,%TMSES
+	  JRST MGERR		;Oops.
+	ENDIF.
+	SETZM MGEOFR(W)		;Seen no EOFs since last record
+
+;Here after rewind command has started.
+;  Two possibilities: Tape is rewound already, or controller is finished
+;  but tape is still rewinding.
+IFN TM10P,[
+MGRWD2:	TXNN J,%T1SRW		;Slave still rewinding tape?
+	 JRST MGRWD3		;No, at BOT
+	PUSHJ Q,CPOPJ		;Wait some.
+	CONI MTS,J		;Get status again
+	MOVEM J,MGCMTS(W)	;Update in memory
+	JRST MGRWD2		;Go see if we're done yet.
+
+;Here when tape has rewound
+MGRWD3:	MOVE T,TIME		;Wait 1 second more
+	ADDI T,30.		;This is an attempt to fix a hardware bug
+	MOVEM T,MGJDTI
+MGRWD4:	MOVE T,TIME
+	CAML T,MGJDTI		;Check time
+	 JRST MGRWD5		;Finished waiting, go clean up
+	PUSHJ Q,CPOPJ		;No, wait some more
+	JRST MGRWD4
+
+MGRWD5:	MOVSI A,%MAMSO+%MAREW
+	ANDCAM A,MSRAC(W)	;Say not rewinding, hasn't moved
+	SETZM MGJDTI		;Clear timeout
+	POPJ Q,
+];IFN TM10P
+IFN TM03S,[
+;This could be a lot smarter; should dismiss the command completely
+; after rewind is started, and just scan for rewinding transports
+; when a SSC interrupt is received. This change is also necessary
+; to make multiple slaves work right; currently the rewinding unit
+; holds active unit (MGUNIT) until the rewind is completed.
+MGRWD2:	TTNN FS,%TMSPP		;Transport still rewinding?
+	 JRST MGRWD3		;No, go finish up
+	PUSHJ Q,CPOPJ		;Dismiss interrupt, wait a while
+	PUSHJ Q,MGGXPT		;Get right slave, set up status
+	JRST MGRWD2
+
+MGRWD3:	MOVSI A,%MAMSO+%MAREW
+	ANDCAM A,MSRAC(W)	;Say not rewinding, hasn't moved
+	POPJ Q,
+];IFN TM03S
+
+;SKIP TO LOGICAL EOT
+;
+MGSEOT:	PUSHJ Q,MGGXPT		;Get transport
+IFN TM10P,[
+	TXNE J,%T1STH\%T1SRW	;Hung or rewinding?
+	 JRST MGERR
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+]
+	MOVEM W,MGUNIT		;Set active unit
+IFN TM10P,TXNE J,%T1SBT		;BOT?
+IFN TM03S,TTNE FS,%TMSBT
+	 JRST MGVTCK		;Yep, do virgin tape check
+
+;Not at BOT
+; Do we have enough CONDITIONALS yet?
+MGNVT:	
+IFN TM10P,[
+	MOVE B,MTCONO(W)	;Get CONO word
+ IFN TM10A,[
+	PUSHJ Q,MGDCSO
+	MOVE A,[-1,,MGVTC-1]
+	MOVEM A,MIOWD		;Tell it to move one record
+ ]
+ IFN TM10B,SETZM MIOWD
+	CONO MTC,MSPRR(B)	;Space reverse first
+];IFN TM10P
+IFN TM03S,[
+	SETO B,			;Space backwards one record
+	IOWRI B,%TMFC
+	MOVEI B,%TMSPR\%TM1IE
+	IOWRI B,%TMCS1
+];IFN TM03S
+	PUSHJ Q,MGWTJD		;Wait till done
+	IFNSK.
+	 TTNE FS,%TMSES
+	  JRST MGERR
+	ENDIF.
+	SETZM MGEOFR(W)
+	AOS MGEOFR(W)		;Claim to have seen one EOF
+MGEOT2:	
+IFN TM10P,[
+	MOVE B,MTCONO(W)
+	CONO MTC,MSPFF(B)	;Skip forward to EOF
+	PUSHJ Q,MGWTJD
+	 JRST MGERR
+]
+IFN TM03S,[
+	AOS MSCMDC(W)		;Kludge so MGSPFF will return here.
+	PUSHJ Q,MGSPFF		;Space forward file
+]
+	MOVSI B,%MAETR		;See if we hit real EOT
+IFN TM10P, TXNE J,%T1SET
+IFN TM03S, TTNE FS,%TMSET
+	 IORM B,MSRAC(W)	;Yep, tell MP
+IFN TM10P,[
+	MOVE B,MTCONO(W)
+ IFN TM10A,[
+	MOVE A,[-1,,MGVTC-1]
+	MOVEM A,MIOWD		;One record
+ ]
+ IFN TM10B,SETZM MIOWD
+	CONO MTC,MSPFR(B)	;Space forward one record
+]
+IFN TM03S,[
+	SETO B,
+	IOWRI B,%TMFC
+	MOVEI B,%TMSPF\%TM1IE
+	IOWRI B,%TMCS1
+]
+	PUSHJ Q,MGWTJD
+	IFNSK.
+	 TTNE FS,%TMSES
+	 JRST MGERR
+	ENDIF.
+	MOVSI B,%MAETR		;Check for real EOT again
+IFN TM10P,TXNE J,%T1SET
+IFN TM03S,TTNE FS,%TMSET
+	 IORM B,MSRAC(W)
+IFN TM10P,TXNN J,%T1SEF		;Is this another EOF?
+IFN TM03S,TTNN FS,%TMSTM	;(i.e. a tape mark)
+	 JRST MGEOT2		;No, not at logical EOT. Go try again
+IFN TM10P,[
+	MOVE B,MTCONO(W)	;Yes, at logical EOT, Back up over 1 EOF
+	CONO MTC,MSPRF(B)	;Space back one file
+]
+IFN TM03S,[
+	SETO B,
+	IOWRI B,%TMFC
+	MOVEI B,%TMSPR\%TM1IE
+	IOWRI B,%TMCS1
+]
+	PUSHJ Q,MGWTJD
+	IFNSK.
+	 TTNE FS,%TMSES
+	 JRST MGERR
+	ENDIF.
+	MOVSI B,%MAEOF+%MAETR	;Tell MP at EOF, EOT
+	IORM B,MSRAC(W)
+	JRST MGCMDR
+
+;Check for virgin tape
+MGVTCK:	MOVE T,TIME
+	ADDI T,60.		;Set a two second timeout
+	MOVEM T,MGEOTT(W)	; before we must see an EOT
+IFN TM10P,[
+ IFN TM10B,[
+	SETZM MIOWD
+	DATAO MTS,[MICWA]
+ ]
+ IFN TM10A,[
+	MOVE A,[-1,,MGVTC-1]
+	MOVEM A,MIOWD
+	PUSHJ Q,MGDCSO
+ ]
+	MOVE B,MTCONO(W)
+	CONO MTC,MREAD(B)	;Read record. will time out if no EOF marks
+MGVTC1:	CONI MTS,J
+	MOVEM J,MGCMTS(W)
+	TXNE J,%T1SJD		;Job done?
+	 JRST MGNVT		;Yep,  not virgin tape
+	TXNE J,%T1STH\%T1SIO	;Transport hung or illegal operation?
+	 JRST MGERR		;Yes, give up
+	MOVE T,MGEOTT(W)	;Get the timeout value
+	CAMG T,TIME		;Time up?
+	 JRST MGVT		;Yes, it's a new tape
+	PUSHJ Q,CPOPJ		;Wait a while
+	JRST MGVTC1		;Go back and check again
+];IFN TM10P
+IFN TM03S,[
+	SETO B,
+	IOWRI B,%TMFC		;Do one record
+	MOVEI B,%TMSPF\%TM1IE	;Space forward command
+	IOWRI B,%TMCS1
+
+MGVTC1:	IORDI T,%TMCS1		;Get status
+	TXNN T,%TM1GO		;Still going?
+	IFSKP.			;Yep.
+	 MOVE T,MGEOTT(W)	;Get the timeout value
+	 CAMG T,TIME		;Time up?
+	  JRST MGVT		;Yes, it's a new tape
+	 PUSHJ Q,CPOPJ		;Wait a while
+	 JRST MGVTC1		;Go back and check again
+	ENDIF.
+	TXNE T,%TM1TE\%TM1MP	;Controller error?
+	 JRST MGERR		;Yes, bad
+	IORDI T,%TMFS		;Get formatter status
+	TXNE T,%TMSES		;Formatter error?
+	 JRST MGNVT		;No error, not a new tape
+	IORDI T,%TMERR		;Get formatter error register
+	TXNE T,%TMEFC		;Frame Count error?
+	 JRST MGNVT		;Yes, that is probably an OK tape
+	JRST MGERR		;Not FC, must be a real problem
+];IFN TM03S
+
+;Virgin tape. Abort operation in progress, rewind tape
+MGVT:	
+IFN TM10P,[
+	MOVE B,MTCONO(W)
+	CONO MTS,31		;Clear controller
+	CONO MTC,MNOPIN(B)	;Start new command to clear things out
+	PUSHJ Q,MGWTJD
+	 JFCL			;Ignore errors
+]
+IFN TM03S,[
+	PUSHJ P,TMINIC
+]
+IFN TM10P,MOVEI B,MREWND		;Do a rewind
+IFN TM03S,MOVEI B,%TMREW
+	MOVEM B,MGSPCD(W)
+	PUSHJ Q,MGRWD1	
+	SETZM MGEOFR(W)		;No EOFs seen
+	AOS MGEOFR(W)		;???
+	JRST MGCMDR		;Done
+
+;Write EOT mark (two EOF's) on tape
+;
+MGMEOT:	PUSHJ Q,MGGXPT
+IFN TM10P,[
+	TXNE J,%T1STH\%T1SRW\%T1SWL ;Hung, rewinding, or write locked...
+	 JRST MGERR
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+	TTNE FS,%TMSWL		;Transport write locked?
+	 JRST MGERR		;Shouldn't happen, we checked at open.
+];IFN TM03S
+	MOVEM W,MGUNIT		;Note active unit
+	SKIPE MTCEFW(W)		;Check # of EOF's already written
+	IFSKP.			;None. Need to write two
+	 AOS MSCMDC(W)		;Kludge so MGWEOF will return here.
+	 AOS MTCEFW(W)		;Increment EOF count
+	 PUSHJ Q,MGWEOF		;Write an EOF
+	ENDIF.
+	MOVE A,MTCEFW(W)	;Get EOF count
+	SOSLE A			;Check for at least two EOF's written
+	IFSKP.			;No, need one more on tape
+	 AOS MSCMDC(W)		;Again, force MGWEOF to return
+	 AOS MTCEFW(W)		;Incr EOF count
+	 PUSHJ Q,MGWEOF		;Write EOF
+	ENDIF.
+	MOVE A,MSRAC(W)		;Get transport software status
+	TLNE A,%MANWT		;Are we supposed to back up over last EOF?
+	IFSKP.
+	 AOS MSCMDC(W)		;Yes. Force MGSPRF to return, then...
+	 PUSHJ Q,MGSPRF		; ...do space reverse file command
+	ENDIF.
+	MOVSI A,%MANWT		;Note what we've done
+	IORM A,MSRAC(W)		
+	JRST MGCMDR		;Leave through general exit routine
+
+;Write one EOF mark on tape
+;
+MGWEOF:	PUSHJ Q,MGGXPT		;Set up transport for IO
+IFN TM10P,[	
+	TXNE J,%T1STH\%T1SRW\%T1SWL ;Hung, rewinding, or write locked...
+	 JRST MGERR		; ..lose
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+	TTNE FS,%TMSWL		;Transport write locked?
+	 JRST MGERR		;Shouldn't happen, we checked at open.
+]
+	MOVEM W,MGUNIT		;Remember active unit
+IFN TM10P,[
+	MOVE B,MTCONO(W)	;Get CONO word for this unit
+	CONO MTC,MWEOF(B)	;Execute Write EOF function
+]
+IFN TM03S,[
+	MOVEI B,%TM1IE\%TMWTM	;Write tape mark, enable interrupts
+	IOWRI B,%TMCS1		;Do it
+]
+	PUSHJ Q,MGWTJD		;Wait around till command is complete
+	IFNSK.
+	 TTNE FS,%TMSES
+	 JRST MGERR
+	ENDIF.
+	MOVSI A,%MAMSO
+	IORM A,MSRAC(W)		;Note tape movement in software status
+	JRST MGCMDR		;Return through general exit routine
+
+;Get transport and controller status
+;
+MGSTAT:	PUSHJ Q,MGGXPT
+	JRST MGCMDR
+
+;Write some blank space
+;
+MGW3IN:	PUSHJ Q,MGGXPT
+IFN TM10P,[
+	TXNE J,%T1STH\%T1SRW\%T1SWL ;Hung, rewinding, or write locked...
+	 JRST MGERR
+]
+IFN TM03S,[
+	TTNE FS,%TMSFR		;Formatter ready?
+	 TTNN FS,%TMSOL		;Transport on line
+	  JRST MGERR		;No or no, can't do operation
+	TTNE FS,%TMSWL		;Transport write locked?
+	 JRST MGERR		;Shouldn't happen, we checked at open.
+];IFN TM03S
+	MOVEM W,MGUNIT		;Note active transport
+IFN TM10P,[			
+;TM10 can't just write blank space, it has to write blank space followed
+; by a data record
+ IFN TM10B,[
+	SETZM MIOWD		;Tell TM10 to write 1-word record
+	DATAO MTS,[MICWA]
+ ]
+ IFN TM10A,[
+	MOVE A,[-1,,MGVTC-1]	;1-word record
+	MOVEM A,MIOWD
+	PUSHJ Q,MGDCSO
+ ]
+	MOVE B,MTCONO(W)
+	CONO MTC,MW3IN(B)	;Write date record preceeded by 3-in gap
+];IFN TM10P
+IFN TM03S,[
+	MOVEI B,%TM1IE\%TMER3	;Erase 3 inches command, enable interrupts
+	IOWRI B,%TMCS1		;Do it
+];IFN TM03S
+	PUSHJ Q,MGWTJD		;Wait...
+	 JFCL			;Ignore errors (really should check kind)
+IFN TM10P,JRST MGSPRR		;Now space record reverse over the bogus record
+IFN TM03S,JRST MGCMDR		;TM03 does it right
+
+
+SUBTTL .MTAPE UUO 
+
+;.MTAPE AC,
+;	AC/	CHNM,,COMMAND
+;		COMMAND/	COUNT,,FUNCTION
+
+;Called with	J/ AC field from UUO
+
+AMTAPE:	XCTR XR,[HLRZ R,(J)]	;Get IO channel from user
+	TRNE R,-NIOCHN		;Legal channel?
+	 JRST ILUUO		;Lose
+	HRRZM R,UUAC(U)		;Cause errors to report on the correct channel
+	ADDI R,IOCHNM(U)	;Form IOCHNM pointer
+	HRRZ A,(R)		; A: CLSTB/IOTTB index
+	CAIL A,MTUAIX		; Min index for tape
+	 CAILE A,MTBOX		; Max
+	  POPJ P,		; Laconic error reportage.
+	LDB W,[MTXP(R)]		;Get transport number
+	CAME U,MTUSR(W)		;Same user?
+	 POPJ P,		;No, give up
+	UMOVE A,(J)		;Get Channel,,Command from user
+	MOVEM A,MTMTAP(W)	;Save it
+	HRRZS A			;Get user address of Count,,Function word
+	PUSHJ P,MTIECK		;Check transport for error states
+	UMOVE A,(A)		;Get Count,,Function from user
+	HRRZM A,MTMFNC(W)	;Store function
+	HLREM A,MTMCNT(W)	; and count
+	SKIPN MTMCNT(W)		;Count of zero always means one, for
+	 AOS MTMCNT(W)		; compatibility with the old code.
+	HRRZS A			;Just Function
+	CAIL A,NMTAPC		;Command in range?
+	 POPJ P,		;No...
+	AOS (P)			;Command OK, skip return
+	JRST @MTAPDT(A)		;Go do command
+
+MTAPDT:	MTHANG			;0 Hang till tape motion done
+	MTRWND			;1 Rewind
+	MTRWDM			;2 Rewind and dismount
+	MTWEOR			;3 Write EOR if appropriate
+	MTW3IN			;4 Write 3 inches of blank tape
+	MTWEOF			;5 Write EOF
+	MTSPR			;6 Space records
+	MTSPF			;7 Space files
+	MTSPEOT			;10 Space to EOT
+	MTSTOP			;11 Abort all operations immediately
+	MTSBKS			;12 Set block size (to COUNT)
+	MTRBKS			;13 Read block size (to AC)
+IFN 0,[
+	MTRTSW			;14 Read Transport Information (to AC)
+	MTRTEW			;15 Read Tape Error Word (to AC)
+]
+NMTAPC==.-MTAPDT
+
+;Set block size for write
+;
+MTSBKS:	MOVE A,MTMCNT(W)	;Desired blocksize
+	CAIL A,4		;Check reasonableness
+	 CAILE A,2000
+	  SOSA (P)		;Fail if too big or too small
+	   MOVEM A,MTBLKS(W)	;OK, change write-buffer size
+	POPJ P,
+
+;Read current write blocksize
+;
+MTRBKS:	MOVE A,MTBLKS(W)	;Get current write block size
+	JRST APTUAJ		;Return it
+
+;Hang until all motion finished
+;
+MTHANG:	SKIPLE MSCMDC(W)	;Check count of queued commands
+	 PUSHJ P,UFLS		;Wait if there are any
+	JRST MTIECK		;Done, check for errors and return
+
+;Rewind, Rewind and dismount
+;
+MTRWND:	SKIPA B,[MGRWND]	;Get "REWIND" PI level command
+MTRWDM:	 MOVEI B,MGRWDM		; or "REWIND and DISMOUNT" if appropriate
+	SKIPE MSCRW(W)		;Writing?
+	 JRST MTSOSP		;Yes, error. Go undo skip rtn and exit
+	MOVSI A,%MAREW		;Note rewinding in software status
+	IORM A,MSRAC(W)
+	JRST MTCMD		;Go queue command for PI level
+
+
+;"Write End of Record" 
+; This is really the FORCE system call, or should be.
+;
+MTWEOR:	SKIPG MTMDN(W)		;MP level have an active buffer?
+	 POPJ P,		;No, nothing to do
+	SKIPE MSCRW(W)		;Writing?
+	 JRST MTWBFD		;Yes, go write buffer to tape
+MTSOSP:	SOS (P)			;Not writing, error. Undo skip return
+	POPJ P,			;Return
+
+;Write EOF
+;
+MTWEOF:	SKIPN MSCRW(W)		;Writing?
+	 JRST MTSOSP		;No, can't write EOF. Take error exit
+	PUSHJ P,MTWEOR		;Flush current buffer, if any
+	MOVEI B,MGWEOF		;Get PI level EOF routine
+	AOS MTCEFW(W)		;Increment count of EOF's written
+	MOVSI TT,%MANWT		;Flag something written on tape
+	ANDCAM TT,MSRAC(W)
+	JRST MTCMD		;Queue MGWEOF command for PI level
+
+;Write blank tape
+;
+MTW3IN:	SKIPN MSCRW(W)		;Error if tape not open for write
+	 JRST MTSOSP
+	MOVEI B,MGW3IN		;Get PI level command
+	SETZM MTCEFW(W)		;No EOF's since last record
+	MOVSI TT,%MANWT
+	ANDCAM TT,MSRAC(W)	;Note written something to tape
+	JRST MTCMD		;Go queue command for PI
+
+;Space records, +=forward, -=back
+;
+MTSPR:	SKIPE MSCRW(W)		;Not allowed if writing
+	 JRST MTSOSP
+	PUSHJ P,MTFLRA		;Flush read-ahead, find out how far off we are
+	ADD B,C			;Get records tape is ahead of user (EOF=record)
+	MOVNS B			;Subtract this from user's request
+	ADDB B,MTMCNT(W)	;Adjust count
+	JUMPE B,CPOPJ		;If count is now zero, we are done
+MTSPR1:	PUSHJ P,MTCNTR		;Update user's copy in case PCLSR
+	JUMPG B,MTSPFR		;Space forward
+	MOVEI B,MGSPRR		;Get SPACE REVERSE command
+	PUSHJ P,MTCMD		;Queue it
+	AOSGE B,MTMCNT(W)	;Increment count, check if done
+	 JRST MTSPR1		;More
+	POPJ P,			;No more
+
+MTSPFR:	MOVEI B,MGSPFR		;Get SPACE FORWARD command
+	PUSHJ P,MTCMD		;Queue it
+	SOSLE B,MTMCNT(W)	;Decr count, check if done
+	 JRST MTSPR1		;More
+	POPJ P,
+
+;This routine flushes readahead.  Call before doing a spacing operation
+; this doesn't actually undo the effect on the drive of the read-ahead.
+; It does make sure that read-ahead's effect can't change, then returns
+; in B the number of records ahead (non-negative) and in C the number of
+; EOF's ahead (0 or 1).  If called twice it will return zero the second
+; time.  Be sure to update your parameters.
+;
+MTFLRA:	PUSHJ P,MTCNTR		;Make sure user space is writable first
+	MOVSI B,%MASTP
+	MOVSI T,%MARAC
+	IORM B,MSRAC(W)		;Tell PI-level read routine to stop reading
+	TDNE T,MSRAC(W)		;Wait until PI level actually stops
+	 PUSHJ P,UFLS
+	ANDCAM B,MSRAC(W)	;Turn off %MASTP, things are now quiet
+	SKIPLE MSCMDC(W)	;Make sure PI level is completely inactive
+	 PUSHJ P,UFLS		;Wait if necessary
+	MOVE B,MSNBOL(W)	;Get # bufs on read list (='s # records ahead)
+	LDB C,[.BP (%MAEFA),MSRAC(W)] ;1 if EOF read ahead
+	MOVSI T,%MAEFA		;Clear read-ahead EOF 
+	ANDCAM T,MSRAC(W)
+	JRST MTCBFF		;Go flush read-ahead buffers
+
+;Space files, + = forward, - = back
+MTSPF:	SKIPE MSCRW(W)		;Not allowed if writing
+	 JRST MTSOSP
+	PUSHJ P,MTFLRA		;Flush read-ahead
+	MOVN B,C		;Number of files tape is ahead of user
+	ADDB B,MTMCNT(W)	;Adjust desired count
+	JUMPE B,CPOPJ		;If now zero we are done
+MTSPF1:	PUSHJ P,MTCNTR		;Update user's count in case of PCLSR
+	JUMPG B,MTSPFF		;Go do forward if needed
+	MOVEI B,MGSPRF		;Get space reverse file command
+	PUSHJ P,MTCMD		;Queue it
+	AOSGE B,MTMCNT(W)	;Done?
+	 JRST MTSPF1		;Nope
+	POPJ P,
+
+MTSPFF:	MOVEI B,MGSPFF		;Get space forward file command
+	PUSHJ P,MTCMD		;Do it
+	SOSLE B,MTMCNT(W)	;Count down
+	 JRST MTSPF1		; till done
+	POPJ P,
+
+;Update user's FUNCTION,,COUNT word in case he's PCLSR'd
+;
+MTCNTR:	HRRZ A,MTMTAP(W)
+	MOVE T,MTMFNC(W)
+	HRL T,MTMCNT(W)
+	XCTR XW,[MOVEM T,(A)]
+	POPJ P,
+
+;Get Controller status words to I,J
+;
+MTSTAT:	SKIPLE MSCMDC(W)	;Wait till commands queued to PI level are done
+	 PUSHJ P,UFLS
+	MOVEI B,MGSTAT		;GET STATUS command
+	PUSHJ P,MTCMD		;Give to PI
+	SKIPLE MSCMDC(W)	;Wait till done
+	 PUSHJ P,UFLS
+	MOVE I,MGCMTC(W)
+	MOVE J,MGCMTS(W)
+	POPJ P,
+
+;Go to EOT
+;
+MTSPEOT:MOVEI B,MGSEOT		;Get SPACE-TO-LOGICAL-EOT command
+	JRST MTCMD		;Queue it. Note read-ahead doesn't matter here
+
+;Stop whatever we are doing right now
+; Very brute-force - throws away all pending commands, read-ahead buffers, etc.
+;
+MTSTOP:	CONO PI,UTCOFF		;We are going to mess with buffer lists
+	SETZM MSCMDC(W)		;Poof, no more commands
+	MOVE Q,[-MGQDLL,,MGQD0-1] ;Reset Q PDL pointer to base of stack
+	MOVE T,MSLCTB
+	IMUL T,W
+	ADD Q,T
+	MOVEM Q,MGQDLP(W)
+	MOVE Q,[-MSCBL-1,,MSCB0-1] ;Reset command queue input pointer
+	ADD Q,T
+	MOVEM Q,MTCMBP(W)
+	MOVE Q,[4400,,MSCB0-1]	;Reset command queue output pointer
+	ADD Q,T
+	MOVEM Q,MGCMBP(W)
+	SKIPL A,MTMDN(W)	;Buffer active at MP level?
+	 PUSHJ P,IMEMR		;Yes, release it
+	SETOM MTMDN(W)		;No buffer active at MP level
+	SETZM MSMPRP(W)		;Zero MP pointer into current buffer
+	SETZM MSMPRC(W)		;Zero count of available words in buffer
+	PUSHJ P,MTCBFF		;Flush any buffers queued for PI level
+	CAME W,MGUNIT		;Is interrupt level waiting for this unit?
+	 JRST UTCONJ		;No, all set
+	SETOM MGUNIT		;Yes, say no unit waiting for interrupt.
+				;(Makes interrupt go away w/out doing anything)
+IFN TM10P,[
+	CONI MTC,I		;See what drive controller thinks it's using
+	LDB B,[MUNITF,,I]
+	CAME W,B		;Same as the drive we're clearing?
+	 JRST UTCONJ		;If not same unit, don't do anything
+	MOVE B,MTCONO(W)	;Yes, abort operation in progress
+	CONO MTS,31		;Stop the tape
+	CONO MTC,(B)		;Clear interupts
+];IFN TM10P
+IFN TM03S,[
+	IORDI B,%TMTC
+	ANDI B,7		;Get selected transport
+	CAME W,B		;Same?
+	 JRST UTCONJ
+	PUSHJ P,TMINIC		;Yes, go reinit controller
+];IFN TM03S
+	SKIPGE A,MGCABN(W)	;Any buffers active at PI level?
+	 JRST UTCONJ		;No
+	PUSHJ P,IMEMR		;Yes, return buffer to system
+	SETOM MGCABN(W)		;Say no buffer active at PI level
+	JRST UTCONJ		;Leave
+
+
+
+

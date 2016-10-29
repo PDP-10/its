@@ -1,0 +1,315 @@
+;.OPEN CHNL,PNTR1
+
+;PNTR1:	MODE,,(SIXBIT /NET/)
+;	PNTR2
+;	MYNAME1
+;	MYNAME2
+
+;PNTR2:	HISNAME1
+;	HISNAME2
+;	COUNT
+;	buffer
+
+;MODES=> BITS	3.1== READ FROM ANY
+;		3.2== READ FROM SPECIFIC
+;		3.3== SEND AND HANG
+;		3.4== SEND IMMEDIATE
+;		3.5== USE UNAME JNAME AS MY1 AND MY2
+;		3.6== USE UNAME AS HIS1
+
+;OPEN FAILURES:
+;	4	HIS NAME 1 & HIS NAME 2 WERE ZERO
+;	6	TABLE FULL
+;	7	ON WRITE, RELOCATION OF READ BUFFER FAILED
+;	11	ATTEMPT TO SEND TO SELF
+;	12	NOT A LEGAL MODE
+;	20	SEND IMMEDIATE, GUY WASN'T THERE
+;	22	BUFFER NOT IN YOUR CORE IMAGE
+
+
+EBLK
+
+MSENTS==40	;# OF ENTRIES IN THE TABLE
+
+MSUSER:	BLOCK MSENTS	;USER INDEX
+MSCHNL:	BLOCK MSENTS	;USERS CHANNEL
+MSBADR:	BLOCK MSENTS	;RELATIVE ADDRR OF USER'S BUFR
+MSBCNT:	BLOCK MSENTS	;SIZE OF USERS BUFFER
+
+MSWRIT:	BLOCK MSENTS	;SENDING NAME 1
+MSWRT2:	BLOCK MSENTS	;SENDING NAME 2
+MSREAD:	BLOCK MSENTS	;READING NAME 1
+MSRED2:	BLOCK MSENTS	;READING NAME 2
+
+MSPSW:	-1		;SWITCH FOR MSP VARIABLES
+	0		;EXTRA WORD, FOR SWTL ROUTINE
+
+BBLK
+
+IPCO:	PUSHJ	P,SWTL		;LOCK THE MSP SWITCH
+		MSPSW
+	TLNE	C,1		; read from any?
+	JRST	MSRA		; yes
+	TLNE	C,2		; read from specific?
+	JRST	MSRS		; yes
+	TLNE	C,4		; send and hang?
+	JRST	MSSH		; yes
+	TLNE	C,8		; send immediate?
+	JRST	MSSI		; yes
+	JRST	OPNL12		; none of the above
+
+; read from any (RA) and read from specific (RS)
+MSRA:	SETOM	H		; H/-1 =>RA  0=>RS
+	SKIPA
+MSRS:	SETZM	H
+
+; find first free user slot
+	MOVSI	W,-MSENTS	; W/ slot index
+MSR1:	SKIPG	MSUSER(W)	; is this slot free?
+	JRST	MSR2		; yes
+	AOBJN	W,MSR1
+	JRST	OPNL6		; no free slots, device full
+
+; W/ slot index of a free slot
+MSR2:	MOVEM	U,MSUSER(W)	; occupies this slot
+; make sure we have a legal buffer
+	HRRZ	D,A		; relative address of second buffer
+	MOVEI	E,3(D)		; E/ relative address of data area
+	XCTR	XRW,[MOVES (D)]	;CHECK COUNT FETCH?
+	XCTR	XRW,[MOVES TT,2(D)]	;CHECK ACTUAL COUNT PLACE
+
+; bufr ok, now put data in table
+	MOVEM	E,MSBADR(W)	; stores buffer address
+	MOVEM	TT,MSBCNT(W)
+
+; store sender name only if RS
+	JUMPL	H,MSR3
+	XCTR	XR,[MOVE TT,(D)] ; his name 1
+	XCTR	XR,[MOVE I,1(D)] ; his name 2
+	TLNE	C,40		; his1 = UNAME?
+	MOVE	TT,UNAME(U)	; yes
+	SKIPA
+MSR3:	SETZB	TT,I		; zero if RA
+	MOVEM	TT,MSWRIT(W)
+	MOVEM	I,MSWRT2(W)
+
+; 3.5 bit in C means use UNAME JNAME as  myname1 and myname2
+	TLNN	C,20		; skips if want default
+	JRST	.+4
+	MOVE	TT,UNAME(U)
+	MOVE	I,JNAME(U)
+	JRST	.+3
+   ; else me1 is in B and me2 is in SRN3(U)
+	MOVE	TT,B
+	MOVE	I,SRN3(U)
+	MOVEM	TT,MSREAD(W)
+	MOVEM	I,MSRED2(W)
+
+	MOVEI	TT,(R)	;GET CHANNEL
+	SUBI	TT,IOCHNM(U)
+	MOVEM	TT,MSCHNL(W)	;STORE FOR LATER INTERRUPT
+
+	PUSHJ	P,LSWPOP	;UNLOCK MSP SWITCH
+
+; now put tabl index in lh of IOCHNM(U)(R)
+	HRLZ	A,W
+	JSP	Q,OPSLD1
+		MSPIO,,MSPIO	; attempted IOT will get IOCER 10.
+; send and hang (SH) and send immediate (SI)
+MSSI:	SETOM	H		; H/-1=>SI  0=>SH
+	SKIPA
+MSSH:	SETZM	H
+
+; validate his buffer specs
+	HRRZ	D,A		; relative buffer address
+	MOVEI	E,3(D)		; E/ relative data addr
+	XCTR	XRW,[MOVES (D)]	;CHECK NAME
+	XCTR	XRW,[MOVES Q,2(D)] ;CHECK COUNT
+
+; other data
+		; E/ absolute data addr
+		; Q/ count
+	XCTR XR,[MOVE T,(D)]	; T/ his name 1
+	TLNE	C,40		; 3.6 bit means use UNAME
+	MOVE	T,UNAME(U)	; yes
+	XCTR	XR,[MOVE TT,1(D)] ; TT/ his name 2
+	JUMPN	T,.+3		; T and TT can not both be zero
+	SKIPN	TT
+	JRST	OPNL4
+	MOVEM	TT,EPDL(U)	; EPDL(U)/ hisname2
+
+; 3.5 bit in C means use UNAME JNAME as myname1 and myname2
+	TLNN	C,20		; skips if wants default
+	JRST	.+4
+	MOVE	TT,UNAME(U)
+	MOVE	I,JNAME(U)
+	JRST	.+3
+   ; else myname1 is in B and myname2 is in SRN(U)
+	MOVE	TT,B
+	MOVE	I,SRN3(U)
+	MOVEM	TT,EPDL3(U)	; EPDL3/ myname1
+	MOVEM	I,SRN4(U)	; SRN4/ myname2
+
+; see if entry is in the table
+	PUSHJ	P,MSSTBL
+	SKIPA			; no, will havee to wait
+	JRST	MSS2		; yes, service the transfer
+	JUMPL	H,OPNL20	; was an SI, lose
+MSS1:	XCTR XR,[MOVE T,(D)]	; in case it got munged
+	TLNE	C,40		; 3.6 bit means use UNAME
+	MOVE	T,UNAME(U)
+
+
+; wait for entry to appear in table
+MSDM3:	PUSH	P,T		;LSWPOP CLOBBERS T
+	PUSHJ	P,LSWPOP	;UNLOCK MSPSW FOR WAITING
+	MOVE	T,(P)		;RESTOR T
+	SKIPA			; forces a call to ufls
+	PUSHJ	P,MSSTBL
+	PUSHJ	P,UFLS		; hang . . . .
+	PUSHJ	P,SWTL		;RELOCK SWITCH NOW
+		MSPSW
+	POP	P,T		;RESTORE T AFTER CLOBBERING BY SWTL
+	PUSHJ	P,MSSTBL	; read has been done, get details
+	JRST	MSS1		; oops, must have been aborted
+
+;		FALLS THRU IF MSSTBL SKIPS
+; table index of the user is now in T
+MSS2:	MOVE	H,T		; H/ table index
+	MOVE	A,MSUSER(H)	; A/ user index
+	CAMN	A,U
+	JRST	[PUSHJ P,LSWPOP	;POP MSPSW
+		JRST OPNL11]
+	PUSHJ	P,RPCLSR	; stop or i'll shoot
+	PUSHJ	P,SOSSET	;SET TO SOS USTP(A) ON PCLSR
+		USTP(A)
+
+; get the absolute address of the read data buffer
+MSS3:	MOVE	A,MSBADR(H)	; relative
+;SET UP PAGE MAP FOR RECEIVER (USER IN MSUSER(H))
+	PUSH	P,R
+	MOVE	J,MSUSER(H)	;USER TO RECEIVE
+	PUSHJ	P,MPLDJ		;LOAD MAP
+; fix count (sender cnt in Q, receiver cnt in MSBCNT(H))
+	CAMG	Q,MSBCNT(H)	; will it fit?
+	JRST	MSS4		; yes
+	XCTRI	XRW,[SETOM -1(A)] ; no, indicate overflow will be lost
+	 CAIA			;REFERENCE WORKED, SKIP
+	  JRST	MSS7		;FAIL, RESTORE STOPS ETC.
+	MOVE	B,MSBCNT(H)	; B/ count
+	JRST	MSS5
+MSS4:	MOVE	B,Q		; B/ count
+	MOVE	TT,MSBCNT(H)
+	SUB	TT,B
+	XCTRI	XRW,[MOVEM TT,-1(A)] ; amount that will be xfered
+	 CAIA			;REFERENCE WORKED, SKIP
+	  JRST	MSS7		;FAIL, RESTORE STOPS ETC.
+
+; if MSWRIT was zero (RA), fill it in
+MSS5:	SKIPN	MSWRIT(H)
+	SKIPE	MSWRT2(H)
+	JRST	MSS6
+	MOVE	TT,EPDL3(U)
+	XCTRI	XRW,[MOVEM TT,-3(A)] ; read's him1
+	 CAIA			;REFERENCE WORKED, SKIP
+	  JRST	MSS7		;FAIL, RESTORE STOPS ETC.
+	MOVE	TT,SRN4(U)	; 
+	XCTRI	XRW,[MOVEM TT,-2(A)] ; read's him2
+	 CAIA			;REFERENCE WORKED, SKIP
+	  JRST	MSS7		;FAIL, RESTORE STOPS ETC.
+
+; RESTORE USER MAP TO CURRENT USER
+MSS6:	PUSHJ	P,MPLDZ
+	POP	P,R
+; XFER => B/ CNT  A/READ BUFR  E/WRIT BUFR  J/UNRELOCATED BUFFER (READ)
+	HRRM	A,IOCHST-IOCHNM(R)	;STORE RECEIVER ADDRESS FOR UBO
+	MOVN	W,B	;-COUNT
+	MOVSS	W	;-COUNT,,
+	HRR	W,E	;-COUNT,,ADR
+	MOVE	C,[SETZ W]	;POINTER FOR UBO
+	MOVE	A,MSUSER(H)	;GET OTHER USERS NUMBER FOR UBO
+	PUSHJ	P,UBO	;USER BLOCK OUTPUT - DO WRITE TRANSFER
+
+; RESTART THE LOSER
+	PUSHJ	P,LSWPOP	;UNDO RPCLSR (SOS USTP(MSUSR(H)))
+	MOVE	A,MSUSER(H)	;GET TARGET USER
+	MOVE	B,MSCHNL(H)	;CHANNEL HE OPENED
+	MOVE	B,CHNBIT(B)	;BIT CORRESPONDING TO CHAN
+	TDNE	B,MSKST2(A)	;SKIP IF NOT ENABLED
+	IORM	B,IFPIR(A)	;SET HIS INTERRUPT
+
+; flush read entry from the table
+	SETZM	MSCHNL(H)
+	SETZM	MSREAD(H)
+	SETZM	MSRED2(H)
+	SETZM	MSWRIT(H)
+	SETZM	MSWRT2(H)
+	SETZM	MSBADR(H)
+	SETZM	MSBCNT(H)
+	SETZM	MSUSER(H)
+
+	PUSHJ	P,LSWPOP	;UNLOCK MSPSW
+
+; end open
+	SETOM	A		; LH IOCHNM==-1 MEANS SEND (FOR CLOS)
+	JSP	Q,OPSLD1	;DOES POPJ BACK TO UUOH
+		MSPIO,,MSPIO
+;	(DOES NOT COME BACK)
+
+;HERE FOR FAILURE OF XCTRI WHILE MAP SET TO RECEIVER
+MSS7:	POP	P,R		;RESTORE STACK
+	PUSHJ	P,LSWPOP	;RESTART USER (SOS USTP)
+	PUSHJ	P,TPFLT		;TAKE PAGE FAULT, CAUSE PAGE LOAD
+	PUSHJ	P,MPLDZ		;RESTORE MY PAGE MAP
+	JRST	MSS1		;TRY AGAIN
+
+; FIND LOSER IN TABLE SKIP IF WINS
+; IN => T/READ1  EPDL/READ2  EPDL3/WRITE1  SRN4/WRITE2
+; OUT => IF WINS, T/TABLE OFFSET
+MSSTBL:	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	MOVSI	A,-MSENTS
+	MOVE	B,EPDL(U)	; B/ READ2
+	MOVE	C,EPDL3(U)	; C/ WRITE1
+	MOVE	D,SRN4(U)	; D/ WRITE2
+MSSTB1:	CAMN	T,MSREAD(A)
+	CAME	B,MSRED2(A)
+	JRST	MSSTB2
+	SKIPN	MSWRIT(A)	; if it was read from any
+	SKIPE	MSWRT2(A)	; win if WRIT and WRT2 are both zero
+	JRST	.+2
+	JRST	MSSTB3
+	CAMN	C,MSWRIT(A)
+	CAME	D,MSWRT2(A)
+	JRST	MSSTB2
+MSSTB3:	HRRZ	T,A
+	AOSA	-4(P)
+MSSTB2:	AOBJN	A,MSSTB1
+	POP	P,D
+	POP	P,C
+	JRST	POPBAJ
+
+; close routine
+; A/ lf IOCHNM
+; R/ addr of IOCHNM(USER)(CHNL)
+
+MSCLOS:	TRNE	A,400000	; -1 means write
+	POPJ	P,
+	CAIL	A,MSENTS	; in bounds of table?
+	POPJ	P,		; no
+	CAME	U,MSUSER(A)	; is this still me?
+	POPJ	P,
+
+; yes, make this a free slot
+	SETZM	MSCHNL(A)
+	SETZM	MSREAD(A)
+	SETZM	MSRED2(A)
+	SETZM	MSWRIT(A)
+	SETZM	MSWRT2(A)
+	SETZM	MSBADR(A)
+	SETZM	MSBCNT(A)
+	SETZM	MSUSER(A)
+	POPJ	P,
+
