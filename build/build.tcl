@@ -86,6 +86,12 @@ spawn pdp10 build/simh/boot
 respond "DSKDMP" "its\r"
 type "\033g"
 pdset
+respond "*" ":midas midas;_midas\r"
+respond ":KILL" ":job midas\r"
+respond "*" ":load midas;midas bin\r"
+respond "*" "purify\033g"
+respond "CR to dump" "\r"
+respond "*" ":kill\r"
 respond "*" ":midas system;_its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"

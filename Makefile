@@ -1,4 +1,4 @@
-SRC = system
+SRC = system midas
 MINSYS = _ sys sys3 sysbin
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
