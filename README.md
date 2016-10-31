@@ -1,5 +1,8 @@
 # Build ITS from scratch
 
+[![Build Status](https://travis-ci.org/PDP-10/its.svg?branch=master)]
+(https://travis-ci.org/PDP-10/its)
+
 ### About ITS
 
 ITS, the Incompatible Timesharing System, is an operating system for
