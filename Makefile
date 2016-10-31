@@ -1,3 +1,9 @@
+SRC = system
+MINSYS = _ sys sys3 sysbin
+RAM = bin/boot/ram.262
+NSALV = bin/boot/salv.rp06
+DSKDMP = bin/boot/dskdmp.rp06
+
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
@@ -8,16 +14,16 @@ out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build
 
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
-	cd bin; $(ITSTAR) -cf ../$@ _ sys sys3 sysbin
-	cd src; $(ITSTAR) -rf ../$@ system
+	cd bin; $(ITSTAR) -cf ../$@ $(MINSYS)
+	cd src; $(ITSTAR) -rf ../$@ $(SRC)
 
-out/salv.tape: $(WRITETAPE) bin/boot/ram.262 bin/boot/salv.rp06
+out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	mkdir -p out
-	$(WRITETAPE) -n 2560 $@ bin/boot/ram.262 bin/boot/salv.rp06
+	$(WRITETAPE) -n 2560 $@ $(RAM) $(NSALV)
 
-out/dskdmp.tape: $(WRITETAPE) bin/boot/ram.262 bin/boot/dskdmp.rp06
+out/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	mkdir -p out
-	$(WRITETAPE) -n 2560 $@ bin/boot/ram.262 bin/boot/dskdmp.rp06
+	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
 $(ITSTAR):
 	cd tools/itstar; make
