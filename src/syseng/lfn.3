@@ -1,0 +1,655 @@
+.BEGIN LFN		;-*- Midas -*-
+
+SUBTTL	Routines for parsing and printing filenames
+
+;Basic conventions:
+;We assume that there are ACs A, B, C, D and E, not necessarily consecutive,
+;and that the stack is in P.  No routine touches any other acs.
+;No routine clobbers ACs other than the ones it is documented to clobber.
+;All code generated is pure, some local storage is allocated with .SCALAR.
+
+;Most of the routines deal with 'filename blocks'.
+;A filename block consists of any number of two-word entries.  Each entry
+;describes one component of a filename.  The component may either be sixbit, in
+;which case word 1 has the sixbit word and word 2 has -1 in rhs; or it can be
+;ascii, in which case word 1 has a bp and word 2 has the length in rhs.  Either
+;way, lhs of word 2 has the component type: NAMFLG if this is a name component,
+;DIRFLG if this is a directory component, DEVFLG if this is a device component.
+;None of the entries include the terminating character (i.e. the : or ; or
+;whatever).
+;Filename blocks are described by aobjn pointers:  "-2*N,,address" where
+;N is the number of entries starting at the address.
+;Main routines in this package are:
+
+;IFN $$PARSE: parsing routine
+;PARFN(D/byte pointer, A/aobjn pointer to space available in filename block)
+;  Parse filename from string in D to block in A.
+;  D is advanced (so ldb x,d gets the terminating byte), A gets an aobjn
+;  pointer to the space actually used in the block.  lh(E) gets flags (i.e.
+;  NAMFLG,DIRFLG,DEVFLG) of all the components present, and rh(E) gets the
+;  number of NAME components.
+;  Skips unless data was lost because there were more components than slots in
+;  the block.
+;  If A is 0, we don't actually write anything, just count the words that would
+;  be required (and return with A/-N,,0).  This case always skips.
+;
+;  Requires RFNTRM to be a routine which skips if the character in A should
+;  terminate the filename or start switches. It must not change any AC's. It
+;  will never be called with ":", ";", space, tab, ^Q, ^A, ^X, ^B, ^Y or ^@.
+;  For reading JCL, a typical RFNTRM might skip for ^C,^M and ^_. For parsing
+;  asciz strings, RFNTRM: RET would be sufficient.
+;
+;  If $$SWITCH is on, and if RFNTRM skips for "/" or "(", it will start a
+;  switch rather than terminating the filespec.  In that case you must define
+;  a routine SWITCH to process a switch.  It will be called with the first
+;  char of the switch in A, and may read more characters off of D.
+;  If it skips, PARFN will re-read the character D points to.
+;  SWITCH may clobber A,B,C,E and may advance D as appropriate.
+
+;IFN $$MERGE: merging routines
+;All merging routines take an input filename block in A, a default filename
+;block in B and a count in E which specifies how to to do the merging for NAME
+;components. It is the count of how many NAMEs are 'normal'.  If A has n < E
+;names, than A and B are merged by taking first the n names from A and then
+;(n+1)st and so on from B.  If A has n >= E names, than only A's names are
+;used, and B is ignored.  The idea is that a filespec with at least E names is
+;fully specified by itself and thus should not be merged.
+;E may be -1, meaning infinity.
+;The merging of DIR and DEV components is always done with a 'merging count'
+;of 1.
+;A "^X" or "^A" in the input block refers to the first NAME in the default
+;block, and a "^Y" or "^B" refers to the second NAME.
+;
+;BMERGE(A/input,B/default, C/output block, E/NAME merging count)
+;  Merge the two blocks into the output block in C.  C should be an aobjn
+;  pointer to space available in the block, and on return it will describe the
+;  space used.  BMERGE skips if there was enough room for all components.
+;  If C is 0, we don't actually write anything, just count the words that would
+;  be required (and return with C/-N,,0).  This case never skips.
+;SMERGE(A/input,B/default, C/output BP, D/byte count, E/NAME merging count)
+;  Merge the two blocks and print the result, followed by a null, into the
+;  BP in C. D should be the size of the output buffer (including room for the
+;  null).  On return, C points to the terminating null and D contains the
+;  number of bytes written (including the null).  SMERGE skips if there
+;  was enough room in the buffer. Note that the output is guaranteed to be
+;  null-terminated, even if SMERGE doesn't skip due to truncation.
+;MCOUNT(A/input,B/default, E/NAME merging count)
+;  Count the space required for the merge.  On return C contains the
+;  number of words which would be necessary to do a BMERGE, and D the
+;  number of bytes necessary to do an SMERGE.  MCOUNT never skips.
+
+;IFN $$GNAME: routines for selecting parts of a name.
+;All selecting routines take a filename block in A and a description of
+;the components to select in E.  lh(E) should have DEVFLG or DIRFLG or
+;NAMFLG.  If rh(E) is 0, all components of the type given in lh(E) are
+;selected.  If rh(E) is positive, it is the number of the component to
+;select (1 = first, etc.).  If rh(E) is negative, it is the number from the
+;end of the component to select (-1 = last, etc.).
+;
+;BGNAME(A/input, C/output block, E/selector)
+;  Copy the specified component(s) into C.  C should be an aobjn pointer
+;  to space available in the block, and on return it will describe the
+;  space used.  BGNAME skips if there was enough room in C for all the
+;  components.  If C=0, we don't actually write anything, just count the
+;  words that would be required (and return with C/-N,,0).  This case never
+;  skips.
+;SGNAME(A/input block, C/output BP, D/byte count, E/selector)
+;  Print the specified component(s) into the BP in C, followed by
+;  a terminator char (":" or ";" or " ").  On return, C points to the
+;  last byte and D contains the number of bytes written (which will be
+;  0 if no matching components were found).  SGNAME skips if there was
+;  enough room in the buffer.  Note that SGNAME does *not* write a terminating
+;  null.
+;GCOUNT(A/input block, E/selector)
+;  Count the space required for the specified component(s).  Returns with
+;  C containing the number of words which would be necessary to do a BGNAME,
+;  and D the number of bytes necessary to do an SGNAME.  GCOUNT never skips.
+
+;Printing routines:
+;IFN $$PFNRAW:
+;RAWPFN(A/input block, C/output BP, D/byte count)
+;  Print the filename into buffer, in the order of components specified in
+;  A, followed by a null.  On return C points to the null and D contains the
+;  number of bytes written (including the null).  Skips if there was enough
+;  room in the buffer (but note that the terminating null is written even if
+;  truncation occured).
+;IFN $$PFN:
+;PFN(A/input block, C/output BP, D/byte count)
+;  Like RAWPFN but always writes the components in the standard order (all
+;  devices first, then directories, and finally the filenames).
+;IFN $$PFNMCH:
+;PFNMCH(A/input block, C/output BP, D/byte count)
+;  Like PFN, except if the first device component is "DSK" (case independent)
+;  we output the machine name instead.  If $$MNAME is set, the user must define
+;  MNAME to point to a word holding this machine's name in sixbit.  Otherwise,
+;  we look it up from the system.
+
+IFNDEF $$SWITCH,$$SWITCH==0
+IFNDEF $$PARSE,$$PARSE==0
+IFNDEF $$MERGE,$$MERGE==0
+IFNDEF $$GNAME,$$GNAME==0
+IFNDEF $$PFNRAW,$$PFNRAW==0
+IFNDEF $$PFN,$$PFN==0
+IFNDEF $$PFNMCH,$$PFNMCH==0
+IFNDEF $$MNAME,$$MNAME==0
+
+IFN $$SWITCH,$$PARSE==1
+IFN $$PFNMCH,$$PFN==1
+
+NAMFLG==:1_35.
+DIRFLG==:1_34.
+DEVFLG==:1_33.
+
+SIXFLG==:1_17.
+
+.AUXIL
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ included in this assembly.
+/
+
+IFN $$PARSE,[
+;PARFN(D/bp,A/block) -> A/filled-in block, E/flags,,NAME count, D/advanced
+;Skips if block big enuff.
+PARFN:	push p,[0]	;Final E
+	push p,c
+	push p,b
+
+	push p,a	;Save original block
+	move b,a	;B= current block aobjn pointer
+	tlnn d,-1	;D= input bp
+	 hrli d,440700
+parfn0:	setz e,		;E= component length
+	move c,d	;C= start of component
+parfn1:	ildb a,d
+	caie a,":
+	 cain a,";
+	  jrst parfs
+	caie a,40
+	 cain a,^I
+	  jrst parfs
+	caie a,^X
+	 cain a,^Y
+	  jrst parfnx
+	caie a,^A
+	 cain a,^B
+	  jrst parfnx
+	caie a,^Q
+	 jrst parfn2
+	move a,d		;Peek ahead
+	ildb a,a
+	jumpe a,parfn3		;Null terminates even if quoted
+	ibp d			;Else accept the quoted char
+	addi e,2
+	jrst parfn1
+parfn2:	jumpe a,parfn3
+	pushj p,RFNTRM
+	 aoja e,parfn1
+parfn3:	jumpg e,parfs
+ifn $$switch,[
+	cain a,"/
+	 jrst parssw
+	cain a,"(
+	 jrst parpsw
+]
+	hrri b,0
+	pop p,a
+	skipe a			;If was 0 to start with, always enough room
+	 jumpg b,parfn4
+	sub a,b
+	aos -3(p)
+parfn4:	pop p,b
+	pop p,c
+	pop p,e
+	popj p,
+
+parfnx:	jumpg e,parfs		;Here when got ^X/^Y
+	ildb a,d		;Allow "^X:" etc.
+	aoja e,parfs
+
+parfs:	jumpe e,parfn0		;Here to save a component
+	hrli e,(NAMFLG)
+	cain a,":
+	 hrli e,(DEVFLG)
+	cain a,";
+	 hrli e,(DIRFLG)
+	jumpge b,.+3
+	  movem c,(b)
+	  movem e,1(b)
+	add b,[2,,2]
+	trz e,-1
+	iorm e,-3(p)
+	tlne e,(NAMFLG)
+	 aos -3(p)
+parfs2:	ldb e,[300600,,d]	;Back up to re-read terminator
+	lsh e,30.
+	add d,e
+	jrst parfn0
+
+ifn $$SWITCH,[
+;Here to parse a /switch
+parssw:	push p,b		;Give him free reign over b
+	ildb a,d
+	caie a,0
+	 cain a,^M
+	  jrst parss1
+	cail a,140		;Switches get upcased
+	 subi a,40
+	pushj p,SWITCH
+	 jrst parss2
+parss1:	pop p,b			;Here to re-read last char
+	jrst parfs2
+parss2:	pop p,b			;Here to keep reading
+	jrst parfn0
+
+;Here to parse a (switch)
+parpsw:	push p,b
+parps0:	ildb a,d
+parps1:	cain a,")
+	 jrst parss2
+	caie a,0
+	 cain a,^M
+	  jrst parss1		;CR ends even in switch list
+	cail a,140		;Switches get upcased
+	 subi a,40
+	pushj p,switch
+	 jrst parps0
+	ldb a,d			;He skipped to re-read last char
+	jrst parps1
+];$$SWITCH
+
+];$$PARSE
+
+IFN $$MERGE\$$PFN,[
+IFN $$MERGE,[
+;MCOUNT: count size of merged filename
+;A/input block, B/Default block, E/NAME merging count
+;Return: C/# block words D/# string bytes
+mcount:	setzm mrgcnt
+	setz c,
+	movei d,savcnt
+	pushj p,merge0
+	skipn mrgcnt		;If nothing there,
+	 sos mrgcnt		;will write at least a null
+cexit:	tlz c,-1
+	movn d,mrgcnt
+	popj p,
+
+;BMERGE: merge into block
+;A/input block B/default block, C/output block, E/NAME merging count
+;Return: C updated, skip if big enuff
+bmerge:	push p,d
+	push p,c
+	movei d,savaob
+	pushj p,merge0
+bexit:	pop p,d
+	hrri c,0
+	jumpe d,.+3
+	 jumpge c,.+3
+	  aos -1(p)
+	   sub d,c
+	move c,d
+popdj:	pop p,d
+	popj p,
+];$$MERGE
+
+;SMERGE: merge into string
+;A/input block, B/default block, C/BP, D/size, E/NAME merging
+;Return: C,D advanced.
+smerge:	push p,d
+	movem d,mrgcnt
+	tlnn c,-1
+	 hrli c,440700
+	movei d,savstr
+	pushj p,merge0
+	move d,(p)
+	came d,mrgcnt
+	 jrst .+3
+	  ibp c
+	  sos mrgcnt
+	setz d,
+	dpb d,c
+sexit:	pop p,d
+	skipge mrgcnt
+	 popj p,
+	sub d,mrgcnt
+popj1:	aos (p)
+	popj p,
+
+;MERGE0: A/input block, B/default block, E/NAME merging count
+;D/output routine, C/parameter for output routine
+;Clobbers D
+	.scalar mrgdef
+merge0:	push p,e
+	movem b,mrgdef
+IFN $$MERGE\$$GNAME,movem d,mrgout
+	movsi e,(DEVFLG)
+	movei d,1
+	pushj p,mergef
+	movsi e,(DIRFLG)
+	movei d,1
+	pushj p,mergef
+	movsi e,(NAMFLG)
+	move d,(p)
+	pushj p,mergef
+	move b,mrgdef
+popej:	pop p,e
+	popj p,
+
+;Merge components of type E from block in A, default in mrgdef,
+;according to count in D. Output/count routine in mrgout, parameter in C.
+;Clobbers B,D.
+mergef:	push p,a
+	tlz d,400000		;Convert -1 to positive infinity
+	push p,mrgcnt		;Remember so can tell if got anything
+	pushj p,msrcha
+	move b,mrgdef
+	pushj p,msrchb
+mergf1:	jumpl a,mergf2
+	jumple d,mergfx
+	move a,b		;Hit end before limit, switch to B
+	seto d,			;No more limit
+	jrst mergf1
+mergf2:	pushj p,mcopnm
+	pushj p,nsrcha		;Advance A
+	pushj p,nsrchb		;Advance B
+	soja d,mergf1
+mergfx:	pop p,d
+	tlnn e,(NAMFLG)		;Doing filenames
+	 camn d,mrgcnt		;or didn't get anything, or not using mrgcnt
+	  jrst popaj		;Ok as is.
+	movei d,40		;Add a space, so get like
+	sosl mrgcnt		; DEV:DEV: DIR;DIR;DIR;DIR; NAME...
+	 idpb d,c
+	jrst popaj
+
+;Might as well, exch a,b type thing is almost as long
+msrchb:	skipge b
+	 tdne e,1(b)
+	  popj p,
+nsrchb:	add b,[2,,2]
+	jrst msrchb
+];$$MERGE\$$PFN
+
+IFN $$GNAME,[
+
+;GCOUNT(A/block, E/selector)
+gcount:	movei d,savcnt
+	setzb c,mrgcnt
+	pushj p,gname0
+IFN $$MERGE,jrst cexit
+.ELSE,[
+cexit:	tlz c,-1
+	movn d,mrgcnt
+	popj p,
+]
+
+;BGNAME(A/block, C/output block, E/selector)
+bgname:	push p,d
+	push p,c
+	movei d,savaob
+	pushj p,gname0
+IFN $$MERGE,jrst bexit
+.ELSE,[
+bexit:	pop p,d
+	hrri c,0
+	jumpe d,.+3
+	 jumpge c,.+3
+	  aos -1(p)
+	   sub d,c
+	move c,d
+popdj:	pop p,d
+	popj p,
+]
+
+;SGNAME(A/block, C/bp, D/size, E/selector)
+sgname:	push p,d
+	movem d,mrgcnt
+	tlnn c,-1
+	 hrli c,440700
+	movei d,savstr
+	pushj p,gname0
+IFN $$MERGE\$$PFN,jrst sexit
+.ELSE,[
+sexit:	pop p,d
+	skipge mrgcnt
+	 popj p,
+	sub d,mrgcnt
+popj1:	aos (p)
+	popj p,
+]
+
+gname0:	push p,a
+	push p,e
+IFN $$MERGE,setzm mrgdef		;No default
+	movem d,mrgout
+	hrre d,e
+	trz e,-1
+	jumpge d,gname3
+gname1:	jumpge a,gname2		;From end, so count first
+	tdne e,1(a)
+	  aoj d,
+	add a,[2,,2]
+	jrst gname1
+gname2:	move a,-1(p)
+	aojle d,popeaj
+gname3:	pushj p,msrcha
+	jumpge a,popeaj
+	sosg d
+	 pushj p,mcopnm
+	add a,[2,,2]
+	jumpn d,gname3
+	jrst popeaj
+];$$GNAME
+
+IFN $$PFNRAW,[
+;;pfnraw(a/input,c/bp,d/count)
+pfnraw:	push p,d
+	push p,a
+	movem d,mrgcnt
+	tlnn c,-1
+	 hrli c,440700
+IFN $$MERGE,setzm mrgdef
+pfnra1:	jumpge a,pfnra3
+	pushj p,mcopnm
+	move d,1(a)
+	tlnn d,(NAMFLG)
+	 sosge mrgcnt
+	  jrst pfnra2
+	movei d,40
+	idpb d,c
+pfnra2:	add a,[2,,2]
+	jrst pfnra1
+pfnra3:	pop p,a
+IFN $$MERGE,jrst sexit0
+.ELSE,[	move d,(p)
+	came d,mrgcnt
+	 jrst .+3
+	  ibp c
+	  sos mrgcnt
+	setz d,
+	dpb d,c
+IFN $$GNAME,jrst sexit
+.ELSE,[	pop p,d
+	skipge mrgcnt
+	 popj p,
+	sub d,mrgcnt
+	aos (p)
+	popj p,
+]]
+];$$PFNRAW
+
+IFN $$PFN,[
+pfn:	push p,b
+	push p,e
+pfn1:	setz b,
+	setz e,
+	pushj p,smerge
+	 caia
+	  aos -2(p)
+	pop p,e
+	pop p,b
+	popj p,
+];$$PFN
+
+IFN $$PFNMCH,[
+pfnmc1:	pop p,a
+	jrst pfn1
+
+pfnmch:	push p,b
+	push p,e
+	push p,a
+	pushj p,pfnmcp
+	 jrst pfnmc1
+IFN $$MNAME,move b,mname
+.ELSE [	.call [sixbit/sstatu/ ? repeat 5,[%clout,,b ? ] setzm b]
+	 .lose %lssys
+]
+	hrloi e,(DEVFLG)
+	exch b,(a)
+	exch e,1(a)
+	exch a,(p)
+	pushj p,pfn
+	 caia
+	  aos -3(p)
+	exch a,(p)
+	movem e,1(a)
+	movem b,(a)
+	pop p,a
+	pop p,e
+	pop p,b
+	popj p,
+
+pfnmcp:	movsi e,(DEVFLG)
+	pushj p,msrcha
+	jumpge a,pfnmpx
+	move b,(a)
+	hrr e,1(a)
+	jumpge e,pfnmp1
+	camn b,[sixbit/DSK/]
+	 aos (p)
+pfnmpx:	popj p,
+
+pfnmp1:	caie e,3
+	 popj p,
+	ildb e,b
+	caie e,"D
+	 cain e,"d
+	  caia
+	   popj p,
+	ildb e,b
+	caie e,"S
+	 cain e,"s
+	  caia
+	   popj p,
+	ildb e,b
+	caie e,"K
+	 cain e,"k
+	  aos (p)
+	popj p,
+];$$PFNMCH
+
+
+IFN $$MERGE\$$GNAME\$$PFN\$$PFNRAW,[
+
+msrcha:	skipge a
+	 tdne e,1(a)
+	  popj p,
+nsrcha:	add a,[2,,2]
+	jrst msrcha
+
+IFN $$MERGE\$$GNAME,.scalar mrgout
+
+;;Copy entry from A to C via @mrgout
+;;If $$MERGE, process ^X/^Y via mrgdef.
+mcopnm: push p,a
+	push p,e
+	push p,d
+IFE $$MERGE,[
+	move d,(a)
+	move e,1(a)
+]
+.ELSE [
+	hrre e,1(a)
+	jumple e,mcopnx		;sixbit or empty, can't be ^X/^Y
+	move d,(a)
+	ildb d,d
+	cain d,^A
+	 movei d,^X
+	cain d,^B
+	 movei d,^Y
+	caie d,^X
+	 cain d,^Y
+	  skipn a,mrgdef
+	   jrst mcopn1
+	movsi e,(NAMFLG)
+	pushj p,msrcha
+	caie d,^X
+	  pushj p,nsrcha
+	jumpl a,mcopnx
+mcopn1:	move a,-2(p)		;Hmm, no name in mrgdef, just copy the "^X"
+mcopnx:	move d,(a)
+	move e,-2(p)		;Get the type from original
+	move e,1(e)
+	hrr e,1(a)		;But count from actual
+]
+IFN $$MERGE\$$GNAME,pushj p,@mrgout
+.ELSE	pushj p,savstr
+	pop p,d
+popeaj:	pop p,e
+popaj:	pop p,a
+	popj p,
+
+IFN $$MERGE\$$GNAME,[
+;Do count, mrgcnt has -<byte count>, C has fake aobjn pointer for block count
+savcnt:	pushj p,savstr		;Count string
+	;jrst savaob		;Count block
+
+;Save to a block
+savaob:	jumpge c,savao1
+	movem d,(c)
+	movem e,1(c)
+savao1:	add c,[2,,2]
+	popj p,
+];$$MERGE\$$GNAME
+
+;Save to a string, mrgcnt has count, C has bp
+;Clobbers A,D,E.
+	.scalar mrgcnt
+savstr:	push p,b
+	hrre b,e
+	jumpge b,savnm1		;String
+	movei b,^Q		;Else sixbit.  Remember that can't assume any
+savnm6:	ldb a,[360600,,d]	;acs are consecutive.
+	caie a,':
+	 cain a,';
+	  caia
+	   jumpn a,savnm7
+	sosl mrgcnt
+	 idpb b,c
+savnm7:	addi a,40
+	sosl mrgcnt
+	 idpb a,c
+	lsh d,6
+	jumpn d,savnm6
+savnmx:	movei d,40
+	tlne e,(DEVFLG)
+	 movei d,":
+	tlne e,(DIRFLG)
+	 movei d,";
+	sosl mrgcnt
+	 idpb d,c
+	pop p,b
+	popj p,
+
+savnm1:	sojl b,savnmx		;Here to do a string
+	ildb a,d
+	sosl mrgcnt
+	 idpb a,c
+	jrst savnm1
+];$$MERGE\$$GNAME\$$PFN\$$PFNRAW
+
+.END LFN
