@@ -6,6 +6,7 @@ RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
 DSKDMP = bin/boot/dskdmp.rp06
 
+KLH10=${PWD}/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
@@ -29,6 +30,18 @@ out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 out/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	mkdir -p out
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
+
+build/klh10/stamp: $(KLH10)
+	touch $<
+
+$(KLH10):
+	cd tools/klh10; \
+	./autogen.sh; \
+	mkdir tmp; \
+	cd tmp; \
+	../configure --bindir=${PWD}/build/klh10; \
+	make base-ks-its; \
+	make -C bld-ks-its install
 
 $(ITSTAR):
 	cd tools/itstar; make
