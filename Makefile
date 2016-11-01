@@ -1,4 +1,4 @@
-SRC = system syseng sysen1 sysnet midas
+SRC = system syseng sysen1 sysnet midas _teco_
 MINSYS = _ sys sys3
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06

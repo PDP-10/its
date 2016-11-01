@@ -32,6 +32,7 @@ from scratch.
    - MIDAS, the assembler.
    - DDT, debugger and HACTRN user login shell.
    - The ITS monitor (kernel).
+   - TECO, editor.
    - DUMP, tape backup and restore.
 
 4. Finally, the whole file system is dumped to tape.

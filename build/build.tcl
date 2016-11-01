@@ -107,6 +107,17 @@ respond "*" ":midas system;_its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
+respond "*" ":midas sysbin;_.teco.;teco\r"
+expect ":KILL"
+respond "*" ":job teco\r"
+respond "*" ":load sysbin;teco bin\r"
+sleep 2
+respond "*" "dumpit\033g"
+sleep 2
+respond "TECPUR" "\r"
+respond "*" ":kill\r"
+respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
