@@ -41,6 +41,7 @@ from scratch.
 5. Remaining programs are rebuilt:
 
    - TECO, editor.
+   - EMACS, binaries only.
    - DUMP, tape backup and restore.
    - PDSET, set time and date.
    - KSFEDR, manipulate front-end file system.

@@ -9,6 +9,7 @@
 - DUMP: [manual](_info_/dump.info), [format](sysdoc/dump.format)
 - TECO: [primer](_teco_/teco.primer), [manual](info/tecman.20),
   [commands](_teco_/tecord.1132)
+- EMACS: [manual](emacs1/emacs.guide), [info](info/emacs.147)
 - CRTSTY: [manual](info/crtsty.39)
 - TCTYP: [manual](_info_/tctyp.order)
 - DSKDUMP: [commands](sysdoc/dskdmp.order)
@@ -34,6 +35,7 @@ The `$` character represents typing ESC.
 | ln f1 f2     	| $^O f1,f2            | :link f1,f2              |
 | mv f1 f2     	| $$^O f1,f2           | :rename f1,f2            |
 | mv file dir  	|                      | :move file,dir           |
+| emacs         |                      | :emacs                   |
 | ps           	| $$v                  | :listj                   |
 | killall -9 id	| id$j  $^X            | :job id  :kill           |
 | sudo -u u cmd | u$^S cmd             |                          |
