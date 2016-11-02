@@ -86,9 +86,10 @@ spawn pdp10 build/simh/boot
 respond "DSKDMP" "its\r"
 type "\033g"
 pdset
-respond "*" ":midas midas;_midas\r"
-respond ":KILL" ":job midas\r"
-respond "*" ":load midas;midas bin\r"
+respond "*" ":midas sysbin;_midas;midas\r"
+expect ":KILL"
+respond "*" ":job midas\r"
+respond "*" ":load sysbin;midas bin\r"
 respond "*" "purify\033g"
 respond "CR to dump" "\r"
 respond "*" ":kill\r"
