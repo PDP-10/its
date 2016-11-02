@@ -105,5 +105,19 @@ respond "*" ":kill\r"
 respond "*" ":midas system;_its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
+
+#respond "*" ":midas sysbin;_syseng;dump\r"
+#respond "WHICH MACHINE?" "AI\r"
+#expect ":KILL"
+
+respond "*" "\005"
+respond "sim>" "at tu0 out/output.tape\r"
+respond "sim>" "c\r"
+type ":dump\r"
+respond "_" "dump full\r"
+respond "TAPE NO=" "0\r"
+expect "REEL"
+respond "_" "quit\r"
+
 shutdown
 respond "sim>" "quit"
