@@ -1,0 +1,1136 @@
+.BEGIN DATIME	;-*-MIDAS-*-
+
+SUBTTL Time routines - readin', ritin', & rithmetic for dates/times
+
+;We assume that there are consecutive accumulators A, B, C, D and E,
+;and that the stack is in P.  No routine clobbers ACs other than the
+;ones it is documented to clobber, and none touches even temporarily
+;any AC other than A, B, C, D, E and P.
+;All impure storage is allocated using .SCALAR
+
+;Symbols defined by the user to select parts of this file:
+IFNDEF $$OUT,$$OUT==0	;include routines for outputting times.
+IFNDEF $$DSTB,$$DSTB==0 ;hack DST bit in time word.
+			; This only effects TIMGET currently.
+IFNDEF $$ABS,$$ABS==0	;include conversions to/from absolute days/seconds
+IFNDEF $$OUTF,$$OUTF==0	;include rtns for english-style ("fancy") output.
+IFNDEF $$RFC,$$RFC==0	;include rtns for RFC### style output.
+IFNDEF $$OUTT,$$OUTT==0	;include basic tables for fancy output.
+IFNDEF $$OUTZ,$$OUTZ==0	;include output rtns that know about time zones.
+IFNDEF $$IN,$$IN==0	;include rtns for reading times
+IFNDEF $$INF,$$INF==0	;include rtns  for parsing "3 AUG 1971 0800"
+IFNDEF $$SVNG,$$SVNG==0	;include handling of daylight savings time.
+IFNDEF $$UPTM,$$UPTM==0	;include rtns for system uptime in 30'ths conversion.
+IFNDEF $$CURD,$$CURD==1	;if year missing, use current year
+
+;Interdependencies of the various selectable submodules:
+
+IFN $$OUTZ,$$OUTF==1 ? $$SVNG==1
+IFN $$UPTM,$$ABS==1
+IFN $$SVNG,$$ABS==1
+IFN $$RFC,$$SVNG==1
+
+.AUXIL		;Don't mention all our internal symbols in crefs.
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ included in this assembly.
+/
+
+DEFINE SYSCAL NAME,ARGS
+.CALL [SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+;;; A time word is a single word describing the date and time in ITS DSK
+;;; format, except that we use bit 1.1 as Daylight Saving Time indicator.
+
+; Mask    Field     Bits	Range	Var.    Variable range
+
+TM%DST==      1    ; 1.1	0-1	half-sec or DST indicator.
+TM%SEC== 777776    ; 2.9-1.2	0-131K	seconds	0-86399.
+TM%DAY==     37,,0 ; 3.5-3.1	0-31	days	1-31
+TM%MON==    740,,0 ; 3.9-3.6	0-15	months	1-12
+TM%YR==  177000,,0 ; 4.7-4.1	0-127	years	0-127 relative to 1900 (1900-2027)
+
+TM$DST==(.BP TM%DST,)	; Define BP LH's into each field.
+TM$SEC==(.BP TM%SEC,)
+TM$DAY==(.BP TM%DAY,)
+TM$MON==(.BP TM%MON,)
+TM$YR== (.BP TM%YR,)
+
+ESTDIF==5	; # hours difference of EST from GMT.
+DWFUDG==1	; day of week of 1st day of 1900.
+
+
+IFE $$DSTB, TIMGET:
+TIMGT:	SYSCAL RQDATE,[%CLOUT,, A]	; Get DSK format date.
+	 SETO A,		; Ugh, system doesn't know time.
+	POPJ P,
+
+IFN $$DSTB,[
+TIMGET:	PUSH P,B
+	SYSCAL RQDATE,[%CLOUT,,A]	; Get DSK format date.
+	 SETO A,		; Eh?
+	.RYEAR B,		; 4.6 => time known, 4.7 => DST in effect
+	TLNE B,40000
+	 CAMN A,[-1]		; Make sure system knows time.
+	  JRST TIMGE9
+	TRZ A,TM%DST		; Assume Standard Time in effect.
+	TLNE B,100000		; Now if Daylight Savings in effect,
+	 TRO A,TM%DST		;  set flag.
+TIMGE9:	POP P,B
+	POPJ P,
+] ;$$DSTB
+
+IFN $$OUT,[	;Routines for simple output of times.
+
+; DATASC - Deposit MM/DD/YY using BP in D.
+;	Deposits a trailing null, which D is left ready to IDPB.
+;	Takes time wd in A, clobbers B and C.
+
+DATASC:	PUSH P,B
+	PUSH P,C
+	PUSH P,E
+	SKIPA E,[-3,,[	TM$MON,,A
+			TM$DAY,,A
+			TM$YR,,A ] ]
+TMDT2:	 IDPB B,D
+	LDB B,(E)		; Get numerical value into B.
+	IDIVI B,10.		; Divide into 2 digits.
+	MOVEI B,"0(B)
+	IDPB B,D		; Output first,
+	MOVEI B,"0(C)
+	IDPB B,D		; and second.
+	MOVEI B,"/		; Set up separator, in case looping again.
+	AOBJN E,TMDT2
+TIMTMX:	MOVE B,D		; Follow the string with a null so it's asciz.
+	SETZ C,
+	IDPB C,B
+	POP P,E
+	POP P,C
+	POP P,B
+	POPJ P,
+
+; TIMASC - Deposit HH:MM:SS using BP in D given a time word in A.
+;	Deposits a trailing null, which D is left ready to IDPB.
+;	Takes time wd in A.
+
+TIMASC:	PUSH P,B
+	PUSH P,C
+	PUSH P,E
+	HRRZ B,A		; For storage of hr, min, sec.
+	LSH B,-1
+	IDIVI B,60.		; Get secs
+	PUSH P,C		; save
+	IDIVI B,60.		; Get hr and mins
+	PUSH P,C		; Save mins too.
+	MOVSI E,-3
+	JRST TMTM3
+
+TMTM2:	IDPB B,D
+	POP P,B			; Get numerical value into B.
+TMTM3:	IDIVI B,10.		; Divide into 2 digits.
+	MOVEI B,"0(B)
+	IDPB B,D		; Output first,
+	MOVEI B,"0(C)
+	IDPB B,D		; and second.
+	MOVEI B,":		; Set up separator, in case looping again.
+	AOBJN E,TMTM2
+	JRST TIMTMX
+
+; TWDASC - Given time word in A, send YY/MM/DD HH:MM:SS down b.p. in D.
+
+TWDASC:	PUSHJ P,DATASC
+	PUSH P,A
+	MOVEI A,40
+	IDPB A,D
+	POP P,A
+	JRST TIMASC
+
+] ;end ifn $$out
+
+IFN $$OUTZ,[	;Routines for fancy output of dates, including time zones.
+
+; TIMSTD - Takes a time word which is assumed to be in standard time, and
+;	converts it to daylight time if necessary, then prints like TIMEXP.
+
+TIMSTD:	PUSH P,A
+	PUSH P,B
+	PUSH P,[0]		;push 0, assuming it's standard time.
+	MOVEI B,3600.
+	PUSHJ P,ODAYL
+	 SOSA (P)		;if daylight time, replace 0 with -1 and convert the time.
+	  CAIA
+	   PUSHJ P,TIMADD
+	JRST TIMEX1
+
+; TIMEXP - Takes time wd in A, deposits through D a string of the form
+;	of the form <7 AUG 1976 0831-EDT>.
+;	Assumes that the time is in either daylight or savings time,
+;	whichever is appropriate for the specified time of year.
+
+TIMEXP:	PUSH P,A
+	PUSH P,B
+	PUSH P,[0]
+	PUSHJ P,IDAYL
+	 SETOM (P)
+TIMEX1:	PUSHJ P,TIMENG
+	MOVE B,[440700,,[ASCIZ /-EST/]]
+	SKIPE (P)
+	 MOVE B,[440700,,[ASCIZ /-EDT/]]	; Use EDT if DST in effect.
+TIMEX2:	ILDB A,B
+	IDPB A,D
+	CAIE A,"T
+	 JRST TIMEX2
+	SETZ A,
+	MOVE B,D		;Stick a 0 at the end to make asciz, but don't advance D.
+	IDPB A,B
+	SUB P,[1,,1]
+	POP P,B
+	POP P,A
+	POPJ P,
+
+] ;end ifn $$outz,
+
+IFN $$OUTF,[	;Routines for fancy output of dates.
+
+; TIMENG - Takes time wd in A, deposits through D a string of the form
+;	of the form "7 AUG 1976  0831", followed by a null, which we don't
+;	advance D past.
+
+TIMENG:	PUSHJ P,DATENG		;Output "7 AUG 1976".
+	PUSH P,A
+	PUSH P,B
+	MOVEI A,40		;space out
+	IDPB A,D
+	IDPB A,D
+	HRRZ A,-1(P)		;get half-sec since midnight
+	IDIVI A,60.*2		; get mins
+	IDIVI A,60.		; Get hrs in A, mins in B
+	IMULI A,100.		; space hrs out 2 digits
+	ADD A,B			;get total 'time'
+
+	MOVEI B,"0		;crock to add (!) zeros so stupid
+	CAIGE A,1000.		;parsers will be happy (4 digits total)
+	 IDPB B,D
+	CAIGE A,100.
+	 IDPB B,D
+	CAIGE A,10.
+	 IDPB B,D
+	PUSHJ P,TIMCVT
+	PUSH P,D
+	SETZ B,
+	IDPB B,D
+	POP P,D
+	POP P,B
+	POP P,A
+	POPJ P,
+
+TIMCVT:	IDIVI A,10.
+	JUMPE A,TIMCV1
+	PUSH P,B
+	PUSHJ P,TIMCVT
+	POP P,B
+TIMCV1:	ADDI B,"0
+	IDPB B,D
+	POPJ P,
+
+
+;Output just the date from the time word in A, as "7 AUG 1976",
+;down bp in D, sticking a null after the string.
+DATENG:	PUSH P,A
+	PUSH P,B
+	LDB A,[TM$DAY,,-1(P)]	;get day
+	IDIVI A,10.
+	JUMPN A,[MOVEI A,"0(A)
+		IDPB A,D
+		JRST .+1]
+	MOVEI A,"0(B)
+	IDPB A,D
+	MOVEI A,40
+	IDPB A,D		;space out
+	LDB A,[TM$MON,,-1(P)]	;get month
+	MOVE A,MONTAB(A)	;get ptr to string for it
+	HRLI A,440700
+	ILDB B,A
+	IDPB B,D
+	ILDB B,A
+	IDPB B,D
+	ILDB B,A
+	IDPB B,D		;3 chars
+	MOVEI A,40
+	IDPB A,D		;space out
+	LDB A,[TM$YR,,-1(P)]	;get year
+	ADDI A,1900.		;get real year
+	PUSHJ P,TIMCVT
+	MOVE B,D		;Pad with a null at the end, but don't move over it.
+	SETZ A,
+	IDPB A,B
+	POP P,B
+	POP P,A
+	POPJ P,
+
+
+IFN $$DSTB,[
+
+; LTMEXP - Takes time wd in A, deposits through D a string of the form
+;	of the form "7 August 1976 08:31 EDT".
+;	Returns in A an ASCNT ptr to the string.
+; LTMENG - similar but uses current time and takes no arg.
+
+.SCALAR TIMBP
+
+LTMENG:	PUSHJ P,TIMGET
+LTMEXP:	MOVEM D,TIMBP
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	PUSH P,A		; Save time wd.
+	MOVE C,TIMBP		; Get Bp to result.
+	MOVEI D,17.
+	LDB A,[TM$DAY,,(P)]	;get day
+	IDIVI A,10.
+	JUMPN A,[MOVEI A,"0(A)
+		IDPB A,C
+		AOJA D,.+1 ]
+	MOVEI A,"0(B)
+	IDPB A,C
+	MOVEI A,40
+	IDPB A,C		;space out
+	LDB A,[TM$MON,,(P)]	;get month
+	MOVE A,LMNTAB(A)	;get ptr to string for it
+	HRLI A,440700
+	ILDB B,A
+LTME1:	IDPB B,C
+	ADDI D,1
+	ILDB B,A
+	JUMPN B,LTME1
+	MOVEI A,40
+	IDPB A,C		;space out
+	LDB A,[TM$YR,,(P)]	;get year
+	ADDI A,1900.		;get real year
+	PUSHJ P,TIMCVT
+	MOVEI A,40		;space out
+	IDPB A,C
+	HRRZ A,(P)		;get half-sec since midnight
+	IDIVI A,60.*2		; get mins
+	IDIVI A,60.		; Get hrs in A, mins in B
+	PUSH P,B
+	IDIVI A,10.
+	ADDI A,"0
+	IDPB A,C
+	ADDI B,"0
+	IDPB B,C
+	MOVEI A,":
+	IDPB A,C
+	POP P,A
+	IDIVI A,10.
+	ADDI A,"0
+	IDPB A,C
+	ADDI B,"0
+	IDPB B,C
+
+	POP P,A			; Restore to test DST bit.
+	MOVE B,[440700,,[ASCIZ / EST/]]
+	TRNE A,TM%DST
+	 MOVE B,[440700,,[ASCIZ / EDT/]]	; Use EDT if DST in effect.
+	ILDB A,B
+	IDPB A,C		;note nice hack..makes asciz when done.
+	JUMPN A,.-2
+	MOVS A,D		; Return ASCNT ptr to result
+	MOVE A,TIMBP
+	POP P,D
+	POP P,C
+	POP P,B
+	POPJ P,
+
+];IFN $$DSTB
+];END IFN $$OUTF
+
+ifn $$rfc,[
+
+; TIMRFC - Takes time wd in A, deposits through D a string of the form
+;	   of the form "7 MAR 85  09:31:12 EDT".
+;          (Does not tie off the string.)
+
+TIMRFC:	PUSH P,A
+	PUSH P,B
+	LDB A,[TM$DAY,,-1(P)]	;get day
+	IDIVI A,10.
+	JUMPN A,[MOVEI A,"0(A)
+		IDPB A,D
+		JRST .+1]
+	MOVEI A,"0(B)
+	IDPB A,D
+	MOVEI A,40
+	IDPB A,D		;space out
+	LDB A,[TM$MON,,-1(P)]	;get month
+	MOVE A,LMNTAB(A)	;get ptr to string for it
+	HRLI A,440700
+	ILDB B,A
+	IDPB B,D
+	ILDB B,A
+	IDPB B,D
+	ILDB B,A
+	IDPB B,D		;3 chars
+	MOVEI A,40
+	IDPB A,D		;space out
+	LDB A,[TM$YR,,-1(P)]	;get year
+	PUSHJ P,TIMCVT		;Output "85"
+	MOVEI A,40		;space out
+	IDPB A,D
+	IDPB A,D
+	MOVE A,-1(P)		;Recover time word.
+	PUSHJ P,TIMASC		;Output "09:31:12".
+	MOVE B,[440700,,[ASCIZ / EST/]]
+	PUSHJ P,IDAYL
+	 MOVE B,[440700,,[ASCIZ / EDT/]]
+TIMRZN:	ILDB A,B
+	IDPB A,D		;Output " EST"
+	CAIE A,"T
+	 JRST TIMRZN
+	POP P,B
+	POP P,A
+	POPJ P,
+
+] ;end ifn $$rfc
+
+;;; Routines for fancy output of time.
+
+IFN $$OUTT,[
+;To print the Day-of-week, call TIMDOW to convert a time word to
+;day-of-week # (0-6) in B, then use 440700,,DOWTAB(B) or the contents
+;of DOWLNG(B) as a b.p. to type.
+
+;Table of days of the week.
+DOWTAB:	IRP D,,[Sun,Mon,Tue,Wed,Thu,Fri,Sat]
+	ASCIZ /D/		; All strings of length 3.
+TERMIN
+
+DOWLNG:	IRPS D,,Sunday Monday Tuesday Wednesday Thursday Friday Saturday
+	[ASCIZ /D/]
+TERMIN
+
+];END IFN $$OUTT
+
+;;; Tables which fancy routines need.
+
+IFN $$OUTT\$$OUTF\$$INF,[	
+	; Table for printing month, indexed by 1-12.
+MONTAB:	0
+	IRP M,,[JANUARY,FEBRUARY,MARCH,APRIL,MAY,JUNE,JULY,AUGUST,SEPTEMBER,OCTOBER,NOVEMBER,DECEMBER]
+	[ASCIZ /M/]
+	TERMIN
+
+	; Prettier ASCNT versions of above, used only by certain routines.
+	; Maybe someday make most rtns in this library use these tables.
+
+LMNTAB:	0
+	IRP M,,[January,February,March,April,May,June,July,August,September,October,November,December]
+	.LENGTH "M",,[ASCIZ "M"]
+	TERMIN
+
+	; Table for long-form Day-Of-Week, indexed by 1-7.
+LDOWTB:	0
+	IRP D,,[Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday]
+	.LENGTH "D",,[ASCIZ "D"]
+	TERMIN
+
+];END IFN $$OUTF\$$OUTT\$$INF
+
+
+IFN $$IN,[	;Routines for reading in the date and time in a simple format.
+
+;Takes a b.p. in D to a time in the format mm/dd/yy hh:mm:ss
+;and returns the corresponding time word in A.
+;Leaves D pointing at the terminator (having LDB'd it).
+ASCTWD:	PUSH P,B
+	PUSH P,C
+	SETZ A,			;Initialize all fields of date to 0.
+	MOVEI B,40
+	PUSHJ P,NUMIN		;Read month number.
+	CAIN B,":		;If :, default to somtime today
+	 JRST ASCTI5
+	CAIE B,"/		;If month is 0 and not followed by : or /,
+				; assume date null, 
+	 JUMPE C,[		;so use current date and time.
+		PUSHJ P,TIMGT
+		JRST ASCTIX]
+	DPB C,[270400,,A]
+	PUSHJ P,NUMINS		;Day of month.
+	DPB C,[220500,,A]
+	CAIN B,40
+	 JRST [	ILDB B,D
+		JRST .-1]
+	CAIN B,"/		;Year not specified =>
+	 JRST ASCTI1
+	SYSCAL RQDATE,[%CLOUT,,C]
+	 SETZI C,
+	LDB C,[330700,,C]	; use today's year.
+	JRST ASCTI2
+
+ASCTI5:	SYSCAL RQDATE,[%CLOUT,,A]
+	 SETZI A,
+	HLLZ A,A
+	JRST ASCTI6
+
+ASCTI1:	PUSHJ P,NUMINS		;Year number.
+ASCTI2:	DPB C,[330700,,A]
+	PUSHJ P,NUMIN		;Hour.
+ASCTI6:	IMULI C,3600.*2
+	ADD A,C
+	PUSHJ P,NUMINC		;Minute.
+	IMULI C,60.*2
+	ADD A,C
+	PUSHJ P,NUMINC		;Second
+	ADD A,C
+	ADD A,C
+ASCTIX:	POP P,C
+	POP P,B
+	POPJ P,
+
+;Read a number, but insist on skipping over a slash first.
+NUMINS:	CAIN B,40
+	 JRST [	ILDB B,D	;Ignore leading spaces.
+		JRST NUMINS]
+	SETZ C,
+	CAIE B,"/		;Return 0 if no slash to skip over.
+	 POPJ P,
+	JRST NUMIN0
+] ;end ifn $$in
+
+IFN $$INF,[	;Routines for reading in English-style dates and times.
+
+;Read the date and then the time off the b.p. in D, returning time word in A.
+;Skips if the supplied text is valid.  Leaves terminating char in B.  Clobbers C.
+
+ENGTWD:	PUSHJ P,ENGDAT		;Read date as time word in A.
+	 POPJ P,
+	PUSHJ P,[PUSH P,A	;Read hours and minutes,
+		 JRST ENGT0]	;sticking it into time word holding date.
+	 POPJ P,
+	JRST ENGSEC		;Read seconds, adding them into time-word in A.
+
+.SCALAR  ENGDTP			;Holds pdl-level for error return in ENGDAT
+
+;Read the date off the b.p. in D, returning it as a time-word in A.
+;Skips if it's valid.  Leaves terminating char in B.  Clobbers C.
+
+ENGDAT:	PUSH P,ENGDTP
+	MOVEM P,ENGDTP
+	PUSH P,[0]		;Accumulate the time-word in this word, (P).
+	MOVEI B,40
+	PUSHJ P,MONTH		;Try to read a month name.
+	 JRST ENGD1		;Can't => may be numeric, or name may be after day number.
+	DPB A,[TM$MON,,(P)]	;Store number corresponding to month name.
+	PUSHJ P,NONSEP		;A day number must follow, after a slash or dash, perhaps.
+	PUSHJ P,NUMIN
+	CAIL C,32.
+	 JRST ENGDLZ
+	DPB C,[TM$DAY,,(P)]	;Save the day number.
+ENGDYR:	PUSHJ P,NONSPC		;There may be a comma here, before the year.
+	CAIE B,",
+	 CAIN B,"/
+	  CAIA
+	   CAIN B,"-
+	    ILDB B,D
+	PUSHJ P,NUMIN		;Read the year number.
+	MOVE A,C
+IFN $$CURD,[
+	JUMPE A,[		;none => use current year.
+		SYSCAL RQDATE,[%CLOUT,,A]
+		 SETZ A,
+		LDB B,[330700,,A]
+		JRST .+2]
+];$$CURD
+.ELSE,	JUMPE A,ENGDOK
+	IDIVI A,100.		;Extract low two digits of year and put in time-word.
+	DPB B,[TM$YR,,(P)]
+ENGDOK:	POP P,A
+	AOS -1(P)
+ENGDLZ:	MOVE P,ENGDTP		;Come here to fail-return from ENGDAT
+	POP P,ENGDTP
+	POPJ P,
+
+;Here in ENGDAT if date doesn't start with a month name.
+ENGD1:	PUSHJ P,NUMIN		;Number might be day or month.
+	PUSHJ P,NONSEP
+	PUSH P,C		;Save that number.
+	PUSHJ P,MONTH		;Month name after the number?
+	 JRST [	PUSHJ P,NUMIN	; No, two numbers => month then day.
+		POP P,A
+		JRST ENGD4]
+	POP P,C			;A has month number, C has day number.
+ENGD4:	JUMPN C,ENGD5		;If no day number, better DWIM.
+	CAIL A,32.		;Lone number is probably a day
+	 JRST ENGDLZ		; else I give up.
+	DPB A,[TM$DAY,,(P)]	;Store day of month.
+	JRST ENGDOK
+
+ENGD5:	CAIG A,12.		;Examine month # for validity.
+	 CAIL C,32.		;Bounds check the day number.
+	  JRST ENGDLZ		; A loser - just return the number.
+	DPB C,[TM$DAY,,(P)]	;Else store them in time-word.
+	DPB A,[TM$MON,,(P)]
+	JRST ENGDYR		;Now go read the year.
+
+
+;Read the time off the b.p. in D, returning time word with date=0 in A.
+;Skips if it's valid.  Leaves terminating char in B.  Clobbers C.
+ENGTIM:	PUSHJ P,ENGTHM		;Read hours and minutes.
+	 POPJ P,
+ENGSEC:	PUSH P,A		;Read seconds, adding them into time word in A.
+	JRST ENGTS0		;return the sum.
+
+;Read the time, as just hours and minutes, off the b.p. in D,
+;returning time word in A.
+;Skips if it's valid.  Leaves terminating char in B.  Clobbers C.
+ENGTHM:	PUSH P,[0]
+ENGT0:	MOVEI B,40
+	PUSHJ P,ENGTNM		;Read one number in decimal in A;  C gets number of digits.
+	CAIGE C,3
+	 JRST ENGT1		;2 digits => it is just hours.
+	MOVE C,B
+	IDIVI A,100.		;else it is 24-hour hhmm.  Take it apart.
+	EXCH C,B		;A has hours, C has minutes.
+	CAIL A,24.
+	 JRST ENGTLZ
+	IMULI A,3600.*2		;Stick hours into accumulator.
+	ADDM A,(P)
+;Here with minutes in C;  hours already in (p).
+ENGT2:	CAIL C,60.
+	 JRST ENGTLZ
+	IMULI C,60.*2
+	ADDM C,(P)
+	JRST ENGTX		;Return the time word with hours and minutes.
+
+ENGT1:	CAIL A,24.		;here if first number is 1 or 2 digits:
+	 JRST ENGTLZ
+	IMULI A,3600.*2		;STore it as hours,
+	ADDM A,(P)
+	PUSHJ P,NUMINC		;and expect the minutes after a colon.
+	JRST ENGT2
+
+;Read a decimal number off b.p. in D, returning it in A,
+;and returning the number of digits in C.
+;The terminating character is returned in B.
+ENGTNM:	SETZB A,C
+	PUSHJ P,NONSPC
+ENGTN1:	CAIL B,"0
+	 CAILE B,"9
+	  POPJ P,
+	IMULI A,10.
+	ADDI A,-"0(B)
+	ILDB B,D
+	AOJA C,ENGTN1
+
+;Read the seconds off the b.p. in D, and add them into the time-word in (P).
+;Then pop that into A and skip-return.
+ENGTS0:	PUSHJ P,NUMINC
+	CAIL C,60.
+	 JRST ENGTLZ
+	LSH C,1
+	ADDM C,(P)
+ENGTX:	AOS -1(P)
+	PUSHJ P,NONSPC
+ENGTLZ:	POP P,A
+	POPJ P,
+
+;Subroutines for input of month names.
+
+;Read a month name off the b.p. in D.  Skip if successful, with month number (origin 1) in A.
+;No skip if there is no word (first nonspace is not a letter;  leaves it in B).
+;Err out to ENGDLZ if there is a word which is not recognized.
+MONTH:	PUSHJ P,LETTER
+	 POPJ P,		;No skip if there is no word here (may be a number).
+	MOVE A,[-12.,,MONTAB+1]
+	PUSHJ P,WRD		;Read the rest of the word and look it up.
+	 JRST ENGDLZ		;Unrecognized word must be invalid.
+	MOVEI A,-MONTAB(A)	;Get month number corresponding to word, from table pointer.
+	JRST MONTHX
+
+;Advance to next nonspace, and skip if it's a letter.
+LETTER:	PUSHJ P,NONSPC
+
+;Skip if character in B is a letter.
+LETP:	CAIG B,"Z+40
+	 CAIGE B,"A+40
+	  CAIG B,"Z
+	   CAIGE B,"A
+	    CAIA
+MONTHX:	     AOS (P)
+	POPJ P,
+
+NONSP1:	ILDB B,D
+
+;Advance to next nonspace;  leave it in B.  Assumes that next char is in B to start.
+NONSPC:	CAIE B,40
+	 CAIN B,^I
+	  JRST NONSP1
+	POPJ P,
+
+;Advance over spaces and one "-" or "/".  Leave next character in B.
+NONSEP:	PUSHJ P,NONSPC
+	CAIE B,"-
+	 CAIN B,"/
+	  JRST NONSP1
+	POPJ P,
+
+;Search a table pointed to by the AOBJN in A
+;for a word read off b.p. in D, starting with the character in B.
+;Skip-returns an incremented aobjn pointer in A if word is found in the table.
+;Else non-skip returns.  In either case, the word terminator is left in B.
+;Clobbers C.
+;Somewhat specialized:  no input word shorter than 3 characters matches.
+;No input word longer than 15 characters is allowed at all.
+WRD:
+REPEAT 4,PUSH P,[0]		;Push 4 words to hold the string.
+	MOVEI C,-3(P)
+	HRLI C,170700		;C points to middle of first word, leaving 2 chars of word for use.
+ ;Note that we got at least 3 characters if C advances to the next word.
+	PUSH P,P		;Push a pointer to middle of last word, to check overflow.
+	HLLM C,(P)
+;Store the character in B into the temporary storage, and advance to the next character.
+WRD1:	CAMN C,(P)		;Bomb out if word is too long.
+	 JRST ENGDLZ
+	CAIL B,140		;Convert lower case to upper.
+	 SUBI B,40
+	IDPB B,C		;Store character on stack.
+	ILDB B,D		;Get next character of input.
+	PUSHJ P,LETP
+	 TLZA C,-1
+	  JRST WRD1		;If it's a letter, store it too.
+	CAIN C,-4(P)		;Search fails if word read is shorter than 3 characters.
+	 JRST WRDFL
+	MOVEI C,-4(P)
+	HRLI C,170700		;Else reconstruct b.p. to beginning of word read,
+	PUSHJ P,WRD2		;and compare against table entries one by one.
+	 AOBJN A,.-1
+	SKIPGE A		;Found a match => skip.  A points at entry that matched.
+	 AOS -5(P)
+WRDFL:	SUB P,[5,,5]
+	POPJ P,
+
+;Compare the string pointed to by a b.p. in C with the asciz string whose address
+;is in the word which A points at.  Skip if the first abbreviates the second.
+;Clobbers no ACs.
+WRD2:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	MOVE A,(A)
+	HRLI A,440700
+WRD2A:	ILDB B,A
+	ILDB D,C
+	JUMPE D,WRD2B
+	CAIN B,(D)
+	 JRST WRD2A
+	CAIA
+WRD2B:	 AOS -4(P)
+	POP P,D
+	POP P,C
+	POP P,B
+	POP P,A
+	POPJ P,
+] ;end ifn $$inf
+
+IFN $$IN\$$INF,[	;Subroutines for all time-input functions
+
+;Read a number, but insist on skipping over a colon first.
+NUMINC:	CAIN B,40
+	 JRST [	ILDB B,D	;Ignore leading spaces.
+		JRST NUMINC]
+	SETZ C,
+	CAIE B,":		;Return 0 if no colon to skip over.
+	 POPJ P,
+	JRST NUMIN0
+
+;Read a decimal number off b.p. in D, into C, stopping at a non-digit.
+;Expects last character read to be in B.  Starts with that char, but skips spaces.
+NUMIN:	CAIN B,40
+	 JRST [	ILDB B,D	;Ignore leading spaces.
+		JRST NUMIN]
+	SETZ C,
+NUMIN1:	CAIL B,"0
+	 CAILE B,"9		;Terminate on non-digit.
+	  POPJ P,
+	IMULI C,10.
+	ADDI C,-"0(B)
+NUMIN0:	ILDB B,D
+	JRST NUMIN1
+] ;end ifn $$in\$$inf
+
+IFN $$ABS,[	;Routines for conversion to/from absolute days/seconds since year 1900.
+
+; TIMADY - Time in Absolute Days.  Converts time wd in A to absolute
+;	# of days since Jan 1 1900, returns value in same.
+
+TIMADY:	PUSH P,B
+	PUSH P,C
+	LDB B,[TM$MON,,A]	;get month #
+	LDB C,[TM$DAY,,A]	;get day #
+	ADD C,TMONTB(B)		;add days in months thus far to # days thus far in month
+	LDB A,[TM$YR,,A]	;get year
+	JUMPE A,TIMAD1		;Avoid screwing up for dates in 1900.
+	TRNE A,3	;is this a leap yr?
+			; Note that 2000 is a leap year.  We don't have to
+			; worry about -that- problem until 2100!
+	 JRST .+3	;no, skip additional day
+	CAIL B,3	;leap yr... is it after feb?
+	 ADDI C,1	;yes, add extra day.
+	MOVEI B,-1(A)	;adjust, and
+	LSH B,-2	;get # of l.y. since 1900, not incl. this yr
+	IMULI A,365.	;# yrs times 365
+	ADDI A,(B)	;plus # prior l.y.'s (# extra days)
+TIMAD1:	ADDI A,(C)	;plus days so far this yr
+	SOJA A,POPCBJ	; minus 1 since 1st day of month is day 1,
+			; (Don't ADDI A,-1(C) since C might be 0!)
+
+; TIMSEC - Similar to TIMADY, but returns value in seconds.
+;	Value is 31,536,000. per yr (32 bits for 136 yrs).  
+
+TIMSEC:	PUSH P,B
+	HRRZ B,A	; Get # half-secs
+	LSH B,-1	; # secs.
+	PUSHJ P,TIMADY	; Get # days.
+	IMULI A,24.*60.*60.
+	ADDI A,(B)	; Add # secs for today to # secs of days past.
+	POP P,B
+	POPJ P,
+
+; TIMNET - Converts time word in A to 32-bit "Network time" in A.
+
+TIMNET:	PUSHJ P,TIMSEC		; Convert to network time.
+	ADDI A,ESTDIF*60.*60.
+	POPJ P,			; Return.
+
+; TIMGTN - Similar to TIMNET, but uses the current time and skips for success.
+;	This is GMT in # seconds since 1/1/00.
+
+TIMGTN:	PUSH P,B
+	PUSH P,C
+	.RLPDTM A,		; Get in A, # secs since beg of year.
+	TLNN B,40000		; in B, the year
+	 JRST TIMGTX		; 4.6 => Time is known.
+	TLNE B,400000		; 4.9 => past Feb 28 and non-leap-yr
+	 SUBI A,24.*60.*60.	; so subtract one day from .RLPDTM misfeature.
+	TLNE B,100000		; 4.7 => Daylight Savings time?
+	 SUBI A,60.*60.		; If on, subtract one hour to get Standard.
+	MOVEI B,-1900.(B)	; Get year, relative to 1900.
+	MOVEI C,-1(B)		; Adjust and
+	LSH C,-2		; Get # leap years since 1900 not including
+				; this year.
+	IMULI B,365.		; Find # days in years thus far
+	ADDI B,(C)		; Plus # LY's, to get total days in years past.
+	IMULI B,24.*60.*60.	; Now get # seconds in all them days.
+	ADD A,B			; and produce total seconds since 1/1/00 !
+	ADD A,[ESTDIF*60.*60.]	; Adjust to GMT.
+	AOS -2(P)
+TIMGTX:	POP P,C
+	POP P,B
+	POPJ P,
+
+; ADYTIM - Convert Absolute Days to time word.   Inverse of TIMADY.
+;	Takes # days since 1/1/1900 in A, returns time wd in same.
+
+ADYTIM:	PUSH P,B
+	PUSH P,C
+	IDIVI A,365.		;find # "normal" years.
+	JUMPE A,ADYTI1
+	MOVEI C,-1(A)		;now see how many leap years covered (not incl current)
+	LSH C,-2		;divide by 4 to get # leap yrs
+	SUB B,C			;adjust cnt of remaining days
+	JUMPL B,[SUBI A,1	;backed past year boundary? bump down # yrs
+		ADDI B,365.	;if negative, must adjust again
+		TRNN A,3	;if in leap year,
+		 ADDI B,1	;add one more since 366. days in LY
+		JRST .+1]
+
+ADYTI1:	MOVEI C,12.
+	CAMGE B,TMONTB(C)	;compare # days in year with # days after each month
+	 SOJA C,.-1		;loop (#1 index has 0 value, so it will stop)
+	TRNN A,3		;leap year?
+	 JUMPN A,[
+		CAIGE C,3	;ugh, yes. but if in jan or feb,
+		 JRST .+1	;saved.  else it's after feb and must hack it.
+		SUBI B,1	;lower value
+		CAMGE B,TMONTB(C) ;still wins?
+		 SUBI C,1	;if not, bump month down.
+		CAIN C,2	;if now in Feb,
+		 ADDI B,1	;restore value so subtracting TMONTB gives 29, not 28.
+		JRST .+1]
+	SUB B,TMONTB(C)		;get # of day within month
+	DPB A,[TM$YR,,A]	;deposit year
+	DPB C,[TM$MON,,A]	;and month
+	AOS B			;and day.  Remember start of month is day 1, not day 0.
+	DPB B,[TM$DAY,,A]
+	HLLZS A			;Zap RH to start of day.
+POPCBJ:	POP P,C
+	POP P,B
+	POPJ P,
+
+; Used to be called "TIMCAS".
+; SECTIM - Converts Absolute Seconds to time word.
+;	Argument in A (# secs since 1/1/00), returns time wd in A.
+
+SECTIM:	PUSH P,B
+	IDIVI A,24.*60.*60.	; Get remainder of # secs in day
+	PUSHJ P,ADYTIM		; Find time wd given # days.
+	LSH B,1
+	ADD A,B			; Add in # half secs.
+POPBJ:	POP P,B
+	POPJ P,
+
+; TIMADD - Add time in seconds in B to time word in A, returning time word in A.
+
+TIMADD:	PUSHJ P,TIMSEC
+	ADD A,B
+	JRST SECTIM
+
+; TIMSUB - subtract time word in B from that in A, 
+;	returning time difference in seconds in A. 
+
+TIMSUB:	PUSH P,B
+	PUSHJ P,TIMSEC
+	EXCH A,B
+	PUSHJ P,TIMSEC
+	SUBM B,A
+	JRST POPBJ
+
+; TIMDOW - Return in B the day-of-week (SUN = 0) of the time word in A.
+
+TIMDOW:	PUSH P,A
+	PUSHJ P,TIMADY
+	ADDI A,DWFUDG
+	IDIVI A,7
+	POP P,A
+	POPJ P,
+
+];$$ABS
+
+
+;;; tables used in conversion between time words and absolute days.
+
+	; Table containing # of days in each month, assuming non-leap year.
+TMONLN:	0	; no 0'th month.
+	;JAN   FEB   MAR   APR   MAY   JUN   JUL   AUG   SEP   OCT   NOV   DEC
+	 31. ? 28. ? 31. ? 30. ? 31. ? 30. ? 31. ? 31. ? 30. ? 31. ? 30. ? 31.
+
+	; Special table to allow figuring how many days so far
+	; in this year.  Indexed by month # (1-12) gives # days
+	; taken up by months preceding it.  Assumes non-leap year.
+TMONTB:	0
+	0
+	31.	;+jan
+	59.	;+jan+feb
+	90.	;+jan+feb+mar...
+	120.	;...+apr
+	151.	;...+may
+	181.	;...+jun
+	212.	;...+jul
+	243.	;...+aug
+	273.	;...+sep
+	304.	;...+oct
+	334.	;...+nov
+
+IFN $$UPTM,[
+
+; UPTIME - Converts internal time wd. to system time
+;	( 30'ths of second since system startup).  Will return
+;	negative value if time specified is BEFORE system startup.
+
+;Note: UPINI must be called before using this routine.
+
+.SCALAR TMSYST	; Holds time of system startup in absolute # secs.
+
+;  ***  This produces the wrong answer if daylight savings times went on or
+;  ***  off since the system came up.  Fix it some day!
+
+UPTIME:	PUSHJ P,TIMSEC		; Convert given time to absolute # secs.
+	SUB A,TMSYST		; Find difference in secs.
+	IMULI A,30.		; Turn into 30'ths.
+	POPJ P,
+
+; UPINI - Initializes time routines and makes sure system knows the
+;	  current time and time when came up; fails to skip if it doesn't.
+
+UPINI:	PUSH P,A		   ;Smash no ACs.
+	PUSH P,B
+	SYSCAL RQDATE,[%CLOUT,,B ? %CLOUT,,A]
+	 SETO B,
+	CAME A,[-1]		   ;If we don't know when ITS came up
+	 CAMN B,[-1]		   ; or know what time it is
+	  JRST UPINI9		   ;  we lose.
+	PUSHJ P,TIMSEC		   ;Find uptime as abs secs since 1900.
+	MOVEM A,TMSYST		   ;Remember it.
+	AOS -2(P)		   ;Skip.
+UPINI9:	POP P,B			   ;Return.
+	POP P,A
+	POPJ P,
+
+] ;end ifn $$UPTM
+
+
+IFN $$SVNG,[	;Routines to handle daylight savings time.
+
+;Note that the actual conversion is trivial:  just use TIMADD to add +/- 3600. secs.
+
+;Subroutine to skip if daylight saving time should not be
+; applied to date being output converted.
+;In other words, we have a date and a standard time,
+; and we skip unless the user would rather see it printed in daylight time.
+
+;To use, do 
+;	MOVEI B,3600.
+;	PUSHJ P,DATIME"ODAYL	;If daylight time now in effect,
+;	 PUSHJ P,TIMADD		;convert to daylight time before printing.
+
+;This version puts daylight saving into effect at 2AM on the
+;last Sunday in April and ends it at 1AM standard time on the
+;last Sunday in October.
+; It also includes forced daylight time from 6 JAN 74 thru summer 75.
+
+;Takes a time-word in A.
+
+ODAYL:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	HRRZ B,A
+	PUSHJ P,TIMADY		;B has just time, A has date as abs day number.
+	JSP D,DAYLFS		;CHECK DAYLIGHT FOR FUEL SHORTAGE
+				; WON'T RETURN HERE IF FORCED SETTING.
+	PUSH P,A
+	MOVE A,-4(P)		;Get time word back as arg for NMSS.
+	PUSHJ P,NMSS		;COMPUTE DATE OF MAGIC SUNDAY IN
+	POP P,A			;APRIL (MSAPR) INTO C AND DITTO OF OCT
+				;(MSOCT) INTO D.
+	CAMN A,D		;DATE = MSOCT?
+	 CAIGE B,1*3600.*2	;YES, 1AM OR AFTER STD TIME?
+	  JRST .+2
+	   JRST ODAYS		;YES AND YES, STD TIME APPLIES.
+	CAMN A,C		;DATE = MSAPR?
+	 CAIL B,2*3600.*2	;YES, BEFORE 2AM?
+	  JRST .+2
+	   JRST ODAYS		;YES AND YES, STD TIME.
+	;AT THIS POINT WE WOULD HAVE RETURNED IF IT WAS MSAPR OR
+	;MSOCT AND TIME OF DAY WAS SUCH THAT STANDARD TIME APPLIED.
+	;HENCE IF ITS BETWEEN MSAPR AND MSOCT INCLUSIVE, 
+	;DAYLIGHT SAVING APPLIES.
+	CAML A,C		;DATE BEFORE MSAPR?
+	 CAMLE A,D		;OR AFTER MSOCT?
+	  JRST ODAYS		;YES, STANDARD TIME APPLIES.
+	JRST ODAYD
+
+ODAYS:	AOS -4(P)		;SKIP IF STANDARD TIME SHOULD BE USED
+ODAYD:	POP P,D
+	POP P,C
+	POP P,B
+	POP P,A
+	POPJ P,
+
+;Subroutine to skip UNLESS daylight saving time should
+;be applied to date being input converted.
+;IE, we have a time word of standard time or daylight time,
+;and we SKIP if it should be treated as STANDARD time.
+;If we skip, we leave the 
+
+;To use, do
+;	MOVNI B,3600.
+;	PUSHJ P,IDAYL		;If at a time when daylight time is in use,
+;	 PUSHJ P,TIMADD		;convert daylight to standard.
+
+IDAYL:	PUSH P,A
+	PUSH P,B
+	MOVNI B,3600.		;Assuming it's daylight time, convert to standard,
+	PUSHJ P,TIMADD
+	POP P,B
+	PUSHJ P,ODAYL		;then see if the resulting standard time is a time at which
+	 CAIA			;daylight savings was in effect.
+	  AOS -1(P)		;Note: we don't screw up if it was really standard time
+	POP P,A			;because of the 1-hour gap when we move clock forward in APR.
+	POPJ P,			;Note also that there is no way to avoid ambiguity in OCT.
+
+;SUBROUTINE TO CHECK FOR THE FORCED DAYLIGHT TIME DECLARED BY CONGRESS
+; FOR THE FUEL SHORTAGE FROM 6 JAN 74 THRU THE SUMMER OF 74.
+; ALSO, FOR THE MODIFICATION WHEREIN WE GO BACK TO DAYLIGHT
+; TIME IN LATE FEBRUARY OF 75 RATHER THAN LATE APRIL. AS THE LAW
+; STANDS TODAY, WE REVERT TO APRIL-OCTOBER IN 1976, AND THIS CODE
+; DOES THAT, TOO, BUT WATCH YOUR LOCAL CONGRESSMAN....
+
+;Call with JSP D,DAYLFS.  It returns if it has no knowledge to contribute.
+;If it knows whether daylight savings time was in effect then,
+;It returns, skipping or not as appropriate, from its CALLER.
+
+DSTFS1==64631		;DAYLIGHT SAVINGS TIME, FUEL SHORTAGE, START
+			; DATE, WHICH IS 6 JAN 74 ( A SUNDAY ).
+DSTFS2==65245		;DAYLIGHT SAVINGS TIME, FUEL SHORTAGE, END
+			; DATE, WHICH IS 1 OCT 74, AND THE NORMAL
+			; ALGORITHM TAKES OVER FOR REST OF THAT MONTH.
+DSTFS3==65466		;23 FEB 75, WHEN WE GO BACK TO DAYLIGHT TIME
+			; EARLY FOR SUMMER 75.
+DSTFS4==65571		;1 MAY 75, WHEN THE NORMAL ALGORITHM TAKES OVER
+			; AGAIN UNTIL THE LAW CHANGES AGAIN.
+
+DAYLFS:	CAIN A,DSTFS1		;The day this period starts?
+	 CAIL B,2*3600.*2	;Yes. Before 2 AM standard time?
+	  SKIPA			;Not morning of that day.
+	   JRST ODAYS		;Yes. First hours of that day. std time.
+	CAIGE A,DSTFS1		;Any time in this fudged period?
+	 JRST 0(D)		;Before 6 JAN 74. Normal algorithm.
+	CAIGE A,DSTFS2		; ..
+	 JRST ODAYD		;Yes. Force daylight time.
+	CAIN A,DSTFS3		;23 FEB 75, first day of DST in 75?
+	 CAIL B,2*3600.*2	;Yes. Before 2 AM?
+	  SKIPA			;No.
+	   JRST ODAYS		;Yes. Still standard time.
+	CAIL A,DSTFS3		;In the period 23 FEB 75 0200 thru
+	 CAIL A,DSTFS4		;1 MAY 75?
+	  JRST 0(D)		;No. Use normal algorithm.
+	JRST ODAYD		;Yes. This is forced daylight time.
+
+; Compute dates of magic Sundays in April and October in C, D as absolute day
+; numbers.
+; 
+; Prior to 1987 the magic Sundays were the last Sundays in April and
+; October.  In 1987 the law was changed so that the first day of daylight
+; savings time fell on the -first- Sunday in April.  The date to switch
+; back remained the last Sunday in October.
+;
+; Takes a date to use the year from as a time word in A.
+
+NMSS:	PUSH P,A
+	AND A,[TM%YR]		;Flush all of supplied date except year. 
+	PUSH P,A
+	CAMGE A,[.DPB 87.,TM$YR,0]
+	 TLOA A,(.DPB 4,TM$MON,.DPB 30.,TM$DAY,0)
+	  TLO A,(.DPB 4,TM$MON,.DPB 7,TM$DAY,0)
+	PUSHJ P,TIMADY		;Get absolute day number of 30th day April
+				; of year in A.
+;Date of magic Sunday in April this year (MSAPR) to C
+;Have date of APR 7 or APR 30 this year =last possible date of magic Sunday
+;in April.  If it isn't Sunday, find preceding Sunday.
+	MOVE C,A
+	ADDI C,DWFUDG+70000.	;Add 70000 to make sure its positive.
+	IDIVI C,7		;Divide into weeks and day of weeks
+	IMULI C,7		;Convert back, discarding day of week
+	SUBI C,DWFUDG+70000.	;Unfudge and we've got it!
+;DATE OF MAGIC SUNDAY IN OCTOBER (MSOCT) THIS YEAR TO D.
+	POP P,A
+	TLO A,(.DPB 10.,TM$MON,<.DPB 31.,TM$DAY,0>)
+	PUSHJ P,TIMADY		;Get day # of oct 31 of this year.
+	PUSH P,E
+	MOVE D,A
+	ADDI D,DWFUDG+70000.
+	IDIVI D,7
+	IMULI D,7
+	SUBI D,DWFUDG+70000.
+	POP P,E
+	POP P,A
+	POPJ P,
+
+] ;end ifn $$SVNG
+
+.END DATIME

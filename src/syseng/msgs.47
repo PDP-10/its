@@ -1,0 +1,244 @@
+; -*- MIDAS -*-
+subttl MSGS -- format of the MSGS file
+
+.begin MSGS
+.auxil
+.tyo6 .ifnm1
+.tyo 40
+.tyo6 .ifnm2
+printx / INCLUDED IN THIS ASSEMBLY
+/
+
+comment|
+
+File:  MSGS,	Node: Top,	Up: (LIB)	Next: Routines
+
+MSGS is a library for accessing and setting the date of the last system message
+a user has viewed.  The date of the last message used is stored in the file
+SYS;:MSGS TIMES, which is mapped in and modified rather than read and
+written.  It is used by the GMSGS program and the :MSGS command in DDT.
+
+This is used as follows:
+To access a user, call USRGET, if you're going to access only one user.
+If you're going to do multiple accesses, call MAPMSG first, then call
+USRGT1 for each user you wish to look up.  When done, call UNMAP
+
+Restriction:  This cannot be used inside interrupt routines, since it
+assumes that the proper states of .DF1 and .DF2 are 0, rather than
+saving and restoring.  This is fixable if needed.
+
+* Menu:		        Here's more info
+
+* Routines::		Routines contained in this file
+* Format::		Format of the database file
+
+File: MSGS,	Node: Routines,	Up: Top, Previous: Top,	Next: Format
+
+All user-level routines skip unless there's been an error.
+
+AC's A, B, C, and D are assumed to exist, but not assumed consecutive.
+No AC's are clobbered unless they contain arguments to the routines.
+
+A macro CRITIC is provided to include in the critical routines table.
+It ** MUST ** be included in the range of the AOBJN ptr to the table.
+(see *Note LOCKS: (LOCKS)*, for info on ITS LOCKS)
+
+USRGET:
+A/ UNAME to look up
+B/ channel on which to open file
+C/ AOBJN ptr to pages in which to map the file
+
+The address in core of the user's entry is returned in A
+If the entry is freshly created, it will have a 0 in ME$MDT
+
+MAPMSG:
+B/ channel on which to open the file
+C/ AOBJN ptr to pages in which to map the file
+
+UNMAP
+B/ channel to do a DSKUPD and close.
+C/ AOBJN ptr to pages to flush
+
+UNMAP should always be called when the file isn't needed any more.
+
+
+The ITS locks feature is used to prevent simultaneous addition of
+users to the table.  For this to work, %OPLOK and %OPLKF should be set
+in the job's .OPTION word, a .CALL UNLOCK should be done in the event
+of quits and the like, and the critical pieces of code in this package
+*MUST* be included in the job's critical routines table, via the macro
+MSGS"CRITIC
+
+File: MSGS,	Node: Format, Up: Top, Previous: Routines
+|
+;;; Header info at start of file
+
+m$==:,-1
+m$init==:0			   ;time of system invocation, from start init
+m$done==:1			   ;time of system invocation, from init done
+m$lock==:2			   ;0 means locked
+m$lokl==:3			   ;link/instruction word of lock
+m$loku==:4			   ;uname of locking job
+m$lokj==:5			   ;jname of locking job
+
+m$aobj==:6			   ;AOBJN ptr to table (-<# entries>,,<loc>)
+m$size==:7			   ;size of entries in table
+
+;; Entries in the table
+
+me$==:,-1
+me$unm==:0			   ;UNAME
+me$mdt==:1			   ;MSGS date
+
+
+lock:	push p,a
+	.call [setz ? sixbit /RQDATE/ ? %clout,,a ? setz+<%clout,,a>]
+	  .lose %lssys
+	jumpl a,[pop p,a ? popj p,]
+	aos -1(p)
+	.suset [.sdf1,,[-1]]
+	.suset [.sdf2,,[-1]]
+	camn a,m$done(c)	   ;is it initialized?
+	  jrst lock0		   ;  yes, lock it up.
+init0:	exch a,m$init(c)	   ;claim privilege of init'ing.
+init1:	camn a,m$init(c)	   ;should we init?
+	  jrst initw		   ;  no, someone else is, wait for him
+	setom m$lock(c)		   ;unlock the lock
+init2:	move a,m$init(c)
+	movem a,m$done(c)	   ;mark init complete.
+	jrst lock0		   ;We're all done.
+
+initw:	move a,m$init(c)
+	camn a,m$done		   ;wait till someone else's init is finished.
+	  jrst lock0		   ;  yes, they finished already.
+
+	movei a,30.		   ;wait until they finish
+	.sleep a,		   ;also consider that the job doing the
+	move a,m$init(c)	   ;init'ing may have aborted.
+	jrst init0		   ;so go back to try it again just in case.
+
+lock0:	skipl m$lock(c)		   ;wait for switch to be free.
+	 .hang
+	aose m$lock(c)		   ;try to lock it.
+	 jrst lock0		   ;(somone else grabbed it between
+				   ;our .hang and our aose)
+lock1:	push p,b
+	move b,[-4,,[sixbit /UNAME/ ? movem m$loku(c)
+		     sixbit /JNAME/ ? movem m$lokj(c)]]
+	.call [setz ? sixbit /USRVAR/ ? %climm,,%jself ? setz b]
+	  .lose %lssys
+	.suset [.r40addr,,b]
+	move a,3(b)		   ;put the switch on the
+	hrli a,(setom)		   ;locked switch list
+	movem a,m$lokl(c)	   ;link it in
+	movei a,m$lock(c)	   ;get address of this lock
+	movem a,3(b)		   ;and install it in the chain
+
+lock2:	move a,[-2,,[.sdf1,,[0] ? .sdf2,,[0]]]
+	.suset a
+	pop p,b
+	pop p,a
+	popj p,
+
+unlock:	push p,b
+	push p,a
+	move a,[-3,,[.sdf1,,[-1] ? .sdf2,,[-1] ? .r40addr,,b]]
+	.suset a		   ;get address of start of list, etc.
+unloc0:	hrrz a,m$lokl(c)	   ;remove the switch from the
+	movem a,3(b)		   ;locked switch list.
+unloc1:	setom m$lock(c)		   ;then unlock the switch.
+	move a,[-2,,[.sdf1,,[0] ? .sdf2,,[0]]]
+	.suset a
+	pop p,a
+	pop p,b
+	popj p,
+
+define critic
+	msgs"init1,,msgs"init2	   ;from init1 to init2 the database has been
+	setzm msgs"m$init(b)	   ;marked as being inited.  If killed undo it
+
+	msgs"unloc0,,msgs"unloc1   ;Here the lock has been removed from chain
+	setom @msgs"m$lock(c)	   ;but is still locked.
+
+	msgs"lock1,,msgs"lock2	   ;Here, the switch is locked, but we are
+	setom @msgs"m$lock(c)	   ;still in the process of putting it on the
+				   ;chain
+termin
+
+mapmsg:	push p,b
+	push p,a
+	push p,d
+	movem c,msgpgn		   ;remember what pages we're hacking
+	.call [setz ? sixbit /OPEN/ ? %clbit,,.uii ? b ? [sixbit /SYS/]
+	       [sixbit /:MSGS/] ? setz [sixbit /TIMES/]]
+	  jrst maperr		   ;Fail!
+	.call [setz ? sixbit /DSKUPD/ ? setz b]
+	  jfcl
+	.call [setz ? sixbit /FILLEN/ ? b ? setz+<%clout,,a>]
+	  jrst maperr
+	hlre d,c		   ;get -<# of pages>
+	movns d
+	imuli d,2000		   ;Get <# of words>
+	caige d,(a)		   ;If there's enough room
+	  jrst maperr
+	.call [setz ? sixbit /CORBLK/ ? %climm,,%cbndw ? %climm,,%jself ? c
+	       setz b]
+	  jfcl
+	    aos -3(p)
+
+maperr:	.call [setz ? sixbit /CLOSE/ ? setz b]
+	  jfcl
+	pop p,d
+	pop p,a
+	pop p,b
+	popj p,
+
+;; A/ UNAME
+;; B/ Channel
+;; C/ -<# of pages>,,first page
+
+usrget:	pushj p,mapmsg
+	  popj p,
+usrgt1:	push p,b
+	hrrz c,msgpgn		   ;get the starting page #
+	imuli c,2000		   ;and convert to words
+	move b,m$aobj(c)	   ;get the AOBJN ptr to our table
+	addi b,(c)		   ;and point to its location in our core
+usrgt0:	camn a,me$unm(b)	   ;Is this our user?
+	  jrst [movei a,(b)	   ;  return that as the pointer
+	        pop p,b
+		aos (p)		   ;  skip return, we've succeeded.
+		popj p,]
+	add b,m$size(c)		   ;point to next entry
+	sos b			   ;allow for one added by AOBJN
+	aobjn b,usrgt0		   ;next entry
+	  pop p,b
+	push p,d
+	pushj p,lock		   ;must lock it to add a user
+	  jrst msgext		   ;  Probably don't know the time.
+	aos -1(p)		   ;skip when we return
+	hlre d,m$aobj(c)	   ;get the size of the table in entries
+	sos d			   ;get new size
+	hrlm d,m$aobj(c)	   ;store it away
+	movns d			   ;get positive size
+	imul d,m$size(c)	   ;in words, not entries
+	push p,a		   ;remember the UNAME
+	hrrz a,m$aobj(c)	   ;get start of table
+	addi a,(c)		   ;make absolute instead of relative to table
+	addi a,(d)		   ;entry after last
+	sub a,m$size(c)		   ;last entry
+	pop p,me$unm(a)		   ;salt away that uname
+	setzm me$mdt(a)		   ;initially, date is 0
+	pushj p,unlock		   ;unlock the table
+msgext:	pop p,d			   ;restore D
+	popj p,
+
+unmap:	.call [setz ? sixbit /CORBLK/ ? %climm,,0 ? %climm,,%jself
+	       setz msgpgn]	   ;flush the pages
+	  jfcl
+	aos (p)			   ;skip return
+	popj p,
+
+.scalar msgpgn
+
+.end MSGS
