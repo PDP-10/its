@@ -26,5 +26,7 @@ from scratch.
 2. Then the tapes are used to create a file system on an RP06 disk and
    populate it with a minimal system, and also source code.
 
-3. Finally, the system is booted from the disk, and MIDAS is invoked
+3. Next, the system is booted from the disk, and MIDAS is invoked
    to assemble ITS from source code.
+
+4. Finally, the whole file system is dumped to tape.

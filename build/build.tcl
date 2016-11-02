@@ -86,6 +86,7 @@ spawn pdp10 build/simh/boot
 respond "DSKDMP" "its\r"
 type "\033g"
 pdset
+respond "*" ":print sysbin;..new. (udir)\r"
 respond "*" ":midas sysbin;_midas;midas\r"
 expect ":KILL"
 respond "*" ":job midas\r"
@@ -106,9 +107,10 @@ respond "*" ":midas system;_its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
-#respond "*" ":midas sysbin;_syseng;dump\r"
-#respond "WHICH MACHINE?" "AI\r"
-#expect ":KILL"
+respond "*" ":midas sysbin;_syseng;dump\r"
+respond "WHICH MACHINE?" "DB\r"
+expect ":KILL"
+respond "*" ":link sys3;ts dump,sysbin;dump bin\r"
 
 respond "*" "\005"
 respond "sim>" "at tu0 out/output.tape\r"

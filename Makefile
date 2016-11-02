@@ -1,5 +1,5 @@
 SRC = system syseng sysen1 sysnet midas
-MINSYS = _ sys sys3 sysbin
+MINSYS = _ sys sys3
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
 DSKDMP = bin/boot/dskdmp.rp06
