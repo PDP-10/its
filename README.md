@@ -1,4 +1,4 @@
-# Build ITS from scratch
+# Incompatible Timesharing System
 
 [![Build Status](https://travis-ci.org/PDP-10/its.svg?branch=master)]
 (https://travis-ci.org/PDP-10/its)
@@ -21,12 +21,17 @@ from scratch.
 
 1. First, magnetic tape images are created from files in `src` and
    `bin`.  There are two bootable tapes, and one tape with files in
-   DSKDMP backup format.
+   DUMP backup format.
 
 2. Then the tapes are used to create a file system on an RP06 disk and
    populate it with a minimal system, and also source code.
 
-3. Next, the system is booted from the disk, and MIDAS is invoked
-   to assemble ITS from source code.
+3. Next, the system is booted from the disk, and the following programs
+   are rebuilt:
+
+   - MIDAS, the assembler.
+   - DDT, debugger and HACTRN user login shell.
+   - The ITS monitor (kernel).
+   - DUMP, tape backup and restore.
 
 4. Finally, the whole file system is dumped to tape.
