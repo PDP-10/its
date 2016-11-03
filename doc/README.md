@@ -6,6 +6,8 @@
   [colon commands](_info_/ddt.:cmnds)
 - MIDAS: [manual](info/midas.25)
 - DUMP: [manual](_info_/dump.info), [format](sysdoc/dump.format)
+- TECO: [primer](_teco_/teco.primer), [manual](info/tecman.20),
+  [commands](_teco_/tecord.1132)
 
 ### DDT cheat sheet for Unix users
 
