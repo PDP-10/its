@@ -11,6 +11,7 @@
   [commands](_teco_/tecord.1132)
 - CRTSTY: [manual](info/crtsty.39)
 - TCTYP: [manual](_info_/tctyp.order)
+- DSKDUMP: [commands](sysdoc/dskdmp.order)
 
 ### DDT cheat sheet for Unix users
 

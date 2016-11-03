@@ -156,10 +156,34 @@ respond "*" ":midas .;_kshack;nsalv\r"
 respond "Which machine?" "KSRP06\r"
 expect ":KILL"
 
+respond "*" ":midas .;_system;dskdmp\r"
+expect "Configuration"
+respond "?" "ksrp06\r"
+respond "Assemble BOOT?" "no\r"
+expect ":KILL"
+
+respond "*" ":midas .;bt_system;dskdmp\r"
+expect "Configuration"
+respond "?" "ksrp06\r"
+respond "Assemble BOOT?" "yes\r"
+expect ":KILL"
+
+respond "*" ":ksfedr\r"
+respond "!" "write\r"
+respond "Are you sure" "yes\r"
+respond "Which file" "bt\r"
+expect "Input from"
+sleep 1
+respond ":" ".;bt bin\r"
+respond "!" "quit\r"
+expect ":KILL"
+
 shutdown
 start_dskdmp
 respond "DSKDMP" "l\033ddt\r"
-expect "\n"; type "t\033its bin\r"
+expect "\n"; type "t\033dskdmp bin\r"
+expect "\n"; type "\033g"
+respond "DSKDMP" "t\033its bin\r"
 expect "\n"; type "\033u"
 respond "DSKDMP" "m\033nsalv bin\r"
 expect "\n"; type "d\033nits\r"
