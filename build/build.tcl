@@ -150,6 +150,10 @@ expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
 
+respond "*" ":midas .;_kshack;nsalv\r"
+respond "Which machine?" "KSRP06\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_sysen1;pdset\r"
 expect ":KILL"
 respond "*" ":delete sys;ts pdset\r"

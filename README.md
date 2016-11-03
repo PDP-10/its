@@ -35,6 +35,7 @@ from scratch.
    - Exec DDT, standalone debugger.
    - TECO, editor.
    - DUMP, tape backup and restore.
+   - NSALV, standalone file system tool.
    - PDSET, set time and date.
    - KSFEDR, manipulate front-end file system.
    - LOCK, shut down system.
