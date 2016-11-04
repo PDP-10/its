@@ -439,7 +439,7 @@ respond "*" ":link device;jobdev los,device;jobdev loss\r"
 respond "*" ":midas sys1;ts dir_bawden;dir^k\r"
 expect ":KILL"
 
-respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
+respond "*" ":xfile build;mtboot xfile\r"
 expect ":KILL"
 
 respond "*" ":midas syshst;_syshst;hosts3\r"
