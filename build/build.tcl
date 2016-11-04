@@ -12,7 +12,7 @@ proc type s {
 }
 
 proc respond { w r } {
-    expect $w
+    expect -exact $w
     type $r
 }
 
@@ -42,6 +42,7 @@ proc maybe_pdset {} {
     } "IT IS NOW" {
 	type "\032"
 	expect "Fair"
+	type ":vk\r"
     }
 }
 
@@ -63,7 +64,7 @@ start_nsalv
 respond "\n" "mark\033g"
 respond "Format pack on unit #" "0"
 respond "Are you sure you want to format pack on drive" "y"
-respond "Pack no?" "0\r"
+respond "Pack no ?" "0\r"
 respond "Verify pack?" "n"
 respond "Alloc?" "3000\r"
 respond "ID?" "foobar\r"
@@ -124,6 +125,7 @@ respond "_" "quit\r"
 expect ":KILL"
 
 respond "*" ":print sysbin;..new. (udir)\r"
+type ":vk\r"
 respond "*" ":midas sysbin;_midas;midas\r"
 expect ":KILL"
 respond "*" ":job midas\r"
