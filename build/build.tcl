@@ -130,6 +130,21 @@ respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
 respond "*" ":link sys3;ts dump,sysbin;dump bin\r"
 
+respond "*" ":midas sysbin;_sysen1;pdset\r"
+expect ":KILL"
+respond "*" ":delete sys;ts pdset\r"
+respond "*" ":link sys;ts pdset,sysbin;pdset bin\r"
+
+respond "*" ":midas sysbin;_kshack;ksfedr\r"
+expect ":KILL"
+respond "*" ":delete sys;ts ksfedr\r"
+respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
+
+respond "*" ":midas sysbin;_syseng;lock\r"
+expect ":KILL"
+respond "*" ":delete sys;ts lock\r"
+respond "*" ":link sys;ts lock,sysbin;lock bin\r"
+
 respond "*" "\005"
 respond "sim>" "at tu0 out/output.tape\r"
 respond "sim>" "c\r"

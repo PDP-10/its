@@ -34,5 +34,8 @@ from scratch.
    - The ITS monitor (kernel).
    - TECO, editor.
    - DUMP, tape backup and restore.
+   - PDSET, set time and date.
+   - KSFEDR, manipulate front-end file system.
+   - LOCK, shut down system.
 
 4. Finally, the whole file system is dumped to tape.
