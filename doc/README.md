@@ -15,6 +15,7 @@
 - CRTSTY: [manual](info/crtsty.39)
 - FIND: [manual](info/find.13)
 - DIRED: [manual](_info_/dired.info), [commands](_info_/dired.order)
+- XXFILE: [manual](_info_/xxfile.info)
 
 ### Programming
 
