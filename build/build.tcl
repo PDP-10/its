@@ -2,7 +2,11 @@ proc type s {
     sleep .2
     foreach c [split $s ""] {
         send $c
-        expect -re .
+        if [string match {[a-z]} $c] {
+	    expect -nocase $c
+	} else {
+	    expect "?"
+	}
     }
 }
 
