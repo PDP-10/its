@@ -145,6 +145,11 @@ expect ":KILL"
 respond "*" ":delete sys;ts lock\r"
 respond "*" ":link sys;ts lock,sysbin;lock bin\r"
 
+respond "*" ":midas sysbin;_syseng;@dev\r"
+expect ":KILL"
+respond "*" ":delete sys;atsign device\r"
+respond "*" ":link sys;atsign device,sysbin;@dev bin\r"
+
 respond "*" "\005"
 respond "sim>" "at tu0 out/output.tape\r"
 respond "sim>" "c\r"

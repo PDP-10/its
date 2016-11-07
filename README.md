@@ -37,5 +37,6 @@ from scratch.
    - PDSET, set time and date.
    - KSFEDR, manipulate front-end file system.
    - LOCK, shut down system.
+   - ATSIGN DEVICE, load device drivers.
 
 4. Finally, the whole file system is dumped to tape.
