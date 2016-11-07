@@ -46,6 +46,7 @@ expect_before timeout abort
 
 spawn pdp10 build/simh/init
 
+respond "sim>" "show ver\r"
 respond "sim>" "b tu1\r"
 respond "MTBOOT" "mark\033g"
 respond "Format pack on unit #" "0"
