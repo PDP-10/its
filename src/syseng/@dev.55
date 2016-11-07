@@ -1,0 +1,396 @@
+; -*- Midas -*-
+
+title SYS:ATSIGN DEVICE
+
+ifndef debug, debug==:0
+
+;;;Accumulators:
+a=:1
+b=:2
+c=:3
+d=:4
+
+op=:5			;Initial JOBCAL loads these 5.
+fn1=:6
+fn2=:7
+snm=:10
+dev=:11			;.CALL DSKOPN uses this as FN2.  Trailing digits
+			;are removed from here.
+
+odev=:12		;The original value of DEV is kept here.
+
+u=:14
+v=:15
+w=:16
+
+;;;Channels:
+dskc==:1
+bojc==:2
+
+define syscall name,args
+	.call [setz ? sixbit /name/ ? args(400000)]
+termin
+
+loc 40
+
+	0
+	0
+	jsr tsint
+
+loc 100
+
+; Semi-builtin devices are loaded from DSK:DEVICE;ATSIGN <foo>, where <foo>
+; is one of the following:
+devml==:sixbit /MLDEV/
+devrip==:sixbit /R.I.P./
+devrmt==:sixbit /RMTDEV/
+devdir==:sixbit /DIRDEV/
+; Note that you can always override this by placing an explicit link in the
+; DEVICE directory.
+
+define defdev name,file
+if2,[
+loc devtab+.cnt.
+	sixbit /name/
+loc filtab+.cnt.
+	file
+]
+.cnt.==.cnt.+1
+termin
+
+devtab:
+
+.cnt.==0
+	defdev MC,devml		; We start with the foreign filesystems
+	defdev AI,devml		; Note that these are all two characters
+	defdev MD,devml		; long!
+	defdev ML,devml
+	defdev DM,devrip	; Never again...
+	defdev KL,devrip
+	defdev MX,devrip
+	defdev OZ,devrip
+nffs==:.cnt.			; # foreign filesystems
+	defdev TPL,devrip	; Unless otherwise defined...
+	defdev DIR,devdir
+	defdev DIRDSK,devdir
+	defdev DIRSYS,devdir
+	defdev DIRCOM,devdir
+	defdev DIRDIR,devdir	; Is this really reasonable?
+	defdev DIRDNR,devdir
+	defdev DIRMC,devml
+	defdev DIRAI,devml
+	defdev DIRMD,devml
+	defdev DIRML,devml
+	defdev DIRDM,devrip	; Never more
+	defdev DIRKL,devrip
+	defdev DIRMX,devrip
+ndevs==:.cnt.			; # semi-builtin devices
+
+loc devtab+ndevs
+filtab:
+loc .+ndevs
+
+ife debug, stop=:.logout 1,
+ifn debug,[
+$stop:	0
+stop=:jsr $stop
+	jfcl
+	 .hang
+] ;end ifn debug
+
+go:	.iopush dskc,		;Hack so that a single .IOPDL will close
+	.iopush bojc,		; both channels!
+ifn debug,[
+	.suset [.roption,,a]
+	tlnn a,%opddt
+	 jrst go1
+	tlo a,%opojb
+	.suset [.soption,,a]
+	.value [asciz ""]
+go1:
+] ;end ifn debug
+	.open bojc,[.uao,,'boj ? setz ? setz]
+	 stop			;He went away?
+	move a,[-5,,op]
+	.call jobcal
+	 stop			;He went away?
+	tlne d,60000   
+	 stop			;Close?
+	move odev,dev		;Save original device name.
+retry:	came dev,[sixbit />/]
+	 camn dev,[sixbit /</]
+	  jrst giveup   
+	.call dskopn
+	 caia   
+	  jrst load0
+	; No explicit file in directory, check for a semi-builtin device.
+	movsi d,-ndevs
+	came dev,devtab(d)
+	 aobjn d,.-1
+	jumpge d,ffchek		; nope
+; Come here with semi-builtin device index in RH(D).
+load1:	syscall open,[[.uii,,dskc] ? [sixbit /DSK/] ? [sixbit /ATSIGN/]
+			filtab(d) ? [sixbit /DEVICE/]]
+	 jrst [	; it -should- be there, so say device not available
+		syscall jobret,[movei bojc ? [%enadv,,0]]
+		 jfcl   
+		stop ]
+; Come here when DSKC has been successfully opened.
+load0:	movsi 17,loader
+	blt 17,17   
+	jrst loadit
+
+zero==:0
+
+;;;If this thing gives the %ENACR error, it does a bunch of wierd things
+;;;after the JOBRET, but none of them seem to be harmfull...
+loader: offset -.
+zero::		%enacr,,0	;No core available.  (must be in zero!)
+crapit::	.call crap	
+		 .logout
+loadit::	.core 0		;Start here.
+		 .logout	
+		.call load	
+		 jrst crapit	
+		.iot a,crap	;This better get an instruction!
+		.iopdl		
+crap::		setz		
+		sixbit /jobret/	
+		movei bojc	
+load::		setz zero	;Dual purpose!
+		sixbit /load/	
+		movei %jself	
+		setzi dskc	
+	offset 0
+
+ifg <.-loader>-20, .err Loader won't fit in accumulators.
+
+; Come here having failed to load the obvious file.  Check for possible
+; foreign filesystems.
+ffchek:	trnn dev,-1		; A three character device name
+	 jrst pkchek		; is too short for this hack.
+	movsi a,777700
+	and a,dev		; Check first two characters
+	movsi d,-nffs		; to see if it is a foreign filesystem
+	came a,devtab(d)
+	 aobjn d,.-1
+	jumpge d,pkchek
+	; We have decided to contact a foreign filesystem.  A contains name
+	; of some machine to contact.  RH(D) contains index into FILTAB.
+	move dev,a   
+	.call dskopn		; Explicit link?
+	 jrst load1		; No: use index
+	jrst load0		; Yes: use channel
+
+; Come here having failed to load the obvious file, or decide on a foreign
+; filesystem.  Check for the names of normally mounted secondary packs.
+pkchek:	syscall sstatu,[repeat 5,[movem a ? ] movem a]	;Get machine name.
+	 .lose %lssys
+	movsi b,-nmach   
+	came a,machtb(b)	;Find our machine.
+	 aobjn b,.-1
+	move b,dsktab(b)
+	came dev,(b)		;Look for a known disk alias.
+	 aobjn b,.-1
+	jumpge b,strip		;Not one of ours.
+	syscall jobret,[movei bojc ? [%enapk,,0]]	;Pack not mounted.
+	 jfcl   
+	stop
+
+machtb:	sixbit /MX/
+	sixbit /AI/
+nmach==:.-machtb
+
+dsktab:	-3,,[sixbit /second/ ? sixbit /third/ ? sixbit /fourth/]
+	-2,,[sixbit /second/ ? sixbit /third/]
+nmach==:.-dsktab
+	-1,,[sixbit /second/]	; By default, there is a second.
+
+bptab:	000600,,dev   
+	060600,,dev   
+	140600,,dev
+	220600,,dev
+	300600,,dev
+
+; Come here having failed to load the obvious file, decide on a foreign
+; filesystem, or detect an unmounted pack.
+; Try to strip off a trailing digit.
+strip:	movsi a,-5   
+strip1:	ldb b,bptab(a)   
+	cail b,'0
+	 caile b,'9
+	  jrst strip2		;Wasn't a digit.
+	setzi b,		;Erase trailing digit.
+	dpb b,bptab(a)   
+	jrst retry		;Take it from the top!
+
+strip2:	jumpn b,lost 		;That was really a character.
+	aobjn a,strip1		;Was trailing space, try previous?
+
+;;;When we get here, there is no longer a chance that we will find a
+;;;handler to load.  But we do provide directorys for a couple of odd
+;;;things. 
+lost:	camn fn1,[sixbit /.file./]	;Directory listing?
+	 came fn2,[sixbit /(dir)/]
+	  jrst giveup			;Nope.  Giveup.
+	setom crock		;???  How could it be otherwise?
+;???	tlnn odev,77		;Three or more character device name?
+;???	 jrst giveup		;Nope.  Giveup.
+lfunbuf==:100
+.vector funbuf(lfunbuf)
+	move a,[-lfunbuf,,funbuf]
+	move b,[sixbit /devs/]
+	.getsys a,   
+	 jrst giveup		;Whazat?
+	jumpge a,giveup		;Huh?
+	move b,[-lfunbuf,,funbuf]   
+dvlook:	camn dev,(b)		;Look for digit stripped name
+	 jrst dirwin		; in system's table.
+	aobjn b,.+1
+	came b,a   
+	 jrst dvlook   
+giveup:	syscall jobret,[movei bojc ? [%ensdv,,0]]	;No such device.
+	 jfcl   
+	stop
+
+funtb:
+funln==:2			;A table of two word entries.
+irp foo,,[lpt,ptr,ptp,plt,cod,dis,nvd,pdp,tab,stk]
+	sixbit /foo/		;0
+	squoze 0,foo!usr	;1
+termin
+lfuntb==:.-funtb
+
+;;;We come here when the user has asked for a directory listing of a known
+;;;system device.
+dirwin:	move d,[-lfuntb,,funtb]   
+funluk:	hllz c,0(d)   
+	camn c,dev		;Is this a directory for a one-user device?
+	 jrst funwin		;Yup.
+	add d,[funln,,funln]	;Next entry.
+	jumpl d,funluk   
+	move a,[440700,,[asciz /Non-Directory Device
+/]]
+;;;Come here with a bp to an asciz string to produce as a directory listing
+;;;in A.
+winwin:	setz d,			;Count length of string into D.
+	move b,a   
+	ildb c,b   
+	skipe c   
+	 aoja d,.-2
+	.suset [.smsk2,,[1_bojc]]
+win1:	.call jobwin
+	 jrst [	.call jobcal	;???  Why is this done?  Won't this trash
+		 stop		; A and D and then loop back to win1?
+		tlne d,60000   
+		 stop   
+		jrst win1]
+squirt:	syscall siot,[movei bojc ? a ? d]	;???  Perhaps the fact that
+	 stop			;we only use SIOT, and only use it once,
+				;makes it OK that we might not have our
+				;channel open in a matching byte size?
+	aose crock		;IOT's should now return.  This is
+	 jrst hang		; the wrong way to handle EOF!
+				;???  How can this AOSE fail to skip?
+	.call jobwin
+	 jfcl   
+hang:	jfcl   
+	.hang   
+
+crock:	-1   
+
+tsint:	0   
+	0   
+	skipge u,tsint   
+	tdne u,[#<setz 1_bojc>]
+	 .lose  
+	hrroi u,w		;U: -1,,W
+	syscall jobcal,[movei bojc ? u ? movem v]
+	 .dismis tsint+1   
+	tlne v,60000		;Close?
+	 stop   
+	hrrzs v			;Clear left half of op
+	jumpe v,tsinx		;???  (%joopn=0) how can this happen?
+	cain v,%joiot		;Anything but IOT just returns.
+	 skipl crock		;IOT returns if CROCK >= 0
+	  .call jobwin
+	   jfcl   
+tsinx:	.dismis tsint+1   
+
+;;;Come here to produce a directory listing for a single user device.
+;;;D still points to a pair of words: [sixbit /foo/ ? squoze 0,foousr]
+funwin:	move a,1(d)   
+	.eval a,		;Get address of the lock for that device.
+	 jrst dirwin		;???  Infinite loop?
+	hrli a,1(a)   
+	hrri a,b   
+	.getloc a,		;Get lock word.
+	jumpl b,funwn0		;Not locked.
+	sub a,[1,,0]  
+	.getloc a,		;Get user index.
+	move a,[squoze 0,uname]
+	.eval a,   
+	 jrst dirwin		;???  Infinite loop?
+	add b,a   
+funwn0:	hrli d,440600		;BP to sixbit device name.
+	move a,[440700,,funbuf]
+repeat 6,[
+	ildb c,d
+	jumpe c,funwn7
+	addi c,40   
+	idpb c,a   
+	]
+funwn7:	skipl b   
+	 skipa d,[440700,,[asciz " IN USE BY "]]
+	  move d,[440700,,[asciz " NOT IN USE"]]
+funwn1:	ildb c,d   
+	jumpe c,funwn2   
+	idpb c,a   
+	jrst funwn1   
+
+funwn2:	jumpl b,fundon		;If it was free.
+	movsi b,(b)		;Else deposit user's name.
+	hrri b,b   
+	.getloc b,		;Get UNAME
+	move d,[440600,,b]
+repeat 6,[
+	ildb c,d
+	jumpe c,fundon
+	addi c,40   
+	idpb c,a   
+	]
+fundon:	movei c,^M		;Finally a crlf.
+	idpb c,a   
+	movei c,^J
+	idpb c,a   
+	setzi c,   
+	idpb c,a   
+	move a,[440700,,funbuf]
+	jrst winwin		;Send it off.
+
+;;;Various common .CALLs
+
+;;;.CALL DSKOPN to try to load a handler for the device name in DEV.
+dskopn:	setz   
+	sixbit /open/
+	move [.uii,,dskc]
+	move [sixbit /dsk/]
+	move [sixbit /jobdev/]
+	move dev
+	setz [sixbit /device/]
+
+;;;.CALL JOBCAL to pick up the user's call.  A should have an AOBJN to a
+;;;place to deposit the arguments.  D will get the "opcode".
+jobcal:	setz   
+	sixbit /jobcal/
+	movei bojc
+	move a
+	setzm d
+
+;;;.CALL JOBWIN to cause a call to return and skip, returning no values.
+jobwin:	setz   
+	sixbit /jobret/
+	movei bojc
+	setzi 1
+
+end go
