@@ -41,6 +41,9 @@ proc shutdown {} {
     respond "NOW IN DDT" "\005"
 }
 
+set timeout 100
+expect_before timeout abort
+
 spawn pdp10 build/simh/init
 
 respond "sim>" "b tu1\r"
