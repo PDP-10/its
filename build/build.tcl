@@ -286,6 +286,9 @@ respond "*" ":link channa; rakash pfthmg,dragon; rakash pfthmg\r"
 
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
+respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
+expect ":KILL"
+
 respond "*" $emulator_escape
 create_tape "out/output.tape"
 type ":dump\r"

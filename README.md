@@ -50,5 +50,6 @@ from scratch.
    - TCTYP and CRTSTY, terminal handling.
    - PEEK, system monitoring.
    - ARCDEV, transparent file system access to archive files.
+   - MTBOOT, make bootable tapes.
 
 6. Finally, the whole file system is dumped to tape.

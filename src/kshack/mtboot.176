@@ -1,0 +1,720 @@
+; -*- Mode:MIDAS -*- 
+
+TITLE	MTBOOT - Create KS10 bootload tape or file.
+	;CStacy,  21 July 1984
+	;(Munged by Alan a great deal since then.)
+
+; The 8080 front-end reads a tape starting with an optional 
+; microcode file, and EOF, and a 512 word bootload program
+; which is loaded at 1000 and started.
+;
+; MTBOOT writes a file (to be copied onto a KS10 boot tape after the
+; microcode file) containing the SBLK-bootstrap loader followed by SBLK
+; files concatenated.  Usually the first one is DDT and the second is
+; some client program.
+;
+; OR
+;
+; MTBOOT will directly write a tape containing a microcode and the boot
+; file.
+
+;;; MTBOOT gets DDT from the file DSK:KSHACK;DDT BIN
+;;; MTBOOT gets microcode from the file DSK:KSHACK;GOOD RAM
+
+IFNDEF $$DBG, $$DBG==0		;Set for debugging version of bootloader.
+IFNDEF $$TPDBG, $$TPDBG==0	;Set for debugging tape handling
+IFNDEF $$SBDBG, $$SBDBG==0	;Set for debugging SBLK stuff
+
+
+SUBTTL	Definitions
+
+X=0		;Super temporary.
+A=1		;A-E general purpose.
+B=2
+C=3
+D=4
+E=5
+BP=6		;Buffer pointer.
+F=7		;Flags.
+RETRY=10	;Count disk ops.
+Q=11		;Checksum.
+T=12		;Temporary ACs.
+TT=13
+P=17		;Stack pointer.
+
+; I/O channels for MTBOOT
+
+DSKI==1		;Disk input
+OUTCH==2	;Disk or tape output
+TYIC==3		;Typein
+TYOC==4		;Typeout
+
+CALL==:<PUSHJ P,>
+RET==:<POPJ P,>
+NOP=:<TRN>
+
+;System call macro
+DEFINE SYSCAL OP,ARGS
+	.CALL [ SETZ ? SIXBIT /OP/ ? ARGS ((SETZ)) ]
+TERMIN
+
+
+;Canonical information macro.
+DEFINE INFORM A,B
+IF1,[	PRINTX /A = B
+/]
+TERMIN
+
+;Type out an ascii string.
+DEFINE TSTYPE &STRING
+	MOVEI T,<.LENGTH STRING>
+	MOVE TT,[440700,,[ASCII STRING]]
+	SYSCAL SIOT,[%CLIMM,,TYOC ? TT ? T]
+	 .LOSE %LSFIL
+TERMIN
+
+;Type string from BP until null encountered.
+DEFINE TYPEBP BPTR
+	MOVE T,BPTR
+	ILDB TT,T
+	JUMPE TT,.+3
+	.IOT TYOC,TT
+	JRST .-3
+TERMIN
+
+
+;Decrement ASCII byte pointer.
+DEFINE DECBP C			   ;Decrement byte pointer.
+	ADD C,[70000,,]		   ;Back up the byte pointer.
+	SKIPGE C		   ;Did we cross a word boundary?
+	  SUB C,[430000,,1]	   ; then fix it.
+TERMIN
+
+
+
+SUBTTL	Main Program and Data
+
+SYSLOS:	.VALUE [ASCIZ ":Losage."]
+	JRST .-1
+
+POPJ1:	AOS (P)				;Canonical Skip
+CPOPJ:	POPJ P,				;Return.
+DIE:	.LOGOUT 1,			;JRST here to die.
+
+MTBOOT:	MOVE P,[-PDLLEN,,PDL-1]		;Init our stack.
+	PUSHJ P,RFN"RMNAME		;Find name of this machine.
+	SYSCAL OPEN,[%CLBIT,,<.UAO+%TJDIS> ? %CLIMM,,TYOC ? [SIXBIT /TTY/]]
+	  .LOSE %LSFIL
+	SYSCAL OPEN,[%CLBIT,,.UAI ? %CLIMM,,TYIC ? [SIXBIT /TTY/]]
+	  .LOSE %LSFIL
+	SYSCAL CNSGET,[%CLIMM,,TYIC ? %CLOUT,,X ? %CLOUT,,X	;Get TTY caps.
+		       %CLOUT,,X ? %CLOUT,,X ? %CLOUT,,TTYOPT]
+	  .LOSE %LSFIL
+	.SUSET [.RSNAME,,A]
+	MOVEM A,INFILE+3
+	MOVEM A,KSBOOT+3
+	TSTYPE "AKS10 ITS Bootload Generator."
+	SETZM MAGP
+	TSTYPE "AWrite a tape? "
+	PUSHJ P,YORNP
+	 JRST NOTAPE
+	SETOM MAGP
+	TSTYPE "ARewind tape first? "
+	PUSHJ P,YORNP
+	 JRST NOWIND
+	SYSCAL OPEN,[	[.BII,,OUTCH]	; Can only rewind in input mode...
+			[SIXBIT /MT0/]]
+	 .LOSE %LSFIL 
+	MOVE A,[OUTCH,,[1,,1]]	; rewind once
+	.MTAPE A,
+	 .LOSE %LSSYS
+NOWIND:	SYSCAL OPEN,[	[1000+.BIO,,OUTCH]	; 1000 word records
+			[SIXBIT /MT0/]]
+	 .LOSE %LSFIL 
+	TSTYPE "AWriting microcode from "
+	MOVEI B,RAMFIL
+	MOVE D,[440700,,TYPEIN]
+	PUSHJ P,RFN"PFN
+	MOVE D,[440700,,TYPEIN]
+	TYPEBP D
+	PUSHJ P,COPY
+	MOVE A,[OUTCH,,[1,,5]]	; EOF once
+	.MTAPE A,
+	 .LOSE %LSSYS
+NOTAPE:	TSTYPE "AInclude DDT? "
+	SETOM DDTP			;Normally we write DDT
+	SETOM PRGP			;and some other program.
+	PUSHJ P,YORNP
+	 SETZM DDTP			;Say not to include DDT.
+	TSTYPE "AInput file (just press Return if none)? "
+	PUSHJ P,READER			;Read file name string.
+	 CAIA
+	JRST [	MOVE D,[440700,,TYPEIN]	;Bp to the filename string.
+		MOVEI B,INFILE		;Ptr to file block.
+		PUSHJ P,RFN"RFN		;Parse the file name.
+		JRST MERGE ]
+	SETZM PRGP
+	SKIPN DDTP
+	 JRST [	TSTYPE "AWriting just the loader is useless!"
+		JRST DIE ]
+MERGE:	SKIPE MAGP
+	 JRST MERGE0
+	MOVEI A,KSBOOT			;Open the output file.
+	SYSCAL OPEN,[%CLBIT,,.BIO ? %CLIMM,,OUTCH ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 .LOSE %LSFIL
+MERGE0:	TSTYPE "AWriting 512 word bootstrap loader."
+	MOVE A,[-1000,,PREBOOT]		;Pointer to bootload program.
+	.IOT OUTCH,A			;Write out 512 words.
+	SKIPN DDTP
+	 JRST [	CALL MNSBLK
+		JRST MERGE1]
+	TSTYPE "AWriting DDT from "
+	MOVEI B,DDTBIN
+	MOVE D,[440700,,TYPEIN]
+	PUSHJ P,RFN"PFN
+	MOVE D,[440700,,TYPEIN]
+	TYPEBP D
+	PUSHJ P,COPY			;Write out DDT.
+MERGE1:	SKIPN PRGP
+	 JRST [	CALL MNSBLK
+		JRST MERGE2]
+	SETOM CLIENP
+	TSTYPE "AWriting SBLK program from "
+	MOVEI B,INFILE
+	MOVE D,[440700,,TYPEIN]
+	PUSHJ P,RFN"PFN
+	MOVE D,[440700,,TYPEIN]
+	TYPEBP D
+	PUSHJ P,COPY			;Write out program.
+MERGE2:	SKIPE MAGP
+	 JRST MERGE3
+	SYSCAL RFNAME,[%CLIMM,,OUTCH ? %CLOUT,,KSBOOT
+			%CLOUT,,KSBOOT+1 ? %CLOUT,,KSBOOT+2 ? %CLOUT,,KSBOOT+3]
+	 .LOSE %LSFIL
+	TSTYPE "AWrote file "
+	MOVEI B,KSBOOT
+	MOVE D,[440700,,TYPEIN]
+	PUSHJ P,RFN"PFN
+	MOVE D,[440700,,TYPEIN]
+	TYPEBP D
+MERGE3:	.CLOSE OUTCH,
+	JRST DIE
+
+;;; Open, gobble, and write out the file specified by B.
+COPY:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	SYSCAL OPEN,[%CLBIT,,.BII ? %CLIMM,,DSKI ? 0(B) ? 1(B) ? 2(B) ? 3(B)]
+	 .LOSE %LSFIL
+	JRST COPY1
+
+COPY2:	MOVE B,[-1000,,BUFFER]
+	.IOT OUTCH,B			;Copy out buffer.
+COPY1:	SETZM BUFFER			;Freshen buffer.
+	MOVE C,[BUFFER,,BUFFER+1]
+	BLT C,BUFFER+1000
+	MOVE A,[-1000,,BUFFER]		;Pointer to input buffer
+	.IOT DSKI,A			;Read max 512 words from file.
+	CAME A,[-1000,,BUFFER]	; Stop at EOF
+	 JRST COPY2
+	.CLOSE DSKI,
+	POP P,C
+	POP P,B
+	POP P,A
+	RET
+
+;;; Write minimum SBLK file:
+MNSBLK:	PUSH P,A
+	MOVE A,[-3,,[
+		JRST 1
+		JRST 4,17
+		JRST 4,17
+		]]
+	.IOT OUTCH,A
+	SETZM BUFFER
+	MOVE A,[BUFFER,,BUFFER+1]
+	BLT A,BUFFER+1000
+	MOVE A,[-775,,BUFFER]
+	.IOT OUTCH,A
+	POP P,A
+	RET
+
+;;; Read from TYIC with minimal rubout handling (displays only).
+;;; Uses TYPEIN buffer and skips if read something; returns count in A.
+
+READER:	MOVE BP,[440700,,TYPEIN]
+	SETZM TYPEIN			;Clear typein buffer.
+	MOVE A,[TYPEIN,,TYPEIN+1]
+	BLT A,TYPEIN+LTYPEI
+	SETZ A,				;Keep count in A.
+READ1:	.IOT TYIC,T
+	CAIN T,177			;Rubout deletes chars.
+	 JRST RUBOUT
+	CAIN T,^D			;^D rubs out a line.
+	 JRST RUBALL
+	CAIE T,^C			;^C and ^M finish input.
+	 CAIN T,^M
+	 JRST [	MOVEI T,0
+		IDPB T,BP		;Tie off ASCIZ string.
+		SKIPE A			;If we read something
+		 AOS (P)		; Skip
+		POPJ P, ]		;  Return.
+	AOS A				;Keep count of chars read.
+	CAILE C,LTYPEI*5.		;Avoid overflowing the buffer.
+	 JRST RUBALL
+	IDPB T,BP			;Stuff it.
+	CAIGE T,40			;No random ctl chars allowed!
+	 JRST [ .IOT TYOC,[^G]
+		JRST RUBOUT ]
+	JRST READ1			;Get another.
+RUBALL:	TSTYPE " XXX?"
+	JRST READER			;Flush entire line.
+
+RUBOUT:	SKIPN A				;Something to rubout?
+	 JRST [	.IOT TYOC,[^G]		; No, just beep.
+		JRST READ1 ]
+	MOVE T,TTYOPT			;Examine terminal.
+	TLNE T,%TOERS
+	 JRST [ TSTYPE "X"		;If able, erase from screen
+		JRST RUBOU1 ]
+	LDB T,BP			;Else just echo deleted char.
+	.IOT TYOC,T
+RUBOU1:	DECBP BP
+	SOS A
+	JRST READ1
+
+
+;;; Y-OR-N-P, skips for Yes.
+YORNP:	TSTYPE / (Y or N) /
+	.IOT TYIC,T
+	CAIN T,40			;A [SPACE] means yes.
+	 JRST POPJ1
+	CAIN T,177			;A [RUBOUT] means no.
+	 POPJ P,
+	CAIL T,140
+	 SUBI T,40			;Y or N mean the obvious.
+	CAIN T,"Y
+	 JRST POPJ1
+	CAIN T,"N
+	 POPJ P,
+	.IOT TYOC,[^G]
+	JRST YORNP			;Maybe obvious not to everybody????
+
+
+
+$$RFN==1
+$$PFN==1
+$$MNAME==1
+.INSRT DSK:SYSENG;RFN
+
+RSIXTP::				;Filename parser routines.
+PSIXTP:	POPJ P,				;No special character processing.
+
+
+;;; Data
+
+PDLLEN==200
+LTYPEI==20.
+LBUFFE==1001
+
+TTYOPT:	0				;TTYOPT word.
+MAGP:	0				;-1 if writing a tape.
+DDTP:	0				;-1 if DDT being written too.
+PRGP:	0				;-1 if program to "merge" with DDT.
+CLIENP:	0			   	;-1 if hacking client now.
+MNAME:	0				;Name of this ITS.
+
+PDL:	BLOCK PDLLEN			;Stack.
+BUFFER:	BLOCK 1001			;Disk buffer.
+TYPEIN:	BLOCK LTYPEI+1			;Typein buffer.
+
+;;; File names.
+
+KSBOOT:	SIXBIT /DSK/
+	SIXBIT /KSBOOT/
+	SIXBIT />/
+	0
+
+INFILE:	SIXBIT /DSK/
+	SIXBIT /FOO/
+	SIXBIT /BIN/
+	0
+
+DDTBIN:	SIXBIT /DSK/
+	SIXBIT /DDT/
+	SIXBIT /BIN/
+	SIXBIT /KSHACK/
+
+RAMFIL:	SIXBIT /DSK/
+	SIXBIT /GOOD/
+	SIXBIT /RAM/
+	SIXBIT /KSHACK/
+
+CONSTANTS
+
+
+SUBTTL	SBLK Bootstrap Loader
+
+.INSRT KSHACK;KSDEFS
+
+MEMSIZ=1000000		;The size of memory.
+DDT=MEMSIZ-4000		;Address of DDT.
+JOBSYM=DDT-1		;-1 if following is invalid.
+;      DDT-2		;All symbols ptr. 
+KILC=  DDT-3		;Initial symbols ptr.
+STARTA=DDT-4		;Start address.
+
+;Print a string
+DEFINE	TYPE &STRING
+	MOVEI T,[ASCIZ STRING]
+	CALL TYPOUT
+TERMIN
+
+;Type a SIXBIT value
+DEFINE	6TYPE LOC
+	MOVEI T,LOC
+	CALL TYPSIX
+TERMIN
+
+;Type a number.
+DEFINE	8TYPE LOC
+	MOVE T,LOC
+	CALL OCTPNT
+TERMIN
+
+;Type a CRLF (sugar macro).
+DEFINE	TYPECR
+	CALL CRLF
+TERMIN
+
+; Type character immediate.
+DEFINE	CTYPE CHAR
+	MOVEI TT,CHAR
+	CALL TYO
+TERMIN
+
+;Fatal error macro.
+DEFINE	ERROR &MSG
+	JRST [	MOVEI T,[ASCIZ MSG]
+		JSR BARF ]
+TERMIN
+
+; 1000  --- Start Program
+; 1001  --- Lossage PC stored here.
+; LOSE  --- Horrible PC here.
+
+IFNDEF ORG, ORG==:1000	;Location of this bootload program in core (PREBOOT).
+
+PREBOOT:	
+OFFSET ORG-.
+	JRST GO			;Go for it!.
+
+BARF:	0			;Errors JSR here
+	TYPECR
+	CALL TYPOUT
+	TYPECR
+	JRST 4,@BARF
+
+LOSE:	0			   ;Really awful errors JSR here.
+	JRST 4,@LOSE
+
+IFN 0,[
+	IORD X,MTCS1		   ;Store some I/O info in 103-113.
+	MOVEM X,103		   ;MTCS1.
+	IORD X,MTCS2
+	MOVEM X,104		   ;MTCS2.
+	IORD X,MTDS
+	MOVEM X,105		   ;MTDS.
+	IORD X,MTER
+	MOVEM X,106		   ;MTER1.
+	SETZM 107		   ;Not used.
+	SETZM 110		   ;Not used.
+	IORD X,IOPAGR
+	MOVEM X,111		   ;UBA page RAM loc 0.
+	IORD X,IOSTAT
+	MOVEM X,112		   ;UBA status register.
+	MOVE X,VERSUN
+	MOVEM X,113		   ;Version of this bootloader.
+];IFN 0
+
+GO:	;; Clear core above and below the loader.  Be careful about 8RHBAS
+	;; through 8BOOTP.
+	SETZM ORG+1000
+	MOVE A,[ORG+1000,,ORG+1001]
+	BLT A,777677		; Don't clobber DSKDMP bootstrap
+	SETZM 8BOOTP+1
+	MOVE A,[8BOOTP+1,,8BOOTP+2]
+	BLT A,ORG-1
+	SETZM 20
+	MOVE A,[20,,21]
+	BLT A,8RHBAS-1
+	;; Clear all AC's and select block 0
+CLRACS:	WRUBR ACBLK+0		; A in block 0 contains count.
+	MOVEI A,7		; Start with block 7.
+CLRACL:	WRUBR ACBLK(A)		; Select next block
+	SETZI 0,
+	MOVEI 17,1
+	BLT 17,17		; Clears A iff A already contained 0.
+	WRUBR ACBLK+0		; Select block 0 again
+	SOJGE A,CLRACL		; Go do next?
+	MOVE P,[-LBOOPD,,BOOPDL-1] ;Init our stack.
+MAKIOT:	SKIPN A,8RHBAS		   ;Find 19 bit base addr of tape boot device.
+	 ERROR "RH11 base?"
+	HLLM A,IOPAGR		   ;UBA pager this bus.
+	HLLM A,IOSTAT		   ;UBA status this bus.
+	MOVE B,[-NIOWDS,,MTCS1]		   ;AOBJN to IO words.
+MAKIO1:	MOVEM A,(B)		   ;Store unibus addr of tape control register.
+	ADDI A,2		   ;Compute next one.
+	AOBJN B,MAKIO1		   ;Go store them all.
+HERALD:	TYPE "ITS MTBOOT."
+	6TYPE VERSUN
+	SETZI BP,		; Buffer starts empty.
+	CALL LODCOD
+	MOVEM A,START
+	JRST LOAD3
+
+LOAD4:	CALL LODSKP
+LOAD3:	CALL MTIOT
+	JUMPL A,LOAD4
+	CAME A,START
+	 ERROR "Start instruction mismatch"
+	CALL LODCOD
+	EXCH A,START		; Consider running second program
+	CAMN A,[JRST 4,17]	; Was first file the minimal SBLK file?
+	 JRST DONE		; Yes:  Run second program
+	EXCH A,START		; OK, so run first program
+	MOVE B,JOBSYM
+	CAIE B,DDT-2		; Does it look like DDT?
+	 JRST DONE		; No:  Just go run it
+	MOVEM A,STARTA		; This must be DDT, set starting address
+	TLO B,400000
+	MOVEM B,JOBSYM		; and mark symbol table as clobbered
+	JRST LOAD5
+
+LOAD6:	CALL LODSYM
+LOAD5:	CALL MTIOT
+	JUMPL A,LOAD6
+	CAME A,STARTA
+	 ERROR "Start instruction mismatch"
+DONE:	;; Clear out loader and start him up.
+	SETZM ORG
+	MOVE 15,[ORG,,ORG+1]	; Load AC for BLT.
+	MOVE 16,[BLT 15,ORG+1777]	; This instruction does the work.
+	MOVE 17,START		; This is the start instruction.
+	JRST 16			; Do it.
+
+;;; Load a symbol table block or other information block.  Enter with first
+;;; word already in A.
+;;; Clobbers A, B, C and Q.
+LODSYM:	HRRZ C,A		; C: type of block
+	JUMPN C,LODSKP
+	HLRE B,A
+	ADD B,A
+	ADDB B,@JOBSYM
+	HLL B,A
+	JRST LODBK1
+
+;;; Skip over an information block.  Enter with first word already in A.
+;;; Clobbers A, B and Q.
+LODSKP:	MOVE B,A		; B: aobjn into hyperspace
+	MOVE Q,A		; Q: checksum
+SKPLUP:	ROT Q,1
+	CALL MTIOT
+	ADD Q,A
+	AOBJN B,SKPLUP
+	JRST CHKSUM
+
+;;; Load the code from an SBLK file, returns start instruction in A.
+;;; Clobbers A, B, C and Q.
+LODCOD:	CALL MTIOT		; Get a word
+	CAME A,[JRST 1]		; End of RDIN cruft?
+	 JRST LODCOD		; No: keep looking.
+	JRST LODCD1
+
+LODCD2:	CALL LODBLK		; Loop loading SBLKs
+LODCD1:	CALL MTIOT
+	JUMPL A,LODCD2		; Until start instruction
+	RET
+
+;;; Load an SBLK into memory.  Enter with first word already in A.
+;;; Clobbers A, B, C and Q.
+LODBLK:	MOVE B,A		; B: aobjn into core
+LODBK1:	MOVE Q,A		; Q: checksum
+LODLUP:	ROT Q,1
+	HRRZ C,B		; C: destination address
+	CAIL C,8SWIT0		; Smashing 8080 area?
+	 CAILE C,8QNUM
+	  CAIA
+	   ERROR "Overwriting 8080 area"
+	CAIGE C,20		; Smashing ACs?
+	 ERROR "Overwriting ACs"
+	CAIL C,ORG		; Smashing loader?
+	 CAILE C,ORG+1777
+	  CAIA
+	   ERROR "Overwriting loader"
+	CALL MTIOT		   ;Get word.
+	MOVEM A,(B)		   ;Store it.
+	ADD Q,A			   ;Do sum checking.
+	AOBJN B,LODLUP
+CHKSUM:	CALL MTIOT		   ;Read checksum.
+	CAME A,Q		   ;Match?
+	 ERROR "Checksum error"
+	RET
+
+; Get word from tape (or refill buffer) into A.
+MTIOT:	JUMPL BP,MTIOT1		   ;Jump if buffer contains data
+	IFN $$TPDBG,CTYPE "%
+	MOVEI RETRY,20.		   ;Retry count
+READ:	CALL MTHAK		   ;Init tape.
+	MOVEI A,40001+<org/1000>   ;Page after loader, UBA valid.
+	IOWR A,IOPAGR		   ;Map Unibus locations 0-1777 to KS10 mem.
+	SETZ A,
+	IOWR A,MTBA
+	MOVNI A,2000		   ;2000 18-bit words = 1000 36-bit words.
+	IOWR A,MTWC
+	MOVEI A,71		   ;Read forward
+	IOWR A,MTCS1
+	CALL IOWAIT
+	TRNE A,4		   ;Premature tape mark?
+	 ERROR "Unexpected EOF"	   ; Lose.
+	IORD A,MTER
+	TRNE A,176777		   ;Tape error--retry
+	 JRST [	SOJL RETRY,[ ERROR "Tape err" ]
+		CALL MTHAK
+		MOVNI A,1	   ;Backspace one record.
+		IOWR A,MTFC
+		MOVEI A,33
+		IOWR A,MTCS1
+		CALL IOWAIT
+		JRST READ ]
+	MOVSI BP,-1000		   ;Buffer contains data now
+	IFN $$TPDBG,CTYPE "$
+MTIOT1:	MOVE A,2000(BP)		   ;Get next word from buffer
+	AOBJN BP,.+1		   ;Advance buffer pointer
+IFN $$SBDBG,[
+	TYPE "...  "
+	8TYPE A
+	MOVEI B,40000.		;Pause about 1/4 sec.
+	SOJG B,.
+]; $$SBDBG
+	RET
+
+MTHAK:	IFN $$TPDBG,CTYPE "#
+	MOVEI A,40		   ;Hack the tape drive.
+	IOWR A,MTCS2
+	MOVE A,8QNUM
+	IOWR A,MTCS2
+	MOVE A,8BOOTP
+	IOWR A,MTTC
+	SETZ A,
+	IOWR A,MTFC
+	RET
+
+IOWAIT:	IORD A,MTDS		   ;Wait for IO completion.
+	TRNN A,20000		   ;Wait if positioning in progress
+	 TRNN A,200		   ;Wait until drive ready
+	  JRST IOWAIT
+	RET
+
+;Hand TT to 8080 for printing.
+TYO:	ANDI TT,177		;Remove crap.
+	TRO TT,400		;Set CTY-character-pending
+	MOVEM TT,8CTYOT		;Store in comm area
+	CONI TT			;Read 8080
+	TRO TT,80INT		;Hey you! Get this!
+	CONO (TT)		;Interrupt 8080
+	SKIPE 8CTYOT		;Wait for completion
+	 JRST .-1
+	RET
+
+IFN 0,[
+;Wait for console char TT from the 8080.
+TYI:	SKIPN TT,8CTYIN		   ;Chars stored here by 8080.
+	 RET
+	SETZM 8CTYIN		   ;Remember to clear it.
+	ANDI TT,177		   ;Remove crap.
+	RET
+]; 0
+
+;Type Newline.
+CRLF:	MOVEI TT,15
+	CALL TYO
+	MOVEI TT,12
+	CALL TYO
+	RET
+
+;Type SIXBIT from T.
+TYPSIX:	HRLI T,440600
+	MOVEI X,6
+TYPSI1:	ILDB TT,T
+	JUMPE TT,TYPSIZ
+	ADDI TT,40
+	CALL TYO
+	SOJG X,TYPSI1
+TYPSIZ:	RET
+
+;Type ASCIZ from T.
+TYPOUT:	HRLI T,440700
+TYPOUL:	ILDB TT,T
+	JUMPE TT,TYPOUZ
+	CALL TYO
+	JRST TYPOUL
+TYPOUZ:	RET
+
+;Type octal number from T.
+OCTPNT:	SETZ TT,
+	LSHC T,-3		   ;shift instead of IDIVI, don't forget
+	LSH TT,-41		   ;negative! 
+	PUSH P,TT		   ;push remainder
+	SKIPE T			   ;done?
+	  CALL OCTPNT		   ;no compute next one
+OCTPN1:	POP P,TT		   ;yes, take out in opposite order
+	ADDI TT,60		   ;make ascii
+	CALL TYO
+	RET			   ;and return for the next one.
+
+;;; WRUBR ACBLK+N selects AC block N as current and previous.
+ACBLK:	REPEAT 8, <400000+<1100*.RPCNT>>,,0
+
+; Data
+LBOOPD==20.
+
+VERSUN:	.FNAM2			; Loader version.
+BOOPDL:	BLOCK LBOOPD		; The stack.
+START:	0			; Start instruction.
+
+;;; Table of I/O addresses
+MTCS1:	0
+MTWC:	0
+MTBA:	0
+MTFC:	0
+MTCS2:	0
+MTDS:	0
+MTER:	0
+MTAS:	0
+MTCK:	0
+MTDB:	0
+MTMR:	0
+MTDT:	0
+MTSN:	0
+MTTC:	0
+NIOWDS==:.-MTCS1
+
+IOPAGR:	UBAPAG
+IOSTAT:	UBASTA
+
+VARIABLES
+CONSTANTS
+
+IF1,[	PRINTX /
+Bootstrap loader /
+	.TYO6 .FNAM2 ]
+INFORM [, length]\.-1000
+IFG .-2000, .FATAL Bootstrap loader doesn't fit in 512 words.
+
+BLOCK 1000			   ;Pad the loader.
+	-1			   ;Force core to exist.
+
+OFFSET 0
+
+END MTBOOT
