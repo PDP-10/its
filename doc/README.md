@@ -8,6 +8,8 @@
 - DUMP: [manual](_info_/dump.info), [format](sysdoc/dump.format)
 - TECO: [primer](_teco_/teco.primer), [manual](info/tecman.20),
   [commands](_teco_/tecord.1132)
+- CRTSTY: [manual](info/crtsty.39)
+- TCTYP: [manual](_info_/tctyp.order)
 
 ### DDT cheat sheet for Unix users
 
