@@ -289,6 +289,26 @@ respond "*" ":link sys; ts p,sys; ts peek\r"
 respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
 expect ":KILL"
 
+respond "*" ":link kshack;good ram,.;ram ram\r"
+respond "*" ":link kshack;ddt bin,.;@ ddt\r"
+respond "*" $emulator_escape
+create_tape "out/ndskdmp.tape"
+type ":kshack;mtboot\r"
+respond "Write a tape?" "y"
+respond "Rewind tape first?" "y"
+respond "Include DDT?" "y"
+respond "Input file" ".;dskdmp bin\r"
+expect ":KILL"
+
+respond "*" $emulator_escape
+create_tape "out/nnsalv.tape"
+type ":kshack;mtboot\r"
+respond "Write a tape?" "y"
+respond "Rewind tape first?" "y"
+respond "Include DDT?" "y"
+respond "Input file" ".;nsalv bin\r"
+expect ":KILL"
+
 respond "*" $emulator_escape
 create_tape "out/output.tape"
 type ":dump\r"
