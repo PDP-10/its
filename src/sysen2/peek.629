@@ -1,0 +1,7460 @@
+; -*-MIDAS-*-
+
+.SYMTAB 4001.,4500.
+TITLE PEEK
+; Tasteful ITS system status display
+
+;	**************************************************
+;	******** WARNING! The squeamish and those ********
+;	******** who are prone to heart attacks   ********
+;	******** read beyond this point at their  ********
+;	******** own risk.                        ********
+;	**************************************************
+
+IFNDEF GUNCTL,GUNCTL==1	;1 means users who do not have directories
+			;  may not gun or detach anyone but themselves.
+
+IFNDEF CRAWLP,CRAWLP==1	; 1 - Use CRAWL, FLY, etc; else just RUN
+IFNDEF 340P,340P==0	; 1 to still include obsolete 340 code
+IFNDEF MUDP,MUDP==0	; 1 to include kludge for MUDDLE that might
+			; randomly PCLSR any job.  Set this to 1 and your
+			; name is mud.  -Alan
+
+F=0
+A=1
+B=2
+C=3
+D=4
+U=5	;USER INDEX (MOSTLY)
+T=6	;SUPER TEMPORARY
+X=7
+U1=10	; Ux's used at UUOH level
+U2=11
+U3=12
+OBUFP=13	; Output buf byte pointer
+ODEV=14		; Output Dev type - 0 THROUGH %OMMAX-1
+I1=15		; Ix's used only at TSINT level
+I2=16
+P=17
+
+IF1 .INSRT SYSTEM;FSDEFS >
+
+IFN MUDP,[
+; Muddle definitions
+UUOLOC==41
+PVEC54==1367	;This is the address of something or other in Muddle
+PVEC55==1567	;So is this, for Muddle 55
+]
+
+;DEFINITIONS OF OFFSETS INTO JOB DEVICES
+%JOBDV==77
+%JDEV==100
+%JFN1==101
+%JFN2==102
+%JSNM==103
+%JACC==104
+%JMODE==105
+%JCUNM==106
+%JCJNM==107
+%JFLEN==110
+%JBTSZ==111	;BYTE SIZE
+
+PURPGB==:3	; PEEK pure code starts at user page 3
+SYSHGH==:200	; # of system pages to map in, starting at abs page 0 (128K)
+
+;SYSA==1	; ITS ac "A" - this isn't used though.
+;SYSP==15	; ITS ac "P" - ditto, what were these for anyway...
+SYSSYM==774000-2	; Location of ITS symbol table, from Exec DDT.
+
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT/A/ ? B ((SETZ))]
+TERMIN
+CALL==:<PUSHJ P,>
+RET==:<POPJ P,>
+CALRET==:JRST
+
+;USER UUO'S (MUST RUN FROM PUOMIN TO 37)
+ALIGN=37000,,	;SPACE TO COLUMN E BUT OUTPUT AT LEAST AC SPACES
+6TYPE=36000,,	;OUTPUT C(E) AS SIXBIT
+XTYPE=35000,,	;OUTPUT IN SIXBIT THE BLOCK STARTING AT E UNTIL AN "!" IS ENCOUNTERED
+SQPR=34000,,	;OUTPUT C(E) AS SQUOZE SYM
+CTYPE=33000,,	;OUTPUT CHARACTER WHOSE ASCII VALUE IS E
+6XTYPE=32000,,	;OUTPUT C(E) AS SIXBIT BUT STOP ON A SPACE
+VALRET=31000,,	;DOES .VALUE, SEE UVALRET
+ONUM=30000,,	;OCTAL PRINT C(E) IN A FIELD AT LEAST AC COLUMNS WIDE
+DNUM=27000,,	;DECIMAL "
+ATYPE=26000,,	;OUTPUT BLOCK OF ASCII STARTING AT E, STOPPING ON A ZERO
+SONUM=25000,,	;SIGNED OCTAL PRINT AS IN ONUM
+DWRD=24000,,	;ADD C(E) TO IMAGE MODE DISPLAY LIST (SEE UDWRD, HIST)
+DPCT=23000,,	;ALWAYS PRINT DECIMAL (FOR %'S)
+
+PUOMIN=23
+
+;SYMBOLIC IO CHANNELS
+TYOC==1
+TYIC==2
+DISC==3
+DISWC==4	;IMAGE MODE
+LPTC==5
+DIRC==6
+IFN MUDP, JOBI==7
+IMXC==10
+USRI==11	; For inferior to map crash dumps into
+USRO==12
+NTYO==14
+
+IFNDEF OBUFL,OBUFL==40	;SIZE OF OUTPUT BUF
+IFNDEF PDLL,PDLL==100	;LENGTH OF PDL.
+
+DEFINE TYPE &STR&
+	ATYPE [ASCIZ STR]
+TERMIN
+
+DEFINE CONC A,B
+A!B!TERMIN
+
+DEFINE DBP X				;DECREMENT BYTE POINTER
+	ADD X,[060000,,0] .SEE RUBOUT	;THIS IS VERY SPECIALIZED TO SIXBIT INPUT ROUTINE
+	JUMPGE X,.+3
+	 SOS X
+	 HRLI X,010600
+TERMIN
+
+DEFINE MM,B
+	MOVE A,[SIXBIT B]
+TERMIN
+
+DEFINE INFORM A,B
+IF1,[PRINTX \A = B
+\]TERMIN
+
+DEFINE TOUT AC
+IDPB AC,OBUFP	;DEPOSIT CHARACTER
+	CAMN OBUFP,[010700,,OBUF+OBUFL-1]	;SKIP IF BUF NOT FULL
+	 PUSHJ P,OBLOCK	;OUTPUT FULL BUF
+	TERMIN
+
+; Output device definitions - ODEV holds one of these values
+%ODTTY==:0	; Output to plain printing TTY (default)
+%ODDPT==:1	; Datapoint-type display
+%OD340==:2	; DEC 340 display (obsolete, alas)
+%ODLPT==:3	; Output to "LPT" (disk file)
+%ODWID==:4	; Wide display terminal
+%ODWIT==:5	; Wide printing terminal
+%ODMAX==:6	; # of output device types
+DEFINE ODEVER X
+IFN .-%ODMAX-X,.ERR TABLE X INDEXED BY ODEV HAS WRONG LENGTH.
+TERMIN
+
+SUBTTL	Purification macros copied from MC:KSC;IVORY >
+comment |
+	Definitions for purifying and relocating variables into impure low
+core.  BVAR and EVAR should bracket each group of variables, which by
+definition are impure.  LVAR may be used for single-line variable
+definitions.
+
+PURPGB specifies PAGE NUMBER beginning pure code;
+VARBEG specifies ADDRESS beginning variable (impure) code.
+
+VARCHK is a macro which should be called at the end of the program to
+ensure that pure and impure storage areas do not overlap, and to put MIDAS
+variables (foo', .scalar foo, etc) in the impure area.  It may be called
+more than at various places throughout the program, and each time will
+define PURPGE to be the first page unused by pure core.
+
+TMPLOC <loc>,{text} will assemble specified text at <loc> and restore
+	the loc counter automatically.
+
+To purify, use something like:
+	MOVE A,[<purpgb-purpge>,,purpgb]
+	.CALL [SETZ ? 'CORBLK ? 1000,,%CBNDR
+		1000,,%JSELF ? A ? SETZI %JSELF]
+|
+
+ifndef purpgb, purpgb==1	; 1st pure page normally 1; single impure at 0.
+ifndef varbeg, varbeg==100	; Variables normally start at location 100
+
+	; Initialize internal syms for B/EVAR
+%%pbeg==2000*purpgb		; Loc of 1st pure wd
+%%pend==%%pbeg			; Used to remember pure loc while assembling variables.
+%%vend==varbeg			; Current first unused loc for vars
+%%vflg==0			; 1 when assembling into var area, 0 otherwise.
+loc %%pbeg			; Start assembling into pure!
+
+define bvar
+ifn %%vflg,.err BVAR inside BVAR!
+.m"%%vflg==1
+.m"%%pend==.
+loc %%vend
+termin
+
+define evar
+ife %%vflg,.err EVAR without BVAR!
+.m"%%vflg==0
+.m"%%vend==.
+loc %%pend
+termin
+
+define lvar -line
+bvar
+line
+evar
+termin
+
+ifndef tmploc,{
+define tmploc val,?arg
+%%%tlc==.
+loc val
+arg
+loc %%%tlc
+termin }
+
+define errmac a,b,c,d,e,f
+.err a!b!c!d!e!f
+termin
+
+define varchk
+lvar variables			; Do this first; LVAR will set %%PEND properly
+.m"purpge==<%%pend+1777>/2000
+ifg varbeg-%%pbeg,{ifl .-varbeg,{
+ errmac [Pure overflow! ]\<.-varbeg>,[ words needed, increase VARBEG to ]\.,[?]
+ }
+}
+ifle varbeg-%%pbeg,{ifl %%pbeg-%%vend,{
+ errmac [Impure overflow! ]\<%%vend-%%pbeg>,[ words needed, increase PURPGB to ]\<<1777+%%vend>/2000>,[?]
+ }
+}
+termin
+
+SUBTTL	Impure code and variables
+
+TMPLOC 41,{
+	JSR UUOH	;TRANSFER TO USER UUO ROUTINE
+	JSR TSINT	;TRANSFER TO INTERRUPT ROUTINE
+}
+
+BVAR		; Start of impure code!
+
+UUOH:	0	;UUO HANDLER
+	LDB U1,[331100,,40]	;PICK UP OP CODE FROM 40
+	CAIGE U1,PUOMIN	;SKIP IF LEGAL
+	 .VALUE		;ILLEGAL
+	HRRZ U2,40	;GET EFFECTIVE ADDRESS	OF UUO
+	JRST @UUOTAB-PUOMIN(U1)	;DISPATCH TO UUO ROUTINE
+
+TSINT:	0
+	0
+	JRST INTPUR	; Jump to pure code
+
+
+TTYOP:	0	;HOLDS TTYOPT WORD OF TTY, USED TO DISTINGUISH ARDS-LIKE
+		;DISPLAYS FROM GOOD ONES.
+
+SPNDD:	0	;JUSTIFICATION FLAG:  -1=>JUSTIFICATION COMPLETED, OTHERWISE COUNT OF SPACES NEEDED
+TMPTCL:	0	;INITIAL COLUMN NUMBER OF FIELD
+
+NAMEHK:	0
+NAMESW:	0
+ONAMSW:	0
+LNAMES:	0
+NAMEBP:	0
+NAMCOM:	0
+
+USRMEM:	0
+USRTIM:	0
+USRJTM:	0
+MMUSFL:	0	.SEE HL4A
+
+NEGF:	0	;-1=> SIGNED OUTPUT, 0=> UNSIGNED
+NEGF2:	0	;-1=>PRINT MINUS SIGN, 0=> DON'T
+UNUMQ:	0
+
+CRASHF:	0	; 0 if PEEKing at a running ITS (normal state)
+		; else <JOB> spec for PEEKing at a crash dump.
+MODE:	%MDNRM	; Current Mode - type of info to display (index into MDTAB)
+RUUFLG:	0	; Current Argument flag, -1 if arg furnished to mode
+RUUIND:	0	; Current Argument (always -1 if RUUFLG is 0)
+LMODE:	0	; Last MODE
+LRUUFL:	0	; Last RUUFLG
+LRUUIN:	0	; Last RUUIND
+UUIND:	0	; New RUUIND being collected at typein int level
+
+CRSFIL:	BLOCK 4	; Holds filename of crash dump being examined, if any
+
+SPCCNT:	0	;NUMBER OF TYPED-AHEAD SPACES (NOT FOLLOWED BY ANYTHING ELSE).
+TOPFLG:	0	;-1 MEANS SECOND TWO LINES HAVE BEEN PRINTED
+MORFLG:	0
+VSZ:	0
+JHFLAG:	0	; -1 if in J mode (single job display)
+DSKZER:	0	;ABORT ON CONTROL-@
+DSKCON:	-1	;HANG ON OUTPUT CHANNELS IN <NM> C MODE
+HSTEXP:	-1	;EXPAND HOST NAMES
+HLPFLG:	0	;-1 if each command should display help
+HSZ:	55.
+ORADIX:	10.
+ERRDVF:	0
+CONST:	4,,4
+CONST2:	-2,,A
+MUDFLG:	0
+CURUNM:	0
+GUNFLG:	0
+RNDFLG:	0
+RONLY:	0	;-1 FOR R MODE/ +1 FOR 0J MODE HACK
+EONLY:	-1	;-1 NORMALLY / SQUOZE SYMBOL NAME ELSE
+EINST:	0	;INSTRUCTION FOR E MODE
+EWORD:	0	;WORD SO FAR FOR E MODE
+ESW:	0
+SQUOZR:	0
+SHRTOT:	0
+VPOS:	0
+FTCTYP:	0
+V2:	0
+V3:	0
+V4:	0
+GNORDT:	0	;GUN OR DETACH
+LPCHPT:	-1
+TTOWNR:	-1	;IN ULOOK, -1 IFF OWNERSHIP OF TREE'S TTY PASSES DOWN THROUGH THIS JOB.
+		;IGNORES THE QUESTION OF WHETHER TREE HAS A TTY.
+DDXFIL:	.BAI,,(SIXBIT /.../)
+	SIXBIT /.FILE./
+	SIXBIT /(DIR)/
+
+IFN 340P,[
+DISF:	SIXBIT /   DIS.PEEK.>/
+LPBLK:	BLOCK 6	; Args to .LTPEN UUO
+DISNOT:	0	;IF ZERO, TRY TO USE 340
+		;IF NON ZERO, DON'T
+] ;340P
+
+; Network Metering (For "+" mode)
+; (Note: Each meter also needs to be mentioned at NXTAB.)
+; Each entry in the meter table contains:
+MT$LOC==0		; Instruction to get the meter value.
+MT$OLD==1		; Previous value of the meter.
+MT$TIM==2		; Time when the meter was last updated.
+MT$DSC==3		; Pointer to description for the meter.
+MT$NAM==4		; 6bit name of meter variable
+MT$L==5
+
+DEFINE	METER NAME,&DESC
+	MOVE A,@!NAME
+	0
+	0
+	[ASCIZ DESC]
+	SIXBIT "NAME"
+TERMIN
+
+MTRTAB:	METER IMCT1,  /IMP: Output starts from MP/
+	METER IMCT2,  /IMP: Input done interrupts/
+	METER IMCT3,  /IMP: Output Done interrupts/
+	METER IMNBLK, /IMP: msgs blocked for RFNM wait/
+IFN 0,	METER IMPNIH,  /Times input held up/
+	METER IMNIPI, /IP: Datagrams rcvd/
+	METER IMNIPO, /IP: Datagrams sent/
+	METER CHNIPI, /IP: Datagrams in from Chaosnet/
+	METER CHNIPO, /IP: Fragments out to Chaosnet/
+	METER IMNIPR, /IP: RFNMs received/
+	METER IMNIPF, /IP: Datagrams flushed/
+	METER IMNIP7, /IP: Dest Host Dead msgs rcvd/
+	METER IMNIP8, /IP: Error msgs rcvd/
+	METER IMNIP9, /IP: Incomplete Xmsn msgs rcvd/
+IFN 0,	METER IMNWIG, /Words ignored by Ignore state/
+	METER CHNPI, /CHAOS: Packets input (really to 10)/
+	METER CHNPO, /CHAOS: Packets output (all causes)/
+	METER CHNPF, /CHAOS: Packets forwarded/
+	METER CHNSTS, /CHAOS: STS packets output/
+	METER CHNSNS, /CHAOS: SNS packets output/
+	METER CHNRTR, /CHAOS: Retransmitted packets output/
+	METER CHNPFL, /CHAOS: Packets discarded (fwd loop)/
+	METER CHNPD, /CHAOS: Packets discarded (duplicates)/
+	METER CHNABT, /CHAOS: Transmit aborts/
+	METER CHNCRC, /CHAOS: CRC errors before reading/
+	METER CHNCR2, /CHAOS: CRC errors after reading/
+	METER CHNWLE, /CHAOS: Bit length not 0 mod 16/
+	METER CHNPLE, /CHAOS: Length disagrees with header/
+	METER CHNLOS, /CHAOS: Lost due to receiver busy/
+	METER CHNSPZ, /CHAOS: Times bit counter spazzed/
+NMTRS==<.-MTRTAB>/MT$L
+
+
+LINEPOS:	0	;CHARACTER COUNT ON LINE
+PAGEPOS:	0	;LINE COUNT ON PAGE
+NVLNS:	0	;# VERT LINES IN TTY DISPLAY MODE
+NHLNS:	0	;# HORZ CHAR POS " " " "
+
+;MAX NUM OF LINES ON PAGE FOR EACH DEV
+MPAGEP:	,,-1	;TTY	;=2**18-1
+	.	;GE
+	41.	; 340 DISPLAY
+	,,-1	;LPT	;=2**18-1
+	.	;WIDE DISPLAY
+	,,-1	;WIDE TTY
+ODEVER MPAGEP
+
+DOZE:	20.
+
+NSNAM:	0
+XCHFLG:	0
+TDATIM:	SIXBIT *  /  /      :  :  !*
+NMMPGS:	0	; # MMP PGS SET FOR
+NMMPES:	0	; # words in MMP (NMMPGS*2000)
+UCPLC:	0	;COUNT IN UCPRL
+UCPLOS:	0	; UCPRL lossage count while tracing circ mem pntrs
+UDISP:	-1	;-1 => SHOW ALL TREES IN ULOOK.  ELSE IT IS EITHER IDX OF TREE TO SHOW
+		;(IF GUNFLG SET) OR XUNAME/UNAME OF TREES TO SHOW (OTHERWISE).
+NETQF:	0
+SCHHT1:	0
+OVHTIM:	-1	;GE 0 IS TIME OVERHEAD METERS WERE COPIED INTO RHIST
+HSTSIN:	-1	;GE 0 IF HOSTS3 FILE MAPPED IN
+
+PAT:
+PATCH:	BLOCK 16	;PATCH SPACE
+
+JCLBUF:	BLOCK 20.	;SPACE FOR COMMAND STRING FROM SUPERIOR.
+JCLBFE:
+JCLBP:	0		;BYTE POINTER FOR READING THAT STRING.
+
+PDL:	BLOCK PDLL	;PUSH DOWN LIST
+
+OBUF:	BLOCK OBUFL	;OUTPUT BUFFER
+
+LUIDTB==:200	; Max # of jobs PEEK can hack, must be greater than ITS MAXJ!
+UIDTAB:	BLOCK LUIDTB	; Holds user indices (U values) for jobs ULOOK finds.
+UIDCNT:	0		; # of entries
+
+SUBTTL	System symbol value tables
+
+ITSNAM:	0	; Holds ITS machine name PEEK initialized for (sixbit)
+ITSVER:	0	; Holds ITS version number, ditto (sixbit)
+SYMPTR:	0	; If doing autopsy, holds aobjn ptr to copied ITS sym table
+
+DEFINE SYMS LIST
+	0		; Will hold AOBJN to table
+%%%SB==.
+	IRPS FOOBAR,,[LIST]
+FOOBAR:	0
+	SQUOZE 0,FOOBAR
+	TERMIN
+%%%SE==.
+LOC %%%SB-1
+	-<%%%SE-%%%SB>/2,,%%%SB
+LOC %%%SE
+TERMIN
+
+;FULL WORD
+FLWDT:	JFCL
+	SYMS [LUBLK:NCT:NUNITS:NUTIC:NUTOC:NQCHN:SSCHDB:TSYSM:MAXJ:
+NQS:NFSTTY:NSTTYS:MURUSR:TOBL:DIRCHN:LUIOP:PGIHTL:SWPHTL:LOVHTB:
+%IOTBK:%IOTOT:RCHQSK:TCPRCH:
+%QAEFR:%QAEFW:%QACTH:%QAFUL:%QADEL:%QAACC:%QAPAR:%QAWOV:
+%QMUDR:%QMMDR:%QMTTR:%QMUDW:%QMMDW:%QMTTW:
+NINDX:%CFOFF:%CFSTS:%CFCLS:%CFSTY:%SWOUT:%SWLOD:%SWSB:%SWBEM:%SWDSO:
+NIPGW:IPKSNA:IPKSNC:NSUBNT:MYCHAD:
+ITSVRS:TTYVRS:DSKVRS:
+SYSMLN:
+XBL:%NMTRS:NIPUQ:NIPF:NPKB:
+PK.FLG:PK.IP:PK.TCP:PK.L:%PKPIL:%PKODN:%PKNOF:%PKFLS:%PKRTR:  ;PK.TIM:
+PK.HSP:PK.HST:%NTRCE:PKTTRC:]  ;PK.TIM:
+
+;No longer used: IMPSTL:IMNWIG:
+
+;+SYSBEG
+NXTAB:	ADDI A,SYSBEG
+	SYMS [QDATE:TIMOFF:SHUTDN:
+SYSCN:AUSOPG:CUSER:DEVTAB:EDEVS:LOUTIM:
+MEMFR:MMPNP:MEMPNT:MTUSR:NCBCOM:
+NPGSWO:NULTIM:PSWOUS:
+QIRRCV:RNABLU:SILNG:SOLNG:SCHHB:SWPOPR:
+SWRCE:TIME:TRUMM:UMASTER:UREALT:USRHI:USRRCE:SYSDBG:
+PRVUSR:LOSRCE:IDLRCE:SLOADU:
+IMPUP:IMCT1:IMCT2:IMCT3:
+IMNIPI:IMNIPF:IMNIPO:IMNIPR:IMNIP7:IMNIP8:IMNIP9:IMNBLK:
+USER:BUGPC:SYSMPT:SYSMBF:
+CHNPI:CHNPO:CHNPF:CHNSTS:CHNSNS:CHNRTR:CHNPFL:CHNPD:
+CHNABT:CHNCRC:CHNCR2:CHNWLE:CHNPLE:CHNLOS:CHNSPZ:
+CHTTBF:CHFRBF:CHQRFC:CHQLSN:CHNIPI:CHNIPO:
+TCPUP:PKBNT:PKBNF:OVHTB2:
+PKEQHF:IPOUTQ:IPOBLQ:PKETBL:]
+
+;No longer used: DISUSR:LPTUSR:NVDUSR:PDPUSR:PLTUSR:PTPUSR:PTRUSR:TABUSR:
+;		 MSUSER:MSREAD:MSRED2:MSWRIT:MSWRT2:IMPBPQ:
+;		 IMNOSH:IMNISH:IMPNPE:IMNSRF:IMNSRC:IMNRFN:IMPNIH:
+
+;+SYSBEG(C)
+CXTAB:	ADD A,[SYSBEG(C)]
+	SYMS [AC0S:DCHSTB:IOCHST:IOCHNM:IOTTB:DRFNTB:
+DSKLST:UDSYSN:UUDPP:
+MEMBLT:MMMPG:MMSWP:
+PARERR:
+QUSR:QUDPR:QUDFPR:QSMPRP:QSMDN:
+QSBYTE:QMPBSZ:QDSKN:QFBLNO:QSCRW:QSRAC:STYSTS:OPRSXB:CALSXB:CLSTB:
+JBDEV:QSFT:QPKID:
+BUGACS:
+XBUSER:XBSTAT:XBSTAU:XBCLSU:XBPORT:XBHOST:XBINBS:XBINPS:XBORTL:XBORTC:
+XBRWND:XBSAVW:MTRCNT:MTRNAM:
+CHSUSR:CHSSTA:CHSNBF:CHSNOS:CHSFRN:CHSACK:CHSPKN:CHSWIN:CHSIBP:CHSOBP:
+IPGWTN:IPGWTG:IPGWTI:IPGWTM:SBNRUT:
+PGIHTB:SWPHTB:OVHTB1:
+IPUQHD:IPFDPE:XBITQH:XBORTQ:XBOCOS:]
+
+;No longer used: DG2:DRTM:EUPOS:UDIR:UDIRO:UGOAL:ULCTM:UTASS:UTBFS:
+;		 UTTNO:UTUSR:UMNTR:MPXBUF:
+;		 IMSOC1:IMSOC2:IMSOC3:IMSOC4:IMSOC5:IMSOC6:IMSOC7:IMSOC8:
+
+;+SYSBEG(U)
+USERT:	ADD A,[SYSBEG(U)]
+	SYMS [APRC:FLSINS:HUSRAD:IFPIR:IOTLSR:JNAME:JTMU:LUBTM:MSKST:
+MSKST2:NMPGS:NSWPGS:PICLR:PIRQC:RPCL:SUEXIT:SUPPRO:SUUOH:
+SV40:TTYTBL:UPGCP:TRNLST:TRNLS1:UNAME:TTSTSV:UPC:USIPRQ:USTP:XUNAME:
+USWSCD:USWPRI:USWST:USYSN1:USYSNM:UTMPTR:UTRNTM:LSCALL:QSNUD:QSNLCN:
+TRUNTM:UUAC:IDF1:IDF2:UWRKST:USVWRK:USWTIM:]
+
+;+SYSBEG(T)
+TXTAB:	ADD A,[SYSBEG(T)]
+	SYMS [TOBEP:TOOP:TTYSTS:TTYCOM:TCTYP:TTYTYP:TCMXV:TCMXH:TTYOPT:
+TOIP:TOBBP:TTYST1:TTYST2:TTITM:IMPHTN:TRCTBL:
+RCHDRD:RCHDR1:RCHDR2:]
+
+;value,,SYSBEG+MEMBLT(C) - note ITS symbol MUR is a byte-pointer LH.
+;	what PEEK is doing here is setting up MUR as a byte-pointer
+;	into the ITS MEMBLT mem mgt table (1 entry per physical page)
+
+MBTAB:	PUSHJ P,[ HRLZ A,A ? ADD A,MEMBLT ? POPJ P,]
+	SYMS [MUR:]
+
+MEMTB:	REPEAT 40,CONC SIXBIT/CODE,\.RPCNT,/
+		;SIXBIT NAMES INDEXED BY MUR CODE (POSSIBLY -340)
+
+RHIST:	;THIS STORAGE USED FOR MEM HISTOGRAM MODE AND FOR TRANSLATE TABLE MODE.
+
+	LOC RHIST+500
+RHISTL==<.-RHIST>
+
+EVAR		; End of impure code!
+
+MURTBS:
+DEFINE MURTYP SQZ,SXB
+	SQUOZE 0,SQZ
+	SIXBIT /SXB/
+TERMIN
+	MURTYP MUEX,EXEC
+	MURTYP MUIOB,IOBUF
+	MURTYP MUFR,FREE
+	MURTYP MUINP,PROCES
+	MURTYP MUMGB,MAGBUF
+	MURTYP MUMMP,MMP
+	MURTYP MUDISB,DISPLA
+	MURTYP MUFRT,SFREE
+	MURTYP MU23B,DSKBUF
+	MURTYP MU23UD,DSKUDR
+	MURTYP MU23MD,DSKMFD
+	MURTYP MU23TT,DSKTUT
+	MURTYP MU23LS,DIRCPY
+	MURTYP MUHOLE,HOLE
+	MURTYP MUDDT,EXDDT
+	MURTYP MUNET,NETWRK
+	MURTYP MUPKT,NETPKT
+	MURTYP MUSWPG,SWAPG
+	MURTYP MUCHA,CHAOS
+NMURTY==<.-MURTBS>/2
+
+SUBTTL	Memory management and map initialization
+
+; PEEK memory allocation
+;	0-HUSED	PEEK code (some pages pure)
+;	UMAPG	System randomly-mapped page
+;	DSKPG	System Disk buffer (nC mode)
+;	 -	1 empty page to fence DSKPG in
+;	PGFHST	Network host table file
+;	PGFSYM	Crash file symbol table
+;	 -
+;	200-377	Mapped into system
+PGFPUR==:PURPGB			; Another name for 1st PEEK pure code page
+IFNDEF PGFSYS,PGFSYS==:200	; PEEK page # to start mapping system into.
+IFL 400-<SYSHGH+PGFSYS>,.ERR PGFSYS or SYSHGH too big
+SYSBEG==:PGFSYS*2000
+
+NHSTPG==90.			;Number of pages for host table
+NMMPPG==8			;Maximum pages in MMP on any system
+NSYMPG==30			;Maximum size of system symbol table
+
+; Page pointer variables -<# pages>,,<1st page #>
+PGAPUR:	-<PURPGE-PGFPUR>,,PGFPUR	; Start of pure code
+PGAUMP:	-1,,UMAPG		; System randomly-mapped page
+PGADSK:	-1,,DSKPG		; System disk buffer page (nC mode)
+PGAHST:	-NHSTPG,,PGFHST		; Network host table file pages
+PGAMMP:	-NMMPPG,,PGFHST+NHSTPG	; System MMP pages
+PGASYM:	-NSYMPG,,PGFHST		; Crash file symbol table (overlays host table)
+PGASYS:	-SYSHGH,,PGFSYS		; System absolute memory pages
+
+IF2, IFG PGFHST+NHSTPG+NMMPPG-PGFSYS, .ERR Core allocation overlaps
+
+REPURF:	.VALUE [ASCIZ\:New system version; must repurify.
+Take paws off keys and wait.
+
+p\]
+	JRST PURIFY
+DEBUG:	0	;-1 => Debugging, so dont purify or dump.
+
+; PURIFY - Initialize as pure procedure
+
+PURIFY:	MOVEI P,PDL-1
+	SKIPE DEBUG
+	 JRST PURIF2
+	MOVE A,PGAPUR			; Purify this section of core
+	SYSCAL CORBLK,[MOVEI %CBNDR ? MOVEI %JSELF ? A ? MOVEI %JSELF]
+	 .LOSE 1000
+PURIF2:	CALL INISYS
+	SKIPN DEBUG
+	 .VALUE [ASCIZ /:PDUMP DSK:SYS;TS PEEK
+GOG/]
+	.VALUE [ASCIZ /: Ready 
+/]
+	JRST GO
+
+; INISYS - Initialize mapping into system, including all symbols.
+
+INISYS:	MOVE A,PGASYS
+	SKIPN B,CRASHF		; If not looking at crash-dump file,
+	 MOVEI B,%JSABS		; we map from running ITS.
+	SETZ C,
+	SYSCAL CORBLK,[MOVEI %CBRED+%CBNDR ? MOVEI %JSELF ; Get us read-access
+			A		; For pages spec'd by PGASYS
+			B		; From job spec (normally system)
+			C]		; starting at page 0
+	 .LOSE 1000
+	.OPEN TYOC,[%TJDIS+.BAO,,'TTY]	; Open TTY in display mode, block out
+	 .LOSE 1000
+	MOVE OBUFP,[440700,,OBUF]	; Must set up TTY output for EVALL.
+	SETZM ODEV			; Use default %ODTTY type.
+	PUSHJ P,EVALL
+	PUSHJ P,CRR
+	PUSHJ P,BUFOUT
+	RET
+
+DEFINE UMOVE AC,(ADDR)
+	MOVEI U1,ADDR		; Get address
+	MOVEI U2,(U1)
+	TRZ U2,1777		; Get 1st addr in page
+	CAME U2,UMAPTO		; Page already mapped in?
+	 CALL UMAPIN		; No, must get it
+	ANDI U1,1777
+	MOVE AC,<UMAPG_10.>(U1)
+TERMIN
+
+; UMAPIN - Map in page specified by address in U2.
+.SCALAR UMAPTO
+
+UMAPIN:	LSH U2,-10.		; Get page # of source
+	SKIPN U3,CRASHF
+	 MOVEI U3,%JSABS
+	SYSCAL CORBLK,[MOVEI %CBRED+%CBNDR ? MOVEI %JSELF
+		MOVEI UMAPG		; Get us a read-access page here
+		U3			; From this job's
+		U2]			; page.
+	 JRST [	SYSCAL CORBLK,[MOVEI %CBNDR	; If fail, just get
+			MOVEI %JSELF		; a page of zeros.
+			MOVEI UMAPG
+			MOVEI %JSNEW]
+		 .LOSE %LSSYS
+		JRST .+1]
+	LSH U2,10.
+	MOVEM U2,UMAPTO
+	RET
+
+; Like UMOVE, except for job in U
+
+DEFINE JMOVE AC,(ADDR)
+	MOVEI U1,ADDR		; Get address
+	PUSHJ P,JMAPIN
+	MOVE AC,<UMAPG_10.>(U1)
+TERMIN
+
+JMAPIN:	MOVEI U2,(U1)		; Another copy of address in U2
+	ANDI U1,1777		; Leave only offset in U1
+	TRZ U2,1777		; Get 1st addr in page in RH
+	HRLI U2,(U)		; Put job index in LH
+	CAMN U2,UMAPTO		; Map already set up?
+	 POPJ P,		; Yes: exit
+	MOVEM U2,UMAPTO		; Remember this for next time
+	MOVEI U2,(U)
+	IDIV U2,LUBLK		; U2: job number
+	LDB U3,[121000,,UMAPTO]	; U3: page number
+	SKIPN CRASHF		; Can't work if crash dump...
+	 SYSCAL CORBLK,[MOVEI %CBRED+%CBNDR
+			MOVEI %JSELF ? MOVEI UMAPG
+			MOVEI %JSNUM(U2) ? MOVEI (U3)]
+	  SKIPA
+	   RET
+	SYSCAL CORBLK,[MOVEI %CBNDR	; If fail, just get a page of zeros.
+			MOVEI %JSELF ? MOVEI UMAPG
+			MOVEI %JSNEW]
+	 .LOSE %LSSYS
+	RET
+
+
+; EVALL - .EVAL all system symbols necessary for PEEKing
+
+EVALL:	; First grovel over all standard symbol-map tables.
+	IRP TABLE,,[FLWDT,NXTAB,CXTAB,USERT,TXTAB,MBTAB]
+	MOVEI D,TABLE
+	CALL EVALTB
+	TERMIN
+
+	; Special hack for initializing MUR type table
+	MOVE D,[-NMURTY,,MURTBS]	; Get AOBJN to initializer table
+EVALL2:	MOVE A,(D)		; Get SQUOZE symbol
+	CALL XEVAL		; Find its value
+	 JRST EVALL3		; Undefined?  Barf.
+	CAIL A,340		; Bring old high codes within range
+	 SUBI A,340
+	CAIL A,0
+	 CAIL A,40
+	  JRST EVALL3		; Value out of range?  Barf.
+	MOVE B,1(D)		; Get sixbit name for this MUR type
+	MOVEM B,MEMTB(A)	; Stick it into lookup table
+	AOJA D,EVALL4
+EVALL3:	SQPR (D)		; MUR lossage, barf about it.
+	CTYPE "?
+EVALL4:	AOBJN D,EVALL2
+
+	; Now finally get the version # for this ITS.
+	SKIPE CRASHF
+	 JRST EVALL5	; Hmm, must extract from crash dump.
+	SYSCAL SSTATU,[	REPEAT 5,MOVEM A
+		MOVEM ITSNAM	; Get machine name
+		MOVEM ITSVER]	; Get ITS version number
+	  .LOSE 1000
+	RET
+EVALL5:
+	; Maybe someday ITS will be fixed to have these symbols defined.
+	MOVE A,[SQUOZE 0,/ITSVER/]
+	CALL XEVAL	; Extract version # from crash dump.
+	 SETZ A,
+	MOVEM A,ITSVER
+	MOVE A,[SQUOZE 0,/ITSMCH/]
+	CALL XEVAL
+	 SETZ A,
+	MOVEM A,ITSNAM
+	ADD A,ITSVER
+	JUMPN A,APOPJ		; If either is set, assume we're OK.
+	MOVE A,[SQUOZE 0,/ASSTAT/]
+	CALL XEVAL		; Prepare for truly heroic kludge
+	 RET			; Barf, this has gone far enough.
+	UMOVE B,13(A)	; Get pair of instructions from ASSTAT code
+	UMOVE C,14(A)	; (Gasp, choke, glug)
+	UMOVE A,(B)	; First one's E is machine name
+	MOVEM A,ITSNAM
+	UMOVE A,(C)	; Second one's E is version number
+	MOVEM A,ITSVER
+	RET
+
+; EVALTB - .EVAL a complete symbol-map table.
+;	D/ addr of table.  1st wd is instr to XCT to convert each value,
+;		2nd wd is AOBJN to table proper.
+
+EVALTB:	MOVE C,(D)		; Get conversion instruction
+	SKIPL D,1(D)		; Get AOBJN to symbol/value pairs
+	 RET
+EVALT2:	MOVE A,1(D)		; Get SQUOZE symbol
+	CALL XEVAL		; Evaluate it
+	 JRST [	SQPR A		; Undefined sym, barf.
+		CTYPE "?
+		CALL BUFOUT	; Give user something to watch while waiting.
+		SETZ A,		; Use value of zero
+		JRST .+2]	; Skip over the conversion XCT.
+	XCT C			; Got it, convert the value!
+	MOVEM A,(D)		; Store
+	ADDI D,1
+	AOBJN D,EVALT2
+	RET
+
+
+; MMPINI - Initialize MMP map table
+;	Clobbers A,B,C
+
+MMPINI:	MOVE A,@MMPNP		; Find # pages we need for MMP
+	MOVEM A,NMMPGS		; Get # pages in MMP table
+	LSH A,10.
+	MOVEM A,NMMPES		; Also store # words (for fast index checks)
+	MOVN C,NMMPGS
+	HRLZS C
+	HRRZ A,PGAMMP		; Find 1st page # for MMP
+MMPIN2:	MOVE B,@MMMPG		; Get system page # for this MMP page (idx C!)
+	SYSCAL CORBLK,[MOVEI %CBRED+%CBNDR ? MOVEI %JSELF ; Get us read-access
+			A		; For this page
+			MOVEI %JSABS	; From system (absolute)
+			B]		; at this abs page #
+	 .LOSE 1000
+	ADDI A,1
+	AOBJN C,MMPIN2	; Loop through the MMP table.
+	RET
+
+SUBTTL	Crash dump support routines
+
+; UINIT - Gobbles filename argument from JCL (if none, defaults to
+;	DSK:CRASH;ITS >) and sets up everything for PEEKing at the
+;	corpse.
+;	A/ BP to ASCIZ crash-dump filename
+
+UINIT:
+	; First tries to hack argument as filename and open DISC.
+	SYSCAL SOPEN,[[.BII,,DISC] ? A]
+	 .LOSE %LSSYS
+	SYSCAL RFNAME,[MOVEI DISC	; Record filename we got
+		REPEAT 4,[ ? MOVEM CRSFIL+.RPCNT ]]
+	 .LOSE %LSSYS
+	.VALUE [ASCIZ /: Loading crash dump...
+P/]
+
+	; Now load up the crash dump file into an inferior.
+	CALL UCREAT	; Load up and snarf syms if possible
+	MOVEI A,USRI	; Now set up job spec for PEEKing at.
+	MOVEM A,CRASHF
+	CALL INISYS	; Initialize system map and pointers
+
+	; Now set up various miscellaneous stuff for PEEK.
+	MOVEI A,%MDCRS	; Set initial mode to special hack for dumps.
+	MOVEM A,MODE
+	SETZM RUUFLG	; Say no argument
+	SETOM RUUIND
+	MOVEI A,-1
+	MOVEM A,DOZE	; Set up infinite sleep time
+	RET
+
+; UCREAT - Given crash dump file open on disk channel DISC,
+;	creates inferior on chans USRI/USRO and loads up the dump.
+
+UCREAT:	MOVE T,[SIXBIT /CRASH/]
+	SYSCAL OPEN,[[.BIO,,USRO] ? ['USR,,0] ? [0] ? T ? %CLERR,,U1]
+	 JRST [	CAIN U1,%ENSMD	; Job exists?
+		 AOJA T,.-1	; Yes, try again.
+		.LOSE %LSSYS]
+	SYSCAL OPEN,[[.BII,,USRI] ? ['USR,,0] ? [0] ? T ? %CLERR,,U1]
+	 .LOSE %LSSYS
+	SYSCAL LOAD,[MOVEI USRI ? MOVEI DISC]
+	 .LOSE %LSSYS
+	SYSCAL FILLEN,[MOVEI DISC ? MOVEM A]	; Find length of file
+	 .LOSE %LSSYS
+	SYSCAL RFPNTR,[MOVEI DISC ? MOVEM B]	; Find current loc in file
+	 .LOSE %LSSYS
+	SUB A,B			; Find # words left to read
+	ADDI A,1777
+	LSH A,-10.		; Find # pages we need to get for symtab
+	MOVNS A
+	HRLZS A
+	CAMG A,PGASYM		; We better not be asking for too much
+	 .VALUE [ASCIZ /: Symbol table of crash dump is too big!! 
+/]
+	HRR A,PGASYM
+	SYSCAL CORBLK,[MOVEI %CBNDR	; Get fresh pages to hold symtab
+		MOVEI %JSELF
+		A
+		MOVEI %JSNEW]
+	 .LOSE %LSSYS
+
+	; Now start reading symtab in from disk.
+	HRRZ C,PGASYM
+	LSH C,10.	; Get address to copy to
+	MOVEI D,(C)	; Save in D (will become final AOBJN)
+	HRROI B,A
+	.IOT DISC,B	; Flush the start addr
+	CAIG A,
+	 .VALUE [ASCIZ /: Bad start addr in file? 
+/]
+UCRET3:	HRROI B,A	; Get AOBJN for sym block
+	.IOT DISC,B
+	JUMPL B,UCRET4
+	JUMPGE A,UCRET4	; If positive, done.
+	TRZ A,-1	; Ensure RH zero
+	ADD D,A		; Add into total count
+	HLL C,A		; Make C an AOBJN to place to write
+	.IOT DISC,C	; Read in the stuff
+	JUMPGE C,UCRET3	; So much for that block, get next.
+	TRZ C,-1
+	MOVMS C		; Get <# wds not read>,,0
+	ADD D,C		; Adjust final aobjn accordingly
+UCRET4:	MOVEM D,SYMPTR	; All done!  Store AOBJN ptr to copied symtab.
+	SETOM HSTSIN	; Overlays host table
+	.CLOSE DISC,
+	RET
+
+
+XEVAL:	SKIPE CRASHF
+	 JRST UEVAL
+	.EVAL A,
+	 RET
+	AOS (P)
+	RET
+
+; UEVAL - Simulation of .EVAL for use when mapping a crash dump.
+;	A/ squoze symbol
+; Returns .+1 if failed
+; Returns .+2
+;	A/ symbol value
+; Clobbers B
+
+UEVAL:	PUSH P,C
+	TLZ A,740000	; Flush flags
+	SKIPE C,SYMPTR	; Do we already have symtab in our core?
+	 JRST UEVAL4	; Yes, hack fast internal lookup.
+	UMOVE C,SYSSYM	; Pick up AOBJN ptr to symtab from exec DDT
+UEVAL2:	UMOVE B,(C)	; Get sym from table
+	AOBJP C,UEVAL9	; Bump pointer to point at value
+	TLNN B,200000	; Skip if delete input (flag prevents match)
+	 TLZE B,740000	; Flush flags and cause loss if all 0 (prog name)
+	  CAME A,B	; Compare
+	   AOBJN C,UEVAL2
+	JUMPGE C,UEVAL9	; Fail if counted out
+	UMOVE A,(C)	; Get value
+UEVAL8:	AOS -1(P)
+UEVAL9:	POP P,C
+	RET
+
+UEVAL4:	MOVE B,(C)	; Get sym from table
+	AOBJP C,UEVAL9	; Bump pointer to point at value
+	TLNN B,200000	; Skip if delete input (flag prevents match)
+	 TLZE B,740000	; Flush flags and cause loss if all 0 (prog name)
+	  CAME A,B	; Compare
+	   AOBJN C,UEVAL4
+	JUMPGE C,UEVAL9	; Fail if counted out
+	MOVE A,(C)	; Get value
+	JRST UEVAL8
+
+SUBTTL	PEEK startup
+
+GO:	MOVEI P,PDL-1	;INITIALIZE PUSH DOWN LIST
+	SETOM UUIND	;CLEAR COMMAND ARGUMENT
+
+	; Initialize JCL if any
+	SETZM JCLBP	;FIRST, ASSUME THERE'S NO COMMAND STRING.
+	.SUSET [.ROPTIO,,A]
+	TLNN A,%OPCMD
+	 JRST GO20
+	SETZM JCLBUF	; There is one; get it from superior.
+	MOVE A,[JCLBUF,,JCLBUF+1]
+	BLT A,JCLBFE-1
+	.BREAK 12,[5,,JCLBUF]
+	MOVE A,[440700,,JCLBUF]	; Set up to scan the JCL
+GO15:	MOVE C,A	; Save BP
+	ILDB B,A
+	CAIE B,^I
+	 CAIN B,40	; IGNORE LEADING SPACES IN IT.
+	  JRST GO15
+	CAIN B,^M
+	 JRST GO19	; End of JCL
+	CAIE B,
+	 CAIN B,^C
+	  JRST GO19	; End of JCL
+	SKIPN JCLBP	; Regular char, if BP to beginning isn't already set,
+	 MOVEM C,JCLBP	; Then set it up!
+	JRST GO15
+GO19:	SETZ B,
+	DPB B,A		; Deposit zero byte to ensure ASCIZ!
+			; Note JCLBP is 0 if nothing but whitespace in string.
+
+	; Now initialize mapping into system
+GO20:	SKIPE A,JCLBP	; First check JCL for crash-dump command
+	 JRST [	ILDB B,A	; Check 1st char
+		CAIE B,"<
+		 JRST .+1	; Nope
+		CALL UINIT	; Aha!! Go hack dump file, BP in A to filename
+		SETZM JCLBP	; Say no JCL left.
+		JRST GO30]
+	; Not hacking crash file, see if system already mapped
+	SYSCAL SSTATU,[	REPEAT 5,MOVEM A
+		MOVEM A		; Get machine name
+		MOVEM B]	; Get ITS version number
+	  .LOSE 1000
+	SKIPE ITSNAM
+	 SKIPN ITSVER
+	  JRST REPURF	; No, not initialized at all.
+	CAMN A,ITSNAM	; Compare machine name
+	 CAME B,ITSVER	; and version number
+	  JRST REPURF	; Not initialized for current system
+
+	CAMN A,[SIXBIT /DM/]	; Special hack - on DM,
+	 JRST GO25		; default mode is 'J' instead of 'N'
+IFN 0,[
+	.SUSET [.RXUNAME,,A]	   ;WHO ARE WE
+	MOVSI B,-UNMTLN		   ;AOBJN PTR TO PEOPLE WHO WANT J MODE
+INITUN:	CAMN A,UNMTAB(B)	   ;DOES HE WANT J MODE?
+	  JRST GO25		   ;  YES, GIVE IT TO HIM!
+	AOBJN B,INITUN		   ;KEEP ON TRYING
+	JRST GO30
+] ;IFN 0
+	.SUSET [.RXJNAM,,A]
+	CAME A,[SIXBIT /PJ/]	; PJ gets default mode "J" like on DM.
+	 JRST GO30
+GO25:	MOVEI A,%MDJHK		; Set default to J mode
+	MOVEM A,MODE
+	.SUSET [.RUIND,,RUUIND]	; can get user's U from ITS.
+
+GO30:
+INITY:	MOVEI P,PDL-1	;INITIALIZE PUSH DOWN LIST
+	MOVE OBUFP,[440700,,OBUF]	;SET UP OUTPUT BUF POINTER
+
+	.SUSET [.SMASK,,[%PILTP\%PIIOC\%PITYI]] 
+			;SET MASK TO TYPE IN AND LIGHT PEN INTERRUPTS
+	.SUSET [.SPICL,,[-1]]	;ENABLE ABOVE INTERRUPTS
+
+	; Try opening TTY input, "DDT" mode (don't echo CR, LF, TAB)
+	.OPEN TYIC,[10+.UII,,'TTY]
+	 JFCL			; Ignore failure
+	SETZM ODEV		; Initialize output device to printing TTY
+	.OPEN TYOC,[%TJDIS+.BAO,,'TTY]	; Try to open TTY output
+	 JRST INIT20		; Fail, try 340 display
+	.OPEN NTYO,[.UAO,,'TTY]	; Another chan for unit-mode output
+	 JFCL
+IFN 340P,[
+	.STATUS TYIC,A	;SEE IF IT IS A 340 DISPLAY CONSOLE
+	TRNN A,200000
+	 SETOM DISNOT	;NOT AT 340
+] ;340P
+	SYSCAL CNSGET,[MOVEI TYOC ? MOVEM A ? MOVEM HSZ
+		MOVEM A ? MOVEM A ? MOVEM TTYOP]
+	 .LOSE %LSSYS
+	SYSCAL RSSIZE,[MOVEI TYOC ? MOVEM NVLNS ? MOVEM NHLNS]
+	 .LOSE %LSSYS
+	MOVE A,HSZ
+	SUBI A,30.
+	MOVEM A,HSZ
+	MOVE A,TTYOP	;IS TTY AN ERASABLE DISPLAY?
+	TLNN A,%TOERS
+	 JRST INIT20	;NO, TRY 340 IF TTY IS NEAR IT, ELSE USE PRINTING TTY MODE.
+SETDIS:	MOVEI ODEV,%ODDPT	;SET OUT MODE TO "DISPLAY TTY"
+	.SUSET [.RTTY,,T]
+	MOVE A,@TCMXV	
+	MOVEM A,VSZ
+	.CALL TTYGET
+	 .LOSE 1000
+	TLZ C,%TSMOR	;ALWAYS **MORE** ON DISPLAY TTYS
+	.CALL TTYSET
+	  .LOSE 1000
+	MOVE A,[-1,,[ASCIC/C/]]	;CLEAR SCREEN
+	.IOT TYOC,A
+	MOVE A,NHLNS
+	CAIL A,79.	;Worth an occasional (rare) overflow for more info
+	 MOVEI ODEV,%ODWID	;WIDE DISPLAY
+	MOVE A,NVLNS
+	SOS A
+	MOVEM A,MPAGEP(ODEV)
+	JRST INIT30	;AVOID 340 DISPLAY
+
+INIT20:	MOVE A,NHLNS
+	CAIL A,79.	;Worth occasional (rare) line overflow for useful info
+	 MOVEI ODEV,%ODWIT	; Wide TTY
+IFN 340P,[
+	PUSHJ P,ODIS	;TRY FOR 340 DISPLAY
+	 JRST INIT30	;LOSE
+	MOVEI ODEV,%OD340	;SET OUT DEV TO 340
+] ;340P
+
+INIT30:	CAIE ODEV,%ODTTY	; If output is to printing TTY,
+	 CAIN ODEV,%ODWIT
+	  JRST [MOVEI A,400000	; use a very long sleep.
+		MOVEM A,DOZE
+		JRST .+1]
+	.SUSET [.SMSK2,,[1_NTYO+1_TYOC]]
+
+SUBTTL	PEEK Main Loop
+
+;;;;;;;;;;; MAIN BODY OF PROGRAM, PEEK LOOPS TO HERE AFTER SLEEPING
+
+BEG:	MOVE A,@MMPNP
+	CAME A,NMMPGS
+	 CALL MMPINI	;# OF MMP PAGES HAS INCREASED, PARTIAL RE-INIT NEEDED.
+	SKIPN JCLBP	;FIRST, ARE THERE ANY CHARS OF COMMAND STRING YET UNPROCESSED?
+	 JRST BEG0
+	ILDB I1,JCLBP	;YES; HANDLE ONE.
+	JUMPE I1,BEG0A	;TERMINATOR => INDICATE JCL STRING ENTIRELY HANDLED.
+	.LISTEN A,	;WAIT FOR OUTPUT TO FINISH BEFORE MAYBE CLOBBERING IT.
+	JUMPN A,BEG0A	;PENDING INPUT IS MORE INPORTANT THAN THE JCL - USER HAS CHANGED HIS MIND.
+	PUSHJ P,TSINTO	;PROCESS ALL OTHER CHARS AS IF WERE TTY INPUT.
+	JRST BEG
+
+BEG0A:	SKIPGE NAMESW
+	 PUSHJ P,TSSEM1	;HACK THE COMMAND NOW
+	SETZM JCLBP
+BEG0:	SKIPE NAMESW
+	 JRST PUTPKX
+	.LISTEN A,
+	JUMPE A,BEG1
+	.SUSET [.SPICL,,[0]]
+	MOVEI A,BEG
+	MOVEM A,TSINT+1
+	JRST TSINTI
+
+BEG1:	SETZM TOPFLG
+	MOVEI P,PDL-1	;SET UP P
+	MOVE OBUFP,[440700,,OBUF]	;SET UP OUTPUT BUF POINTER
+	SETZM LINEPOS	;CLEAR LINE AND PAGE POSITION
+	SETZM PAGEPOS
+	HRRZ A,MODE
+	CAIN A,%MD1LN
+	 JRST BEG1LN
+	XCT BEGT(ODEV)	; Initialize depending on output dev
+	SKIPE A,CRASHF
+	 JRST [	MOVEI B,[ASCIZ /DEAD /]
+		CAIN A,%JSABS
+		 MOVEI B,[ASCIZ /LIVE /]
+		ATYPE (B)
+		JRST .+1]
+	6XTYPE ITSNAM
+	ATYPE [ASCIZ / ITS /]
+	6TYPE ITSVER
+	ATYPE [ASCIZ /Peek /]
+	6TYPE [.FNAM2]
+	CALL PDTIME	; Output date and time
+	ATYPE [ASCIZ /  Up time =/]
+	SETZM TMPTCL	;STARTS OUTPUT 1 SPACE FROM CURRENT POSITION
+	MOVE A,@TIME	;GET TIME SYS UP IN 1/30'S
+	IDIVI A,30.	;CONVERT TO SECS
+	PUSHJ P,TMPT	;OUTPUT HH:MM:SS
+	PUSHJ P,CRR
+BEG1LN:	HRRZ D,MODE	;GET MODE
+IFN 0,[
+	SKIPGE XCHFLG
+	 JRST [	CAIN D,%MDMPX	; Mplxrs open, skip if should be off
+		 JRST .+1	; Still on, OK.
+		.CLOSE IMXC,	; We were interrupted out of mplxr mode
+		SETZM XCHFLG	; to another mode, so turn mplxrs off.
+		JRST .+1]
+];IFN 0
+	CAIE D,%MDOVH
+	 SETOM OVHTIM		;Allow for RHIST to get clobbered
+	MOVE A,MDTAB(D)	; Get mode dispatch table entry
+	TLNE A,(%MFERO)	; If desired, output topmost "errors" line
+	 CALL TOPERR
+	HLRZ D,(A)	; See if command help is present and wanted
+	SKIPE HLPFLG
+	 CAIE D,(SKIP)
+	  JRST BEG8
+	ATYPE @(A)
+	CALL CRR
+BEG8:	CALL (A)	; Execute routine for mode!
+	MOVE D,MODE
+	MOVE A,MDTAB(D)
+	TLNE A,(%MFGUN)	; If mode was a variety of gun/detach,
+	 JRST PUTPKG	; Skip over some cleanup stuff.
+BEG9:
+	; Fall through to wrap up
+	.CLOSE DIRC,	; Close out dir channel if open
+	MOVEI A,1
+	MOVEM A,ESW
+	SETZM JHFLAG
+	SETZM RONLY
+	MOVE A,NAMESW
+	CAME A,[-2]
+	 JRST [	SKIPG A
+		 SETZM NAMESW
+		MOVEM A,LNAMES
+		JRST .+1]
+	SETZM RNDFLG
+	SETZM GUNFLG
+	CAIA
+PUTPKX:	 MOVE OBUFP,[440700,,OBUF]	;SET UP OUTPUT BUF POINTER
+PUTPKG:
+		; Fall through to sleep
+
+	XCT OMENDT(ODEV)	;TERMINATE MESSAGE
+	PUSHJ P,BUFOUT		;TERMINATE CHAR OUTPUT
+	SKIPN OMSLPT(ODEV)
+	 SKIPN B,JCLBP	;ON PRINTING DEVICES, AVOID SLEEPING IF JCL COMMANDS YET UNPROCESSED.
+	  JRST ASLEE1
+	ILDB B,B
+	CAIN B,^C	;BUT IF REMAINING JCL IS JUST THE TERMINATOR, FLUSH IT RIGHT AWAY AND DO SLEEP.
+	 SETZM JCLBP
+	SKIPE JCLBP
+	 JRST BEG
+
+ASLEE1:	SKIPLE SPCCNT	;IF USER TYPED AHEAD A SPACE, DON'T SLEEP.
+	 JRST [	SOS SPCCNT	; Count space as eaten.
+		JRST BEG]
+	; Okay, we're gonna sleep!
+	MOVE A,DOZE	; Get delay in seconds
+	IMULI A,30.	; Convert to 30'ths
+	SKIPE CRASHF	; If hacking crash dump,
+	 JRST ASLEE2	; relative time is sufficient.
+	MOVE B,@TIME	; Else try for absolute sleep; get sys time (30ths)
+	ADD A,B		; Get absolute system time to sleep until
+	IDIVI A,15.
+	IMULI A,15.	; Truncate to nearest half sec
+	ADDI A,9	; Set phase relative to slow clock (magic num, <14.&>0)
+	MOVNS A		; Neg for absolute sleep feature
+ASLEE2:	.SLEEP A,	; ZZ ZZ ZZ
+	JRST BEG	; Sleep done, back to start of main loop!
+
+
+SUBTTL	Command dispatch table
+
+;DISPATCH TABLE TO ROUTINES FOR DIFFERENT MODES
+; Flags:
+%MFERO==SETZ		; Output errors on 2nd line
+%MFGUN==100000,,0	; Hack gun/detach after mode (a crock, this)
+%MFINV==040000,,0	; "Invisible" mode command, not documented by "?"
+
+DEFINE MODEF CHAR,(RTN,FLAGS),&HELP
+%%%SV==.
+	FLAGS+RTN		; <flags>,,<rtn addr>
+OFFSET 0
+IF1 LOC .-1 ? [ASCIZ HELP]
+IF2 [	LOC MDHTAB+%%%SV
+	[ASCIZ HELP]
+	LOC MDTAB2+%%%SV
+	CHAR
+	LOC MDTAB+%%%SV+1
+]
+OFFSET -MDTAB
+TERMIN
+
+; Dispatch table for PEEK display modes.  The order of entries in
+; this table is the order in which "?" will display the command list.
+
+MDTAB:
+	OFFSET -.
+	MODEF "?,EXPL,,		"This.  1? enables help before each command."
+%MDNET::MODEF "A,NETWRK,,	"Arpanet connections (1A: buffer info, 2A pkt trace if available)"
+%MDBAK::MODEF "B,MDBACK,,	"Back (to previous mode)"
+	MODEF "C,DISK,%MFERO,	"Channel/buffer (channel#)"
+	MODEF "D,DDXR,,		"Directory (channel#)"
+	MODEF "E,EPEEK,,	"Eval & test job var (use ;Evar)"
+%MD1LN::MODEF "F,1PEEK,,	"Fast 1-line (job#)"
+%MDSCH::MODEF "G,NORMAL,,	"Swap variables"
+	MODEF "H,MEML,%MFERO,	"Histogram of mem usage"
+IFN 0,[
+%MDMPX::MODEF "I,MPXR,,		"IMX??"
+];IFN 0
+%MDJHK::MODEF "J,JHACK,,	"Joint S+C+A (job#)"
+%MDCHA::MODEF "K,KAOS,,		"Chaosnet connections"
+	MODEF "L,LINES,,	"tty Lines (job#)"
+	MODEF "M,MHIST,%MFERO,	"Memory (job#)"
+%MDNRM::MODEF "N,NORMAL,%MFERO,	"Normal"
+	MODEF "O,OSHACK,,	"Output (tty#)"
+	MODEF "R,RNABLE,%MFERO,	"Running jobs"
+%MDS::	MODEF "S,SPEEK,,	"Single Tree (job#)"
+	MODEF "T,TRANPK,,	"Translations"
+IFN 0,	MODEF "U,UTPEEK,%MFERO,	"Utape??"
+	MODEF "V,DOUSER,,	"job Variables (job#)"
+		; ULOOK checks MODE to hack this one (swap vars)
+	MODEF "W,WROUTE,,	"Internet, Chaosnet routing tables (1W is Chaos only)"
+	MODEF "X,GUNNER,%MFGUN+%MFINV,	"Gun down tree"
+	MODEF "Y,DETACH,%MFGUN+%MFINV,	"Detach tree"
+	MODEF "*,NORMAL,%MFERO+%MFINV,	"Hung jobs(???)"
+	MODEF "%,SCHH,,		"Scheduler History"
+	MODEF "$,SWPH,,		"Swapper History"
+	MODEF "!,PAGH,,		"Page-in History"
+	MODEF "+,IMPMTR,,	"Network meters"
+%MDOVH::MODEF "~,OVHMTR,,	"System overhead meters"
+	MODEF "",SYSMSG,,	"System message buffer"
+%MDCRS::MODEF "<,CRASH,%MFINV,	|Crash dump autopsy (JCL: "< filename")|
+MAXMODE:: OFFSET 0
+
+MDTAB2:	BLOCK MAXMODE		; Holds command chars that invoke mode
+MDHTAB:	BLOCK MAXMODE		; Holds ptrs to ASCIZ description strings
+
+
+MDBACK:	.VALUE [ASCIZ /:Should not execute back/]
+
+SUBTTL	Misc command loop support
+
+; TOPERR - Print topmost line showing system errors if any
+;	Mustn't clobber A
+
+TOPERR:	MOVE T,@QIRRCV
+	MOVEI C,0
+	MOVE D,@PARERR
+	MOVEI C,1
+	MOVE B,@PARERR
+	ADD T,D
+	ADD T,B
+	JUMPE T,CPOPJ
+	TYPE "ERRS:"
+	SKIPE @QIRRCV
+	 JRST [	TYPE "   DSK(IRRECOV) ="
+		DNUM 4,@QIRRCV
+		JRST .+1]
+	JUMPN D,[TYPE "   CORPAR =!"
+		DNUM 4,D
+		JRST .+1]
+	JUMPE B,CRR
+	TYPE "   CORNXM =!"
+	DNUM 4,B
+	JRST CRR
+
+; Execute table for start of a mode display
+
+BEGT:	PUSHJ P,CRR	;TTY
+	PUSHJ P,TTYDPT	;DATAPOINT
+	CALL [	MOVEI A,^T ? IDPB A,OBUFP ? RET]	;340
+	PUSHJ P,CRR	;LPT
+	PUSHJ P,TTYDPT	;WIDE DISPLAY
+	PUSHJ P,CRR	;WIDE TTY
+ODEVER BEGT
+
+TTYDPT:	MOVEI A,^P
+	IDPB A,OBUFP
+	MOVE A,TTYOP	;IF ARDS CLEAR USING ^PC
+	TLNN A,%TOERS
+	 SKIPA A,["C]	;MAKE CHAR "C" FOR ^PC
+	  MOVEI A,"T	;DATAPOINTS HOME UP AND CLEAR TOP LINE.
+	IDPB A,OBUFP
+	MOVEI A,^P
+	IDPB A,OBUFP
+	MOVEI A,"]
+	IDPB A,OBUFP
+	POPJ P,
+
+IFN 340P,[
+ODIS:	SKIPE DISNOT
+	 POPJ P,
+	MOVEI A,.BAO	;SET DISPLAY FILE NAME BLOCK
+	HRLM A,DISF		;TO ASCII BLOCK OUTPUT
+	.OPEN DISC,DISF	;TRY TO OPEN DIS DIVICE
+	 POPJ P,		;FAILURE EXIT
+	MOVEI A,.BIO	;SET DIS FIL NAM BLK
+	HRLM A,DISF		;TO IMAGE BLK OUT
+	.OPEN DISWC,DISF	;TRY TO OPEN DIS DEVICE
+	 JRST ODIS2	;FAILURE (SOMEOME MUST HAVE JUST TAKEN DIS AWAY)
+	MOVSI A,(SETZ)	;TURN ON
+	MOVEM A,LPBLK		;SIGN BIT
+	.LTPEN LPBLK	;INITIALIZE LIGHT PEN IN RIGHT "MODE"
+	AOS (P)		;INCREMENT RETURN ADDRESS
+	POPJ P,
+
+ODIS2:	.CLOSE DISC,	;CLOSE OUT ASCII CHANNEL
+	POPJ P,		;FAILURE EXIT
+] ;340P
+
+; Execute table for end of a mode display
+OMENDT:	PUSHJ P,CRR2	;TTY	;2 CR/LF'S
+	CALL GEEND	;DATAPOINT
+IFN 340P,CALL DISEND	; 340 display
+.ELSE	JFCL
+	CTYPE ^L	;LPT
+	CALL GEEND	;WIDE DISPLAY
+	CALL CRR2	;WIDE TTY	;2 CR/LF'S
+ODEVER OMENDT
+
+OMSLPT:	0
+	1
+	1
+	0
+	1
+	0
+ODEVER OMSLPT
+
+GEEND:	MOVE A,MPAGEP(ODEV)	;GE TERMINATION
+	CAMLE A,PAGEPOS		;IF HAVEN'T WRAPPED AROUND YET,
+	 ATYPE [ASCIZ/E/]	;CLEAR REST OF SCREEN.
+	RET
+
+IFN 340P,[
+DISEND:	PUSH P,MPAGEP(ODEV)
+	MOVEI A,2
+	ADDB A,MPAGEP(ODEV)
+	PUSHJ P,VALIGN	;CLEAR UNUSED PART OF SCREEN
+			;STRING GOES ON BOTTOM OF SCREEN
+	MOVSI A,-MAXMODE
+	CAIA
+DISND2:	 ALIGN 3,	;PLUG IN 3 SPACES
+	MOVE B,MDTAB2(A)	;GET CHAR
+	CTYPE 40(B)	;OUTPUT CHAR AS ASCII
+	AOBJN A,DISND2	;LOOP
+	POP P,MPAGEP(ODEV)
+	RET
+
+;MOVE DOWN PAGE UNTIL AT LINE NUMBER IN A
+VALIGN:	SUB A,PAGEPOS
+	JUMPLE A,CPOPJ
+	PUSHJ P,CRR
+	SOJA A,.-2
+] ;340P
+
+
+SUBTTL	UUO Routines
+
+;UUO DISPATCH TABLE
+UUOTAB:	UDPCT
+	UDWRD
+	USONUM
+	UATYPE
+	UDNUM
+	UONUM
+	UVALRET
+	U6XTYPE
+	UCTYPE
+	USQPR
+	UXTYPE
+	U6TYPE
+	UALIGN
+
+;ALIGN AC,E	;SPACE TO COLUMN E OUTPUTTING AT LEAST AC SPACES
+UALIGN:	LDB U1,[270400,,40]	;PICK UP UUO'S AC FIELD
+	MOVEI U3,40
+	SOJL U1,UALIG2	;JUMP IF NO MIN NUM OF SPACES
+UALIG1:	AOS LINEPOS	;INCREMENT LINE POSITION
+	TOUT U3		;OUTPUT SPACE
+	SOJGE U1,UALIG1	;LOOP TILL MIN SPACES OUT
+UALIG2:	CAMLE U2,LINEPOS	;SKIP IF LINE POSITION = EFF ADR
+	JRST UALIG1	;MORE SPACES
+	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+;6TYPE E	;OUTPUT (E) AS SIXBIT
+U6TYPE:	MOVSI U1,-6	;INITIALIZE LOOP, 6 CHARS
+	HRLI U2,440600	;BYTE POINTER FOR HIGH 6 BITS OF E
+U6TYP2:	ILDB U3,U2	;GET CHAR (6 BITS)
+	ADDI U3,40	;CONVERT TO ASCII
+	TOUT U3		;OUTPUT
+	AOBJN U1,U6TYP2	;LOOP
+	MOVEI U1,6
+	ADDM U1,LINEPOS	;INCREMENT LINE POSITION BY 6
+UEXIT:	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+;ATYPE E	;OUTPUT C(E), C(E+1),... AS ASCII, STOPPING AT ZERO OR FF
+UATYP2:	AOSA LINEPOS	;INCREMENT LINE POSITION AND SKIP
+UATYPE:	HRLI U2,440700	;ENTRY, BYTE POINTER TO TOP 7 BITS OF C(E)
+UATYP3:	ILDB U3,U2	;GET CHAR
+	JUMPE U3,UEXIT	;EXIT IF ZERO
+	CAIN U3,14
+	 JRST UEXIT	;EXIT IF FORM FEED
+	TOUT U3	;OUTPUT
+	CAILE U3,15	;SKIP IF MAY BE NON-PRINTING CHAR
+	 JRST UATYP2	;REGULAR CHAR
+	CAIN U3,15
+	 JRST UACR	;CARRIAGE RETURN
+	CAIE U3,12
+	 JRST UATYP2	;REGUALR CHAR
+	AOS PAGEPOS	;LINE FEED, INCREMENT PAGE POSITION
+	JRST UATYP3
+
+UACR:	SETZM LINEPOS	;RESET TO BEG OF LINE
+	JRST UATYP3
+
+;XTYPE E	;OUTPUT IN 6BIT STARTING AT E UNTIL AN "!" IS ENCOUNTERED
+UXTYPE:	HRLI U2,440600	;ENTRY, BYTE POINTER TO TOP 6 BITS OF C(E)
+UXTYP2:	ILDB U3,U2	;GET CHAR
+	CAIN U3,'!	;SKIP UNLESS "!"
+	 JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+	ADDI U3,40	;CONVERT TO ASCII
+	TOUT U3		;OUTPUT
+	AOS LINEPOS	;INCREMENT LINE POSITION
+	JRST UXTYP2	;LOOP
+
+;CTYPE E	;OUTPUT ASCII CHAR WHOSE VALUE IS E
+UCTYPE:	TOUT U2	;OUTPUT CHAR
+	CAIE U2,^B
+	 CAIN U2,^E
+	  JRST 2,@UUOH
+	AOS LINEPOS	;INCREMENT LINE POSITION
+	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+;6XTYPE E	;OUTPUT C(E) AS 6BIT W/ TRAILING SPACES SUPPRESSED.
+U6XTYPE:
+	MOVE U2,(U2)	;GET THE WORD OF SIXBIT
+U6XTY2:	MOVEI U1,0
+	LSHC U1,6	;GET THE NEXT CHARACTER
+	ADDI U1,40	;MAKE INTO ASCII
+	AOS LINEPOS
+	TOUT U1		;OUTPUT IT
+	JUMPN U2,U6XTY2	;IF MORE NON SPACES, KEEP GOING.
+	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+UVALRET:	.RESET TYOC,	;RESET TTY OUTPUT BUF (IN SYSTEM)
+	.SUSET [.RJNAM,,U1]
+	CAMN U1,[SIXBIT/HACTRN/]
+	 JRST [	HRROI U3,[ASCIC/C/]
+		CAIE ODEV,%ODWID	;IF ON DISPLAY TERMINAL,
+		 CAIN ODEV,%ODDPT
+		  XCT ODEVT(ODEV)	;CLEAR SCREEN BEFORE LOGGING OUT.
+		.LOGOUT
+		.VALUE]
+	.VALUE (U2)	;TRANSMIT E FROM UUO TO DDT
+	.DISMISS [BEG]	;RESTART PEEK IF DDT RETURNS
+
+USQPR:	MOVE U1,(U2)
+	TLZ U1,740000
+USPQR2:	IDIV U1,[50*50*50*50*50]
+	ADDI U1,260-1
+	CAILE U1,271
+	 ADDI U1,301-272
+	CAILE U1,332
+	 SUBI U1,334-244
+	CAIN U1,243
+	 MOVEI U1,256
+	TOUT U1
+	MOVE U1,U2
+	IMULI U1,50
+	JUMPN U1,USPQR2
+	JRST 2,@UUOH
+
+
+;ONUM AC,E	;UNSIGNED OCT PRINT C(E), RIGHT JUSTIFIED IN FIELD AT LEAST AC WIDE
+UONUM:	MOVEI U3,10	;SET RADIX 8.
+	SETZM NEGF	;SET TO UNSIGNED OUTPUT
+UONUM2:	SETZM NEGF2	;SET TO NOT PRINT "-"
+	LDB U1,[270400,,40]	;GET AC FROM 40
+	MOVE U2,(U2)	;PUT C(E) IN U2
+	HRRM U3,UNUMQ	;PLANT RADIX
+	PUSHJ P,UNUMP	;PRINT OUTPUT
+	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+UNUMP:	SOS U1	;DECREMENT FIELD WIDTH
+	JUMPL U2,UNUMPN	;C(E) NEG
+UNUMQ1:	IDIVI U2,@UNUMQ
+UNUMQ2:	HRLM U3,(P)	;PUT REMAINDER IN STACK OVER FLAGS
+	SKIPE U2	;SKIP IF REMAINING QUOTIENT IS ZERO
+	 PUSHJ P,UNUMP	;RECURSE ON QUOTIENT
+	JUMPG U1,UNUMS	;ALL OF C(E) PRINT-OUT COMPUTED, PAD WITH SPACES AS REQUIRED
+UNUMP2:	AOSN NEGF2	;SKIP UNLESS "-" TO BE PRINTED
+	 JRST UNUMMM	;PRINT MINUS
+	HLRZ U3,(P)	;PICK UP DIGIT
+	ADDI U3,"0	;CONVER TO ASCII
+	TOUT U3		;OUTPUT
+	AOS LINEPOS	;INCREMENT LINE POSITION
+	POPJ P,
+
+	;C(E) NEGATIVE
+UNUMPN:	SKIPE NEGF	;SKIP IF UNSIGNED OUTPUT
+	 JRST UNUMN2	;SIGNED OUTPUT
+	LSHC U2,-43		;PUT BOTTOM 35 BITS IN BOTTOM OF U3
+	LSH U3,-1	;AND SIGN BIT AT BOTTOM OF U2 (DOUBLE PRECISION INTEGER FORMAT)
+	DIVI U2,@UNUMQ	;DIVIDE OFF DIGIT
+	JRST UNUMQ2
+
+	;SIGNED OUTPUT OF NEGATIVE
+UNUMN2:	SETOM NEGF2	;SET FLAG TO PRINT "-"
+	MOVNS U2	;MAKE NUM PSOITIVE
+	SOJA U1,UNUMQ1	;DECREMENT FIELD WIDTH ANTICIPATING MINUS SIGN
+
+	;PRINT MINUS SIGN
+UNUMMM:	MOVEI U3,"-	;OUTPUT
+	TOUT U3		;A "-"
+	AOS LINEPOS	;INCREMENT LINE POSITION
+	JRST UNUMP2
+
+	;FILL BEGINNING OF FIELD WITH SPACES
+UNUMS:	MOVEI U3,40
+UNUMS2:	TOUT U3		;OUTPUT A SPACE
+	AOS LINEPOS	;INCREMENT LINE POSITION
+	SOJG U1,UNUMS2	;LOOP TILL ENOUGH SPACES
+	JRST UNUMP2
+
+
+;DPCT AC,E
+UDPCT:	MOVEI U3,10.
+	SETOM NEGF
+	JRST UONUM2
+
+;DNUM AC,E	;SIGNED DEC OUTPUT RIGHT JUSTIFIED IN FIELD AT LEAST AC WIDE
+;SONUM AC,E	;SIGNED OCT ETC.
+UDNUM:	SKIPA U3,ORADIX	;RADIX OF 10.
+USONUM:	 MOVEI U3,10	;RADIX OF 8
+	SETOM NEGF	;SET TO SIGNED OUTPUT
+	JRST UONUM2
+
+UDWRD:	PUSH OBUFP,(U2)	;PUT UUO C(E) IN OUTPUT BUF
+	CAME OBUFP,[OBUFL,,OBUF+OBUFL-1]	;SKIP IF BUF FULL
+	 JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+	MOVE U3,[-OBUFL,,OBUF]	;SET UP FOR IOT
+	.IOT DISWC,U3	;OUTPUT BUF TO DIS IN IMAGE MODE
+	MOVEI OBUFP,OBUF-1	;INITIALIZE BUF POINTER
+	JRST 2,@UUOH	;EXIT AND RESTORE FLAGS
+
+;OUTPUT FULL BUFFER (SEE TOUT MACRO)
+OBLOCK:	PUSH P,U3	;PRESERVE U3
+	MOVE U3,[-OBUFL,,OBUF]	;SET UP IOT COUNT
+	XCT ODEVT(ODEV)	;EXECUTE APROPRIATE IOT
+	POP P,U3	;RESTORE U3
+	MOVE OBUFP,[440700,,OBUF]	;INITIALIZE CHAR POINTER TO START OF NOW FREE BUF
+	POPJ P,
+
+;OUTPUT INSTRUCTIONS FOR VARIOUS DEVICES
+ODEVT:	.IOT TYOC,U3	;0=TTY
+	.IOT TYOC,U3	;1=DATAPOINT
+	.IOT DISC,U3	;2=340
+	.IOT LPTC,U3	;3=LPT
+	.IOT TYOC,U3	;WIDE DISPLAY
+	.IOT TYOC,U3	;WIDE TTY
+ODEVER ODEVT
+
+; BUFOUT - Terminate character output, force out output buffer.
+;	Called from various routines, NOT from UUO handler.
+;	Clobbers U1,U3
+BUFOUT:	HLRZ U1,OBUFP
+	CAIE U1,010700	;IS CURRENT ACTIVE WORD IN BUFFER FULL?
+	 JRST [	MOVEI U1,^C
+		IDPB U1,OBUFP	;NO, INSERT AN EOF
+		JRST BUFOUT]
+	;YES, LAST WORD HAS BEEN FILLED OUT
+	MOVEI U3,OBUF
+	SUB U3,OBUFP
+	SOS U3
+	HRLS U3
+	HRRI U3,OBUF
+	XCT ODEVT(ODEV)	;OUTPUT ALL OF BUF THAT IS ACTIVE
+	MOVE OBUFP,[440700,,OBUF]	; Reset output buffer ptr
+	POPJ P,
+
+SUBTTL	Network Host name/number output rtns
+
+;PRINT HOST NUMBER (OR INDEX) IN A, WIDTH IN B
+OHOST:	SKIPN IMPHTN		;NEW SYSTEM?
+	 JRST OHOST0
+	PUSH P,B
+	PUSH P,T
+	MOVE T,A
+	MOVE A,@IMPHTN		;GET NEW-FORMAT HOST# INDEXED FROM T
+	POP P,T
+	POP P,B
+OHOST0:	SKIPN HSTEXP		;EXPAND?
+	 JRST OHLOS1		;NO
+OHOST2:	PUSH P,X
+	PUSH P,U
+	PUSH P,D
+	PUSH P,C
+	PUSH P,B
+	PUSH P,A
+	PUSHJ P,GTHOST
+	SKIPGE HSTSIN
+	 JRST OHLOS0
+;;;; HSTSRC(B:host#) => A:TIP_flag,,name_p, D:site_p
+	MOVE B,(P)		;HOST#
+	PUSHJ P,NETWRK"HSTSRC	;A -> NAME, D -> SITE
+	 JRST OHLOS0		;NOT FOUND
+	HRRZ B,MODE
+	CAIN B,%MDCHA
+	 JRST [	MOVE A,(P)	;CHAOSNET DISPLAYS SHORT NAMES
+		PUSHJ P,NETWRK"HSTSIX
+		 JRST OHLOS0
+		6XTYPE A		
+		JRST OHOST3 ]
+	ATYPE (A)		;FOUND, TYPE IT
+OHOST3:	POP P,A
+	POP P,B
+	POP P,C
+	POP P,D
+	POP P,U
+	POP P,X
+	POPJ P,
+
+OHLOS0:	POP P,A
+	POP P,B
+	POP P,C
+	POP P,D
+	POP P,U
+	POP P,X
+	; Expects HOSTS3 format
+OHLOS1:	HLRZ D,A		;Extract network number
+	TRZ D,77		;Isolate NW$BYT bits
+	CAIE D,(NETWRK"NW%CHS)
+	 JUMPN D,TYPINA		;Jump if internet address
+	TLZ A,777700		;CLEAR POSSIBLE NETWORK NUMBER
+	MOVE D,[ONUM A]
+	DPB B,[270600,,D]
+	XCT D
+	POPJ P,
+
+OHOSTK:	ANDI A,177777		; Chaos addresses have only 16 bits
+	MOVEI B,4		;FIELD WIDTH
+	SKIPN HSTEXP		;EXPAND?
+	 JRST OHLOS1		;NO
+	IOR A,[NETWRK"NW%CHS]	;INSERT CORRECT NETWORK NUMBER
+	JRST OHOST2
+
+GTHOST:	SKIPL HSTSIN		;GOT HOST FILE?
+	 POPJ P,		;YES
+	.IOPUSH DIRC,		;NO, TRY TO GET IT
+	HRRZ A,PGAHST		; Get page # to map host file into
+	MOVEI B,DIRC
+	PUSHJ P,NETWRK"HSTMAP
+	 CAIA
+	  SETZM HSTSIN		;Got it
+	.IOPOP DIRC,
+	POPJ P,
+
+SUBTTL	Interrupt Handler
+
+INTPUR:	SKIPE MORFLG
+	JRST MORON
+TSINT0:	SKIPGE I1,TSINT
+	 JRST TSINTP
+TSINT1:	TRZE I1,%PIIOC
+	 .DISMIS TSINT+1	
+IFN 340P,[
+	TRZ I1,1
+	JUMPN I1,TSINTL
+];340P
+	MOVEI I1,TYIC
+	.ITYIC I1,
+	 .DISMIS TSINT+1
+TSINTI:	.IOT TYIC,I1
+TSINTJ:	PUSHJ P,TSINTQ
+	 .DISMISS TSINT+1
+	HRRZ I1,TSINT+1	;SKIP RETURN IF LOST (ILLEGAL CHAR)
+	CAIN I1,AHANG+1	;FIX UP POINTER IF HANGING
+	 PUSHJ P,TSINTH
+	.DISMISS TSINT+1
+
+TSINT2:	.RESET TYOC,
+	CAIE I1,"Q
+	CAIN I1,"P
+	 .IOT NTYO,I1
+	CAIE I1,^B
+	CAIN I1,^E
+	 .IOT NTYO,I1
+IFN 340P,[
+	CAIE I1,^Y
+	CAIN I1,^N
+	 .IOT NTYO,I1
+];340P
+	CAIN I1,"Q
+	 JRST [.LOGOUT
+	       .BREAK 16,160000]	;PER AS SUGGESTION
+	CAIN I1,"P
+	 PUSHJ P,PROCED
+	CAIN I1,^C
+	 PUSHJ P,PROCED
+	CAIN I1,^G
+	 JRST [SETZM NAMESW
+	       POPJ P,]	       
+	CAIN I1,^B
+	 JRST LPTON
+	CAIN I1,^E
+	 JRST LPTOFF
+IFN 340P,[
+	CAIN I1,^Y
+	 JRST DISON
+	CAIN I1,^N
+	 JRST DISOFF
+];340P
+	CAIN I1,177
+	 JRST TSRET2
+TSINNM:	MOVSI I2,-MAXMOD
+	 CAME I1,MDTAB2(I2)
+	AOBJN I2,.-1
+	HRRZ A,I2
+	CAIN A,%MDBAK
+	 JRST TSINT5
+	MOVE A,RUUFLG
+	MOVEM A,LRUUFL
+	SETZM JHFLAG
+	SETZM RUUFLG
+	MOVE A,RUUIND
+	MOVEM A,LRUUIND
+	SETOM RUUIND
+	SKIPGE A,UUIND
+	 JRST TSINT4
+	SETOM RUUFLG
+	MOVEM A,RUUIND
+TSINT4:	SETOM UUIND
+	CAILE I2,0
+	 .IOT NTYO,[^G]
+	CAIG I2,0
+	 JRST [SKIPL NAMESW
+	      .IOT NTYO,I1
+	      JRST .+1]
+	CAILE I2,0
+	 JRST [AOS (P)
+	       POPJ P,]
+	MOVE A,MODE
+	MOVEM A,LMODE
+	MOVEM I2,MODE
+TSRET2:	.DISMISS [BEG1]
+
+TSINT5:	MOVE A,LMODE	;RESTORE TO PREVIOUS MODE
+	EXCH A,MODE
+	MOVEM A,LMODE
+	MOVE A,LRUUIN
+	EXCH A,RUUIND
+	MOVEM A,LRUUIN
+	SKIPL A,LRUUFL
+	 SETOM RUUIND	; Make sure that arg is -1 if no arg specified.
+	EXCH A,RUUFLG
+	MOVEM A,LRUUFL
+	JRST TSRET2
+
+PROCED:	CAIE ODEV,%ODWID	; If wide display
+	 CAIGE ODEV,%OD340	; or %ODTTY or %ODDPT
+	  JRST [VALRET [ASCIZ /J/]	; then do this, whatever it is.
+		POPJ P,]
+	VALRET [ASCIZ /:PROCED /]	;RETURN TO DDT TO RESTART PEEK
+	POPJ P,
+
+TSINDK:	SETCMM DSKZER	
+	SKIPE DSKZER
+	 .IOT NTYO,["1]
+	.IOT NTYO,["@]
+	POPJ P,
+
+TSINDC:	SETCMM DSKCON
+	SKIPE DSKCON
+	 .IOT NTYO,["1]
+	.IOT NTYO,["&]
+	POPJ P,
+
+TSINHS:	SETCMM HSTEXP
+	SKIPE HSTEXP
+	 .IOT NTYO,["1]
+	.IOT NTYO,["=]
+	POPJ P,
+
+TSINRX:	MOVE A,ORADIX
+	TRC A,2
+	PUSH P,A
+	TRNE A,2
+	 JRST [PUSHJ P,OCTA
+	       JRST TSINR1]
+	PUSHJ P,DECA
+TSINR1:	.IOT NTYO,["#]
+	POP P,A
+	MOVEM A,ORADIX
+	POPJ P,
+
+TSINTZ:	SKIPGE A,UUIND		;ARG SUPPLIED TO Z COMMAND ??
+	 POPJ P,
+	MOVEM A,DOZE		;TIME FOR SLEEPING
+	SETOM UUIND		;SET "NO ARG TYPED" FLAG
+	.IOT NTYO,["Z]		;SO USER KNOWS HE'S HEARD
+	POPJ P,
+
+IFN 340P,[
+TSINTL:	TRNN I1,100000
+	 .LOSE 1000
+	SETZM LPBLK
+	.LTPEN LPBLK
+	SKIPN LPBLK+1	;NUMBER OF TIMES SEEN
+	JRST TSINTX
+	HLRZ I2,LPBLK	;Y
+	HRRZ I1,LPBLK	;X
+	CAIL I2,300
+	JRST TSINL1
+	IDIVI I1,12.*4	;LIGHT-PEN HIT IN LOWER (MODE) AREA
+	CAME I1,MODE
+	CAILE I1,MAXMOD
+];340P
+
+TSINTX:	.DISMISS TSINT+1	;Skipped into from TSINTL above
+	PUSH P,A
+	HRRZ A,I1
+	CAIN A,%MDBAK
+	 JRST TSINX1
+	MOVE A,MODE
+	MOVEM A,LMODE
+	MOVEM I1,MODE
+TSINX2:	POP P,A
+	.DISMISS [BEG]
+
+TSINX1:	MOVE A,LMODE
+	EXCH A,MODE
+	MOVEM A,LMODE
+	JRST TSINX2
+
+IFN 340P,[
+TSINL1:	SUBI I1,12.	;LIGHT-PEN HIT IN UPPER (USER) AREA
+	IDIVI I1,12.*8
+	MOVEM I1,LPBLK+1
+	HLRZ I1,LPBLK
+	SUBI I1,1700
+	MOVNS I1
+	IDIVI I1,18.
+	SOS I1
+	IMULI I1,6
+	ADD I1,LPBLK+1
+	MOVE I2,MODE
+	SKIPL LPCHPT
+	 JRST TSINTX
+	MOVEM I1,LPCHPT
+	.DISMISS [BEG]
+];340P
+
+TSINTQ:	SETZM JCLBP	;ANY TYPEIN EXCEPT **MORE**-PROCEDING RUBOUT FLUSHES
+			;UNPROCESSED JCL.
+TSINTO:	CAIN I1,%TXTOP+"H
+	  MOVEI I1,"?		   ;Help key should work!!
+	CAILE I1, 140	;LOWER CASE CAN GET IN FROM JCL
+	 CAILE I1, 172
+	  CAIA
+	   SUBI I1, 40
+	SKIPGE GUNFLG
+	 JRST GUNNEM
+	SKIPE NAMESW
+	 JRST TSNAME
+TSINAG:	CAIN I1,";
+	 JRST TSSEMI
+	CAIN I1,177
+	 JRST RUBNUM
+	CAIN I1,40	;SPACE INCREMENTS COUNT OF SPACES
+	 JRST [	aos spccnt
+		HRRZ I1,TSINT+1	;IF SLEEPING WAITING FOR A CHARACTER,
+		CAIE I1,DSKHNG+1
+		 CAIN I1,AHANG+1	
+		  JRST TSINTH
+		CAIE I1,ASLEE2	;IF WE CAME FROM SLEEPING
+		 RET
+		SOS SPCCNT	;COUNT THIS SPACE AS EATEN.
+		AOS TSINT+1	;DO HACK TO REDISPLAY.
+		RET]
+	SETZM SPCCNT	;ANYTHING ELSE ZEROES COUNT OF SPACES.
+	CAIN I1,^Z
+	JRST [.CALL [SETZ ? SIXBIT /RELOAD/ ? SETZ]
+	       .LOGOUT
+	      JRST .+1]
+	CAIN I1,"@
+	 JRST TSINDK
+	CAIN I1,"Z
+	 JRST TSINTZ
+	CAIN I1,"#
+	 JRST TSINRX
+	CAIN I1,"=
+	 JRST TSINHS
+	CAIN I1,"&
+	 JRST TSINDC
+	CAIN I1,12.
+	 JRST TSINCL
+	CAIN I1,".
+	 JRST TSFOO
+	CAIL I1,"0
+	 CAILE I1,"9
+	  JRST TSINT2
+	SKIPGE I2,UUIND
+	SETZ I2,
+	ASH I2,3
+	.IOT NTYO,I1		;OUTPUT NUMBER IMMEDIATE
+	ADDI I2,-"0(I1)
+	JRST TSFOO1
+TSFOO:	SKIPGE I2,LNAMES
+	JRST [SETOM NAMESW
+	      SETOM ONAMSW
+	      POPJ P,]
+	SETZM NAMESW
+	MOVE I2,RUUIND
+TSFOO1:	MOVEM I2,UUIND
+	POPJ P,
+
+TSSEMI:	SETZM NAMEHK		;CLEAR FLAGS
+	SETZM NAMCOM
+	MOVE I2,[440600,,NAMEHK]
+	MOVEM I2,NAMEBP		;AND BP
+	MOVEI I1,1
+	MOVEM I1,NAMESW		;SET THE 'IN SEMI MODE' FLAG (+1)
+	POPJ P,	
+
+TSSEM1:	.IOT NTYO,I1
+TSSEM2:	MOVE I1,NAMESW
+	CAME I1,[-2]		;HAVE WE GOT A NAME YET?
+	 POPJ P,	 	;NO KEEP GOING
+	SETOM NAMESW
+	MOVE I1,NAMCOM		;GET BACK THE COMMAND
+	CAIN I1,"E
+	 JRST TSEFND
+TSSEM3:	SETZM ONAMSW
+	JRST TSINNM		;AND DO THE RIGHT THING	
+
+; SPECIAL E MODE HACK FOR GETTING SYMBOL NAME
+
+TSEFND:	MOVE I2,[CAME A,@EONLY]
+	SKIPLE ESW
+	 MOVEM I2,EINST
+	SOSGE ESW
+	 JRST TSSEM3
+	SETZM EONLY
+	SETZM EWORD
+	SETZM SQUOZR		;SLOT FOR SQUOZE'S NAME
+	MOVE I1,NAMEHK
+TSELP:	SETZ I2,		;FOR NEXT CHARACTER
+	ROTC I1,6		;CHARACTER MOVED INTO RH OF I1
+	JUMPE I2,TSEDON		;DONE
+	CAIL I2,'0		;IS IT NUMERIC?
+	 CAILE I2,'9
+	  JRST TSENNM
+	SUBI I2,'0-1		;SQUOZIFY THE NUMBER
+	JRST SQUEEZ
+
+TSENNM:	CAIL I2,'A		;IS IT A LETTER?
+	 CAILE I2,'Z
+	  JRST TSENAN
+	SUBI I2,'A-11.		;SQUOZIFY THE LETTER
+	JRST SQUEEZ
+
+TSENAN:	MOVEI I2,37.		;GET SPECIAL CHARACTERS
+	CAIN I2,'.
+	 AOJ I2,
+	CAIN I2,'$
+	 ADDI I2,2
+	CAIN I2,'%
+	 ADDI I2,3
+	CAIN I2,37.
+	 JRST TSEILL		;NON-SQUOZE CHARACTER
+	
+SQUEEZ:	EXCH I1,SQUOZR		;DO THE SQUOZING
+	IMULI I1,40.
+	ADD I1,I2
+	EXCH I1,SQUOZR
+	AOS I2,EONLY
+	CAIE I2,6
+	 JRST TSELP
+	JRST TSEWIN
+
+TSEDON:	MOVE I2,EONLY
+	CAIE I2,6
+	 JRST [SETZ I2,
+	       JRST SQUEEZ]
+TSEWIN:	MOVE I1,USERT+1		; Get AOBJN ptr to mapped symbol/val pairs
+TSEDLP:	MOVE I2,1(I1)		;SEE IF WE HAVE THE SYMBOL
+	CAMN I2,SQUOZR
+	 JRST [MOVE I2,(I1)
+	       MOVEM I2,EONLY
+	       MOVNI I1,2
+	       MOVEM I1,NAMESW
+	       SETZM NAMEHK
+	       MOVE I2,[440600,,NAMEHK]
+	       MOVEM I2,NAMEBP		;AND BP
+	       POPJ P,]
+	ADDI I1,1
+	AOBJN I1,TSEDLP		;FALL OUT IF NO SYMBOL
+	SKIPA A,[ASCIZ /?U?/]
+TSEILL:	 MOVE A,[ASCIZ /?CH?/]
+	PUSHJ P,NAMA
+	SETOM EONLY
+	SETZM NAMESW
+	POPJ P,
+
+TSNAME:	CAIN I1,177		;RUBOUT?
+	 JRST RUBOUT	
+	SKIPE ONAMSW
+	 JRST TSLNAM
+	SKIPN NAMCOM		;COMMAND SET?
+	 JRST [.IOT NTYO,[";]
+	       CAMN I1,";
+	        POPJ P,		;NO SEMI COMMANDS, PLEASE
+	       MOVEM I1,NAMCOM	;NO. MAKE THIS THE COMMAND
+	       .IOT NTYO,I1
+	       POPJ P,]
+	CAIE I1,40		;END COMMAND ON SEPARATOR
+	 CAIN I1,^I
+	  JRST TSSEM1
+	CAIE I1,^M
+	 CAIN I1,^J
+	  JRST TSSEM1
+	SKIPL EONLY
+	 JRST TSNAM2
+TSNAM1:	MOVE I2,NAMEHK
+	TRNE I2,77		;6 CHARACTERS IN WORD?
+	 POPJ P,		;YES. IGNORE OTHERS
+	CAIL I1,40
+	 .IOT NTYO,I1		;PRINT CHARACTER IF LEGAL
+	MOVNI I2,2
+	MOVEM I2,NAMESW		;SET NAMESW TO -2 TO INDICATE NAME COMING
+	SUBI I1,40		;TO SIXBIT
+	JUMPL I1,CPOPJ		;NO ILLEGAL CHARS
+	IDPB I1,NAMEBP		;PUT IT IN HACK WORD
+	POPJ P,
+
+TSNAM2:	SETZ I2,
+	CAIN I1,">
+	 MOVE I2,[CAMG A,@EONLY]
+	CAIN I1,"<
+	 MOVE I2,[CAML A,@EONLY]
+	CAIN I1,"#
+	 MOVE I2,[CAMN A,@EONLY]
+	CAIN I1,"&
+	 MOVE I2,[PUSHJ P,EAND]
+	CAIN I1,54
+	 JRST [SKIPL EWORD
+	        JRST [MOVSI I2,400000
+		      IORM I2,EWORD
+		      JRST TSNAM3]
+	       HRRZ I2,NAMEHK
+	       HRRM I2,EWORD
+	       SETZM NAMEHK
+	       JRST TSNAM3]
+	SKIPE I2
+	 JRST [MOVEM I2,EINST
+	       JRST TSNAM3]
+	CAIL I1,"0
+	 CAILE I1,"9
+	  JRST TSNAM1
+	MOVE I2,NAMEHK
+	LSH I2,3
+	ADDI I2,(I1)-"0
+	MOVEM I2,NAMEHK
+	MOVNI I2,2
+	MOVEM I2,NAMESW
+TSNAM3:	.IOT NTYO,I1
+	POPJ P,
+
+TSLNAM:	MOVEM I1,NAMCOM
+	.IOT NTYO,[";]
+	.IOT NTYO,I1
+	.IOT NTYO,[" ]
+	PUSH P,I1
+	MOVE I2,[440600,,NAMEHK]
+TSLNLP:	ILDB I1,I2
+	JUMPE I1,TSLNM1
+	ADDI I1,40
+	.IOT NTYO,I1
+	TRNN I2,760000
+	 JRST TSLNLP
+TSLNM1:	.IOT NTYO,[" ]
+	POP P,I1
+	JRST TSSEM3
+
+RUBOUT:	HLRZ I1,NAMEBP
+	CAIE I1,10600
+	 CAIN I1,440600		;FLUSH THIS MODE AT START OF WORD
+	  JRST [SETZM NAMESW	
+		.DISMIS [BEG1]]
+	MOVE I1,NAMEBP	
+	LDB I2,I1		;GET THE RUBBED OUT CHARACTER
+	ADDI I2,40		;TO ASCII
+	.IOT NTYO,I2		;PRINT IT
+	SETZ I2,
+	DPB I2,I1		;DEPOSIT A ZERO
+	DBP I1			;DECREMENT THE BP
+	MOVEM I1,NAMEBP		;AND SAVE IT
+	POPJ P,	
+
+RUBNUM:	SKIPGE I1,UUIND
+	 .DISMIS [BEG1]
+	LSHC I1,-3		;RUBOUT A NUMERICAL ARGUMENT
+	MOVEM I1,UUIND
+	LSH I2,-41
+	ADDI I2,"0
+	.IOT NTYO,I2
+	SKIPN UUIND
+	 SETOM UUIND
+	POPJ P,
+
+TSINCL:	MOVE I2,[-1,,[ASCIC /C/]]
+	.IOT TYOC,I2
+	SUB P,[1,,1]
+ 	.DISMISS [BEG]
+
+TSINTH:	AOS TSINT+1
+	AOS TSINT+1
+	POPJ P,
+
+;INTERRUPT AT BOTTOM OF PAGE.
+TSINTP:	IRPC X,,--More--
+		.IOT NTYO,["X]
+	TERMIN
+	SOSL SPCCNT	;ANY SPACES TYPED AHEAD => CONTINUE.
+	 JRST TSINTR
+	SETZM SPCCNT
+	.IOT TYIC,I1	;ELSE WAIT FOR CHARACTER.
+	CAIE I1,40	;SPACE SAYS CONTINUE
+	 JRST TSINTJ	;ANYTHING ELSE HAS NORMAL EFFECT.
+TSINTR:	.IOT NTYO,[^M]
+	.IOT NTYO,[^J]
+	AOS PAGEPOS
+	.DISMISS TSINT+1
+
+MORON:	.CALL TTYGET		;TURN ON MORE INTERRUPT AGAIN
+ 	 .LOSE 1000
+	TLZ C,%TSMOR
+	.CALL TTYSET
+	 .LOSE 1000
+	SETZM MORFLG
+	JRST TSINT0
+
+SUBTTL	I/O Control - ^B, ^E, ^Y, ^N
+
+; ^B
+LPTON:	.OPEN LPTC,[.BAO,,'DSK
+		SIXBIT /.PEEK./
+		SIXBIT />/]
+	 JRST LPTOFF
+IFN 340P,[
+	CAIN ODEV,%OD340
+	 JRST [	.CLOSE DISC,
+		.CLOSE DISWC,
+		JRST .+1]
+] ;340P
+	HRROI I1,[.BYTE 7 ? ^L ? ^M ? ^M ? ^M ? ^M]
+	.IOT LPTC,I1
+	MOVEI ODEV,%ODLPT
+	JRST TSRET2
+
+; ^E
+LPTOFF:	.CLOSE LPTC,
+TSRET3:	.RESET TYOC,
+	.DISMISS [INITY]
+
+IFN 340P,[
+; ^Y
+DISON:	SETZM DISNOT
+	PUSHJ P,ODIS
+	 JRST DISOFF
+	CAIN ODEV,%ODLPT
+	 .CLOSE LPTC,
+	MOVEI ODEV,%OD340
+	JRST TSRET2
+
+; ^N
+DISOFF:
+	SETOM DISNOT
+	.CLOSE DISC,
+	.CLOSE DISWC,
+	JRST TSRET3
+];340P
+
+SUBTTL	"?" Command - Show command list
+
+EXPL:	ATYPE [ASCIZ "Modes:
+"]
+	MOVE A,RUUIND
+	SKIPE RUUFLG
+	 MOVEM A,HLPFLG
+	MOVSI A,-MAXMODE
+EXPL10:	MOVE B,MDTAB(A)		; Get flags for mode
+	TLNE B,(%MFINV)		; If it's invisible,
+	 JRST EXPL40		; Ignore it.
+	CTYPE 40
+	CTYPE 40
+	CTYPE @MDTAB2(A)	; Output mode command char
+	CTYPE 40
+	CTYPE 40
+	ATYPE @MDHTAB(A)	; Output mode description string
+	CALL CRR
+EXPL40:	AOBJN A,EXPL10
+
+	ATYPE EXPLN2
+	RET
+
+EXPLN2:	ASCIZ \IO Control:
+  ^B Output to .PEEK. >			^Y Use 340
+  ^E Stop output to .PEEK. >		^N Stop 340
+Etc:
+  P  Proceed
+  Q  Quit
+  Z  Set doze time
+  .  Current argument
+  #  Toggle radix (8/10)
+  @  Toggle ^@ abort in <n>C mode
+  &  Toggle output hang in <n>C mode
+  =  Toggle host name expansion
+  ;  SIXBIT name input mode
+\
+
+SUBTTL	Mode "<" - Crash dump autopsy
+
+; Note that currently this mode can only be initialized by JCL.
+; If command is given while PEEKing a live system, it no-ops.
+
+CRASH:	SKIPE A,CRASHF
+	 CAIN A,%JSABS
+	  JRST [TYPE "Cannot do autopsy of running system."
+		CALL CRR
+		TYPE "PEEK is mapping ITS "
+		SKIPGE RUUIND		; Any argument given?
+		 JRST [	SETZM CRASHF	; No, use normal map.
+			TYPE "normally."
+			CALRET CRR]
+		MOVEI A,%JSABS		; Arg given, test crash-dump code
+		MOVEM A,CRASHF		; on live system!
+		TYPE "with crash-dump code as a test."
+		CALRET CRR]
+
+	TYPE "Autopsy of crash dump "
+	6XTYPE CRSFIL
+	CTYPE ":
+	6XTYPE CRSFIL+3
+	CTYPE ";
+	6XTYPE CRSFIL+1
+	CTYPE 40
+	6XTYPE CRSFIL+2
+	CALL CRR
+	TYPE "Sources:  ITS "
+	6XTYPE ITSVRS
+	TYPE ", TS3TTY "
+	6XTYPE TTYVRS
+	TYPE ", DISK "
+	6XTYPE DSKVRS
+	CALL CRR
+	MOVE A,@SYSMPT
+	CALL SYSMS1
+	TYPE "BUGPC/  "
+	MOVE B,@BUGPC
+	CALL OCTHLF
+	TYPE "    USER/  "
+	SONUM @USER
+	SKIPGE U,@USER
+	 JRST NULJB
+	MOVE A,U
+	IDIV A,LUBLK
+	TYPE "    "
+	ONUM A
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+NULJB:	CALL CRR
+	MOVSI C,-16.
+BGACLP:	MOVEI T,(C)
+	ONUM 2,T
+	TYPE "/  "
+	ONUM @BUGACS
+	CALL CRR
+	AOBJN C,BGACLP
+
+	; Should try to trace lossage path better, show PDL, maybe other
+	; generally interesting stuff.
+
+	RET
+
+SUBTTL	Mode """ - System message buffer
+
+; SYSMBF:  Buffer of 8-word entries.
+; SYSMPT:  Pointer to last entry printed.  Take this modulo length of buffer.
+; SYSMLN:  Log[2] of number of entries in buffer.
+; Each 8-word entry has the format:
+; 0:  <modes>,,<string>
+; 1:  <arg1>
+; ...
+; 6:  <arg6>
+; 7:  <time>
+; <string> is the address of an ASCIZ string.  ^@ terminates the end of the
+; string (of course), and ^A - ^F mean to output 1 - 7 arguments
+; respectively.  Remaining arguments are printed after the string is
+; exhausted.
+; When printed, each argument is followed by a space.  The last character in
+; the string is also followed by a space just to introduce confusion.
+; <time> is the time of the message.
+; Each octal digit in <modes> controls the printing of one argument.  The
+; codes are:
+; 0:  No argument (all exhausted)
+; 1:  Octal (foo,,bar)
+; 2:  Decimal
+; 3:  Decimal with commas
+; 4:  Newline
+; 5:  Unused
+; 6:  SIXBIT
+; 7:  ASCIZ
+
+sysmsg:	type "System messages:
+"
+	movei t,1
+	lsh t,@sysmln
+	push p,t		; (P): number of entries
+	move a,@sysmpt
+sysmsl:	addi a,8		; A: buffer pointer
+	push p,a
+	pushj p,sysms1		; print one
+	pop p,a
+	sosle b,(p)
+	 jrst sysmsl
+	sub p,[1,,1]
+	popj p,
+
+sysms1:	movei t,8
+	lsh t,@sysmln
+	subi t,1
+	and a,t
+	addi a,@sysmbf		; A: address of 8-word entry
+	hrrz d,0(a)
+	jumpe d,cpopj		; Empty entry
+	add d,[440700,,sysbeg]	; D: BP into string
+	hllz x,0(a)		; X: mode bits
+	push p,7(a)		; (P): time
+sysms2:	ildb c,d
+	jumpe c,sysms9
+	caige c,10
+	 jrst sysms3
+	ctype (c)
+	jrst sysms2
+
+; Print C(C) arguments
+sysms3:	call sysms4
+	 sojg c,.-1
+	jrst sysms2
+
+; Print 1 argument
+sysms4:	setzi t,
+	lshc t,3
+	jumpe t,popj1
+	aos a
+	move b,(a)
+	xct sysms5-1(t)
+	ctype 40
+	ret
+
+sysms5:	call octhlf		; 1:  Octal (foo,,bar)
+	dnum b			; 2:  Decimal
+	call dectho		; 3:  Decimal with commas
+	call crr		; 4:  Newline
+	ctype "?		; 5:  Unused
+	6type b			; 6:  SIXBIT
+	atype (b)		; 7:  ASCIZ
+
+sysms9:	ctype 40		; The random space
+	call sysms4		; Print remaining arguments
+	 jrst .-1
+	pop p,t			; Finally print time since message
+	move a,@time
+	sub a,t
+	idivi a,30.
+	jumpe a,crr		; Don't bother about 0
+	ctype 40
+	call tmpt
+	jrst crr
+
+; Print C(B) in octal. Use commas if LH non-zero
+octhlf:	tlnn b,-1
+	 jrst octhl9
+	hlrz t,b
+	hrrz b,b
+	onum t
+	type ",,"
+octhl9:	onum b
+	ret
+
+; Print C(B) in decimal with a commas separating three digit groups.
+dectho:	push p,c
+	idivi b,1000.
+	jumpe b,decth1
+	call dectho
+	ctype ",
+	caige c,100.
+	 ctype "0
+	caige c,10.
+	 ctype "0
+decth1:	dnum c
+	pop p,c
+	ret
+
+
+
+
+SUBTTL	Mode "V" - Job Variables
+
+DOUSER:	MOVE U,RUUIND
+	IMUL U,LUBLK
+	CAML U,@USRHI
+	 JRST [	CALL CRR
+		ATYPE [ASCIZ /User number /]
+		ONUM RUUIND
+		ATYPE [ASCIZ / does not exist./]
+		CALRET CRR]
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	CTYPE 40
+	6TYPE @USYSNM
+	CTYPE 40
+	6TYPE @USYSN1
+	CTYPE 40
+	PUSHJ P,USTATUS	;(USTATUS ALSO INTERPRITS RPCL)
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /UPC  =/]
+	ONUM 12.,@UPC
+	ALIGN 22.
+	ATYPE [ASCIZ /SV40 =/]
+	ONUM 12.,@SV40
+	ALIGN 44.
+	ATYPE [ASCIZ /SUUOH=/]
+	ONUM 12.,@SUUOH
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /UEXIT=/]
+	ONUM 12.,@SUEXIT
+	ALIGN 22.
+	ATYPE [ASCIZ /SUPRO=/]
+	ONUM 12.,@SUPPRO
+	ALIGN 44.
+	ATYPE [ASCIZ /HUSRAD/]
+	DNUM 12.,@HUSRAD
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /FLSIN=/]
+	ONUM 12.,@FLSINS
+	ALIGN 22.
+	ATYPE [ASCIZ /NSWPGS/]
+	DNUM 12.,@NSWPGS
+	ALIGN 44.
+	ATYPE [ASCIZ /MASK =/]
+	ONUM 12.,@MSKST
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /MASK2=/]
+	ONUM 12.,@MSKST2
+	ALIGN 22.
+	ATYPE [ASCIZ /PIRQC=/]
+	ONUM 12.,@PIRQC
+	ALIGN 44.
+	ATYPE [ASCIZ /IFPIR=/]
+	ONUM 12.,@IFPIR
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /TTYTB=/]
+	ONUM 12.,@TTYTBL
+	ALIGN 22.
+	ATYPE [ASCIZ /JTMU =/]
+	ONUM 12.,@JTMU
+	MOVE A,@TIME
+	SUB A,@LUBTM
+	IDIVI A,30.
+	JUMPE A,USER1A
+	ALIGN 44.
+	ATYPE [ASCIZ/LUBTM=/]
+	PUSHJ P,TMPT
+USER1A:	PUSHJ P,CRR
+
+	; Loop over job's ACs and I/O channels
+	CAIE ODEV,%ODTTY	; Don't do this for small TTYs
+	 CALL [	ATYPE [ASCIZ / #/]
+		ALIGN 12.
+		ATYPE [ASCIZ /AC's/]
+		ALIGN 24.
+		ATYPE [ASCIZ /IOCHNM/]
+		ALIGN 38.
+		ATYPE [ASCIZ /IOCHST/]
+		CALRET CRR]
+	MOVSI C,-16.
+USER2:	HRRZ A,C
+	ONUM 2,A
+	JUMPE ODEV,USER3
+	MOVEI A,@AC0S
+	ADD A,U
+	ONUM 14.,(A)
+USER3:	MOVEI A,@IOCHNM
+	ADD A,U
+	ONUM 14.,(A)
+	MOVEI B,@IOCHST
+	ADD B,U
+	ONUM 14.,(B)
+	ALIGN 1,
+	HRRZ B,(A)		; CHANNEL OPEN?
+	JUMPE B,USER80
+	SKIPE CRASHF		; Make sure we're examining a live system
+	 JRST USER70		; Else we can't use RFNAME!
+	MOVE A,RUUIND
+	TRO A,400000		; JOB ARGUMENT
+	HRRZ B,C		; CHANNEL NUMBER
+	SYSCAL RFNAME,[	A ? B
+		REPEAT 5,[ ? MOVEM RHIST+.RPCNT ]]
+	 JRST USER80
+	SKIPN A,RHIST
+	 JRST USER80
+	CAMN A,[SIXBIT /CHAOS/]
+	 JRST [	CALL UNETCH
+		JRST USER80]
+	CAME A,[SIXBIT /TCP/]
+	 CAMN A,[SIXBIT /NET/]
+	  JRST [CALL UNETCH
+		JRST USER80]
+IFN 0,[
+	CAMN A,[SIXBIT /MSP/]
+	 JRST [	CALL UMSPCH
+		JRST USER80]
+];IFN 0
+	MOVEI A,"R
+	MOVEI D," 
+	MOVE B,RHIST+4
+	 TRNE B,1
+	MOVEI A,"W
+	 TRNE B,2
+	MOVEI D,"B
+	CTYPE (A)
+	CTYPE (D)
+	ALIGN 48.
+
+	; Print filename for I/O channel
+	6XTYPE RHIST		; DEVICE
+	CTYPE ":
+USER60:	SKIPE RHIST+3		; SNAME/DIRECTORY
+	 JRST [	6XTYPE RHIST+3
+		CTYPE ";
+		JRST .+1]
+	6XTYPE RHIST+1		; FILE NAME 1
+	CTYPE 40
+	6XTYPE RHIST+2		; FILE NAME 2
+USER80:	PUSHJ P,CRR
+	AOBJN C,USER2
+	RET			; Return from mode
+
+	; Make a feeble effort to print something interesting for
+	; a user-job I/O channel in a crash dump.
+	; Channel # is in RH(C)
+USER70:	MOVEI A,@IOCHNM
+	PUSH P,C
+	ADDI A,(U)
+	MOVE C,(A)	; Get contents of IOCHNM word into C as index reg
+	HLRZ D,C	; Save LH in D for possible device-dependent use
+
+	; Try to get some mode bits
+	MOVE A,@IOTTB	; Get IOTTB entry for this device
+	MOVEI B,"R
+	TDNE A,%IOTOT	; Is output-device bit set?
+	 MOVEI B,"W	; Yup
+	CTYPE (B)
+	TDNE A,%IOTBK	; Is block-mode bit set?
+	 CTYPE "B
+
+	ALIGN 48.
+	HLLZ A,@DCHSTB	; Get DCHSTB entry for device specified by RH(C)
+	JUMPG A,[		; If positive,
+		HLRZS A		; it's really an addr to 6-char dev name.
+		MOVE A,SYSBEG(A)
+		JRST .+1]
+	6XTYPE A
+	CTYPE ":
+
+	; Now see if we can do any better.
+	LDB C,[1400,,@DCHSTB]	; Get index into other ITS device tables
+	HLRZ A,@DRFNTB		; Get address of device's RFNAME routine
+	CAMN A,RCHQSK		; Is it DSK?
+	 JRST [	MOVEI C,(D)	; Yes!!  Set up LH of IOCHNM as index
+		MOVE B,@QUDFPR	; Get offset loc of file within dir (C idx)
+		PUSH P,U
+		MOVE U,@QUDPR	; Get user dir pointer (C idx)
+		MOVE D,@QSNLCN	; Get abs loc of directory page (U idx, sigh)
+		POP P,U
+		ADDI B,(D)	; Find abs loc of file
+		UMOVE A,(B)	; Get FN1
+		MOVEM A,RHIST+1
+		UMOVE A,1(B)	; Get FN2
+		MOVEM A,RHIST+2
+		UMOVE A,UDNAME(D)	; Get directory name, using dir offset.
+		MOVEM A,RHIST+3
+		POP P,C
+		JRST USER60]	; All done, go print our winnage!
+
+	CAMN A,TCPRCH		; A TCP net channel?
+	 JRST [	MOVEI C,(D)	; Yes, get TCB index into C
+		MOVE A,@XBHOST	; Get foreign host
+		MOVEM A,RHIST+3
+		LDB A,[.BP TH%DST,@XBPORT]	; Get local port
+		MOVEM A,RHIST+1
+		LDB A,[.BP TH%SRC,@XBPORT]	; Get foreign port
+		MOVEM A,RHIST+2
+		POP P,C
+		CALL UNETC2
+		JRST USER80]
+	POP P,C		; Matched nothing we know about, give up.
+	TYPE "<???>"
+	JRST USER80
+
+UNETCH:	ALIGN 48.
+	6XTYPE RHIST
+	CTYPE ":
+	CTYPE 40
+UNETC2:	ONUM RHIST+1		; Show local port/socket
+	CTYPE 40
+	MOVE A,RHIST+3
+	TLZ A,(SETZ)		;A gets host number
+	PUSHJ P,NETWRK"STDHST	;Convert to standard form
+	SETZ B,
+	PUSHJ P,OHOST0		;Output it
+	CTYPE "(
+	ONUM RHIST+2		; Show foreign port/socket
+	CTYPE ")
+	RET
+
+IFN 0,[
+UMSPCH:	SETZ A,
+	MOVE D,MSUSER
+UMSPC1:	CAIL A,40
+	 JRST UMSPLS
+	MOVE B,D
+	ADD B,A
+	CAME U,(B)
+	 AOJA A,UMSPC1
+	MOVE B,MSREAD
+	ADD B,A
+	SKIPN (B)
+	 JRST UMSPWR
+	CTYPE "R
+	ALIGN 48.
+	6XTYPE RHIST
+	CTYPE ":
+	6XTYPE (B)
+	CTYPE " 
+	MOVE B,MSRED2
+	ADD B,A
+	6XTYPE (B)
+	RET
+
+UMSPWR:	CTYPE "W
+	ALIGN 48.
+	6XTYPE RHIST
+	CTYPE ":
+	MOVE B,MSWRIT
+	ADD B,A
+	6XTYPE (B)
+	CTYPE " 
+	MOVE B,MSWRT2
+	ADD B,A
+	6XTYPE (B)
+	RET
+
+UMSPLS:	ATYPE [ASCIZ /MSP: LOSER??/]
+	RET
+];IFN 0
+
+SUBTTL	Mode "I" - IMX/OMX display (obsolete)
+
+IFN 0,[
+
+;INPUT AND OUTPUT MULTIPLEXORS DISPLAY
+MPXR:	SKIPL XCHFLG
+	 JRST [	SKIPE CRASHF
+		 JRST [	TYPE "No IMX data from dumped system."
+			CALRET CRR]
+		.OPEN IMXC,[4,,(SIXBIT /IMX/)]
+		 JRST [	ATYPE [ASCIZ/IMX not available/]
+			RET]
+		MOVEI C,0
+		.IOT IMXC,C	;WAIT FOR FIRST IMX DATA
+		SETOM XCHFLG
+		JRST .+1]
+
+	6XTYPE [SIXBIT /IMPX/]
+	MOVSI A,-10
+	ALIGN 4,
+	CTYPE "0(A)
+	AOBJN A,.-2
+	MOVSI D,-200
+	MOVE X,[441400,,@MPXBUF]
+	MOVEI C,0
+MPXRL1:	TRNE D,7
+	 JRST MPXRL2
+	PUSHJ P,CRR
+	LDB B,[30400,,D]
+	ONUM 2,B
+	ALIGN 2,
+MPXRL2:	ILDB B,X
+	TLNE X,770000
+	 JRST MPXRL3
+	HRLI X,441420
+	AOS C
+MPXRL3:	ONUM 5,B
+	AOBJN D,MPXRL1
+	RET
+];IFN 0
+
+SUBTTL	Mode "nmM" - Job memory map display
+
+MEMHAK:	MOVE A,[4,,4]
+	MOVEM A,CONST
+	MOVE A,[-2,,A]
+	MOVEM A,CONST2
+	SETZM MUDFLG
+	MOVE U,RUUIND
+	IMUL U,LUBLK
+	CAML U,@USRHI
+	 JRST MHISTN
+IFN MUDP,[
+	PUSHJ P,MUDDLE		;CHECK FOR A MUDDLE
+	 CAIA
+	  JRST MEMMDL		; Go hack special Muddle stuff
+]
+MEMHK1:	HRLZI T,-400		;HERE FOR nmM MODE
+	SETZM SHRTOT
+	MOVE U,RUUIND
+	TRO U,400000
+	MOVEI B,0		;B HAS PAGE COUNT 
+	SKIPE CRASHF
+	 JRST [	TYPE "CORTYP simulation for crash files not yet implemented."
+		CALRET CRR]
+
+	;LOOP THROUGH PAGES
+CORLUP:	SYSCAL CORTYP,[	U ? B
+	       MOVEM A
+ 	       MOVEM V2
+	       MOVEM V3
+	       MOVEM V4]
+	 JRST MHISTN
+	JUMPE A,CORLP1
+	SKIPLE V2
+	AOS SHRTOT
+CORLP1:	LDB F,[900,,V2]	;GARBLE THE RESULT INTO ONE WORD
+	DPB F,[220900,,A]
+	HLRZ F,V4
+	IOR A,F
+	LDB F,[900,,V3]
+	DPB F,[900,,A]
+	LDB F,[900,,V4]
+	DPB F,[110600,,A]
+	MOVEM A,RHIST(T)
+	AOS B
+	AOBJN T,CORLUP
+	MOVE D,SHRTOT	;D HAS TOTAL SHARED
+	MOVE U,RUUIND
+	MOVE C,U
+	IMUL U,LUBLK
+	ATYPE HTOP
+	SKIPE UWRKST
+	 ATYPE HTOPWS
+	XCT CRR
+	MOVE A,@NMPGS
+	SUB A,@NSWPGS	;PUT MEM TOTAL IN A
+	PUSHJ P,PMEML0	;PRINT MEMORY LINE (AS IN M MODE)
+	ATYPE MTOP2
+	HRLZI T,-400
+	MOVE X,T
+	ADD X,[1,,1]
+
+CORCM1:	SKIPN MUDFLG
+	JRST CORCMP
+	SETZM V3
+	HRRZ A,T
+	PUSHJ P,PPWINR
+	JRST CORCMP
+	HRLI A,(A)
+	ADD X,A
+	MOVEM B,V3
+	JRST CORDIF
+	
+
+
+
+CORCMP:	HLLZ A,RHIST(T)	;CHECK IF PAGES LOOK THE SAME
+	HLLZ B,RHIST(X)
+	CAME A,B
+	JRST CORDIF
+	MOVE A,RHIST(T)
+	MOVE B,RHIST(X)
+	LDB A,[090800,,A]
+	LDB B,[090800,,B]
+	CAME A,B
+	JRST CORDIF
+	SKIPN MUDFLG
+	JRST CORCM2
+	HRRZ A,X
+	PUSHJ P,PPWINR
+	CAIA
+	JRST CORDIF
+
+CORCM2:	AOBJN X,CORCMP	;PAGES ARE THE SAME
+	SKIPN RHIST(T)
+	 RET		; Return from mode
+
+CORDIF:	HRRZ A,T
+	HRRZ B,X
+	SUBI B,1
+	CAME A,B
+	JRST CORMNY		;MANY PAGES
+	DNUM 3,A		;JUST ONE PAGE HERE
+	ALIGN 11.
+	JRST CORBIT
+
+CORMNY:	DNUM 3,A
+	ATYPE [ASCIZ "-"]
+	DNUM 3,B
+	ALIGN 11.
+
+CORBIT:	MOVE F,RHIST(A)	;INFO FOR PAGE
+	MOVE C,F
+	AND C,[770000,,0]
+	SKIPN C
+	JRST CORZIP		;NO PAGES HERE
+	MOVEI D,40
+	TLNE C,200000	;READ BIT
+	 MOVEI D,"R
+	CTYPE (D)
+	MOVEI D,40
+	TLNE C,400000	;WRITE BIT
+	 MOVEI D,"W
+	CTYPE (D)
+	MOVEI D,40
+	MOVE B,F
+	TRNE B,200000
+	 MOVEI D,"P
+	CTYPE (D)
+	ALIGN 16.
+	LDB B,[090800,,B]
+
+CORSHR:	LDB C,[220900,,F]
+	TRNE C,400
+	 JRST CORNX1
+	JUMPE C,CORABS	;ABSOLUTE PAGE
+	HRRE D,B
+	SOS D
+	DNUM 1,D
+	SKIPN V3
+	 JRST CORWHO
+	LDB B,[300600,,V3]
+	JUMPE B,CORWHO
+	ALIGN 21.
+	CTYPE "[
+	6XTYPE V3
+	CTYPE "]
+	JRST CORWHO
+		
+CORNX1:	SKIPN V3
+	 JRST CORNXT
+	LDB F,[300600,,V3]
+	JUMPE F,CORNXT
+	ALIGN 21.
+	CTYPE "[
+	6XTYPE V3
+	CTYPE "]
+	JRST CORNXT
+
+CORWHO:	SKIPN V3
+	 ATYPE [ASCIZ "    "]
+	LDB A,[900,,F]
+	MOVE B,RUUIND
+	MOVNM D,RNDFLG	;NUMBER OF SHARERS OF THIS PAGE
+	SETZ F,
+	SKIPE V3
+	 ADDI F,1
+
+CORWLP:	CAMN B,C
+	 CAMN A,(T)
+	  JRST CORWNM
+	PUSHJ P,RETIF		;THIS PAGE SHARES WITH PAGE IN SAME JOB
+	CTYPE "(
+	DNUM A
+	CTYPE ")
+	JRST CORWN1
+
+CORWNM:	MOVE U,C
+	IMUL U,LUBLK
+	PUSHJ P,PFUJNM
+
+CORWN1:	AOSN RNDFLG		;GET THE SHARERS 
+	 JRST CORNXT
+	TRO C,400000
+	SYSCAL CORTYP,[ C ? A	; DO CORTYP OF NEXT SHARER IN LIST
+	       MOVEM D
+	       MOVEM C
+	       MOVEM A
+	       MOVEM U]
+	 JRST CORNXT
+	JUMPE D,CORNXT
+	JUMPL C,CORNXT
+	JRST CORWLP
+
+CORABS:	ATYPE [ASCIZ "1    SYSTEM"]	
+	JRST CORNXT		;SHARES WITH SYSTEM JOB
+
+CORNXT:	PUSHJ P,CRR
+	SKIPG T,X
+	 JRST CORCM1
+	RET		; Return from mode
+
+CORZIP:	ATYPE [ASCIZ "--"]
+	JRST CORNXT
+
+PFUJNM:	PUSHJ P,RETIF		;PRINT UNAME/JNAME OF SHARER
+	ONUM 2,C
+	ATYPE [ASCIZ "-"]
+PFUJN1:	6XTYPE @UNAME
+	CTYPE " 
+	6XTYPE @JNAME
+	POPJ P,
+
+RETIF:	CAIN F,2
+	 JRST NXTLIN
+	CAIE F,0
+	 ALIGN 38.
+	AOJ F,
+	POPJ P,
+
+NXTLIN:	MOVEI F,1
+	PUSHJ P,CRR
+	ALIGN 21.
+	POPJ P,
+
+MTOP2:	ASCIZ /
+
+  Page    Type  #    Sharers
+/
+
+SUBTTL	Muddle memory routines for "M" mode
+
+IFN MUDP,[
+
+; I SWEAR I'LL BREAK THE NECK OF THE ASSHOLE WHO REMOVES ANY 
+; CODE HERE WITHOUT CONSULTING ME AND OBTAINING PERMISSION.  (MARC)
+
+; I find it hard to take this seriously from someone who hasn't logged in
+; to an ITS machine since May 1984.  -Alan 1/18/87
+
+MEMMDL:	SKIPN CRASHF		; If hacking a crash dump, ignore this cruft.
+	 .CALL USROPN		;OPEN THE JOB
+	  JRST MHISTN
+	SETOM MUDFLG
+	MOVEI F,UUOLOC		;FIND UUOH LOCATION
+	PUSHJ P,MUDLOC
+	HRRZ F,D
+	ADDI F,1		;FIND UUOH+1
+	PUSHJ P,MUDLOC
+	MOVEI F,PVEC55		;GET PURVEC+1 = 1567
+	CAMN D,[JRST 702470]	;JRST UUOPUR = MUD54, ELSE MUD55
+	 MOVEI F,PVEC54	 	;GET PURVEC+1 = 1367
+	PUSHJ P,MUDLOC
+	MOVEI F,(D)
+	.CALL USRACC		;ACCESS TO PURE VECTOR
+	 JRST MHISTN
+	MOVE C,[-100,,RHIST+400]
+PLP:	MOVE F,[-2,,A]
+	.CALL USRIOT
+	 JRST MHISTN
+	JUMPE A,PLP2
+	JUMPE B,PLP1
+	JUMPGE C,MHISTN
+	MOVEM A,(C)
+	ASH B,-10.
+	MOVEM B,1(C)
+	ADD C,[2,,2]
+PLP1:	MOVE F,CONST2
+	.CALL USRIOT
+	 JRST MHISTN
+	ADD D,CONST
+	JUMPL D,PLP
+PLP2:	SETZM 1(C)
+	JRST MEMHK1
+
+MUDLOC:	.CALL USRACC
+	 JRST MUDLC1
+	MOVE F,[-1,,D]
+	.CALL USRIOT
+	 JRST MUDLC1
+	POPJ P,
+
+MUDLC1:	POP P,
+	JRST MHISTN
+
+DEFINE NPAC X
+	MOVEI C,X
+	MOVEI A,@AC0S
+	ADD A,U
+	SKIPLE (A)
+	 POPJ P,
+TERMIN
+
+DEFINE NEGAC X
+	MOVEI C,X
+	MOVEI A,@AC0S
+	ADD A,U
+	SKIPL (A)
+	 POPJ P,
+TERMIN
+
+MUDDLE:	MOVE C,@UPC		;CHECK IF THESE ARE USER AC'S
+	TLNN C,%PCUSR
+	 POPJ P,
+	NEGAC 13
+	NPAC 14
+	NPAC 15
+	NPAC 16
+	NEGAC 17
+	JRST POPJ1
+
+] ;IFN MUDP
+
+PPWINR:	MOVE B,[-100,,RHIST+400]
+PPWNR2:	SKIPN C,1(B)
+	 RET
+	CAIN A,(C)
+	 JRST PPWNR4
+	ADD B,[2,,2]
+	JUMPL B,PPWNR2
+PPWNR4:	AOS (P)
+	MOVE B,(B)
+	HLRE A,C
+	MOVNS A
+	RET
+
+SUBTTL	Misc J-mode routines
+
+; Look up index in U to see if it's one of the ones we should
+; display -- only called if JHFLAG set (J mode)
+; Clobbers T.
+
+IDXLKP:	SKIPG T,UIDCNT
+	 RET
+	PUSH P,A
+	PUSH P,B
+	HRRZ A,U
+IDXLK5:	SKIPG B,UIDTAB-1(T)
+	 JRST POPBAJ	; Lose, non-skip return.
+	CAME A,B
+	 SOJG T,IDXLK5
+	JUMPLE T,POPBAJ
+	POP P,B
+POPAJ1:	POP P,A
+POPJ1:	AOS (P)
+	POPJ P,
+
+POPBJ:	POP P,B
+APOPJ:	POPJ P,
+
+POPBAJ:	POP P,B
+POPAJ:	POP P,A
+	POPJ P,
+
+;HACK TO GROK ARC, ML etc. DEVICES
+
+JARCHK: MOVN D,UIDCNT
+	HRLZS D
+	CAIA
+JARCLP:	 AOBJP D,APOPJ
+	SKIPN U,UIDTAB(D)
+	 POPJ P,
+	PUSHJ P,ARCPRT
+	JRST JARCLP
+
+ARCHAK:	MOVE U,LUBLK
+ARCLP:	ADD U,LUBLK	;SKIP CORE JOB OR GREAT EMBARRASSMENT ENSUES
+	CAML U,@USRHI
+	 POPJ P,
+	SKIPN @UNAME
+	 JRST ARCLP
+	PUSHJ P,ARCPRT
+	JRST ARCLP
+
+;GET DATA FROM JOB.  GIVE UP IF ANY CALLS LOSE.
+
+ARCPRT:	HLRZ A,@JNAME	;GOT A POSSIBLE WINNER
+	SKIPN CRASHF	; Ignore if examining crash dump, can't hack USR:
+	 CAIE A,'JOB
+	  POPJ P,
+	JMOVE A,%JOBDV
+	CAME A,[SIXBIT /ARCDEV/]
+	 CAMN A,[SIXBIT /MLDEV/]
+	  JRST .+3		;A TRULY WINNING JOB
+	CAME A,[SIXBIT /DIRDEV/]
+	 POPJ P,
+	SKIPN RNDFLG	;ONLY PRINT HEADER IF ANYTHING'S THERE
+	 SKIPN JHFLAG
+	  JRST ARCLP1
+	PUSHJ P,CRR
+	ATYPE DSKTOP
+	SETOM RNDFLG
+ARCLP1:	PUSH P,U	;SAVE OUR INDEX AND FIND REAL INDEX
+	JMOVE C,%JCUNM
+	JMOVE B,%JCJNM
+	MOVE U,LUBLK
+ARCLP3:	ADD U,LUBLK
+	CAML U,@USRHI
+	 JRST [SETO U,
+	       JRST ARCLPX] ;JOB GONE NOW?
+	CAMN C,@UNAME
+	 CAME B,@JNAME
+	  JRST ARCLP3
+ARCLPX:	CTYPE "J	;FOUND THE JOB INDEX
+	HRRZ T,(P)
+	IDIV T,LUBLK
+	ONUM 2,T	;PRINT Jnm
+	CTYPE 40
+	PUSHJ P,DLPRT1	;PRINT INDEX/UNAME
+	POP P,U		;AND RESTORE OLD INDEX
+	JMOVE T,%JCJNM
+	6TYPE T		;CORRECT JNAME
+	CTYPE 40
+	MOVEI A,"R
+	JMOVE B,%JMODE
+	TRNE B,1
+	 MOVEI A,"W
+	CTYPE (A)	;DIRECTION
+	ALIGN 1,26.
+	JMOVE A,%JACC
+	JMOVE B,%JBTSZ
+	CAIN B,7
+	 IDIVI A,5		;CHARACTERS TO WORDS
+	PUSHJ P,BLKPRT
+	ALIGN 35.
+	JMOVE B,%JMODE
+	JMOVE T,%JFLEN
+	SKIPL T			;DON'T DO LENGTH IF NOT KNOWN
+	 TRNE B,1		;OR IF WRITE CHANNEL
+	  JRST ARCLP4
+	JMOVE A,%JACC
+	IMULI A,100.
+	JMOVE T,%JFLEN
+	IDIV A,T
+	CAIL A,0
+	 CAILE A,100.	;DONT PRINT 1329% FOR RO FILES
+	  JRST ARCLP4
+	DPCT 3,A	
+	CTYPE "%
+ARCLP4:	ALIGN 45.
+	JMOVE T,%JDEV
+	6XTYPE T		;DEVICE
+	CTYPE ":
+	CTYPE 40
+	JMOVE T,%JSNM
+	6XTYPE T		;DIRECTORY
+	CTYPE ";
+	CTYPE 40
+	JMOVE T,%JFN1
+	6XTYPE T		;FILE NAME 1
+	CTYPE 40
+	JMOVE T,%JFN2
+	6XTYPE T		;FILE NAME 2
+	PUSHJ P,CRR
+	POPJ P,		;NEXT VICTIM
+
+SUBTTL	Mode "C" - Disk Channels
+
+DISK:	SKIPGE C,RUUIND
+	 JRST DISK1		; No argument specified
+	CAIL C,@NQCHN
+	 JRST DISK1
+	SKIPGE A,@QSMDN
+	 JRST DISK1
+	MOVEM A,V2
+	MOVEM C,V4
+	SKIPN B,CRASHF		; If not looking at crash-dump file,
+	 MOVEI B,%JSABS		; we map from running ITS.
+	SYSCAL CORBLK,[	MOVEI %CBRED+%CBNDR ? MOVEI %JSELF ; Get us read-access
+			MOVEI DSKPG		; at this page
+			B			; From this addr space
+			A]			; from this page
+	 JRST DISK1
+	SKIPGE U,@QUSR
+	 JRST DISK1
+	ATYPE DSKTOP		
+	MOVEI D,1	;HACK
+	PUSHJ P,DLPRT
+	PUSHJ P,CRR2
+	PUSHJ P,DSKTYP
+	ATYPE [ASCIZ /
+*** End of Buffer ***
+/]
+	RET
+
+
+DSKTYP:	MOVE A,[010700,,DSKPG*2000-1]	;ENTRY, BYTE POINTER TO TOP 7 BITS
+DSKTLP:	SETZM V3
+	PUSHJ P,DSKOUT			;OUTBUT BUFFER
+	PUSHJ P,BUFOUT
+	MOVE C,V4			;RESTORE CHANNEL NUMBER 
+	MOVE D,@QSMDN			;GET BUFFER POINTER
+	CAME D,V2			;SAME AS LAST?
+	 POPJ P,			;NO. RETURN
+	SKIPE DSKCON			;CONTINUE FLAG
+	 PUSHJ P,DSKWRT			;READ BUFFER?
+	  POPJ P,			;YES. RETURN
+	MOVE D,V3
+DSKHNG:	CAME D,@QSMPRP
+	 JRST DSKHN1
+	ATYPE [ASCIZ /*>/]
+	PUSHJ P,BUFOUT
+	SETOM V3
+DSKHN1:	CAMN D,@QSMPRP			;WAIT FOR MORE
+	 .HANG
+	MOVE D,@QSMDN			;NEW BUFFER?
+	CAME D,V2
+	 POPJ P,
+	SKIPN V3
+	 JRST DSKTLP
+	MOVE F,[-1,,[ASCIC /XX/]]	;ERASE *>
+	.IOT TYOC,F	
+	JRST DSKTLP			;OTHERWISE, CONTINUE
+
+;A HAS BYTE POINTER TO NEXT BYTE IN BUFFER TO OUTPUT, C CHNL NUMBER
+DSKOUT:	MOVE D,@QMPBSZ		;NUMBER OF BYTES IN BUFFER
+	HRRZ B,@QSBYTE		;BYTES PER WORD
+	CAIN B,1
+	 IMULI D,5		;NUMBER OF CHARACTERS IN BUFFER
+	PUSHJ P,DSKWRT
+	 JRST DSKTY3		;READ
+	MOVE D,@QSMPRP		;-> LAST BYTE OUTPUT
+	MOVEM D,V3
+	LDB B,[360600,,D]
+	LDB C,[360600,,A]
+	SUBM C,B
+	IDIVI B,7		;CHARACTER OFFSET
+	SUBI D,(A)		;WORD OFFSET
+	ANDI D,1777
+	IMULI D,5
+	ADD D,B			;NUMBER OF CHARACTERS TO OUTPUT
+	CAIA
+DSKTY2:	 AOS LINEPOS
+DSKTY3:	SOJL D,CPOPJ		;MORE CHARACTERS TO OUTPUT?
+	ILDB B,A		;GET CHAR
+	SKIPN DSKZER
+	 JUMPE B,DSKTY3		;IGNORE IF ZERO
+	CAIN B,^C
+	 JRST DSKTY3		;OR ^C
+	CAIN B,^P
+	 JRST [ CTYPE "^ ? ADDI B,100 ? JRST .+1 ]
+	TOUT B			;OUTPUT
+	CAILE B,15	;SKIP IF MAY BE NON-PRINTING CHAR
+	 JRST DSKTY2	;REGULAR CHAR
+	CAIN B,15
+	 JRST DSKTCR	;CARRIAGE RETURN
+	CAIE B,12
+	 JRST DSKTY2	;REGUALR CHAR
+	AOS PAGEPOS	;LINE FEED, INCREMENT PAGE POSITION
+	JRST DSKTY3
+
+DSKTCR:	SETZM LINEPOS	;RESET TO BEG OF LINE
+	JRST DSKTY3
+
+;SKIP IF CHANNEL IN C IS A WRITE CHANNEL
+DSKWRT:	SKIPGE @QSCRW
+	 JRST POPJ1
+	MOVE T,@QSRAC
+	TLNE T,@%QAWOV
+	 AOS (P)		;REALLY WRITING
+	POPJ P,
+
+; PRINT HEADER LINE FOR DSK INFO
+
+DSKHD1:	PUSHJ P,CRR	;FROM J MODE, DON'T PRINT FREE BLOCK INFO
+	SETOM RNDFLG
+	JRST DSKHD2
+
+DSKHDR:	PUSH P,C
+	MOVN C,NQS	;AOBJN ON DISK PACKS
+	HRLZS C
+	ATYPE [ASCIZ / Free Blocks: /]
+DFRELP:	SKIPGE @QPKID
+	 JRST DFREL1	;PACK NOT MOUNTED
+	CTYPE "#
+	DNUM @QPKID
+	CTYPE "=
+	DNUM @QSFT	;QSFT IS (C)
+	CTYPE 40
+DFREL1:	AOBJN C,DFRELP
+	PUSHJ P,CRR
+	POP P,C
+DSKHD2:	ATYPE DSKTOP
+	POPJ P,
+
+DISK1:	SKIPN JHFLAG
+	 PUSHJ P,DSKHDR
+	MOVE C,NQCHN
+	ADD C,NQS	;INDEX +1 FOR DIR WRT, NQS FOR SWAP
+	MOVN D,NQS	;COUNT SPECIAL ACTION ON SWAP, DIR WRT
+DLUP:	SKIPGE U,@QUSR
+	 JRST DLUP1
+	LDB T,[360600,,@UNAME]
+	JUMPE T,DLUP1
+	SKIPN JHFLAG
+	 JRST DLUP0
+	PUSHJ P,IDXLKP
+	 JRST DLUP1		
+	SKIPN RNDFLG	;ONLY PRINT HEADER IF ANYTHING'S THERE
+	PUSHJ P,DSKHD1
+
+;AT THIS POINT C HAS CHANNEL NUMBER, U HAS INDEX*LUBLK
+DLUP0:  PUSHJ P,DLPRT
+DLUP2:	PUSHJ P,CRR
+DLUP1:	AOS D
+	SOJGE C,DLUP
+	SKIPE JHFLAG
+	 RET
+	PUSHJ P,ARCHAK	;ARCHIVE CHANNELS, ETC.
+	PUSHJ P,ERRDEV	;ERR, DIRECTORIES, ETC. (FROM OLD E MODE)
+	RET	
+
+DLPRT:	CTYPE 40	;TYPE=DISK
+	ONUM 2,C
+	CTYPE 40
+	PUSHJ P,DLPRT1
+	6TYPE @JNAME
+	CTYPE 40
+	MOVEI A,"R
+	SKIPGE @QSCRW
+	 MOVEI A,"W
+	CTYPE (A)
+	MOVE A,@QSRAC
+	HRRZ B,A
+	TLNE A,@%QAWOV
+	 CTYPE "O
+	SKIPGE A	;%QALOK
+	 CTYPE "L	;LOCKED
+	TLNN A,@%QAEFR
+	 TLNE A,@%QAEFW
+	  CTYPE "E	;E-O-F
+	CAIE B,@%QMTTW
+	 CAIN B,@%QMTTR
+	  CTYPE "T	;TUT READ OR WRITE
+	CAIE B,@%QMUDW
+	 CAIN B,@%QMUDR
+	  CTYPE "U	;USER DIR READ OR WRITE
+	CAIE B,@%QMMDW
+	 CAIN B,@%QMMDR
+	  CTYPE "M	;MFD READ OR WRITE
+	TLNE A,@%QACTH
+	 CTYPE "B	;CORE TRANSFER HUNG ON ACTIVE BUFFER
+	TLNE A,@%QAFUL
+	 CTYPE "F	;HUNG IN DIR FULL
+	TLNE A,@%QADEL
+	 CTYPE "*	;DELETE WHEN CLOSED
+	TLNE A,@%QAACC
+	 CTYPE "A	;ADR MODIFIED (.ACCESS)
+	TLNE A,@%QAPAR
+	 CTYPE "?	;PARITY ERROR
+	SKIPN B
+	 CTYPE "I	;CHANNEL IDLE
+	CAIE B,@%QMUDR	;SEE IF DIRECTORY CHANNEL
+	 CAIN B,@%QMUDW
+	  JRST [ALIGN 41.
+		PUSH P,C
+		HRRZ C,@QDSKN
+		DNUM @QPKID
+		POP P,C
+		MOVE U,@QUDPR
+		ALIGN 45.
+		6XTYPE @QSNUD
+		CTYPE ";
+		POPJ P,]
+	CAIE B,@%QMUDW	;SKIP REST IF DIR READ/WRITE
+	 CAIN B,@%QMUDR
+	  JRST @.+1
+	JUMPLE D,[ALIGN 41.	;FINISHED FOR SWAP AND DIR CHNLS
+		  PUSH P,C
+		  HRRZ C,@QDSKN
+		  DNUM @QPKID
+		  POP P,C
+		  POPJ P, ]
+	ALIGN 1,26.
+	MOVE A,@QSMPRP
+	IBP A
+	ANDI A,1777
+	PUSH P,B
+	HRRZ B,@QSBYTE
+	IMUL A,B		;CONVERT WORDS TO BYTES
+	SKIPGE @QSMDN
+	 SETZM A
+	ADD A,@QFBLNO
+	IDIV A,B		;CONVERT BACK TO WORDS (AT LEAST FOR NOW)
+	PUSHJ P,BLKPRT		;PRINT WORD COUNT
+	POP P,B
+	ALIGN 35.
+	MOVE B,A
+	MOVE U,@QUDPR
+	MOVE A,@QSNLCN
+	ADD A,@QUDFPR		;POINTER INTO USER DIRECTORY
+	SKIPGE @QSCRW		;ONLY HACK READ CHANNELS
+	 JRST DLPRT0
+LENHAK:	PUSH P,A		;SAVE THE WORLD
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	PUSH P,U
+;THIS CODE FROM ITS
+	SETOM B
+	UMOVE C,UNRNDM(A)
+	LDB C,[UNDSCP+C]
+	IDIVI C,UFDBPW
+	HLL C,QBTBLI(D)		;MAKE A BP TO DESCRIPTOR AREA
+	UMOVE X,UNRNDM(A)
+	LDB X,[UNWRDC+X]
+	ANDCMI A,1777		; X HAS WORD COUNT IN LAST BLOCK OF FILE
+	HRRZS A
+	ADDI A,UDDESC
+	ADD C,A
+	PUSHJ P,NFLLN1		; GET THE BLOCK COUNT OF FILE
+	IMULI B,2000
+	SKIPN X
+	 MOVEI X,2000
+	ADD B,X		;FILE LENGTH NOW IN B
+	POP P,U
+	POP P,D
+	MOVE A,-1(P)	;THIS IS WORD COUNT (FROM ABOVE)
+	IMULI A,100.
+	IDIV A,B
+	CAILE A,100.
+	 JRST LENHK1
+	CAIGE A,0
+	 JRST LENHK1
+	DPCT 3,A	;PRINT THE %AGE
+	CTYPE "%
+	CTYPE 40
+LENHK1:	POP P,C		;GOES THE WEASEL
+	POP P,B
+	POP P,A
+
+DLPRT0:	ALIGN 41.	;HERE TO PRINT DISK NUMBER AND FILE NAME
+	PUSH P,C
+	HRRZ C,@QDSKN
+	DNUM @QPKID
+	POP P,C
+	ALIGN 45.
+	6XTYPE @QSNUD	
+	CTYPE ";
+	CTYPE 40
+	UMOVE B,(A)
+	6XTYPE B
+	CTYPE 40
+	UMOVE B,1(A)
+	6XTYPE B
+	POPJ P,
+
+DLPRT1:	JUMPL U,DLPRTA
+	HRRZ A,U
+	IDIV A,LUBLK
+	ONUM 3,A
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	POPJ P,
+
+DLPRTA:	ATYPE [ASCIZ / ?? /]
+	6TYPE A
+	CTYPE 40
+	POPJ P,
+
+QBTBLI:	440600,,
+	360600,,
+	300600,,
+	220600,,
+	140600,,
+	060600,,
+	000600,,
+
+NFLLN1:	IBP C		;HERE TO GET FILE LENGTH
+	UMOVE D,(C)
+	HLL A,C
+	HRRI A,D	;MAKE BP IN A 
+	LDB F,A		;GET THE DESCRIPTOR BYTE
+	JUMPE F,CPOPJ
+	CAILE F,UDTKMX
+	 JRST NFLLN2
+	ADD B,F
+	JRST NFLLN1
+
+NFLLN2:	CAIGE F,UDWPH
+	 AOJA B,NFLLN1
+	CAIN F,UDWPH
+	 JRST NFLLN1
+	REPEAT NXLBYT, IBP C
+	AOJA B,NFLLN1
+
+BLKPRT:	PUSH P,A
+	IDIVI A,2000
+	DNUM 3,A
+	CTYPE "+
+	DNUM B
+	POP P,A
+	POPJ P,	
+
+DSKTOP:	ASCIZ ! Ch Idx Uname  Jname Mode Bks+Wds   Rd%  Pk  File Name
+!
+
+SUBTTL	ERR device hacking
+
+; ERRDEV - Show channels open on ERR: or reading file directory.
+; ERRDEV is only entry point, called only by DLUP/JREST
+
+ERRDEV:	MOVEI U,0
+	SETOM ERRDVF
+ERRDV0:	CAML U,@USRHI		; Loop over all jobs
+	 POPJ P,
+	SKIPN @UNAME
+	 JRST ERRDV9
+	SKIPE JHFLAG		; In J mode,
+	 JRST [	PUSHJ P,IDXLKP	; be picky about which jobs we look at.
+		 JRST ERRDV9
+		JRST .+1]
+	HRRZ C,U
+	MOVEI A,@IOCHNM		; Get 1st IOCHNM addr for this job
+	HRLI A,-20		; Loop over all active channels
+	PUSHJ P,ERRDV1		; Print out cruft if channel is right kind.
+	AOBJN A,.-1
+	HRL A,LUIOP	; Then examine IOPDL chans
+			; NOTE!!!! This code depends on fact that
+			; IOPDL follows IOCHNM!
+	PUSHJ P,ERRDV1
+	AOBJN A,.+1	; 2-word entries on IOPDL.
+	AOBJN A,.-2
+ERRDV9:	ADD U,LUBLK
+	JRST ERRDV0
+
+	; Auxilary routine called once for each channel being examined.
+	; A/ mapped addr of IOCHNM word for channel
+ERRDV1:	HRRZ B,(A)	; Get device index
+	CAMGE B,DIRCHN	; See if it fits one of DIRCHN, DIRBN, NDATAI, NBLKI.
+	 POPJ P,
+	SUBI B,4	; NOTE!!! Code depends on above 4 being in order!
+	CAML B,DIRCHN
+	 POPJ P,
+	SKIPN RNDFLG	; Only print header if anything's there
+	 SKIPN JHFLAG
+	  JRST ERRDV3
+	PUSHJ P,CRR
+	ATYPE DSKTOP
+	SETOM RNDFLG
+	SETZM ERRDVF
+	
+ERRDV3:	HRRZ B,A
+	MOVE C,U
+	SUBI B,@IOCHNM
+	CTYPE "C
+	ONUM 2,B
+	IDIV C,LUBLK
+	ONUM 4,C
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	ALIGN 45.
+	SKIPE CRASHF		; RFNAME only works for a live ITS
+	 JRST [	; Ugh, do manual RFNAME.  See RCHDIR in ITS for code expl.
+		HLRZ C,(A)	; Get LH of IOCHNM word
+		MOVE T,@DSKLST	; Get type-of-dir code (indexed by C)
+		SUBI T,1
+		SETZB X,D
+		;SKIPE X,@UDUSR	; Ignore this, no more utapes to worry about
+		; HRLZS X
+		ADD X,@RCHDRD	; Determine dev name (indexed by T)
+		CAIN T,3-1
+		 MOVE D,@UDSYSN	; Get directory (indexed by C)
+		MOVE B,@RCHDR1	; Get FN1 (indexed by T)
+		SKIPN @RCHDR2	; Test FN2 (indexed by T)
+		 SKIPA C,@UUDPP	; Not there, get ERR dev code (indexed by C!!!)
+		  MOVE C,@RCHDR2	; OK to clobber C now.
+		JRST ERRDV4]	; Gasp, wheeze.
+		
+	SYSCAL RFNAME,[	MOVEI 400000(C)
+		B
+		MOVEM X
+		MOVEM B
+		MOVEM C
+		MOVEM D]
+	 JRST [	ATYPE [ASCIZ/ON IO PDL?/]
+		CALRET CRR]
+ERRDV4:	CAME X,[SIXBIT /DSK/]
+	 JRST [	6XTYPE X
+		CTYPE ":
+		JRST .+1]
+	JUMPE D,.+3
+	 6XTYPE D
+	 CTYPE ";
+	6XTYPE B
+	CTYPE " 
+	6XTYPE C
+	PUSHJ P,CRR
+	POPJ P,
+
+SUBTTL	Mode "K" - Chaosnet connections
+
+KAOS:	SKIPN JHFLAG
+	 ATYPE KTOP
+	SETZM RNDFLG
+	MOVE C,NINDX
+KAOS0:	SOJL C,KAOS10
+	SKIPGE @CHSUSR
+	 JRST KAOS0
+	SKIPN JHFLAG
+	 JRST KAOS00
+	HRRZ U,@CHSUSR
+	PUSHJ P,IDXLKP
+	 JRST KAOS0		;NOT THIS TREE
+	SKIPE RNDFLG
+	 JRST KAOS00
+	PUSHJ P,CRR		;GOING TO PRINT SOMETHING, GIVE HEADER
+	ATYPE KTOP0
+	ATYPE KTOP
+	SETOM RNDFLG
+KAOS00:	ONUM 3,C
+	CTYPE 40
+	HRRZ U,@CHSUSR
+	MOVE A,U
+	IDIV A,LUBLK
+	ONUM 3,A
+	CTYPE 40
+	6TYPE @UNAME
+
+	CTYPE 40
+	6TYPE @JNAME
+	ALIGN 1,22.
+	HRRZ A,@CHSSTA
+	CAILE A,10
+	 MOVEI A,10
+	6TYPE (A)[SIXBIT/CLOSED/
+		  SIXBIT/LISTEN/
+		  SIXBIT/RFCRCV/
+		  SIXBIT/RFCSNT/
+		  SIXBIT/OPEN  /
+		  SIXBIT/LOS   /
+		  SIXBIT/INCXMT/
+		  SIXBIT/LOWLVL/
+		  SIXBIT/GARBAG/]
+	CTYPE 40
+	HRRZ A,@CHSNBF
+	DNUM 3,A
+	CTYPE 40
+	HLRZ A,@CHSNBF
+	DNUM 3,A
+	CTYPE 40
+	SKIPGE A,@CHSNOS
+	 JRST [	CTYPE "-
+		MOVMS A
+		DNUM A
+		JRST .+2 ]
+	  DNUM 3,A
+	ALIGN 1,41.
+	HLRZ A,@CHSPKN		;COMPUTE # PKTS AWAITING ACK
+	HLRZ B,@CHSACK
+	SUB A,B
+	SKIPGE A
+	 ADDI A,200000
+	DNUM 3,A
+	CTYPE 40
+	HLRZ A,@CHSWIN
+	DNUM A
+	ALIGN 1,49.
+	HRRZ A,@CHSWIN
+	DNUM 3,A
+	CTYPE 40
+	LDB A,[242000,,@CHSFRN]	;HOST NUMBER
+	PUSHJ P,OHOSTK
+	ALIGN 1,60.
+	LDB A,[042000,,@CHSFRN]
+	ONUM A
+	ALIGN 1,67.
+	MOVE A,@CHSSTA		;DECODE FLAGS
+	TSNE A,%CFOFF
+	 CTYPE "F		;F - OFF AT PI LEVEL
+	TSNE A,%CFSTS
+	 CTYPE "S		;S - SEND STS
+	TSNE A,%CFCLS
+	 CTYPE "C		;C - HALF-CLOSED
+	TSNE A,%CFSTY
+	 CTYPE "T		;T - CONNECTED TO STY
+	SKIPE @CHSIBP
+	 CTYPE "I		;I - HAS INPUT BUFFER
+	SKIPE @CHSOBP
+	 CTYPE "O		;O - HAS OUTPUT BUFFER
+	PUSHJ P,CRR
+	JRST KAOS0
+
+KAOS10:	SKIPE JHFLAG
+	 SKIPE RNDFLG
+	  CAIA
+	   POPJ P,		;J mode and nothing involved with Chaos net
+	DNUM @CHTTBF
+	ATYPE [ASCIZ/ buffers, /]
+	DNUM @CHFRBF
+	ATYPE [ASCIZ/ of which are free.
+/]
+	SKIPN A,@CHQRFC
+	 JRST KAOS20
+	ATYPE [ASCIZ/Pending RFCs:
+/]
+	HLRZS A
+	PUSHJ P,KAOSPP
+	JUMPN A,.-1
+KAOS20:	SKIPN A,@CHQLSN
+	 JRST KAOS30
+	ATYPE [ASCIZ/Pending LSNs:
+/]
+	HLRZS A
+	PUSHJ P,KAOSPP
+	JUMPN A,.-1
+KAOS30:	SKIPGE RUUIND		; any arg causes skip of STY cruft.
+	 CALL STYSHO
+	RET
+
+;Print packet in A, set A to next.  Prints source index and contact name.
+KAOSPP:	ONUM A
+	ATYPE [ASCIZ/: /]
+	PUSH P,A
+	UMOVE A,NETWRK"%CPKS(A)	; Get source host
+	LDB A,[NETWRK"$CPKSA-NETWRK"%CPKS+A]
+	MOVEI B,0
+	PUSHJ P,OHOSTK
+	CTYPE 40
+	POP P,A
+	UMOVE B,NETWRK"%CPKS(A)	; Get source index
+	LDB B,[NETWRK"$CPKSI-NETWRK"%CPKS+B]
+	ONUM B
+	CTYPE 40
+	UMOVE B,(A)		; Get nbytes
+	LDB C,[041400,,B]
+	MOVEI D,4(A)		; Data pointer
+KAOSP1:	UMOVE B,(D)		; B GETS A DATA WORD
+	MOVE U,[440800,,B]
+REPEAT 4,[
+	ILDB T,U
+	CTYPE (T)
+	SOJLE C,KAOSP2
+]
+	AOJA D,KAOSP1
+
+KAOSP2:	PUSHJ P,CRR
+	UMOVE B,-2(A)		; Get thread
+	HRRZ A,B
+	POPJ P,
+
+KTOP0:	ASCIZ /Chaos network connections:
+/
+KTOP:	ASCIZ /Idx Usr Uname  Jname  State  Ibf Pbf Nos Ack R Win T Foreign Addr  Flag
+/
+
+SUBTTL	Mode "W" - Network routing tables
+
+WROUTE:	SKIPLE RUUIND		;1W shows Chaosnet routing only
+	 JRST WROUTK
+	ATYPE [ASCIZ/Internet routing table
+Network			     Gateway		        Interface   Idle
+/]
+	PUSHJ P,GTHOST
+	SETZB A,C		;Copy Internet routing table into RHIST
+WROUT1:	SKIPN @IPGWTN
+	 JRST WROUT2
+	HRLZM C,RHIST(A)	;Make table index,,idle time
+	MOVN D,@IPGWTM
+	ADD D,@TIME
+	IDIVI D,30.*60.		;Time since entry last used in minutes
+	SKIPLE D
+	 HRRM D,RHIST(A)
+	ADDI A,1
+WROUT2:	ADDI C,1
+	CAMGE C,NIPGW
+	 JRST WROUT1
+	PUSHJ P,HTBSRT		;Sort by time
+	MOVN U,A
+	HRLZ U,U		;Aobjn pointer to RHIST
+WROUT3:	HLRZ C,RHIST(U)		;Index into gateway table
+	SKIPN A,@IPGWTN
+	 JRST WROUT7
+	CALL TYPINA
+	MOVE B,@IPGWTN
+	CALL NETWRK"NETSRC
+	 JRST WROUT4
+	ALIGN 1,14.
+	ATYPE (A)
+WROUT4:	ALIGN 1,29.
+	SKIPN A,@IPGWTG
+	 JRST [	ATYPE [ASCIZ/(direct)/]
+		JRST WROUT5 ]
+	PUSHJ P,TYPINA
+	ALIGN 1,41.
+	PUSHJ P,NETWRK"STDHST	;Convert to standard form
+	SETZ B,
+	PUSHJ P,OHOST0		;Output it
+WROUT5:	MOVE A,@IPGWTI
+	ALIGN 1,62.
+	CAMN A,IPKSNA
+	 ATYPE [ASCIZ/IMP/]
+	CAMN A,IPKSNC
+	 ATYPE [ASCIZ/Chaos/]
+	SKIPN IPGWTM		;Check for old version of ITS
+	 JRST WROUT6
+	MOVN A,@IPGWTM
+	ADD A,@TIME
+	IDIVI A,30.		;Time since entry last used in seconds
+	JUMPLE A,WROUT6
+	ALIGN 0,67.
+	CALL TMPT
+WROUT6:	CALL CRR
+WROUT7:	AOBJN U,WROUT3
+	SKIPN NSUBNT
+	 RET
+WROUTK:	ATYPE [ASCIZ/
+Chaosnet Routing Table
+Subnet	Cost	Gateway
+/]
+	MOVEI C,0
+WROUT8:	MOVE A,MYCHAD
+	LSH A,-8
+	CAME A,C
+	 SKIPA A,@SBNRUT
+	  SETO A,
+	HLRE B,A
+	CAIL B,1000
+	 JRST WROUT9
+	ONUM 3,C
+	JUMPL A,[ ALIGN 16.
+		  ATYPE [ASCIZ/(direct)/]
+		  PUSHJ P,CRR
+		  JRST WROUT9 ]
+	ALIGN 8
+	DNUM 3,B
+	ALIGN 16.
+	HRRZS A
+	ONUM 6,A
+	ALIGN 24.
+	PUSHJ P,OHOSTK
+	PUSHJ P,CRR
+WROUT9:	ADDI C,1
+	CAMGE C,NSUBNT
+	 JRST WROUT8
+	RET
+
+;Print Internet address in A
+TYPINA:	LDB B,[301000,,A]
+	DNUM B
+	CTYPE ".
+	LDB B,[201000,,A]
+	DNUM B
+	CTYPE ".
+	LDB B,[101000,,A]
+	DNUM B
+	CTYPE ".
+	LDB B,[001000,,A]
+	DNUM B
+	RET
+
+SUBTTL	Mode "+" - Network metering
+
+IMPMTR:	PUSHJ P,IMPSTA
+	SKIPE @SYSDBG
+	 JRST [ PUSHJ P,CRR
+		ATYPE [ASCIZ /  (ITS being debugged!)/]
+		JRST .+1 ]
+	PUSHJ P,CRR
+	PUSHJ P,CRR
+	SKIPL RUUIND		; Do default if no arg
+	 JRST IMTR50		; Else special hack.
+	ATYPE [ASCIZ /Meter/]
+	ALIGN 53.
+	ATYPE [ASCIZ /Value/]
+	ALIGN 61.
+	ATYPE [ASCIZ /Change/]
+
+	MOVSI D,-NMTRS	    		; Counter into table.
+IMTR20:	movei b,@mtrtab+mt$loc(d)
+	jumpe b,imtr21
+	PUSHJ P,CRR			; Skip a line.
+	XCT MTRTAB+MT$LOC(D)		; Get the meter value in A.
+	MOVE B,MTRTAB+MT$OLD(D)		; Get the old value in B.
+	MOVEM A,MTRTAB+MT$OLD(D)	; Update the old value.
+	ATYPE @MTRTAB+MT$DSC(D)	    	; Print the description.
+	ALIGN 40.
+	6TYPE MTRTAB+MT$NAM(D)		; Print name of symbol
+	ATYPE [ASCIZ / = /]
+	ALIGN 51.
+	DNUM 7.,A	    		; Print the meter.
+	ALIGN 61.
+	SUB A,B		    		; Compute the change.
+	DNUM 4.,A	    		; Print it.
+imtr21:	ADDI D,MT$L-1			; Bump to next
+	AOBJN D,IMTR20
+	PUSHJ P,CRR
+	RET			; End of Network metering.
+
+; Special alternate mode, show all net meters.
+; Should be a way to select classes of meters with argument.
+
+IMTR50:	MOVN C,%NMTRS
+	MOVSI C,(C)		; Index for MTRCNT
+IMTR51:	DNUM 10,@MTRCNT
+	TYPE " "
+	HRRZ A,@MTRNAM		; Holds location,,asciz name
+	JUMPE A,IMTR52		; Haven't got a string
+	ATYPE SYSBEG(A)		; Print meter name
+	JRST IMTR53
+IMTR52:	TYPE "(MTRCNT+"		; ITS assembled without meter names.
+	MOVEI A,(C)		; Could be cute and look up loc in symtab,
+	ONUM 3,A		; at great expense.
+	TYPE ")"
+IMTR53:	CALL CRR
+	AOBJN C,IMTR51
+	RET
+
+;;; Subroutine to show ARPA network status.
+
+IMPSTA:	ATYPE [ASCIZ /IMP is /]
+	MOVE A,@IMPUP
+	CAIN A,0
+	 ATYPE [ASCIZ /up./]
+	CAMN A,[-1]
+	 ATYPE [ASCIZ /down./]
+	CAMN A,[-2]
+	 ATYPE [ASCIZ /coming up./]
+	CAIN A,1
+	 ATYPE [ASCIZ /down until rdy line changes./]
+	ATYPE [ASCIZ "   TCP/IP is"]
+	SKIPN @TCPUP
+	 ATYPE [ASCIZ / not/]
+	ATYPE [ASCIZ / available./]
+	POPJ P,
+
+
+SUBTTL	Mode "A" - Arpanet (NCP/TCP) connections (plus all STYs)
+
+NETWRK:	SETZM RNDFLG
+	SKIPN JHFLAG
+	 PUSHJ P,IMPSTA
+	SKIPE JHFLAG
+	 JRST NETWR1
+	SKIPE @SYSDBG
+	 JRST [ PUSHJ P,CRR
+		ATYPE [ASCIZ /  (ITS being debugged!)/]
+		JRST .+1 ]
+NETWR1:
+IFN 0,[		;NCP support removed
+	SKIPN JHFLAG
+	 ATYPE ATOP
+	MOVE C,IMPSTL
+	SUBI C,1
+NETLUP:	SKIPL U,@IMSOC1		;USER INDEX
+	 JRST NETL1
+	SKIPN JHFLAG
+	 JRST NETLP1
+	PUSHJ P,IDXLKP
+	 JRST NETL1
+	SKIPE RNDFLG		;ONLY PRINT HEADER IF ANYTHING'S THERE
+	 JRST NETLP1
+	PUSHJ P,CRR
+	ATYPE ATOP0
+	ATYPE ATOP
+	SETOM RNDFLG
+NETLP1:	ONUM 2,C		;TABLE INDEX
+	ALIGN 0,3
+	MOVE A,@IMSOC1
+	TLNE A,200000		;BEING CLOSED BIT 
+	 JRST [	ATYPE [ASCIZ\ -BEING CLOSED-  \] ;STRING MUST BE 17. CHARACTERS LONG
+		JRST NETLP2 ]
+	HRRZ A,U
+	IDIV A,LUBLK
+	ONUM 3,A		;USER INDEX
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	ALIGN 25
+NETLP2:	ONUM 7,@IMSOC2		;LOCAL SOCKET NUMBER
+	CTYPE 40
+	MOVE A,@IMSOC4		;SOCKET STATE
+	HRRZ B,A		;GET THE STATE ALL BY ITSELF
+	JUMPE B,CLOSED		;SOCKET CLOSED, FIND OUT WHY
+NETL2:	HRRZ B,A
+	CAIGE B,NSTATE		;SKIP IF STATE GOT CLOBBERED?
+	 6XTYPE STATES(A)
+	HLRZ B,@IMSOC6
+	ANDI B,377
+	CAIN B,377
+	 CTYPE "+		;BIG BUFFER
+	CTYPE 40		;SPACE
+	MOVE B,@IMSOC2		;LOCAL SOCKET NUMBER
+	ANDI B,1
+	ATYPE (B)[ASCIZ/<- / ? ASCIZ/-> /]
+	HRRZ B,@IMSOC4
+	CAIN B,1
+	 JRST [ATYPE [ASCIZ /[ANY]/]
+	       JRST NETL2G]
+	LDB A,[321000,,A]	;FOREIGN HOST
+	MOVEI B,5
+	PUSHJ P,OHOST		;PRINT HOST NAME RIGHT AFTER ARROW
+NETL2G:	MOVEI B,60.		;NOW PUT FOREIGN SOCKET, FLUSH-RIGHT TO COLUMN 60
+	SUB B,LINEPOS
+	CAIG B,0
+	 MOVEI B,0
+	CAIL B,20
+	 JRST [	ALIGN 60.-17
+		MOVEI B,17
+		JRST .+1 ]
+	LSH B,27
+	IOR B,[ONUM @IMSOC3]
+	XCT B			;FOREIGN SOCKET
+	DNUM 4,@IMSOC8		;MESSAGE ALLOCATION
+	DNUM 6,@IMSOC7		;BIT ALLOCATION
+	PUSHJ P,CRR
+NETL1:	SOJGE C,NETLUP
+	JRST NETL1A
+];IFN 0
+NETL1A:
+	; Now print out TCP connections
+	SKIPN JHFLAG
+	 CALL CRR		; Separate the two listings
+	CALL NETTCP
+	MOVE A,MODE
+	CAIN A,%MDNET		; If mode is arpanet,
+	 SKIPGE RUUIND		; then any arg causes skip of STY cruft.
+	  CAIA
+	   JRST NETQ3
+	CALL STYSHO
+NETQ3:	RET	;Remove NCP support
+IFN 0,[		;Remove NCP support
+	SKIPN @IMPUP
+	 SKIPN IMPBPQ
+	  JRST NETQ1	;NOT UP, OR NCP SUPPORT NOT THERE ANY MORE
+	SETOM NETQF	;PRINT PENDING QUEUE
+	MOVE C,@IMPBPQ
+NETQ2:	JUMPL C,NETQ1
+	SKIPE JHFLAG
+	 JRST NETQ1
+	ADDI C,SYSBEG
+	AOSN NETQF
+	 ATYPE [ASCIZ /
+Pending queue
+  Host             Frn Soc       Loc Soc   Type   Link or size
+/]
+	LDB A,[101000,,3(C)]
+	MOVEI B,4
+	PUSHJ P,OHOST
+	ALIGN 13.
+	MOVE A,2(C)
+	ONUM 14,A
+	CTYPE 40
+	MOVE A,1(C)
+	ONUM 14,A
+	ALIGN 6,
+	MOVE A,[ASCIZ / Rts  /]
+	SKIPL 3(C)
+	 MOVE A,[ASCIZ / Str  /]
+	ATYPE A
+	LDB A,[1000,,3(C)]
+	ONUM 4,A
+	PUSHJ P,CRR
+	MOVE C,(C)
+	JRST NETQ2
+
+NETQ1:	RET		; All done, return
+
+CLOSED:	HRRZ B,@IMSOC5	;REASON CLOSED
+	LSH B,-9
+	ADDI B,15	;MAXIMUM STATE+2
+	HRR A,B		;FUDGE NEW STATE
+	JRST NETL2
+
+;SOCKET STATES
+
+STATES:
+IRPS A,,[CLOSED LISTEN RFCRCV RFCCLS RFCSNT OPEN
+RNMWT SNTCLS RDCLS DATA RNMCLS ALMCLS ABORT NVROPN
+CLSUSR CLSFH CLSRST CLSHD CLSINC CLSBSM NCPDWN RFCRFS]
+SIXBIT /A/
+TERMIN
+NSTATE==.-STATES
+
+ATOP0:	ASCIZ /Network Sockets
+/
+ATOP:	ASCIZ /SI  UI Uname  Jname   Socket State     Host       Forn Socket Msg Bits
+/
+];IFN 0
+
+STYTOP:	ASCIZ /
+STY Map
+    Idx    STY owner   Idx    STY user    Host
+/
+
+NETTCP:	SKIPN JHFLAG
+	 JRST [	ATYPE TCPTOP
+		SKIPG RUUIND	;Skip if 1A mode, show buffer status
+		 JRST .+1
+		SETZM RHIST
+		MOVE C,[RHIST,,RHIST+1]
+		MOVE U,NPKB
+		BLT C,RHIST-1(U)
+		JRST .+1 ]
+	SETZM RNDFLG
+	MOVE C,XBL		; Get length of TCP conn tables
+	SOJL C,APOPJ		; If no TCP, just return.
+NETT05:	SKIPN U,@XBUSER
+	 JRST NETT19
+	SKIPN JHFLAG
+	 JRST NETT10		; Hacking all conns, always show.
+	CALL IDXLKP		; See if this user is within subset
+	 JRST NETT19		; Nope
+	SKIPN RNDFLG
+	 JRST [	CALL CRR
+		ATYPE TCPTP0
+		ATYPE TCPTOP
+		SETOM RNDFLG
+		JRST .+1]
+
+	; Show conn status
+NETT10:	CALL NETT50	; Show connection status
+NETT19:	SOJGE C,NETT05
+
+	; Now show connections without users
+	SKIPE JHFLAG
+	 JRST NETT90	; If not showing all, ignore rest.
+
+	MOVE C,XBL
+	SUBI C,1
+NETT20:	SKIPE A,@XBSTAT
+	 SKIPE U,@XBUSER	; If user exists, we already showed it.
+	  JRST NETT29
+	CALL NETT50	; Show connection
+NETT29:	SOJGE C,NETT20
+
+	; All connections shown, now print some cruft about buffer usage.
+	DNUM @PKBNT
+	ATYPE [ASCIZ / buffers (/]
+	DNUM @PKBNF
+	ATYPE [ASCIZ / free)
+/]
+	SKIPG RUUIND	;Skip if 1A mode, show buffer status
+	 JRST NETT90
+	MOVSI C,-1	;Record free packet descriptors
+	MOVE A,PK.FLG	;Offset of link word
+	SKIPE B,@PKEQHF
+	 CALL NETRQH
+	MOVE A,PK.IP
+	MOVSI C,6	;IP output queue
+	SKIPE B,@IPOUTQ
+	 CALL NETRQH
+	MOVSI C,7	;IP blocked link output queue
+	SKIPE B,@IPOBLQ
+	 CALL NETRQH
+	MOVSI C,4	;User datagram queue
+	MOVE D,NIPUQ
+NETT30:	SKIPE B,@IPUQHD
+	 CALL NETRQH
+	ADDI C,1
+	SOJG D,NETT30
+	MOVSI C,5	;IP fragment reassembly table
+	MOVE D,NIPF
+NETT31:	SKIPE B,@IPFDPE
+	 CALL NETRBF
+	  JFCL
+	ADDI C,1
+	SOJG D,NETT31
+
+	;Now report on what we found
+	ATYPE [ASCIZ/
+Status of non-free packet buffers:
+/]
+	MOVEI C,0
+NETT40:	SKIPGE RHIST(C)
+	 JRST NETT4A	;Free entry or free buffer, don't print anything
+	ONUM 3,C
+	CTYPE 40
+	HLRZ B,RHIST(C)	;Type of queue
+	6TYPE (B)[SIXBIT/NO-QUE/	;0 Not found
+		  SIXBIT/TCP-IN/	;1 TCP input queue
+		  SIXBIT/TCPRTR/	;2 TCP retransmit queue
+		  SIXBIT/CUROUT/	;3 Current output segment
+		  SIXBIT/IP-USR/	;4 User datagram queue
+		  SIXBIT/FRAG/		;5 IP fragment reassembly table
+		  SIXBIT/IP-OUT/	;6 IP output queue
+		  SIXBIT/BLKLNK/ ]	;7 IP blocked link output queue
+	CAIL B,1
+	 CAIL B,5
+	  JRST NETT41
+	CTYPE "(
+	HRRZ B,RHIST(C)
+	ONUM B
+	CTYPE ")
+NETT41:	MOVE B,C
+	IMUL B,PK.L
+	ADD B,PKETBL
+	ADD B,PK.FLG
+	MOVE A,(B)	;PK.FLG word
+	TDNE A,%PKPIL
+	 ATYPE [ASCIZ/ PIlock/]
+	TDNE A,%PKODN
+	 ATYPE [ASCIZ/ Out-done/]
+	TDNE A,%PKNOF
+	 ATYPE [ASCIZ/ Dont-free/]
+	TDNE A,%PKFLS
+	 ATYPE [ASCIZ/ Flush/]
+	TDNE A,%PKRTR
+	 ATYPE [ASCIZ/ Retran/]
+	TLNE A,1
+	 ATYPE [ASCIZ/ QF0/]
+	TLNE A,2
+	 ATYPE [ASCIZ/ QF1/]
+	TLNE A,4
+	 ATYPE [ASCIZ/ QF2/]
+	SUB B,PK.FLG
+IFN 0,[	;Too bad nothing ever, ever sets PK.TIM
+	ADD B,PK.TIM
+	MOVE A,@TIME
+	SUB A,(B)	;Number of 30ths of second on queue
+	PUSH P,B
+	IDIVI A,30.	;CONVERT TO SECS
+	JUMPLE A,.+3
+	 ATYPE [ASCIZ/ Time-on-queue=/]
+	 PUSHJ P,TMPT	;OUTPUT HH:MM:SS
+	POP P,B
+	SUB B,PK.TIM
+];IFN 0
+	;Show IP header
+	ADD B,PK.IP
+	HLRZ B,(B)	;PK.IP word points to IP header
+	ATYPE [ASCIZ/ @/]
+	ONUM B
+	UMOVE A,(B)	;First word of IP header
+IFN 0,[
+	ATYPE [ASCIZ/ IP ver=/]
+	LDB D,[400400,,A]
+	DNUM D
+	ATYPE [ASCIZ/ hdrlen=/]
+]
+IFN 1,[
+	ATYPE [ASCIZ/ IP hdrlen=/]
+]
+	LDB D,[340400,,A]
+	DNUM D
+	ATYPE [ASCIZ/ totlen=/]
+	LDB D,[042000,,A]
+	DNUM D
+	CALL CRR	;Line getting too long
+	ALIGN 3
+	UMOVE A,2(B)	;Time-to-live,protocol,header checksum
+	ATYPE [ASCIZ/ ptcl=/]
+	LDB D,[241000,,A]
+	PUSH P,D	;Save protocol number
+	MOVSI A,-3
+NETT42:	CAMN D,(A)[1 ? 6 ? 17.]
+	 JRST [	ATYPE (A)[ASCIZ/ICMP/
+			  ASCIZ/TCP/
+			  ASCIZ/UDP/]
+		JRST NETT43 ]
+	AOBJN A,NETT42
+	DNUM D
+NETT43:	UMOVE A,3(B)	;Source host
+	UMOVE D,4(B)	;Destination host
+	LSH A,-4
+	ATYPE [ASCIZ/ src=/]
+	MOVEI B,0
+	CALL OHOST0
+	MOVE A,D
+	LSH A,-4
+	ATYPE [ASCIZ/ dst=/]
+	MOVEI B,0
+	CALL OHOST0
+	POP P,D		;Restore protocol number
+	CAIE D,6	;Skip if TCP
+	 JRST NETT44
+	MOVE B,C
+	IMUL B,PK.L
+	ADD B,PKETBL
+	ADD B,PK.TCP
+	HLRZ B,(B)	;PK.TCP word points to TCP header
+	UMOVE A,0(B)
+	ATYPE [ASCIZ/ ports=/]
+	LDB D,[242000,,A]
+	DNUM D
+	ATYPE [ASCIZ/->/]
+	LDB D,[042000,,A]
+	DNUM D
+	UMOVE A,3(B)	;Flags in second byte
+	TLNE A,200
+	 ATYPE [ASCIZ/ Urgent/]
+	TLNE A,100
+	 ATYPE [ASCIZ/ Ack/]
+	TLNE A,40
+	 ATYPE [ASCIZ/ Push/]
+	TLNE A,20
+	 ATYPE [ASCIZ/ RST/]
+	TLNE A,10
+	 ATYPE [ASCIZ/ SYN/]
+	TLNE A,4
+	 ATYPE [ASCIZ/ FIN/]
+NETT44:	CALL CRR
+
+	; Print packet buffer trace info if arg > 1
+	MOVE A,RUUIND
+	CAILE A,1
+	 SKIPN PKTTRC
+	  JRST NETT4A
+	MOVE B,C
+	IMUL B,PK.L
+	ADD B,PKETBL
+	ADD B,PK.HSP		; Get BP to packet history
+	MOVE D,(B)
+	ADD D,[SYSBEG]		; Fix up BP for mapping offset
+	PUSH P,U		; Who knows??
+	MOVEI U,(B)		; Save address for later compare
+	LDB A,D			; Gets next history byte
+	JUMPN A,[		; If something there, data has wrapped
+		ATYPE [ASCIZ/  Incomplete history, buffer overflow!
+/]
+		JRST NETT45 ]	
+	SUB B,PK.HSP		; Fix up B to point to start of history buffer
+	ADD B,PK.HST
+	MOVEI D,(B)		; Else get BP to start of buffer
+	HRLI D,360600		; +++ Fix to calculate this.
+NETT45:	MOVE B,PK.HSP		; Must count in case of full buffer.
+	SUB B,PK.HST
+	IMULI B,6		; +++ Fix to calculate bytes-per-word
+
+NETT46:	LDB T,D			; Trace event table index
+	JUMPE T,NETT49		; Done if zero
+	IBP D
+	CAILE U,(D)		; End of history buffer yet?
+	 JRST NETT47
+	SUB U,PK.HSP		; Wrap BP back to beginning
+	ADD U,PK.HST
+	MOVEI D,(U)
+	HRLI D,360600		; +++ Fix to calculate this.
+	SUB U,PK.HST
+	ADD U,PK.HSP
+NETT47:	HRRZ A,@TRCTBL		; Holds location,,asciz name
+	JUMPE A,NETT48
+	ATYPE SYSBEG(A)		; Print event name
+	CALL CRR
+NETT48:	SOJG B,NETT46
+NETT49:	POP P,U
+	CALL CRR
+
+NETT4A:	ADDI C,1
+	CAMGE C,NPKB
+	 JRST NETT40
+NETT90:	RET
+
+NETT50:	ONUM 2,C	; Table index
+	JUMPE U,NETT15
+	MOVEI A,(U)
+	IDIV A,LUBLK
+	CTYPE 40
+	ONUM 3,A	; User index
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+NETT15:	ALIGN 25
+	HRRZ A,@XBSTAT	; Find state
+	6TYPE TCPSTB(A)
+	CTYPE 40
+	JUMPE A,[ATYPE [ASCIZ /due to (/]
+		HLRZ A,@XBCLSU
+		6TYPE TCPCTB(A)
+		ATYPE [ASCIZ /, /]
+		HRRZ A,@XBCLSU
+		6TYPE TCPCTB(A)
+		CTYPE ")
+		JRST NETT65]
+
+	ONUM 5,@XBRWND	; Receive window (in bytes)
+	CTYPE 40
+	ONUM 2,@XBINPS	; # input segments
+	CTYPE 40
+	ONUM 5,@XBSAVW	; Send window (in bytes)
+	CTYPE 40
+	ONUM 1,@XBORTL	; Retrans queue length (segments)
+	CTYPE 40
+	ONUM 3,@XBORTC	; Retrans attempt count
+	CTYPE 40
+	MOVE A,@XBPORT
+	LSH A,-4
+	ANDI A,177777
+	ONUM 6,A	; Local port number
+	CTYPE 40
+	MOVE A,@XBPORT
+	LSH A,-<4+16.>
+	ONUM 6,A	; Foreign port number
+	CTYPE 40
+	MOVE A,@XBHOST
+	MOVEI B,5
+	CALL OHOST0
+	SKIPG RUUIND	;Skip if 1A mode, show buffer status
+	 JRST NETT65
+	;Record packet buffers in use by this connection
+	PUSH P,C
+	MOVE A,PK.TCP	;Offset of TCP queue links in packet descriptors
+	HRLI C,1	;TCP input queue
+	SKIPE B,@XBITQH
+	 CALL NETRQH
+	HRLI C,2	;TCP retransmit queue
+	SKIPE B,@XBORTQ
+	 CALL NETRQH
+	HRLI C,3	;Current output segment
+	SKIPE B,@XBOCOS
+	 CALL NETRBF
+	  JFCL
+	POP P,C		
+NETT65:	CALL CRR
+	RET
+
+TCPTP0:	ASCIZ /TCP conns:
+/
+TCPTOP:	ASCIZ /Ix Usr Uname  Jname  State   RWnd Ibf SWnd ReTxQ Lclprt Fgnprt Fgnhst
+/
+
+TCPSTB:	IRPS A,,[CLOSED SYNQUE LISTEN SYNSNT SYNRCV OPEN
+FINWT1 FINWT2 CLSWT CLSING CLSACK TIMWT]
+	SIXBIT /A/
+	TERMIN
+
+TCPCTB:	IRPS A,,[NVROPN USRCLS FGNCLS FGNRST HSTDED RTXTMO GARBAG TCPDED]
+	SIXBIT /A/
+	TERMIN
+
+;A has offset of queue links in packet descriptors,
+;B has non-zero packet queue header, C has value to store into RHIST
+NETRQH:	CALL NETRBF	;Record buffer
+	 POPJ P,	;Oops, address was garbage
+	ADDI B,SYSBEG(A)
+	HRRZ B,(B)	;Next buffer on queue
+	JUMPN B,NETRQH
+	POPJ P,
+
+NETRBF:	MOVEI U1,SYSBEG(B)	;Address of packet descriptor
+	SUB U1,PKETBL
+	IDIV U1,PK.L
+	JUMPL U1,CPOPJ		;Check for garbage before writing RHIST
+	JUMPN U2,CPOPJ
+	CAMGE U1,NPKB
+	 MOVEM C,RHIST(U1)
+	AOS (P)
+	POPJ P,
+
+	; Print out list of STYs in use, whether hooked to Arpanet or not.
+STYSHO:	MOVS C,NSTTYS
+	MOVNS C		;GET AOBJN -> STY'S.
+	MOVE D,C	;WE'LL NEED TO USE IT TWICE, SO SAVE IT.
+	MOVSI X,%SSUSE
+	TDNN X,@STYSTS	;IS AT LEAST 1 STY IN USE?
+	 AOBJN C,.-1
+	JUMPGE C,STYSH9	;NO.
+	SKIPN JHFLAG
+	 ATYPE STYTOP
+	MOVE C,D	;SCAN THRU ALL STY'S AGAIN.
+STYSH1:	MOVSI X,%SSUSE
+	TDNN X,@STYSTS
+	 JRST STYSH8	;SKIP STY'S NOT IN USE.
+	HRRZ U,@STYSTS
+	SKIPN JHFLAG
+	 JRST STYSH2
+	PUSHJ P,IDXLKP
+	 JRST STYSH8
+	SKIPE RNDFLG	;ONLY PRINT HEADER IF ANYTHING'S THERE
+	 JRST STYSH2
+	ATYPE STYTOP
+	SETOM RNDFLG
+STYSH2:	PUSH P,U	; Save user index of STY owner
+	MOVEI A,(C)
+	ADD A,NFSTTY
+	CTYPE "T	;PRINT Tnm
+	ONUM 2,A
+	CTYPE 40
+	MOVE A,U
+	IDIV A,LUBLK	;AND USER INDEX.
+	ONUM 3,A
+	CTYPE 40
+	6TYPE @UNAME	;PRINT UNAME AND JNAME OF OWNER OF STY.
+	MOVE A,@UNAME
+	MOVEM A,V2
+	CTYPE 40
+	6TYPE @JNAME
+	MOVE A,@JNAME
+	MOVEM A,V3
+	ATYPE [ASCIZ /  /]
+	MOVE U,@USRHI
+	MOVEI A,(C)
+	ADD A,NFSTTY
+STYSH4:	SUB U,LUBLK
+	JUMPLE U,STYSH5	;HAVE RUN OUT OF USERS
+	SKIPN @UNAME
+	 JRST STYSH4
+	HRRZ D,@TTYTBL	;PICK UP TTY #
+	CAME A,D
+	 JRST STYSH4	;THIS IS NOT THE ONE
+	MOVE A,U	;USER INDEX
+	IDIV A,LUBLK
+	ONUM 3,A
+	CTYPE 40
+	6TYPE @UNAME	;FOUND THE BUGGER!!
+	CTYPE 40
+	6TYPE @JNAME
+
+	; Hunt for network connection
+STYSH5:	POP P,U		; Restore user index of STY owner
+	PUSH P,C
+	ALIGN 1,42.	; Get into proper column even if no user found
+	CALL STYSNT	; Find and print network host hooked to user.
+	POP P,C
+	PUSHJ P,CRR
+STYSH8:	AOBJN C,STYSH1
+STYSH9:
+	RET
+
+STYSNT:
+IFN 0,[		;NCP support removed
+	; First look for NCP conns
+	MOVE C,IMPSTL		; Search socket table for matching user
+	SOJL C,STYSN2		; May not have NCP
+STYSN1:	SKIPE A,@IMSOC1		; Get index of user for this socket
+	 CAIE U,(A)		; Matches user index of STY owner?
+	  SOJGE C,STYSN1	; No, keep looking.
+	JUMPGE C,[
+		LDB A,[321000,,@IMSOC4]
+		MOVEI B,5
+		PUSHJ P,OHOST
+		ATYPE [ASCIZ / (NCP)/]
+		RET ]
+STYSN2:
+];IFN 0
+	; Now look for TCP conns
+	MOVE C,XBL		; Get length of TCB tables
+	SOJL C,STYSN4
+STYSN3:	HRRZ A,@XBUSER		; Get user index for TCP connection
+	CAIN A,(U)
+	 JRST [	MOVE A,@XBHOST	; Got it!  Get foreign host #
+		MOVEI B,5
+		CALL OHOST0
+		ATYPE [ASCIZ / (TCP)/]
+		RET]
+	SOJGE C,STYSN3
+STYSN4:
+
+	; Try Chaosnet connection
+	MOVE C,NINDX
+	SOJL C,STYSN9		; May not have Chaosnet.
+STYSN5:	HRRZ A,@CHSUSR		; Find user for connection
+	CAIN A,(U)
+	 JRST [	LDB A,[242000,,@CHSFRN]	; Get Chaos host #
+		CALL OHOSTK
+		ATYPE [ASCIZ / (Chaos)/]
+		RET]
+	SOJGE C,STYSN5
+
+STYSN9:	RET
+
+SUBTTL	Utilities - Time hacking rtns
+
+; ITS "disk-format" time word defines the date/time as follows.
+; Mask    Field     Bits	Range	Var.    Variable range
+
+;TM%X==       1    ; 1.1	0-1	half-sec 
+TM%SEC== 777776    ; 2.9-1.2	0-131K	seconds	0-86399.
+TM%DAY==     37,,0 ; 3.5-3.1	0-31	days	1-31
+TM%MON==    740,,0 ; 3.9-3.6	0-15	months	1-12
+TM%YR==  177000,,0 ; 4.7-4.1	0-127	years	0-127 relative to 1900 (1900-2027)
+
+$TMSEC==(.BP TM%SEC,)	; Define BP LH's into each field.
+$TMDAY==(.BP TM%DAY,)
+$TMMON==(.BP TM%MON,)
+$TMYR== (.BP TM%YR,)
+
+PDTIME:	MOVE C,@QDATE	; Get disk-format date
+	MOVE B,@TIMOFF	; and time since midnight in half secs
+	LDB A,[$TMMON,,C]
+	DNUM 1,A	; Output month
+	CTYPE "/
+	LDB A,[$TMDAY,,C]
+	DNUM 1,A	; Output day
+	CTYPE "/
+	LDB A,[$TMYR,,C]
+	DNUM 2,A	; Output year
+	CTYPE 40
+	IDIVI B,60.*60.*2	; Find # hours in B
+	IDIVI C,60.*2		; Find # minutes in C
+	LSH D,-1		; Find # seconds in D
+	CAIGE B,10.
+	 CTYPE "0
+	DNUM 1,B
+	CTYPE ":
+	CAIGE C,10.
+	 CTYPE "0
+	DNUM 1,C
+	CTYPE ":
+	CAIGE D,10.
+	 CTYPE "0
+	DNUM 1,D
+	RET
+
+; TMPT - Output time in seconds as HH:MM:SS
+;	A/ Time in sec
+; TMPTH - Similar, but A/ ITS internal runtime value
+
+TMPTH:	LSH A,-6	;WIN FOR SIGN BIT
+	IDIVI A,1000.*1000000./<4000.*100>	;CONVERT PAGER/4 CLOCK TICKS TO SECONDS
+TMPT:	JUMPE A,CPOPJ
+	SETZM SPNDD	;INITIALIZE TO ZERO SPACES RIGHT JUSTIFICATION
+	MOVEI D,0	;INITIALIZE DIGIT COUNT
+TMP2:	CAMGE A,TMT1(D)	;SKIP IF REMAINING NUM OF SECS IS DIVISIBLE BY APPROPRIATE DIVISOR
+	 JRST TMP1	;NOT DIVISIBLE
+TMP3:	IDIV A,TMT1(D)	;DIVIDE OFF DIGIT
+	SKIPL SPNDD	;SKIP IF PAST FIRST DIGIT TO BE OUTPUT
+	JRST TMP4	;RIGHT JUSTIFY FIRST DIGIT
+TMP5:	CTYPE "0(A)	;OUTPUT DIGIT
+	MOVE A,B	;REMAINDER NEW BECOMES NUM OF UNCONVERTED SECS
+	TRNN D,1	;SKIP IF 2ND DIGIT OF PAIR WAS JUST OUTPUT
+	AOJA D,TMP3	;INCREMENT COUNT AND GO DO 2ND DIGIT
+	CAIL D,7	;SKIPE IF NOT DONE
+CPOPJ:	 POPJ P,	;DONE, EXIT
+	CTYPE ":	;OUTPUT COLON
+	AOJA D,TMP3	;INCREMENT COUNT AND START NEXT PAIR
+
+	;NOT DIVISIBLE- ACCUMULATE SPACES FOR EVENTUAL OUTPUT AT START
+TMP1:	TRNE D,1	;SKIP IF EVEN NUM OF DIGITS OUTPUT (START OF PAIR)
+	AOS SPNDD	;2ND DIGIT, EXTRA SPACE FOR COLON
+	AOS SPNDD	;SPACE FOR DIGIT
+	AOJA D,TMP2	;INCREMENT COUNT AND TRANSFER
+
+	;RIGHT JUSTIFICATION OF OUTPUT
+TMP4:	MOVE U3,SPNDD	;NUMBER OF SPACES NEEDED
+	CAIG U3,2	;IF GREATER THAN 1 DAY
+	 MOVEI U3,2	;THEN SCREW ALIGNMENT
+	SUBI U3,2
+	ADD U3,TMPTCL
+	ALIGN 1,(U3)	;SPACE OVER
+	SETOM SPNDD	;INDICATE FIRST DIGIT OUT, TURNS OFF TMP1 & TMP4
+	JRST TMP5
+
+	;TABLE OF SECONDS
+TMT1:	36000.*24.	;10 DAYS
+	3600.*24.	;DAYS
+	36000.	;10 HOURS
+	3600.	;HOURS
+	600.	;10 MINUTES
+	60.	;MINUTES
+	10.	;10 SECONDS
+	1	;SECONDS
+
+	;CONVERT HHMMSS (TIME IN 6BIT CHARS) TO BINARY 1/30'S OF SECOND
+TIM30.:	LDB A,[360400,,B]	;GET HOURS, TENS
+	IMULI A,10.
+	LDB C,[300400,,B]	;HOURS, UNITS
+	ADD A,C		;TOTAL HOURS
+	IMULI A,6	;HOURS AS MINUTES*10
+	LDB C,[220400,,B]	;MINUTES, TENS
+	ADD A,C
+	IMULI A,10.
+	LDB C,[140400,,B]	;MINUTES UNITS
+	ADD A,C
+	IMULI A,6	;MINUTES+HOURS AS SECONDS*10
+	LDB C,[60400,,B]	;SECONDS, TENS
+	ADD A,C
+	IMULI A,10.
+	LDB C,[400,,B]	;SECONDS, UNITS
+	ADD A,C		;TOTAL TIME AS SECONDS
+	IMULI A,30.	;AS 1/30'S
+	POPJ P,
+
+SUBTTL	Mode "%" - Scheduler History display
+
+;USE OF RHIST:
+;0-177	   COPY OF SYSTEM SCHEDULER HISTORY TABLE
+;200-377   NUMBER OF TIMES EACH USER-INDEX SEEN
+;400-477   RH PC LH COUNT EXCEPT 4.9 EXEC MODE BIT OF PC
+;	   THESE ARE USED IN ACCUMULATING INFO FOR A SINGLE USER
+
+
+SCHH:	SKIP [ASCIZ/Jobs that ran recently, most-frequent first.
+Most frequent PC for each job is shown with count of its occurrences.
+* next to PC means exec mode./]
+	ATYPE SCHTOP
+	HRL A,SCHHB
+	HRRI A,RHIST
+	HRRZ B,A
+	ADD B,SSCHDB
+	BLT A,-1(B)	;READ SCHED HIST TBL FROM SYS
+	CLEARM RHIST+200
+	MOVE A,[RHIST+200,,RHIST+201]
+	BLT A,RHIST+477	;CLEAR AREA
+SCHH1:	MOVE A,SSCHDB	;LENGTH OF HISTORY BUFFER
+	SOS A
+SCHH2:	HLRZ B,RHIST(A)
+	ANDI B,177	;USER #
+	AOS RHIST+200(B)
+	SOJGE A,SCHH2
+SCHH4:	MOVNI B,1	;FIND USER WITH MOST SCHEDLUES
+	MOVEI A,0
+SCHH3:	CAMGE B,RHIST+200(A)
+	MOVE C,A
+	CAMGE B,RHIST+200(A)
+	MOVE B,RHIST+200(A)
+	CAIGE A,177
+	AOJA A,SCHH3
+	JUMPLE B,APOPJ	;THRU
+	SETOM RHIST+200(C)
+	ONUM 3,C	;OUTPUT INDEX
+	CTYPE 40
+	MOVE U,C
+	IMUL U,LUBLK
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	CTYPE 40
+	DNUM 3,B	;COUNT
+	CLEARB U2,U3
+	SETOM SCHHT1
+	MOVE A,SSCHDB	;FIND MOST FREQUENT PC ETC
+	SOS A
+SCHHL1:	HLRZ U1,RHIST(A)
+	ANDI U1,177
+	CAME U1,C
+	 JRST SCHHL2
+	MOVE U1,RHIST(A)
+	TLNE U1,200000
+	 AOS U3			;THIS QUANTUM TERMINATED BY PAGE FAULT
+	LDB D,[311100,,U1]	;TIME USED IN 512-MICROSECOND UNITS
+	ADD U2,D
+	TLZ U1,377777	;GET PC WITH EXEC BIT IN 4.9
+	MOVE D,SCHHT1
+	JUMPL D,SCHHL3
+SCHHL5:	MOVE T,RHIST+400(D)
+	TLZ T,377777
+	CAMN T,U1	
+	 JRST [	MOVSI T,1	;SAME, BUMP COUNT
+		ADDM T,RHIST+400(D)
+		JRST SCHHL2]
+	SOJGE D,SCHHL5
+SCHHL3:	AOS D,SCHHT1
+	MOVEM U1,RHIST+400(D)
+SCHHL2:	SOJGE A,SCHHL1
+	PUSH P,U3
+	IMULI U2,512.	;CONVERT TO USEC
+	IDIV U2,B
+	MOVE T,U2
+	DNUM 10.,T
+	ALIGN 5,
+	POP P,D
+	IMULI D,100.
+	IDIV D,B
+	DNUM 3,D	;PERCENT OF TIME TERMINATED ON PG FAULT
+	MOVE U1,SCHHT1
+	JUMPL U1,SCHPL3
+	MOVNI T,1
+SCHPL1:	LDB U2,[222100,,RHIST+400(U1)]
+	CAML T,U2
+	 JRST SCHPL2
+	MOVE T,U2
+	MOVE D,RHIST+400(U1)
+SCHPL2:	SOJGE U1,SCHPL1
+	ALIGN 6,
+	SKIPL D
+	 CTYPE 40
+	SKIPGE D
+	 CTYPE "*	;EXEC MODE
+	HRRZS D
+	ONUM 6,D	;PC
+	CTYPE 40
+	AOS T
+	DNUM 3,T	;COUNT FOR THAT PC
+SCHPL3:	PUSHJ P,CRR
+	JRST SCHH4
+
+SCHTOP:	ASCIZ ?Indx Uname Jname  Count   Avg/Schd   %Pg-flt    PC   Count
+?
+
+SUBTTL	Mode "D" - Disk Directory display
+
+; This mode screws around with RUUIND and RUUFLG in order to preserve a
+; sixbit argument.  In fact this mode is the main reason RUUFLG exists at all!
+; Note also that this mode isn't very useful when hacking crash dumps,
+; since it just looks at the currently running system.
+
+DDXR:	.SUSET [.RUNAM,,A]
+	SKIPL NAMESW		; SIXBIT HACKERY HERE?
+	 JRST DDXR0
+	MOVE A,NAMEHK		; YES. GET THE NAME
+	MOVEM A,RUUIND		; AND MAKE IT THE INDEX FOR THE FUTURE
+	SETOM RUUFLG		; AND SAY THERE IS AN ARGUMENT
+	JRST DDXR1
+DDXR0:	SKIPL RUUFLG
+	 JRST DDXR1
+	MOVE C,RUUIND		; GET THE INDEX
+	TLZ C,400000		; AND ZERO TOP BIT IN CASE ITS A NAME
+	CAIL C,@NQCHN		; IS THIS IN RANGE
+	 JRST DDXRHK		; NO. IT'S PROBABLY A NAME
+	MOVE U,@QUDPR
+	SKIPN A,@QSNUD		; GET THE DIRECTORY NAME
+	 .SUSET [.RUNAM,,A]
+	CAIA
+DDXRHK:	 MOVE A,RUUIND		; GET THE DIRECTORY NAME FROM RUUIND
+DDXR1:	.SUSET [.SSNAM,,A]
+	SKIPE CRASHF		; If hacking crash dump, stop humoring loser.
+	 JRST [	TYPE "Directory "
+		6XTYPE A
+		TYPE " is unlikely to be interesting any more."
+		CALL CRR
+		RET]
+	CAIN ODEV,%ODDPT
+	 JRST DDXS
+	CAIN ODEV,%ODWID
+	 JRST DDXS
+	.OPEN DIRC,[.BAI,,'DSK	; Open Master File Dir
+		SIXBIT /M.F.D./
+		SIXBIT /(FILE)/]
+	 JRST DDXR9
+	MOVE B,[ASCIC//]
+	MOVEM B,RHIST+477
+	MOVEI B,0
+	SETZM NSNAM
+	MOVE X,[440600,,NSNAM]
+DDXR7:	MOVE C,[440700,,RHIST]
+	MOVE D,[-477,,RHIST]
+	.IOT DIRC,D
+DDXR2:	ILDB D,C
+	CAIN D,15
+	 JRST DDXR2
+	CAIN D,12
+	 JRST DDXR4
+	CAIE D,3
+	 CAIN D,14
+	  JRST DDXR6
+	CAMN B,LPCHPT
+	 JRST DDXR5
+DDXR3:	CTYPE (D)
+	JRST DDXR2
+
+DDXR6:	HRRZ D,C
+	CAIN D,RHIST+477
+	 JRST DDXR7
+	JRST DDXS
+
+DDXR4:	CAMN B,LPCHPT
+	.SUSET [.SSNAM,,NSNAM]
+	AOS B
+	MOVEI D,40
+	MOVE A,LINEPOS
+	CAIGE A,40.
+	 JRST DDXR3
+	PUSHJ P,CRR
+	JRST DDXR2
+
+DDXR5:	CTYPE (D)
+	SUBI D,40
+	JUMPE D,DDXR2
+	IDPB D,X
+	JRST DDXR2
+
+DDXR9:	ATYPE [ASCIZ/Directory not available/]
+	RET
+
+DDXS:	MOVEI A,(SIXBIT /DSK/)
+	PUSHJ P,CRR
+	MOVEI B,16.
+	SKIPL LPCHPT
+	.SLEEP B,
+	SETOM LPCHPT
+	HRRM A,DDXFIL
+	.OPEN DIRC,DDXFIL
+	 RET
+DDXL1:	MOVE A,[-477,,RHIST]
+	.IOT DIRC,A
+	SETZM (A)
+	ATYPE RHIST
+	JUMPGE A,DDXL1
+	.CLOSE DIRC,
+	RET
+
+SUBTTL	Mode "O" - TTY Output display (Output Spy)
+
+OSHACK:	SKIPL NAMESW
+	 JRST OSHAK1
+	PUSHJ P,TTYFOO		;WILL SKIP IF WINS
+	 JRST LINES0	
+OSHAK1:	SKIPGE T,RUUIND		; Skip if arg specified
+	 JRST LINES0
+	SETZM NAMESW		;WIN ON INTERRUPTS
+	SKIPN CRASHF		; Get our TTY number to make sure
+	 .SUSET [.RTTY,,A]	; we don't try to spy on ourself
+	SKIPE CRASHF		; But if looking at crash dump,
+	 SKIPA A,[-1]		; don't worry about it.
+	  HRRZ A,A
+	CAMGE T,NCT		; Make sure TTY number is within limits
+	 CAMN T,A		; and isn't same as our own TTY!
+	  JRST LINES0
+	SETOM MORFLG
+	.CALL TTYGET
+	 .LOSE 1000
+	TLO C,%TSMOR		; Turn off --MORE-- hacking.
+	.CALL TTYSET
+	 .LOSE 1000
+	MOVEI A,4
+	MOVEM A,VPOS
+	SETZ C,
+	MOVE A,@TCTYP
+	CAIN A,%TNTV
+	 ATYPE [ASCIZ /
+WARNING - unreliable when spying on TV
+/]
+	ATYPE TTYTOP
+	PUSHJ P,TTYLIN
+	PUSHJ P,CRR2
+	PUSHJ P,BUFOUT		;FINISH OUTPUT AND MAKE MY BUFFER EMPTY
+	MOVE F,[-1,,[ASCIC /E/]]
+	.IOT TYOC,F	
+	MOVEI A,40.		;LET HIM EYE IT FOR AWHILE
+	.SLEEP A,
+	MOVE D,@TOBBP
+	MOVE B,@TOBEP
+	SUB B,D
+	MOVE D,TOIP
+	MOVE B,FTCTYP
+	CAIN B,%TNTV
+	 MOVEM D,TOOP
+	MOVE D,@TOOP
+	CAMN D,@TOBEP
+	 MOVE D,@TOBBP
+	IBP D
+
+TTYLP:	PUSHJ P,TGETCH
+	TRZE B,200		; %TXDIS - maybe this should be changed?
+	 JRST TTYLP1		;	it is undefined in the new ITS - MRC
+	CAIE B,"^P
+	 .IOT NTYO,B
+	JRST TTYLP
+
+TTYLP2:	PUSHJ P,TGETCH
+	PUSHJ P,CRR
+	JRST TTYLP
+
+TGETCH:	CAMN D,@TOOP
+	JSP U,AHANG
+	JRST TGETC1
+	MOVE F,[-1,,[ASCIC /E/]]
+	.IOT TYOC,F	
+
+TGETC1:	CAMN D,@TOBEP
+	 JRST [	MOVE D,@TOBBP
+		JRST TGETCH]
+	IBP D
+	PUSH P,C
+	MOVE C,D
+	ADDI C,SYSBEG
+	LDB B,C
+	POP P,C
+	ANDI B,377
+	POPJ P,
+
+NUMHAK:	CTYPE 40
+	CTYPE ">
+	AOS (P)
+	POPJ P,
+
+AHANG:	XCT -2(U)
+	.HANG
+	JRST 1(U)
+	RET		; Exit this mode
+
+TTYLP1:	CAIGE B,NUMCTL
+	 JRST @CTLTAB(B)
+	JRST TTYLP
+
+CTLTAB:	OFFSET -.
+	TYMOV	
+	TYMOV1	
+	TYEEOF
+	TYEEOL
+	TYDELF
+	TTYLP
+	TTYLP	
+	TYECRL	
+	TTYLP	
+	TYEBS	
+	TYELF
+	TYECRL
+	TTYLP
+	TTYLP
+	TYEFS
+	TYMOV1
+	TYECLR
+	TTYLP
+	TTYLP
+	TTYILP
+	TTDDLP
+	TTYICP
+	TTYDCP
+	TTYLP
+	TTYLP
+NUMCTL::OFFSET 0
+
+TTYILP:	MOVEI C,"[
+	JRST PTYO
+TTDDLP:	MOVEI C,"\
+	JRST PTYO
+TTYICP:	MOVEI C,"^
+	JRST PTYO
+TTYDCP:	MOVEI C,"_
+	JRST PTYO
+
+TYMOV:	PUSHJ P,TGETCH	;OLD V IN V2
+	MOVE C,B	
+	PUSHJ P,TGETCH	;OLD H IN B
+	PUSHJ P,TGETCH	;NEW V IN V4
+	MOVE  A,B
+	PUSHJ P,TGETCH	;NEW H IN B
+	CAIN A,1(C)
+	JRST TYECRL
+	SKIPE FTCTYP
+	JRST TYMOV0
+	SUB A,C
+	ADD A,VPOS
+	EXCH A,B
+	IDIV B,VSZ
+	MOVE B,C
+	EXCH A,B
+
+TYMOV0:	MOVEM A,VPOS
+	MOVEI A,10(A)	
+	MOVEI B,10(B)
+	MOVE F,[-1,,A]
+	LSH A,36.-21.
+	IOR A,[ASCIC /V /]
+	.IOT TYOC,F
+	MOVE F,[-1,,B]
+	LSH B,36.-21.
+	IOR B,[ASCIC /H /]
+	.IOT TYOC,F
+	JRST TTYLP
+
+TYMOV1:	PUSHJ P,TGETCH
+	MOVE A,B
+	PUSHJ P,TGETCH
+	SKIPE FTCTYP
+	JRST TYMOV0
+	EXCH A,B
+	IDIV B,VSZ
+	MOVE B,C
+	EXCH A,B
+	JRST TYMOV0
+
+TYEFS:	MOVEI C,"F	
+	JRST PTYO
+
+TYECLR:	MOVEI C,"C
+	JRST PTYO
+
+TYDELF:	MOVEI C,"F
+	JRST PTYO
+
+TYEEOL:	MOVEI C,"L
+	JRST PTYO
+	
+TYEEOF:	MOVEI C,"F
+
+PTYO:	MOVE F,[-1,,C]
+	LSH C,36.-14.
+	IOR C,[ASCIC / /]
+	.IOT TYOC,F
+	JRST TTYLP
+
+TYECRL:	.IOT NTYO,[^M]
+	JRST TTYLP
+
+TYELF:	.IOT NTYO,[^J]
+	AOS VPOS
+	JRST TTYLP
+
+TYEBS:	.IOT NTYO,[^H]
+	JRST TTYLP
+
+TYERCR:	.IOT NTYO,[^M]
+	JRST TTYLP
+
+SUBTTL	Mode "L" - TTY Line status
+
+LINES:	SKIPGE NAMESW
+	 PUSHJ P,TTYFOO		;WILL SKIP IF WINS
+	SKIPL RUUIND
+	 JRST TTYDES		; Arg given, describe specific job's TTY vars
+
+	; Can enter here from OSHACK or TTYDES.
+LINES0:	ATYPE TTYTOP
+	movn t,nct
+	hrlz t,t
+LINES1:	SETZ C,
+	HRRZ A,T
+	CAME A,@SYSCN
+	 SKIPLE @TTYSTS
+	   PUSHJ P,TTYLIN	; Describe TTY on one line
+	AOBJN T,LINES1
+	RET
+
+TTYFOO:	movn t,nct
+	hrlz t,t
+	MOVE A,NAMEHK		;GET SIXBIT NAME
+TTYF10:	SKIPLE U,@TTYSTS	;GET TTYSTS VARIABLE
+ 	 JRST [HRRZ U,U		;RIGHT HALF OF TTYSTS
+	       CAME A,@UNAME	;GET UNAME OF TTY
+	 	JRST .+1	;LOSER
+	       HRRZM T,RUUIND	;SET UP RUUIND
+	       SETOM RUUFLG	;AND RUUFLG
+	       JRST POPJ1]	;SKIP RETURN
+	AOBJN T,TTYF10
+	SETZM RUUFLG		; Lost, say no arg
+	SETOM RUUIND
+	POPJ P,
+
+	; nmL - Show TTY vars for specific job
+TTYDES:	MOVE U,RUUIND
+	IMUL U,LUBLK
+	CAMG U,@USRHI
+	 SKIPN @UNAME
+	  JRST LINES0
+	SETZM RNDFLG
+	SETZ D,
+	SKIPGE T,@UTMPTR		
+	 JRST LINES0
+	ADDI T,SYSBEG
+	SUB T,USRRCE
+	ATYPE TTYTOP
+	PUSH P,U
+	PUSHJ P,TTYLNN
+	JUMPGE C,.+2
+	 PUSHJ P,COMHAK
+	POP P,U
+	ATYPE TTYTP2
+	SKIPGE @TTYTBL		;DO I HAVE THE TTY?
+	 JRST [MOVE A,TTSTSV
+	       ADD A,U
+	       MOVE B,1(A)
+	       PUSH P,2(A)
+	       MOVE A,(A)
+	       JRST TTYDS1]
+	MOVE A,@TTYST1		;YES. WHAT A WINNER
+	MOVE B,@TTYST2
+	PUSH P,@TTYSTS
+TTYDS1:	MOVE F,[440600,,A]
+TTYDLP:	PUSHJ P,CRR
+	ATYPE CHRTYP(D)		
+	ILDB C,F
+	ALIGN 25.
+	TRNE C,40
+	CTYPE "*
+	ALIGN 30.
+	TRNE C,20
+	CTYPE "*
+	ALIGN 35.
+	TRNE C,10
+	CTYPE "*
+	ALIGN 40.
+	TRNE C,4
+	CTYPE "*
+	ALIGN 45.
+	TRNE C,2
+	CTYPE "*
+	ALIGN 50.
+	TRNE C,1
+	CTYPE "*
+	ADDI D,4
+	CAIG D,44.
+	JRST TTYDLP
+	PUSHJ P,CRR
+	ATYPE [ASCIZ /Options: /]
+	POP P,A
+	TLNE A,40000
+	ATYPE [ASCIZ /Full-TV-set /]
+	TLNE A,10000
+	ATYPE [ASCIZ /Scroll /]
+	TLNE A,4000
+	ATYPE [ASCIZ /Sail /]
+	TLNE A,200
+	ATYPE [ASCIZ /No-more /]
+	TLNE A,10
+	ATYPE [ASCIZ /Defer-echo /]
+	TLNE A,2
+	ATYPE [ASCIZ /Super-image-input /]
+	PUSHJ P,CRR
+	RET
+
+CHRTYP:	ASCIZ /Control characters/
+	ASCIZ /Letters           /
+	ASCIZ /Digits            /
+	ASCIZ /!"#$%&',.:;?@\`|  /
+	ASCIZ |+ - * / = ^ _     |
+	ASCIZ /Brackets          /
+	ASCIZ /Control G and S   /
+	ASCIZ /Control I and J   /
+	ASCIZ /Altmode           /
+	ASCIZ /Carriage return   /
+	ASCIZ /Rubout            /
+	ASCIZ /Space, backspace  /
+
+; TTYLIN, TTYLNN - Show specific TTY status on single line
+
+TTYLIN: HRRZ U,@TTYSTS
+TTYLNN:	MOVE A,@TCTYP
+	MOVE B,@TTYTYP
+	MOVEM A,FTCTYP
+	HRRZ F,T
+	CAMN F,@SYSCN
+	JRST TTYLN0
+	JUMPL U,[ATYPE [ASCIZ /CONSOLE FREE/]
+		 JRST TTYHK0]
+	CAIN U,-1
+	 POPJ P,
+TTYLN0:	ONUM 2,F
+	ALIGN 3.
+	CAMN F,@SYSCN
+	JRST [ALIGN 7.
+	      ATYPE [ASCIZ /SYSTEM CONSOLE/]
+	      JRST TTYLN1]
+	MOVE C,U
+	IDIV C,LUBLK
+	ONUM 3,C
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+TTYLN1:	ALIGN 23.
+	caile a,11
+	  addi a,1
+	CAIN A,11
+	JRST [MOVE @TTYOPT
+	      TRNN 20000
+	      MOVEI A,12
+	      JRST .+1]
+	LSH A,1
+	CAIGE A,MAXTYP
+	ATYPE TYPTBL(A)	
+	ALIGN 36.
+	MOVEI A,1000
+	CAMG A,@TCMXV
+	PUSHJ P,NUMHAK	
+	DNUM 3,@TCMXV
+	ALIGN 44.
+	CAMG A,@TCMXH
+	PUSHJ P,NUMHAK
+	DNUM 3,@TCMXH
+TTYHK0:	ALIGN 50.
+	MOVE A,@TTYCOM
+	TLNE A,400000
+	JRST [CTYPE "C
+	      SETO C,
+	      JRST .+1]
+	TLNE A,%TCICO
+	CTYPE "I
+	TLNE A,%TCOCO
+	CTYPE "O
+	TLNE A,%TCRFS
+	CTYPE "R
+	TLNE A,%TCQRY
+	CTYPE "Q	
+	TLNE A,%TCRFT
+	CTYPE "E
+	ALIGN 55.
+	MOVE B,@TTYOPT
+	TLNE B,%TOALT
+	ATYPE [ASCIZ /$ /]
+	TLNE B,%TOCLC
+	ATYPE [ASCIZ /a->A /]
+	TLNE B,%TOERS
+	ATYPE [ASCIZ /X /]
+	TLNE B,%TOHDX
+	ATYPE [ASCIZ "1/2 "]
+	TLNE B,%TOMVB
+	ATYPE [ASCIZ /<- /]
+	TLNE B,%TOOVR
+	ATYPE [ASCIZ /OV /]
+	PUSH P,A
+	PUSHJ P,TTYTIM
+	POP P,A
+	JUMPGE C,.+2
+	PUSHJ P,COMHAK
+	PUSHJ P,CRR
+	POPJ P,
+
+TTYTIM:	ALIGN 66.
+	MOVE A,@TIME
+	SUB A,@TTITM	
+	IDIVI A,30.*60.	
+	JUMPE A,[ATYPE [ASCIZ /    /]
+		 POPJ P,]	
+	CAIGE A,60.
+	JRST [CTYPE 40
+	      CTYPE 40
+	      DNUM 2,A
+	      POPJ P,]
+	IDIVI A,60.
+	CAIL A,10.
+	JRST [ATYPE [ASCIZ /   -/]
+	      POPJ P,]
+	ADDI A,"0
+	CTYPE (A)
+	CTYPE ":
+	IDIVI B,10.
+	ADDI B,"0
+	ADDI C,"0
+	CTYPE (B)
+	CTYPE (C)
+	POPJ P,
+
+TYPTBL:	ASCIZ /Printing /
+	ASCIZ /Datapoint/
+	ASCIZ /Loser    /
+	ASCIZ /Imlac    /
+	ASCIZ /Tektronix/
+	ASCIZ /PDP-11 TV/
+	ASCIZ /Memowreck/
+	ASCIZ /Software /
+	ASCIZ /Terminet /
+	ASCIZ /Display  /
+	ASCIZ /VT52     /
+	ASCIZ /Datamedia/
+	ASCIZ /T1061    /
+	ASCIZ /C100     /
+	ASCIZ /H19      /
+	ASCIZ /Ann Arbor/
+MAXTYP==.-TYPTBL
+
+COMHAK:	ATYPE [ASCIZ /
+ in COM link with /]
+	PUSH P,T
+	HRRZ T,A
+	MOVE B,T
+COMLP:	MOVE U,@TTYSTS
+	SKIPN F,@UNAME
+	JRST [CTYPE "T
+	      ONUM 2,T
+	      JRST COMLP1]	
+	6XTYPE @UNAME
+COMLP1:	HRRZ T,@TTYCOM
+	CAMN T,B
+	JRST [POP P,T
+	      POPJ P,]
+	CTYPE ",
+	CTYPE 40
+	JRST COMLP
+
+
+TTYTOP:	ASCIZ /TTY Ix Uname  Jname    Type        V-size  H-size Com   Bits    Idle-min
+/
+
+TTYTP2:	ASCIZ /
+			 Echoing       Special
+Character group         MP   INT  IMG  UPP  ACT  INT/
+
+SUBTTL	Mode "Y", "X" - Detach or Gun specified job tree
+
+DETACH:	SETOM GNORDT
+	CAIA
+GUNNER:	 SETZM GNORDT
+	SKIPGE NAMESW
+	 CALL NMHACK
+	  JFCL
+	SKIPGE U,RUUIND
+	 CALRET NORMAL
+	IMUL U,LUBLK
+	SKIPGE @SUPPRO
+	 SETOM GUNFLG
+	CALL JHACK
+
+IFN GUNCTL,[
+	.SUSET [.RXUNAME,,B]	;Validate the XUNAME somewhat
+IRPS W,,[Devon EAK EJS GSB]
+	CAMN B,[SIXBIT/W/]
+	 JRST GUNCT4
+TERMIN
+GUNCT3:	.SUSET [.RXUNAME,,A]
+	.CALL [ SETZ ? SIXBIT/OPEN/ ? MOVEI DIRC  ;Now see if dir exists
+		[SIXBIT/DSK/] ? [SIXBIT/.FILE./] ? [SIXBIT/(DIR)/]
+		SETZ A]
+	 CAIA
+	  JRST GUNCT4		;OK
+	;Compare A with xuname of job to be gunned
+	MOVE B,RUUIND
+	.CALL [ SETZ ? SIXBIT/USRVAR/ ? MOVEI %JSNUM(B)
+		['XUNAME] ? SETZM B]
+	 JRST GUNCT5		;Job vanished
+	CAMN A,B
+	 JRST GUNCT4
+	ATYPE [ASCIZ/
+I'm sorry, you aren't allowed to GUN or DETACH anyone but yourself./]
+GUNCT5:	PUSHJ P,BUFOUT		;Finish output buffer
+	.BREAK 16,160000	;Too much trouble to turn off all those
+				; damn flags.
+GUNCT4:
+];IFN GUNCTL
+	CALL CRR
+	SKIPE CRASHF
+	 JRST [	TYPE "GUN/DETACH IMPOSSIBLE."
+		RET]
+	SKIPL GNORDT
+	 TYPE "GUN DOWN THIS TREE? "
+	SKIPGE GNORDT
+	 TYPE "DETACH THIS TREE? "
+	RET			; Return to sleep and wait for answer.
+
+; GUNNEM - dispatched to at interrupt level to process answer.
+
+GUNNEM:	CAIE I1,"Y
+	 JRST GUNNO
+	MOVE I2,RUUIND		;GET THE INDEX
+	SKIPGE GNORDT
+	 JRST [	TRO I2,400000
+		SYSCAL DETACH,[I2]
+		 JRST GUNNO
+		JRST GUNYES]
+	.GUN I2,		;TRY THE GUN
+GUNNO:	MOVEI I1,"N
+GUNYES:	.IOT NTYO,I1
+GUNSTP:	MOVE A,LMODE
+	MOVEM A,MODE		;MAKE MODE THE LAST ONE
+	MOVE A,LRUUIN
+	MOVEM A,RUUIND
+	SKIPL A,LRUUFL		;fix so existence or non-existence
+	 SETOM RUUIND
+	MOVEM A,RUUFLG		;of arg remembered.
+GUNNO1:	SETZM GUNFLG
+	SETZM NAMESW
+	.DISMIS [BEG]
+
+SUBTTL	Mode "T" - Translation table display
+
+; Display translate table.
+
+TRANAP:	-RHISTL,,RHIST	; Where to read translate table into.
+
+TRANPK:	SETZB A,U	;LOOK AT USERS IN NUMER. ORDER.
+	SKIPE CRASHF
+	 JRST [	TYPE "PEEK cannot hack crash-dump translate lists yet."
+		RET]
+TRANP4:	SKIPGE @TRNLST
+	 JRST TRANP1	;DO NOTHING IF LIST EMPTY.
+TRANP3:	TRO A,400000	;INDICATE JOB SPEC IS USER NUMBER.
+	SYSCAL TRANEX,[A ? TRANAP	; Read list into RHIST
+		MOVEM B]	; Updated ptr goes here
+	 JFCL
+	TRZ A,400000
+	CAMN B,TRANAP	;COUNTED-UP AOBJN IN B.
+	 JRST TRANP1	;DO NOTHING IF LIST EMPTY.
+	6XTYPE @UNAME	;PRINT NAME OF JOB.
+	CTYPE 40
+	6XTYPE @JNAME
+	TLNE A,200000	;IF THIS IS TRNLS1, SAY SO.
+	 ATYPE [ASCIZ / & inferiors/]
+	CTYPE ":
+	PUSHJ P,CRR
+	HLLZS B
+	MOVNS B
+	ADD B,TRANAP	;AOBJN -> PART OF RHIST THAT WAS FILLED.
+TRANP0:	XTYPE [SIXBIT/   !/]
+	MOVE C,(B)	;GET MODE BITS.
+IRPS X,,A I O,Y,,400000 1 2
+	TLNE C,Y
+	 CTYPE "X
+TERMIN
+IRP X,,[^I,":,";," ]Y,,[1,4,2,3]
+	CTYPE X
+	6XTYPE Y(B)	;PRINT NEXT NAME.
+	SKIPN Y(B)
+	 CTYPE "*	;IF NAME BLANK.
+TERMIN
+	XTYPE [SIXBIT/ => !/]
+IRP X,,[" ,":,";," ]Y,,[1,4,2,3]
+	CTYPE X
+	6XTYPE 4+Y(B)
+	SKIPN 4+Y(B)
+	 CTYPE "*
+TERMIN			;PRINT OUTPUT NAMES.
+	PUSHJ P,CRR
+	ADD B,[9,,9]
+	JUMPL B,TRANP0	;PRINT ALL ENTRIES SYS STORED.
+TRANP1:	TLCE A,200000	;IF WAS TRNLST, PRINT TRNLS1.
+	 AOJA A,TRANP2	;ELSE PRINT NEXT USER'S TRNLST.
+	SKIPGE @TRNLS1
+	 JRST TRANP1	;DON'T BOTHER WITH .CALL IF NOTHING.
+	JRST TRANP3
+TRANP2:	ADD U,LUBLK
+	CAMGE U,@USRHI
+	 JRST TRANP4
+	RET
+
+SUBTTL	Mode "N","J","S","R","E" - General procedure tree display
+
+; Mode "J" - Single job hack
+JHACK:	SETOM JHFLAG		; Say J mode (single job display)
+	CALL SPEEK
+	CALL DISK1
+	CALL JARCHK
+	CALL ERRDEV
+	CALL KAOS
+	CALL NETWRK
+	RET
+
+; Mode "S" - Single tree peek
+SPEEK:	SKIPL NAMESW
+	 JRST SPEEK1
+	PUSHJ P,NMHACK		;CHECK FOR NAME?
+	 JFCL			;DONT CARE
+SPEEK1:	SKIPGE U,RUUIND		; If arg given, use it.
+	 JRST [	SKIPE CRASHF	; No arg, if hacking crash dump
+		 TDZA U,U	; then default to 0, otherwise
+		 .SUSET [.RUIND,,U]	; can get user's U from ITS.
+		JRST .+1]
+	IMUL U,LUBLK
+	CAMGE U,@USRHI
+	 SKIPN @UNAME
+	  JRST NORMAL
+	SKIPE JHFLAG		;SPECIAL HACK FOR 0J
+	 SKIPE RUUIND
+	  JRST SPKY
+	MOVEI A,1
+	MOVEM A,RONLY
+SPKY:	MOVNI A,1
+SPK3:	CAMN A,@SUPPRO
+	 JRST SPK2
+	CAMN U,@SUPPRO
+	 JRST NORMAL
+	HRRZ U,@SUPPRO
+	JRST SPK3
+
+SPK2:	MOVE A,@XUNAME	;FOUND TOP OF SPEC'D TREE.  ITS XUNAME IS THE NAME TO WATCH.
+	SKIPN GUNFLG	;ANY TREE WHOSE TOP'S UNAME OR XUNAME MATCHES IT, WE PRINT.
+	 JRST SPKX
+	MOVE A,RUUIND	;BUT FOR X AND Y COMMANDS, WANT ONLY ONE TREE,
+	IMUL A,LUBLK	;SO SAVE IDX OF THE TREE'S TOP.
+SPKX:	MOVEM A,UDISP
+	JRST NORMLS
+
+
+; Mode "F" - Fast 1-line
+1PEEK:	SKIPGE U,RUUIND
+	 JRST NORMAL
+	IMUL U,LUBLK
+	PUSHJ P,ULOOK2
+	RET
+
+; Mode "R" - Runnable jobs only
+RNABLE:	SETOM RONLY
+	SETOM UDISP
+	MOVSI A,400000			; GODDAMN IT, THIS IS IMPORTANT!
+	IORM A,EONLY
+	JRST NORML0
+	
+; Mode "E" - Eval & test job var
+EPEEK:	MOVE A,EONLY
+	CAMN A,[-1]
+	 JRST JHACK
+	LSH A,1
+	LSH A,-1
+	MOVEM A,EONLY
+	JRST NORMLE
+
+; Mode "N" - Normal all-job display
+NORMAL:	SETOM UDISP
+NORMLS:	MOVSI A,400000
+	IORM A,EONLY
+	CAIA
+NORMLE:	 SETOM UDISP
+	SKIPG RONLY
+	 SETZM RONLY
+NORML0:	SKIPE TOPFLG
+	 JRST NORML3		;DON'T RETYPE TOP LINES
+	SETZM UIDCNT	; Say no user indices in found-job table
+	SETZM USRMEM	;INITIALIZATION
+	SETZM USRTIM	;"
+	SETZM USRJTM	;"
+	ATYPE [ASCIZ /Memory: Free=/]
+	MOVE A,@MEMFR
+	SUB A,@NCBCOM
+	DNUM A		;OUTPUT NUM OF FREE BLOCKS OF MEM
+	ALIGN 19.
+	ATYPE [ASCIZ /Runnable Total=/]
+	DNUM @TRUMM
+	ATYPE [ASCIZ / Out=/]
+	DNUM @AUSOPG
+	ALIGN 47.
+	ATYPE [ASCIZ /Users: High=/]
+	MOVE A,@USRHI
+	IDIV A,LUBLK
+	ONUM A
+	ATYPE [ASCIZ / Runnable=/]	;CARRIAGE RETURN/LINE FEED
+	ONUM @RNABLU
+	PUSHJ P,CRR
+	XCT NTAB3(ODEV)
+	PUSHJ P,CRR
+	SETOM TOPFLG
+NORML3:	PUSH P,[,-1]	;INITIALIZE PDL
+	MOVE U3,PAGEPOS	;STOP OUTPUT IF TOO NEAR BOTTOM OF PAGE
+	CAML U3,MPAGEP(ODEV)	;SKIP IF CURRENT POSITION > PAGE SIZE
+	 RET		;GO TO STOP OUTPUT
+	MOVEI X,0	;SET X TO TOP LEVEL PROCEDURE
+	SKIPL EONLY
+	 PUSHJ P,EHACK
+	PUSHJ P,ULOOK	;OUTPUT POOP
+	SUB P,[1,,1]	;RESET PDL
+
+	ATYPE [ASCIZ /Fair Share /]
+	MOVEI A,10000.
+	IDIV A,@SLOADU
+	DPCT A
+	CTYPE "%
+	ATYPE [ASCIZ /     Totals:/]
+	HRRZ A,FLKT7(ODEV)		;WHERE DOES CORE SIZE OF INDIVIDUAL JOB START?
+	SUBI A,1			;BUT MORE THAN 1000K USUALLY
+	LDB B,[270400,,FLKT8(ODEV)]	;AND HOW MANY COLS USED IN THAT CASE?
+	ADD A,B				;THIS IS WHERE CORE SIZE ENDS, ON THOSE LINES
+	ALIGN 1,-3(A)			;WE WANT TO END IN SAME PLACE.
+	DNUM 4,USRMEM	;OUTPUT NUM OF BLOCKS OF USER MEM
+	XCT FLKT88(ODEV) ;ALIGN UNDER %RUNTIMES OF JOBS
+	MOVE A,USRTIM	;AND PRINT THE TOTAL.
+	ADDI A,9830.
+	IDIVI A,19661.
+	DPCT 2,A	;OUTPUT TOTAL % TIME DEVOTED TO USERS
+	CTYPE "%	;OUTPUT "%"
+	JUMPE ODEV,NORM2	;JUMP IF TTY OUTPUT
+	XCT FLKT13(ODEV)	;SPACE OVER
+	MOVEM A,TMPTCL	;STORE COLUMN NUMBER
+	MOVE A,USRJTM
+	PUSHJ P,TMPTH	;OUTPUT TOTAL USER TIME
+NORM2:	PUSHJ P,CRR	;CR LF
+	SETZM TMPTCL	;STARTS OUTPUT 1 SPACE FROM CURRENT POSITION
+	ATYPE [ASCIZ /Logout time =/]
+	MOVE A,@LOUTIM	;TOTAL TIME USED BY LOGGED OUT USERS
+	PUSHJ P,TMPTH	;OUTPUT AS HH:MM:SS
+	ALIGN 21.
+REPEAT 0,[
+	ATYPE [ASCIZ /Kjtim/]
+	SETZB U,A
+KJLUP:	SKIPE @UNAME
+	 ADD A,@TRUNTM
+	ADD U,LUBLK
+	CAMGE U,@USRHI
+	 JRST KJLUP
+	SKIPGE A
+	 ATYPE [ASCIZ / -/]
+	MOVMS A
+	PUSHJ P,TMPTH
+]
+	ATYPE [ASCIZ / Lost /]
+	MOVE A,@LOSRCE
+	ADDI A,9830.
+	IDIVI A,19661.
+	DNUM A
+	ATYPE [ASCIZ /%  Idle /]
+	MOVE A,@IDLRCE
+	ADDI A,9830.
+	IDIVI A,19661.
+	DNUM A
+	ATYPE [ASCIZ /%  Null time =/]
+	MOVE A,@NULTIM
+	IDIVI A,60.
+	PUSHJ P,TMPT
+	PUSHJ P,CRR	;CR LF
+	SKIPN A,@SHUTDN	; Get system shutdown time
+	 JRST PUTPK0	; Jump if sys not going down.
+	JUMPL A,[TYPE "System shut down."
+		JRST PUTPK0]
+	TYPE "System going down in"
+	sub a,@time
+	IDIVI A,30.	; Convert to seconds
+	PUSH P,A	; Save
+	PUSHJ P,TMPT	; Output relative time of death (HH:MM:SS)
+	TYPE " (at"
+	POP P,B
+	MOVE A,@TIMOFF	; Get time since midnight in half-sec
+	LSH A,-1
+	ADD A,B		; Now have "absolute" time of death
+	PUSHJ P,TMPT	; Output abs time as [DD:]HH:MM:SS
+	CTYPE ")
+PUTPK0:	MOVE A,UIDCNT	; Mark bound of entries
+	SETZM UIDTAB(A)
+	RET
+
+
+NTAB3:	ATYPE GTOP	;SEE ABOVE
+	ATYPE DPTOP
+	ATYPE DTOP
+	ATYPE DTOP
+	ATYPE DTOP
+	ATYPE DTOP
+ODEVER NTAB3
+
+; NMHACK - Try to look up job index specified by UNAME in NAMEHK.
+; Returns .+1 if failed, sets RUUFLG/ 0, RUUIND/ -1 and U random.
+; Returns .+2 if won, RUUFLG/ -1, RUUIND/ <job index>, U/ index*LUBLK
+; Clobbers A,B,U
+
+NMHACK:	SETZ U,
+	SKIPA A,NAMEHK
+NMHAK2:	 ADD U,LUBLK		; Bump to next job
+	CAML U,@USRHI
+	 JRST [	SETZM RUUFLG	; Lost
+		SETOM RUUIND
+		RET]
+	CAME A,@UNAME	; Right UNAME?
+	 JRST NMHAK2	; Nope, go get next.
+	SKIPL @SUPPRO	; Must be the top level job
+	 JRST NMHAK2
+	MOVE A,U	; Won, found it!
+ 	IDIV A,LUBLK
+	MOVEM A,RUUIND
+	SETOM RUUFLG
+	JRST POPJ1
+
+SUBTTL	Procedure tree output
+
+;PRINT INFO FOR ALL INFERIORS OF PROCEDURE WHOSE INDEX IS IN -1(P)
+;  X HAS PROCEDURE DEPTH (0=TOP LEVEL)
+;  -2(P) HAS TTOWNR OF THAT SUPERIOR (UNLESS X=0)
+
+ULOOK:	MOVEI U,0	;INITIALIZE TO LOOK AT PROCEDURE WITH INDEX 0
+	MOVE A,-1(P)
+ULOOK1:	SKIPN @UNAME	;IS JOB SLOT ACTIVE?
+	 JRST ULOOKE	;NO, TRY NEXT
+	HRRZ B,@SUPPRO	;GET SUPPRO
+	CAME A,B	;SKIP IF RIGHT SUPPRO
+	 JRST ULOOKE	;DIFFERENT TRY NEXT
+	MOVE B,UDISP
+	CAMN B,[-1]
+	 JRST ULOOK0
+	JUMPN X,ULOOK0	;IF UNAME OR SINGLE-TREE MODE, AND LOOKING AT TOP-LEVEL JOBS,
+	SKIPE GUNFLG
+	 JRST [CAME B,U	;IF X OR Y COMMAND, WANT ONLY ONE TREE.  IS THIS THAT TREE?
+		JRST ULOOKE
+	       JRST ULOOK0]
+	SKIPN RUUIND	; Skip if no arg, or nonzero arg
+	 JRST ULOOK0	; arg = 0
+	CAME B,@XUNAME
+	 CAMN B,@UNAME	;IN S OR J MODE, WINS IF TOP'S UNAME OR XUNAME MATCHES SPEC'D.
+	  CAIA
+	   JRST ULOOKE
+ULOOK0:	SKIPN JHFLAG
+	 JRST ULOOKA	;ALWAYS PRINT
+	AOS B,UIDCNT	;ADD ENTRY TO TABLE OF INDICES
+	MOVEM U,UIDTAB-1(B)
+ULOOKA:	MOVEI F,0	;RONLY FLAG
+	SKIPE @USTP
+	 MOVEI F,1
+	SKIPGE RONLY
+	 JUMPN F,ULOOKE
+	SKIPLE RONLY
+	 JRST [CAIE A,777777
+		JRST ULOOKE
+	       HLLZ B,@TTYTBL
+	       TLNN B,200000
+	        JRST ULOOKE
+		JRST .+1]
+	EXCH A,U
+	HRRZ B,@TTYTBL
+	EXCH A,U
+	SETOM TTOWNR
+	JUMPE X,[PUSHJ P,ULOOK2	;SET TTOWNR FOR ALL TOP-LEVEL JOBS.
+		 JRST ULENDR]
+	CAMN B,U	;ELSE SET IT IFF IT WAS SET FOR SUPERIOR AND
+	 SKIPN -2(P)	;SUPERIOR WANTED TO GIVE TTY TO ME.
+	  SETZM TTOWNR
+	PUSHJ P,ULOOK2
+ULENDR:	PUSH P,TTOWNR
+	SETZM TTOWNR
+	PUSH P,U	;STORE POINTER IN -1(P) FOR ULOOK
+	AOS X		;SET TO ONE LEVEL DEEPER
+	PUSHJ P,ULOOK	;RECURSE
+	SOS X		;RETURN LEVEL COUNT
+	POP P,U		;RESTORE U
+	POP P,TTOWNR
+	MOVE A,-1(P)	;RESTORE A
+ULOOKE:	ADD U,LUBLK	;GO TO NEXT BLOCK OF USER VARS
+	CAMGE U,@USRHI	;CHECK FOR NONE LEFT
+	 JRST ULOOK1	;MORE
+	POPJ P,		;END
+
+
+EAND:	PUSH P,A
+	AND A,@EONLY
+	JUMPE A,POPAJ
+	JRST POPAJ1
+
+EHACK:	SETZB X,U
+	SKIPL EWORD
+	 JRST EPLOOP
+	HRRZ A,EWORD
+	HRLM A,NAMEHK
+EPLOOP:	MOVE A,NAMEHK
+	SKIPE @UNAME
+	 XCT EINST
+	  JRST EEPEEK
+	PUSHJ P,ULOOK2
+EEPEEK:	ADD U,LUBLK
+	CAMGE U,@USRHI
+	 JRST EPLOOP
+	JRST POPJ1
+
+; HERE TO PRINT INFO FOR USER WITH INDEX IN U
+
+ULOOK2:	MOVE A,U
+	IDIV A,LUBLK
+	ONUM 3,A	;OUTPUT INDEX/L
+	XCT FLKT2(ODEV)	;GO TO FLKD IF DIS OR LPT
+	ALIGN 4(X)	;INDENT TO INDICATE PROCEDURE DEPTH
+	SKIPGE @APRC	;SKIP IF NOT DISOWNED
+	 JUMPE X,FLKDSN	;DISOWNED TOP LEVEL JOB.
+	MOVE A,@UNAME	;NOT DISOWNED, PICK UP UNAME
+	SKIPE X		;SKIP IF TOP LEVEL
+	 MOVE A,@JNAME	;NOT TOP, USE JNAME
+	6TYPE A		;OUTPUT U OR J NAME
+	XCT FLKT21(ODEV)
+	JRST FLK6
+
+	;DISOWNED PROCEDURE WITH TTY OR GE OUTPUT
+FLKDSN:	6TYPE @UNAME	;MUST OUTPUT BOTH NAMES FOR FULL INFO
+	CTYPE 40
+	6TYPE @JNAME
+	JRST FLK6
+
+FLKD:	CAILE X,5	;FOR DIS OR LPT OUTPUT	;INDENT TO INDICATE PROCEDURE DEPTH
+	 MOVEI X,5	;BUT DON'T LOSE IF GROTESQUELY DEEP TREE
+	ALIGN 4(X)
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	CTYPE 40
+	6TYPE @USYSNM
+	CTYPE 40
+FLK6:	XCT FLKT3(ODEV)	;SPACE OVER
+	PUSHJ P,USTATUS	;OUTPUT STATUS COLUMN
+	XCT FLKT4(ODEV)	;SPACE OVER
+	SKIPL B,@TTYTBL	;SKIP IF USER DOES NOT CURRENTLY HAVE TTY
+	 JRST TTYO2	;HAS TTY => GIVE TTY NUMBER.
+	MOVEI A,"?
+	SKIPN TTOWNR	;IF THIS JOB WOULD HAVE TTY IF TREE HAD ONE, SAY "?", ELSE
+	 MOVEI A,"<
+	TLNN B,%TBDTY	;SKIP & OUTPUT "<" IF PROCEDURE HAS HAD TTY TAKEN AWAY FROM IT
+	 MOVEI A,">	;OUTPUT ">" IF PROCDURE HAS GIVEN AWAY TTY.
+TTYO0:	CTYPE (A)
+	SKIPGE @APRC
+	 XTYPE [SIXBIT / DSN!/]
+TTYO1:	XCT FLKT6(ODEV)	;SPACE OVER
+	PUSHJ P,RESORS	;OUTPUT SPECIAL RESOURCES PROCEDURE IS USING
+	XCT FLKT7(ODEV)	;SPACE OVER
+	MOVE A,@NMPGS	;TOP OF USER MEM
+	ADDM A,USRMEM	;ADD INTO RUNNING TOTAL OF USER MEM
+	XCT FLKT8(ODEV)	;OUTPUT
+	XCT FLKT85(ODEV)	;SPACE OVER
+	XCT FLKT87(ODEV)	;PRINT PAGES SWAPPED OUT
+	XCT FLKT88(ODEV)	;ALIGN
+TIMOUT:	MOVE A,@JTMU
+	ADDM A,USRTIM	;INCREMENT RUNNING TOTAL USER TIME
+	ADDI A,9830.
+	IDIVI A,19661.
+	DPCT 2,A
+	CTYPE "%
+	HRRZ F,MODE
+	CAIN F,%MDSCH
+	JRST GPK1	;DISPLAY SCHED VARIABLES, SWPIN RQ ETC INSTEAD OF RUN TIMES
+TIMOT1:	XCT FLKT13(ODEV)	;SPACE OVER
+	MOVEM A,TMPTCL	;STORE COLUMN NUMBER
+	MOVE A,@UTRNTM	;GET TOTAL RUN TIME FOR THIS PROCEDURE
+	ADDM A,USRJTM	;INCREMENT TOTAL RUN TIME
+	PUSHJ P,TMPTH	;OUTPUT AMOUNT OF TIME USED BY PROCEDURE
+	XCT FLKT9(ODEV)	;GO TO TIMOT1 IF TTY OR GE, OTHERWISE SPACE OVER
+	SKIPE A,@PIRQC
+	PUSHJ P,INTOUT
+	XCT FLKT11(ODEV)	;GO TO TIMOT1 IF GE, OTHERWISE SPACE OVER
+	SKIPE @IFPIR
+	ONUM @IFPIR	;OUTPUT 2ND WORD OF INTERRUPT REQUESTS
+TIMOT2:	PUSHJ P,CRR	;END OF LINE FOR PROCEDURE
+	POPJ P,
+
+INTOUT:	JFFO A,.+2
+	 POPJ P,
+	PUSH P,C
+	MOVSI C,400000
+	MOVNS B
+	6XTYPE INTBL1(B)
+	CTYPE 40
+	LSH C,(B)
+	TDZ A,C
+	POP P,C
+	JRST INTOUT
+
+DECA:	IDIVI A,10.
+	PUSH P,B
+	CAIE A,0
+	PUSHJ P,DECA
+	POP P,B
+	ADDI B,"0
+	.IOT NTYO,B
+	POPJ P,
+
+OCTA:	IDIVI A,10
+	PUSH P,B
+	CAIE A,0
+	PUSHJ P,OCTA
+	POP P,B
+	ADDI B,"0
+	.IOT NTYO,B
+	POPJ P,
+
+NAMA:	SETZ B,
+	ROTC A,7
+	JUMPE B,CPOPJ
+	.IOT NTYO,B
+	JRST NAMA
+
+GPK1:	CTYPE 40
+	DNUM 4,@USIPRQ	;OUTPUT # PG SWPIN RQ
+	CTYPE 40
+	MOVE A,@USWPRI
+	IDIVI A,15000.	;CONVERT TO PG MILLISEC'S
+	DNUM 5,A
+	SKIPL @SUPPRO
+	JRST TIMOT2	;NOT TOP LVL
+	PUSHJ P,CRR
+	ALIGN 10.
+	ATYPE [ASCIZ /Total for tree /]
+	MOVE B,@UTMPTR
+	MOVE A,SYSBEG(B)
+	IDIVI A,19661.
+	DPCT 2,A
+	CTYPE "%
+	CTYPE 40
+	MOVE B,@UTMPTR
+	SUB B,USRRCE
+	ADD B,SWRCE
+	MOVE A,SYSBEG(B)
+	IDIVI A,15000.	;CONVERT TO ASYMPTOTIC PG-MS
+	DNUM 5,A
+	ATYPE [ASCIZ / Pg-ms !/]
+	JRST TIMOT2
+
+FLKT2:	JFCL		;TTY
+	JFCL		;DATAPOINT OR OTHER DISPLAY
+	JRST FLKD	;DISPLAY
+	JRST FLKD	;LPT
+	JRST FLKD	;WIDE DISPLAY
+	JRST FLKD	;WIDE TTY
+ODEVER FLKT2
+
+FLKT21:	JFCL
+	PUSHJ P,SNMTYP
+	 .LOSE 1000
+	 .LOSE 1000
+	 .LOSE 1000
+	 .LOSE 1000
+ODEVER FLKT21
+
+SNMTYP:	XTYPE [SIXBIT /   !/]
+	6TYPE @USYSNM
+	POPJ P,
+
+FLKT3:	ALIGN 1,11.	;STATUS
+	ALIGN 1,22.
+	ALIGN 1,28.
+	ALIGN 1,28.
+	ALIGN 1,28.
+	ALIGN 1,28.
+ODEVER FLKT3
+
+FLKT4:	ALIGN 1,22.	;TTY
+	ALIGN 1,29.
+	ALIGN 1,37.
+	ALIGN 1,37.
+	ALIGN 1,37.
+	ALIGN 1,37.
+ODEVER FLKT4
+
+FLKT6:	ALIGN 1,24.	;RESOURCES
+	ALIGN 0,33.
+	ALIGN 1,41.
+	ALIGN 1,41.
+	ALIGN 1,41.
+	ALIGN 1,41.
+ODEVER FLKT6
+
+FLKT7:	ALIGN 1,27.	;CORE
+	ALIGN 0,37.
+	ALIGN 1,45.
+	ALIGN 1,45.
+	ALIGN 1,45.
+	ALIGN 1,45.
+ODEVER FLKT7
+
+FLKT8:	DNUM 2,A
+	DNUM 2,A
+	DNUM 3,A
+	DNUM 3,A
+	DNUM 3,A
+	DNUM 3,A
+ODEVER FLKT8
+
+FLKT85:	ALIGN 1,30.	;OUT
+	ALIGN 1,41.
+	ALIGN 1,49.
+	ALIGN 1,49.
+	ALIGN 1,49.
+	ALIGN 1,49.
+ODEVER FLKT85
+
+FLKT87:	DNUM 2,@NSWPGS
+	DNUM 2,@NSWPGS
+	DNUM 3,@NSWPGS
+	DNUM 3,@NSWPGS
+	DNUM 3,@NSWPGS
+	DNUM 3,@NSWPGS
+ODEVER FLKT87
+
+FLKT88:	ALIGN 1,34.	;%RUNTIME
+	ALIGN 1,45.
+	ALIGN 1,54.
+	ALIGN 1,54.
+	ALIGN 1,54.
+	ALIGN 1,54.
+ODEVER FLKT88
+
+FLKT9:	JRST TIMOT2
+	JRST TIMOT2
+	ALIGN 1,67.
+	ALIGN 1,67.
+	ALIGN 1,67.
+	ALIGN 1,67.
+
+ODEVER FLKT9
+
+FLKT11:	 .LOSE 1000
+	 .LOSE 1000
+ 	CTYPE 40
+	CTYPE 40
+	CTYPE 40
+	CTYPE 40
+ODEVER FLKT11
+
+FLKT13:	MOVEI A,36.		;TOTAL TIME
+	MOVEI A,47.
+	MOVEI A,57.
+	MOVEI A,57.
+	MOVEI A,57.
+	MOVEI A,57.
+ODEVER FLKT13
+
+RESORS:	MOVEI F,0
+	SKIPL @IOTLSR
+	JRST RESR2
+	MOVEI T,"I
+	JSP A,RESCHO            ;user i/o mode
+RESR2:	MOVEI T,"%
+	HRRZ B,@UREALT
+	CAMN U,B
+	JSP A,RESCHO            ;real time user
+IFN 0,[
+	SKIPE PDPUSR
+	CAME U,@PDPUSR
+	JRST RESR4
+	MOVEI T,"6
+	JSP A,RESCHO            ;pdp-6 user
+	MOVEI T,"D
+	CONI 130,A
+	SKIPN A
+	JSP A,RESCHO            ;340 display user
+];IFN 0
+RESR4:	MOVSI B,RESTAB-RESTBE
+RESR3A:	HRRZ T,RESTAB(B)
+	SKIPN (T)
+	JRST RESR3	;NOT DEFINED IN SYSTEM
+	CAME U,@RESTAB(B)
+RESR3:	AOBJN B,RESR3A
+	JUMPGE B,RESRND
+	LDB T,[350700,,RESTAB(B)]
+	MOVEI A,RESR3
+RESCHO:	TRON F,1
+	XCT RESOR2(ODEV)	;BLINKING ON (IF NOT ALREADY)
+	CTYPE (T)
+	JRST (A)
+
+RESRND:	TRNE F,1
+	XCT RESOR3(ODEV)	;BLINK OFF
+	POPJ P,
+
+RESOR2:	JFCL
+	CTYPE 40
+	CTYPE ^B
+	JFCL
+	JFCL
+	JFCL
+ODEVER RESOR2
+
+RESOR3:	JFCL
+	CTYPE 40
+	CTYPE ^E
+	JFCL
+	JFCL
+	JFCL
+ODEVER RESOR3
+
+RESTAB:	"C_11.,,@CUSER          ;core alocator user
+IFN 0,[		;Remove stuff that no longer exists
+	"D_11.,,@DISUSR         ;340 display user
+	"L_11.,,@LPTUSR         ;line printer user
+	"R_11.,,@PTRUSR         ;paper tape reader user
+	"P_11.,,@PLTUSR         ;plotter user
+	"T_11.,,@PTPUSR         ;paper tape punch user
+	"V_11.,,@NVDUSR         ;tv camera user
+	"S_11.,,@TABUSR         ;tablet user
+];IFN 0
+	"M_11.,,@UMASTER        ;in master mode
+	"B_11.,,@MTUSR          ;mag tape user
+	"W_11.,,@PRVUSR         ;priviledged user
+RESTBE:
+
+	;USER HAS TTY
+TTYO2:	CTYPE "T
+	ANDI B,-1
+	ONUM B
+	JRST TTYO1
+
+;OUTPUT THE "STATUS" OF THE JOB IN U.
+USTATUS:	MOVEI A,40	;LOAD WITH CODE FOR SPACE
+	SKIPN @PICLR	;SKIP IF PROCEDURE NOT PROCESSING INTERRUPT
+	MOVEI A,"*	;REPLACE SPACE WITH * IF INTERRUPTED
+	SKIPN @IDF1
+	 SKIPE @IDF2
+	  MOVEI A,"*
+	SKIPGE B,@USWST
+	 MOVEI A,"_	;USER DESIRED OUT
+	SKIPGE @USWSCD
+	 MOVEI A,">	;SWAP-BLOCKED
+	CTYPE (A)	;OUTPUT
+	SKIPE A,@USTP	;SKIP IF RUNNING
+	 JRST URUN1	;NOT RUNNING, OUTPUT STOP WORD
+	SKIPE @FLSINS	;SKIP IF NOT BLOCKED
+	 JRST HAIR2	;BLOCKED, OUTPUT MNEMONIC FOR HUNG OPERATION
+	MOVE B,@UPC	;GET USER PC
+	TLNN B,10000	;SKIP IF USER MODE
+	 JRST EHAIR	;EXEC MODE, OUTPUT + AND MNEMONIC
+IFN CRAWLP,[	;CRAWL, FLY, ETC.
+	MOVE A,@JTMU
+	ADDI A,9830.
+	IDIVI A,19661.
+	MOVEI B,0
+	CAIL A,1
+	 MOVEI B,1
+	CAIL A,2
+	 MOVEI B,2
+	CAIL A,10.
+	 MOVEI B,3
+	CAIL A,49.
+	 MOVEI B,4
+	CAIL A,79.
+	 MOVEI B,5
+	CAIL A,89.
+	 MOVEI B,6
+	6XTYPE RUNTBL(B)
+]
+IFE CRAWLP,6XTYPE [SIXBIT /RUN/]
+USTAT2:	SKIPN A,@RPCL	;SKIP IF RPCLSR'ING GOING ON
+	 POPJ P,
+	SKIPL A
+	 CTYPE ">	;RPCLSR'ING (STOPPING <'ED PROCEDURE)
+	SKIPG A
+	 CTYPE "<	;BEING RPCLSR'ED (STOPPED BY >'ED PROCEDURE)
+	ANDI A,-1	;GET USER INDEX
+	IDIV A,LUBLK	;GET USER # OF OBJECT OR SOURCE OF RPCLSR'ING
+	ONUM A		;OUTPUT USER NUM
+	POPJ P,
+
+	;NOT RUNNING (.USTP NONZERO).
+URUN1:	LSHC A,-30.	;RIGHT JUSTIFY LEFT TWO DIGITS OF .USTP.
+	ONUM 2,A	;OUTPUT LEFT TWO DIGITS
+	CTYPE "!	;OUTPUT "!"
+	LSH B,-6	;RIGHT JUSTIFY REMAINDER
+	ONUM B		;OUTPUT COUNT OF TRANSIENT REASONS TO BE STOPPED
+	JRST USTAT2
+
+HAIR2:	TLNN B,200000
+	 JRST HAIR
+	TLNE B,10000
+	 SKIPA A,[SIXBIT /IPAGE/]
+	  IFN CRAWLP,JRST HAIR3
+	  IFE CRAWLP,JRST HAIR5
+	JRST HAIR1
+
+HAIR3:	MOVEI C,600.	;THRASH FIRST IF AUSOPG > 600.
+	CAML C,@AUSOPG
+	 JRST HAIR5
+	MOVEI C,6	;WOULDN'T IT BE GREAT IF SOMEONE COMMENTED THIS?
+	MOVEI B,@AC0S
+	ADD B,U
+	HLRZ A,(B)
+	CAIE A,-200	;AC6 MUST BE -200,,?
+	 JRST HAIR5
+	ADDI C,1
+	MOVEI B,@AC0S
+	ADD B,U
+	MOVE A,[SIXBIT /THRASH/]
+	SKIPL (B)	;AC7 MUST BE <0
+HAIR5:	 MOVE A,[SIXBIT /PAGE/]	
+	JRST HAIR1
+
+EHAIR:	CTYPE "+
+HAIR:	SKIPGE A,@SV40	;SKIP IF SIGN BIT ON
+	 JRST IOTUUO
+	CAML A,[100000,,]	;SKIP IF UUO
+	 JRST ILLOP	;NOT A UUO
+	LSH A,-27.	;RIGHT JUSTIFY OP CODE AND AC
+	CAIG A,47	;SKIP IF TOO LARGE FOR SYS UUO
+	 CAIGE A,40	;SKIP IF SYS UUO
+	  SKIPA A,[SIXBIT /UUO/]	;NOT SYS UUO, OUTPUT "UUO"
+	   XCT UUOTB-40(A)	;SYS UUO, DISPATCH
+HAIR1:	6XTYPE A	;OUTPUT MNEMONIC
+	JRST USTAT2
+
+ILLOP:	6XTYPE [SIXBIT /XXX/]	;ILLEGAL OPERATION
+	JRST USTAT2
+
+IOTUUO:	LDB A,[270300,,@SV40]
+	MOVE A,UIOTAB(A)
+	JRST HAIR1
+
+UIOTAB:	IRPS A,,[BLKI DATAI BLKO DATAO CONO CONI CONSZ CONSO]
+	SIXBIT /A/
+	TERMIN
+
+UUOTB:	JRST AIOT
+	MM /OPEN/
+	JRST AOPER
+	JRST ACALL
+	MM /USET/
+	MM /BREAK/
+	MM /STATUS/
+	MM /ACCESS/
+
+ACALL1:	SKIPGE C,@UUAC	;.CALL IOT OR SIOT
+	 MOVE D,@LSCALL
+	JRST AIOT1	;DON'T BE CRETINOUS WITH IOT/SIOT!
+
+AIOT:	LDB C,[270400,,@SV40]	;.IOT, GET AC FIELD
+	MOVEI D,0	;NOT SIOT
+AIOT1:	MOVEI A,@IOCHNM
+	ADD A,U
+	HRRZ C,(A)	;RIGHT HALF OF IOCHNM IS INDEX TO IOTTB
+	PUSHJ P,AIOTNM
+	JRST USTAT2
+
+AIOTNM:	MOVEI B,(C)
+	HLL A,@CLSTB
+	TLNN A,100040
+	 JRST AIOTN1
+	HLRZ C,(A)		;JOB DEVICE
+	SKIPA A,@JBDEV
+AIOTN1:	 HLLZ A,@DCHSTB
+	JUMPG A,[
+		HLRZ A,A
+		MOVE A,SYSBEG(A)
+		JRST .+1 ]
+	6XTYPE A
+	MOVEI C,(B)
+	MOVE T,@IOTTB
+	TLNE T,400000
+	 CTYPE "B
+	CAMN D,[SIXBIT/SIOT/]
+	 CTYPE "S
+	MOVEI C,"I
+	TLNE T,200000
+	 MOVEI C,"O
+	CTYPE (C)
+	POPJ P,
+
+ACALL:	LDB C,[270400,,@SV40]	;GET AC FIELD
+	JUMPE C,ACALL0
+	6XTYPE @CALSXB	;OUTPUT MNEMONIC
+	JRST USTAT2
+
+ACALL0:	MOVE C,@LSCALL
+	CAME C,[SIXBIT/SIOT/]
+	 CAMN C,[SIXBIT/IOT/]
+	  JRST ACALL1
+ACALL2:	6XTYPE @LSCALL
+	JRST USTAT2
+
+AOPER:	HRRZ C,@SV40	;GET OPER NUM
+	MOVE A,CALSXB
+	SUB A,OPRSXB
+	CAML C,A
+	 MOVEI C,0	;NOT IN RANGE, DISPLAY AS 'OPER'
+	6XTYPE @OPRSXB
+	JRST USTAT2
+
+TTAB:	PUSH P,A
+	CTYPE 40
+	LDB U3,[300,,LINEPOS]
+	JUMPN U3,.-3
+	POPJ P,
+
+CRR2:	PUSHJ P,CRR
+CRR:	ATYPE [ASCIZ /
+/]
+	POPJ P,
+
+
+SUBTTL	Mode "H" - Memory Histogram
+
+MEML:
+IFN 1,[
+	JRST MRHIST	; No more 340.
+]
+.ELSE [		;THIS MODE DOESN'T WORK AT ALL WELL
+VSPACE==34
+
+	CAIE ODEV,%OD340
+	 JRST MRHIST
+	PUSHJ P,BUFOUT
+	MOVEI OBUFP,OBUF-1
+	MOVN C,TSYSM
+	HRLZS C
+	DWRD [20117]		;POINT MODE, SCALE 0, INTENSITY 3
+	MOVE X,[220000,,22000]	;Y=0, POINT MODE; X=0, POINT MODE, INTENSIFY.
+MLUP:	LDB B,MUR
+	CAIGE B,340
+	 JRST MEML4
+	SUBI B,340
+MLUP5:	PUSHJ P,MEMLD		;DRAW BLIP 2 FROBS LONG, 1 SPACE IN BETWEEN.
+	DWRD X
+	ADDI X,1
+MEML9:	AOBJN C,MLUP
+	DWRD [0]		;PARAMETER MODE
+	MOVE X,[20175,,220060]	;SCALE 3 INTENSITY 5, POINT MODE; Y=60, POINT MODE.
+	DWRD X
+	MOVEI A,40
+MLUPA:	DWRD [120000,,600177]	;X=0, VECTOR CONTINUE; INTENSIFY, HORIZONTAL LINE, PARAM MODE
+	ADDI X,VSPACE
+	CAIN A,1
+	 JRST MLUPB		;KEEP DRAWING HORIZONTAL LINES.
+	DWRD X
+	SOJG A,MLUPA
+
+MLUPB:	MOVEI U,0
+	MOVEI A,0
+	DWRD [20137]		;SCALE 1 INTENSITY 7, POINT MODE.
+	MOVE X,[220062,,60000]	;Y=62, POINT MODE; X=0, CHARACTER MODE.
+MLUP2:	CAML U,@USRHI
+	 JRST MLUP3A
+	DWRD X
+	MOVE B,@UNAME
+	TDC B,[404040404040]
+	DWRD B
+	SKIPE B,@UNAME
+	 MOVE B,@JNAME
+	TDC B,[404040404040]
+	 MOVE C,[373702013700]	;LEAVE CHAR MODE; SCALE 1, INTENSITY 7, POINT MODE.
+	LSHC B,-6
+	TLO B,400000
+	DWRD B
+	DWRD C
+	ADD X,[VSPACE,,]
+	ADD U,LUBLK
+	AOJA A,MLUP2
+
+MEML4:	CAMN B,MURUSR
+	 TRNN C,-1
+	  JRST MLUP5
+	MOVE U1,C
+	ADD U1,MEMPNT
+	HRRZ B,(U1)
+MEML5:	JUMPE B,MEML8	;?
+	TRZE B,400000
+	JRST MEML6
+	LDB D,[1000,,B]	;PG
+	LDB B,[101100,,B]	;USR
+	MOVE A,B
+	PUSHJ P,MEMLD
+	DWRD X
+	SUBI X,2
+	IMUL A,LUBLK
+	EXCH U,A
+	MOVEI T,@UPGCP
+	EXCH U,A
+	ROT D,-1
+	ADDI T,(D)
+	HRLI T,222200
+	SKIPGE D
+	HRLI T,2200
+MEML7:	LDB B,T
+	JRST MEML5
+
+MEML6:	TRZE B,200000
+	JRST MEML8
+	HRRZ T,PGAMMP	; MOVE T,[2200,,<MMPPAG_10.>]
+	LSH T,10.
+	HRLI T,2200
+	ADDI T,(B)
+	JRST MEML7
+
+MEML8:	ADDI X,4
+	JRST MEML9
+
+MEMLD:	IMULI B,VSPACE
+	ADDI B,60
+	DPB B,[221200,,X]
+	DWRD X
+	ADDI X,2
+	POPJ P,
+
+MLUP3A:	MOVEI A,MXHUSR
+	MOVE X,[220062+MXHUSR*VSPACE,,60000]
+	DWRD X
+MLUP3:	MOVE C,MEMTB-MXHUSR(A)
+	XOR C,[404040404040]
+	DWRD C
+	ADD X,[VSPACE,,]
+	DWRD [370000,,20137]
+	CAIL A,37
+	JRST MLUP4
+	DWRD X
+	AOJA A,MLUP3
+
+MLUP4:	DWRD [0]
+	MOVEI A,OBUF
+	SUB A,OBUFP
+	SOS A
+	HRLS A
+	HRRI A,OBUF
+	.IOT DISWC,A
+	AOS PAGEPOS
+	MOVE OBUFP,[440700,,OBUF]
+	RET
+];IFN 0
+
+SUBTTL	Mode "M" - Memory Usage (also "histogram")
+
+; Both H and M modes generate a table in RHIST which is somewhat
+; arbitrarily defined to be 400 words long, and fill it by scanning
+; the system's physical page table to count the number of swapped-in 
+; pages either by type of page (if a system page) and by user.
+; Entries 0-177 correspond to user jobs 0-177 and have the format
+;	<# in-core pages shared>,,<# in-core pages in this job>
+; All in-core pages of type USER are counted there.
+; Entry 200 is reserved for USER pages which cannot be found in any
+;	job's virtual page table and hence are called "loose".
+; All other page types are considered to be system pages.  Since
+;	type values range from 0 to 37, counts for these types are
+;	offset into entries 340-377 and have the format
+;		0,,<# pages of this type>
+; There should never be anything in entries 201-337, but if anything
+; does turn up it is called "UNKNOWN".
+
+	; Mode H comes here
+MRHIST:	SETOM RNDFLG	; Random flag set -1 for H mode
+	SETZM V4	; Say header not printed yet.
+	JRST MHIST0
+
+	; Mode M comes here
+MHIST:	SETZM RNDFLG	; Random flag set 0 for M mode.
+	SKIPL RUUIND	; Was arg specified?
+	 JRST MEMHAK	; Yes, go hack memory status of specified job.
+
+	; Failing nmM's come back here
+MHISTN:	ATYPE HTOP
+	SKIPE UWRKST
+	 ATYPE HTOPWS
+	CALL CRR
+	SETOM V4	; Say we've printed header already.
+
+	; Start histogram hacking.
+MHIST0:	SETZM V2	; V2 counts total of system type pages
+	SETZM UCPLOS	; Clear # of lossages in UCPRL
+	SETZM RHIST	; Clear out 400 entries in RHIST
+	MOVE A,[RHIST,,RHIST+1]
+	BLT A,RHIST+377
+	MOVN C,TSYSM	; Get total # hardware pages system is config'd for
+	HRLZS C		; Make AOBJN out of it -<# pages>,,0
+
+	; Count pages belonging to system job specially, since
+	; they are continuous from page 0 rather than linked together.
+	SETZB U,D	; Initialize U to point at sysjob
+MHL10:	CALL MHLCNT	; Count the page (bump RHIST entry)
+	MOVEI B,1(C)	; Get mem addr for next page
+	LSH B,10.
+	CAMGE B,@HUSRAD	; Stop when counted all sysjob pages
+	 AOBJN C,MHL10	; else keep going
+	JUMPGE C,[TYPE "Bad TSYSM or HUSRAD!"	; Just in case we count out!
+		JRST MHL99]
+
+	; Now count rest of physical pages above system job.
+MHL20:	LDB A,MUR	; Get MUR code for page entry in MEMBLT(C)
+	CAME A,MURUSR	; Is it part of a plain user job?
+	 JRST [	CAIGE A,340	; No, system page!  Adjust for historical mess
+		 ADDI A,340	; Force it high
+		AOS RHIST(A)	; Add to RHIST+340 above user job entries.
+		JRST MHL25]
+	PUSH P,C	; User page, must track down which user it is.
+	HRRZ D,@MMSWP	; Find # of virtual user pages pointing to phys page
+	ADD C,MEMPNT	; Get address of MEMPNT entry (circ mem use ptr)
+	HRLI C,2200	; Make a halfword BP to extract RH of entry with
+	SETOM MMUSFL	; Clear # pages counted in search
+	MOVE U1,[400000,,MHLCNT]
+	PUSHJ P,UCPRL
+	POP P,C		; Restore AOBJN through MEMBLT
+	AOSN MMUSFL	; If no pages were found while tracing pointers,
+	 AOS RHIST+200	; Bump this fake entry, # pages not linked to any user.
+MHL25:	AOBJN C,MHL20
+	SKIPE UCPLOS	; Any errors while tracing links?
+	 JRST [	TYPE "Bad mem pointer data for "
+		DNUM UCPLOS
+		TYPE " physical page(s)!"
+		CALL CRR
+		JRST .+1]
+
+	; All phys pages have now been counted up by type or user job.
+	; For histogram (mode H), scan all jobs to find the highest
+	; total # pages that any process is using, so SHRTOT can be set.
+	; Do this now, before data in RHIST gets too old.
+	SKIPN RNDFLG	; Skip next step if in M mode
+	 JRST MHL40
+
+	SETZ C,		; Clear highest total found so far.
+	MOVE U,@USRHI	; Start from 1st non-ex user slot
+	SUB U,LUBLK
+MHL31:	SKIPN @UNAME	; For each valid process,
+	 JRST MHL35
+	MOVE B,@NMPGS	; Get total non-absolute pages it's using.
+	CAMGE C,B	; If higher than highest so far,
+	 MOVE C,B	; remember it.
+MHL35:	SUB U,LUBLK
+	JUMPGE U,MHL31	; Loop down through them all (incl sys job)
+	MOVEM C,SHRTOT	; Save highest total in convenient niche
+
+	; OK, now start loop to print out results for each entry in RHIST.
+	; Scans whole table each pass, to select biggest one for output
+	; (and then flushes it)
+MHL40:	SETOB A,U	; Initialize highest count thus far, and entry # for it
+	MOVEI B,377	; Grovel over all 400 slots in RHIST
+MHL41:	HRRE C,RHIST(B)	; Get # pages seen of this type (-1 if entry flushed)
+	CAML A,C	; If this entry larger
+	 JRST MHL42
+	MOVEI A,(C)	; then save value
+	MOVEI U,(B)	; and its slot #
+MHL42:	SOJGE B,MHL41
+	JUMPL A,MHL99	; If only -1 entries were seen, mode is done!
+
+	; Have an entry to print out.
+	HLRZ D,RHIST(U)	; Get # shared pages from LH (only meaningful if user)
+	SETOM RHIST(U)	; Now flush the entry from table
+	MOVEI C,(U)	; Get entry # in C (page type index)
+	IMUL U,LUBLK	; User index (if meaningful) in U
+	CAIL C,200	;>MAXJ
+	 JRST [	CALL PMURLN	; Invoke routine to print non-user MUR type
+		 JRST MHL40	; Punted, printed nothing.
+		JRST MHL49]	; Good, printed some stuff.
+	CAMGE U,@USRHI
+	 SKIPN @UNAME
+	  JRST MHL40		; Non-ex job, ignore it.
+	PUSHJ P,PMEMLN		; Aha, print out blurb for this job!
+	SKIPN RNDFLG		; If hacking M mode,
+	 JRST [	XCT HLTT2(ODEV)	; Also print additional cruft
+		CALL RESORS
+		JRST .+1]
+MHL49:	PUSHJ P,CRR
+	JRST MHL40
+
+MHL99:	ATYPE [ASCIZ /Available user memory= /]
+	MOVE A,TSYSM
+	PUSH P,A
+	SUB A,V2
+	DNUM A
+	CTYPE "/
+	POP P,A
+	DNUM A
+	PUSHJ P,CRR
+	RET
+
+
+
+; MHLCNT - Auxiliary to bump counts in RHIST for page type histogram.
+
+MHLCNT:	AOS MMUSFL
+	MOVE A,U
+	IDIV A,LUBLK
+	AOS RHIST(A)
+	MOVSI B,1
+	CAILE D,1
+	 ADDM B,RHIST(A)
+	POPJ P,
+
+; PMURLN - Print out line about special MUR page type.
+;	A/ # pages of this type
+;	C/ idx into RHIST (indicates page type)
+
+PMURLN:	JUMPE A,APOPJ	; If no pages, just ignore it.
+	CAIL C,340
+	 JRST PMURL2	; It's a system page of some type
+	CAIE C,200	; Random lossage...
+	 JRST [	TYPE "("
+		ONUM 2,C
+		TYPE ") UNKNOWN!"	; Completely random page type?!?
+		ONUM 6,A
+		ADDM A,V2	; May as well add it into system page count
+		JRST POPJ1]
+	; Page is a "loose" page, marked as user but not found on circ
+	; mem list (maybe things changed out from under us?)
+	SKIPE RNDFLG	; If in H mode, don't list them.
+	 RET		; Don't print anything at all.
+	TYPE "LOOSE!"	; M mode, show loose pages!
+	JRST PMURL9
+
+PMURL2:	MOVE C,MEMTB-340(C)	; Get sixbit name for this MUR code
+	CAME C,[SIXBIT /FREE/]	; Unless it's a free page,
+	 ADDM A,V2		; add count for this type to total # sys pages.
+	SKIPE RNDFLG		; If doing H mode histogram,
+	 JRST PMURL6		; Show stuff histogram-style!
+	6TYPE C			; Print type name
+PMURL9:	ALIGN 20.		; M mode only, show count for this type.
+	DNUM 3,A
+	JRST POPJ1
+
+	; H mode only prints HOLE and FREE entries
+PMURL6:
+; Commented out cuz I want to see everything --KLH
+;	CAME C,[SIXBIT /HOLE/]	; only show types HOLE and FREE
+;	 CAMN C,[SIXBIT /FREE/]
+;	  CAIA
+;	   RET			; Nope, don't print anything.
+
+	; Is this right??? Old PEEK always added count even if
+	; type FREE, if in H mode.  Suspect it's wrong.
+	CAMN C,[SIXBIT /FREE/]
+	 ADDM A,V2
+
+	PUSH P,C		; Save type name
+	SETO C,
+	SKIPN V4		; If header not yet printed,
+	 PUSHJ P,PMEMLN		; make use of once-only code to do it.
+	POP P,T
+	6TYPE T
+	ALIGN 20.
+	MOVEI C,"@
+	CAME T,[SIXBIT /FREE/]
+	 MOVEI C,"O
+	PUSHJ P,HOUT		; Print out histogram marks
+	JRST POPJ1
+
+
+PMEMLN:	PUSH P,A	;SHARED IN D, IDX IN C, TOT MEM IN A
+	SKIPE V4	; If header not yet printed, skip to do it.
+	 JRST PMEML1
+	MOVE T,SHRTOT	;SET UP AT MHL35 TO HIGHEST TOTAL
+	IDIV T,HSZ	;FIGURE OUT MARK VALUE
+	ADDI T,1
+	MOVEM T,V3	;SAVE THIS FIGURE
+	ATYPE HTOP1	
+	DNUM 2,T
+	ATYPE [ASCIZ / pages
+/]
+	ALIGN 20.
+	MOVEI A,5
+PMLOOP:	MOVE B,A	;PRINT HEADER LINE
+	IMUL B,V3
+	CTYPE " 
+	CAIGE B,100.
+	 CTYPE " 
+ 	CAIGE B,10.
+	 CTYPE " 
+	CAILE B,256.	;IGNORE OVER 256K
+	 JRST PMLOP1
+	DNUM 2,B
+	CTYPE "+
+	ADDI A,5
+	CAMGE A,HSZ
+	 JRST PMLOOP
+PMLOP1:	PUSHJ P,CRR
+	SETOM V4
+	JUMPLE C,[POP P,A
+		  POPJ P,]
+	CAIA
+PMEML0:	 PUSH P,A
+PMEML1:	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	SKIPN @USTP
+	 CTYPE 40
+	SKIPE @USTP
+	 CTYPE "*
+	CAIE C,1	;DONT PRINT GARBAGE
+	 ONUM 3,C	;INDEX
+	ALIGN 20.
+	SKIPN RNDFLG
+	 DNUM 3,(P)	;IN
+	MOVE A,@HUSRAD	
+	LSH A,-10.
+	SKIPN C
+	 ADDM A,V2
+	POP P,B
+	SKIPE RNDFLG
+	 JRST MEMHST	;JRST OFF TO HISTOGRAM PRINTER
+	CTYPE 40
+	DNUM 3,A
+	ALIGN 3,
+	DNUM 3,D	;SHARED
+	ALIGN 3,
+	DNUM 3,@NSWPGS	;PGS OUT
+	CTYPE 40
+	DNUM 3,@NMPGS	;TOTAL
+	SKIPN UWRKST
+	 POPJ P,
+	ALIGN 1,46.
+	HLRZ A,@UWRKST
+	DNUM 3,A	;WORKING SET SIZE
+	HLRZ A,@USVWRK
+	DNUM 4,A	;SAVED WSS
+	CTYPE 40
+	IRP FLG,,[%SWLOD,%SWOUT,%SWSB,%SWBEM,%SWDSO]CH,,[L,O,B,S,_]
+	 MOVS A,FLG
+	 TDNE A,@USWST
+	  CTYPE "CH
+	 TERMIN
+	ALIGN 1,60.
+	MOVE A,@TIME
+	SUB A,@USWTIM
+	IDIVI A,30.
+	DNUM A
+	POPJ P,
+
+MEMHST:	MOVE A,B	;PRINT HISTOGRAM HERE
+	SUB A,D
+	MOVEI C,"+	;TOTAL IN CORE - SHARED
+	PUSHJ P,HOUT
+	MOVE A,D	;SHARED
+	MOVEI C,"=
+	PUSHJ P,HOUT
+	MOVE A,@NSWPGS	;SWAPPED OUT
+	MOVEI C,"-
+	PUSHJ P,HOUT
+	MOVE A,@NMPGS
+	CAML A,V3
+	POPJ P,
+	MOVEI C,"-	;HERE TO PRINT ONE MARK FOR EACH USER
+	MOVE B,@NSWPGS	;WILL PRINT HIGHEST OF THE CATEGORIES
+	SUB A,B		;TOT-SWAPPED
+	CAMGE B,D
+	MOVEI C,"=
+	SUB A,D		;ALL IN	
+	CAMGE B,A
+	MOVEI C,"#
+	MOVE A,V3
+	PUSHJ P,HOUT
+	POPJ P,
+
+HOUT:	IDIV A,V3	;MARK PRINTER
+	JUMPE A,CPOPJ
+	CTYPE (C)
+	SOJG A,.-1
+	POPJ P,
+
+
+
+HLTT2:	JFCL
+	CTYPE 40
+	CTYPE 40
+	CTYPE ^I
+	CTYPE 40
+	CTYPE 40
+ODEVER HLTT2
+
+; UCPRL - Called to trace through the linked page table entries for
+;	a particular physical page, calling a furnished routine for each
+;	link found.
+;	C/ 2200,,<addr of MEMPNT entry, in PEEK's addr space>
+;	U1/ <flags>,,<addr of routine>
+;		There are only 3 flags, to cover the 3 types of circ pointers.
+
+UCPRL:	SETZM UCPLC	; Clear count of links found
+	PUSH P,C	; Push arg on stack
+	PUSH P,C	; Save it again
+	JRST UCPRL5	; Jump into loop.
+
+UCPRL2:	AOS U2,UCPLC	; Increment count of circular pointers we've hacked
+	CAIL U2,100	; If we've cycled an absurd number of times,
+	 JRST UCPRL9	; we're probably losing... go barf.
+	CAMN C,-1(P)	; Have we traced circular list back to original ptr?
+	 JRST [	; Yeah, hurray!  Can stop here.  Leave last byte pointer
+		POP P,C		; used in C.
+		SUB P,[1,,1]
+		POPJ P,]
+	MOVEM C,(P)		; Nope, save BP to entry we're checking.
+
+UCPRL5:	LDB U2,C		; Get circ page link via BP
+	JUMPE U2,UCPRL9		; If zero, go lose!
+	TRZE U2,400000		; Test bit 2.9
+	 JRST UCPRL1		; It's on, this is a link of some kind.
+
+	; Circ pointer is a job/page descriptor.
+	LDB U3,[001000,,U2]	; Not a link!  Get page # (1.8-1.1, 0-377)
+	LDB U,[101100,,U2]	; Get user # (2.8-1.9, 0-777)
+	CAML U,MAXJ		; Make sure it's within reason!
+	 JRST UCPRL9		;   No, barf barf.
+	IMUL U,LUBLK		; Make it a user index
+	CAIGE U1,		; If flags want invocation for each page,
+	 PUSHJ P,(U1)		; Invoke routine.
+	MOVEI C,@UPGCP		; Find PEEK addr for this user's UPGCP
+	ROT U3,-1		; Get index into it (halfword entries)
+	ADDI C,(U3)		; Get address (in PEEK space)
+	HRLI C,222200		; Set up right BP LH
+	SKIPGE U3		; depending on low bit of page #.
+	 HRLI C,2200
+	JRST UCPRL2		; Then go to trace through user's map.
+
+	; Circ pointer is a link to either MMP or MEMPNT.
+UCPRL1:	TRZE U2,200000	; Check to see which...
+	 JRST UCPRL3	; 2.8 = 1 means 2.7-1.1 is index into MEMPNT.
+	CAML U2,NMMPES	; 2.8 = 0 means 2.7-1.1. is index into MMP table.
+	 JRST UCPRL9	; Verify that index is reasonable...
+	HRRZ C,PGAMMP	; Seems winning.  Get PEEK address
+	LSH C,10.	; that MMP is mapped into.
+	HRLI C,2200	; Set up BP to point at RH of entry
+	ADDI C,(U2)	; and point to right entry in MMP table.
+	TLNE U1,200000	; Does routine want to be called for MMP entries?
+	 PUSHJ P,(U1)	; Yeah, invoke it.
+	JRST UCPRL2	; Back to follow circular list onwards.
+
+	; Circ pointer is a link to MEMPNT.
+UCPRL3:	CAML U2,TSYSM	; Verify that it's a reasonable MEMPNT index.
+	 JRST UCPRL9	; Ugh, bletch.
+	TLNE U1,100000	; Does routine want to be called for MEMPNT entries?
+	 PUSHJ P,(U1)	; Yeah, invoke it.
+	MOVE C,MEMPNT	; OK, get PEEK address of MEMPNT table
+	ADDI C,(U2)	; and make it address of right entry
+	HRLI C,2200	; and fix up BP to RH.
+	JRST UCPRL2
+
+	; Bad screwup while tracking stuff down!
+	; Maybe later add more details?
+UCPRL9:	AOS UCPLOS	; Say we lost bad
+	SUB P,[2,,2]
+	RET
+
+SUBTTL	Mode "!" - Page-In History
+
+;WITH NO ARG, SHOW ALL, WITH JOB NUMBER ARG, JUST THAT JOB
+;WHEN DOING ONE JOB, SHOULD SHOW HIS SWAP EVENTS ALSO (NOT YET IMPLEMENTED)
+PAGH:	SKIP [ASCIZ/Page-in history, newest event first.  Read across rows, then
+down columns.  Time is seconds this event precedes one printed before it.
+L => job is loading its working set into memory.
+With argument, show only events for that job./]
+	MOVE A,PGIHTL		;TRY TO GET STUFF INTO CORE IF NOT ALREADY
+	SETZM RHIST
+	SETZM RHIST-1(A)
+	MOVS B,PGIHTB		;COPY OUT THE PAGE-IN HISTORY
+	HRRI B,RHIST
+	BLT B,RHIST-1(A)
+	PUSHJ P,HTBSRT		;SORT BY TIME (NEWEST TO HIGHEST ADDRESS)
+	MOVEI B,[ASCIZ/Idx UNAME  JNAME  Pg Ld Time/]
+	MOVEI C,28.+3
+	PUSHJ P,COLSET		;PICK NUMBER OF COLUMNS, SET D TO NO. OF COLUMNS
+	MOVE X,@TIME
+	MOVEI A,-1(A)		;Last
+	MOVE B,D		;NUMBER OF COLUMNS TO GO, THIS LINE
+PAGH1:	SKIPN RHIST(A)
+	 JRST PAGH9
+	LDB U,[221000,,RHIST(A)]	;USER INDEX OF THIS ONE
+	SKIPL RUUIND
+	 CAMN U,RUUIND
+	  CAIA			; No arg, or arg matches.
+	   JRST PAGH9		;NOT INTERESTED
+	ONUM 3,U
+	IMUL U,LUBLK
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	LDB U,[321000,,RHIST(A)]	;VIR PG #
+	ONUM 4,U
+	CTYPE 40
+	SKIPL RHIST(A)
+	 CTYPE 40
+	SKIPGE RHIST(A)
+	 CTYPE "L
+	CTYPE 40
+	PUSHJ P,ELTMPR		;ELAPSED TIME
+	SOJG B,[ ATYPE [ASCIZ/   /] ? JRST PAGH9]
+	MOVE B,D
+	XCT CRR
+PAGH9:	SOJGE A,PAGH1
+	RET
+
+COLSET:	MOVE D,NHLNS
+	ADDI D,3-1		;3 SPACES DON'T APPEAR AFTER LAST COLUMN
+	IDIV D,C		;GET NUMBER OF COLUMNS
+	SKIPN D
+	 MOVEI D,1
+	SKIPA C,D
+COLST1:	 ATYPE [ASCIZ/   /]
+	ATYPE (B)
+	SOJG C,COLST1
+	JRST CRR
+
+;PRINT ELAPSED TIME IN 4 COLUMNS, CURRENT TIME IN RH(RHIST(A))
+;X HAS TIME PREVIOUSLY PRINTED (A NEWER ENTRY)
+ELTMPR:	PUSH P,A
+	PUSH P,B
+	HRRZ B,X		;TIME OF NEXT EVENT (PREVIOUSLY PRINTED)
+	HRRZ X,RHIST(A)		;TIME OF THIS EVENT
+	MOVE A,B
+	SUB A,X			;NUMBER OF 30THS ELAPSED
+	SKIPGE A
+	 ADD A,[1,,]
+	IDIVI A,30.
+	CAIGE A,100.
+	 JUMPN A,ELTMP1
+	DNUM 4,A
+	JRST POPBAJ
+
+ELTMP1:	CAIGE A,10.
+	 JRST ELTMP2
+	DNUM 2,A
+	CTYPE ".
+	MOVE A,B
+	IDIVI A,3
+ELTMP3:	CTYPE "0(A)
+	JRST POPBAJ
+
+ELTMP2:	CTYPE "0(A)
+	CTYPE ".
+	IMULI B,333.
+	MOVE A,B
+	IDIVI A,1000.
+	CTYPE "0(A)
+	MOVE A,B
+	IDIVI A,100.
+	JRST ELTMP3
+
+;SORT RHIST, TO PUT LATEST TIMES LAST, A HAS LENGTH
+;THIS BUBBLE SORT WILL TAKE LESS THAN A SECOND FOR 128 ENTRIES, GOOD ENOUGH
+;CLOBBER B,D,T
+HTBSRT:	PUSH P,A
+	SUBI A,1
+HTBSR1:	HRREI B,-1(A)
+	JUMPL B,POPAJ
+HTBSR2:	HRRZ D,RHIST(A)	;BIGGEST TIME SO FAR
+HTBSR3:	HRRZ T,RHIST(B)	;TIME TO COMPARE WITH
+	SUB T,D
+	TRNE T,400000
+	 JRST HTBSR4	;(B) IS LESS THAN (A)
+	MOVE T,RHIST(A)
+	EXCH T,RHIST(B)
+	MOVEM T,RHIST(A)
+	SOJGE B,HTBSR2
+	SOJA A,HTBSR1
+
+HTBSR4:	SOJGE B,HTBSR3
+	SOJA A,HTBSR1
+
+SUBTTL	Mode "$" - Swapping History
+
+;WITH NO ARG, SHOW ALL EVENTS
+;WITH JOB# ARG, SHOW JUST EVENTS FOR THAT JOB
+;WITH ZERO ARG, SUMMARIZE VARIOUS CRUFT (NOT YET IMPLEMENTED)
+;FOR EACH EVENT, SHOW NUMBER OF PAGE FAULTS IN THAT JOB SINCE PREVIOUS
+; EVENT THAT JOB (NYI).  UNCLEAR HOW TO WEDGE THAT IN (WANT 3 COLUMNS ON TVS) 
+SWPH:	SKIP [ASCIZ/Swapping history, newest event first.  Read across rows, then
+down columns.  Time is seconds this event precedes one printed before it.
+With argument, show only events for that job./]
+	MOVE A,SWPHTL		;TRY TO GET STUFF INTO CORE IF NOT ALREADY
+	SETZM RHIST
+	SETZM RHIST-1(A)
+	MOVS B,SWPHTB		;COPY OUT THE SWAP HISTORY
+	HRRI B,RHIST
+	BLT B,RHIST-1(A)
+	PUSHJ P,HTBSRT		;SORT BY TIME (NEWEST TO HIGHEST ADDRESS)
+	MOVEI B,[ASCIZ/Idx UNAME  JNAME  Ev Wks Time/]
+	MOVEI C,29.+3
+	PUSHJ P,COLSET		;PICK NUMBER OF COLUMNS, SET D TO NO. OF COLUMNS
+	MOVE X,@TIME
+	MOVEI A,-1(A)		;LAST
+	MOVE B,D		;NUMBER OF COLUMNS TO GO, THIS LINE
+SWPH1:	SKIPN RHIST(A)
+	 JRST SWPH9
+	LDB U,[221000,,RHIST(A)]	;USER INDEX OF THIS ONE
+	SKIPL RUUIND
+	 CAMN U,RUUIND
+	  CAIA			; No arg, or arg matches.
+	   JRST SWPH9		;NOT INTERESTED
+	ONUM 3,U
+	IMUL U,LUBLK
+	CTYPE 40
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	CTYPE 40
+	LDB U,[420200,,RHIST(A)]	;EVENT
+	6XTYPE (U)[SIXBIT/LD/ ? SIXBIT/IN/ ? SIXBIT/SW/ ? SIXBIT/BK/]
+	LDB U,[321000,,RHIST(A)]	;WORKING SET SIZE -1
+	ADDI U,1
+	ONUM 4,U
+	CTYPE 40
+	PUSHJ P,ELTMPR		;ELAPSED TIME
+	SOJG B,[ ATYPE [ASCIZ/   /] ? JRST SWPH9]
+	MOVE B,D
+	XCT CRR
+SWPH9:	SOJGE A,SWPH1
+	RET
+
+SUBTTL	Mode "~" - Overhead meters (KS10 only)
+
+;RHIST - RHIST+177: Current values of overhead counters
+;RHIST+200 - RHIST+377: Initial values of overhead counters
+;UIDTAB - UIDTAB+177: Permutation table for sorting
+;  RH index into RHIST, LH link to next UIDTAB entry same sixbit, or -1
+OVHMTR:	SETZM RHIST		;Try to get stuff into core if not already
+	SETZM RHIST+377
+	MOVE A,LOVHTB
+	CAILE A,200
+	 .LOSE			;Table overflow
+	SKIPL OVHTIM
+	 JRST OVHMT0		;Already initialized
+	SKIPN OVHTB2
+	 RET			;No overhead meters in this system
+	MOVS B,OVHTB2		;Initial copy of the overhead table
+	HRRI B,RHIST+200
+	BLT B,RHIST+177(A)
+	MOVE B,@TIME
+	MOVEM B,OVHTIM
+	HRRZI C,-2(A)		;Initialize permutation table (skip USR)
+	SETOB A,B
+	MOVEI D,177
+OVHM10:	HRRZ U,@OVHTB1		;SIXBIT name
+	PUSH P,A
+	PUSH P,C
+	JUMPL A,OVHM12
+OVHM11:	MOVE C,UIDTAB(A)
+	HRRZ T,@OVHTB1
+	CAME T,U
+	 SOJGE A,OVHM11
+	JUMPL A,OVHM12
+	POP P,C
+	HLL C,UIDTAB(A)
+	HRLM D,UIDTAB(A)	;Link this to duplicate
+	MOVEM C,UIDTAB(D)
+	HRRZ C,C
+	POP P,A
+	SOJA D,OVHM19
+
+OVHM12:	POP P,C
+	POP P,A
+	HLRZ T,@OVHTB1		;PC
+	CAME T,B		;Overwrite previous entry if same
+	 ADDI A,1
+	MOVE B,T
+	HRROM C,UIDTAB(A)
+OVHM19:	SOJGE C,OVHM10
+	MOVEM A,UIDCNT		;Number of entries in UIDTAB minus 1
+	MOVE A,LOVHTB
+;End of initialization
+OVHMT0:	MOVS B,OVHTB2		;Current copy of the overhead table
+	HRRI B,RHIST
+	BLT B,RHIST-1(A)
+	MOVE A,UIDCNT
+OVHMT2:	HRREI B,-1(A)		;Bubble sort it
+	JUMPL B,OVHMT5
+OVHMT3:	MOVE T,UIDTAB(A)
+	MOVE D,RHIST(T)		;Largest count so far
+	JUMPL T,OVHMT4
+OVHM13:	HLRZ T,T
+	MOVE T,UIDTAB(T)
+	ADD D,RHIST(T)
+	JUMPGE T,OVHM13
+OVHMT4:	MOVE T,UIDTAB(B)
+	MOVE U1,RHIST(T)	;Count to compare with it
+	JUMPL T,OVHM15	
+OVHM14:	HLRZ T,T
+	MOVE T,UIDTAB(T)
+	ADD U1,RHIST(T)
+	JUMPGE T,OVHM14
+OVHM15:	CAML D,U1
+	 JRST [	SOJGE B,OVHMT4	;(B) is less than (A), which is wanted
+		SOJA A,OVHMT2 ]
+	MOVE T,UIDTAB(B)
+	EXCH T,UIDTAB(A)
+	MOVEM T,UIDTAB(B)
+	SOJGE B,OVHMT3
+	SOJA A,OVHMT2
+
+OVHMT5:	ATYPE [ASCIZ/   Since boot    Last /]
+	MOVE A,@TIME
+	SUB A,OVHTIM
+	IDIVI A,30.
+	CAIL A,600.
+	 JRST OVHMT6
+	DPCT A
+	ATYPE [ASCIZ/ seconds/]
+	JRST OVHMT7
+
+OVHMT6:	IDIVI A,60.
+	DPCT A
+	ATYPE [ASCIZ/ minutes/]
+OVHMT7:	ATYPE [ASCIZ/
+   Count    %    Count    % Section of Code/]
+	SETZB U,X
+	MOVE A,LOVHTB		;Sum all counts except USR
+	SUBI A,2
+	ADD X,RHIST(A)
+	ADD U,RHIST+200(A)
+	SOJGE A,.-2
+	SUBM X,U
+	MOVEM U,SCHHT1		;Sum of incremental counts
+	MOVE U,UIDCNT
+OVHMT8:	XCT CRR
+	MOVE C,UIDTAB(U)
+	MOVE A,RHIST(C)
+	JUMPL C,OVHM21
+OVHM20:	HLRZ C,C
+	MOVE C,UIDTAB(C)
+	ADD A,RHIST(C)
+	JUMPGE C,OVHM20
+	MOVE C,UIDTAB(U)
+OVHM21:	DPCT 8,A
+	PUSHJ P,OVHMTP
+	MOVE A,RHIST(C)
+	SUB A,RHIST+200(C)
+	JUMPL C,OVHM23
+OVHM22:	HLRZ C,C
+	MOVE C,UIDTAB(C)
+	ADD A,RHIST(C)
+	SUB A,RHIST+200(C)
+	JUMPGE C,OVHM22
+	MOVE C,UIDTAB(U)
+OVHM23:	DPCT 8,A
+	EXCH X,SCHHT1
+	PUSHJ P,OVHMTP
+	EXCH X,SCHHT1
+	HRLZ A,@OVHTB1
+	6XTYPE A
+	MOVSI B,-LOVHMT
+	HLLZ T,OVHMTN(B)
+	CAME T,A
+	 AOBJN B,.-2
+	JUMPGE B,OVHMT8
+	MOVE B,OVHMTN(B)
+	CTYPE 40
+	ATYPE (B)
+OVHMT9:	SOJGE U,OVHMT8
+	XCT CRR
+	MOVE C,LOVHTB
+	DPCT 8,X
+	MOVE A,X
+	ADD X,RHIST-1(C)
+	PUSHJ P,OVHMTP
+	MOVE X,SCHHT1
+	DPCT 8,X
+	MOVE A,X
+	ADD X,RHIST-1(C)
+	SUB X,RHIST+177(C)
+	PUSHJ P,OVHMTP
+	ATYPE [ASCIZ/Total exec time as fraction of total time/]
+	RET
+
+OVHMTP:	JUMPE A,[ ATYPE [ASCIZ/      /]
+		  RET ]
+	CTYPE 40
+	IMULI A,10000.
+	IDIV A,X		;Percentage of exec time
+	IDIVI A,100.		;A units, B hundredths
+	CAILE A,99.
+	 JRST [	ATYPE [ASCIZ/100 /]
+		RET ]
+	CAILE A,9
+	 JRST [	DPCT 2,A
+		CTYPE ".
+		MOVE A,B
+		IDIVI A,10.
+		DPCT 1,A
+		CTYPE 40
+		RET ]
+	DPCT 1,A
+	CTYPE ".
+	CAIGE B,10.
+	 CTYPE "0
+	DPCT B
+	CTYPE 40
+	RET
+
+DEFINE XX SHORT,LONG/
+	<(SIXBITSHORT)>,,[ASCIZLONG]
+TERMIN
+
+OVHMTN:	XX LOW,LOW CORE
+	XX ALC,ALLOCATE CORE PAGE FRAME
+	XX FLT,MISCELLANEOUS FAULTS
+	XX IMP,ARPANET INTERRUPT (NOT STYNET)
+	XX NET,INTERNET CODE
+	XX PGF,PAGE FAULT
+	XX PPI,PPIUM
+	XX QIN,DISK INTERRUPT LOW LEVEL
+	XX QSC,DISK INTERRUPT HIGH LEVEL, DISK SCHEDULER
+	XX SC1,SCHEDULER 1 - ENTRY
+	XX SC2,SCHEDULER 2 - SEARCH
+	XX SC3,SCHEDULER 3 - EXIT
+	XX SC4,SCHEDULER 4 - UNSWAPBLOCK
+	XX SLW,SLOW CLOCK
+	XX SWF,SWAP FIND NEW USER (SWAPOUT SCHEDULER)
+	XX SWP,SWAP OUT PAGE
+	XX SWS,SWAP SCHEDULER
+	XX SWU,SWAP OUT A USER
+	XX TTI,TTY INPUT INTERRUPT LEVEL
+	XX TTO,TTY OUTPUT INTERRUPT LEVEL
+	XX TTY,MISCELLANEOUS TTY CODE
+	XX UUO,UUO LEVEL & MISCELLANEOUS ROUTINES
+	XX WS,WORKING SET & SWAP-BLOCK ENTRY CODE
+	XX CHX,CHAOS NET TRANSMISSION
+	XX CHS,CHAOS NET STY STUFF
+	XX CHC,CHAOS NET CLOCK STUFF
+	XX CHR,CHAOS NET RETRANSMISSION
+	XX CHI,CHAOS NET INPUT PROCESSING
+	XX CHJ,CHAOS NET INPUT PROCESSING PART 2
+	XX CHD,CHAOS NET INPUT DATA-PACKET PROCESSING
+	XX CHA,CHAOS NET RECEIVED ACK/RCP PROCESSING
+	XX CHH,CHAOS NET HARDWARE ROUTINES
+	XX CHL,CHAOS NET BUFFER-LIST PRIMITIVES
+	XX CHZ,END OF CHAOS NET CODE
+LOVHMT==.-OVHMTN
+
+SUBTTL	Mode "U" - DECtape status display
+
+IFN 0,[
+
+UTPEEK:	ATYPE UTTOP
+	MOVN C,NUNITS
+	HRLZS C
+	HRRI C,1
+UTP1:	CTYPE "0(C)
+	CTYPE 40
+	SONUM @UDIR
+	ALIGN 5
+	SONUM @UGOAL
+	ALIGN 10.
+	ONUM 2,@EUPOS
+	ALIGN 14.
+	SONUM @DG2
+	ALIGN 18.
+	SKIPL A,@UDIRO
+	 HRRZ A,A
+	SONUM A
+	SKIPN @UMNTR
+	 JRST UTP2
+	ALIGN 25.
+	6XTYPE @UMNTR
+	SKIPN @UTASS
+	 JRST UTP2
+	ALIGN 32.
+	6XTYPE @UTASS
+UTP2:	PUSHJ P,CRR
+	MOVE B,@DRTM
+	CAMN B,[177777,,-1]
+	 JRST UTP3
+	SUB B,@TIME
+	ALIGN 5
+	ONUM @ULCTM
+	ALIGN 1,15.
+	SONUM B
+	PUSHJ P,CRR
+UTP3:	AOBJN C,UTP1
+	PUSHJ P,CRR
+	SETZM F
+	MOVN C,NUTIC
+	SUB C,NUTOC
+	HRLZS C
+UTP5:	SKIPG @UTUSR
+	 JRST UTP9
+	TRON F,1
+	ATYPE UTMID
+	HRRZ X,C
+	ONUM 2,X
+	HRRZ A,@UTTNO
+	ONUM 2,A
+	ALIGN 6
+	HLRZ U,@UTUSR
+	6TYPE @UNAME
+	CTYPE 40
+	6TYPE @JNAME
+	CTYPE 40
+	CAMGE X,NUTIC
+	 ATYPE [ASCIZ /In  !/]
+	CAML X,NUTIC
+	 ATYPE [ASCIZ /Out !/]
+	ONUM @UTBFS
+	PUSHJ P,CRR
+UTP9:	AOBJN C,UTP5
+	RET
+
+UTTOP:	ASCIZ /Dirc Goal Pos Dg2 Dir   Umntr  Utass
+     Ulctm     Drtm
+/
+UTMID:	ASCIZ /Cn Tn Uname  Jname  Dir Bufs
+/
+];IFN 0
+
+SUBTTL	Misc constants
+
+;DTOP is heading for wide displays, line printer, etc.
+;DPTOP is heading for medium displays such as datapoints
+;GTOP is heading for narrow, printing terminals
+DTOP:	ASCIZ /Index Uname Jname Sname     Status   TTY    Core Out %Time    Time PIs/
+GTOP:	ASCIZ /Idx U-Jname  Status TTY   Core Out %Tm   Time/
+DPTOP:	ASCIZ /Idx U-Jname  Sname    Status TTY     Core Out %Tm   Time/
+
+HTOP1:	ASCIZ /Uname Jname    Idx  Memory Histogram : One mark = /
+/
+HTOP:	ASCIZ /Uname Jname    Idx  Mem Top  Shared Out Total/
+HTOPWS:	ASCIZ /  WS SWS Flags Time/
+
+IFN CRAWLP,[
+RUNTBL:	SIXBIT /MULTIX/
+	SIXBIT /TENEX/
+	SIXBIT /WALK/
+	SIXBIT /RUN/
+	SIXBIT /FLY/
+	SIXBIT /ZOOM/
+	SIXBIT /WARP/
+]
+
+
+INTTBL: SIXBIT /TYPEIN/
+        SIXBIT /^Z/
+        SIXBIT /BADPI/
+        SIXBIT /AROV/
+        SIXBIT /DPY/
+        SIXBIT /ILOPR/
+        SIXBIT /SYSDED/
+        SIXBIT /.VALUE/
+        SIXBIT /IOC/
+        SIXBIT /ILUAD/
+        SIXBIT /.BREAK/
+        SIXBIT /1PROC/
+        SIXBIT /SCLOCK/
+        SIXBIT /MPV/
+        SIXBIT /MAR/
+        SIXBIT /LTPEN/
+        SIXBIT /PDLOV/
+        SIXBIT /CLI/
+        SIXBIT /ERROR/
+        SIXBIT /SYSDBG/
+        SIXBIT /<3.3>/
+        SIXBIT /<3.4>/
+        SIXBIT /<3.5>/
+        SIXBIT /SYSUUO/
+        SIXBIT /PURINS/
+        SIXBIT /PURPG/
+        SIXBIT /ARFOV/
+        SIXBIT /PARERR/
+        SIXBIT /DTTY/
+        SIXBIT /ATTY/
+        SIXBIT /^_D/
+        SIXBIT /JBSTAT/
+        SIXBIT /NXIO/
+        SIXBIT /RUNTIM/
+        SIXBIT /REALTM/
+INTBL1:	SIXBIT /PCLSR/
+
+IFN 0,[
+UNMTAB:	IRPS NAME,,[RWK HIC EJS RL RLB EBM]
+	SIXBIT /NAME/
+TERMIN
+	BLOCK 5			   ;ANYONE ELSE?
+UNMTLN==.-UNMTAB
+] ;IFN 0
+
+IFN MUDP,[
+
+	;OPEN THE JOB
+USROPN: SETZ ? SIXBIT /OPEN/
+	5000,,10\.BII
+	1000,,JOBI
+	[SIXBIT /USR/]
+	@UNAME
+	SETZ @JNAME
+
+USRACC:	SETZ ? 'ACCESS ? MOVEI JOBI
+	SETZ F
+
+USRIOT: SETZ ? SIXBIT /IOT/ ? MOVEI JOBI
+	SETZ F
+
+] ;IFN MUDP
+
+TTYGET:	SETZ ? 'TTYGET ? MOVEI TYOC
+	MOVEM A ? MOVEM B ? SETZM C
+
+TTYSET:	SETZ ? 'TTYSET ? MOVEI TYOC
+	A ? B ? SETZ C
+
+SUBTTL	End
+
+; Insert standard network package
+
+IF2,[
+NETWRK"E=U
+NETWRK"TT=X
+]
+$$HST3==1	; Use HOSTS3 table/formats
+$$HSTMAP==1
+$$ARPA==1
+$$CHAOS==1
+$$HSTSIX==1
+$$NETSRC==1
+
+.INSRT SYSNET;NETWRK >
+
+; Until TCP stuff has a TCPDEF file, use following hack.
+	TH%SRC==<777774,,0>
+	TH%DST==<     3,,777760>
+
+CONSTANTS
+VARCHK		; Store away last variables and check for overflow.
+INFORM [End of impure]\%%VEND-1
+INFORM [Highest used]\%%PEND-1
+
+	.SEE PURIFY	; For PEEK mem layout
+UMAPG==PURPGE
+DSKPG==UMAPG+1
+PGFHST==:DSKPG+2
+
+END GO

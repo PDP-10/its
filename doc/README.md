@@ -34,3 +34,4 @@ The `$` character represents typing ESC.
 | ps           	| $$v                  | :listj                   |
 | killall -9 id	| id$j  $^X            | :job id  :kill           |
 | sudo -u u cmd | u$^S cmd             |                          |
+| top           |                      | :peek                    |

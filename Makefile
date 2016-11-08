@@ -1,4 +1,4 @@
-SRC = system syseng sysen1 sysnet kshack midas _teco_ rms klh
+SRC = system syseng sysen1 sysen2 sysnet kshack midas _teco_ rms klh
 MINSYS = _ sys sys3
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
