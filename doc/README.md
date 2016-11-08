@@ -1,6 +1,7 @@
 ## Documentation
 
-- ITS: [primer](_info_/its.primer), [building](kshack/build.doc)  
+- ITS: [intro](info/intro.29), [primer](_info_/its.primer),
+  [building](kshack/build.doc),  
   [Getting Started Computing at the AI Lab](ai_wp_235.pdf)
 - DDT: [manual](info/ddt.33), [commands](_info_/ddtord.1462),
   [colon commands](_info_/ddt.:cmnds)
