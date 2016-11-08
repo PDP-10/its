@@ -38,5 +38,7 @@ from scratch.
    - KSFEDR, manipulate front-end file system.
    - LOCK, shut down system.
    - ATSIGN DEVICE, load device drivers.
+   - TCTYP and CRTSTY, terminal handling.
+   - PEEK, system monitoring.
 
 4. Finally, the whole file system is dumped to tape.
