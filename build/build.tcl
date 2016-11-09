@@ -172,6 +172,10 @@ respond "*" "purify\033g"
 respond "Idle" "q"
 expect ":KILL"
 
+respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
+expect ":KILL"
+respond "*" ":link device;jobdev ar,device;jobdev arc\r"
+
 respond "*" "\005"
 respond "sim>" "at tu0 out/output.tape\r"
 respond "sim>" "c\r"

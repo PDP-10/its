@@ -40,5 +40,6 @@ from scratch.
    - ATSIGN DEVICE, load device drivers.
    - TCTYP and CRTSTY, terminal handling.
    - PEEK, system monitoring.
+   - ARCDEV, transparent file system access to archive files.
 
 4. Finally, the whole file system is dumped to tape.

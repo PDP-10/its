@@ -1,0 +1,1962 @@
+;-*-MIDAS-*-
+
+TITLE	BOJ JOB ARCDEV
+
+VERSIO==.FNAM2
+
+
+A=1
+B=2
+C=3
+D=4
+E=5
+TT=6
+INT=7	;FLAG FOR INTERRUPT, -1 INT HAPPENED
+Q=10
+J=11
+I=12
+W=13
+H=14
+P=15
+T=16
+U=17
+
+CH==,,-1	;BIT TYPEOUT MODE MASK FOR I/O CHANNEL NAMES.
+
+CHBOJ==1
+CHDSK==2
+CHSALV==3
+
+IOCEOF==8	;IOCERROR CODE FOR EOF.
+
+;Temporary until they're predefined in MIDAS.
+%CBLOK==2000	; 4.2 LOCK PAGE IN CORE.
+%CBULK==1000	; 4.1 UNLOCK PAGE (ALLOW SWAP-OUT)
+
+DEFINE PAUSE
+	MOVEI TT,10.*30.
+	.SLEEP TT,
+TERMIN
+
+DEFINE SYSCAL NAME,ARGS
+	.CALL [ SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+LOC	42
+	JSR TSINT
+SWTLST:	0		;This is the locked switch list, used to undo AOS's if we are killed.
+	-CRITLN,CRITTB	;This points to the critical routine table.
+
+LOC	77
+SIXBIT /ARCDEV/
+RDEVN:	BLOCK 3	;Real filenames of file open in creator's channel on the archive device.
+RDIRN:	0
+ACCP:	0	;Access pointer in open file, as byte # of next byte to transfer.
+DIRECTN:0	;-1 if direction is Output.
+CRUNAM:	0	;creator's uname.
+CRJNAM:	0	;creator's jname.
+FILLEN:	0	;File length, in bytes of size now open in,
+		;or -1 => FILLEN, FILBLN and FILBSZ not known.
+BYTSIZ:	0	;Byte size channel is open in.
+FILBLN:	0	;File length, in bytes of size file was written in.
+FILBSZ:	0	;Byte size file was written in.
+
+;;; From 77 to here is looked at by PEEK.
+
+AFDEV:	0	;Real Device (the machine name) and FN2 of the archive file.
+AFFN2:	0	;(the real FN1 and SNAME are in RDEVN and RDIRN).
+FILADR:	0	;Address in core of start of file's data area (actually, start of header).
+		;Zero only if no file is open.
+DIRFLG:	0	;-1 => reading the directory rather than a file.
+ACCBP:	0	;byte pointer for I/O to file.  Always agrees with ACCP.  P-field mustn't be 44
+BYTSWD:	0	;number of bytes per word in file.
+FILRND:	0	;# of bytes that fit in space allocated to file.
+		;bytes past this one exist only on output, when we are extending the file,
+		;and they live starting at NEWDAT rather than in the archive.
+
+OPMODE:	0	;Mode creator opened us in.
+CRDATE:	0	;Creation date of open file.
+REFDAT:	0	;Reference date of open file.
+DATUPD:	0	;-1 if CRDATE or REFDAT has been set and UNDATE, UNREF need to be updated.
+OFILLE:	0	;Value of FILLEN before we changed it by .IOTing to extend the file.
+ORFDAT:	0	;Old reference date, so RESRDT system call can set it back.
+ERCD:	0	;Error code saved here by some system calls.
+ARCCDT:	0	;Creation date of archive device, saved for first call to LOCK
+		;(because at that time the archive device pages aren't mapped yet.
+		;-1 after archive is mapped in and we should look in ARCADR+UDCDAT
+ARCDMP:	0	;Dumped bit of archive device, saved over first LOCK, or -1 thereafter.
+
+RNDM:	BLOCK 5	;Temp storage used for return values of FILBLK.
+
+PAT:
+PATCH:	BLOCK 100
+PATCHE:	-1
+
+;START HERE.
+GO:	MOVE P,[-LPDLL-1,,PDL-1]
+	.SUSET [.SMASK,,[%PIMPV+%PIIOC]]
+	SYSCAL USRVAR,[%CLIMM,,%JSELF ? ['OPTION] ? 0 ? [TLO %OPOPC\%OPLOK]]
+	 .LOSE %LSSYS
+	.OPEN CHBOJ,[17,,'BOJ]
+	 .VALUE
+	SYSCAL RFNAME,[
+		1000,,CHBOJ
+		2000,,0
+		2000,,CRUNAM
+		2000,,CRJNAM]
+	 JFCL
+	.CALL JBGT	;What is the name of the archive device and file?
+	 .VALUE
+	MOVE A,JBCOP
+	TLNE A,60000	;IF HE ALREADY PCLSR'D, GIVE UP, SINCE HE WILL GIVE UP ON US
+	 JRST DIE	;SINCE WE DID A JOBGET AND SAW THAT FACT.
+	ANDI A,-1	;NOW .VALUE IF OPCODE IS .IOT - SHOULDN'T HAPPEN, 
+	CAIN A,1	;BUT DID DUE TO A BUG.
+	 .VALUE
+	SYSCAL OPEN,[	;OPEN THE ARCHIVE DEVICE FILE WE ARE SUPPOSED TO USE.
+		[.BII,,CHDSK]
+		['DSK,,]
+		JBCDEV
+		[SIXBIT />/]
+		JBCSNM
+		%CLERR,,B]
+	 PUSHJ P,ARCINI		;Archive file does not exist => maybe create it.
+	HRROI A,B
+	.IOT CHDSK,A
+	CAME B,[SIXBIT/ARC1!!/]	;If the file isn't recognizable as a current-format archive,
+	 JRST OLDARC		;maybe it's an old-format one.  Load the old handler.
+	SYSCAL RFNAME,[%CLIMM,,CHDSK
+		%CLOUT,,AFDEV ? %CLOUT,,RDEVN ? %CLOUT,,AFFN2 ? %CLOUT,,RDIRN]
+	 .LOSE %LSFIL
+	SYSCAL RFDATE,[%CLIMM,,CHDSK ? %CLOUT,,ARCCDT]
+	 .LOSE %LSFIL		;Read the arc dev's creation date before we lock it.
+	SKIPGE ARCCDT		;If file has none, use current date.
+	 SYSCAL RQDATE,[%CLOUT,,ARCCDT]
+	  JFCL
+	SKIPGE ARCCDT		;Current date not known either => barf.
+	 .LOSE %LSSYS
+	SYSCAL RDMPBT,[%CLIMM,,CHDSK ? %CLOUT,,ARCDMP]
+	 .LOSE %LSFIL		;Same for file-dumped-bit.
+	SYSCAL SSTATU,[REPEAT 6,[ ? %CLOUT,,AFDEV ]]
+	 .LOSE %LSSYS
+	.CLOSE CHDSK,		;Close our input channel
+	PUSHJ P,LOCK		;Open an output channel instead,
+	PUSHJ P,MAPARC		;get all the pages.
+	MOVE A,ARCCDT		;Store what should be the creation date and dumped bit
+	MOVEM A,ARCADR+UDCRDT	;of the archive itself inside the archive.
+	MOVE A,ARCDMP
+	MOVEM A,ARCADR+UDDMPB
+	SETOM ARCCDT
+	SETOM ARCDMP
+	PUSHJ P,ARCDEL		;Delete any files marked "delete when closed" and not open.
+	.SUSET [.SMSK2,,[1_CHBOJ]]
+	JRST GOINIT		;Dispatch to JOPEN or JFDEL with dir still locked.
+
+WRGDIR:	SKIPA A,[%ENSIO]
+NSDEV:	MOVSI A,%ENSDV
+	JRST NOGO2
+
+PKNMTD:	MOVSI A,%ENAPK		;If Pack Not Mounted, say so, and die.
+	JRST NOGO2
+
+
+FILXST:	MOVSI A,%EEXFL		;File already exists error.
+	JRST NOGO2
+
+DIRFUL:	SKIPA A,[%EFLDR]
+WTDDIE:	MOVSI A,%EBDDV		;Wrong type device on initial operation - report and suicide.
+NOGO2:	MOVEM A,ERRCOD
+	MOVEI C,20.
+NOGO1:	.CALL JBGT
+	 .LOSE %LSFIL		;JOBGET ON INITIAL IS NOT SUPPOSED TO FAIL.
+	MOVE A,JBCOP
+	TLNE A,%JGCLS		;HE CLOSED US => WE CAN STOP NOW.
+	 JRST DIE
+	.CALL JBRT3	;KEEP TRYING TO RETURN THIS ERROR, IN CASE HE PCLSR'S AND COMES BACK.
+	 SOJG C,[MOVEI B,1 ? .SLEEP B, ? JRST NOGO1]
+	JRST DIE
+
+;When an archive device file is in an old format, load in the old archive device handler.
+OLDARC:	.CLOSE CHBOJ,		;Close both channels.
+	.IOPUS CHBOJ,		;Push them both, so a single .IOPDL will close both.
+	.IOPUS CHDSK,
+	.OPEN CHBOJ,['BOJ]	;Then open them again.
+	 .LOSE %LSSYS
+	SYSCAL OPEN,[[.UII,,CHDSK] ? ['DSK,,] ? ['OARCDV] ? ['BIN,,] ? ['DEVICE]]
+	 .LOSE %LSFIL
+	MOVE 17,[LOADER,,0]	;Put the loader in the ACS so we can flush all core.
+	BLT 17,17
+	JRST LOADIT
+
+LOADER:
+OFFSET -.
+	%ENACR,,0	;"No Core Available" error code.
+CRAPIT::.CALL CRAP	;Do JOBRET to give user the "No Core" error code.
+			;If the JOBRET succeeds, we go through the .CORE and
+			;then the .CALL LOAD must fail, so we'll get here again;
+			;but then we will fail and log out.
+	 .LOGOUT
+LOADIT::.CORE 0		;Flush all core so LOAD will get fresh core.
+	 .LOGOUT
+	.CALL LOAD	;Load up old-format archive device handler.
+	 JRST CRAPIT
+	.IOT CHDSK,CRAP	;Read in starting address.
+	.IOPDL		;Close all I/O channels (which we carefully pushed to this end).
+CRAP::	SETZ		;.IOT clobbers this word with a jump to the starting address.
+	SIXBIT \JOBRET\
+	  %CLIMM,,CHBOJ
+LOAD::	SETZ		;1st wor of LOAD call and last word of JOBRET call.
+	SIXBIT \LOAD\
+	  %CLIMM,,%JSELF
+	401000,,CHDSK
+IFG .-20,.ERR LOADING ROUTINE DOESN'T FIT IN ACS.
+OFFSET 0
+
+;Here to create an archive file if appropriate and necessary.
+ARCINI:	CAIN B,%ENAFL		;If we couldn't open the file because it was locked,
+	 JRST [	PAUSE		;wait and try again.
+		JRST ARCIN1]
+	CAIN B,%ENAPK		;if pack not mounted,
+	 JRST PKNMTD		;say so and die.
+	HRRZ A,JBCOP
+	CAIE A,%JOOPN		;Create only if opening a file
+	 JRST NSDEV
+	MOVE A,JBCWD6
+	TRNN A,1		;for output
+	 JRST NSDEV
+	TRNE A,100000		;and not for write-over.
+	 JRST NSDEV
+	SYSCAL OPEN,[[.BIO,,CHDSK] ? ['DSK,,] ? JBCDEV ? [SIXBIT />/] ? JBCSNM]
+	 JRST NSDEV		;Can't create file => no such device.
+	PUSHJ P,GETPAG
+	SETZM DIRCPY		; INITIALIZE THE OUTPUT BLOCK
+	MOVE A,[DIRCPY,,DIRCPY+1]
+	BLT A,DIRCPY+1777
+	MOVE A,[SIXBIT /ARC1!!/]
+	MOVEM A,DIRCPY		; IDENTIFY THIS FILE AS LEGITIMATE ARCHIVE.
+	MOVEI A,2000		; POINTER TO NAME AREA OFF THE END
+	MOVEM A,DIRCPY+UDNAMP
+	MOVEM A,DIRCPY+UDDATP
+	MOVE A,[-2000,,DIRCPY]
+	.IOT CHDSK,A
+	PUSHJ P,RELPAG
+ARCIN1:	SOS (P)
+	SOS (P)			;Return to retry the open which originally failed.
+CPOPJ:	POPJ P,
+
+;Upon first accessing an archive, clean up after any damage produced
+;by a system crash.
+ARCCLN:	SYSCAL RQDATE,[
+		%CLOUT,,A	;Ignore 1st value
+		%CLOUT,,A]	;2nd value is time of system startup.
+	 .LOSE %LSSYS
+	JUMPL A,[ PAUSE		;System doesn't know the time => wait
+		  JRST ARCCLN]	;and hope it finds out the time.
+	CAMN A,UDINIT+ARCADR	;Has this archive been cleaned since the system came up?
+	 POPJ P,		;Yes.
+	PUSHJ P,ARCCL1		;No, it's our task.  Set all UHREFC's to 0.
+	MOVEM A,UDINIT+ARCADR	;Assert that this archive has been initialized
+	POPJ P,			;since the last system crash.
+
+ARCCL1:	MOVE Q,UDNAMP+ARCADR	;Scan through all filename blocks in the directory.
+	ADDI Q,ARCADR
+ARCCL2:	CAIN Q,2000+ARCADR
+	 POPJ P,
+	HRRZ B,UNRNDM(Q)	;Set the UHREFC word of each file to 0.
+	SETZM UHREFC+ARCADR(B)
+	ADDI Q,LUNBLK
+	JRST ARCCL2
+
+;Delete all files marked "delete when closed" which aren't open.  Dir already locked.
+ARCDEL:	PUSHJ P,DIRGE1		;Get a copy of the directory.
+	MOVE Q,UDNAMP+ARCADR
+	ADDI Q,ARCADR
+	SETZ I,			;I is flag saying whether any files had to be deleted.
+ARCDE1:	CAIN Q,2000+ARCADR
+	 JRST ARCDE3
+	MOVE B,UNRNDM(Q)	;Look at each file.
+	TLNE B,UNCDEL		;If UNCDEL is set
+	 SKIPE UHREFC+ARCADR(B)	;And the ref count is 0,
+	  JRST ARCDE2
+	PUSHJ P,QSQSH0		;delete its filename block.
+	SETO I,
+ARCDE2:	ADDI Q,LUNBLK
+	JRST ARCDE1
+
+ARCDE3:	JUMPN I,DIRPU1		;If any files are being deleted, write back the directory.
+	POPJ P,
+
+;If no files are open in this archive, and there is at least 1K of garbage,
+;rewrite the archive to compress it.
+ARCSAL:	PUSHJ P,DIRWST
+	JUMPN C,CPOPJ		;Do nothing if files are open,
+	CAIGE B,2000		;of if there isn't much garbage to clean up.
+	 POPJ P,
+	SYSCAL OPEN,[[.BIO,,CHSALV] ? ['DSK,,] ? ['_ARCSA] ? ['OUTPUT] ? RDIRN]
+	 POPJ P,
+	MOVE A,[-2000,,ARCADR]
+	.IOT CHSALV,A		;Write out the old directory,
+	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000
+			%CLIMM,,CHSALV ? %CLIMM,,0]	;then map that page in so we can update it.
+	 JSR CBKLOS
+;Now write out the data areas of all files, one by one,
+;and make the copy's directory point at them.
+	MOVE Q,UDNAMP+ARCADR
+	ADDI Q,ARCADR
+	MOVEI D,2000		;D is a running pointer into the copy's data area.
+ARCSA1:	CAIN Q,2000+ARCADR
+	 JRST ARCSA2
+	HRRZ B,UNRNDM(Q)
+	ADDI B,ARCADR		;Get address of next file's data area.
+	MOVN C,(B)
+	HRL B,C			;Get an AOBJN pointer to that data area.
+	.IOT CHSALV,B		;Write it into the copy.
+	HRRM D,UNRNDM+DIRCPY-ARCADR(Q)	;Make copy's directory point at it.
+	SUB D,C			;Advance D to be right for the next file we copy.
+	ADDI Q,LUNBLK
+	JRST ARCSA1
+
+ARCSA2:	MOVEM D,UDDATP+DIRCPY	;Store size of copy's data area into the copy.
+;Now the copy is fully written.  Replace the old archive device file with it.
+	SYSCAL RFNAME,[%CLIMM,,CHDSK ? %CLOUT,,A ? %CLOUT,,B ? %CLOUT,,C]
+	 .LOSE %LSFIL
+	SYSCAL RENMWO,[%CLIMM,,CHSALV ? B ? C]
+	 .LOSE %LSFIL
+	SYSCAL DELEWO,[%CLIMM,,CHDSK]
+	 .LOSE %LSSYS
+	.CLOSE CHDSK,
+	.CLOSE CHSALV,
+	POPJ P,
+
+;Compute in B the total number of words used by all files' data areas.
+;Return C nonzero if any files in this archive are open.
+DIRWST:	MOVE Q,UDNAMP+ARCADR
+	SETZB B,C
+DIRWSF:	CAIN Q,2000
+	 JRST DIRWS2
+	MOVE A,UNRNDM+ARCADR(Q)
+	ADD B,UHWCNT+ARCADR(A)
+	IOR C,UHREFC+ARCADR(A)
+	ADDI Q,LUNBLK
+	JRST DIRWSF
+
+DIRWS2:	MOVNS B			;B has number of used words in the data area.
+	ADD B,UDDATP+ARCADR	;Subtract from total size to get number of wasted words,
+	SUBI B,2000		;but don't count the directory as wasted.
+	POPJ P,
+
+;Archive device format:
+
+;The first page of an archive device file is its directory.
+;The remaining pages are data.
+
+;The directory may not even be looked at unless the archive is "locked".
+.SEE LOCK,UNLOCK	;Only one ARCDEV can lock a given archive at a time.
+;Shuffling the directory should not be done in place, even when it is locked.
+;Instead, use DIRGET to make a copy and DIRPUT to store the copy back in.
+;When a file is open, the address of its data area is remembered in FILADR.
+;The data area of a file never moves, and the file can be open only in one
+;direction at a time, so reading or writing the data area requires no interlocking.
+
+;The format of the archive device directory is approximately that of
+;an I.T.S. UFD.  The differences are:
+
+;In the fixed header, word 0 (UDESCP) contains SIXBIT /ARC1!!/
+;Word 1 points to the beginning of the name area, as in UFDs.
+;Word 2 points to the end of the data area.
+;Word 3 is used to tell when the archive needs to be cleaned
+;  because it is being touched for the first time since the system came up.
+;Word 4 contains what is supposed to be the creation date of the archive.
+;  Since locking the archive device clobbers the creation date,
+;  we store it here so we can restore it after clobbering it.
+;Word 5 similarly stores the dumped bit.
+
+;There is nothing analogous to the "descriptors" in a disk UFD.
+
+		;Random info in UFD
+UDESCP==0	;SIXBIT /ARC1!!/
+UDNAMP==1	;Address in directory of first filename block.
+UDDATP==2	;Address of first free word past data area of last file.
+UDINIT==3	;Time of startup of last run of system during which this
+		;archive was cleaned (ARCCLN).  If not same as startup time
+		;of this run of the system, we must do ARCCLN.
+UDCRDT==4	;This word holds what ought to be the creation date
+		;of the archive device file itself.
+		;0 => this archive antedates the UDCRDT word, in which
+		;case it gets set from today's date.
+UDDMPB==5	;This is like UDCRDT but stores the dumped bit.
+
+UDNMIN==10	;If UDNAMP is less than this, there is no room for another filename block.
+
+;In each filename block, the UNFN1, UNFN2, UNDATE and UNREF words are
+;just as in UFDs.  The UNRNDM word is slightly different:
+
+LUNBLK==5	;Number of words in each filename block.
+UNFN1==0	;First file name.
+UNFN2==1	;Second file name.
+UNRNDM==2	;All kinds of random info:
+		;The RH is the address in the file of the start of the file's data area header.
+		;The LH contains these bits:
+	UNWRIT==4		;Open for writing.  Not actually maintained in the archive,
+				;Just reflected to the user when he reads ARC:.FILE. (DIR).
+	UNCDEL==20		;Delete this file when it is closed.
+	UNIGFL==24		;Bits to ignore file
+	UNWRDC==301200,,	;Word count of last block mod 2000.
+				;This information really lives in UHWCNT, and is just reflected
+				;here when the user reads the image directory.
+UNDATE==3	;Date and time file last modified.
+	UNTIM==2200,,		;Compacted time of creation
+	UNYMD==222000,,		;Y,M,D of creation
+	UNMON==270400,,		;Month
+	UNDAY==220500,,		;Day
+	UNYRB==330700,,		;Year
+UNREF==4	;Reference date same as left half of undate
+	UNREFD==222000,,	;Reference date byte pointer
+	UNAUTH==111100,,	;MFD index of author, all 1=> no directory.
+	UNBYTE==001100,,	;File byte size and length info.
+		;LET S=BITS PER BYTE, C=COUNT OF UNUSED BYTES IN LAST WD
+		;400+100xS+C	S=1 TO 3	C=0 TO 35.
+		;200+20xS+C	S=4 TO 7	C=0 TO 8
+		;44+4xS+C	S=8 TO 18.	C=0 TO 3
+		;44-S		S=19. TO 36.	C=0
+		;NOTE THAT OLD FILES HAVE UNBYTE=0 => S=36.
+
+
+;The data of a file starts with two words of header information:
+UHWCNT==0	;Total length of the file's data, including header, in words.
+UHREFC==1	;RH: Number of archives using the file, in either direction.
+		;LH: -1 if file open for writing.
+UHNAMP==2	;Unused
+UHBLEN==3	;Length of this header;  offset to 1st actual data word.
+
+GOL:	SKIPL INT	;THERE ARE NO INTERRUPTS => WAIT QUIETLY.
+	 .HANG
+GOLOOP:	SETZM INT	;HERE TO SERVICE ANY INTERRUPTS THERE ARE.
+	.CALL JBGT
+	 JRST GOL
+GOINIT:	MOVE B,JBCOP
+	TLNE B,%JGCLS
+	 JRST JCLS
+	LDB A,[000400,,JBCOP]
+	TLNE B,%JGFPD	;IF THIS IS A RETRY OF A CALL THAT PCLSR'ED,
+	 JRST RETRY	;GIVE IT THE SAME JOBRET WE TRIED TO GIVE LAST TIME.
+RETRYR:	SETZM PCLSRD	;WE CAN'T MANAGE TO HANDLE A RETRY AFTER ANYTHING ELSE HAPPENS.
+	CAILE A,7
+	 JRST JSYSCL	; HANDLE A .CALL
+	JRST @DISP(A)
+
+DISP:	JOPEN
+	JIOT
+	WTDDIE	;Mlink isn't allowed.
+	JRESET
+	JRCH
+	JACC
+	JFDELE
+	JRNMWO
+
+;HERE WHEN CREATOR GIVES US A SYSTEM CALL AND SAYS IT'S A RETRY.
+RETRY:	AOSE PCLSRD	;IF WE HADN'T SEEN THE SYSTEM CALL THE FIRST TIME,
+	 JRST RETRYR	;TREAT IT AS NEW.
+	MOVE B,LJBRTA	;IF WE FINISHED HANDLING IT AND OUR JOBRET FAILED,
+	JRST -2(B)	;GIVE HIM THE SAME JOBRET AGAIN.
+
+PCLSR:	POP P,LJBRTA	;FOLLOW EVERY JOBRET WITH A PUSHJ P,PCLSR.
+PCLSR1:	SETOM PCLSRD	;A FAILING JOBRET INDICATES THAT CREATOR WAS PCLSRD AND WE SHOULD
+	JRST GOLOOP	;EXPECT HIM TO RETRY HIS SYSTEM CALL.
+
+PCL==PUSHJ P,PCLSR
+
+LJBRTA:	0		;2 PLUS ADDRESS OF LAST FAILING JOBRET.
+PCLSRD:	0		;-1 => OUR LAST JOBRET FAILED, SO EXPECT A RESTARTED SYSTEM CALL.
+
+;Get a page of core at address DIRCPY
+GETPAG:	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000 ? %CLIMM,,%JSNEW]
+	 JSR CBKLOS
+	POPJ P,
+
+;JSR CBKLOS after a CORBLK which can possibly get NO CORE AVAILABLE.
+;If that happens, we sleep and retry.  Otherwise, we LOSE.
+CBKLOS:	0
+	SOS CBKLOS
+	SOS CBKLOS		;Get address of the CORBLK which failed.
+	PUSH P,A
+	.STATUS 0,A
+	LDB A,[220600,,A]
+	CAIE A,%ENACR		;If not NO CORE AVAILABLE, pretend we did a .LOSE.
+	 JRST [ POP P,A
+		SYSCAL LOSE,[ %CLIMM,,%LSSYS ? CBKLOS]]
+	MOVEI A,300.		;If NO CORE AVAILABLE, wait 10 seconds and return
+	.SLEEP A,		;to the failing CORBLK to retry it.
+	JRST @CBKLOS
+
+;Release the page.
+RELPAG:	SYSCAL CORBLK,[%CLIMM,,0 ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000]
+	 .LOSE %LSSYS
+	POPJ P,
+
+;Lock the archibve directory and core allocation by opening the file for write-over.
+;This also enables us to extend the archive file.
+;Also, return in Q the address of the filename block for the file whose
+;data header address is in FILADR, if there is one.
+;Note: follow a LOCK with a MAPARC, unless you are damned sure
+;that you won't reference anything outside the directory.
+;Anything which might look at the header for a file other than the one which is open
+;might look at a file which was created since your last MAPARC.
+LOCK:	SYSCAL OPEN,[[100000+.BIO,,CHDSK] ? AFDEV ? RDEVN ? AFFN2 ? RDIRN
+			%CLERR,,TT]
+	 JRST LOCKWT
+	SKIPGE Q,ARCCDT
+	 MOVE Q,ARCADR+UDCRDT
+	SYSCAL SFDATE,[%CLIMM,,CHDSK ? Q]	;Restore the arc dev's creation date
+	 .LOSE %LSFIL		;which was clobbered by the OPEN just done.
+	SKIPGE Q,ARCDMP
+	 MOVE Q,ARCADR+UDDMPB
+	SYSCAL SDMPBT,[%CLIMM,,CHDSK ? Q]	;Restore the arc dev's dumped bit
+	 .LOSE %LSFIL		;which was clobbered by the OPEN just done.
+	SKIPN FILADR
+	 POPJ P,
+	MOVE Q,ARCADR+UDNAMP
+	ADDI Q,ARCADR
+LOCK1:	CAIN Q,ARCADR+2000
+	 .LOSE			;File no longer has a filename block pointing to it?
+	HRRZ TT,UNRNDM(Q)
+	ADDI TT,ARCADR
+	CAMN TT,FILADR
+	 POPJ P,
+	ADDI Q,LUNBLK
+	JRST LOCK1
+
+LOCKWT:	CAIE TT,%ENAFL
+	 .LOSE
+	PAUSE
+	JRST LOCK
+
+UNLOCK:	.CLOSE CHDSK,
+	POPJ P,
+
+;Map in the pages of the archive file starting at ARCADR.
+;We assume that CHDSK is open.
+MAPARC:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	SYSCAL FILLEN,[%CLIMM,,CHDSK ? %CLOUT,,A]
+	 .LOSE %LSFIL
+	MOVE C,A
+	CAILE A,ARCMAX		;Barf if archive file is bigger than address space allocated.
+	 .LOSE
+	ADDI A,1777
+	LSH A,-10.
+	MOVNS A
+	HRLZS A
+	HRRI A,ARCADR/2000
+	SETZ B,
+	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? A ? %CLIMM,,CHDSK ? B ? %CLERR,,ERCD]
+	 JSR CBKLOS
+	POP P,C
+	JRST POPBAJ
+
+;Make a copy of the archive directory in DIRCPY so we can move filename blocks around.
+DIRGET:	PUSHJ P,LOCK
+DIRGE1:	PUSHJ P,GETPAG
+	MOVE TT,[ARCADR,,DIRCPY]
+	BLT TT,DIRCPY+1777
+	POPJ P,
+
+;Store the updated archive directory from DIRCPY into the archive, carefully.
+DIRPUT:	PUSHJ P,DIRPU1
+	JRST UNLOCK
+
+;This should really use PGEXCH, whenever that exists.
+DIRPU1:	MOVE TT,[DIRCPY,,ARCADR]
+	BLT TT,ARCADR+1777
+	JRST RELPAG
+
+;When the archive device is "written" as it appears to the user, call this
+;routine to update the creation date and clear the dumped bit.
+;Archive must be locked.
+ARCWRT:	SYSCAL RQDATE,[%CLOUT,,ARCADR+UDCRDT]
+	 .LOSE %LSSYS
+	SETZM ARCADR+UDDMPB
+	SYSCAL SFDATE,[%CLIMM,,CHDSK ? ARCADR+UDCRDT]
+	 .LOSE %LSFIL
+	SYSCAL SDMPBT,[%CLIMM,,CHDSK ? ARCADR+UDDMPB]
+	 .LOSE %LSFIL
+	POPJ P,
+
+;OPEN operation.  This is an initial operation, done with no JOB channel open yet,
+;so the dir is still locked from the initialization.
+JOPEN:	LDB W,[410100,,JBCOP]	;0 => INPUT  1 => OUTPUT
+	MOVEM W,DIRECTN
+	MOVE A,JBCWD6		;SAVE OPEN-MODE.
+	MOVEM A,OPMODE
+	TRNE A,6		; SKIP IF CHARACTER MODE
+	 SKIPA A,[44]		; BLOCK OR IMAGE
+	  MOVEI	A,7
+	MOVEM A,BYTSIZ
+	MOVEI B,44
+	IDIVM B,A
+	MOVEM A,BYTSWD
+	HRLZ A,OPMODE	; GET OPEN MODE
+	TLZ A,777770	; ISOLATE BASIC OPEN MODES
+	TLC A,1		; COMPLEMENT READ/WRITE MODE
+	TLO A,10		; MAKE SURE OPPOSITE DIRECTION BIT IS ON
+	HRRI A,(SIXBIT/BOJ/)
+	.OPEN CHBOJ,A		; OPEN BOJ IN THE CORRECT MODE
+	 .VALUE
+	MOVE A,JBCFN1	; MY KIND OF ARCHIVE
+	MOVE B,JBCFN2	; SEE IF HE ASKED FOR DIRECTORY
+	CAMN A,[SIXBIT/.FILE./]
+	 CAME B,[SIXBIT/(DIR)/]
+	  JRST FILOPN		; NO - GO OPEN THE FILE
+	SETOM DIRFLG		; SET DIRECTORY OPEN FLAG
+	MOVE C,OPMODE	; GET OPEN MODE
+	 TRNE C,777771	; OPEN FOR WRITING?
+	  JRST WRGDIR		; WRONG DIRECTION - LOSE
+	MOVEM A,RDEVN+1
+	MOVEM B,RDEVN+2
+	.CALL JBST		;Report file being operated on as .FILE. (DIR)
+	 JFCL
+	PUSHJ P,DIRGE1		;Get a copy of the directory.
+	MOVE A,DIRCPY+UDNAMP
+	MOVSI C,UNWRIT		;Set the UNWRIT bit in the copy for each file
+JOPNC2:	CAIL A,2000		;which is being written now.
+	 JRST JOPNC3
+	HRRZ B,UNRNDM+DIRCPY(A)
+	SKIPGE UHREFC+ARCADR(B)
+	 IORM C,UNRNDM+DIRCPY(A)
+	MOVE D,UHWCNT+ARCADR(B)
+	SUBI D,UHBLEN		;Also store the number of words in the last K
+	DPB D,[UNWRDC,,UNRNDM(B)]	;in the UNWRDC field in the filename block.
+	ADDI A,LUNBLK
+	JRST JOPNC2
+
+JOPNC3:	PUSHJ P,UNLOCK
+	MOVE A,OPMODE
+	TRNE A,4		; ascii or image directory?
+	 JRST [	MOVE A,[004400,,DIRCPY-1]
+		MOVEM A,ACCBP	;For image directory, just read straight out of our copy.
+		MOVEI A,2000
+		MOVEM A,FILLEN
+		MOVEM A,FILBLN
+		MOVEI A,44
+		MOVEM A,FILBSZ
+		JRST OPNWIN]
+	PUSHJ P,DIRASC		;For ASCII directory, create the text starting at NEWDAT-1
+	MOVE A,FILBLN		;Length (in chars) left in FILBLN.
+	IDIVI A,5		;Set up for FILCP1.
+	MOVNS B
+	ADDI B,5
+	CAIN B,5		;B gets number of free bytes in last word.
+	 SETZ B,
+	MOVE D,FILBLN
+	ADDI D,4
+	IDIVI D,5		;D gets number of words.
+	MOVEI A,7		;A gets byte size.
+	MOVEM A,FILBSZ
+	PUSHJ P,FILCP1		;Set up FILLEN.
+	MOVE A,[010700,,NEWDAT-1]
+	MOVEM A,ACCBP		;and start reading it.
+OPNWIN:	MOVE A,FILLEN		;keep track of whether we extend the file at all
+	MOVEM A,OFILLEN		;(whether FILLEN changes).
+	SETZM ACCP
+	.CALL JBRT1
+	 PUSHJ P,IJBRTF
+	JRST GOLOOP
+
+IJBRTF:	MOVEI A,30.	;IF INITIAL JOBRET FAILS, WAIT A WHILE BEFORE JOBGETING,
+	.SLEEP A,	;SINCE IF WE JOBGET BEFORE HE RETRIES WE WILL READ A CLOSE
+	JRST PCLSR	;AND GIVE UP, AND HE WILL DO WHATEVER IT IS TWICE.
+
+
+; FILOPN - Come here to open a sub-file in the archive.
+; The archive's directory is still locked from start-up.
+
+FILOPN:	MOVE C,OPMODE		; GET OPEN MODE
+	TRNE C,1		; OPEN FOR READING?
+	 JRST OPNWRT		; NO - GO OPEN FOR WRITING
+	MOVE A,JBCFN1
+	MOVE B,JBCFN2
+	PUSHJ P,QLOOK		; ATTEMPT A LOOK UP
+	 JRST RDFNF		; FILE NOT FOUND
+	PUSHJ P,FILCPT		; Compute file length in byte size open in.
+FILOP0:	HRRZ B,UNRNDM(Q)
+	ADDI B,ARCADR
+	MOVEM B,FILADR
+	MOVEI A,UHREFC(B)
+	MOVEM A,HRZBLK
+	MOVEM A,SOSBLK
+CRIT1A:	AOS UHREFC(B)		; Update file reference count
+	MOVEI A,SOSBLK
+CRIT1B:	MOVEM A,SWTLST
+	SKIPE DIRECTN
+	 HRROS UHREFC(B)	; and whether the file is open for writing.
+CRIT2A:	MOVEI A,HRZBLK
+	MOVEM A,SWTLST
+CRIT2B:	JRST FILOP3
+
+;These two blocks form the locked switch list
+HRZBLK:	0			;This word gets the UHREFC word's address.
+	HRRZS @SOSBLK		;This block undoes the HRROS, if there was one.
+
+SOSBLK:	0			;This word gets the UHREFC word's address.
+	SOS @			;This block undoes the AOS, if there was one.
+
+;The critical code table undoes things if we are in the middle of
+;setting up the locked switch list.
+CRITTB:	CRIT1A,,CRIT1B
+	SOS @SOSBLK		;These can be indirect but can't be indexed!
+	CRIT2A,,CRIT2B
+	HRRZS @SOSBLK
+	CRIT3A,,CRIT3B
+	SOS @SOSBLK
+CRITLN==.-CRITTB
+
+FILOP3:	MOVE A,UNFN1(Q)	; STORE REAL INFO ABOUT THE FILE
+	MOVEM A,RDEVN+1
+	MOVE A,UNFN2(Q)
+	MOVEM A,RDEVN+2
+	.CALL JBST		; GIVE REAL NAMES TO SYS
+	 JFCL
+	MOVE A,BYTSIZ		; Create B.P. to ILDB the first byte of the file.
+	LSH A,30
+	HRR A,FILADR
+	ADDI A,UHBLEN-1
+	MOVEM A,ACCBP
+	MOVE A,UNREF(Q)		; REFERENCE DATE
+	MOVEM A,ORFDAT
+	HLLZ B,A		; SAVE ISOLATED REFERENCE DATE
+	MOVE A,OPMODE		; DOES HE WANT REFERENCE DATE UPDATED
+	TRNE A,10		; IF 3.4=1 - DON'T CHANGE REFERENCE DATE
+	 JRST FILOP5
+	SYSCAL RQDATE,[%CLOUT,,A]	; NOW UPDATE REFERENCE DATE
+	 SETZM A
+	HLLZS A
+	CAMN A,B		; HAS REFERENCE DATE CHANGED?
+	 JRST FILOP5		; NO - DON'T CHANGE THE PAGE
+	HLLM A,UNREF(Q)		; UPDATE DIRECTORY
+FILOP5:	MOVE A,UNDATE(Q)
+	MOVEM A,CRDATE		; Remember the file's dates in our memory
+	HLLZ A,UNREF(Q)		; so we can return and set them without locking the directory.
+	MOVEM A,REFDATE
+	SETZM DATUPD
+	LDB A,[UNBYTE,,UNREF(Q)]
+	PUSHJ P,BDEC		; Now remember the file's written byte size
+	MOVEM B,FILBSZ		; and how many bytes of that size it has.
+	MOVEI J,44
+	IDIV J,B		; J gets # bytes per word.
+	MOVE D,@FILADR
+	SUBI D,UHBLEN		; D gets number of words
+	IMUL D,J		; Convert to bytes.
+	SUB D,A			; less bytes which are free
+	MOVEM B,FILBLN		; gives number of bytes, in file byte size.
+	SKIPE DIRECTN
+	 PUSHJ P,ARCWRT		; Set archive creation date and dumped bit, if writing.
+	PUSHJ P,UNLOCK
+	JRST OPNWIN		; DONE - OPEN HAS WON
+
+; FILE NOT FOUND - CHECK TO SEE IF BECAUSE OPEN FOR WRITING?
+
+RDFNF:	HRLZI A,%ENSFL		; BE PREPARED TO REPORT FNF
+	ADDI Q,5		; ON FNF Q POINTS TO ENTRY BEFORE
+				;	MATCH IF THERE WAS ONE
+	CAIL Q,ARCADR		; SO SEE IF (Q)+5 IS IN BOUNDS
+	 CAIL Q,ARCADR+2000
+	  JRST NOGO2
+	CAMN A,UNFN1(Q)		; SEE IF THE FILE NAMES MATCH
+	 CAME B,UNFN2(Q)
+	  JRST NOGO2		; NO - REALLY A FNF
+	HRLZI A,%ENAFL	; - REPORT FILE LOCKED INSTEAD OF FNF
+	JRST NOGO2
+
+;Compute file's length in bytes of the size it is open for.
+;Set up FILLEN and FILRND.  Assume that BYTSIZ and BYTSWD are set up.
+;Also, return in A and B what BDEC returns (for byte size remembered by file).
+FILCPT:	LDB A,[UNBYTE,,UNREF(Q)]
+	PUSHJ P,BDEC		; Extract byte size of file, and # free bytes in last word.
+	MOVE C,UNRNDM(Q)
+	MOVE D,UHWCNT+ARCADR(C)	; Get length in words.
+	SUBI D,UHBLEN
+FILCP1:	MOVE E,A
+	IMUL E,B		; Number of free BITS in last word.
+	MOVE W,D
+	IMUL W,BYTSWD		; Number of bytes of size file is open in, including WHOLE last word.
+	MOVEM W,FILRND
+	IDIV E,BYTSIZ		; Number of free bytes of size open in in last word.
+	SUB W,E			; File's length in size open in.
+	MOVEM W,FILLEN
+	POPJ P,
+
+;Get in B the byte size of the current file,
+;and in A the number of unused bytes in the last word.
+;Assume that A contains the UNBYTE field for the file.
+.SEE UNBYTE	;Comments there explain this code.
+BDEC:	TRNN A,400
+	 JRST BDEC1
+	LDB B,[060200,,A]
+	ANDI A,77
+	POPJ P,
+
+BDEC1:	TRNN A,200
+	 JRST BDEC2
+	LDB B,[040300,,A]
+	ANDI A,17
+	POPJ P,
+
+BDEC2:	CAIG A,44
+	 JRST BDEC3
+	SUBI A,44
+	LDB B,[020600,,A]
+	ANDI A,3
+	POPJ P,
+
+BDEC3:	MOVEI B,44
+	SUB B,A
+	MOVEI A,0
+	POPJ P,
+
+;Update the UNBYTE fiels of the open file's directory entry
+;according to what BYTSIZ and FILLEN and FILRND say.
+;Assume that Q points at the file's 5-word directory entry
+BENC:	MOVE B,BYTSIZ
+	MOVE A,FILRND
+	SUB A,FILLEN		;B has byte size, A has # free bytes in last word.
+	CAIGE B,19.		;Now do a backwards BDEC, producing result in A.
+	 JRST BENC1
+	MOVEI A,44
+	SUB A,B
+	JRST BENC9
+
+BENC1:	CAIGE B,8
+	 JRST BENC2
+	LSH B,2
+	ADDI A,44(B)
+	JRST BENC9
+
+BENC2:	CAIGE B,4
+	 JRST BENC3
+	LSH B,4
+	ADDI A,200(B)
+	JRST BENC9
+
+BENC3:	LSH B,6
+	ADDI A,400(B)
+BENC9:	DPB A,[UNBYTE,,UNREF(Q)]
+	POPJ P,
+
+; HANDLE OPENS FOR OUTPUT
+
+; OPNWRT - OPEN FOR WRITE OR WRITE OVER
+
+OPNWRT:	LDB C,[170300,,OPMODE]	; GET EXTRA MODE BITS
+	CAIE C,1		; OPEN FOR WRITE-OVER?
+	 JRST OPNOUT		; NO - GO OPEN FOR OUTPUT
+	PUSHJ P,QLOOK		; DO LOOK TO SEE IF ALREADY EXISTS
+	 JRST RDFNF		; NO - GO SEE WHY
+	PUSHJ P,FILCPT		; Set up FILLEN and FILRND.
+	MOVE A,FILLEN
+	MOVEM A,FILBLN
+	PUSHJ P,BENC		; So update the file's UNBYTE field in the directory.
+OPNWR1:	MOVE A,BYTSIZ
+	MOVEM A,FILBSZ		; Since we are writing, the file's byte size is set to ours.
+	.CALL GDATE
+	 SETO A,
+	MOVEM A,UNDATE(Q)
+	JRST FILOP0		; GO COMPLETE THE OPEN
+
+; OPNOUT - OPEN NEW FILE FOR OUTPUT
+
+OPNOUT:	PUSHJ P,QFNG		; FIXUP ">" AND "<" IF ANY
+	 JFCL			; DON'T CARE IF FAIL (DINSRT KNOWS WHAT TO DO)
+	PUSHJ P,DINSRT		; MAKE NEW DIRECTORY ENTRY
+	SETZM FILLEN		; A new file's length is 0, in all units.
+	SETZM FILRND
+	SETZM FILBLN
+	SETZM UNREF(Q)
+	MOVE D,UDDATP+ARCADR	;Create a header with zero data words so things will look OK,
+	HRRM D,UNRNDM(Q)	;and make filename block point at it.
+	MOVEI J,3		;Construct the header in J thru J+2
+	SETZB J+1,J+2
+	MOVE C,[-3,,J]
+	PUSHJ P,JFRCIOT		;And output it, using BLT if page already exists.
+	JUMPG TT,OPNOU1
+	SYSCAL FINISH,[%CLIMM,,CHDSK]
+	 .LOSE %LSFIL
+	PUSHJ P,MAPARC		;maybe that gobbled an additional page, so map all pages again.
+OPNOU1:	MOVEI A,3		;Remember that data area is 3 words bigger now.
+	ADDM A,UDDATP+ARCADR
+	JRST OPNWR1
+
+GDATE:	SETZ			; CALL TO GET FUNNY FORMAT DATE
+	SIXBIT/RQDATE/
+	SETZM A
+
+; DINSRT - ROUTINE TO INSERT A NEW ENTRY INTO A DIRECTORY
+;	TAKES FILE NAMES IN A AND B.
+
+DINSRT:	PUSH P,A		; SAVE FILE NAMES
+	PUSH P,B
+DINSR1:	MOVE TT,UDNAMP+ARCADR
+	CAIGE TT,UDNMIN
+	 JRST DIRFUL
+	PUSHJ P,DIRGE1		; Copy the directory out of the archive (which stays locked).
+	PUSHJ P,DINSR2		; In sert an entry in the copy, and store filenames from A, B.
+	SETZM UNRNDM(Q)		; Initialze random info
+	.CALL GDATE		; Get current date and time
+	 SETO A,
+	MOVEM A,UNDATE(Q)	; Store as file creation date,
+	HLLZM A,UNREF(Q)	; and as file reference date.
+	PUSHJ P,DIRPU1		; Write the directory back into the archive.
+	SUBI Q,DIRCPY-ARCADR
+POPBAJ:	POP P,B
+POPAJ:	POP P,A
+	POPJ P,
+
+DINSR2:	PUSHJ P,QLGLKB	; DO THE LOOKUP
+	MOVEI J,DIRCPY+2000	; DIRECTORY EMPTY
+	MOVE Q,J
+	MOVEI C,-DIRCPY-5(Q)	; GET INDEX TO NEW NAME AREA SLOT
+	CAML C,DIRCPY+UDNAMP	; FARTHER BACK THAN POINTER?
+	 JRST DINSR6		; NO - GO AHEAD
+	MOVEM C,DIRCPY+UDNAMP	; UPDATE INDEX
+	JRST DINSR4		; AND DON'T BLT
+
+DINSR6:	SKIPN -LUNBLK(Q)	; SEE IF ENTRY ZERO OR IF BLT NEEDED
+	 JRST DINSR4		; MUST HAVE BEEN DELETED - NO BLT
+	MOVE C,DIRCPY+UDNAMP	; NEED TO BLT - BUILD BLT POINTER
+	ADDI C,DIRCPY		; GET ADDRESS OF START OF NAME AREA
+	HRLS C			; PUT IN BOTH HALVES OF C
+	SUBI C,LUNBLK		; BLT UP ONE NAME BLOCK
+	BLT C,-LUNBLK-1(Q)	; MAKE ROOM
+	MOVE C,DIRCPY+UDNAMP	; UPDATE START POINTER
+	SUBI C,LUNBLK
+	MOVEM C,DIRCPY+UDNAMP
+DINSR4:	SUBI Q,LUNBLK		; BACK UP TO EMPTY ENTRY
+DINSR5:	MOVEM A,UNFN1(Q)	; STORE NEW INFORMATION
+	MOVEM B,UNFN2(Q)
+	POPJ P,
+
+QFNG:	SKIPA C,[SETZ]	;GENERATE FILE NAME TO REPLACE < OR > ON WRITE
+QLOOK:	MOVEI C,0
+	PUSH P,J	;Q_FILE #
+	MOVEI J,ARCADR	;GET POINTER TO SHARED COPY OF DIRECTOYR
+	MOVEI Q,2000-LUNBLK(J)
+	ADD J,UDNAMP(J)
+	CAMN A,[SIXBIT />/]
+	 TLOA J,400000
+	  CAMN A,[SIXBIT /</]
+	   JRST QLOOKA	;4.9 BIT OF J SET IF >
+	CAMN B,[SIXBIT />/]
+	 TLOA J,400000
+	  CAMN B,[SIXBIT /</]
+	   AOJA C,QLOOK1
+	PUSHJ P,QLGLK
+	 JRST POPJJ	;FNF
+	TRNN J,1777
+	 JRST POPJJ	;J IS OFF THE END OF THE BLOCK
+	PUSH P,C
+QLK4:	CAIL J,ARCADR+2000-LUNBLK
+	 JRST QLK5
+	CAMN B,UNFN2+5(J)	;Now scan forward PAST all the files with this name.
+	 CAME A,UNFN1+5(J)
+	  JRST QLK5
+	ADDI J,LUNBLK
+	JRST QLK4
+
+QLK5:	EXCH Q,J		;Then scan back through them all for the one with no "*".
+QLK1:	CAMN A,UNFN1(Q)
+	 CAME B,UNFN2(Q)	;They all have stars => return non-skip,
+	  JRST QLK3		;causing File Not Found or File Locked.
+	MOVE C,UNRNDM(Q)
+	SKIPL UHREFC+ARCADR(C)
+	 TLNE C,UNCDEL
+	  CAIA
+	   JRST QLK2		;Found one with no "*" => return skipping.
+	SUBI Q,LUNBLK
+	CAML Q,J
+	 JRST QLK1
+QLK3:	POP P,C
+POPJJ:	POP P,J
+	POPJ P,
+
+QLK2:	AOS -2(P)
+	JRST QLK3
+
+;Look up names containing a > or <.
+
+QLOOKA:	CAME B,[SIXBIT /</]
+	CAMN B,[SIXBIT />/]
+	JRST POPJJ	;MUST BE READ RETN FILE NOT FOUND
+QLOOK1:	PUSH P,D
+	PUSH P,TT
+	PUSH P,I
+	PUSH P,[-1]	;BEST INDEX
+	PUSH P,[SETZ]	;BEST "NUMERIC" PART
+	PUSH P,[SETZ]	;BEST ALPHA PART
+QLOOK4:	CAIGE Q,(J)
+	JRST QLOOK2
+	MOVE D,UNRNDM(Q)
+	TLNE D,UNIGFL
+	JUMPGE C,QLOOK3	;IF CONJURING NAME FOR WRITE, CONSIDER ALL
+	XCT QLKI1(C)
+	JRST QLOOK3
+	SKIPE TT,@QLKI1+1(C)
+QLOOK6:	TRNE TT,77	;RIGHT ADJ
+	JRST QLOOK5
+	LSH TT,-6
+	JRST QLOOK6
+QLOOK5:	MOVEI I,0
+QLOOK8:	LDB D,[600,,TT]
+	CAIL D,'0
+	CAILE D,'9
+	JRST QLOOK7	;NOT A DIGIT
+QLOK5B:	TRNE I,77	;RIGHT ADJ LOW NON NUM PART
+	JRST QLOK5A
+	LSH I,-6
+	JUMPN I,QLOK5B
+QLOK5A:	TLC TT,400000	;AVOID CAM LOSSAGE
+	TLC I,400000
+	SKIPGE -2(P)
+	JRST QLOK5D	;FIRST MATCH
+	JUMPGE J,QLOK5E	;GET LEAST
+	CAMGE TT,-1(P)	;GET GREATEST
+	JRST QLOOK3
+	CAME TT,-1(P)
+	JRST QLOK5D
+	CAMGE I,(P)
+	JRST QLOOK3	;NOT AS GOOD
+QLOK5D:	HRRZM Q,-2(P)
+	MOVEM TT,-1(P)
+	MOVEM I,(P)
+QLOOK3:	SUBI Q,LUNBLK
+	JRST QLOOK4
+
+
+QLOK5E:	CAMLE TT,-1(P)
+	JRST QLOOK3
+	CAME TT,-1(P)
+	JRST QLOK5D
+	CAMLE I,(P)
+	JRST QLOOK3
+	JRST QLOK5D
+
+QLOOK7:	LSHC TT,-6	;LOW DIGIT NOT NUMERIC
+	JUMPN TT,QLOOK8	;NO NUMERIC DIGITS AT ALL ("BIN", MAYBE?)
+	JUMPL J,QLOK5B	;IF LOOKING FOR GREATEST, LET THIS BE LEAST
+	MOVNI TT,1	;GREATEST IF LOOKING FOR LEAST
+	JRST QLOK5B
+
+QLOOK2:	JUMPL C,QFNG1	;REALLY WANT TO MAKE F.N.'S FOR WRITE
+	SUB P,[1,,1]
+	POP P,C	;BEST "NUMERIC" PART
+	POP P,Q	;ADR
+	POP P,I
+	POP P,TT
+	POP P,D
+	JUMPL Q,POPJJ
+	MOVE A,UNFN1(Q)	;ACTUAL MATCHED FILE NAMES
+	MOVE B,UNFN2(Q)
+	POP P,J
+	AOS (P)
+	POPJ P,
+
+
+QFNG1:	SKIPGE -2(P)
+	JRST QFNG2	;NOT FOUND START W/ 1
+	MOVE TT,-1(P)
+	TLC TT,400000
+	MOVE I,[600,,TT]
+QFNG3:	LDB D,I
+	CAIL D,'0
+	CAILE D,'9
+	JRST QFNG4	;REACH END OF NUMERIC FIELD
+	AOS D
+	CAILE D,'9
+	JRST QFNG5
+	DPB D,I
+QFNG5A:	TLNE TT,770000
+	JRST QFNG3A
+	LSH TT,6
+	JRST QFNG5A
+
+QFNG2:	MOVSI TT,(SIXBIT /1/)
+QFNG3A:	MOVEM TT,A(C)	;STORE INTO A OR B AS APPRO
+	SUB P,[3,,3]
+	POP P,I
+	POP P,TT
+	POP P,D
+	JRST POPJJ
+
+
+QFNG5:	MOVEI D,'0
+	DPB D,I
+	ADD I,[60000,,]
+	JUMPL I,QFNG5A
+	JRST QFNG3
+
+QFNG4:	TLNN TT,770000	;SKIP ON ALREADY 6 CHAR NAME
+	LSH TT,6
+	MOVEI D,'1
+	DPB D,I
+	MOVEI D,'0
+QFNG4B:	TLNN I,770000
+	JRST QFNG5A
+	IDPB D,I
+	JRST QFNG4B
+
+QLKI1:	CAME B,UNFN2(Q)
+	CAME A,UNFN1(Q)
+	UNFN2(Q)
+
+
+;ROUTINE TO FIND PLACE IN DIRECTORY WHERE A B WOULD GO
+;SKIPS ONL IF DIRECTORY CONTAINS AT LEAST ONE FILE
+;FOR INSERTION, FILE GOES BEFORE PNTR RETURNED IN J
+;RETURNS PNTR IN Q TO BEGINNING OF NAME AREA
+;(ONLY WORKS FOR LUNBLK = 5)
+
+QLGLKB:	SKIPA J,[DIRCPY]
+QLGLK:	 MOVEI J,ARCADR
+	HRRZ Q,UDNAMP(J)
+	ADDI Q,(J)
+	CAIL Q,2000(J)
+	POPJ P,	;DIRECTORY EMPTY
+	TLC A,(SETZ)
+	TLC B,(SETZ)
+	PUSH P,D
+	PUSH P,E
+	ADDI J,600
+REPEAT 7,[
+	CAMGE J,Q
+	JRST .+6
+	MOVE D,UNFN1(J)
+	TLC D,(SETZ)
+	CAMN A,D
+	JSP E,QLGLE
+	CAML A,D
+	ADDI J,<1_<7-.RPCNT>>*LUNBLK
+	SUBI J,<1_<6-.RPCNT>>*LUNBLK
+]
+	CAMGE J,Q
+	ADDI J,LUNBLK
+	CAMGE J,Q
+	JRST 4,.
+	MOVE D,UNFN1(J)
+	TLC D,(SETZ)
+	CAME A,D
+	JRST QLGL1
+	MOVE D,UNFN2(J)
+	TLC D,(SETZ)
+	CAMLE B,D
+QLGL2:	ADDI J,LUNBLK
+QLGL3:	TLC A,(SETZ)
+	TLC B,(SETZ)
+	POP P,E
+	POP P,D
+POPJ1:	AOS (P)
+	POPJ P,
+
+QLGL1:	CAML A,D
+	JRST QLGL2
+	JRST QLGL3
+
+;CALL BY JSP E,QLGLE
+QLGLE:	MOVE D,UNFN2(J)
+	TLC D,(SETZ)
+	CAMN B,D
+	JRST QLGL3
+	CAML B,D
+	JRST 1(E)
+	JRST 2(E)
+
+;REMOVE HOLE FROM NAME AREA AT Q
+QSQSH:	PUSH P,A
+	PUSH P,B
+	PUSHJ P,DIRGE1
+	PUSHJ P,QSQSH0
+	PUSHJ P,DIRPUT
+	JRST POPBAJ
+
+;Note that Q should point into ARCADR, but we operate on DIRCPY.
+QSQSH0:	MOVEI TT,DIRCPY
+	MOVE A,UDNAMP(TT)
+	ADDI A,(TT)
+	HRRZ C,Q
+	ADDI C,DIRCPY-ARCADR
+QSQSH1:	SUBI C,LUNBLK
+	CAMLE A,C
+	JRST QSQSH2
+	HRLZ B,C
+	HRRI B,LUNBLK(C)
+	BLT B,2*LUNBLK-1(C)
+	JRST QSQSH1
+QSQSH2:
+REPEAT LUNBLK,SETZM .RPCNT(A)
+	SUBI A,-LUNBLK(TT)
+	HRRZM A,UDNAMP(TT)
+	POPJ P,
+
+QBTBLI:	440600,,	;IF GOING TO ILDB
+	360600,,
+	300600,,
+	220600,,
+	140600,,
+	060600,,
+	000600,,
+
+;Generate an ASCII directory.  Write the whole thing as an ASCII string
+;starting at NEWDAT.  FILBLN gets the number of characters.
+DIRASC:	MOVE D,[440700,,NEWDAT]
+	SETZM FILBLN		;initialize vars used for creating the directory string.
+	MOVE B,AFDEV
+	PUSHJ P,DIRSI4		;Output machine name and disk dir which archive resides on.
+	MOVE B,RDIRN
+	PUSHJ P,DIRSIX
+	MOVEI A,40
+	PUSHJ P,DIRCHR
+	MOVE B,RDEVN
+	PUSHJ P,DIRSIX		;Output archive device name, and archive file's FN2.
+	MOVEI A,40
+	PUSHJ P,DIRCHR
+	MOVE B,AFFN2
+	PUSHJ P,DIRSIX
+	PUSHJ P,DIRCRL
+	MOVEI B,[ASCIZ /Free files = /]
+	PUSHJ P,DIRSTR
+	MOVE B,ARCADR+UDNAMP
+	SUBI B,UDNMIN-LUNBLK+1
+	IDIVI B,LUNBLK		;Compute # of filename blocks we have room for.
+	PUSHJ P,DIRDEC
+	MOVEI B,[ASCIZ /, Wasted Words = /]
+	PUSHJ P,DIRSTR
+	PUSHJ P,DIRWST
+	PUSHJ P,DIRDEC
+	PUSHJ P,DIRCRL
+	MOVE Q,ARCADR+UDNAMP
+	ADDI Q,ARCADR		;Q gets addr of first existing file.
+DIRFIL:	CAIN Q,ARCADR+2000
+	 JRST DIRPAD
+	MOVEI A,40		;First, a space, or a star for an inaccessible file.
+	MOVE B,UNRNDM(Q)
+	SKIPL UHREFC+ARCADR(B)	;File is being written, or
+	 TLNE B,UNIGFL		;is marked for deletion, =>
+	  MOVEI A,"*		;mark it with a star.
+	PUSHJ P,DIRCHR
+	MOVEI B,[ASCIZ / 0   /]
+	PUSHJ P,DIRSTR
+	MOVE B,UNFN1(Q)		;Then come the FN1
+	PUSHJ P,DIRSIX
+	MOVEI A,40
+	PUSHJ P,DIRCHR
+	MOVE B,UNFN2(Q)		;and the FN2.
+	PUSHJ P,DIRSIX
+	MOVEI A,40
+	PUSHJ P,DIRCHR
+	MOVE B,UNRNDM(Q)
+	MOVE B,UHWCNT+ARCADR(B)
+	ADDI B,1777-UHBLEN
+	LSH B,-10.
+	PUSHJ P,DIRDEC		;and then the size in K.
+	MOVEI B,[ASCIZ /  /]	;No archive files are ever dumped,
+	PUSHJ P,DIRSTR		;so don't mention any dumped-bit.
+	MOVE A,UNDATE(Q)
+	PUSH P,D
+	MOVE D,[440700,,DIRDAT]
+	PUSHJ P,DATIME"TWDASC	;Convert creation date/time to ASCII
+	POP P,D
+	MOVEI B,DIRDAT
+	PUSHJ P,DIRSTR		;and copy into the directory.
+	PUSHJ P,DIRCRL		;That's all for this file.
+	ADDI Q,LUNBLK
+	JRST DIRFIL
+
+;Pad the end of an ASCII directory with ^C's.
+DIRPAD:	MOVE B,D
+	MOVEI A,^C
+REPEAT 5,IDPB A,B
+	POPJ P,
+
+;Subroutines for generating ASCII directories.
+
+;Output the next character of one.
+;The character is in A.  Stuff it down bp in D and count in FILBLN.
+MPVOK3::
+DIRCHR:	IDPB A,D
+	AOS FILBLN
+	POPJ P,
+
+;Output the SIXBIT word in B as six characters.
+DIRSI4:	SKIPA C,[4]		;DIRSI2 outputs only the first four.
+DIRSIX:	MOVEI C,6
+DIRSI1:	SETZ A,
+	ROTC A,6
+	ADDI A,40
+	PUSHJ P,DIRCHR
+	SOJG C,DIRSI1
+	POPJ P,
+
+;Send a CRLF to the ascii directory.
+DIRCRL:	MOVEI A,^M
+	PUSHJ P,DIRCHR
+	MOVEI A,^J
+	JRST DIRCHR
+
+;Output ASCIZ string B points at into the ASCII directory.
+DIRSTR:	HRLI B,440700
+DIRST1:	ILDB A,B
+	JUMPE A,CPOPJ
+	PUSHJ P,DIRCHR
+	JRST DIRST1
+
+;Print number in B in decimal into the ASCII directory.
+DIRDEC:	IDIVI B,10.
+	HRLM C,(P)
+	SKIPE B
+	 PUSHJ P,DIRDEC
+	HLRZ A,(P)
+	ADDI A,"0
+	JRST DIRCHR
+
+DATIME"$$OUT==1			;Insert the TWDASC routine for converting times to asciz.
+
+.INSRT SYSENG;DATIME
+
+DIRDAT:	BLOCK 5			;Buffer for TWDASC to use.
+
+;Handle .IOT.
+JIOT:	MOVE A,JBCOP
+	TLNN A,100000	;Skip if output IOT
+	 JRST JIOTI
+	TLNN A,200000	;Skip if block IOT
+	 JRST JIOTO1
+	HLRE D,JBCWD1	;User's block IOT pointer - get word count.
+	MOVNS D
+;D has number of words we want to write.
+JIOTO2:	MOVE C,FILRND	;C gets # of bytes that fit in existing space allocated.
+	SUB C,ACCP	;How many remain past current access pointer?
+	SKIPN C		;Are we pointing exactly at end of file?
+	 PUSHJ P,JIOTEX	;If so, prepare to extend the file.
+	JUMPGE C,JIOTO5	;If this is extending the file, make sure we don't overflow maximum.
+	MOVEI A,NEWMAX
+	IMUL A,BYTSWD	;How many bytes is the most we can fit in memory?
+	MOVE B,NEWLEN
+	ADD B,C		;How many will we have, of data to extend with, after this?
+	CAML B,A	;Will it fit?
+	 JRST JIOTDF	;No.  Give a "device fill" ioc error.
+JIOTO5:	SKIPLE C	;Are we extending the file?
+	 CAMLE C,D	;No, we are overwriting it.  If whole IOT will fit in existing length,
+	  MOVE C,D	;do it all.  Else rewrite existing stuff, then loop around
+			;and come through JIOTO2 to xfer the rest and extend the file.
+	SUB D,C		;# bytes of user's IOT that will be left.
+	MOVE A,JBCOP
+	TLNE A,200000	;Now read the bytes from the user.
+	 JRST JIOTO4	;using SIOT or block IOT, whichever we can.
+	MOVE A,C	;SIOT directly into the file's data.
+MPVOK1:	SYSCAL SIOT,[ 1000,,CHBOJ ? ACCBP ? C]
+	 .VALUE
+	SUB A,C		;A gets # bytes we got, C # we wanted but didn't get.
+JIOTO3:	PUSHJ P,UPDACP	;Update access pointer in bytes.  Access b.p. already incremented.
+	JUMPN C,GOLOOP	;Now, if this IOT was pclsr'ed, don't try to do
+		;any more for it.  If it comes back in we will find out.
+	JUMPE D,GOLOOP	;If there is more stuff to output,
+	JRST JIOTO2	;go read it in and extend the file.
+
+;Here to xfer from creator in block mode.
+JIOTO4:	MOVN B,C
+	HRLZS B
+	HRR B,ACCBP
+	AOS B			;Point at first unfilled word, not last filled.
+MPVOK2:	.IOT CHBOJ,B
+	HRRZ A,B
+	SUB A,ACCBP
+	MOVEI A,-1(A)	;A gets number of words we got.
+	SUB C,A		;C gets # that we expected but didn't get.
+	ADDM A,ACCBP
+	JRST JIOTO3
+
+;Here to begin extending the file.  Start writing into NEWDAT instead of the file's data.
+;Core in NEWDAT is created by MPVs.
+JIOTEX:	MOVEI A,NEWDAT-1	;Create 010700,,NEWDAT-1 or 004400,,NEWDAT-1
+	HRRM A,ACCBP
+	POPJ P,
+
+;Here to decode a unit mode IOT or SIOT.
+JIOTO1:	TLNE A,%JGSIOT		;Skip if unit IOT.
+	 SKIPA D,JBCWD1		;Else it's SIOT, get the byte count.
+	  MOVEI D,1		;Unit IOT, byte count is 1.
+	JRST JIOTO2
+
+;Update our access pointer when we write C(A) bytes.
+UPDACP:	ADDB A,ACCP
+	SKIPL FILLEN		;If file length known,
+	 CAMG A,FILLEN		;and writing past end of file,
+	  POPJ P,
+	MOVEM A,FILLEN		;update the file length.
+	MOVEM A,FILBLN		;Since we're writing, byte size written and current byte size must be the same.
+	SUB A,FILRND		;Get how many of the bytes were added above old allocated space.
+	CAML A,NEWLEN
+	 MOVEM A,NEWLEN		;Store as amount of bytes to extend file by when we close.
+	POPJ P,
+
+JIOTDF:	SYSCAL JOBIOC,[%CLIMM,,CHBOJ ? %CLIMM,,11]
+	 .LOSE %LSFIL
+	JRST GOLOOP
+
+JIOTI:	TLNN A,200000	;SKIP IF BLOCK IOT
+	 JRST JIOTI3
+	HLRE C,JBCWD1	;USER'S BLOCK IOT POINTER - GET WD COUNT.
+	MOVNS C
+;C HAS # BYTES THE USER WANTS IN THIS IOT OR SIOT.
+;A HAS JBCOP, EVERYWHERE ON THIS PAGE.  DON'T CLOBBER IT!
+JIOTI1:	MOVE D,FILLEN
+	SUB D,ACCP	;How many bytes of file remain past current access pointer?
+	JUMPLE D,JIOTIE
+	CAML D,C
+	 MOVE D,C	;D gets # of bytes we can give the user.
+	SUB C,D		;C gets number user wants beyond that (beyond EOF).
+	TLNN A,200000
+	 JRST JIOTI4	;NOW IN UNIT MODE GO XFER THEM WITH SIOT.
+	MOVNS D
+	HRLZS D
+	HRR D,ACCBP	;IN BLOCK MODE, MAKE AOBJN TO WHAT WE WILL GIVE
+	AOS D
+	.IOT CHBOJ,D	;GIVE
+	SKIPGE D	;IF CREATOR DIDN'T TAKE ALL WE OFFERED, HE WAS
+	 SETZ C,	;PCLSRED, SO DON'T TRY TO OFFER ANY MORE.
+	MOVEI E,-1(D)
+	SUB E,ACCBP	;NUMBER OF WORDS GIVEN TO CREATOR
+	ANDI E,-1
+	ADDM E,ACCBP
+;HERE E HAS # BYTES WE JUST GAVE THE USER.  ACCBP HAS BEEN UPDATED,
+JIOTI5:	ADDM E,ACCP
+	JUMPN C,JIOTI1	;NOW, IF CREATOR'S IOT NOT ALL FILLED, GIVE HIM MORE.
+	JRST GOLOOP
+
+;Here for unit mode IOT or SIOT to determine amount to transfer.
+JIOTI3:	TLNE A,%JGSIOT	;SKIP IF UNIT IOT
+	 SKIPA C,JBCWD1	;SIOT, GET BYTE COUNT
+	  MOVEI C,1	;IOT, TRANSFER ONE BYTE
+	JRST JIOTI1
+
+;HERE TO GIVE THE CREATOR SOME DATA IN UNIT MODE.
+JIOTI4:	MOVE E,D
+	SYSCAL SIOT,[1000,,CHBOJ ? ACCBP ? D]
+	 .VALUE
+	SUB E,D		;E GETS # BYTES HE TOOK.
+	SKIPE D		;IF HE DIDN'T TAKE ALL WE OFFERED, HE WAS PCLSRED,
+	 SETZ C,	;SO DON'T TRY TO GIVE HIM ANY MORE.
+	JRST JIOTI5
+
+;Handle attempt to read when at EOF.
+JIOTIE:	MOVE A,JBCOP
+	TLNN A,201000	;SKIP IF BLOCK OR SIOT BIT ON
+	 JRST JIOTI6	;FOR UNIT-MODE IOTS, RETURN SOMETHING.
+	.CALL JBRTL	;JUST UNHANG A BLOCK IOT OR SIOT.
+	 PCL
+	JRST GOLOOP
+
+JIOTI6:	TLNE A,400000	;EOF, AND USER'S CHANNEL IS UNIT MODE.
+	 JRST JIOTI8
+	.IOT CHBOJ,[-1,,^C]	;IF ASCII, INDICATE EOF (CHBOJ IS UNIT MODE)
+	JRST GOLOOP
+
+JIOTI8:	SYSCAL JOBIOC,[MOVEI CHBOJ ? MOVEI 2]	;IOCERR FOR EOF
+	 JFCL
+	JRST GOLOOP	;ON UNIT IMAGE CHANNEL
+
+;The creator closed his channel.
+JCLS:	SKIPN FILADR		;If a file is open,
+	 JRST JCLS1
+	PUSHJ P,JFORCE		;write out any extension data.
+	 JFCL
+	PUSHJ P,LOCK
+	PUSHJ P,MAPARC
+	PUSHJ P,CLSDEL		;Closing a file can delete an existing one.
+	MOVE B,FILADR
+	HRRZS UHREFC(B)		;Remove our traces from the reference count
+	SETZM SWTLST		;and unlock our locks.
+CRIT3A:	SOS UHREFC(B)
+CRIT3B:	JRST JCLS2
+
+JCLS1:	PUSHJ P,LOCK
+	PUSHJ P,MAPARC
+JCLS2:	PUSHJ P,ARCDEL		;Delete this file if desired, and it's now no longer open.
+	PUSHJ P,ARCSAL		;Maybe eliminate wasted space.
+	PUSHJ P,UNLOCK
+	JRST DIE
+
+;When we close a file we were writing, delete any existing file with the same name.
+CLSDEL:	MOVE B,UNRNDM(Q)
+	SKIPGE UHREFC+ARCADR(B)
+	 TLNE B,UNCDEL		;(but not if this file is going to be deleted itself).
+	  POPJ P,
+	MOVE A,UNFN1(Q)		;Get this file's filenames.
+	MOVE B,UNFN2(Q)
+	MOVE C,UDNAMP+ARCADR
+	ADDI C,ARCADR
+	MOVSI D,UNCDEL
+CLSDE1:	CAIN C,2000+ARCADR	;Scan through the directory
+	 POPJ P,
+	CAMN A,UNFN1(C)		;for all files with those names.
+	 CAME B,UNFN2(C)
+	  JRST CLSDE2
+	HRRZ TT,UNRNDM(C)	;All files with those names, not being written,
+	CAME C,Q		;(aside from the one we're closing!)
+	 SKIPGE UHREFC+ARCADR(TT)
+	  JRST CLSDE2
+	IORM D,UNRNDM(C)	;Get marked for deletion
+CLSDE2:	ADDI C,LUNBLK		;(which will be done right away, by ARCDEL,
+	JRST CLSDE1		; except for files open for reading).
+
+JFINISH:PUSHJ P,JFORCE
+	 JRST DVFLERR
+	JRST JSUCC
+
+;Extend a file, adding to it the output we have been saving up in NEWDAT
+JFORCE:	SKIPN DIRECTN		;If we are writing a file, stick it into the directory.
+	 JRST JFRCDT
+	MOVE B,FILLEN
+	CAMN B,OFILLEN		;If we have output something since the last time here,
+	 JRST JFRCDT
+	MOVEM B,OFILLEN
+	PUSHJ P,LOCK		;Lock the archive and stick the new stuff into it.
+	PUSHJ P,MAPARC
+	SKIPN B,NEWLEN		;Do we need to allocate any more words?
+	 JRST JFOR1		;No => just update # free bytes in last word.
+	MOVE D,FILADR		;Yes => we must extend the file.
+	ADD D,UHWCNT(D)
+	SUBI D,ARCADR
+	HRRZ A,UNRNDM(Q)
+	CAMN D,UDDATP+ARCADR	;Is this file the last thing in the archive?
+	 JRST JFRCX		;Yes => we can extend it in place.
+	MOVN C,@FILADR		;Otherwise we must recopy the old contents at the end.
+	HRLZS C
+	HRR C,FILADR		;Write out a copy of the file's old contents.
+	MOVE D,UDDATP+ARCADR	;Start writing where allocation is being done.
+	MOVE A,D
+	PUSHJ P,JFRCIOT		;Simulate .IOT, using BLT on existing pages.
+	 JRST UNLOCK
+;A has new value for file's UNRNDM rh.
+JFRCX:	MOVE J,NEWLEN		;D has updated access pointer.
+	ADD J,BYTSWD
+	SUBI J,1
+	IDIV J,BYTSWD		;How many WORDS are we growing by?
+	MOVE C,J
+	ADD C,D
+	CAIL C,ARCMAX		;Return non-skip if we will exceed maximum archive device size.
+	 JRST UNLOCK
+	PUSH P,J
+	MOVN C,J
+	HRLZS C			;Write out the data we are extending the file with.
+	HRRI C,NEWDAT
+	PUSHJ P,JFRCIOT
+	 .VALUE
+	MOVEM D,UDDATP+ARCADR	;Advance the data area free pointer over what we just gobbled.
+	JUMPG TT,JFOR2		;If we .IOT'ed to make new pages,
+	SYSCAL FINISH,[%CLIMM,,CHDSK]
+	 .LOSE %LSFIL		;Do a finish, so that pages are all on disk when we unlock.
+	PUSHJ P,UNLOCK		;Unlock and relock to make all pages be in the disk ufd,
+	PUSHJ P,LOCK
+	PUSHJ P,MAPARC		;map those pages in.
+;This temporary unlocking can't cause any problems, because the new data area
+;is marked as allocated so can't be reused, but no file points at it so nobody can touch it.
+;Also, since we have a file open, nobody can salvage the archive,
+;and the old file data area can't change since only we have it open.
+JFOR2:	MOVE B,(P)
+	ADD B,@FILADR		;Compute new total length in words, including header.
+	MOVEM B,UHWCNT+ARCADR(A)	;Store as length of file data area.
+	IMUL B,BYTSWD
+	MOVEM B,FILRND		;Store # of bytes now allocated to the file.
+	HRRM A,UNRNDM(Q)	;Store new location of file in directory.
+	ADDI A,ARCADR
+	MOVEM A,FILADR		;Store new address of file.
+	POP P,A			;Flush the core we were using
+	ADDI A,1777		;to hold the data we just wrote out.
+	LSH A,-10.
+	MOVNS A
+	HRLZS A
+	HRRI A,NEWDAT/2000
+	SYSCAL CORBLK,[%CLIMM,,0 ? %CLIMM,,%JSELF ? A]
+	 .LOSE %LSSYS
+	SETZM NEWLEN
+JFOR1:	PUSHJ P,BENC		;Update the UNBYTE fiels of the file's directory entry.
+	JRST JFOR3
+
+JFRCDT:	SKIPN DATUPD
+	 JRST POPJ1
+	PUSHJ P,LOCK
+JFOR3:	MOVE A,CRDATE		;Update the file's dates stored in the directory,
+	MOVEM A,UNDATE(Q)
+	MOVE A,REFDAT
+	HLLM A,UNREF(Q)
+	SETZM DATUPD		;and say that they are now up to correct there.
+	PUSHJ P,UNLOCK		;Unlock the file (close CHDSK).
+	MOVEI A,ARCADR/2000
+	SYSCAL PGWRIT,[A]	;Make sure all pages of archive are up-to-date on disk.
+	 CAIA
+	  AOJA A,.-2
+	JRST POPJ1
+
+;Extend the archive file by effectively doing .IOT CHDSK,C, with access pointer from D.
+;But, to avoid screws, any of the transfer which goes to a page which already exists
+;must also be BLT'ed into that page.
+;When we return, TT is negative if any new pages were created.
+;Clobbers E.  Updates D by the number of words transferred.
+;Skips unless the archive became full.
+JFRCIOT:
+	PUSH P,B
+	PUSH P,C
+	HLRZS C
+	SUBM D,C
+	CAIL C,ARCMAX
+	 JRST POPDBJ
+	.ACCESS CHDSK,D
+	.IOT CHDSK,C		;First, IOT the whole thing so file length is set right.
+	POP P,C
+	HLRE E,C
+	MOVNS E			;E gets number of words to be transferred.
+	PUSH P,D
+	ADDM E,(P)		;Store on the PDL, to be popped, the updated value of D.
+	MOVE TT,UDDATP+ARCADR
+	ADDI TT,1777
+	TRZ TT,1777
+	SUBI TT,(D)		;How many words fit on existing page?
+	JUMPLE TT,JFRCI1	;None, starting past the last mapped page, =>
+				;no need to BLT anything.
+	CAMGE E,TT
+	 JRST JFRCI2
+	MOVE E,TT		;get number of words to transfer, on existing page.
+	SETO TT,		;If we will make new pages, leave TT negative.
+JFRCI2:	HRLZ B,C
+	HRR B,D
+	ADDI B,ARCADR		;Transfer them with BLT.
+	ADD D,E
+	BLT B,ARCADR-1(D)
+JFRCI1:	AOS -2(P)
+POPDBJ:	POP P,D
+POPBJ:	POP P,B
+	POPJ P,
+
+NEWLEN:	0			;# of bytes we are buffering up to add to the end of the file.
+
+;Handle .ACCESS and .CALL ACCESS
+JACCCL:	PUSHJ P,JACC0		;.CALL ACCESS
+	 JRST WTDERR
+	.CALL JBRT1
+	 PCL
+	JRST GOLOOP
+
+JACC:	MOVE A,JBCWD1		;.ACCESS.
+	PUSHJ P,JACC0
+	 JFCL
+	JRST JSTS
+
+JACC0:	SKIPE DIRFLG		;Can't change access pointer if reading a directory.
+	 POPJ P,
+	MOVEM A,ACCP		;Set the access pointerk in bytes.
+	CAMLE A,FILRND		;Set the access byte pointer.
+	 JRST JACC1
+	IDIV A,BYTSWD
+	ADD A,FILADR
+	MOVEI A,UHBLEN-1(A)	;get address of word before the one containing next byte.
+JACC3:	MOVE C,BYTSIZ
+	DPB C,[300600,,A]	;Store the byte size in the byte pointer.
+	JUMPE B,JACC2
+	IBP A			;Advance the appropriate number of bytes past word boundary.
+	SOJG B,.-1
+JACC2:	MOVEM A,ACCBP
+	JRST POPJ1
+
+JACC1:	SUB A,FILRND
+	IDIV A,BYTSWD
+	MOVEI A,NEWDAT-1(A)
+	JRST JACC3
+
+JRESET:
+JSTS:	.CALL JBRTL
+	 PCL
+	JRST GOLOOP
+
+;Handle .RCHST and .CALL RCHST
+JRCH:	SYSCAL JOBRET,[
+		1000,,CHBOJ
+		1000,,0
+		[-5,,RDEVN]]
+	 JFCL
+	JRST GOLOOP
+
+JSYSCL:	MOVE B,JBCWD1		;Handle a .CALL.  What is its name?
+	MOVE A,JBCWD5		;dispatch to it with its 2nd arg in A.
+	CAMN B,['FILLEN]
+	 JRST JFILLEN
+	CAMN B,['SFDATE]
+	 JRST JSFDAT
+	CAMN B,['RFDATE]
+	 JRST JRFDAT
+	CAME B,[SIXBIT /FORCE/]
+	 CAMN B,[SIXBIT /FINISH/]
+	  JRST JFINISH
+	CAMN B,[SIXBIT /ACCESS/]
+	 JRST JACCCL
+	CAMN B,[SIXBIT /RFPNTR/]
+	 JRST JRFPNT
+	CAMN B,[SIXBIT /SRDATE/]
+	 JRST JSRDAT
+	CAMN B,[SIXBIT /RRDATE/]
+	 JRST JRRDAT
+	CAMN B,[SIXBIT /RESRDT/]
+	 JRST JRESRDT
+	CAMN B,[SIXBIT /DELEWO/]
+	 JRST JDELWO
+	CAMN B,[SIXBIT /FILBLK/]
+	 JRST JFILBLK
+;If the call is onw we don't handle, return "wrong type device".
+WTDERR:	MOVSI A,%EBDDV		;Return "Wrong Type Device" error.
+ERR:	MOVEM A,ERRCOD
+	.CALL JBRT3
+	 PCL
+	JRST GOLOOP
+
+DVFLERR:SKIPA A,[%EFLDV,,]
+ILFERR:	MOVSI A,%EBDFN		;Return "Illegal Filename" error.
+	JRST ERR
+
+;Individual .CALL handlers.
+
+JRFPNT:	HRROI A,ACCP		;RFPNTR.
+	JRST JSUCC
+
+JFILLE:	MOVE A,[-4,,FILLEN]	;FILLEN.
+JSUCC:	SKIPE DIRFLG
+	 JRST WTDERR
+JCALRT:	MOVEM A,JRFDAP
+JCALR1:	SYSCAL JOBRET,[ 1000,,CHBOJ ? 1000,,1 ? JRFDAP]
+	 PCL		;THE SYSTEM CALL WAS PCLSR'ED AND COMES IN AGAIN.
+	JRST GOLOOP
+
+JRFDAP:	0
+
+JSFDAT:	MOVEM A,CRDATE		;SFDATE.  Set our cached date but don't write directory yet.
+	SETOM DATUPD		;Set flag saying dir must be updated later.
+	JRST JSUCC
+
+JRFDAT:	HRROI A,CRDATE		;RFDATE.
+	JRST JSUCC
+
+JRRDAT:	HRROI A,REFDAT		;RRDATE.
+	JRST JSUCC
+
+JRESRDT:
+	MOVE A,ORFDAT		;RESRDT.  Restore ref date which was in effect before the open.
+JSRDAT:	HLLM A,REFDAT		;SRDATE.
+	SETOM DATUPD
+	JRST JSUCC
+
+;Return five words: fn1, fn2, "random", cdate, rdate+byte count.
+JFILBLK:
+	SKIPE DIRFLG
+	 JRST WTDERR
+	PUSHJ P,LOCK		;Lock the directory.
+	SKIPN DATUPD
+	 JRST JFILB1
+	MOVE A,CRDATE		;If nec., update the file's dates stored in the directory,
+	MOVEM A,UNDATE(Q)
+	MOVE A,REFDAT
+	HLLM A,UNREF(Q)
+	SETZM DATUPD		;and say that they are now up to correct there.
+JFILB1:	HRL A,Q			;Copy the 5 words out of the dir, so we can unlock fast.
+	HRRI A,RNDM
+	BLT A,RNDM+LUNBLK-1
+	PUSHJ P,UNLOCK
+	MOVE A,[-5,,RNDM]	;Return the values.
+	JRST JCALRT
+
+;Rename while open.
+JRNMWO:	SKIPE JBCWD1		;make sure that neither filename is zero.
+	 SKIPN JBCWD6
+	  JRST ILFERR
+	SKIPE DIRFLG
+	 JRST WTDERR
+	PUSHJ P,LOCK		;Lock dir, get filename block address in Q.
+	PUSHJ P,MAPARC
+	PUSHJ P,JRNM1
+	JRST JCALR1
+
+JRNM1:	PUSHJ P,ARCWRT
+	PUSH P,UNDATE(Q)	;Don't clobber creation date, etc.
+	PUSH P,UNRNDM(Q)
+	PUSH P,UNREF(Q)
+	PUSHJ P,DIRGE1		;Make a copy of the directory.
+	PUSHJ P,QSQSH0		;Delete the old filename block.
+	MOVE A,JBCWD1
+	MOVE B,JBCWD6
+	PUSHJ P,QFNG		;process a > or < appearing in the new filenames.
+	 JFCL
+	MOVEM A,RDEVN+1
+	MOVEM B,RDEVN+2		;Report changed names to RFNAME system call.
+	.CALL JBST
+	 .LOSE %LSFIL
+	PUSHJ P,DINSR2		;Make a new one at the appropriate place, with the new names.
+	POP P,UNREF(Q)		;The other three words carry over from the old entry.
+	POP P,UNRNDM(Q)
+	POP P,UNDATE(Q)
+	JRST DIRPUT		;Return to JCALL do do the JOBRET.
+
+;Rename/delete.
+;This is an initial operation, done when there is no JOB channel open yet,
+;so the directory is still locked from the initialization.
+JFDELE:	MOVE A,JBCFN1
+	MOVE B,JBCFN2
+	CAMN A,['.FILE.]
+	 CAME B,[SIXBIT /(DIR)/]
+	  CAIA
+	   JRST ILFERR
+	PUSHJ P,QLOOK		; Look for the file we are going to rename or delete.
+	 JRST RDFNF		; Can't find it => report error.
+	SKIPE JBCWD1		;Is this delete or rename?
+	 JRST JFDELR		;Rename.
+	PUSHJ P,ARCWRT
+	HRRZ B,UNRNDM(Q)	;Delete.
+	SKIPE UHREFC+ARCADR(B)	;Is file being referred to?  If not,
+	 JRST JFDELD
+	PUSHJ P,DIRGE1		;we can delete it now.  Copy the directory,
+	PUSHJ P,QSQSH0		;delete the filename block,
+	PUSHJ P,DIRPUT		;rewrite the directory.
+JFDELW:	SYSCAL JOBRET,[%CLIMM,,CHBOJ ? %CLIMM,,1]	;Return success.
+	 PUSHJ P,IJBRTF
+	JRST JCLS1		;Commit suicide, since no channel open.  Maybe salvage.
+
+JFDELD:	MOVSI C,UNCDEL		;Deleting a file that's being read.
+	IORM C,UNRNDM(Q)	;Set bit to cause it to be deleted when closed.
+	JRST JFDELW
+
+;Rename.  Now that the filename block address is in Q,
+JFDELR:	PUSH P,Q
+	MOVE A,JBCWD1
+	MOVE B,JBCWD6
+	CAME B,[SIXBIT />/]
+	 CAMN B,[SIXBIT /</]
+	  JRST JFDEL1
+	CAME A,[SIXBIT />/]
+	 CAMN A,[SIXBIT /</]
+	  JRST JFDEL1
+	PUSHJ P,QLOOK		;Make sure no file exists with the specified new names.
+	 JRST JFDEL1
+	CAMN Q,(P)		;(but allow rename to the same names as now).
+	 JRST FILXST
+JFDEL1:	POP P,Q
+	PUSHJ P,JRNM1		;just do a rename-while-open,
+	JRST JFDELW	
+
+JDELWO:	SKIPE DIRFLG		;DELEWO.  Mark file to be deleted when closed.
+	 JRST WTDERR
+	PUSHJ P,LOCK
+	MOVSI C,UNCDEL
+	IORM C,UNRNDM(Q)
+	PUSHJ P,ARCWRT
+	JRST JCALR1
+
+TSINT:	0
+	0
+	SKIPL TSINT
+	 JRST TSFW
+	SETOM INT
+	.DISMISS TSINT+1
+  
+TSFW:	PUSH P,A
+	MOVE A,TSINT
+	TRZE A,%PIMPV
+	 PUSHJ P,TSMPV
+	TRZE A,%PIIOC
+	 PUSHJ P,TSIOC
+	POP P,A
+	.DISMIS TSINT+1
+
+;When an MPV interrupt happens from one of the right places, create the core.
+TSMPV:	PUSH P,A
+	HRRZ A,TSINT+1
+	CAIE A,MPVOK1
+	 CAIN A,MPVOK2
+	  JRST TSMPV1
+	CAIE A,MPVOK3
+	 .VALUE
+TSMPV1:	.SUSET [.RMPVA,,A]
+	LSH A,-10.
+	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? A ? %CLIMM,,%JSNEW]
+	 JSR CBKLOS
+	POP P,A
+	POPJ P,
+
+;IOC error must be disk full.  Just wait a while and try again.
+;(could also be directory full, but what can we do?)
+TSIOC:	PUSH P,TT
+	PAUSE
+	POP P,TT
+	POPJ P,
+
+;COME HERE TO REALLY GIVE UP THE GHOST.
+DIE:	.LOGOUT 1,
+	JRST DIE
+
+JBGT:	SETZ
+	'JOBCAL
+	[CHBOJ]
+	2000,,JBCOP
+	SETZ [-11.,,JBCWD1]
+
+JBST:	SETZ
+	'JOBSTS
+	MOVEI CHBOJ
+	MOVEI 43	;SNDSK
+	RDEVN
+	RDEVN+1
+	RDEVN+2
+	SETZ RDIRN
+
+JBRT1:	SETZ			;JOBRET call block to report success.
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ [1]
+
+JBRTL:	SETZ			;JOBRET to return non-skipping but with no error code.
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ [0]
+
+JBRT3:	SETZ			;JOBRET to return an error code.
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ ERRCOD
+
+ERRCOD:	0		;ERROR CODE PUT IN HL OF THIS WORD.
+
+;DATA RETURNED BY JOBCAL.
+JBCOP:	0	;OPCODE: 0-8 MEANING OPEN, IOT, MLINK, RESET, RCHST, ACCESS, DELETE/RENAME, RENMWO, .CALL.
+JBCWD1:	0	;BLOCK IOT PTR / ACCESS PTR / NEW FN1 IN RENAME&MLINK / 0 IN DELETE. / SYSTEM CALL NAME.
+JBCFN1:
+JBCWD2:: 0	;FN1
+JBCFN2:
+JBCWD3:: 0	;FN2
+JBCSNM:
+JBCWD4:: 0	;SNAME
+JBCDEV:
+JBCWD5:: 0	;DEVICE
+JBCWD6:	0	;NEW FN2 IN RENAME&MLINK / OPEN MODE IN OPEN.
+JBCWD7:	0	;NEW SNAME IN MLINK.
+JBCWD8:	0
+JBCWD9:	0
+JBCW10:	0
+JBCW11:	0
+
+LPDLL==20
+PDL:	BLOCK LPDLL+4
+
+CONSTANTS
+VARIABLES
+
+ARCADR==<.+1777>&-2000		;Address of place to map in the archive pages.
+DIRCPY==540000			;Address of place to put temporary copy of archive directory.
+NEWDAT==542000			;Address of place to put stuff to add to end of file.
+NEWMAX==776000-NEWDAT		;Max number of words of extension data we can hold.
+ARCMAX==DIRCPY-ARCADR		;Maximum size archive we can handle.
+
+END GO
