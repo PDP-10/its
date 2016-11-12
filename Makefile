@@ -9,13 +9,16 @@ WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
 all: out/rp0.dsk
 
-out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl
+out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape
 	expect -f build/build.tcl
 
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
 	cd bin; $(ITSTAR) -cf ../$@ $(MINSYS)
-	cd src; $(ITSTAR) -rf ../$@ $(SRC)
+
+out/sources.tape: $(ITSTAR)
+	mkdir -p out
+	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	mkdir -p out
