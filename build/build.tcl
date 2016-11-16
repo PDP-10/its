@@ -190,6 +190,11 @@ respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
+respond "*" ":print channa;..new. (udir)\r"
+respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
+expect ":KILL"
+respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
+
 respond "*" "\005"
 respond "sim>" "at tu0 out/output.tape\r"
 respond "sim>" "c\r"
