@@ -1,0 +1,2290 @@
+ITS UUOS:
+
+This file attempts to maintain up-to-date documentation on
+all non-symbolic ("old") system calls.  Those wonderful
+souls who update the information in any way (additions,
+deletions, corrections) should describe their
+modifications in a brief note to INFO-ITS@AI so
+that interested parties can correct their copies or
+conceptions without needing to print or read the
+entire file again.  For example:
+
+	:QMAIL INFO-ITS@AI I added more details to the .FOO uuo ^C
+
+If you want to be put on the INFO-ITS mailing list,
+just say so in a message to it.
+-------------------------------------------------
+
+On the PDP-10, opcodes 0 through 77 are deliberately "not
+defined", and are called uuos ("unimplemented user operations").
+Also, certain other opcodes are either illegal in user mode
+or undefined (for example, I/O instructions, JRST 4,).
+
+When an undefined instruction is executed, it "traps to 40":
+it is stored in location 40
+with the index and indirect fields zeroed and the address field
+replaced by the effective address, and then the instruction
+in 41 is executed (it is usually a subroutine call).
+(Some instructions actually trap to 60 on KA's, but ITS contrives
+to make them appear to have trapped to 40 just like all
+the others).
+
+uuos 1 through 37 are reserved for user programs.  They
+go through the entire trap sequence remaining in user mode,
+so it is the user's locations 40 and 41 that are used.
+The operating system is not involved at all.
+These uuos are called "user uuos".
+
+The other undefined opcodes enter exec mode during the trap,
+so that the system's 40 and 41 are used;  the PC saved by the
+subroutine call will say "user mode" if the uuo was executed
+in user mode, however.  These instructions are the normal way
+of calling any PDP-10 operating system.
+
+ITS interprets uuos 40 through 47 as monitor calls;  those
+uuos are called "system uuos".  The bulk of this file is devoted
+to describing how to use them.  In addition, ITS will simulate
+some I/O instructions for the user (for example, any CONI, and
+DATAI 0,).  All other instructions that trap to the system
+will be signaled to the user (they are "returnable uuos").
+For simple programs, they will cause an ILOPR interrupt
+(%PIILO, bit 1.6 of .PIRQC).  For programs that appear able to
+handle them, they are "returned" to the user, pretending to
+be user uuos - that is, the system makes it appear that they had
+trapped to the user's 40.  However, they do not act precisely
+like user uuos:
+ 1) The system can't simulate any trap instruction but
+unindexed, direct JSR.  If the user's trap instruction is
+not a JSR, or is indexed or indirect, the system assumes that
+the user can't handle the returnable uuos, and causes an ILOPR
+interrupt instead.  Also, if the AC field of the JSR is nonzero,
+the system will interrupt instead of returning the uuo;  this
+is a way for a program to say explicitly that it doesn't want
+to have uuos returned, but still handle user uuos.
+ 2) If the opcode in 41 is 0, the system treats it as if it
+were a JSR.
+ 3) 0 is not considered a reasonable place to JSR to.  If the
+address field of 41 is 0, the system will interrupt instead of
+returning the uuo.
+ 4) While the addresses 40 and 41 are fixed by hardware for
+user uuos, for system returned uuos they are not.  They must
+always be consecutive, but the address of the first one is
+kept in the RH of the .USET variable .40ADDR (whose initial value is,
+of course, 40).  Thus, the user may have one handler for user uuos
+and another for returned uuos.
+Note that the system uses "42" for interrupts and "43" and "44"
+for the "locks" feature;  those locations are also shifted
+by setting .40ADDR.
+ 5) Returnable UUOs have complicated interactions with DDT.
+When proceeding from a breakpoint, DDT must simulate certain
+instructions, including all those that can transfer control.
+User uuos can be simulated properly, but not returnable ones
+since DDT does not know how to decide whether they are to cause
+ILOPRs.  So DDT treats those uuos like the typical instructions;
+it puts the uuo in 31, a jump to 1 + the actual address of the
+uuo in 32, and a jump to 2 + that address in 33.  It then starts
+the job at 31.  If the returnable uuo handler does nothing with
+the PC except possibly return to it, and does not try to examine
+the uuo except by looking at 40, this causes no problem.  However,
+if the uuo is followed by arguments, or if it can skip more than
+once, or if it tries to remember the PC somewhere, the handler
+must understand that if the PC is 31 (+1) special treatment is required.
+In addition, the real location of the uuo will contain not the
+uuo but a .BREAK, which will be there to implement the breakpoint.
+
+If the .UTRAP variable of a job is nonzero, ALL instructions
+that trap to the system will cause ILOPR interrupts - even those
+that are usually treated as system calls.  In addition, the
+job will not handle any of its own interrupts - they all interrupt
+its superior.  Thus, the superior can make the job believe it is
+running under a non-ITS environment.  User uuos are not affected.
+The .UTRAP variable is the same as the %OPTRP bit in the LH of .OPTION.
+
+If the %OPDEC bit in the LH of .OPTION is set, uuos 40, 41 and 47
+(as well as those I/O instructions which ITS usually simulates)
+become returnable uuos instead of system calls.  By a lucky
+coincidence, those uuos, which are the only ones used by both
+ITS and TOPS-10, are not really necessary in ITS (they are
+.OPEN, .IOT and .ACCESS, and all have alternative forms using .CALL).
+In this mode, all uuos used as system calls by TOPS-10 are
+returnable.  One of the TOPS-10 simulators works by setting
+this bit, and making .40ADDR point into the simulator where
+it lives at the top of core (to avoid conflicting with the user
+uuo handlers of the simulated programs).
+
+CALLS:	Overview of ITS System Calls
+
+ITS system calls come in two kinds: the older, numerically
+decoded, non-standardized kind, and the newer "symbolic
+system calls" with a standard calling sequence.
+
+Each of the numerically decoded system calls is distinguished
+from all of the others by the values of specific fields
+in the instruction (the opcode, and maybe the AC and address
+fields).  Each specific system call is known as "a uuo", and
+its name is a predefined symbol in the assembler, whose value
+is the appropriate instruction.  For example, one uuo is
+.ACCESS; it is distinguished by the opcode field alone, which means
+that the AC field and address are available as arguments.
+The symbol .ACCESS is defined as the appropriate opcode.
+.RCHST, however, is distinguished by its opcode and its address,
+so that only the AC field can be used as an argument.  The uuos
+distinguished by opcode and address all have the same opcode,
+which is called .OPER; thus, all such uuos are called ".OPER's".
+.FDELE is distinguished by opcode and ac field, leaving the address
+as an argument; such uuos are called ".CALL's" since they all have
+.CALL as their opcode.  Each uuo is described individually in this file.
+
+The symbolic system calls all use the uuo .CALL.  They are
+distinguished by the contents of the block addressed by the .CALL,
+which also points to the arguments.  Ths symbolic system calls
+are described in more detail in the file .INFO.;ITS .CALLS.
+
+.ACCESS chnum,[access pointer]		set file access pointer
+
+	Sets the access pointer for the I/O channel <chnum>
+	for the next input/output operation.  This is used to
+	effect random access.  On the DSK device (and DSK-like
+	JOB devices) the access pointer is the number of "bytes"
+	from the beginning of the file.  Bytes are normally the
+	same as words, but in unit ascii mode there are five
+	seven-bit bytes per word.  In the future there may be
+	the ability to have bytes of any size from 1 to 36 bits.
+	On the USR device the access pointer is the address
+	within the job's memory.
+	Random access on the USR device can also be effected
+	via page mapping (see the .CBLK uuo and the CORBLK
+	symbolic system call).  If the channel number <chnum>
+	is variable, the symbolic system call ACCESS may
+	be used in place of the .ACCESS uuo.
+	The symbolic call RFPNTR may be used to read the current
+	access pointer for a file.
+
+.ARMOFF
+
+This uuo was for hacking the AMF arm.  The arm no longer exists.
+
+.ARMOVE
+
+This uuo was for hacking the AMF arm.  The arm no longer exists.
+
+.ARMRS
+
+This uuo was for hacking the AMF arm.  The arm no longer exists.
+
+.ASSIGN ac,				assign a microtape
+	;skip if successful
+
+	The accumulator <ac> should contain the number of a
+	microtape drive.  If it succeeds, it assigns the drive
+	to the user who executed the .ASSIGN.  When a job
+	attempts to use a microtape drive,
+	it will succeed only if it has the same
+	sname as the uname of the job which did the .ASSIGN.
+	A .ASSIGN will fail only if the drive is already
+	assigned to a different user (i.e. a different uname),
+	or if an invalid drive number is given.
+	See also the .DESIGN and .RCHST uuo's.
+
+.ATTY chnum,				assign tty to inferior
+	;skip if successful
+
+	Puts the job in the state of wishing to pass control of
+	the tty to the direct inferior open on the specified
+	channel.  It skips if successful; it fails if the
+	channel does not have a direct inferior open, if the
+	executing job had never had the tty, or if it had not
+	been in the state of wishing to retain the tty.  If the
+	job had the tty, after the .ATTY the tty will belong
+	to the specified inferior, or one of its inferiors.
+	A job need not have the tty to do an .ATTY.
+	See the .DTTY uuo, and the .TTY user variable.
+	Also see ITS TTY.
+
+.BREAK ac,address			breakpoint instruction, etc.
+
+	The <ac> and <address> fields of this uuo are totally
+	ignored by ITS.  The procedure executing it receives
+	a class 1 interrupt (bit 2.2 of the .PICLR user
+	variable, called %PIBRK), stopping it and interrupting
+	its superior.
+
+	The standard superior procedure, DDT, assigns
+	the following semantics to .BREAK, dependent on
+	the <ac> field (for full information see DDT ORDER):
+
+	<ac>	meaning
+	1-10	Breakpoint number <n> in the program, for <n>
+		between 1 and 10.
+	12	Request for information transfer.
+	15	Temporary breakpoint number 1.
+	16	Request for program suspension or termination.
+	17	Temporary breakpoint number 2.
+
+	The "normal termination" instruction is .BREAK 16,160000
+	(but also see .LOGOUT).
+
+	When DDT sets a breakpoint in a program on a given
+	instruction, it replaces the opcode with .BREAK
+	and the ac field with the breakpoint number.  Thus
+	the instruction will still calculate its usual effective
+	address before breaking.  The two temporary breakpoints
+	are used for ^N (multiple instruction proceed), etc.
+
+	.BREAK 12, is used to transfer information between
+	DDT and the executing program at the latter's request.
+	.BREAK 12, is like .SUSET in that it points
+	either to a specification word or to an AOBJN
+	pointer of such words.  Bit 4.9=0 means read, =1 means
+	write (from the program's point of view).  Writing can
+	be illegal if the ..PERMIT variable in DDT for
+	the job is set appropriately.  Bits 4.7-3.1
+	determine the type of information transferred:
+	..RSTA	1	Starting address of program.
+	..RLFI	2	Loaded file name.
+			Four words: device, sname, file name 1, file name 2.
+	..RSTP	3	(read only)  AOBJN pointer to program's symbol table
+			in DDT.  The left half is the negative of
+			the symbol table size.  See type 7 (..RSTB).
+	..RSYM	4	Symbol definition.  Uses two words.
+			Read:	first word contains squoze for symbol.
+				Second word receives value.
+				If undefined, first word is zeroed.
+			Write:	first word contains squoze, second value.
+	..RJCL	5	Read:	fetches command string for program.
+				Set by : command or via :JCL.
+				Always transfers at least one word of
+				packed ascii, then more until either a
+				zero word is transferred or until a
+				non-zero is about to be transferred into.
+				String is terminated by ^M if non-null.
+			Write:	clear command string.
+	..RPFI	6	File name defaults used for :PRINT.
+			Four words: device, sname, file name 1, file name 2.
+	..RSTB	7	Symbol table.  Allows transfers of many
+			symbols in either direction.
+	..RCON	10	(read only)  Number to symbol conversion.
+			Uses two words.  The first should initially
+			contain a value.  It receives squoze for
+			a symbol, and the next word receives a delta.
+			The value of the symbol plus the delta equals
+			the original argument.  The lookup used by DDT
+			for symbolic typeout is employed here.
+			If the lookup fails, the first word receives
+			zero and the second receives what the first held.
+	..RXUN	11	(read only)  The XUNAME (a uname to be used for
+			getting mail, etc.).  This is like the UNAME, but
+			has trailing digits stripped off, etc.  This is
+			OBSOLETE; use the .XUNAME user variable.
+	..RXJN	12	(read only)  The XJNAME (what this job should think
+			of as its "real" name).  This is like the JNAME,
+			but has trailing digits stripped off, etc.  This is
+			OBSOLETE; use the .XJNAME user variable.
+	..RLJB	13	(read only)  Read index of previously current job.
+	..RRND	14	Reads or writes the ..URANDM variable in DDT for
+			this job.
+	..RPUR	15	Unpurify page.
+	..RHSN	16	(read only)  Ask to lookup an HSNAME from an XUNAME.
+	..RMAI	17	(read only)  Ask to lookup user's mail file name.
+	(Symbols with names starting with "..S" exist for all those not
+	 marked as read only.  For example ..RSTA==1 and ..SSTA==400001.)
+
+	Illegal .BREAK 12,'s cause DDT to give the program an
+	illegal operation interrupt (bit 1.6 in the .PIRQC
+	user variable).
+
+	.BREAK 16, is used to return to DDT in various
+	nice ways.  The effective address is decoded as follows:
+	2.9	Return from X.  (Do not use unless you understand it!)
+	2.8	Type extra carriage return in DDT.
+	2.7	Do not reset TTY input (effective only if
+		executing job has the TTY).
+		"Normal" returns to DDT should always have
+		this bit set.
+	2.6	Kill executing job:
+			Immediately, if it has the TTY.
+			When it gets the TTY, if current job.
+			Otherwise when J'd to in DDT.
+			Will print ":KILL" when killed.
+	2.5	Kill executing job:
+			Like 2.6 if job current.
+			Otherwise is killed silently.
+	2.6&2.5	Together mean kill executing job:
+			Like 2.6 if job current.
+			Otherwise kill immediately, and print
+			JOB <jname> FINISHED on TTY.
+	2.4	Conditional breakpoint return.
+			2.8=1 => condition true.
+			2.8=0 => condition false.
+		Used by DDT.  Dangerous for users to play with.
+	2.3	Don't type even a carriage return.  Don't close
+		the currently open location.  If killing self
+		don't type :KILL.
+	2.2-1.1	Illegal.  (Reserved for expansion.)
+
+	DDT sets the %OPCMD and %OPBRK bits for
+	its inferiors appropriately.  See the .OPTION
+	user variable.
+
+.CALL [ SETZ ? SIXBIT \name\ ? -- args -- ]	symbolic system call
+	;skip if successful
+
+	The .CALL uuo is used to invoke a large class of
+	operations which are distinguished by a sixbit name.
+	See the file ITS .CALLS for more information.
+
+	.CALL is sometimes used in a generic sense to denote
+	the set of uuo's with the same opcode as .CALL; they
+	are distinguished by their accumulator fields:
+		.CALL 0,		.CALL
+		.CALL 1,		.DISMISS
+		.CALL 2,		.LOSE
+		.CALL 3,		.TRANAD
+		.CALL 4,		.VALUE
+		.CALL 5,		.UTRAN
+		.CALL 6,		.CORE
+		.CALL 7,		.TRANDL
+		.CALL 10,		.DSTART
+		.CALL 11,		.FDELE
+		.CALL 12,		.DSTRT
+		.CALL 13,		.SUSET
+		.CALL 14,		.LTPEN
+		.CALL 15,		.VSCAN
+		.CALL 16,		.POTSET
+		.CALL 17,		unused
+
+.CBLK ac,				hack a core block
+	;skip if successful
+
+	This uuo is ARCHAIC.  Its use should be avoided
+	in new programs, since the CORBLK symbolic system call
+	is much more flexible and easy to understand.
+
+	The contents of accumulator <ac> specify an operation
+	on the executing job's core.  It modifies the job's
+	page map entry for one page.  The contents of <ac>
+	should be as follows:
+	4.9	Must be zero.
+	4.3-4.1	Desired operation:
+		0	Get page from self.
+		1	Get absolute page.
+		2	Get a page from the user open on
+			the channel specified by bits 3.8-3.1.
+		3	Get a page from the user whose user
+			index is in bits 3.8-3.1.
+		4	Get fresh page.
+		5	Get public page.
+		6	Make my page public.
+		7	Make my page private.
+	3.9	If 1, request write permission for the page.
+		Assumed 1 for operation 4 (fresh page).
+		Otherwise valid only for self, public page,
+		or direct inferior open on channel.
+	3.8-3.1	User index or USR device channel.
+		If the executing job is a job device, then
+		377 will refer to the job which invoked it.
+	2.9	1 = insert page in core map.
+		0 = delete page.  If the operation is 6 or 7,
+		this bit is ignored.  Otherwise, the operation
+		is ignored for deletion.
+	2.8-2.1	Virtual page to be affected within the core map
+		of the executing job.
+	1.9-1.1	Block number within source specified by
+		bits 4.3-4.1.
+
+	Sample contents of <ac> for various operations:
+	Delete my page 43:			0,,43000
+	Create a fresh page 217:		4400,,517000
+	Make my page 45 be read-only:		0,,445045
+	Make my read-only page 45 writable:	400,,445045
+	Make page 16 of job 34 read-only
+		as my page 377:			3034,,777016
+
+	This uuo is all right for hacking single pages within
+	your own core map.  To alter another job's core map,
+	or to hack many pages at once, use the CORBLK
+	symbolic system call.
+	For more information on core blocks, see ITS CORBLK.
+
+.CLOSE chnum,				close a file
+
+	The input/output channel <chnum> is closed.  All
+	operations associated with that channel are completed.
+	For file structured devices, if another file with
+	the same name exists (if <chnum> was being used for
+	output), that file is deleted at this time and the new
+	file replaces it.
+	Any further attempts to use the channel without re-opening
+	it will cause errors.
+	.CLOSE does nothing if the channel is not open.
+	If the USR device is open on the specified channel,
+	the job is not killed by .CLOSE; it is merely made
+	to be no longer open on the channel.  To kill a USR
+	device job, the .UCLOSE uuo must be used.
+	If the channel number is a variable, the CLOSE
+	symbolic system call may be used.
+
+.CORE <number of blocks>		set core limit
+	;skip if successful
+
+	This uuo is a relic of the old pre-paging version of ITS.
+	For applications which want to be relatively clever
+	about paging and core allocation, see the .CBLK uuo
+	and the CORBLK symbolic system call.
+	The effective address of .CORE should be a number between
+	0 and 400 octal.  The core of the procedure executing it
+	is modified as follows:
+
+	(DEFUN *CORE (N)
+	       (DO ((K (// (*SUSET *RMEMT) 2000)
+		       (// (*SUSET *RMEMT) 2000)))
+		   ((= K N))
+		   (COND ((< K N) (CREATE-PAGE K))
+			 (T (DELETE-PAGE (- K 1))))))
+
+	That is, at each step a page is either added or deleted
+	at the top of the job's memory until page <n-1> is the
+	highest one in the job's memory.  Only a .CORE to
+	acquire more core can fail.  If a .CORE fails to skip,
+	some of the requested core may have been obtained,
+	though not all.
+
+.DCLOSE					display close
+
+	This system call releases the 340 display or the
+	E&S display, if possessed by the executing job, and
+	closes all channels on which the display is open.
+	If the display is being hacked via .DSTART, this
+	won't be any channels.  In the case of the 340, the
+	display is made available to the pdp-6.
+	If the executing job does not possess the
+	display, .DCLOSE does nothing but return.
+
+.DCONTIN				display continue
+
+	This system call will restart the E&S display after stopping
+	or single stepping (.DSTOP, .DSTEP).  If the display is
+	stopped because of a Display MPV, a Hit Stop, WCR stop or
+	PROG Stop, the condition will NOT be cleared and the display
+	NOT restarted.  If the display is not stopped or does not
+	belong to the executing job, no action is taken.
+
+	This system call is ignored by the 340 display.
+
+.DEMON					acknowledge one demon request
+.DEMON ac,				acknowledge <n> demon requests
+	;skip if successful and more requests pending
+
+	As of September 1, 1976, only the DM machine has this.
+
+	If the executing job is not a demon, the uuo merely returns
+	without skipping.  If it is a demon, then either 1 or
+	the contents of the specified non-zero <ac> are subtracted
+	from the demon's request count, and the uuo skips iff the
+	resulting count is still positive.
+	See the DEMSIG, RDDMST, and STDMST symbolic system calls.
+
+.DESIGN ac,				de-assign a microtape
+	;skip if successful
+
+	The accumulator <ac> should contain the number of a
+	microtape drive.  It reverses the effect of a .ASSIGN
+	uuo by making the drive unassigned again.  A .DESIGN
+	will fail only if an invalid drive number is given,
+	or if the drive is assigned to some other user than
+	the one owning the job trying to do the .DESIGN.
+	It will succeed if the drive is already unassigned.
+
+.DIAL ac,		ANCIENT HISTORY	dial a dataphone line
+	;skip if successful
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .NETAC.
+
+	The accumulator <ac> should contain a byte pointer
+	of the following form:
+		440600,,[data](n)
+	where <n> is not an index field, but the number of
+	a dialer (0 or 1), and <data> is a series of dialing
+	bytes.  The byte string may not be longer than 5 words.
+	Each byte specifies a dialing step as follows:
+	0	End of data.
+	1-10.	Send 1-10. dialing pulses.  Pauses are supplied
+		between digits automatically.
+	> 10.	Pause <<byte>-10.> seconds in dialing.
+	If the accumulator is zero except for the dialer number,
+	then the "break" signal is sent after any previous
+	dialing has been completed.
+	A .DIAL will fail if the dialer number is invalid,
+	if the TTY associated with the dialer (0=T07, 1=T06)
+	is in use by another job, or if the dialer is being used
+	by some other job (the other job has not done .HANGUP yet).
+	See the .DIALW and .HANGUP uuos.
+
+.DIALW dialnum,		ANCIENT HISTORY	wait for dialing to finish
+	;skip if successful
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .NETS.
+
+	If dialer number <dialnum> is assigned to the job
+	executing the .DIALW (i.e. the job has done a .DIAL
+	but not a .HANGUP), then .DIALW skips after waiting
+	for dialing to be completed.  Otherwise it fails.
+	See the .DIAL and .HANGUP uuos.
+
+.DIETIME ac,		OBSOLETE	time until system dies
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by the SSTATU
+	symbolic system call.
+
+	The accumulator <ac> is set to the maximum time
+	(in thirtieths of a second) before ITS will go
+	down.  If the system is not planning to go down
+	(the normal case, we hope!) <ac> is set to -1.
+	See also the .REVIVE and .SHUTDN uuos.
+
+.DISMISS [new PC]			dismiss an interrupt
+
+	Dismiss an interrupt.  The user variable .PICLR
+	is set to -1, thereby enabling interrupts, and the PC
+	receives the quantity <new PC>.
+
+	This is for the so-called "old-style" interrupt scheme.
+	See also the DISMIS symbolic system call, which
+	is ordinarily used with the "new-style" vectored
+	interrupt scheme, but may be used in either case.
+
+	Typically .DISMISS is used in this manner:
+
+	LOC 42
+		JSR TSINT	;pointer to interrupt handler
+	LOC 100			;or wherever
+	TSINT:	0		;interrupt flags
+		0		;PC as of interrupt
+		EXCH A,TSINT
+	TSINT1:	TLZE A,<bit1>	;check for various interrupts
+		 JRST <handler1> ;handlers return to TSINT1
+		TLZE A,<bit2>
+		 JRST <handler2>
+		. . . .
+		MOVE A,TSINT	;restore accumulator
+		.DISMISS TSINT+1 ;dismiss interrupt
+
+	See ITS INTRUP for more information on interrupts.
+
+.DISOWN chnum,				disown an inferior
+
+	An inferior job should be open on channel <chnum>.
+	The job is caused to be no longer an inferior of
+	the executing job, and is made to be the top level
+	job of a disowned job tree.  The usual reason for
+	disowning a job is so that it can continue to exist
+	after its former superior has been killed (for instance,
+	after the user who disowned it has logged out).
+	Another reason for disowning a subtree is to reown it
+	under a different superior, thus altering the shape
+	of the system's job-tree structure.
+	All channels on	which the executing job has open the
+	job being disowned will be closed in the process of
+	disowning (see the .CLOSE uuo).  Disowning is illegal if
+	<chnum> does not have an inferior open, or if the
+	subtree being disowned controls the console (see the
+	.ATTY uuo).  If the jobs of the subtree have opened
+	the console, then the channels are not closed, but
+	are marked as "disowned tty"; certain operations
+	on such a channel will succeed, and others will hang
+	until the tree is re-owned and a console tty given
+	to the job.  Such channels appear to be open on
+	tty number %TINON=77 octal.
+	A disowned job is distinguished by the fact that
+	bit 4.9 of its .APRC user variable is set.
+	A disowned job never succeeds in executing the RELOAD symbolic
+	system call, even if it is the top level job in its tree.
+	When a job tree is logged out, any micro-tapes assigned
+	to the uname of that job tree are de-assigned (see the
+	.ASSIGN and .DESIGN uuo's), but only if the job tree is
+	not disowned.
+	All disowned jobs share a resource word for purposes of
+	scheduling, in the same way that all jobs in a single
+	non-disowned tree share a resource word.  Thus all disowned
+	jobs tend collectively to use no more runtime than any
+	single non-disowned job tree.
+	Furthermore, individual disowned jobs are given only 1/4
+	the priority to run as a non-disowned job.  This does
+	not apply, however, if the disowned job in question has
+	.MASTER mode, or controls the 340 display, the E&S display,
+	the vidisector, the arm, the LPT (line printer), or the
+	PLT (plotter).
+	When operating under heavy loads, the swapper prefers to
+	swap out disowned jobs rather than non-disowned jobs.
+
+	The DETACH symbolic system call makes a non-disowned tree
+	disowned.
+
+	When a non-disowned top-level job encounters
+	a fatal interrupt, the system will make it disowned and
+	print a suitable message on the system console and on
+	the job's console (if it has one).  The disowned tree
+	can then be reowned with DDT and debugged.
+
+.DMPCH ac,		OBSOLETE	mung dump check bit
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by the RDMPBT
+	and SDMPBT symbolic system calls.
+
+	The accumulator should contain a channel number
+	in the right half, which should have a disk channel
+	open on it.  The left half describes any alterations
+	to be made to the dump check bit for the open file:
+		4.9	Set dump check bit.
+		4.8	Clear dump check bit.
+	The state of the dump check bit (possibly after setting)
+	is returned in accumulator <ac> in bit 1.1.
+	The dump check bit is used by the magtape file backup
+	system to keep track of which files have been backed
+	up on magtape.  This bit therefore should not be
+	twiddled light-heartedly.  The "!" you sometimes see
+	in front of a date in a disk file directory is present
+	iff the dump check bit for the file is zero.
+
+.DSTART	[start-addr]			start the display
+	; skip if successful
+
+	This system call is used to start the E&S or 340 display processor,
+	whichever one the system has.  If it has neither, the uuo is
+	an illegal operation and gives a %PIILO interrupt.
+	.DSTART assigns the display to the executing job if it is available,
+	and skips if successful.  If the display is not available
+	.DSTART does not skip.
+
+	In the case of the 340 display, the effective address of the
+	.DSTART is the address of the user's display list.  This can
+	be either a single BLKO pointer (if the word is negative), or
+	the first word in a linked list (if the word is positive).
+	The right half of each word in the linked list is zero
+	to end the list, or the address of the next word in the list.
+	The left half of each word in the linked list is the address
+	(which must be less than 400000!) of a BLKO pointer.  If this
+	address is zero, or the BLKO pointer is zero, it is ignored
+	(this allows "jump-type" entries in the list.)
+	The display will continually execute the commands pointed
+	to by this list.  It is OK to change the list, or the single
+	BLKO pointer, while the display is running, provided everything
+	always points to valid data.
+	The .DSTRTL uuo is the same as .DSTART except that it uses
+	regular AOBJN pointers instead of BLKO pointers.
+
+	In the case of the E&S display, the argument to .DSTART contains
+	in the right half, the address at which the display program will
+	start, and in the left half, a code to determine modes of
+	operation:  There are four 3-bit fields in this code:
+
+	3.1-3.3	Start mode.  Only the 3.1 bit is significant.  If set,
+		the display is started in single step mode.
+	3.4-3.6	Action to take on Program stop.
+	3.7-3.9	Action to take on Hit stop.
+	4.1-4.3	Action to take on Memory stop.
+
+	Each of the three Action fields is decoded as follows:
+
+	0	Restart from address of the last .DSTART.
+	1	Continue after the stop condition has been reset.
+	2 	Stop.
+	3	(Reserved).
+	4	Interrupt and restart.
+	5	Interrupt and continue.
+	6	Interrupt and stop.
+
+.DSTEP					step the E&S display
+
+	The .DSTEP call will step the display processor one instruction
+	cycle if it has been stopped (.DSTOP) or started (.DSTART) in
+	step mode.  If the display is not stopped, .DSTEP will first
+	simulate a .DSTOP.  If the display is not the executing job's,
+	no action is taken.
+
+	The .DSTEP call is ignored by the 340 display.
+
+.DSTOP					stop the display
+
+	The .DSTOP call will stop the E&S or 340 display processor,
+	if the display belongs to the executing job.
+
+.DSTRTL					start the display
+
+	In the case of the 340 display, this is the same as
+	.DSTART (q.v.) except that the display will use AOBJN
+	pointers instead of BLKO pointers.
+
+	In the case of the E&S display, this
+	crashes the system.  Maybe someday this will be fixed.
+
+.DTTY					devour the tty
+
+	.DTTY is used when a job decides that it wishes to
+	retain the tty.  It skips if it succeeds; it fails if
+	the job was already in the state of wishing to retain
+	the tty, or if it had never had the tty.  If the tty had
+	actually belonged to some (possibly indirect) inferior, it
+	will belong after the .DTTY to the job that executed it.
+	A job need not have the tty to do a .DTTY.
+	See ITS TTY for a full explanation of .DTTY.
+	See also the .ATTY uuo, and the .TTY user variable.
+
+.DWORD [word]				send word to E&S display
+
+	The specified word is sent to the E&S display via
+	the DATAO instruction.  The display is stopped first
+	via .DSTOP if necessary.
+
+	This system call is ignored if there is no E&S display
+	or the executing job does not own it.
+
+.EOFC ac,		OBSOLETE	end of file character
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been obsoleted and not replaced.
+
+	Accumulator <ac> receives the eof character used to
+	pad the end of the file open on the channel specified
+	by the contents of <ac> before the uuo is executed.
+	Apparently early microtape files used 141 as the pad
+	character.
+
+.EVAL ac,				evaluate squoze symbol
+	;skip if successful
+
+	Before the uuo is executed, accumulator <ac> should
+	contain the squoze code for a symbol.  This symbol
+	is looked up in the symbol table used by exec DDT
+	(the one used to debug ITS); this table contains
+	symbols defined within ITS.  The uuo fails to
+	skip if the symbol is not found; otherwise the value
+	is placed in <ac> and the uuo skips.
+
+	This uuo offers a useful method of obtaining
+	information from ITS, when combined with the .GETLOC
+	uuo or with absolute memory pages;  for example,
+	to find out how many irrecoverable disk errors there
+	have been, PEEK .EVAL's the symbol QIRRCV and examines
+	that location in the system.  Naturally, this is more
+	risky than using a system call, since the system's
+	symbols may be changed.  One protection against that
+	is to make an entry in the file AI:SYSTEM;EVSYMS >
+	mentioning which symbol is being .EVAL'ed by which
+	program.  Then, there will probably be warning from
+	ITS hackers of any change.
+
+.FDELE fblock		OBSOLETE	delete or rename file
+	;skip if successful
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by the DELETE,
+	RENAME, and RENMWO symbolic system calls.
+
+	This uuo may be used to delete and rename files.
+	It points to a five-word block describing the
+	operation to be performed.  There are three cases.
+
+	[1] Delete a file.
+
+	fblock:	SIXBIT \   dev\		;right-justified device name
+		SIXBIT \fname1\		;file name 1
+		SIXBIT \fname2\		;file name 2
+		0			;zero
+		---			;not examined
+
+	[2] Rename a file open for writing on channel <chnum>.
+
+	fblock:	---			;not examined
+		0			;zero
+		<chnum>			;channel number
+		SIXBIT \fname1\		;new file name 1
+		SIXBIT \fname2\		;new file name 2
+
+	[3] Rename an arbitrary file.
+
+	fblock:	SIXBIT \   dev\		;right-justified device name
+		SIXBIT \fname1\		;old file name 1
+		SIXBIT \fname2\		;old file name 2
+		SIXBIT \fname1\		;new file name 1
+		SIXBIT \fname2\		;new file name 2
+
+	In cases [1] and [3], if the device specified has
+	true directory structure, the .SNAME user variable
+	for the executing job is used as the directory name.
+	Also, the file names (for case [1]) or the old file
+	names (for case [3]) are subject to input translation
+	(see the TRANAD symbolic system call).
+	If the device is not file structured, .FDELE
+	succeeds and skips.  If .FDELE fails, it returns
+	an error code on channel 0 which can be retrieved via
+	the .STATUS uuo or the ERR device.
+
+.FEED chnum,				feed paper tape
+	;skip if successful
+
+	If device PTP (the paper tape punch) is open on
+	channel <chnum>, the uuo punches one line of blank
+	tape and skips.  Otherwise it fails and does not skip.
+
+.GENNUM ac,				generate number
+
+	Accumulator <ac> receives a unique generated number
+	which will not be generated again for a very long
+	time (unless the system crashes, in which case the
+	counter is reset, of course).
+	[ In ITS 1554 and later. ]
+
+.GENSYM ac,				generate symbol
+
+	Accumulator <ac> receives the sixbit name of a
+	unique generated symbol which will not be generated
+	again for a very long time (unless the system
+	crashes, in which case the counter is reset, of
+	course).
+
+.GETLOC ac,				get absolute location
+
+	The accumulator <ac> should contain
+	an absolute address in the left half and an address
+	within the executing job in the right half.
+	The contents of the absolute location specified is
+	deposited in the location specified within the job.
+	This is useful for examining locations within the
+	system.  However, if many locations are to be
+	examined, or if a location is to be examined many
+	times, it is far more efficient to map the absolute
+	page(s) containing the location(s) of interest into
+	the job's core map as read-only memory; the job
+	can then examine the locations at top speed without
+	having to go through the system uuo handler.
+	Such page mappings can be established via the .CBLK
+	uuo or the CORBLK symbolic system call.
+
+.GETSYS ac,				get system data
+	;skip if successful
+
+	Accumulator <ac> should contain an AOBJN pointer to a data area in
+	the user's core.  (A zero left half means the data area extends to
+	the end of core.)  Accumulator <ac+1> should contain the sixbit
+	name of a system data area.  The specified system data area is
+	transferred into the user's core in such a way that the data is
+	consistent (i.e. interrupts are inhibited in appropriate ways,
+	etc.).  If the .GETSYS is successful, <ac> is updated to point to
+	the unused part of the user's data area.
+
+	If the named data area does not exits, <ac+1> is cleared.  If the
+	area in the user's core is too small, the left half of <ac> is
+	replaced with the negative of the correct size.  In both of these
+	cases .GETSYS fails to skip.
+
+	Valid data areas are:
+	MEMORY	Memory tables.
+	UTAPE	Micro-tape variables.
+	NCPSM	Network control program socket map.
+	NCPPQ	Network control program pending RFC queue.
+	NCPHT	Network control program host table.
+	USERS	User variables for all jobs.
+	USER	User variables for job whose user index is in <ac+2>.
+		Formerly a uname-jname pair was accepted in <ac+2>
+		and <ac+3>, but this is no longer true (ANCIENT HISTORY).
+	GETS	Valid sixbit .GETSYS area names.
+	DEVS	Valid sixbit built-in device names.  (Doesn't include those on
+		DEVICE directory.)
+	CALLS	Official system symbol table.  Squoze symbols and values for
+		UUO's, .USET variables, and bits DEFSYM'ed in SYSTEM;BITS.
+	IMPX	Input multiplexor data area.
+	CLINK	Core link device variables.
+	DSYMS	Exec DDT symbol table.  Squoze symbols and values.
+	USYMS	Squoze symbols and values for .USET variables only.
+		(Does -not- contain .RMEMT or .SMEMT, but rather .MEMT.
+		Used by DDT when you type ".MEMT/".)
+	CHDEVS	Device names, from .RCHST table.
+	NCALLS	Valid sixbit names for symbolic system calls.
+	USRVAR	Valid sixbit user variable names for USRVAR system call.
+	TTYVAR	Valid sixbit tty variable names for TTYVAR system call.
+	ITSNMS	Valid sixbit names of all local ITS machines.
+
+	Names which used to be valid but are no longer (ANCIENT HISTORY):
+	TRANS	Translation tables.
+	OMPX	Output multiplexor data area.
+
+	PEEK used to use this uuo to get system information.
+	Nowadays it merely maps systems pages into its core
+	image, thereby gaining efficiency at some small cost
+	in accuracy.
+
+.GSNAME ac,		ANCIENT HISTORY	get system name
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function has been superseded by .SUSET of .RSNAM.
+	Its opcode has been recycled as .REALT.
+
+	Put the executing job's .SNAM user variable
+	into accumulator <ac>; this is the default directory
+	name ("system name") for the job.
+
+.GUN ac,				gun down a job tree
+	;skip if successful
+
+	Accumulator <ac> should contain the user index of the
+	top level job of a job tree.  That job tree is expunged
+	from the system.  All the jobs are closed and killed.
+	This is to be used as a last resort to flush hung
+	and worthless jobs.  The system program LOCK
+	contains a command which performs this operation.
+	The system job will print a message on the system console
+	describing what job was gunned and who gunned it.
+
+.HANG					hang until condition satisfied
+
+	The .HANG uuo is to make it easy for programs to wait for various
+	conditions.  It should be used the way a JRST .-1 would be used in
+	a stand-alone program.  Explicitly, it should be preceded by an
+	instruction that will skip or jump if the awaited condition is
+	true.  Because the system must understand that instruction, only
+	certain instructions are allowed to be used (any others cause
+	illegal operation interrupts (%PIILO, bit 1.6 of the .PIRQC user
+	variable)).  They are: SKIP, JUMP, AOS, SOS, AOJ, SOJ, CAI, and CAM
+	class instructions, -all- test instructions, CONSO and CONSZ (which
+	work only if the job is in .IOTLSR mode, and the processor is not a
+	KS10), SKIP and JFCL, which are used to hang forever (really, until
+	some interrupt routine jumps away instead of returning), SKIPA and
+	CAIA, which are used to cause rescheduling but don't actually hang,
+	and JFFO.  XCT is also allowed, but the ultimate end of the chain
+	of XCT's must be one of the instructions listed above.
+
+	In the case of hanging forever, the job is specified to be
+	desirable to swap out, since it may hang for a long time.
+
+	.HANG conditional instructions which reference only ACs are treated
+	as hang-forever, except that they don't set the desire-to-swap-out
+	flag, since the contents of the AC can't change without the job
+	being interrupted out of the .HANG.
+
+	When a job executes a .HANG, the system effectively executes the
+	preceding instruction at each schedule to decide whether the job
+	may be run (cf. the .FLS user variable).  If the job is
+	interrupted, the interrupt routine will find that the saved PC
+	points to the instruction before the .HANG instruction.  It may
+	dismiss normally, in which case the .HANG will be executed again
+	unless the condition has become true (of course, the interrupt
+	routine may do something to make the condition true).
+
+	.HANG takes care to be certain that any side effects of the
+	instruction will be performed when the condition finally becomes
+	true.  .HANG does this by always exiting by jumping to .-1.  Thus
+	an AOSE instruction followed by a .HANG really will increment the
+	referenced location after it becomes -1, JFFO AC, followed by .HANG
+	really will store a bit number into AC+1, and TLZN followed by
+	.HANG really will clear out the bit after it comes on.
+
+	While a job is waiting in a .HANG, the system does not re-examine
+	the AC used by the conditional instruction each time it executes
+	that instruction; it uses what was in the AC when the .HANG was
+	entered.  However, there is no way for this AC to change without
+	the job being interrupted out of the .HANG so it can change it, or
+	PCLSRed out when it's superior changes it.  Also, the effective
+	address calculation is not repeated, and if the actual instruction
+	supplied is an XCT, the XCT'd instruction is not re-fetched.
+	Therefore, it does not work to expect the condition to become true
+	because the contents of a memory location indirected through or
+	XCTed will change.  Because an interrupt always causes the .HANG to
+	be redone, it does work to expect the interrupt routine to change
+	the AC or the indirect pointer in order to make the instruction
+	skip.
+
+	In the special case of waiting for a specific interval of time to
+	pass, the .SLEEP uuo (q.v.) may be useful.  In the special case of
+	waiting for a network socket to change state, the NETBLK symbolic
+	system call may be useful.
+
+.HANG ac,				.HANG with timeout
+
+	[In ITS version 1622 and later]
+
+	.HANG with a non-zero AC field acts as the disjuction of .HANG and
+	.SLEEP, allowing a program to wait either for a condition to become
+	true or for some time to pass.  The contents of accumulator <ac>
+	specify when the .HANG should stop waiting for the condition to
+	become true by returning to the instruction following the .HANG.
+	If non-negative, it is a length of time to wait in thirtieths of a
+	second.  If negative, it means to wait until the system TIME
+	variable exceeds its absolute value.  
+
+	As with .SLEEP, if the job is interrupted while .HANGing, the
+	accumulator will be found to contain the appropriate negative
+	number to allow the .HANG to be resumed properly when the interrupt
+	is dismissed.
+
+	If .HANG times out before the awaited condition becomes true, the
+	accumulator will contain 0.  This is the only case in which .HANG
+	will exit to the following instruction.
+
+	If the awaited condition becomes true, so that the previous
+	instruction skips or jumps away, the accumulator will contain the
+	negative of the time at which the .HANG would have timed out.
+
+
+.HANGUP dialnum,	ANCIENT HISTORY	hang up a dialed line
+	;skip if successful
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .REVIVE.
+
+	This uuo was used to hang up on a line which had
+	been dialed by the .DIAL uuo.
+
+.IFSET ac,				if location contains what I think, set it
+	;skip if successful
+
+	The accumulator <ac> should contain an absolute 18.-bit
+	address in the right half and a pointer to a two-word block
+	in the left half.  The first word of the two-word block
+	contains a test word, and the second a new value.
+
+	If the absolute core location specified contains exactly
+	the quantity specified by the test word, then the contents
+	of that location are replaced by the new value specified,
+	and the .IFSET skips.  If the contents of the location
+	are not the same as the test word, the .IFSET fails.
+
+	This is similar to the .SETLOC uuo, but provides a
+	measure of safety if the contents of the location
+	may be volatile.  Like the .SETLOC uuo, if the .IFSET
+	succeeds the system job prints out a message on the
+	system console detailing the old and new contents
+	of the location and who modified it.
+
+.IOPDL					reset I/O pdl
+
+	The I/O channel pdl of the executing job is reset.
+	Entries on the I/O pdl contain the channel number
+	from which they were pushed; .IOPDL is equivalent
+	to just enough .IOPOP's (possibly none) to clear
+	the I/O pdl, popping each entry into the channel
+	it was pushed from.
+	See the .IOPUSH and .IOPOP uuos, and the .IOC, .IOS,
+	.IOP user variables.
+
+.IOPOP chnum,				pop I/O channel
+
+	This uuo is the inverse of the .IOPUSH uuo.
+	The top entry of the I/O pdl is popped into
+	channel <chnum>, which may be a different channel
+	from the one the entry was pushed from.
+	A .CLOSE is first performed on the channel popped into.
+	If the channel originally pushed was a closed channel,
+	then after popping channel <chnum> will be closed.
+	If the I/O pdl has no entries on it, IOC error
+	number 5 is signaled on channel <chnum>, giving the
+	job a class 2 interrupt (%PIIOC, bit 1.9 of the .PIRQC
+	user variable).
+
+	If the channel number is variable, the IOPOP symbolic
+	call may be used.
+
+	See the .IOPUSH and .IOPDL uuos, and the .IOC, .IOS,
+	and .IOP user variables.
+	See also the .UCLOSE uuo for a discussion of what
+	occurs when a job open on a pushed channel is killed.
+
+.IOPUSH chnum,				push I/O channel
+
+	The channel <chnum> is pushed onto the I/O pdl
+	for the executing job.  A channel may be pushed
+	whether or not it is actually open; if it is open,
+	transactions on the channel are suspended when
+	it is pushed, and any transfer on that channel is
+	inaccessible until the pushed entry is popped
+	again.  The error status and access pointer are
+	correctly saved as well.  The channel number <chnum>
+	is also saved in the pdl entry for use by the .IOPDL uuo.
+	After the channel has been pushed it is returned to
+	a non-open state (this is not the same as being closed
+	since closing implies terminating the I/O transaction).
+	The I/O pdl for each job has room for eight entries;
+	if all are in use .IOPUSH will signal IOC error
+	number 6 on channel <chnum>, giving the job a
+	class 2 interrupt (%PIIOC, bit 1.9 of the .PIRQC user variable).
+
+	If the channel number is variable, the IOPUSH
+	symbolic call may be used.
+
+	See the .IOPOP and .IOPDL uuos, and the .IOC, .IOS,
+	and .IOP user variables.
+	See also the .UCLOSE uuo for a discussion of what
+	occurs when a job open on a pushed channel is killed.
+
+.IOT chan,[foo]				input/output transfer
+
+	Input or output is performed, according to the device
+	open on the specified channel and the mode in which it
+	was opened.  If an error occurs, any of several IOC
+	errors may occur, giving the job a class 2 interrupt
+	(%PIIOC, bit 1.9 of the .PIRQC user variable.)
+
+	In "unit mode", foo is the datum to be transferred
+	in or out.  (In the case of input, the word pointed
+	to by the effective address of the .IOT is modified.)
+
+	In "block mode", foo is an AOBJN pointer to the data
+	to be transferred in or out.  The left half is the
+	negative of the number of words, the right half is
+	the address of the first word.  The pointer is updated
+	as the transfer proceeds.  When the .IOT returns the
+	pointer will have been fully counted out, that is
+	the left half will be zero, except in the case of input
+	that stops because the end of the file was reached.
+
+	In the case of block mode on an intrinsically character
+	device, such as TTY, bits 4.9-4.7 of the pointer are
+	fiddled to indicate which byte in the word is being
+	processed.
+
+	The VID, NVD, and IMX devices handle .IOT in a non-standard
+	way because they do both input and output at the same time.
+
+	The symbolic system calls IOT and SIOT are versions of
+	.IOT which have additional features.
+
+.IOTLSR ac,				iot loser mode
+
+	This uuo is used to request permission from
+	the system to run in user I/O mode (bit 4.3 of the PC).
+	In this mode a program is in user mode (and thus is
+	subject to user mode page mapping), but may perform
+	I/O instructions without trapping to the system.
+	This facility must naturally be used with discretion.
+	It should be noted that ITS will interpretively
+	simulate most I/O instructions anyway, if it thinks
+	that the operation will not harm the time-sharing
+	system.  For example, one may use DATAI to read the
+	console switches even when not in .IOTLSR mode.
+	This simulation is slower than direct execution
+	of I/O instructions, but much safer.
+
+	If bit 4.9 (the sign bit) of accumulator <ac> is zero,
+	.IOTLSR mode is relinquished, even if it was not formerly
+	possessed by the job.
+	If bit 4.9 is one, then the executing job is granted .IOTLSR
+	mode, and the system job prints a message on the system
+	console to document the fact.
+
+.IPDP chnum,				interrupt PDP-6
+
+	Channel <chnum> should have the PDP-6 open as an
+	inferior procedure; if it does not, .IPDP does nothing.
+	Otherwise the PDP-6 receives an interrupt.
+
+	The PDP-6 can also interrupt the PDP-10; when this occurs
+	a job with the PDP-6 open as an inferior will receive
+	an interrupt if enabled for it.  See the .IFPIR
+	user variable for PDP-6 channel interrupts.
+
+	The interface between the PDP-6 and the PDP-10
+	is device 20 octal.
+	The interrupts are given via a CONO:
+	1.5	Interrupt other processor.
+	1.4	Clear interrupt flag.
+	1.3-1.1	Priority interrupt assignment.
+	The bits read by CONI are as follows:
+	1.4	Interrupt flag.
+	1.3-1.1	Clear interrupt flag.
+
+.ITYI ac,		OBSOLETE	input tty interrupt
+	;skip if successful
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by the .ITYIC uuo.
+
+	This uuo is exactly like .ITYIC except that it applies
+	only to the job's console, if any.  This uuo is to be
+	flushed eventually.
+
+.ITYIC ac,				input tty interrupt on channel
+	;skip if successful
+
+	The specified accumulator <ac> should contain the
+	number of a channel which is open for tty input.
+	If an interrupt character is pending in that tty's
+	input buffer, that character replaces the channel number
+	in <ac> and the .ITYIC skips.  It will fail if the
+	channel is bad, if it does not have a tty open, if the
+	tty is the job's console but the job does not possess it,
+	or if there is no interrupt character pending.
+	If the job does not possess its console and the job's
+	%TBINT bit is set in the .TTY user variable, the job
+	receives a class 2 word 1 interrupt (bit 4.2 in the
+	.PIRQC user variable).
+
+	This uuo is typically used in an interrupt routine
+	invoked by bit 1.1 (%PITYI) in the .PIRQC user variable or by
+	a word 2 I/O interrupt on a tty input channel.
+	If the .ITYIC does not skip the program should ignore
+	the interrupt entirely; this can happen due to certain
+	timing screws related to passing the console around
+	among several jobs.
+
+	See the TTYGET and TTYSET symbolic system calls, which
+	manipulate bits relevant to interrupt characters.
+	See the WHYINT system call, which (in the case of
+	TTY channels) is another way to do the same function
+	as .ITYIC.
+	See the .PIRQC and .TTY user variables.
+	See ITS TTY for a complete explanation of .ITYIC.
+
+.LISTEN ac,				listen to tty
+
+	If the job possesses its console, .LISTEN waits
+	for any output to be completed, and then returns the
+	number of input characters pending in the input
+	buffer.  If the job does not possess a console, zero is
+	returned.
+	See also the LISTEN symbolic system call.
+
+.LOGIN	ac,		ANCIENT HISTORY	log in
+	;skip if successful
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function has been superseded by the LOGIN symbolic system call.
+	Its opcode has been recycled as .DEMON.
+
+	Accumulator <ac> contains the sixbit name to log in as.
+	Attempting to log in with a uname equal to 0 or -1 fails,
+	as does attempting to log in when already logged in.
+
+.LOGOUT					log out
+
+	The executing job and all direct inferiors are killed,
+	providing that it is the top-level job of its job tree.
+	All resources used by such jobs are freed.  If the job
+	tree was console-controlled, the system job will print
+	a "console free" message on the freed console.
+
+	If the executing job is not top-level, .LOGOUT with zero
+	in the AC field merely returns without skipping.
+	(An inferior job may not commit suicide without the consent
+	of its superior.)  .LOGOUT with a nonzero AC field will
+	cause a fatal %PIBRK interrupt which will inform the superior
+	that the job wants to be killed.  If the superior is DDT,
+	it will kill the job.  Here is how a program should exit:
+
+		SKIPE DEBUG		;optional debugging aid:
+		 .VALUE			; job hangs if being debugged
+		.LOGOUT 1,		;log out or be killed.
+
+.LOSE lossage-code			report lossage
+
+	The job's Program Counter is set to the address of the
+	.LOSE minus one, the job's .VAL user variable is set
+	to the new PC,,the magic bits, and the
+	job is given a %PILOS interrupt.  If the job does not
+	enable this interrupt, and it's superior is DDT, a
+	helpful error message will be printed.
+
+	The magic bits are documented in DDT ORDER.
+	The most useful ones are 0 for a random error,
+	1000 to ask DDT to type the error message corresponding
+	to the most recent system call error return, and
+	1400 if DDT should attempt to print the names of
+	the file that the call was opening/referring to.
+
+	The lossage codes are defined by DDT's interpretation of them.
+	The defined values are:
+
+	%LSSYS==1000	The last error code returned by a failing
+		system call describes the problem.
+
+	%LSFIL==1400	The last error code returned by a failing
+		system call, together with the name of the file
+		it was operating on, describe the problem.
+		That system call should be right before the .LOSE.
+		DDT will decode it to determine the filenames
+		(if it is an OPEN) or the channel number and then
+		the filenames via an RFNAME.
+
+	%LSSYS+errcode	Means that the system call error code
+		<errcode> describes the problem.
+
+	%LSFIL+errcode	Means that the error code <errcode>
+		together with the filenames being used
+		describe the problem.
+
+	1+.LZ <interrupt bit>
+		Means that the error should be handled as if it
+		were a fatal interrupt on the specified interrupt
+		bit.  For example, the lossage code 1+.LZ %PIMPV
+		will to cause DDT to print out an MPV error message.
+		These lossage codes are more useful with the
+		LOSE and DISMIS symbolic system calls.
+
+	0	Signifies some other nondescript error condition.
+
+	The usual way of using this uuo is to put it
+	after a system call which is expected always to
+	skip.  If it fails to skip, DDT will print an error
+	message based on what the system call is and what
+	it was failing to do (if you said 1000 or 1400).
+	Proceeding the job will retry the call.
+
+	See also the LOSE symbolic system call.
+
+	This call never gets an error, and never returns.
+
+.LTPEN block				hack light pen
+
+	This uuo hacks the light pen on the 340 display.
+	The address <block> should be the start of a six-word
+	block.  The first word controls the mode:
+	4.9	0 => ignore other bits, 1 => examine them.
+	3.1	1 => hang until light pen seen at least once.
+	1.1	Used to set the multiple sighting mode (1 = on).
+	The six words of data returned are as follows:
+	wd 0	The word read by DATAI from the 340 display at
+		the last light pen interrupt.
+	wd 1	Number of times the light pen interrupted
+		since the last .LTPEN uuo.
+	wd 2	Sum of all Y coordinates since the last .LTPEN uuo.
+	wd 3	Sum of all X coordinates since the last .LTPEN uuo.
+	wd 4	The current linked display list pointer.
+	wd 5	The current BLKO display pointer.
+	If the job does not currently possess the 340 display,
+	words 0 and 1 are set to zero.
+
+	If the system has no 340, .LTPEN is ignored.	
+
+.MASTER ac,				request/release master mode
+	;skip if successful
+
+	Accumulator <ac> should have bit 4.9=1 to request
+	master mode, or =0 to release it.  Releasing master
+	mode always succeeds, even if the job did not have it.
+	Requesting master mode succeeds if the job already has
+	master mode, or if it has control of its tty (as determined
+	by bit 4.9 (%TBNOT) of the .TTY user variable).
+	Only one job at a time may have master mode; thus requesting
+	master mode may imply taking it from some other job.
+
+	A job in master mode gets double priority for run time;
+	that is, it tends to get twice as much run time as any other
+	job competing for run time.  Furthermore, it has priority
+	in grabbing the 340 display from another user.  (The precise
+	algorithm for grabbing the 340 is actually a function of
+	who has master mode and of the %TT340 and %TT3HP bits of
+	the TTYTYP variables of the jobs involved.)
+
+	Master mode should be used only when absolutely necessary.
+	Needless use of it is considered to be antisocial, and may
+	be grounds for harassment.
+
+.MTAPE ac,				hack magtape
+	;skip if successful
+
+	Accumulator <ac> should have a channel number in the
+	left half and an address in the right half.
+	(An illegal channel number causes an illegal operation
+	interrupt (%PIILO, bit 1.6 of the .PIRQC user variable).)
+	The channel should have device MTn open on it.
+	The address should point to a word with a signed count <n>
+	in the left half and a function code in the right half.
+	Valid function codes are:
+	0	Hang until tape motion done.
+	1	Rewind tape.
+	2	Rewind and dismount.
+	3	Write end-of-record (i.e. force current output buffer).
+	4	Write three inches of blank tape.
+	5	Write end-of-file.
+	6	Space over <n> records (negative => backwards).
+		Illegal for output channel.
+	7	Space over <n> files (negative => backwards).
+		Illegal for output channel.
+	10	Space to end-of-tape.
+	11	Stop all commands on this channel.
+	12	Set block size for writing to <n> words.
+	13	Return block size in <ac>.  For reading, this is the size
+		of the record most recently swallowed by an IOT.
+	This operation may trigger one of the following IOC errors,
+	causing an interrupt (%PIIOC, bit 1.9 of the .PIRQC user variable):
+	1	ILLEGAL HARDWARE OPERATION ATTEMPTED
+	3	NON-RECOVERABLE DATA ERROR
+	9	DEVICE FULL
+
+.NDIS ac,				display <n> times
+	;skip if successful
+
+	This uuo is intended for use in taking pictures of
+	the 340 display screen.  It sets a display control
+	variable from the contents of accumulator <ac>.
+	This variable has no effect if negative, but if
+	zero it inhibits display completely, and if positive
+	is decremented by 1 each time the current display
+	block or list of blocks is displayed.  This call
+	fails to skip if the job does not possess the 340 display.
+
+	On systems which don't have a 340, .NDIS is ignored.
+
+.NETAC chnum,		OBSOLETE	accept network connection
+	;skip if successful
+
+	This UUO is obsolete.
+	It is documented here for historical purposes only.
+	It now ALWAYS fails to skip.
+
+	Channel <chnum> should be be a network channel in
+	the "RFC received while listening" (%NSRFC) state (see
+	the ITS NCP file.)
+	This is used to accept a connection on a socket opened
+	with mode bit 1.5=1 (see the OPEN symbolic system call).
+	An RFC is sent back and the channel put into the
+	"connection open" state.
+
+	To reject a connection, the channel should be closed with
+	either the .CLOSE uuo or the CLOSE symbolic system call.
+
+.NETINT chnum,		OBSOLETE	network interrupt
+
+	This UUO is obsolete.
+	It is documented here for historical purposes only.
+	It is now always a no-op.
+
+	Sends an interrupt out on the network socket associated
+	with channel number <chnum>, which should be open on
+	the NET device.  If the local socket number is even
+	(receiving), an INR message is sent; otherwise, INS
+	is sent.
+
+.NETS chnum,				network send
+
+	Channel number <chnum> should be open for network
+	output.  The .NETS uuo forces the current output buffer
+	to be sent.  If the channel is open in the wrong direction,
+	IOC error 1 (ILLEGAL HARDWARE OPERATION ATTEMPTED) will occur,
+	possibly giving the user an IOC interrupt (%PIIOC, bit 1.9 of
+	the .PIRQC user variable).
+
+.OPEN chnum,block			open a file
+	;skip if successful
+
+	This uuo is semi-obsolete.  The OPEN symbolic system
+	call is somewhat more flexible and consistent.
+	However, it is still reasonable to use .OPEN for
+	devices which do not use directory names.
+
+	A file is opened on the channel specified by <chnum>.
+	That channel number is then used to specify the file
+	on all further I/O transactions on that file.
+	The address <block> should be the first of several
+	locations:
+	wd 0	<mode bits>,,<device name>
+	wd 1	File name 1, if applicable.
+	wd 2	File name 2, if applicable.
+	wd 3	For the NET device, the foreign host number.
+	The directory name, if applicable, is taken from the
+	.SNAME user variable.  Note that the device name may
+	be only three characters.  The mode bits are as for
+	the OPEN symbolic system call.
+
+	If bits 4.9-4.7 of word 0 contain 2, then a link is
+	created.  Words 1-5 are then as follows:
+	wd 1	From file name 1.
+	wd 2	From file name 2.
+	wd 3	To file name 1.
+	wd 4	To file name 2.
+	wd 5	To sname.
+	.OPEN should never be used in this way in new programs;
+	use the MLINK symbolic system call instead.
+
+	If the .OPEN fails to skip, an error code as for
+	.CALL OPEN will be returned on channel <chnum>.
+
+.OPER					random operation
+
+	The term .OPER is used to refer to a class of uuo's
+	which all have the same op-code and are decoded by
+	the value of their effective address.  Those .OPER's
+	which take arguments generally specify either an
+	accumulator or an I/O channel number in the accumulator
+	field of the .OPER.
+	If the effective address is not a valid .OPER number,
+	then the job executing the .OPER receives an illegal
+	operation interrupt (%PIILO, bit 1.6 of the .PIRQC user
+	variable).
+	A list of currently valid .OPER's is given below in
+	numerical order.
+
+	.OPER 0		illegal
+	.OPER 1		.ITYI
+	.OPER 2		.LISTEN
+	.OPER 3		.SLEEP
+	.OPER 4		.SETMSK
+	.OPER 5		.SETM2
+	.OPER 6		.DEMON
+	.OPER 7		.CLOSE
+	.OPER 10	.UCLOSE
+	.OPER 11	.ATTY
+	.OPER 12	.DTTY
+	.OPER 13	.IOPUSH
+	.OPER 14	.IOPOP
+	.OPER 15	.DCLOSE
+	.OPER 16	.DSTOP
+	.OPER 17	.RDTIME
+	.OPER 20	.RDSW
+	.OPER 21	.GUN
+	.OPER 22	.UDISMT
+	.OPER 23	.GETSYS
+	.OPER 24	.IPDP
+	.OPER 25	.GETLOC
+	.OPER 26	.SETLOC
+	.OPER 27	.DISOWN
+	.OPER 30	.DWORD
+	.OPER 31	.DSTEP
+	.OPER 32	.GENSYM
+	.OPER 33	.LOGOUT
+	.OPER 34	.REALT
+	.OPER 35	.WSNAME
+	.OPER 36	.UPISET
+	.OPER 37	.RESET
+	.OPER 40	.ARMOVE
+	.OPER 41	.DCONT
+	.OPER 42	.CBLK
+	.OPER 43	.ASSIGN
+	.OPER 44	.DESIGN
+	.OPER 45	.RTIME
+	.OPER 46	.RDATE
+	.OPER 47	.HANG
+	.OPER 50	.EOFC
+	.OPER 51	.IOTLSR
+	.OPER 52	.RSYSI
+	.OPER 53	.SUPSET
+	.OPER 54	.PDTIME
+	.OPER 55	.ARMRS
+	.OPER 56	.UBLAT
+	.OPER 57	.IOPDL
+	.OPER 60	.ITYIC
+	.OPER 61	.MASTER
+	.OPER 62	.VSTST
+	.OPER 63	.NETAC
+	.OPER 64	.NETS
+	.OPER 65	.REVIVE
+	.OPER 66	.DIETIME
+	.OPER 67	.SHUTDN
+	.OPER 70	.ARMOFF
+	.OPER 71	.NDIS
+	.OPER 72	.FEED
+	.OPER 73	.EVAL
+	.OPER 74	.REDEF
+	.OPER 75	.IFSET
+	.OPER 76	.UTNAM
+	.OPER 77	.UINIT
+	.OPER 100	.RYEAR
+	.OPER 101	.RLPDTM
+	.OPER 102	.RDATIM
+	.OPER 103	.RCHST
+	.OPER 104	.RBTC
+	.OPER 105	.DMPCH
+	.OPER 106	.SWAP
+	.OPER 107	.MTAPE
+	.OPER 110	.GENNUM
+	.OPER 111	.NETINT
+
+.PDTIME ac,				PD time
+
+	Returns in accumulator <ac> the time since the beginning of the
+	year, measured in sixtieths of a second.  If the time is not known,
+	-1 is returned.  PD = Paul DeCoriolis, who hacked the original
+	clock on which this was based.  Said clock ceased to work many
+	years ago.
+
+.POTSET
+
+.RBTC ac,				robot console switches
+
+	The contents of accumulator <ac> are sent to the
+	robot console (device 514) with a DATAO.  After a short
+	delay the result of a DATAI are returned in <ac>.
+
+	What the heck is device 514???
+
+.RCHST ac,		OBSOLETE	read channel status
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by the RCHST
+	and RFNAME symbolic system calls.
+
+	Accumulator <ac> should contain a channel number
+	in the left half and an address in the right half
+	pointing to a block of several words.
+	The executing job receives an illegal operation
+	interrupt (%PIILO, bit 1.6 of the .PIRQC user variable)
+	if the channel number is illegal.
+
+	The block of words is filled with information
+	about the status of the channel.  The general
+	pattern of this information is as follows, though
+	not all devices adhere to it strictly:
+	wd 0	Device name in the right half.
+	wd 1	First file name, if applicable.
+	wd 2	Second file name, if applicable.
+	wd 3	Sname (directory name), if applicable.
+	wd 4	Access pointer.  Measured in words.
+		A byte pointer if in character mode, for some devices.
+		-1 if not randomly accessible.
+	wds 5-n	Other data.  May be garbage, or not stored,
+		depending on the device as specified by word 0.
+
+	See the RCHST symbolic system call for details
+	of what information is returned for specific devices.
+	Wd 0 from .RCHST has in its RH the LH of symbolic
+	RCHST's 1st value.  Wds 1-4 from .RCHST are the same as
+	the 2nd-5th values returned by symbolic RCHST.
+	Wds 5 and up from .RCHST are the same as values 7 and up
+	of symbolic RCHST, except that they are not stored for
+	devices which do not return significant information in
+	them.  Note that value 6 of the RCHST symbolic system
+	call is not available from .RCHST.
+
+.RD500 ac,		ANCIENT HISTORY	read device 500
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .IPDP.
+
+	Device 500 formerly purported to be some kind of clock.
+
+.RD710 ac,		ANCIENT HISTORY	read device 710
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .HANG.
+
+	Device 710 used to be a kind of clock on the PDP-6.
+	This uuo read a 24.-bit quantity from this clock,
+	measured in 4-microsecond ticks.
+
+.RD760			ANCIENT HISTORY
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .DWORD.
+
+	Device 760 of the PDP-6 used to be used for temporary
+	direct sense hookups.  (For example, the low six
+	bits controlled lights on the hand of the AMF arm.)
+	This uuo returned the result of a DATAI on this device.
+
+.RDATE ac,				read date
+
+	The current date is returned in accumulator <ac> as a
+	word of sixbit characters "YYMMDD", where YY is the
+	year (modulo 100.), MM is the month, and DD is the day,
+	all as two-digit decimal numbers.
+	If the system does not know what the current date is,
+	-1 is returned.
+
+.RDATIM ac,				read date and time
+
+	This is exactly like the sequence
+		.RTIME ac,
+		.RDATE ac+1,
+	except that the timing error involved with crossing
+	midnight between execution of the two uuo's is avoided.
+	Thus accumulator <ac> receives the time of day as a word
+	of sixbit "HHMMSS", where HH is the hour (in 24.-hour
+	notation), MM is the minute, and SS is the second,
+	all as two-digit decimal numbers.
+	Accumulator <ac+1> receives the date as a word of sixbit
+	characters "YYMMDD" where YY is the year (modulo
+	100.), MM is the month, and DD is the day,
+	all as two-digit decimal numbers.
+	If one of the quantities is not known by the system,
+	-1 is returned for that quantity.
+
+.RDSW ac,		OBSOLETE	read switches
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by DATAI.
+
+	The contents of the data switches on the PDP-10 console
+	are returned in accumulator <ac>.
+	The same effect can be achieved by using DATAI 0,<ac>
+	(or any arbitrary location instead of <ac>), which, if
+	the job is not in .IOTLSR mode, ITS will interpret
+	specially and simulate.
+	Neither .RDSW nor DATAI works correctly on KL10s.
+	Hopefully this will not inconvenience anyone.
+	On KS10s .RDSW no longer exists.
+
+.RDTIME ac,				read system time
+
+	The time since the system started running, measured in
+	thirtieths of a second, is returned in accumulator <ac>.
+	Thus the difference between two successive values gives
+	the amount of real time which passed between the two
+	executions of .RDTIME.  This time does not include time
+	during which the system was temporarily down, for instance
+	stopped at a bug halt from which it was later continued
+	by a system hacker.
+
+.REALT ac,				real time hackery
+	;maybe skip on success (see below)
+
+	This uuo controls a fairly complex facility allowing
+	a job to get good service in real time.  The contents
+	of the specified accumulator are decoded as follows:
+	%RLFLS	4.9	Turn off old clock rate, zero the tick count,
+			and release the real time facility.
+	%RLSET	4.8	Turn on new clock rate.
+	%RLUSR	4.7	Attempt to seize the real time facility.
+	%RLNPS	4.6	Do not settle for pseudo-real time status.
+	%RLPSD	4.5	Insist on pseudo-real time status.
+	%RLBLK	4.4	Block me except during high priority period.
+	%RLGET	4.3	Read into words 2-3 (see below) before
+			interpreting the other bits.
+	4.2-3.1	Reserved.  Should be zero.
+	2.9-1.1	Pointer to four word block:
+		wd0	Frame time in sixtieths of a second.
+			Must fit in the right half.
+		wd1	Priority time in sixtieths of a second.
+			Must be less than 15 octal, and less
+			than or equal to half the contents
+			of word 0.
+		wd2	If bit 4.3 on, set the right half to
+			the frame time, and the left half to
+			the tick count since last examined.
+		wd3	If bit 4.3 on, set the right half to
+			the high priority time, and the left
+			half to 0 if currently at low priority
+			or -1 if currently at high priority.
+
+	The real time facility is interpreted as follows:
+	real time is broken up into cycles, each the number
+	of sixtieths of a second in length specified by the frame
+	time.  At the beginning of each frame, the %PIRLT
+	bit (4.8) in the job's .PIRQC user variable is turned
+	on.  This causes an interrupt if the corresponding
+	bit is on in the .MASK user variable.
+	  Within each frame, the first <n> sixtieths are
+	high priority time for the job with the real time
+	facility, where <n> is the specified high priority time.
+	If a job has the facility, presently has high priority,
+	and otherwise wants to run, then it is scheduled above
+	all other jobs.  This guarantees that a job will
+	get a certain amount of run time at specified intervals;
+	this is useful for responding to real-time conditions.
+	The system will not schedule the job during its low-priority
+	phase if it has requested that it be blocked (bit 4.4),
+	unless it gets an interrupt and is not using the new-style
+	interrupt system.
+	The .REALT uuo will skip only if the facility
+	was requested and successfully seized.  In all other
+	cases it does not skip, even if the requested operation
+	succeeded.  If an invalid quantity is supplied for
+	a frame time, or for the high priority time, an
+	illegal operation interrupt occurs
+	(%PIILO, bit 1.6 of the .PIRQC user variable).
+
+.REDEF ac,				redefine symbol to exec DDT
+	;skip if successful
+
+	The specified accumulator should contain the address of
+	a two word block:
+		wd0	SQUOZE bits,symbol
+		wd1	value
+	If the <bits> are all ones, then the symbol is deleted.
+	Otherwise it is defined with the specified value,
+	replacing any old value.  This occurs in the symbol
+	table used by exec DDT, which is used to debug the
+	system, and which is used by the .EVAL uuo.
+	A .REDEF fails to skip only if it tries to add
+	a new symbol and fails for lack of room in the system.
+
+.RESET chnum,				reset I/O channel
+
+	I/O channel <chnum> is reset.  This is exactly
+	like the symbolic system call RESET.  What happens
+	is device-dependent; see the description of that call.
+
+.REVIVE					revive system
+
+	This uuo reverses the effect of the .SHUTDN uuo.
+	It is used by the REVIVE command of LOCK.
+	Jobs which have enabled it will receive an
+	interrupt (bit 1.7 of the .PIRQC user variable).
+	See the .DIETIME and .SHUTDN uuo's, and the SSTATU
+	symbolic system call.
+
+.RLPDTM ac,				read localized PD time and .RYEAR
+
+	This returns the time and date in <ac> and <ac+1>, in a binary
+	form.  <ac+1> contains the result of .RYEAR; see the description
+	of that uuo for details.  <ac> contains the "localized" number
+	of seconds since the beginning of the year.  If this is divided
+	by the number of seconds in a day (86400.), the remainder will
+	be the number of seconds since midnight local time, and the
+	quotient will be the number of days since the beginning of the
+	year, with the (mis)feature that all years are considered to
+	include February 29.  This is done so that date-printing
+	routines do not have to check for leap-year, but it does mean
+	that during the last 10 months of non-leap years the day number
+	is 1 greater than the correct Julian day.  Bit 4.9 of <ac+1> is
+	set in this case.
+
+	Note also that when daylight savings time is in effect <ac> will
+	be advanced by one hour.  Again this is done to simplify date
+	and time printing routines.  Bit 4.7 of <ac+1> is set in this
+	case.
+
+	Note that .RLPDTM should be used instead of .PDTIME followed by
+	.RYEAR, since it guarantees consistency of the two values
+	returned.
+
+	
+.RRTIM ac,		ANCIENT HISTORY	read run time
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function has been superseded by the .RUNT user variable.
+	Its opcode has been recycled as .CBLK.
+
+	The job's run time is returned in accumulator <ac>.
+	See the .RUNT user variable.
+
+.RSYSI ac,				read system incarnation
+
+	Returns in <ac> the .FNAM2 of the system when it
+	was assembled.  Thus, it is a version number in sixbit.
+	This is the same as the seventh value of the
+	SSTATU symbolic system call.
+
+.RTIME ac,				read time
+
+	The time of day is returned in accumulator <ac> as a word
+	of sixbit characters "HHMMSS", where HH is the hour
+	(in 24.-hour notation), MM is the minute, and SS is
+	the second, all as two-digit decimal numbers.
+	If the system does not know the time, -1 is returned.
+	See also .RDATIM.
+
+.RYEAR ac,				read year
+
+	Returns in accumulator <ac> a word as follows:
+
+	4.9	This year has 365. days, and it is after February 28.
+	4.8	This year is a leap year (366. days).
+	4.7	Daylight savings time is in effect.
+	4.6	The time of year is known.
+	4.2-3.9	If bit 4.6 set, the current day of the week.
+		Sunday=0, Monday=1, etc.
+	3.8-3.6	The day of the week of January 1 of this year.
+	3.5-3.1	Zero.
+	2.9-1.1	The year, not modulo 100., but as a full quantity,
+		e.g. 1969. or 1975.
+
+	If the system does not know the time, zero is returned.
+
+.SETLOC	ac,				deposit in system
+
+	Expects the rh of <ac> to contain the address of a
+	location in physical core, and the lh of <ac> to point
+	to a word of data in the executing job's memory.
+	The job's argument word is copied into the addressed
+	location in physical core, and a message is printed
+	on the system console.
+
+.SETM2			OBSOLETE	set two interrupt masks
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by block-mode
+	.SUSET of .MASK and .MSK2.
+
+	The job's .MASK and .MSK2 user variables are set to
+	the respective contents of accumulators <ac> and <ac+1>.
+
+.SETMSK ac,		OBSOLETE	set interrupt mask
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by .SUSET of .MASK.
+
+	The job's .MASK user variable is set to the contents of
+	accumulator <ac>.
+
+.SHUTDN ac,				shut down system
+	;skip on success
+
+	This uuo causes the system to prepare to go down.
+	(It is used by the KILL command in LOCK.)
+	Accumulator <ac> should contain a time interval,
+	in thirtieths of a second.  The system will go down
+	exactly that much time after the present moment.
+
+	When the system prepares to go down, all jobs enabled
+	for it receive a system going down interrupt (%PIDWN, bit 1.7
+	of the .PIRQC user variable).  (DDT prints a message when it
+	receives such an interrupt; part of this message is the
+	contents of the file SYS:DOWN MAIL.)  This interrupt will
+	occur repeatedly every time 3/4 of the time from the previous
+	interrupt to the time of shutdown has elapsed, except that
+	interrupts will not occur less than ten seconds before shutdown.
+	(Thus, if the system were scheduled to go down in ten minutes,
+	interrupts would happen at the following times before shutdown:
+	10:00, 2:30, 0:37.  If in five minutes:  5:00, 1:15, 0:17.)
+	When the magic moment arrives, all users are forceably logged
+	out, all jobs killed (except job trees whose top-level jobs
+	have the %OPLIV bit set in their respective .OPTION user variables
+	-- a feature used primarily by system daemons.  Such trees are
+	expected to log out on their own after finishing their work),
+	all micro-tapes are flapped, the file  SYS:DOWN MAIL  is deleted,
+	"ITS NOT IN OPERATION" messages are printed on all consoles,
+	all Terminet motors are stopped, all files, directories, and TUTs
+	are written out, and everything generally put into a good state;
+	the system then calls DDT.  It may be brought back up again
+	with XREVIV$X, which reloads demons and allows ^Z'ing once more.
+
+	The effects of a .SHUTDN may be reversed by a .REVIVE uuo.
+	See the .DIETIME and .REVIVE uuo's, and the SSTATU symbolic
+	system call.
+
+.SLEEP ac,				sleep
+
+	The .SLEEP uuo temporarily puts the executing job into
+	a dormant but interruptable state.  The job consumes no
+	run time until the specified time interval has elapsed,
+	unless an interrupt occurs.
+	The contents of accumulator <ac> specify how long the
+	job is to sleep.  If non-negative, it is the length
+	of time to sleep in thirtieths of a second.  If negative,
+	it means to sleep until the system TIME variable (which
+	is read by the .RDTIME uuo (q.v.)) exceeds the absolute
+	value of the specified quantity; thus one can sleep
+	until a specific time.
+
+	If the job is interrupted in the middle of a .SLEEP,
+	the accumulator will be seen to contain the appropriate
+	negative number, either the one originally there or one
+	calculated from the original positive argument.  Thus
+	re-executing the .SLEEP after dismissing the interrupt
+	will cause the .SLEEP to be resumed correctly.
+
+	Often it is desirable to "sleep" until some condition
+	other than the passing of time occurs.  For this see
+	the .HANG uuo.  For the special case of sleeping until
+	a network socket changes state, see the NETBLK symbolic
+	system call.
+
+.STATUS chnum,loc			I/O channel status
+
+	The status of I/O channel <chnum> is placed in
+	location <loc>.  This is exactly like the STATUS
+	symbolic system call.
+
+.SUPSET ac,				SUPCOR set
+
+	The system job is partially controlled by a variable
+	called SUPCOR; .SUPSET XOR's the contents of accumulator
+	<ac> with that variable, returning the result of
+	the XOR in <ac>.  Not all bits specified by <ac> take
+	effect; some are AND'ed out first.  A message is printed on
+	the system console as for the .IFSET and .SETLOC uuo's.
+
+	The only really useful bits to set are as follows:
+	1.6	Update TV who lines.
+	1.2	Kill current file being spooled from TPL to LPT
+		(this is what the TPL command in LOCK uses).
+
+.SUSET [suset spec]			self USET
+
+	This uuo is used to examine and set user variables
+	associated with the executing job.  See ITS USETS
+	for more information on .SUSET and .USET.
+
+.SWAP ac,				hack swapping
+
+	This uuo is illegal unless the system is being
+	debugged (the SYSDBG variable in the system is
+	non-zero; see the SSTATU symbolic system call).
+
+	The bits in the specified accumulator indicate
+	a test of the page swapping software in the
+	system:
+	4.9-4.7	Operation to perform.
+		0	Swap out the number of pages
+			specified in 2.9-1.1.
+		1,3,5,7	Go into a loop, waiting for
+			a few seconds and then referencing
+			location 2000 octal.
+		2	Hack the PCLSR test feature on
+			this job.  Bits 2.9-1.1 specify
+			the test mode:
+			-1	Enter in hold mode.
+			0	Leave PCLSR test mode.
+			1	Enter in advance mode.
+			2	Enter in advance but don't ^Z.
+		4	Swap out the virtual page specified
+			by bits 2.9-1.1 for the user specified
+			by bits 3.9-3.1.
+		6	Swap out all pages for the user
+			specified by bits 3.9-3.1.
+	3.9-3.1	User index, for operations 4 and 6.  A user
+		index of zero means the job executing the .SWAP.
+		(After all, it's hard to swap out the system!)
+	2.9-1.1	Number of pages for operation 0.
+		Test mode for operation 2.
+		Virtual page number for operation 4.
+
+.TRANAD			OBSOLETE	translation-list add
+
+.TRANDL			OBSOLETE	translation-list delete
+
+.TRANS			ANCIENT HISTORY	translate file name
+
+.UBLAT ac,				micro-tape blat (?)
+	;skip if successful
+
+	The specified accumulator should contain a micro-tape
+	drive number.  If the uuo succeeds, the drive is marked
+	as being in .UBLAT mode.  In this mode, there are
+	only two permissible operations on the drive: to dismount
+	(flap) it, and to open it as one giant file.  This uuo
+	is intended for use in reading micro-tapes written in
+	non-standard  (e.g. DEC) format.  Any .OPEN
+	on a micro-tape in .UBLAT mode will ignore the
+	file names, and all the blocks of the tape except block 0
+	will be read or written consecutively.  No deletes, renames,
+	etc. are permitted.  A .UBLAT will fail if the drive does
+	not exist, if the micro-tape directory has been read in
+	already by the system, or if the drive is not assigned
+	to the user whose job is trying to do a .UBLAT.
+
+.UCLOSE chnum,				USR close
+
+	This uuo is used to explicitly kill an inferior
+	open on channel <chnum>.  Merely performing a
+	.CLOSE on the channel is not enough - that
+	dissociates the inferior from the I/O channel,
+	but does not destroy the inferior procedure.
+	When the procedure is destroyed, all of its
+	inferiors, direct or indirect, are destroyed also.
+	As each job is destroyed, its I/O channels
+	are automatically .CLOSE'd, and any facilities
+	such as .MASTER mode are released.  The translation
+	lists are cleared for all destroyed jobs.
+
+	If any procedure whatever has a destroyed job
+	open on an I/O channel, that channel is automatically
+	closed; in particular, the channel <chnum> is
+	closed.  All jobs with channels which have the job open
+	as a foreign user (as opposed to an inferior or a
+	job device) also receive a word 2 I/O interrupt on each
+	such channel (see the .IFPIR user variable).
+	If a procedure has pushed a channel with a job to be
+	destroyed onto its I/O pdl (see the .IOPUSH, .IOPOP, and
+	.IOPDL uuos, and the .IOC, .IOS, and .IOP user variables),
+	then that I/O pdl entry is replaced on the pdl with a special
+	entry for a pseudo-device called the "interrupt on .IOPOP
+	device", which delivers a word 2 interrupt when popped from
+	the I/O pdl and then closes its channel (thus it should be
+	impossible to perform any operation on this "device" except
+	.IOPOP).  In this way a job can detect the fact that a
+	foreign job disappeared while it was pushed.
+
+	A procedure which executes a .UCLOSE receives
+	an I/O channel error interrupt (%PIIOC, bit 1.9 of the
+	.PIRQC user variable) if the specified channel
+	does not have an immediately inferior procedure
+	open on it.
+
+.UDISMT ac,				micro-tape dismount
+	;skip if successful
+
+	The specified accumulator should contain a micro-tape
+	drive number.  If the uuo succeeds, the directory
+	is written back onto the micro-tape and excised from
+	the system's memory.  The micro-tape is then physically
+	dismounted (this is known as "flapping" the tape, since
+	when it runs off the reel it goes flap, flap).
+	Micro-tapes should not be manually dismounted, for this
+	will cause the directories to get out of phase, messing
+	up that micro-tape and the next one to use that drive.
+	The .UDISMT will fail if any files are still
+	open on the micro-tape, or if someone else has the
+	drive assigned to him.
+	DDT makes this available via its command :FLAP.
+	See also the FLAP symbolic system call.
+
+.UINIT ac,				initialize micro-tape
+	;skip if successful
+
+	The specified accumulator should contain a micro-tape
+	drive number.  If the uuo succeeds, the directory
+	of the micro-tape is initialized (containing no files).
+	The uuo fails if the drive does not exist, or if the
+	drive is not assigned to the user whose job is trying
+	to do the .UINIT.
+	See the .ASSIGN and .DESIGN uuos.
+
+.UPISET ac,		OBSOLETE	user priority interrupt set
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by .SUSET of .PICLR
+	and/or the .DISMISS uuo and the DISMIS symbolic system
+	call.
+
+	The value of the ac is converted to -1 or 0 on the basis
+	of bit 4.9; this value is then exchanged with the .PICLR
+	user variable for the executing job.  Thus the accumulator
+	gets the old value of .PICLR even as it specifies a
+	new value.  This allows enabling and disabling of
+	interrupts.
+
+.USET chnum,[uset spec]			set (or get) user variable
+
+	This uuo is used to inspect or alter the user variables
+	of a job open on channel <chnum>, which may be a channel
+	open on the USR or BOJ device.
+	See ITS USETS for further information on .USET and .SUSET.
+
+.UTNAM ac,				set micro-tape name
+	;skip if successful
+
+	The specified accumulator should contain a micro-tape
+	drive number in the right half and a three character
+	sixbit name in the left half.  If the uuo succeeds,
+	the name of the micro tape will be changed to the one
+	specified.  The uuo fails if there is no such drive,
+	if it is in .UBLAT mode, or if it is assigned
+	to another user.
+	The name of a micro-tape can be examined with the .RCHST uuo.
+
+.UTRAN loc				user interrupt bit translate
+	;skip if successful
+
+
+	The effective address of .UTRAN must be a three-word
+	block:
+		loc:	bit,,	;interrupt bit of inferior
+			0	;uname returned here
+			0	;jname returned here
+
+	The first word should be all zero, except for one
+	of bits 3.1-3.8; these correspond to inferior
+	interrupt bits in the .IFPIR user variable.
+	If the job executing job has an inferior for that
+	interrupt bit, .UTRAN stores the uname and jname
+	of the inferior in the second and third words and skips;
+	otherwise it fails to skip.
+
+	DDT uses this to find jobs which have been :FORGET'ed, or
+	accidentally created by open's of the USR: device via :PRINT
+	etc.  Normally, superiors should keep track of the interrupt bit
+	and job names when the job is created, and this UUO should be
+	used only for exceptional cases.
+
+	See the .IFPIR, .UNAME, .JNAME, and .UIND user variables.
+	
+.VALUE [item]				return value to superior
+
+	The job which executes a .VALUE receives a class 1
+	interrupt, which stops the job, turns on %PIVAL (bit 1.8)
+	in its .PIRQC variable, and interrupts its superior.
+	The word <item> is placed in the .VAL variable of
+	the executing job (this fact is a historical artifact,
+	relatively useless now).
+
+	The standard superior procedure (DDT) imposes the
+	following additional semantics on .VALUE:
+	If the effective address is zero, then DDT prints
+	out a message to that effect, and the job is left stopped.
+	This used to be the standard way to crap out from a grossly
+	irrecoverable situation (e.g. can't get core, or can't
+	open the TTY when started).  Now .LOSE (q.v.) is preferred.
+	A typical sequence is:
+
+	GO:	.OPEN TTYC,[SIXBIT \  !TTY\]
+		 .VALUE	;unhappy if never got TTY
+		.CALL [ SETZ ? 'TTYGET ? 1000,,TTYC ? 2000,,A ? 402000,,B ]
+		 .VALUE	;shouldn't lose if .OPEN succeeded
+
+	If the effective address is not zero, it is assumed to
+	point to an ASCIZ string in the memory of the job
+	which executed the .VALUE.  DDT proceeds to
+	interpret these characters as if they were typed to
+	DDT on the console.  Thus a job might execute
+
+		.VALUE [ASCIZ \:PROCED :DISOWN V\]
+
+	or something similar, to get itself running again and
+	disowned from its superior.  See the DDT documentation
+	for specific details on .VALUE.
+
+.VSCAN
+
+.VSTST
+
+.WMAR ac,		ANCIENT HISTORY	write mar address
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function has been superseded by .SUSET of .MARA.
+	Its opcode has been recycled as .DCONT.
+
+	The user's mar address variable is set from the
+	contents of the specified accumulator.
+
+.WR760 ac,		ANCIENT HISTORY	write device 760
+
+	This uuo NO LONGER EXISTS.
+	It is documented here for historical purposes only.
+	Its function is obsolete.
+	Its opcode has been recycled as .DSTEP.
+
+	Device 760 of the PDP-6 used to be used for temporary
+	direct sense hookups.  (For example, the low six
+	bits controlled lights on the hand of the AMF arm.)
+	This uuo used the contents of accumulator <ac> for a
+	DATAO to device 760.
+
+.WSNAME ac,		OBSOLETE	write system name
+
+	This uuo is ARCHAIC and OBSOLETE.
+	It is documented here for historical purposes only.
+	Its use in new programs is to be avoided.
+	Its function has been superseded by .SUSET of .SNAME.
+
+	The system name for the job (used as a file directory name)
+	is set to the sixbit contents of accumulator <ac>.
