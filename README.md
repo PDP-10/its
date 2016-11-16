@@ -32,6 +32,7 @@ from scratch.
    - MIDAS, the assembler.
    - DDT, debugger and HACTRN user login shell.
    - The ITS monitor (kernel).
+   - Exec DDT, standalone debugger.
    - TECO, editor.
    - DUMP, tape backup and restore.
    - PDSET, set time and date.

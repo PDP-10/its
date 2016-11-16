@@ -128,6 +128,11 @@ respond "*" ":midas system;_its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
+respond "*" ":midas .;@ ddt_system;ddt\r"
+respond "cpusw" "3\r"
+respond "New One Proceed" "1\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
 respond "*" ":job teco\r"
