@@ -1,0 +1,44 @@
+cd build/klh10
+
+set emulator_prompt "KLH10"
+set emulator_escape "\034"
+
+proc start_nsalv {} {
+    uplevel #0 {spawn ./kn10-ks-its nsalv.ini}
+    expect "EOF"
+    respond "KLH10#" "go\r"
+}
+
+proc restart_nsalv {} {
+    quit_emulator
+    start_nsalv
+}
+
+proc start_dskdmp {} {
+    respond "KLH10>" "zero\r"
+    respond "KLH10>" "load @.ddt-u\r"
+    respond "KLH10>" "load dskdmp.216bin\r"
+    respond "KLH10>" "go\r"
+}
+
+proc start_its {} {
+    uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
+    respond "KLH10#" "go\r"
+}
+
+proc mount_tape {file} {
+    respond "KLH10>" "devmo mta0 ../../$file\r"
+    respond "KLH10>" "c\r"
+}
+
+proc create_tape {file} {
+    respond "KLH10>" "devmo mta0 ../../$file create\r"
+    respond "KLH10>" "c\r"
+}
+
+proc quit_emulator {} {
+    respond "KLH10>" "quit\r"
+    respond "Confirm" "y\r"
+}
+
+source ../build.tcl

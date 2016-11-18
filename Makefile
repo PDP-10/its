@@ -32,7 +32,7 @@ out/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
 build/klh10/stamp: $(KLH10)
-	touch $<
+	touch $@
 
 $(KLH10):
 	cd tools/klh10; \

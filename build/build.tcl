@@ -1,12 +1,13 @@
 proc type s {
-    sleep .2
+    sleep .1
     foreach c [split $s ""] {
-        send $c
+        send -- $c
         if [string match {[a-z]} $c] {
 	    expect -nocase $c
 	} else {
 	    expect "?"
 	}
+	sleep .03
     }
 }
 
@@ -16,7 +17,8 @@ proc respond { w r } {
 }
 
 proc pdset {} {
-    respond "YOU MAY HAVE TO :PDSET" "\032"
+    type "\032"
+
     respond "Fair" ":pdset\r"
     set t [timestamp]
     respond "PDSET" [expr [timestamp -seconds $t -format "%Y"] / 100]C
@@ -30,6 +32,17 @@ proc pdset {} {
         type "Q"
     }
     expect ":KILL"
+}
+
+proc maybe_pdset {} {
+    expect "YOU MAY HAVE TO :PDSET" {
+	pdset
+    } "PDTIME OFFSET" {
+	pdset
+    } "IT IS NOW" {
+	type "\032"
+	expect "Fair"
+    }
 }
 
 proc shutdown {} {
@@ -77,7 +90,9 @@ set dir $expect_out(1,string)
 type "write\r"
 respond "Are you sure" "yes\r"
 respond "Which file" "bt\r"
-respond "Input from" ".;bt rp06\r"
+expect "Input from"
+sleep 1
+respond ":" ".;bt rp06\r"
 respond "!" "quit\r"
 expect ":KILL"
 shutdown
@@ -95,7 +110,7 @@ quit_emulator
 start_its
 respond "DSKDMP" "its\r"
 type "\033g"
-pdset
+maybe_pdset
 
 respond "*" $emulator_escape
 mount_tape "out/sources.tape"
