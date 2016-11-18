@@ -33,22 +33,21 @@ proc pdset {} {
 }
 
 proc shutdown {} {
+    global emulator_escape
     respond "*" ":lock\r"
     expect "_"
     send "5kill"
     respond "GO DOWN?\r\n" "y"
     respond "BRIEF MESSAGE" "\003"
-    respond "NOW IN DDT" "\005"
+    respond "NOW IN DDT" $emulator_escape
 }
 
 set timeout 100
 expect_before timeout abort
 
-spawn pdp10 build/simh/init
+start_nsalv
 
-respond "sim>" "show ver\r"
-respond "sim>" "b tu1\r"
-respond "MTBOOT" "mark\033g"
+respond "\n" "mark\033g"
 respond "Format pack on unit #" "0"
 respond "Are you sure you want to format pack on drive" "y"
 respond "Pack no?" "0\r"
@@ -59,10 +58,10 @@ respond "DDT" "tran\033g"
 respond "onto unit" "0"
 respond "OK" "y"
 expect "EOT"
-respond "DDT" "\005"
+respond "DDT" $emulator_escape
 
-respond "sim>" "b tu2\r"
-respond "MTBOOT" "\033g"
+start_dskdmp
+
 respond "DSKDMP" "l\033ddt\r"
 expect "\n"; type "t\033its rp06\r"
 expect "\n"; type "\033u"
@@ -83,21 +82,23 @@ respond "!" "quit\r"
 expect ":KILL"
 shutdown
 
-respond "sim>" "b tu1\r"
-respond "MTBOOT" "feset\033g"
+restart_nsalv
+
+expect "\n"
+sleep 1
+type "feset\033g"
 respond "on unit #" "0"
 respond "address: " "$dir\r"
-respond "DDT" \005
-respond "sim>" "quit"
+respond "DDT" $emulator_escape
+quit_emulator
 
-spawn pdp10 build/simh/boot
+start_its
 respond "DSKDMP" "its\r"
 type "\033g"
 pdset
 
-respond "*" "\005"
-respond "sim>" "at tu0 out/sources.tape\r"
-respond "sim>" "c\r"
+respond "*" $emulator_escape
+mount_tape "out/sources.tape"
 type ":dump\r"
 respond "_" "reload "
 respond "ARE YOU SURE" "y"
@@ -204,9 +205,8 @@ respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
 
-respond "*" "\005"
-respond "sim>" "at tu0 out/output.tape\r"
-respond "sim>" "c\r"
+respond "*" $emulator_escape
+create_tape "out/output.tape"
 type ":dump\r"
 respond "_" "dump links full\r"
 respond "TAPE NO=" "0\r"
@@ -214,4 +214,4 @@ expect "REEL"
 respond "_" "quit\r"
 
 shutdown
-respond "sim>" "quit"
+quit_emulator

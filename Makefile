@@ -1,3 +1,5 @@
+EMULATOR ?= simh
+
 SRC = system syseng sysen1 sysen2 sysnet kshack midas _teco_ rms klh
 MINSYS = _ sys sys3 device
 RAM = bin/boot/ram.262
@@ -9,8 +11,8 @@ WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
 all: out/rp0.dsk
 
-out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape
-	expect -f build/build.tcl
+out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
+	expect -f build/$(EMULATOR)/build.tcl
 
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
