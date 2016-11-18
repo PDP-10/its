@@ -39,6 +39,7 @@ $(KLH10):
 	./autogen.sh; \
 	mkdir tmp; \
 	cd tmp; \
+	export CONFFLAGS_USR=-DKLH10_DEV_DPTM03=0; \
 	../configure --bindir=${PWD}/build/klh10; \
 	make base-ks-its; \
 	make -C bld-ks-its install
