@@ -215,10 +215,35 @@ respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
-respond "*" ":print channa;..new. (udir)\r"
 respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
+
+respond "*" ":midas channa;rakash dmpcpy_syseng; dmpcpy\r"
+expect ":KILL"
+
+respond "*" ":midas channa;rakash modems_syseng; modems\r"
+expect ":KILL"
+respond "*" ":link channa;ts modems,channa;rakash modems\r"
+
+respond "*" ":midas channa;rakash netime_sysen1; netime\r"
+expect ":KILL"
+respond "*" ":link channa;ts netime,channa;rakash netime\r"
+
+respond "*" ":link dragon;hourly modems,channa;ts modems\r"
+
+# sources dump tape now creates dragon directory and populates
+# with an initial dragon; dragon hoard file, which is required
+# by PFT
+#
+# respond "*" ":print dragon;..new. (udir)\r"
+#
+respond "*" ":midas dragon;rakash pfthmg_syseng; pft\r"
+respond "mcp=" "0\r"
+expect ":KILL"
+respond "*" ":link channa; rakash pfthmg,dragon; rakash pfthmg\r"
+
+respond "*" ":link sys; ts p,sys; ts peek\r"
 
 respond "*" $emulator_escape
 create_tape "out/output.tape"
