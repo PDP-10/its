@@ -1,0 +1,3678 @@
+;;;-*-Midas-*-
+
+TITLE PFTHMG DRAGON II
+
+define setf text,flg
+ifdef flg,.stop
+.tag foobar 
+printc "text
+flg="
+.ttymac flag
+.ttyflg==.ttyflg+1
+printx/flag
+/
+.ttyflg==.ttyflg-1
+ifse flag,YES,flg==1
+ifse flag,NO,flg==0
+ifse flag,Y,flg==1
+ifse flag,N,flg==0
+ifndef flg,flg==flag
+termin
+ifndef flg,.go foobar
+termin
+
+setf [Macsyma and decimal time features for MC KL10]$$mcp
+;setf [Puff internal stats collection (say yes)]$$stat
+
+;$$MCP==1			;non-zero if for MC
+$$STAT==1			;non-zero for PUFF internal stats collection
+
+A=1
+B=2
+C=3
+D=4
+E=5
+T=6
+TT=7
+H=10
+I=11
+J=12
+Q=13
+R=14
+P=17
+
+ERRCH==0
+CLICH==1
+DMPCH==2
+maxch==3
+batusr==4	;See BATCH
+batdsk==5	;Same Bat time, same Bat channel!
+INCH=15
+OUCH=16
+
+
+define syscal oper,args
+	.call [setz ? sixbit /oper/ ? args ((setz))] termin
+
+busrc==100000			   ;user control bit in USTP
+
+EDITF:	0		;NONZERO => WAITING FOR EDITING
+IFN EDITF-100, .ERR EDITF MUST BE LOCATION 100
+
+SNAME:	sixbit /DRAGON/		;DIRECTORY TO USE
+LOTSNM:	sixbit /CHANNA/		;DIRECTORY FOR LOGOUT TIMES FILE
+MALSNM:	sixbit /.MAIL./		;DIRECTORY FOR SENDING MAIL
+
+DEBUG:	-1		;NONZERO => EXTRA CHECKS, .VALUES, ETC.
+FIXIND:	0		;NONZERO => FIX INDENTATION TO STANDARD VALUES
+
+PDL:	-120,,.
+	BLOCK 122
+
+DEFINE INSIRP INS,VALS
+	IRPS VAL,,[VALS]
+	 INS,VAL
+	TERMIN
+TERMIN
+
+ZZ==.
+	LOC 40
+FORTY:	0
+	JSR UUOH
+	-intlen,,TSINT
+	LOC ZZ
+
+;UUOS
+
+WCHI=1000,,		;WRITE-CHAR-IMMEDIATE
+XBUGCH=62000,,		;BUGCHK MACRO - MUST BE MUUO SO NO CLOBBER JPC
+XCLBFI=3000,,		;CLBFIL MACRO
+
+;Give bug message if debugging, and continue
+DEFINE BUGCHK MESS/
+	XBUGCH [ASCIZ:MESS
+
+]
+TERMIN
+
+;Give clobbered file message, pop AC times, and jump to GVLFLS to flush rest of line.
+DEFINE CLBFIL AC,MESS/
+	XCLBFI AC,[ASCIZMESS]
+TERMIN
+
+SUBTTL	How it works
+
+;Accounting information is saved in the DRAGON HOARD file, which is a printable
+;ascii file.  At the end of the month, this file becomes the monthly report, and
+;a new file is started by zeroing all the useages.
+
+;Accounting information is obtained from the system by looking for "dmn-push"
+;messages.  The system has a circular buffer which can hold several of these
+;messages.  When it is idle, the daemon hangs waiting for the count of the
+;number of messages pushed to change.  It then copies out the messages.
+;While it is updating the file, the daemon also checks the dmn-push buffer
+;every 1/2 second to try to avoid missing any messages.
+;The system pushes these messages when a user logs in or out, and when
+;a job tree's name changes e.g. due to detach or attach.  In future it may
+;also do it spontaneously every fifteen minutes or so to keep the
+;accounting up to date.
+
+;The daemon generates two tables from the dmn-push messages.  The logged-in
+;tree table has an entry for each job tree that it saw log in to the system.
+;The table is indexed by the user-index of the top-level job of the tree.
+;This table simply remembers the information from the login message until
+;logout time.  The cruft table is a sequence of "pieces of cruft."  Each
+;piece of cruft contains the accounting information for one user session.
+;When it comes time to update the accounting file, the pieces of cruft
+;are matched against the accounting entries.  When a match occurs, the
+;usage in the piece of cruft is added to the usage in the accounting file
+;for that user.
+
+;Editing the accounting file.
+;It is necessary to lock out updates of the file while it is being
+;edited.  The TS GEORGE program does this.  The dragon remembers any
+;dmn-push messages that happen while updating is locked out, so no
+;information is lost.  GEORGE should also be run just before shooting down
+;the dragon to put up a new one, to insure that the file gets updated.
+
+;The format of the accounting file is as follows:
+;It is processed a line at a time.
+;A line that begins with white space (actually, space or any control character)
+;is a comment, which is not processed by this program.  This is used to insert
+;headings, page throws (^L), etc.
+
+;Various special markers are indicated by a whole mess of dashes surrounding
+;a keyword.  The following keywords exist:
+; TOTALS - the next line is for the "TOTALS" user whose usage is the sum of all
+;	   the usage in the file.
+; PAGE SUBTOTALS - the next line is for the "TOTALS" user whose usage
+;	   is the sum of all the usage on the same page.
+; RANDOMS - the remainder of the page containing this line is for
+;	   "random users".  Users not otherwise accounted for
+;	   will be automatically inserted at the bottom of the page.
+;	   Random users who don't log in for a month will be automatically
+;	   deleted.
+
+
+;^L is considered to separate pages.  The only difference this makes is
+;that "page subtotals" are reset by ^L.  Also, ^L ends the randoms section.
+
+;All other lines are accounting entries.  Each accounting entry starts
+;with a uname spec, which says what user or set of users will be accounted
+;for on this line.  It can be further narrowed down through the use of
+;JOB, ACCT, and/or HOURS specs.  (See below.)  The remainder of the line
+;contains usage informations, separated by spaces and tabs.  These are, in
+;order from left to right:  the connect-time, the run-time, the swap-in count,
+;the logout-date, and the logout-time.  Times are in the form dd!hh:mm:ss.
+;The swap-in count is just a decimal number.  The logout date is in the
+;form yy.mm.dd.
+
+;The uname, job, and acct specs are, in the simplest case, just a sixbit
+;name.  Legal characters are letters (A-Z and a-z), numbers (0-9),
+;underscore (_), and dot (.).
+;If any other character is required it should be preceded by a slash (/).
+;It is also possible to make a spec that matches a class of names, by use
+;of the wild-card characters star (*) and sharp (#).  Sharp matches any
+;numeric digit.  Star matches any character (even space).  As a special
+;case, a spec consisting of just a star matches anything (normally it would
+;just match any one-character name.)
+
+;The uname spec is matched against the XUNAME (what the user logged in as.)
+;The job spec, which is optional and written as "JOB=spec", matches against
+;the JNAME of the top-level job.  This could be used to separate HACTRNs
+;from HACTROs, account separately for job-device jobs ("JOB=JOB.##"), or
+;hack daemons.  The account spec, which is optional and written as "ACCT=spec",
+;matches against the account-name logged in to.  [There is currently no
+;way for a user to log in to an account name, however.]  This is used by
+;users who want to split up their usage into several categories.
+;The hours spec, which is optional and written as "HOURS=m-n", is used
+;to account only for usage between certain hours (currently, it goes
+;by the time of login.)  E.g. "HOURS=9-5".
+
+;When initially setting up a file, it is necessary to list all the
+;users on the system who should be accounted for, dividing them up
+;into pages by groups.  Then there should be a page containing just
+;-randoms-, and finally a page starting with -totals-, and containing
+;a line TOTALS 0.0 0.0 0 0.0 0.0 76.08.01 on MC or
+;a line TOTALS 0 0 0 76.08.01 00:00:00
+;(or whatever date is appropriate.)
+;If special jobnames, (e.g. job devices) or daemons are to be accounted
+;for, they should go at the front.
+
+;The following files are used by this program:
+;
+;	DRAGON HOARD	current accounting file
+;	DRAGON SAVE	previous accounting file
+;	DRAGON YESTER	yesterday's accounting file
+;	_DRGN_ BUFFER	temporary name for output file
+;	month REPORT	completed accounting file for that month
+;	LOGOUT TIMES	old style logout-times file.
+;
+;	It also sends mail to MAGIC-DRAGON-KEEPER and to the last
+;	person who edited the accounting file if it runs into
+;	any problems.
+
+;blah blah
+
+SUBTTL	Program starts here
+
+GO:	.CLOSE 1,
+	.SUSET [.RSUPPRO,,T]
+	JUMPGE T,GO1		;I prefer GO1, changing the directory to ZZ
+	SETZM DEBUG		;top level => running as daemon	
+	.SUSET [.SXUNAME,,['PFTHMG]]
+	.SUSET [.SXJNAME,,['DRAGON]]
+	.SUSET [.SUNAME,,['PFTHMG]]  ;UNAME first since TARAKA DRAGON may exist
+	.SUSET [.SJNAME,,['DRAGON]]
+	.suset [.shsname,,['DRAGON]]  ; for the sake of file authors
+	JRST GO1
+
+GO0:	SETZM SNAME		;use debugger's directory.
+	SETZM LOTSNM
+GO1:	MOVE P,PDL
+GO2:	.RDATIM T,		;Wait until ITS thinks it knows the time
+	IOR T,TT
+	JUMPGE T,GO3
+	MOVEI T,5*30.
+	.SLEEP T,
+	JRST GO2
+
+GO3:	.suset [.ruind,,RUIND]
+	MOVE T,[SQUOZE 0,LIOBLK]
+	.EVAL T,
+	 .LOSE
+	HRLOI T,-1(T)
+	EQVI T,SYCORE_-10.
+	SETZ TT,
+	.CALL [	SETZ		;Map in system core
+		'CORBLK
+		MOVEI %CBRED+%CBNDR
+		MOVEI %JSELF
+		MOVE T
+		MOVEI %JSABS
+		SETZ TT ]
+	 .LOSE 1000
+	IRPS SYM,RELOC,[DMNBC+DMNBD+DMNBF+DMNBFE+DMNBEL DEDTIM+USRHI+LUBLK 
+			UNAME#XUNAME#JNAME#USTP#UTRNTM#USIPRQ#TRUNTM#TSIPRQ#
+			SUPPRO#TIME+SYSMPT+SYSMLNG SYSMBF+]
+	 MOVE T,[SQUOZE 0,SYM]	;Evaluate necessary system symbols
+	 .EVAL T,
+	  .LOSE
+	 IFSE RELOC,+, ADDI T,SYCORE		;reloc address to system core
+	 IFSE RELOC,#, ADD T,[SYCORE(R)]	;also index by user index in R
+	 MOVEM T,SYM
+	TERMIN
+	MOVE T,DMNBFE
+	SUB T,DMNBF
+	IDIV T,DMNBEL
+	MOVEM T,DMNBSZ
+IFN $$MCP,	pushj p,maxget		;get a page of MACSYMA
+
+	;; Don't set %OPLIV until we are fairly certain we will live
+	.SUSET [.ROPTION,,T]
+	TLO T,%opopc+%opliv+%opint
+	.SUSET [.SOPTION,,T]
+	move t,[%rlfls\%rlset,,rltinv]
+	.realt t,		;give ourself periodic interrupts
+	JRST IDLE		;Go enter idle loop
+
+SUBTTL UUO Handler
+
+UUOH:	0			;PC stored here
+	PUSH P,UUOH		;this must be first instruction, see TSINT
+	PUSH P,T		;UUOs shouldn't clobber any ACs.
+	LDB T,[331100,,FORTY]
+	CAIN T,WCHI_-33
+	 JRST UWCHI
+	CAIN T,XCLBFI_-33
+	 JRST UCLBFI
+	CAIE T,XBUGCH_-33
+	 .VALUE
+	.SUSET [.RJPC,,BUGJPC]
+	JRST UBUGCH
+
+UWCHI:	HRRZ T,FORTY
+	PUSHJ P,WCH
+UUORET:	POP P,T
+	POPJ P,
+
+;BUGCHK message in debug mode returns to DDT, in non-debug PDUMPs and continues
+UBUGCH:	SKIPE DEBUG
+	 JRST UBUGC1
+	MOVEM 0,BUGACS		;saves ACs (already saved JPC)
+	MOVE 0,[1,,BUGACS+1]
+	BLT 0,BUGACS+17
+	MOVE 0,BUGACS
+	.CALL [	SETZ		;save core image
+		SIXBIT/OPEN/
+		[.UIO,,DMPCH]
+		['DSK,,]
+		['DRAGON]
+		[SIXBIT/>/]
+		SETZ [SIXBIT/CRASH/] ]
+	 JRST UUORET		;tough noogies, more important to keep running
+	SETZ T,
+	.CALL [	SETZ
+		SIXBIT/PDUMP/
+		MOVEI %JSELF
+		MOVEI DMPCH
+		SETZ T ]
+	 JRST UUORET		;tough noogies, more important to keep running
+	.IOT DMPCH,[JUMPA BUGHAK]
+	.IOT DMPCH,[JUMPA BUGHAK]
+	.CLOSE DMPCH,
+UBUGCX:	JRST UUORET
+
+BUGHAK:	.SUSET [.SJPC,,BUGJPC]	;here restore state so can look at dump
+	MOVSI 17,BUGACS
+	BLT 17,17
+	.VALUE [ASCIZ\:SL CHANNA;RAKASH PFTHMG
+P\]
+UBUGC1:	POP P,T
+	.VALUE @FORTY
+	POPJ P,
+
+;CLBFIL message in debug mode returns to DDT, in non-debug mode generates mail.
+UCLBFI:	SKIPE DEBUG
+	 .VALUE [ASCIZ\: CLBFIL 
+\]
+	AOS C,NERRS		;save message and line number in buffer
+	CAILE C,LERRBF
+	 JRST UCLBF2
+	SOS C
+	HRRZ T,FORTY
+	MOVEM T,ERRBFZ(C)
+	MOVE T,LINENO
+	MOVEM T,ERRBFL(C)
+	MOVE T,UNAMEA
+	MOVEM T,ERRBFA(C)
+	MOVE T,UNAMEB
+	MOVEM T,ERRBFB(C)
+	MOVE T,UNAMEC
+	MOVEM T,ERRBFC(C)
+UCLBF2:	LDB T,[270400,,FORTY]	;flush pdl
+	CAIN T,17
+	 JRST UUORET
+	ADDI T,2
+	HRLS T
+	SUB P,T
+	JRST GVLFL1		;flush rest of input line
+
+SUBTTL Routines to gobble dmn-push messages
+
+;Procedure to gobble any dmn-push messages available from the system.
+;Clobbers pretty much all ACs.
+
+DMNPOP:	MOVE Q,LDMNBD		;last message processed
+	CAML Q,@DMNBD
+	 POPJ P,		;buffer empty
+	ADD Q,DMNBSZ
+	CAML Q,@DMNBC
+	 JRST DMNPO1		;jump if haven't missed any
+;Following 2 lines commented out.  We're never going to get rid of
+;these and I'm tired of deleting the crash files.  11/30/77
+;	SKIPE LDMNBD		;if just started up, mumble this always happens
+;	 BUGCHK Missed dmn-push message.
+	MOVE Q,@DMNBC		;get as many as we can
+	SUB Q,DMNBSZ
+	MOVEM Q,LDMNBD
+DMNPO1:	AOS Q,LDMNBD		;take next one after previous
+	SUBI Q,1		;fudge (DMNBD=1 after msg 0 pushed).
+	IDIV Q,DMNBSZ		;mod size of buffer
+	MOVE Q,R
+	IMUL Q,DMNBEL
+	ADD Q,DMNBF		;now Q -> the dmn-push message
+	HRLZ T,Q		;save the message in case of a BUGCHK
+	HRRI T,BUGMSG
+	BLT T,BUGMSG+7
+	MOVE T,LI.IDX(Q)	;figure out what type of message it is
+	TLNE T,LI%COD
+	 JRST DMNPO2
+	TLNE T,LO%COD
+	 JRST DMNPO3
+	BUGCHK Unknown dmn-push message.
+	JRST DMNPOP		;try for more messages
+
+DMNPO2:	PUSHJ P,LOGIN
+	JRST DMNPOP		;try for more messages
+
+DMNPO3:	PUSHJ P,LOGOUT
+	JRST DMNPOP		;try for more messages
+
+;Procedure to process dmn-push message for log in.
+;Q -> the message.  The logged-in tree table is updated.
+;Uses T, TT, I, J, A, B.
+
+LOGIN:	MOVE I,LI.IDX(Q)	;get user index of top job of tree
+	TLZE I,LI%COD		;check that it's really a login.
+	 TLNE I,-1
+	  BUGCHK Message-type not Login.
+	IDIV I,LUBLK
+	CAIL I,NTREES		;make sure logged in trees table is big enough
+	 .LOSE
+	SKIPN TR.UNM(I)		;make sure table entry not already in use
+	 JRST LOGIN0
+	HLRO TT,TR.UNM(I)	;but watch out for wierd screw in ITS.
+	MOVE T,TR.JNM(I)	;where not logged in job sets its jname
+	CAMN T,LI.JNM(Q)	;(causing an accounting update) then logs in
+	 AOJE TT,LOGIN0		;(causing log in of already logged in job).
+;		;Following line commented out until bugs in ATTACH/DETACH fixed up.
+;	BUGCHK That user index already logged in.
+
+LOGIN0:	MOVE T,LI.UNM(Q)	;fill in the table entry
+	MOVEM T,TR.UNM(I)
+	MOVE T,LI.JNM(Q)
+	MOVEM T,TR.JNM(I)	
+	MOVE T,LI.TNM(Q)
+	MOVEM T,TR.TNM(I)
+	MOVE TT,LI.TIM(Q)
+	MOVEM TT,TR.TIM(I)
+;	MOVE T,LI.XUN(Q)
+	MOVE T,LI.UNM(Q)	; XUNAME not pushed by sys, screw around
+	MOVEM T,TR.XUN(I)	; Guess that UNAME is correct
+	MOVE TT,[-6,,[	SIXBIT /XUNAME/	? MOVEM T
+			SIXBIT /UNAME/	? MOVEM A
+			SIXBIT /JNAME/	? MOVEM B ]]
+	SYSCALL USRVAR,[MOVEI %JSNUM(I) ? MOVE TT]
+	 POPJ P,		; Gone?  Give up.
+	CAMN A,TR.UNM(I)
+	 CAME B,TR.JNM(I)
+	  POPJ P,		; Not the same job?  Give up.
+	TLC T,-1
+	TLCE T,-1
+	 MOVEM T,TR.XUN(I)	; Logged in?  Use it!
+	POPJ P,
+
+;Procedure to process dmn-push message for log out.
+;Q -> the message.  Corresponding entry in logged-in tree table
+;is found, and cruft is pushed.  Later the file will be updated
+;from the cruft.
+;Uses T, TT, H, I, J, A, B, C.
+
+LOGOUT:	MOVE I,LO.IDX(Q)	;get user index of top job of tree
+	TLZE I,LO%COD		;check that it's really a logout.
+	 TLNE I,-1
+	  BUGCHK Message-type not Logout.
+	IDIV I,LUBLK
+	CAIL I,NTREES		;make sure logged in trees table is big enough
+	 .LOSE
+	SETZB A,C		;no connect time nor trmnam if missed log in.
+	MOVE B,LO.UNM(Q)	;no xuname if missed log in.
+	MOVEI TT,9		;no hour if missed log in.
+	SKIPN TR.UNM(I)
+	 JRST LOGOU0		;jump if missed log in.
+	MOVE TT,LO.UNM(Q)	;make some checks
+	CAME TT,TR.UNM(I)
+	 JRST LOGOU3
+	MOVE TT,LO.JNM(Q)
+	CAME TT,TR.JNM(I)
+	 JRST LOGOU3
+	MOVE A,LO.TIM(Q)	;get connect time
+	SUB A,TR.TIM(I)
+	JUMPL A,[ BUGCHK Negative connect time.
+		  MOVEI A,0
+		  JRST .+1 ]
+	MOVE B,TR.XUN(I)	;get XUNAME
+	MOVE C,TR.TNM(I)	;get TRMNAM
+	SETZM TR.UNM(I)		;guy is now logged out
+	.CALL [	SETZ		;compute hour of login in TT
+		'RQDATE
+		MOVEM T
+		SETZM T ]	;QDATE system came up
+	 SETO T,
+	MOVEI TT,9		;9 AM is default if
+	AOJE T,LOGOU0		; sys doesn't know time
+	MOVEI T,-1(T)
+	IMULI T,15.		;30ths since midnight when system came up
+	ADD T,TR.TIM(I)		;30ths since midnight of login
+	IDIVI T,3600.*30.	;hours since midnight of login
+	IDIVI T,24.		;modulo 24 in case system up more than one day
+
+ifn $$STAT,aos crftys		;count this for statistical purposes
+
+logou0:	pushj p,getcor		;allocate one crufty
+	  popj p,		;  no core.
+	MOVEM A,CF.CTM(H)
+	MOVEM B,CF.UNM(H)
+	MOVEM C,CF.TNM(H)
+	MOVEM TT,CF.HOR(H)
+	MOVE T,LO.JNM(Q)
+	MOVEM T,CF.JNM(H)
+	MOVE T,LO.RTM(Q)	;HLRZ if still had old 4.069 usec clock
+	addi t,4166.		;round,
+	idivi t,8333.		;converting to seconds*30.
+	MOVEM T,CF.RTM(H)
+	MOVE T,LO.SWI(Q)
+	MOVEM T,CF.SWI(H)
+ifn $$mcp,[
+	setzm cf.mct(h)		;MACSYMA type is counted elsewhen
+	setzm cf.mrt(h)		
+];mcp
+	PUSHJ P,RDATIM		;TT gets date, T gets time
+	MOVEM TT,CF.DAT(H)
+	MOVEM T,CF.TIM(H)
+	SETOM CF.VAL(H)
+	POPJ P,
+
+;This BUGCHK commented out due to ITS lossage....8/9/76
+LOGOU3:	;BUGCHK Logout Tree doesn't match logged-in tree.
+	SETZM TR.UNM(I)
+	JRST LOGOU0
+
+
+getcor:	MOVEI H,CF.LEN		;push onto end of cruft table
+	ADDB H,CRUFTP
+getc1a:	CAMG H,CRUFTE
+	  jrst getcr1
+
+ifn $$STAT,aos coraos		;count how often we
+	MOVE T,CRUFTE		;need more core
+
+	LSH T,-10.
+	CAIL T,<SYCORE_-10.>-3
+	 .LOSE			;URK
+	.CALL [	SETZ
+		'CORBLK
+		MOVEI %CBRED+%CBWRT+%CBNDR+%CBNDW
+		MOVEI %JSELF
+		MOVEI (T)
+		SETZI %JSNEW ]
+	 JRST [	MOVEI TT,5*30.	;CAN'T GET CORE, WAIT 5 SEC
+		.SLEEP TT,
+		XCT .-1		;TRY AGAIN
+		  JRST getcrb	;STILL LOSING, BARF
+		JRST .+1 ]	;WON AFTER ALL
+	MOVEI T,1_10.
+	ADDM T,CRUFTE
+	JRST getc1a
+
+getcrb:	BUGCHK Can't get core to expand cruft table.
+	MOVEI H,10.*30.		;WAIT 10 SECONDS BEFORE TRYING ANYTHING
+	.SLEEP H,
+	MOVNI H,CF.LEN
+	ADDM H,CRUFTP
+	POPJ P,
+
+getcr1:	cail h,cruftz+<crfsiz*2000>-<crfmrg*cf.len>  ;is it getting big?
+	  jrst [setom dmpcnt	;  yes, request dump soon
+	        .suset [.sipirqc,,[%pirlt]]  ;And speed things up a bit
+		jrst .+1]
+	subi h,cf.len		;h -> new cruft.
+	jrst popj1		;return
+
+;Defensive routine to find out the date and time.
+;TT gets date, T gets time, nothing clobbered.
+;Sets stuff to -1 if it wouldn't have done for the duke.
+
+RDATIM:	.RDATIM T,
+	PUSH P,A
+	PUSH P,B
+	PUSHJ P,RDATI1
+	EXCH T,TT
+	PUSHJ P,RDATI1
+	EXCH T,TT
+	POP P,B
+	POP P,A
+	POPJ P,
+
+;Subroutine to fix T
+RDATI1:	JUMPLE T,RDATI9		;ITS knows it's losing
+	MOVE B,[440600,,T]
+RDATI2:	ILDB A,B		;Check for garbage characters
+	CAIL A,'0
+	 CAILE A,'9
+	  JRST RDATI9
+	TLNE B,770000
+	 JRST RDATI2		;Needn't check for wrong year, month 13, etc.
+	POPJ P,			;since dragon doesn't flame at those anyway.
+
+RDATI9:	SETOB T,TT		;lossage, don't trust any of it
+	POPJ P,
+
+SUBTTL	Idle Loop
+
+;This is where we sit when there's nothing to do.
+;.HANG on the daemon buffer.
+;Also, every 15 minutes do a file-update.
+;If system goes down, wait for full down-ness then log out self, sys, and
+;core and perform final file-update.
+
+IDLE:	PUSHJ P,DSKLOG		;Log disk errors.
+	MOVE T,@TIME		;Check for need to run hourly daemon kludge
+	SUB T,RYGTIM
+	CAIGE T,3600.*30.
+	 JRST IDLE01
+	move a,[sixbit /hourly/]
+	pushj p,batch
+IDLE1B:	MOVE T,@TIME
+	MOVEM T,RYGTIM'
+IDLE01:	move t,dmpinv		;15 minutes (unless sys going down)
+	movem t,dmpcnt		;   from now do update
+	.SUSET [.SMASK,,[%PIRLT+%PICLI+%PIDWN+%PIPDL]]
+IDLE00:	MOVE T,LDMNBD
+IDLE0:	CAMN T,@DMNBD		; PC will be IDLE0
+IDLE1:	 .HANG			; or IDLE1 if interrupt out
+SHUTD0:	PUSHJ P,DMNPOP		;gobble down any daemon messages
+	SKIPL @DEDTIM		;unless ITS is down,
+	 JRST IDLE00		;wait more.
+	MOVE T,@TIME		;save time that system went down.
+	SKIPN DWNTIM
+	 MOVEM T,DWNTIM
+	SUB T,DWNTIM		;# 30ths since shutdown
+	CAIL T,5*30.		;wait at most 5 seconds for other daemons to logout.
+	 JRST SHUTD2
+	MOVE R,@USRHI		;see how many jobs are still on the system
+	SETZ A,
+SHUTD1:	SUB R,LUBLK
+	SKIPE @UNAME
+	 AOS A
+	JUMPG R,SHUTD1
+	CAILE A,3
+	 JRST IDLE00		;some OPTLIV daemon hasn't logged out yet.
+SHUTD2:	MOVE R,@USRHI		;Time to go.
+SHUTD3:	SUB R,LUBLK		;Log out the jobs that are left (sys, core, us).
+	SKIPE @UNAME
+	 SKIPL @SUPPRO
+	  JRST SHUTD4
+	MOVEI Q,FAKMSG		;fake up the dmn-push message
+	HRRM R,LO.IDX(Q)	;see DMNPLO and LOGUSE in ITS.
+	MOVE T,@TIME
+	MOVEM T,LO.TIM(Q)
+	MOVE T,@UNAME
+	MOVEM T,LO.UNM(Q)
+	MOVE T,@JNAME
+	MOVEM T,LO.JNM(Q)
+	MOVE TT,@UTRNTM
+	ADD TT,@TRUNTM
+	MOVE T,@USIPRQ
+	ADD T,@TSIPRQ
+	MOVEM TT,LO.RTM(Q)
+	MOVEM T,LO.SWI(Q)
+	PUSHJ P,LOGOUT		;gobble down this fake message
+SHUTD4:	JUMPG R,SHUTD3
+	JRST FILEUP		;Do final FILEUP and .LOGOUT
+
+SUBTTL	Interrupt handler
+
+TSINT:	setz p			;push the .JPC and .SUUOH and miscellany ...
+	%piioc ? 0 ? -1 ? -1 ? iocint  ;IOC errors
+	%pidwn ? 0 ?  0 ?  0 ? dwnint  ;only sets flags, don't defer anything
+				;%PIRLT and %PICLK defer each other to prevent
+				;contention for pushing cruft
+				;%PIRLT's get delayed if they happen while not
+				;idle, so there can be no contention from
+				;%PIRLT's vs. MP cruft pushes.
+	%piclk ? 0 ? %piclk\%pirlt\%picli ?  0 ? clkint  ;finish up first
+	%pirlt ? 0 ? %pirlt\%picli\%pidwn\%piclk ? 0 ? rltint  ;time-critical
+	%picli ? 0 ? %pirlt\%picli ? 0 ? cliint	 ;defer %PIRLT so handler exits
+				;before getting %PIRLT it gives itself.
+intlen==.-tsint
+
+
+;Here on system-going-down interrupt
+
+DWNINT:	PUSH P,T
+	SKIPE T,@DEDTIM
+	 JRST DWNIN1
+	SETZM DWNTIM		;ITS revived.
+	movni t,31		;back to normal intervals
+	movem t,dmpinv
+	setom maxinv		;count out once per clock tick.
+	setom maxcnt
+	movei t,60.*3600./100.	;interval under normalcy
+	movem t,rltinv
+	jrst dismst		;return
+
+DWNIN1:	CAIL T,2*60.*60.	;Going down in less than two minutes?
+	  jrst dismst		;No, don't panic.
+	movni t,4		;Yes, start checking world every 2 seconds.
+	came t,dmpinv		;is it already schedualled sooner?
+	  movem t,dmpcnt	;  no, schedual it sooner
+	movem t,dmpinv		;and make rest of world use this interval
+	movni t,18.		;every 18 ticks (36 secs) do the MACSYMA update
+	came t,maxinv		;so they don't happen at our accelerated rate.
+	  movem t,maxcnt
+	movni t,60.*2.		;2. seconds,
+	movem t,maxinv		;set the interval
+	move t,[%rlfls\%rlset,,rltinv]	;spead up the clock
+	.realt t,
+	jrst dismst
+
+;Here on real-time interrupt
+
+RLTINT:	PUSH P,T
+	hrrz t,-4(p)		;get the PC we interrupted from.  Idle?
+	CAIE T,IDLE0
+	 CAIN T,IDLE1
+	  JRST RLTIN0
+	MOVE T,[%rlfls\%rlset,,[60.]]	;no, check again in a second
+	.REALT T,
+	jrst dismst		;dismis from the interrupt
+
+RLTIN0:	move t,[%rlfls\%rlset,,rltinv]	;and hack it for that interval
+	.realt t,
+ifn $$mcp,[
+	aosl maxcnt		;if this is a for-real interrupt
+	  pushj p,maxscn	;  update MACSYMA's
+];mcp
+
+	pop p,t			;restore T
+	syscal dismis,[%clbit,,(setz)  ;dismis to our hack
+	       p
+	       %climm,,rlthak]	;hack our from directly.
+	  .lose %lssys
+rlthak:	aosge dmpcnt		;time to update the file?
+	  jrst idle00		;  nope, just go hack them some more
+
+	SKIPE T,@DEDTIM		;system down or going down soon?
+	  CAIL T,2*60.*60.	;  i.e. 2 minutes
+	    jrst FILEUP		;    no, run file update generator
+	jrst shutd0		;yes, do shutdown checks
+
+;Here on slow-clock interrupt.  While we aren't idle, every 1/2
+;second we check for dmn messages this way, to avoid losing any.
+
+CLKINT:	INSIRP PUSH P,A B C D E T TT H I J Q R FORTY UUOH
+	PUSHJ P,DMNPOP
+	INSIRP POP P,UUOH FORTY R Q J I H TT T E D C B A
+	jrst dismis		;return
+
+
+;Here on IOCER interrupt.  If device full, wait ten seconds then try
+;again.  If anything else, we're screwed.
+
+IOCINT:	PUSH P,T
+	.SUSET [.RBCHN,,T]
+	MOVSI T,.RIOS(T)
+	HRRI T,T
+	.SUSET T
+	LDB T,[.BP (37000),T]	; Get IOCER code
+	CAIE T,11		; DEVICE FULL?
+	 jrst [	move t,-4(p)	; No, dismis and instantly .LOSE
+	        hrlm t,losadr	; RH has 1+.LZ %PIIOC
+		pop p,t
+	        syscal dismis,[movsi (setz) ? move p
+				move -3(p)	; Restore PC
+				move -5(p)	; Restore DF1
+				move -4(p)	; Restore DF2
+				move losadr]	; Do .LOSE
+		  .lose %lssys]
+	MOVEI T,10.*30.
+	.SLEEP T,
+	hrrz t,-4(p)		;get the PC off the stack
+	CAIL T,UBUGCH
+	 CAILE T,UBUGCX
+	  jrst dismst		;retry the failing instruction.
+	MOVEI T,UUORET		;disk full while dumping crash file, give up!
+	movem t,-4(p)
+	.CLOSE DMPCH,
+dismst:	pop p,t			;restore T
+dismis:	syscal dismis,[%clbit,,(setz) ? p]
+	  .lose %lssys
+       
+losadr:	0,,1+.lz %piioc
+
+;Here on CLI interrupt.  Someone wants to edit the accounting file.
+;Latch onto the job in question, do a file update, tell the job
+;to proceed, and wait for it to go away.
+
+CLIINT:	.OPEN CLICH,[.UII,,'CLA]
+	 JRST CLIINL
+	.IOT CLICH,UPDATR
+	.IOT CLICH,UPDATJ
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[10,,CLICH]
+		['USR,,]
+		UPDATR
+		SETZ UPDATJ ]
+	 JRST CLIINL
+	.CALL [	SETZ
+		'CORBLK
+		MOVEI %CBRED+%CBNDR
+		MOVEI %JSELF
+		MOVEI CMPAGE_-10.
+		MOVEI CLICH
+		SETZI 0 ]
+	 JRST CLIINL
+	SETOM CLIFLG		;cause it to hang up
+	setom dmpcnt		;make next real-time int cause file update
+	.suset [.sipirqc,,[%pirlt]]  ;cause immediate real-time interrupt
+	CAIA
+CLIINL:	 BUGCHK CLI Lossage.
+	.CLOSE CLICH,
+	jrst dismis
+
+SUBTTL	File update generator
+
+FILEUP:
+ifn $$mcp,[
+	pushj p,maxget		;re-map MACSYMA in case it has changed
+	pushj p,maxlog		;first, log all the MACSYMA's up to now.
+];mcp
+	MOVE Q,CRUFTP
+	MOVEM Q,CRUFTF		;all cruft to here will be gobbled, more may come in
+	SUBI Q,CRUFT		;now sort the cruft table by uname
+	SKIPN CHKALL		;do anyway if need to check file syntax.
+	 SKIPE CLIFLG		;or if hacking CLI
+	  CAIA
+	   JUMPE Q,IDLE		;well, not much to do here
+
+	.SUSET [.SMASK,,[%PICLK+%PIIOC+%PIDWN+%PICLI+%PIPDL]]
+FILEU1:	MOVEI A,CRUFT		;Start a sort pass
+	SETZ R,			;this used to be a shell sort, but now it's a bubble.
+FILEU2:	MOVE B,A		;next step of pass		;maybe it will work.
+	ADDI B,CF.LEN
+	CAML B,CRUFTF
+	 JRST FILEU5		;pass done
+	MOVE T,CF.UNM(A)	;compare two crufties
+	CAMG T,CF.UNM(B)
+	 JRST FILEU4
+	HRLI A,-CF.LEN		;out of order, exchange
+FILEU3:	MOVE T,(A)
+	EXCH T,(B)
+	MOVEM T,(A)
+	AOS B
+	AOBJN A,FILEU3
+	AOJA R,FILEU2
+
+FILEU4:	ADDI A,CF.LEN
+	JRST FILEU2
+
+FILEU5:	JUMPG R,FILEU1		;if exchanged any, do another pass
+	MOVEI A,CRUFT		;should now be sorted, but I feel insecure...
+FILEU6:	MOVEI B,CF.LEN(A)
+	CAML B,CRUFTF
+	 JRST FILEU7
+	MOVE T,CF.UNM(A)
+	CAMLE T,CF.UNM(B)
+	 .VALUE
+	ADDI A,CF.LEN
+	JRST FILEU6
+
+;Open input and output files
+FILEU7:	.SUSET [.SSNAME,,SNAME]
+	.OPEN INCH,[.BAI,,'DSK ? 'DRAGON ? SIXBIT/HOARD/]
+	 .LOSE 1400
+	.OPEN OUCH,[.BAO,,'DSK ? SIXBIT/_DRGN_/ ? SIXBIT/BUFFER/]
+	 .LOSE 1400
+	SETZM INBC
+	SETOM BBC
+	SETOM OUTBC
+	SETZM NERRS
+	SETZM LINENO
+	IRPS FIG,,STCTIM STRTIM STSWAP STLODT STLOTM
+	 SETZM FIG		;reset subtotals since starting a page
+	 TERMIN
+	IRPS FIG,,GTCTIM GTRTIM GTSWAP
+	 SETZM FIG		;reset grand totals since starting a page
+	 TERMIN
+ifn $$mcp,[
+	IRPS FIG,,STMCTM STMRTM GTMCTM GTMRTM
+	 SETZM FIG
+	 TERMIN
+];mcp
+	PUSHJ P,GROVEL
+;drops through
+;drops in
+;Here on EOF.  Finish up and return to the idle loop.
+
+FILFIN:	SKIPGE TOTLF
+	 CLBFIL 17,Totals section does not contain TOTALS line.
+	SETZM TOTLF
+	SKIPE STOTLF
+	 CLBFIL 17,Sub-total screw.
+	SETZM STOTLF
+	SKIPE RANDF
+	 CLBFIL 17,Randoms section doesn't end, probably no Totals section.
+	SETZM RANDF
+	SETZM DRANDF
+	PUSHJ P,WBUF		;dump out the last buffer
+	.CALL [	SETZ		;and close the output file
+		'RENMWO
+		MOVEI OUCH
+		[SIXBIT/DRAGON/]
+		SETZ [SIXBIT/HOARD/] ]
+	 .LOSE 1000
+	SKIPE MNTHLF
+	 JRST MNTHL1
+	SKIPE NERRS
+	 JRST FILEU8		;jump if clobbered file to be saved and mail to be sent
+	.CALL [	SETZ		;save one version back of input file
+		'DELETE
+		[SIXBIT/DSK/]
+		[SIXBIT/DRAGON/]
+		SETZ [SIXBIT/SAVE/] ]
+	 JFCL
+	.CALL [	SETZ
+		'RENMWO
+		MOVEI INCH
+		[SIXBIT/DRAGON/]
+		SETZ [SIXBIT/SAVE/] ]
+	 BUGCHK Can't rename input file.
+FILU8X:	.CLOSE INCH,		;Here when file update complete.
+	.CLOSE OUCH,
+	PUSHJ P,LOTUP		;do the LOGOUT TIMES file.
+	HRRZS CHKALL		;delete program file-checking request
+	PUSHJ P,GOIDLE		;clean up cruft table
+	SKIPE YEARF		;perform periodic special processing
+	 PUSHJ P,YEARLY
+	SKIPE MONTHF
+	 PUSHJ P,MNTHLY
+	SKIPE DAYF
+	 PUSHJ P,DAILY
+	SKIPGE @DEDTIM
+	 .LOGOUT		;ka-zap. (finally)
+	SETZM EDITF		;any previous edits have now been gobbled down
+	SKIPL CLIFLG
+	 JRST IDLE		;exit from file update stuff
+	.SUSET [.SIMASK,,[%PICLK]]  ;going to hang up waiting for user to edit file.
+	MOVE T,CMPAGE+100	;check user's "password"
+	CAME T,['GEORGE]
+	 JRST FILU8Z
+	MOVNS CLIFLG		;initial file-update complete.
+	SETOM EDITF		;tell the user to go ahead.
+	SKIPE CMPAGE+100	;wait for user to edit the file.
+	 .HANG
+FILU8Z:	SETZM CLIFLG		;clear out interlocks
+	HRROS CHKALL		;check user's edits.
+	.CALL [	SETZ		;flush communications page.
+		'CORBLK
+		MOVEI 0
+		MOVEI %JSELF
+		SETZI CMPAGE_-10. ]
+	 JFCL
+	JRST FILEUP		;gobble down edited file and check for errors,
+				;also file away cruft accumulated during editing.
+
+;Call here to restore environment after doing a file-update.
+;Clobber T, TT.
+
+GOIDLE:	.SUSET [.SAMASK,,[%PICLK]]	;no more 1/2 second breaks please
+	movei t,-25.		;reset back to time to wait for next update
+	movem t,dmpcnt
+	MOVE T,CRUFTP		;find amount of cruft pushed while updating
+	SUB T,CRUFTF
+	JUMPE T,GOIDL1
+	HRLZ TT,CRUFTF		;copy it down to beginning of cruft buffer
+	HRRI TT,CRUFT
+	BLT TT,CRUFT-1(T)
+GOIDL1:	MOVEM T,CRUFTP		;fix pointers
+	MOVEI T,CRUFT
+	MOVEM T,CRUFTF
+	ADDB T,CRUFTP
+	CAIL T,CRUFTZ-100	;If there are unused
+	 POPJ P,
+	MOVE T,CRUFTE		; excess cruft pages,
+	SUBI T,CRUFTZ		; flush them.
+	JUMPLE T,CPOPJ
+	LSH T,-10.		;number of such pages.
+	MOVNS T
+	MOVSS T
+	HRRI T,CRUFTZ_-10.	;aobjn pointer to pages
+	.CALL [	SETZ
+		'CORBLK
+		MOVEI 0
+		MOVEI %JSELF
+		SETZ T ]
+	 .LOSE 1000		;should never fail.
+	MOVEI T,CRUFTZ		;reset pointer to end of core
+	MOVEM T,CRUFTE
+	POPJ P,
+
+;Yearly processing
+
+YEARLY:	SETZM YEARF
+	.SUSET [.SIMASK,,[%PICLK]]
+	move a,[sixbit /yearly/]
+	pushj p,batch
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/MAIL/]
+		[SIXBIT/>/]
+		SETZ MALSNM ]
+	 JRST YEARLX
+	SETOM OUTBC
+	MOVEI TT,[ASCIZFROM-JOB:DRAGON
+SENT-BY:PFTHMG-DRAGON
+RCPT:(MAGIC-DRAGON-KEEPER)
+SUBJECT:Happy New Year
+TEXT;-1
+Well, I couldn't think of anything else that needed to be in the yearly processing.
+]
+	PUSHJ P,ASZW
+	PUSHJ P,WBUF
+YEARLX:	.CLOSE OUCH,
+	.SUSET [.SAMASK,,[%PICLK]]
+	POPJ P,
+
+FILEU8:	.CALL [	SETZ
+		'RENMWO
+		MOVEI INCH
+		[SIXBIT/CLBFIL/]
+		SETZ [SIXBIT/>/] ]
+	 .LOSE 1000
+	.CALL [	SETZ		;Send mail
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/MAIL/]
+		[SIXBIT/>/]
+		SETZ MALSNM ]
+	 .LOSE 1400
+	SETOM OUTBC
+	SKIPN A,UPDATR
+	 JRST FILU8E
+	MOVEI TT,[ASCIZTO:CM"]
+	PUSHJ P,ASZW
+	SETZB B,C
+	PUSHJ P,SIXW
+	WCHI 15
+	WCHI 12
+FILU8E:	MOVEI TT,[ASCIZFROM-JOB:DRAGON
+SENT-BY:PFTHMG-DRAGON
+RCPT:(MAGIC-DRAGON-KEEPER)
+SUBJECT:Clobberage of accounting file
+TEXT;-1
+Bad syntax was detected in the accounting file.  The offending lines
+have been deleted.  The bad file is saved as ]
+	PUSHJ P,ASZW
+	PUSHJ P,FLNMW
+	MOVEI TT,[ASCIZ
+The errors encountered were:
+]
+	PUSHJ P,ASZW
+FILU8A:	CAML C,NERRS
+	 JRST FILU8C
+	CAIL C,LERRBF
+	 JRST FILU8B
+	MOVE TT,ERRBFZ(C)
+	PUSHJ P,ASZW
+	MOVEI TT,[ASCIZ  (Line ]
+	PUSHJ P,ASZW
+	MOVE A,ERRBFL(C)
+	PUSHJ P,NUMW
+	MOVE A,ERRBFA(C)
+	MOVE B,ERRBFB(C)
+	SKIPN ERRBFC(C)
+	 JUMPE A,[ JUMPE B,FILU8D ? JRST .+1 ]
+	WCHI ",
+	WCHI 40
+	PUSH P,C
+	MOVE C,ERRBFC(C)
+	PUSHJ P,SIXW
+	POP P,C
+FILU8D:	MOVEI TT,[ASCIZ)
+]
+	PUSHJ P,ASZW
+	AOJA C,FILU8A
+
+FILU8B:	MOVEI TT,[ASCIZetc ad nauseam]
+	PUSHJ P,ASZW
+FILU8C:	PUSHJ P,WBUF
+	JRST FILU8X
+
+SUBTTL	Daily processing
+
+;Save the accounting file.
+;Check for clobbered LOGOUT TIMES file.
+;Maybe this should also sort the randoms?
+
+DAILY:	SETZM DAYF
+	HRROS CHKALL		;Check whole file once a day.
+	.SUSET [.SIMASK,,[%PICLK]]
+	move a,[sixbit /daily/]
+	pushj p,batch
+	.OPEN INCH,[.BAI,,'DSK ? 'DRAGON ? SIXBIT/SAVE/ ]
+	 JRST DAILX
+	.OPEN OUCH,[.BAO,,'DSK ? 'DRAGON ? 'YESTER ]
+	 JRST DAILX
+DAILY1:	MOVE T,[-OUTBFL,,OUTBUF]
+	.IOT INCH,T
+	HRLOI TT,-OUTBUF-1(T)
+	EQVI TT,OUTBUF
+	.IOT OUCH,TT
+	JUMPGE T,DAILY1
+DAILX:	.CLOSE INCH,
+	.CLOSE OUCH,
+	SETOM LOTCHF'
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAI,,INCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/LOGOUT/]
+		[SIXBIT/TIMES/]
+		SETZ LOTSNM ]
+	 JRST DAILX1
+LOTCH1:	MOVE T,[-5,,LOTOLD]
+	.IOT INCH,T
+	JUMPGE T,LOTCH2
+	CAMN T,[-5,,LOTOLD]
+	 JRST DAILX1
+	PUSHJ P,LOTCH9
+	MOVEI TT,[ASCIZ\File length not a multiple of 5 words.
+\]
+	PUSHJ P,ASZW
+	JRST DAILX1
+
+LOTCH9:	AOSE LOTCHF
+	 POPJ P,
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/MAIL/]
+		[SIXBIT/>/]
+		SETZ MALSNM]
+	 .LOSE 1400
+	SETOM OUTBC
+	MOVEI TT,[ASCIZ\FROM-JOB:DRAGON
+SENT-BY:PFTHMG-DRAGON
+RCPT:(MAGIC-DRAGON-KEEPER)
+TEXT;-1
+The file \]
+	PUSHJ P,ASZW
+	PUSHJ P,FLNMW
+	MOVEI TT,[ASCIZ\ seems to be clobbered.  Please check it.
+The offensive material follows:
+\]
+	PUSHJ P,ASZW
+	POPJ P,
+	
+LOTCH2:	MOVE B,[440700,,LOTOLD]
+	MOVE C,[440700,,[ASCIZ\ZZZZZZ99/99/99 99:99:99
+\]]
+LOTCH3:	ILDB T,B
+	ILDB TT,C
+	JUMPE TT,LOTCH1
+	CAIN TT,"Z
+	 JRST [	CAIL T,40
+		 CAIL T,140
+		  JRST LOTCH4
+		JRST LOTCH3 ]
+	CAIN TT,"9
+	 JRST [	CAIL T,"0
+		 CAILE T,"9
+		  JRST LOTCH4
+		JRST LOTCH3 ]
+	CAMN T,TT
+	 JRST LOTCH3
+LOTCH4:	PUSHJ P,LOTCH9
+	MOVEI TT,LOTOLD
+	PUSHJ P,ASZW
+	MOVEI TT,[ASCIZ/
+/]
+	PUSHJ P,ASZW
+	JRST LOTCH1
+
+DAILX1:	SKIPL LOTCHF
+	 PUSHJ P,WBUF
+	.CLOSE INCH,
+	.CLOSE OUCH,
+	.SUSET [.SAMASK,,[%PICLK]]
+	POPJ P,
+
+SUBTTL	Monthly processing
+
+;Save the accounting file as DRAGON lastmonth,
+;and reset all the usages to zero.
+
+MNTHLY:	SETZM MONTHF
+	.SUSET [.SIMASK,,[%PICLK]]
+	move a,[sixbit /mnthly/]
+	pushj p,batch
+	SETOM MNTHLF			;Use regular grovel routines, almost...
+	HRROS CHKALL			; [this is needed to get all lines processed]
+	JRST FILEU7			; upon completion, they will return to MNTHL1
+
+;Trap here from GROVL9 for each line in the file.
+MNTHL2:	SKIPE DRANDF			;if random user with no usage last month,
+	 SKIPE CTIME
+	  JRST MNTHL3
+	SKIPN RTIME
+	 SKIPE SWAPS
+	  JRST MNTHL3
+	JRST GROVEL			;flush him completely
+
+MNTHL3:	SETZM CTIME			;reset usage
+	SETZM RTIME
+	SETZM SWAPS
+ifn $$mcp,[
+	setzm mctime
+	setzm mrtime
+];mcp
+	PUSHJ P,WBACK			;write it back out
+	SKIPN TOTLF			;unless this was final totals line
+	 JRST GROVEL			;and go process more
+
+ifn $$STAT,[
+ifn $$MCP,[
+	MOVEI TT,[ASCIZ\
+
+  STATS fups crfts crftm core runt   nomax normax newfls newcnt oldfls oldcnt
+
+STATS   0    0	   0	 0    0.0    0.0   0.0	  0	 0	0      0 
+
+  FUPS    - # of file updates
+  CRFTYS  - # of pieces of cruft pushed from logouts
+  CRFTYM  - # of pieces of cruft pushed from MACSYMAs
+  CORE	  - # of times core has been grown.  Core is flushed when file updated.
+  RUNT	  - runtime consumed by PFTHMG
+  NOMAX	  - amount of time during which there were no MACSYMA's on the machine
+  NORMAX  - amount of time during which no one accrued MACSYMA connect time
+  NEWFLS  - # of times new entries in MACSYMA table had to be invalidated
+  NEWCNT  - # of entries so invalidated
+  OLDFLS  - # of times all entries in MACSYMA table had to be invalidated
+  OLDCNT  - # of entries so invalidated
+
+  This file is for period beginning \]
+]; END IFN $$MPC,
+IFE $$MCP,[
+	movei tt,[asciz /
+
+  STATS fups crfts core runt
+
+STATS	0    0	   0	0.0
+
+  FUPS    - # of file updates
+  CRFTYS  - # of pieces of cruft pushed from logouts
+  CORE	  - # of times core has been grown.  Core is flushed when file updated.
+  RUNT	  - runtime consumed by PFTHMG
+
+  This file is for period beginning /]
+]; END IFE $$MCP,
+]; END IFN $$STAT,
+
+ife $$stat,[
+	movei tt,[asciz /
+
+  This file is for period beginning /]
+]; END IFE $$STAT
+
+	PUSHJ P,ASZW
+	MOVE A,LODAT
+	PUSHJ P,DATW
+	WCHI 40
+	.rtime a,		;gotta get the time from system
+	movem a,lotim		;and use it; we don't remember logout times
+	PUSHJ P,TIMW
+	MOVEI TT,[ASCIZ\
+
+	System Uptime Report
+
+OK   \]
+	MOVE D,LODAT
+	MOVEM D,OKDAT
+	MOVE D,LOTIM
+	MOVEM D,OKTIM
+	SETZM OKTMUP
+	MOVEI D,OKDAT
+	PUSHJ P,UPTRWW
+	SETZM TOTLF			;avoid screw at FILFIN
+	POPJ P,				;end file, return out of grovel
+
+MNTHL1:	SKIPE NERRS
+	 .VALUE				;we really fucked-up somehow
+	LDB T,[141400,,LASDAT]		;rename the file to be last month's report
+	ANDI T,717
+	TRZE T,100
+	 ADDI T,10.
+	CAIL T,1
+	 CAILE T,12.
+	  .VALUE			;random month
+	.CALL [	SETZ
+		'RENMWO
+		MOVEI INCH
+		MONTHS(T)
+		SETZ ['REPORT] ]
+	 .LOSE 1000
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/MAIL/]
+		[SIXBIT/>/]
+		SETZ MALSNM ]
+	 JRST MNTHL7
+	SETOM OUTBC
+	MOVEI TT,[ASCIZFROM-JOB:DRAGON
+SENT-BY:PFTHMG-DRAGON
+RCPT:(MAGIC-DRAGON-KEEPER)
+SUBJECT:That Time Again
+TEXT;-1
+Don't forget to print out the ]
+	PUSHJ P,ASZW
+	PUSHJ P,FLNMW
+	MOVEI TT,[ASCIZ file and
+give it to the appropriate people.
+	 - puff
+]
+	PUSHJ P,ASZW
+	PUSHJ P,WBUF
+MNTHL7:	.CLOSE OUCH,
+	.CLOSE INCH,
+	SETZM MNTHLF
+	HRRZS CHKALL
+	.SUSET [.SAMASK,,[%PICLK]]
+	POPJ P,				;end of monthly processing
+
+MONTHS:	'FOOBAR
+	SIXBIT/JAN/
+	SIXBIT/FEB/
+	SIXBIT/MARCH/
+	SIXBIT/APRIL/
+	SIXBIT/MAY/
+	SIXBIT/JUNE/
+	SIXBIT/JULY/
+	SIXBIT/AUGUST/
+	SIXBIT/SEP/
+	SIXBIT/OCT/
+	SIXBIT/NOV/
+	SIXBIT/DEC/
+
+SUBTTL	Hack the LOGOUT TIMES file
+
+;For compatibility with old & name dragons.
+
+LOTUP:	MOVEI Q,CRUFT
+	CAML Q,CRUFTF
+	 POPJ P,
+LOTUP0:	SKIPL CF.UNM(Q)		;old dragon used different sort, fix up
+	 JRST LOTUP1		;make Q point to lowest positive
+	ADDI Q,CF.LEN
+	CAMGE Q,CRUFTF
+	 JRST LOTUP0
+	MOVE Q,CRUFTF
+LOTUP1:	MOVE R,Q		;save pntr to lowest positive
+	MOVE J,CRUFTF		;remember haven't done negatives yet
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAI,,INCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/LOGOUT/]
+		[SIXBIT/TIMES/]
+		SETZ LOTSNM ]
+	 POPJ P,		;tough rocks
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/_DRGN_/]
+		[SIXBIT/TIMES/]
+		SETZ LOTSNM ]
+	 .LOSE 1400
+	PUSHJ P,LOTFILL		;fill LOTNEW
+LOTUP5:	MOVE T,[-5,,LOTOLD]	;get entry from file
+	.IOT INCH,T
+	JUMPL T,LOTEOF
+LOTUP4:	MOVE A,LOTOLD		;quick compare
+	LSH A,-1
+	SUB A,LOTCMP
+	JUMPG A,LOTUP6		;LOTNEW goes first
+	JUMPL A,LOTUP7		;LOTOLD goes first
+	LDB A,[350700,,LOTOLD+1];hmm, check 6th char
+	LDB B,[350700,,LOTNEW+1]
+	CAMLE B,A
+	 JRST LOTUP7		;LOTOLD goes first
+	CAMN B,A
+	 JRST LOTUP8		;LOTNEW replaces LOTOLD
+LOTUP6:	MOVE T,[-5,,LOTNEW]	;Put LOTNEW first
+	.IOT OUCH,T
+	MOVE D,LOTCMP
+LOTUP3:	MOVE E,LOTNEW+1
+	PUSHJ P,LOTFILL		;get new LOTNEW
+	CAME D,LOTCMP
+	 JRST LOTUP4
+	XOR E,LOTNEW+1
+	TLNN E,774000
+	 JRST LOTUP3		;this one the same, get another
+	JRST LOTUP4
+
+LOTUP7:	MOVE T,[-5,,LOTOLD]	;put LOTOLD first
+	.IOT OUCH,T
+	JRST LOTUP5		;and get a new one
+
+LOTUP8:	MOVE T,[LOTNEW,,LOTOLD]	;LOTNEW replaces LOTOLD
+	BLT T,LOTOLD+4
+	PUSHJ P,LOTFILL		;get new LOTNEW
+	JRST LOTUP4
+
+LOTEOF:	MOVSI A,377777		;EOF on old file
+	CAME A,LOTCMP		;See if EOF on new also
+	 JRST LOTUP8		;No, read through rest of new
+	.CLOSE INCH,
+	.CALL [	SETZ		;Install new version
+		'RENMWO
+		MOVEI OUCH
+		['LOGOUT]
+		SETZ [SIXBIT/TIMES/]]
+	 .LOSE 1000
+	.CLOSE OUCH,
+	POPJ P,
+
+LOTFILL:CAML Q,J
+	 JRST LOTFL1		;This section of cruft table exhausted
+	MOVE A,CF.JNM(Q)
+	CAME A,['HACTRN]	;Only do legitimate human users
+	 JRST LOTFL4
+	HLRO A,CF.UNM(Q)
+	AOJE A,LOTFL4		;Bastard
+	MOVE B,[440600,,CF.UNM(Q)]
+	MOVE C,[440700,,LOTNEW]
+LOTFL0:	ILDB A,B
+	ADDI A,40'
+	IDPB A,C
+	TLNE B,770000
+	 JRST LOTFL0
+	MOVE A,CF.DAT(Q)	;MMDDYY
+	ROT A,14
+	MOVEM A,CF.DAT(Q)
+	MOVE B,[440600,,CF.DAT(Q)]
+	MOVEI TT,6+6
+LOTFL3:	ILDB A,B
+	ADDI A,40'
+	IDPB A,C
+	TRNE TT,1
+	 IBP C
+	SOJG TT,LOTFL3
+	MOVE A,LOTNEW		;set up quick compare word
+	LSH A,-1
+	MOVEM A,LOTCMP'
+	ADDI Q,CF.LEN
+	POPJ P,
+
+LOTFL1:	JUMPE R,LOTFL2
+	MOVEI Q,CRUFT		;do negatives
+	MOVE J,R
+	MOVEI R,0
+	JRST LOTFILL
+
+LOTFL2:	MOVSI A,377777		;make dummy entry
+	MOVEM A,LOTCMP
+	POPJ P,
+
+LOTFL4:	ADDI Q,CF.LEN		;next
+	JRST LOTFILL
+
+SUBTTL	Grovel over accounting file
+
+;Grovel over the accounting file, updating according to the cruft table.
+
+GROVEL:	AOS LINENO		;starting a new line of input
+	SETZM UNAMEA		;haven't seen a uname yet
+	SETZM UNAMEB		;..
+	SETZM UNAMEC		;..
+GROVL0:	PUSHJ P,RCH		;get first character in line
+	CAILE T,40		;skip if white space or eof
+	 JRST GROVL1
+	CAIE T,^L		;formfeed is considered to end the randoms section...
+	 JRST GVLCPY
+	IRPS FIG,,STCTIM STRTIM STSWAP STLODT STLOTM
+	 SETZM FIG		;reset subtotals since ending a page
+	 TERMIN
+ifn $$mcp,[
+	SETZM STMCTM
+	SETZM STMRTM
+];mcp
+	SKIPE RANDF		;if ending randoms section, add new randoms here
+	 PUSHJ P,SPECR1
+	SETZM DRANDF
+	WCHI ^L
+	JRST GROVL0
+
+GVLCPY:	JUMPL T,CPOPJ		;return from GROVEL if EOF.
+	PUSHJ P,WCH		;copy the line over verbatim
+	CAIN T,12
+	 JRST GROVEL
+GVLCP1:	PUSHJ P,RCH
+	JRST GVLCPY
+
+GVLFL1:	PUSHJ P,RCH
+GVLFLS:	JUMPL T,CPOPJ		;similar to GVLCPY but flush rest of line
+	CAIN T,12
+	 JRST GROVEL
+	jrst gvlfl1
+
+GROVL1:	CAIN T,"-		;lines of dashes introduce special sections
+	 JRST SPEC0
+	pushj p,untyi		;buffer back the first char of line
+	SETZM LVRBEG		;default unspecified stuff to 0
+	MOVE T,[LVRBEG,,LVRBEG+1]
+	BLT T,LVREND-1
+	PUSHJ P,SIXR		;get the uname spec of this line
+	pushj p,untyi		;buffer back delimiter
+	MOVEM A,UNAMEA
+	MOVEM B,UNAMEB
+	MOVEM C,UNAMEC
+	SKIPE TOTLF
+	 JRST GRVL1T
+	SKIPE STOTLF
+	 JRST GRVL1S
+	MOVE E,P
+	SKIPN CHKALL
+	 PUSHJ P,UCRUFT		;see if this line's getting hacked
+	    JRST GROVL2
+GRVLNH:	MOVE A,UNAMEA		;nope, just put out the uname
+	MOVE B,UNAMEB
+	MOVE C,UNAMEC
+	PUSHJ P,SIXW
+	JRST GVLCP1		;and copy the rest verbatim
+
+GROVL2:	MOVE P,E		;this line's getting hacked, gobble it down
+GROVL3:	PUSHJ P,SIGCH
+	CAIG T,40
+	 JRST GROVL9		;end of line
+	CAIE T,"j
+	CAIN T,"J
+	 JRST GROVL4
+	CAIE T,"a
+	CAIN T,"A
+	 JRST GROVL5
+	CAIE T,"h
+	CAIN T,"H
+	 JRST GROVL6
+;drops through
+;drops in
+	pushj p,untyi
+	move tt,column		;column before delimiter
+	movem tt,ctimep
+	pushj p,numf
+	 clbfil 0,Garbage character where connect-time expected.
+ifn $$MCP,pushj p,hread		;get connect time from hours.xx
+ife $$MCP,pushj p,dhmsr		;get connect time from D!HH:MM:SS
+	movem a,ctime
+	pushj p,sigch
+	caig t,40
+	 jrst grovl9		;end of line
+	pushj p,untyi
+	move tt,column
+	movem tt,rtimep
+	pushj p,numf
+	 clbfil 0,Garbage character where run-time expected.
+ifn $$MCP,pushj p,hread		;get run time from HOURS.xxx
+ife $$MCP,pushj p,dhmsr		;get run time from D!HH:MM:SS
+	movem a,rtime
+	pushj p,sigch
+	caig t,40
+	 jrst grovl9		;end of line
+	pushj p,untyi
+	move tt,column
+	movem tt,swapsp
+	pushj p,numf
+	 clbfil 0,Garbage character where swap-in count expected.
+	pushj p,numr		;get number of swaps
+	movem a,swaps
+	pushj p,sigch
+	caig t,40
+	 jrst grovl9		;end of line
+ifn $$MCP,[
+	pushj p,untyi
+	move tt,column
+	movem tt,mctimp		;remember where we found this
+	pushj p,numf		;check for bad char
+	  clbfil 0,Garbage character where MACSYMA connect time expected.
+	pushj p,hread		;read the time
+	movem a,mctime		;and remember it
+	pushj p,sigch		;get next significant char
+	caig t,40		;end of line?
+	  jrst grovl9		;  yes
+	pushj p,untyi		;buffer it back
+	move tt,column
+	movem tt,mrtimp		;remember where we found this
+	pushj p,numf		;check it for bad
+	  clbfil 0,Garbage character where MACSYMA run time expected.
+	pushj p,hread		;read the run time
+	movem a,mrtime		;remember it
+	pushj p,sigch		;and get the next significant char
+	caig t,40		;end of line?
+	  jrst grovl9		;  yes
+] ; END IFN $$MCP,
+	pushj p,untyi		;buffer it back
+	move tt,column
+	movem tt,lodatp
+	pushj p,numf
+	 clbfil 0,Garbage character where logout date expected.
+	pushj p,datr		;get logout date
+	movem a,lodat
+	pushj p,sigch
+	caig t,40
+	 jrst grovl9		;end of line
+	pushj p,untyi
+	move tt,column
+	movem tt,lotimp
+	pushj p,numf
+	 clbfil 0,Garbage character where logout time expected.
+	pushj p,timr		;get logout time
+	movem a,lotim
+grvl9a:	pushj p,sigch		;get char that ends line
+grovl9:	caie t,15
+	 clbfil 0,Garbage character.
+	pushj p,rch
+	caie t,12
+	  pushj p,untyi
+	pushj p,coldef		;default columns of unspecified data.
+	SKIPE MNTHLF
+	 JRST MNTHL2		;if monthly processing, zero usage before writing back
+	SKIPE TOTLF
+	 JRST SPECT2		;This is totals line, go add in all crufts.
+	SKIPE STOTLF
+	 JRST SPECS2		;Process subtotals
+	MOVE A,UNAMEA
+	MOVE B,UNAMEB
+	MOVE C,UNAMEC
+	PUSHJ P,UCRUFT
+	    UPDUSR		;update this line from cruft
+	PUSHJ P,WBACK		;write it back out
+	JRST GROVEL		;go do next line
+
+;Skip if char in T is a numeric digit.
+
+NUMF:	CAIL T,"0
+	 CAILE T,"9
+	  POPJ P,
+	JRST POPJ1
+
+GROVL4:	pushj p,untyi
+	PUSHJ P,SIXR
+	CAMN A,[SIXBIT/JOB/]
+	 CAIE T,"=
+	  CLBFIL 0,Bad JOB= Spec.
+	PUSHJ P,SIXR
+	pushj p,untyi
+	MOVEM A,JNAMEA
+	MOVEM B,JNAMEB
+	MOVEM C,JNAMEC
+	SETOM JNAMEF
+	JUMPN A,GROVL3
+	JUMPN B,GROVL3
+	JUMPN C,GROVL3
+	CLBFIL 0,Null JOB= Spec.
+
+GROVL5:	pushj p,untyi
+	PUSHJ P,SIXR
+	CAMN A,[SIXBIT/ACCT/]
+	 CAIE T,"=
+	  CLBFIL 0,Bad ACCT= Spec.
+	PUSHJ P,SIXR
+	pushj p,untyi
+	MOVEM A,ACCNTA
+	MOVEM B,ACCNTB
+	MOVEM C,ACCNTC
+	SETOM ACCNTF
+	JUMPN A,GROVL3
+	JUMPN B,GROVL3
+	JUMPN C,GROVL3
+	CLBFIL 0,Null ACCT= Spec.
+
+GROVL6:	pushj p,untyi
+	PUSHJ P,SIXR
+	CAMN A,[SIXBIT/HOURS/]
+	 CAIE T,"=
+	  CLBFIL 0,Bad HOURS= Spec.
+	PUSHJ P,NUMR
+	MOVEM A,FHOUR
+	PUSHJ P,RCH
+	CAIE T,"-
+	 CLBFIL 0,HOURS= Spec not followed by two numbers.
+	PUSHJ P,NUMR
+	MOVEM A,LHOUR
+	SETOM HOURSF
+	JRST GROVL3
+
+;Default columns of unspecified items.
+;Clobber T.
+
+IFN $$MCP,[
+COLDEF:	MOVEI T,21.		;default starting places for unspecified fields
+	IRPS FIG,,[CTIMEP RTIMEP SWAPSP mctimp mrtimp LODATP
+	    ]WID,,[10.    11.    7.     10.     11.     10.   ]
+	 SKIPE FIXIND
+	  SETZM FIG
+	 SKIPE FIG
+	  SKIPA T,FIG
+	   MOVEM T,FIG
+	 ADDI T,WID
+	 TERMIN
+	POPJ P,
+] ; END IFN $$MCP,
+IFE $$MCP,[
+COLDEF:	MOVEI T,21.		;default starting places for unspecified fields
+	IRPS FIG,,[CTIMEP RTIMEP SWAPSP LODATP LOTIMP
+	    ]WID,,[13.    10.    7.     10.    10.   ]
+	 SKIPE FIXIND
+	  SETZM FIG
+	 SKIPE FIG
+	  SKIPA T,FIG
+	   MOVEM T,FIG
+	 ADDI T,WID
+	 TERMIN
+	POPJ P,
+] ; END IFE $$MCP,
+
+
+SUBTTL	Write back a line
+
+wback:	setzm column
+	MOVE A,UNAMEA
+	jumpe a,cpopj		   ;don't write wild-care UNAMEs
+	MOVE B,UNAMEB
+	MOVE C,UNAMEC
+	PUSHJ P,SIXW
+	SKIPN JNAMEF
+	 JRST WBACK1
+	MOVEI TT,[ASCIZ/  JOB=/]
+	PUSHJ P,ASZW
+	MOVE A,JNAMEA
+	MOVE B,JNAMEB
+	MOVE C,JNAMEC
+	PUSHJ P,SIXW
+WBACK1:	SKIPN ACCNTF
+	 JRST WBACK2
+	MOVEI TT,[ASCIZ/  ACCT=/]
+	PUSHJ P,ASZW
+	MOVE A,ACCNTA
+	MOVE B,ACCNTB
+	MOVE C,ACCNTC
+	PUSHJ P,SIXW
+WBACK2:	SKIPN HOURSF
+	 JRST WBACK3
+	MOVEI TT,[ASCIZ/  HOURS=/]
+	PUSHJ P,ASZW
+	MOVE A,FHOUR
+	PUSHJ P,NUMW
+	WCHI "-
+	MOVE A,LHOUR
+	PUSHJ P,NUMW
+WBACK3:	SKIPN CTIME		;if all 0, don't write any figures
+	 SKIPE RTIME
+	  JRST WBACK4
+	SKIPN LODAT
+	 SKIPE LOTIM
+	  JRST WBACK4
+ifn $$mcp,[
+	skipn mctime
+	  skipe mrtime
+	    jrst wback4
+];mcp
+	SKIPN SWAPS
+	 JRST CRLF
+wback4:	move t,ctimep
+	PUSHJ P,COLADJ
+	MOVE A,CTIME
+	SKIPE CHKALL
+	 ADDM A,STCTIM
+ifn $$MCP,pushj p,hwrit2	;connect time in hours.xx
+ife $$MCP,pushj p,dhmsw		;connect time in D!HH:MM:SS
+	move t,rtimep
+	PUSHJ P,COLADJ
+	MOVE A,RTIME
+	SKIPE CHKALL
+	 ADDM A,STRTIM
+ifn $$MCP,pushj p,hwrit3	;run time in hours.xx
+ife $$MCP,pushj p,dhmsw		;run time in D!HH:MM:SS
+	move t,swapsp
+	PUSHJ P,COLADJ
+	MOVE A,SWAPS
+	SKIPE CHKALL
+	 ADDM A,STSWAP
+	PUSHJ P,NUMW
+
+ifn $$MCP,[
+	move t,mctimp		;get column to start MACSYMA connect time in
+	pushj p,coladj		;and adjust our position
+	move a,mctime		;get the user's MACSYMA connect time
+	skipe chkall		;if we're counting them
+	  addm a,stmctm		;  add it into the subtotal
+	pushj p,hwrit2		;write it with 2 post-decimal digits
+	move t,mrtimp		;get column to start MACSYMA run time in
+	pushj p,coladj		;and adjust our posititon
+	move a,mrtime		;get the user's MACSYMA run time
+	skipe chkall		;if we're taking subtotals
+	  addm a,stmrtm		;  count this in the subtotal
+	pushj p,hwrit3		;write it with 3 post-decimal digits
+] ; END IFN $$MCP,
+
+	move t,lodatp
+	PUSHJ P,COLADJ
+	SKIPE A,LODAT
+	 CAMN A,[-1]
+	   JRST WBACK5
+	SKIPE CHKALL
+	 MOVEM A,STLODT
+	PUSHJ P,DATW
+WBACK5:
+ife $$MCP,[
+	move t,lotimp
+	PUSHJ P,COLADJ
+	SKIPE A,LOTIM
+	 CAMN A,[-1]
+	  JRST CRLF
+	SKIPE CHKALL
+	 MOVEM A,STLOTM
+	PUSHJ P,TIMW
+] ;END IFE $$MCP,
+
+CRLF:	WCHI 15
+	WCHI 12
+	POPJ P,
+
+SUBTTL	Special sections
+
+;Here from GROVEL when row of dashes encountered.  Begin special section.
+
+SPEC0:	PUSHJ P,RCH		;find non-dash
+	CAIE T,40
+	 CAIN T,"-
+	  JRST SPEC0
+	MOVE Q,T		;save section type letter
+	CAIL Q,"a
+	 SUBI Q,40
+	SKIPE TOTLF
+	 CLBFIL 0,Totals section does not contain TOTALS line.
+	SKIPE STOTLF
+	 CLBFIL 0,Subtotal screw.
+	SKIPE RANDF		;if ending randoms section, add new randoms
+	 PUSHJ P,SPECR1
+	SETZM DRANDF
+SPEC1:	PUSHJ P,RCH		;gobble down rest of line
+	CAIE T,12
+	 JUMPGE T,SPEC1
+	MOVSI I,-LSPECT		;look up section type in table
+	LDB T,[350700,,@SPECNM(I)]
+	CAME T,Q
+	 AOBJN I,.-2
+	SKIPL I
+	 CLBFIL 0,Row of dashes of unrecognized type.
+	MOVE TT,SPECNM(I)	;compute length of special name
+	HRLI TT,440700
+	MOVNI A,1		;A will get (- (+ 2 length))
+SPEC1A:	ILDB T,TT
+	SOS A
+	JUMPN T,SPEC1A
+	ADDI A,68.		;number of dashes to fill in with
+	LSH A,-1
+	MOVE T,A		;copy dashes into output file
+	WCHI "-
+	SOJG T,.-1
+	WCHI 40
+	MOVE TT,SPECNM(I)
+	PUSHJ P,ASZW
+	WCHI 40
+	MOVE T,A
+	WCHI "-
+	SOJG T,.-1
+	WCHI 15
+	WCHI 12
+	SKIPN MNTHLF
+	 JRST @SPECAD(I)	;dispatch to appropriate handler
+	JRST @SPECMO(I)
+
+SPECNM:	[ASCIZ/RANDOMS/]	;names of special sections
+	[ASCIZ/TOTALS/]
+	[ASCIZ/PAGE SUBTOTALS/]
+LSPECT==.-SPECNM
+
+SPECAD:	SPECRN			;normal dispatch for special section
+	SPECTT
+	SPECST
+IFN .-SPECAD-LSPECT, .ERR SPECAD DISAGREES WITH SPECNM
+
+SPECMO:	SPECMR			;dispatch for during monthly processing
+	SPECTT
+	GROVEL
+IFN .-SPECMO-LSPECT, .ERR SPECMO DISAGREES WITH SPECNM
+
+SPECMR:	SETOM DRANDF		;delete useless randoms
+	JRST GROVEL
+
+;Random users begin here.  What we do is put any otherwise
+;unaccounted for users at the END of this section.
+
+SPECRN:	SETOM RANDF
+	JRST GROVEL
+
+;Call here when end of randoms section is reached.  Preserves only Q.
+
+SPECR1:	PUSH P,Q
+	SETZM RANDF
+	JRST SPECR9
+
+SPECR2:	SKIPN CF.VAL(Q)
+	 JRST SPECR7
+	SETZM LVRBEG		;Found a user not yet accounted for.
+	MOVE T,[LVRBEG,,LVRBEG+1]
+	BLT T,LVREND-1		;So fake up an accounting entry for that user.
+	MOVE T,CF.UNM(Q)
+	MOVEM T,UNAMEA
+	MOVE T,CF.JNM(Q)
+	MOVEM T,JNAMEA
+	PUSHJ P,NRJNMP
+	 SETOM JNAMEF		;unusual jname, record it
+	PUSHJ P,COLDEF		;using default columns
+SPECR3:	PUSHJ P,UPDUS3		;update fake accounting from the data
+SPECR4:	ADDI Q,CF.LEN		;look for more cruft for the same user
+	CAML Q,CRUFTF
+	 JRST SPECR8
+	MOVE T,CF.UNM(Q)
+	SKIPE CF.VAL(Q)
+	 CAME T,UNAMEA
+	  JRST SPECR4
+	MOVE T,CF.JNM(Q)
+	SKIPN JNAMEF
+	 JRST [	PUSHJ P,NRJNMP
+		 JRST SPECR4
+		JRST SPECR3 ]
+	CAME T,JNAMEA
+	 JRST SPECR4
+	JRST SPECR3		;found some, gobble it down too
+
+SPECR8:	PUSHJ P,WBACK		;write it out
+SPECR9:	MOVEI Q,CRUFT-CF.LEN	;Look for more randoms.
+SPECR7:	ADDI Q,CF.LEN
+	CAMGE Q,CRUFTF
+	 JRST SPECR2
+	POP P,Q
+	POPJ P,
+
+;Skip if T is a prosaic jname.  Clobber T.
+NRJNMP:	CAMN T,['HACTRN]
+	 JRST POPJ1
+	AND T,[777777,,767070]
+	CAMN T,['JOB.00]
+	 JRST POPJ1
+	POPJ P,
+
+;Here for page subtotals.  Next line is like a totals line
+;but only stuff on this page is updated into it.
+
+SPECST:	SETOM STOTLF		;tell groveler to process a little differently
+	JRST GROVEL
+
+GRVL1S:	CAME A,['TOTALS]
+	 CLBFIL 0,TOTALS line missing after PAGE SUBTOTALS header.
+	JRST GROVL3
+
+SPECS2:
+ifn $$mcp,[
+	IRPS FIG1,OP,[CTIME+RTIME+SWAPS+MCTIME+MRTIME+LODAT LOTIM]FIG2,,[STCTIM STRTIM STSWAP STMCTM STMRTM STLODT STLOTM]
+	 MOVE T,FIG2		;increase page subtotals
+	 SKIPE CHKALL
+	  SETZM FIG1		;recalculating
+	 IFSE OP,+, ADDM T,FIG1
+	 .ELSE [    SKIPE T
+	   	     MOVEM T,FIG1 ]
+	 TERMIN
+];$$mcp
+ife $$mcp,[
+	IRPS FIG1,OP,[CTIME+RTIME+SWAPS+LODAT LOTIM]FIG2,,[STCTIM STRTIM STSWAP STLODT STLOTM]
+	 MOVE T,FIG2		;increase page subtotals
+	 SKIPE CHKALL
+	  SETZM FIG1		;recalculating
+	 IFSE OP,+, ADDM T,FIG1
+	 .ELSE [    SKIPE T
+	   	     MOVEM T,FIG1 ]
+	 TERMIN
+];$$mcp
+	PUSHJ P,WBACK		;write it back out
+ifn $$mcp,[
+	IRPS FIG1,,[GTCTIM GTRTIM GTSWAP GTMCTM GTMRTM]FIG2,,[CTIME RTIME SWAPS MCTIME MRTIME]
+	 MOVE T,FIG2		;update grand totals
+	 ADDM T,FIG1
+	 TERMIN
+];mcp
+ife $$mcp,[
+	IRPS FIG1,,[GTCTIM GTRTIM GTSWAP]FIG2,,[CTIME RTIME SWAPS]
+	 MOVE T,FIG2		;update grand totals
+	 ADDM T,FIG1
+	 TERMIN
+];mcp
+	SETZM STOTLF		;end subtotal processing
+	JRST GROVEL		;continue normal grovelling
+
+;Come here to generate totals section.
+;First comes a line for user "TOTALS" which totals all the usage.
+;then comes the STATS line which gets statistics on PUFF's operation,
+;then the system uptime report
+
+SPECTT:	SETOM TOTLF		;flag for totals mode.
+	JRST GROVEL
+
+GRVL1T:	SKIPL TOTLF
+	 JRST GRVL2T
+	CAME A,['TOTALS]
+	 CLBFIL 0,Totals section does not begin with TOTALS line.
+	JRST GROVL3
+
+SPECT2:	MOVEI Q,CRUFT		;Returns here after gobbling existing totals.
+	MOVE T,LODAT		;Save date file last updated.
+	MOVEM T,LASDAT
+SPECT3:	CAML Q,CRUFTF
+	 JRST SPECT4
+	PUSHJ P,UPDUS3		;Add in this piece of cruft
+	ADDI Q,CF.LEN
+	JRST SPECT3
+
+SPECT4:	SKIPN CHKALL		;If recalculating total
+	 JRST SPCT4A
+	MOVE T,GTCTIM
+	MOVEM T,CTIME
+	MOVE T,GTRTIM
+	MOVEM T,RTIME
+	MOVE T,GTSWAP
+	MOVEM T,SWAPS
+ifn $$mcp,[
+	move t,gtmctm
+	movem t,mctime
+	move t,gtmrtm
+	movem t,mrtime
+];$$mcp
+SPCT4A:	PUSHJ P,RDATIM		;T gets time, TT gets date
+	SKIPLE T
+	 MOVEM T,LOTIM		;set date/time file last updated.
+	JUMPLE TT,SPECT5
+	 MOVEM TT,LODAT
+	SKIPG T,LASDAT		;compare this date against previous
+	 JRST SPECT5		;if known
+	XOR T,TT		;see what differs
+	TLNE T,777700
+	 SETOM YEARF
+	TDNE T,[77770000]
+	 SETOM MONTHF
+	TRNE T,7777
+	 SETOM DAYF
+SPECT5:	PUSHJ P,WBACK		;write it out
+	MOVNS TOTLF		;set TOTLF to 1 to process uptime cruft
+	JRST GROVEL
+
+;Here for a line of uptime report.  Should be UP, DOWN, or OK
+
+GRVL2T:	CAME A,[SIXBIT/UP/]	;UP and DOWN we just copy over
+	 CAMN A,[SIXBIT/DOWN/]
+	  JRST GRVLNH
+ifn $$STAT,[
+	camn a,[sixbit /STATS/]	;PUFF's internal stats
+	  jrst grvlst		;  go handle them
+];  END $$STAT,
+
+	CAME A,[SIXBIT/OK/]
+	 CLBFIL 0,Word other than UP, DOWN, or OK in uptime report.
+	PUSHJ P,SIGCH
+	pushj p,untyi
+	PUSHJ P,DATR
+	MOVEM A,NOKDAT
+	PUSHJ P,SIGCH
+	pushj p,untyi
+	PUSHJ P,TIMR
+	MOVEM A,NOKTIM
+	PUSHJ P,SIGCH
+	pushj p,untyi
+ifn $$MCP,pushj p,hread		;get run time from HOURS.xxx
+ife $$MCP,pushj p,dhmsr		;get run time from D!HH:MM:SS
+	MOVEM A,NOKTMU
+	PUSHJ P,RDATIM		;TT gets date, T gets time
+	EXCH TT,OKDAT
+	EXCH T,OKTIM
+	CAMN T,NOKTIM
+	 CAME TT,NOKDAT
+	  JRST WASDWN
+STILUP:	.RDTIME T,
+	MOVEM T,OKTMUP
+	MOVEI TT,[ASCIZ/OK   /]
+	MOVEI D,OKDAT
+	PUSHJ P,UPTRWW
+	JRST GVLFL1
+
+
+WASDWN:	MOVEI TT,[ASCIZ/DOWN /]
+	MOVEI D,NOKDAT
+	PUSHJ P,UPTRWW
+	MOVE D,NOKDAT
+	PUSHJ P,6DTCNV
+	MOVE B,A
+	MOVE D,OKDAT
+	PUSHJ P,6DTCNV
+	SUBM A,B		;B:=NUMBER OF DAYS DOWN
+	MOVE D,NOKTIM
+	PUSHJ P,6TMCNV
+	MOVE C,A
+	MOVE D,OKTIM
+	PUSHJ P,6TMCNV
+	SUB A,C			;A:=NUMBER OF SECONDS*30.
+
+	IMULI B,24.*60.*60.*30.
+
+	ADD A,B	
+	MOVEM A,OKTMUP		;STORE LENGTH OF TIME DOWN
+	MOVEI TT,[ASCIZ/UP   /]
+	MOVEI D,OKDAT
+	PUSHJ P,UPTRWW
+	JRST STILUP
+
+UPTRWW:	SETZM COLUMN
+	PUSHJ P,ASZW		;WRITE LINE TO UPTIME REPORT
+	MOVE A,OKDAT-OKDAT(D)
+	PUSHJ P,DATW
+	WCHI 40
+	MOVE A,OKTIM-OKDAT(D)
+	PUSHJ P,TIMW
+	WCHI 40
+	MOVE A,OKTMUP-OKDAT(D)
+ifn $$MCP,pushj p,hwrit2	;write out uptime as HOURS.xx
+ife $$MCP,pushj p,dhmsw		;write out uptime as D!HH:MM:SS
+	MOVEI T,40.		;ALIGN FOR REASON
+	PUSHJ P,COLADJ
+	JRST CRLF
+
+ifn $$STAT,[
+;;; update STATS line
+;;; STATS line looks like:
+;STATS fups crftys[crftym]coraos runt[nomax normax newfls newcnt oldfls oldcnt]
+;;; where items in [...]'s exist only if $$MCP is on
+;;; FUPS is # of file updates
+;;; CRFTYS is # of dmnpsh logout's processed (# therefore pushing cruft)
+;;; CRFTYM is # of MACSYMA's cruft is pushed for
+;;; RUNTIME is total runtime consumed by PUFF
+;;; CORAOS is total times core has been grown
+;;; NOMAX  is total times no MACSYMA's seen
+;;; NORMAX  is total times no MACSYMA's seen running
+;;; NEWFLS is total times NEWFLS is called
+;;; NEWCNT is total jobs invalidated by NEWFLS
+;;; OLDFLS is total times OLDFLS is called
+;;; OLDCNT is total jobs invalidated by OLDFLS
+
+grvlst:	pushj p,sigch		;find significant char
+	pushj p,untyi		;buffer back the char
+	move t,column		;remember our column as well
+	movem t,updtcp		;so we can write it back in the same place
+	pushj p,numr		;get count of file updates
+	aos a			;count this update
+	movem a,updtct		;remember it
+	movei b,crftys		;# of crufties pushed by logouts
+	pushj p,addct0
+
+ifn $$MCP,[
+	movei b,crftym		;count number of crufties pushed by MACSYMA's
+	pushj p,addct0
+]; END ifn $$MCP,
+
+	movei b,coraos		;update the count of core growings
+	pushj p,addct0
+
+	move a,lrunt		;back up
+	movem a,orunt		;what we wrote out last time
+	pushj p,sigch		;next significant char
+	pushj p,untyi		;buffer it back
+	move t,column		;remember where we got it
+	movem t,lruntp
+ifn $$MCP,pushj p,hread		;get run time from HOURS.xxx
+ife $$MCP,pushj p,dhmsr		;get run time from D!HH:MM:SS
+	movem a,lrunt
+ifn $$MCP,[
+	pushj p,sigch		;find next entry
+	pushj p,untyi		;buffer back the char
+	move t,column		;remember where we got it
+	movem t,nomaxp
+	pushj p,hread		;read the number
+	move b,nomax		;get the count
+	imuli b,60.*6.*3.	;convert to 1/100'ths of hours
+	add a,b
+	movem a,nomaxc		;add in the count
+	setzm nomax		;restart count
+
+	pushj p,sigch		;find next entry
+	pushj p,untyi		;buffer back the char
+	move t,column		;remember where on the line it was found
+	movem t,normxp
+	pushj p,hread		;read the number
+	move b,normax		;get the count
+	imuli b,60.*6.*3.	;convert to 1/100'ths of hours
+	add a,b			;add in the count
+	movem a,normxc		;remember the count for later
+	setzm normax		;restart count
+
+	movei b,flsnew		;update the count of NEWFLS's we've done
+	pushj p,addct0
+	movei b,cntnew		;update the count of MACSYMA's NEWFLS'ed
+	pushj p,addct0
+	movei b,flsold		;update the count of OLDFLS's we've done
+	pushj p,addct0
+	movei b,cntold		;update the count of MACSYMA's OLDFLS'ed
+	pushj p,addct0
+]; end $$IFN $$MCP
+
+	setzm column		;start at the LHS
+	movei tt,[asciz /STATS/]
+	pushj p,aszw		;write it back out
+	move t,updtcp		;get where we got the info from
+	pushj p,coladj		;adjust our column to win
+	move a,updtct		;get our count of updates
+	pushj p,numw		;write out new count
+	movei b,crftys		;# of crufties pushed by logouts
+	pushj p,addct1
+
+ifn $$MCP,[
+	movei b,crftym		;count number of crufties pushed by MACSYMA's
+	pushj p,addct1
+];  END IFN $$MCP,
+
+	movei b,coraos		;update the count of core growings
+	pushj p,addct1
+
+	.suset [.rrunt,,a]	;get our runtime
+	sub a,orunt		;uncount the old
+	addi a,4166.		;round,
+	idivi a,8333.		;converting to seconds*30.
+	add a,lrunt		;count it in with what was there
+	move t,a		;get copy to round off
+	addi t,30.*1800./1000.	;round it off
+	idivi t,30.*3600./1000.	;just like printing and re-reading it will
+	imul t,[<30.*3600./1000.>*8333.]  ;so that we don't accumulate error.
+	movem t,orunt
+	move t,lruntp		;get position to write this cruft in
+	pushj p,coladj
+ifn $$MCP,pushj p,hwrit3	;write with 3 decimal places precision
+ife $$MCP,pushj p,dhmsw		;run time in D!HH:MM:SS
+
+ifn $$MCP,[
+	move t,nomaxp
+	pushj p,coladj
+	move a,nomaxc		;no-macsyma connect-time count
+	pushj p,hwrit2		;record updated count
+
+	move t,normxp
+	pushj p,coladj
+	move a,normxc		;no-macsyma run-time count
+	pushj p,hwrit2		;record updated count
+
+	movei b,flsnew		;update the count of NEWFLS's we've done
+	pushj p,addct1
+	movei b,cntnew		;update the count of MACSYMA's NEWFLS'ed
+	pushj p,addct1
+	movei b,flsold		;update the count of OLDFLS's we've done
+	pushj p,addct1
+	movei b,cntold		;update the count of MACSYMA's OLDFLS'ed
+	pushj p,addct1
+]; END IFN $$MCP,
+
+	pushj p,crlf		;terpri
+	jrst gvlfl1
+
+addct0:	pushj p,sigch		;find next entry
+	pushj p,untyi		;buffer back the char
+	move t,column
+	movem t,1(b)		;remember where to put it on the line
+	pushj p,numr		;read the number
+	addm a,(b)		;add in the count
+	popj p,			;return
+
+addct1:	move t,1(b)		;get column to hack
+	pushj p,coladj		;adjust the output column now
+	move a,(b)		;get the new count
+	setzm (b)		;restart count
+	jrst numw		;record updated count
+]; END IFN $$STAT,
+
+6DTCNV:	PUSHJ P,6XXMNG		;DAYS SINCE 1 JAN 1901
+	SOS A,T
+	IMULI A,365.
+	IDIVI T,4
+	ADD A,T
+	PUSHJ P,6XXMNG
+	ADD A,(T)6DTMNL-1
+	PUSHJ P,6XXMNG
+	ADDI A,-1(T)
+	POPJ P,
+
+6DTMNL:	ZZ==0
+	IRPS L,,31 28 31 30 31 30 31 31 30 31 30 31
+	 ZZ
+	 ZZ==ZZ+.RADIX 10.,L
+	 TERMIN
+
+6TMCNV:	PUSHJ P,6XXMNG		;SECONDS SINCE MIDNIGHT
+	MOVE A,T
+	IMULI A,60.
+	PUSHJ P,6XXMNG
+	ADD A,T
+	IMULI A,60.
+	PUSHJ P,6XXMNG
+	ADD A,T
+	POPJ P,
+
+6XXMNG:	LDB T,[360400,,D]
+	LDB TT,[300400,,D]
+	IMULI T,10.
+	ADD T,TT
+	LSH D,14
+	POPJ P,
+
+SUBTTL	Update user data
+
+;Update user info from piece of cruft pointed to by Q.
+
+UPDUSR:	SKIPN CF.VAL(Q)
+	 POPJ P,		;already accounted for
+	SKIPN JNAMEF
+	 JRST UPDUS1
+	MOVE A,JNAMEA		;verify that JNAME matches
+	MOVE B,JNAMEB
+	MOVE C,JNAMEC
+	MOVE T,CF.JNM(Q)
+	PUSHJ P,MATCH
+	 POPJ P,		;no match
+UPDUS1:	SKIPN ACCNTF
+	 JRST UPDUS2
+	MOVE A,ACCNTA		;verify that account matches
+	MOVE B,ACCNTB
+	MOVE C,ACCNTC
+	MOVE T,CF.TNM(Q)
+	PUSHJ P,MATCH
+	 POPJ P,
+UPDUS2:	SKIPN HOURSF
+	 JRST UPDUS3
+	MOVE T,CF.HOR(Q)	;verify that hour matches
+	CAML T,FHOUR
+	 CAMLE T,LHOUR
+	  POPJ P,
+UPDUS3:	MOVE T,CF.CTM(Q)	;update the usage
+	ADDM T,CTIME
+	ADDM T,STCTIM		;also update page subtotals
+	MOVE T,CF.RTM(Q)
+	ADDM T,RTIME
+	ADDM T,STRTIM
+	MOVE T,CF.SWI(Q)
+	ADDM T,SWAPS
+	ADDM T,STSWAP
+ifn $$mcp,[
+	move t,cf.mct(q)	;update the macsyma connect time
+	addm t,mctime
+	addm t,stmctm		;update the subtotal
+	move t,cf.mrt(q)	;update the macsyma run time
+	addm t,mrtime
+	addm t,stmrtm		;update the subtotal
+];mcp
+	MOVE T,CF.DAT(Q)
+	MOVEM T,LODAT
+	MOVEM T,STLODT
+	MOVE T,CF.TIM(Q)
+	MOVEM T,LOTIM
+	MOVEM T,STLOTM
+	SETZM CF.VAL(Q)		;don't count this one again
+	POPJ P,
+
+;Skip if sixbit in T matches spec in A, B, C.  Clobbers A, B, C.
+
+MATCH:	ANDCB B,C		;mask for literally specd chars
+	XOR A,T			;xor the sixbits
+	TDNE A,B
+	 POPJ P,		;simply spec'd chars don't match
+	JUMPE C,POPJ1		;match!
+	AND C,T			;chars that gotta be digits or space
+REPEAT 6,[
+	SETZ B,
+	LSHC B,6
+	JUMPE B,.+4
+	 CAIL B,'0
+	  CAILE B,'9
+	   POPJ P,		;no match
+]
+	JRST POPJ1		;matches
+
+SUBTTL	Matching Routines
+
+;Routine to match masked sixbit (in A, B, C) against cruft table.
+;For each match, routine after call is called with Q -> piece of cruft.
+;Clobbers A, B, Q, R, T, TT plus whatever that routine clobbers.
+
+UCRUFT:	JUMPN B,UCRUF0		;has stars
+	JUMPN C,UCRUF0		;has sharps
+	JRST FUSER		;easy case
+
+UCRUF0:	MOVEI Q,CRUFT		;Q -> pieces of cruft
+	ANDCB B,C		;mask for chars literally specd
+	MOVSI T,(@)
+	IORM T,(P)
+	INSIRP PUSH P,A B C Q
+UCRUF1:	MOVE A,-3(P)
+	XOR A,CF.UNM(Q)
+	TDNE A,-2(P)
+	 JRST UCRUF4		;simply spec'd chars don't match
+	SKIPN B,-1(P)
+	 JRST UCRUF3		;match!
+	AND B,CF.UNM(Q)		;chars that gotta be digits or space
+REPEAT 6,[
+	SETZ A,
+	LSHC A,6
+	JUMPE A,.+4
+	 CAIL A,'0
+	  CAILE A,'9
+	   JRST UCRUF4		;no match
+]
+UCRUF3:	PUSHJ P,@-4(P)		;matches, call spec'd routine
+UCRUF4:	MOVEI Q,CF.LEN		;advance to next piece of cruft
+	ADDB Q,(P)
+	CAMGE Q,CRUFTF
+	 JRST UCRUF1
+	SUB P,[4,,4]		;done
+	JRST POPJ1
+
+;Routine to do binary search of cruft table for uname in A.
+;Calls routine after call with Q -> each matching piece of cruft.
+;Clobbers Q, R, T, TT, plus whatever that routine clobbers.
+
+FUSER:	MOVEI T,CRUFT		;T lower limit
+	MOVE TT,CRUFTF		;TT upper limit
+FUSER0:	MOVE Q,TT		;Q pointer halfway between
+	SUB Q,T
+	JUMPE Q,POPJ1		;not found
+	IDIVI Q,CF.LEN*2	;ensure proper alignment (clobber R)
+	IMULI Q,CF.LEN
+	ADD Q,T
+	CAMN A,CF.UNM(Q)
+	 JRST FUSER2		;got it.
+	CAML A,CF.UNM(Q)
+	 JRST FUSER1
+	MOVE TT,Q		;go down
+	JRST FUSER0
+
+FUSER1:	MOVEI T,CF.LEN(Q)	;go up
+	JRST FUSER0
+
+FUSER2:	CAIE Q,CRUFT		;Found one cruft entry for this user.
+	 CAME A,CF.UNM-CF.LEN(Q) ;Look back to see if there are more.
+	  JRST FUSER3
+	SUBI Q,CF.LEN
+	JRST FUSER2
+
+FUSER3:	MOVSI T,(@)		;Call spec'd routine for all entries for this user.
+	IORM T,(P)
+	PUSH P,A
+	PUSH P,Q
+FUSER4:	PUSHJ P,@-2(P)
+	MOVEI Q,CF.LEN
+	ADDB Q,(P)
+	CAML Q,CRUFTF
+	 JRST FUSER5
+	MOVE A,-1(P)
+	CAMN A,CF.UNM(Q)
+	 JRST FUSER4
+FUSER5:	SUB P,[2,,2]
+POPJ1:	AOS (P)
+CPOPJ:	POPJ P,
+
+SUBTTL	I/O Routines
+
+;Read character into T.  Returns -1 at EOF.  Keeps track of column position.
+
+; UNTYI unreads the last character, keeping track of column position
+unrch:
+untyi:	movem t,bbc		;buffer back the character
+	move t,ocolum		;get the old column number
+	movem t,column		;it's current now.
+	move t,bbc		;just in case anyone expects the char to remain
+	popj p,
+
+rch:	move t,column		;remember this position in case of UNTYI's
+	movem t,ocolum
+	skipl t,bbc		;check for buffered back character
+	 jrst [	setom bbc ? jrst rch3]	;get it
+	sosge inbc
+	  jrst rch1		;refill input buffer
+rch2:	ildb t,inbp
+rch3:	aos column
+	caie t,^M		;CR?
+	 cain t,^J		;LF?
+	  setzm column		;  End of line
+	CAIE T,^I
+	 POPJ P,
+	MOVEI T,7	;tabs
+	ADD T,COLUMN
+	TRZ T,7
+	MOVEM T,COLUMN
+	MOVEI T,^I
+	POPJ P,
+
+RCH1:	MOVE T,[-INBFL,,INBUF]
+	.IOT INCH,T
+	MOVEI T,-INBUF(T)	;number of words read	
+	IMULI T,5		;number of characters
+	SOJL T,CPOPJ		;if read nothing, eof.
+	MOVEM T,INBC		;otherwise, set up count
+	MOVE T,[440700,,INBUF]	;and pointer
+	MOVEM T,INBP
+	JRST RCH2		;and return first character
+
+;Write character from T
+
+WCH:	SOSGE OUTBC
+	 JRST WCH1		;no room in output buffer
+	IDPB T,OUTBP
+	AOS COLUMN
+	caie t,^I		;tab?
+	  popj p,		;  no, that's all.
+	movei t,7		;yes, add another 7 positions
+	add t,column		;to the position
+	trz t,7			;and round down
+	movem t,column		;to nearest tab stop
+	movei t,^I		;in case someone really wants it.
+	popj p,
+
+WCH1:	PUSH P,T
+	AOSL OUTBC		;skip if no previous buffer
+	 PUSHJ P,WBUF		;dump previous buffer
+	MOVEI T,5*OUTBFL
+	MOVEM T,OUTBC
+	MOVE T,[440700,,OUTBUF]
+	MOVEM T,OUTBP
+	POP P,T
+	JRST WCH
+
+;Write out the output buffer. Clobbers T.
+
+WBUF:	MOVE T,OUTBP		;pad to end of word
+	TLNN T,760000
+	 JRST WBUF1
+	MOVEI T,^C
+	PUSHJ P,WCH
+	JRST WBUF
+
+WBUF1:	HRLOI T,-OUTBUF(T)
+	EQVI T,OUTBUF
+	.IOT OUCH,T
+	POPJ P,
+
+
+;Routine to read sixbit.
+;A gets sixbit, B gets *-mask, C gets #-mask, T gets delimiter.
+;Clobbers H, I, J.
+
+SIXR:	SETZB B,C
+	SETZ A,
+	MOVE H,[440600,,A]
+	MOVE I,[440600,,B]
+	MOVE J,[440600,,C]	
+SIXR0:	PUSHJ P,RCH
+	CAIN T,"/
+	 JRST SIXR1		;slash quotes
+	CAIN T,"*
+	 JRST SIXR2		;star matches any
+	CAIN T,"#
+	 JRST SIXR3		;sharp matches digits
+	CAIE T,"_		;otherwise only letters, digits, underscore, dot allowed
+	 CAIN T,".
+	  JRST SIXR4
+	CAIL T,"0
+	 CAILE T,"z
+	  JRST SIXR9
+	CAIL T,"a
+	 JRST SIXR5
+	CAILE T,"Z
+	 JRST SIXR9
+	CAILE T,"9
+	 CAIL T,"A
+	  JRST SIXR4
+SIXR9:	CAILE T,40
+	 CAIN T,"=
+	  CAIA
+	   CLBFIL 1,Illegal character in sixbit name.
+	JUMPN A,CPOPJ		;check for just a star
+	JUMPN C,CPOPJ
+	CAMN B,[770000,,000000]
+	 SETO B,		;which should be equivalent to six stars
+	POPJ P,			;done
+
+SIXR1:	PUSHJ P,RCH
+SIXR4:	SUBI T,40
+SIXR5:	TLNN H,770000
+	 CLBFIL 1,Name longer than six characters.
+	IDPB T,H
+	IBP I
+	IBP J
+	JRST SIXR0
+
+SIXR2:	TLNN H,770000
+	 CLBFIL 1,Name longer than six characters.
+	IBP H
+	SETO T,
+	IDPB T,I
+	IBP J
+	JRST SIXR0
+
+SIXR3:	TLNN H,770000
+	 CLBFIL 1,Name longer than six characters.
+	IBP H
+	IBP I
+	SETO T,
+	IDPB T,J
+	JRST SIXR0
+
+;Advance to next significant char, return it in T.
+
+SIGCH:	PUSHJ P,RCH
+	CAIE T,40
+	 CAIN T,^I
+	  JRST SIGCH
+	POPJ P,
+
+;Write out from A, B, C.  (Opposite of SIXR.)
+;Clobbers H, I, J, T, TT.
+
+SIXW:	JUMPN A,SIXW0		;check for lone star
+	JUMPN C,SIXW0
+	CAME B,[-1]
+	 JRST SIXW0
+	WCHI "*
+	POPJ P,
+
+SIXW0:	MOVE H,[440600,,A]
+	MOVE I,[440600,,B]
+	MOVE J,[440600,,C]
+SIXW1:	TLNN H,770000
+	 POPJ P,
+	ILDB T,I		;star?
+	JUMPN T,SIXW2
+	ILDB T,J		;sharp?
+	JUMPN T,SIXW3
+	ILDB T,H
+	JUMPE T,SIXW4		;space, handle with char
+	ADDI T,40		;ordinary character
+	CAIN T,"_		;but maybe needs to be slashified
+	 JRST SIXW6
+	CAIE T,".
+	 CAIL T,"0
+	  CAILE T,"Z
+	   JRST SIXW5
+	CAILE T,"9
+	 CAIL T,"A
+	  JRST SIXW6
+SIXW5:	WCHI "/
+SIXW6:	PUSHJ P,WCH
+	JRST SIXW1
+
+SIXW2:	IBP H
+	IBP J
+	WCHI "*
+	JRST SIXW1
+
+SIXW3:	IBP H
+	WCHI "#
+	JRST SIXW1
+
+SIXW4:	LDB TT,[360600,,H]	;see if space is embedded or terminal
+	MOVEI T,1
+	LSH T,(TT)
+	SOS T			;mask for chars not yet processed
+	TDNE A,T
+	 JRST SIXW7		;embedded because of ordinary chars to right
+	TDNN B,T
+	 TDNE C,T
+	  JRST SIXW7		;embedded because of magic chars to right
+	POPJ P,			;terminal
+
+SIXW7:	MOVEI T,40		;embedded space
+	JRST SIXW5
+
+FLNMW:	.CALL [	SETZ		;Write filename of input file
+		'RFNAME		;Clobber A, B, C, H, I, J, T, TT
+		MOVEI INCH
+		MOVEM CLBDEV'
+		MOVEM CLBFN1'
+		MOVEM CLBFN2'
+		SETZM CLBSNM' ]
+	 .LOSE 1000
+	SETZB B,C
+	IRPS NM,CH,[CLBDEV:CLBSNM;CLBFN1 CLBFN2]
+	 MOVE A,NM
+	 PUSHJ P,SIXW
+	 IFSN [CH], WCHI "CH
+	 TERMIN
+	POPJ P,
+
+;Read decimal number into A.  Buffer-back the delimiter.  Clobber T.
+
+NUMR:	SETZ A,
+NUMR0:	PUSHJ P,RCH
+	CAIL T,"0
+	 CAILE T,"9
+	  JRST UNRCH
+	IMULI A,10.
+	ADDI A,-"0(T)
+	JRST NUMR0
+
+;Write decimal number from A.  Clobber A, B, T.
+
+NUMW:	MOVMS A			;paranoia
+	IDIVI A,10.
+	HRLM B,(P)
+	SKIPE A
+	 PUSHJ P,NUMW
+	HLRZ B,(P)
+	MOVEI T,"0(B)
+	JRST WCH
+
+;Adjust to column specified in T, but give at least 2 spaces.
+;Clobber T.
+
+COLADJ:	SUB T,COLUMN		;distance to go
+	CAIGE T,2
+	 MOVEI T,2
+	ADD T,COLUMN		;where to go
+	PUSH P,T
+	TRO T,7
+	SUB T,COLUMN
+	LSH T,-3		;number of tabs needed
+	JUMPE T,COLAD1
+COLAD0:	WCHI ^I
+	SOJG T,COLAD0
+COLAD1:	POP P,T
+	SUB T,COLUMN		;number of spaces needed
+	JUMPLE T,CPOPJ
+COLAD2:	WCHI 40
+	SOJG T,COLAD2
+	POPJ P,
+
+;Write asciz from TT. Clobber T, TT.
+
+ASZW:	HRLI TT,440700
+ASZW0:	ILDB T,TT
+	JUMPE T,CPOPJ
+	PUSHJ P,WCH
+	JRST ASZW0
+
+ifn $$MCP,[
+;;; Read hours.xxx into A as 30'ths of a second.  Clobbers T and A
+
+hread:	pushj p,numr		;A gets a number
+	imuli a,60.*60.*30.	;standard internal time units
+	pushj p,rch		;T gets delimiter
+	caig t,40		;delimiter?
+	  jrst unrch		;  buffer it back, and return with no fraction
+	caie t,".		;had better be "."
+	  clbfil 1,Non "." where decimal point expected in hours.xxx field
+	pushj p,getdig		;get a digit
+	  popj p,		;  delimiter, read no more
+	imuli t,60.*60.*3.	;first goes in 10'ths position
+	add a,t			;accumulate in A
+	pushj p,getdig		;get a digit
+	  popj p,		;  delimiter, just return
+	imuli t,60.*6.*3.	;goes in 100'th of hours position
+	add a,t
+	pushj p,getdig		;get a digit, this time
+	  popj p,		;  delimiter, just return
+	imuli t,3600.*30./1000.	;goes in 1000'ths of hours position
+	add a,t			;accumulate in A
+	pushj p,rch		;get a character
+	caig t,40		;is it a delimiter?
+	  popj p,		;yes, all OK.
+	clbfil 1,Number too long or garbage in hours.xxx field
+
+getdig:	pushj p,rch		;get another char
+	caig t,40		;is it a delimiter?
+	  popj p,
+	caige t,"0		;  legal digit?
+	  cail t,"9
+	    caia		;  yes
+	      clbfil 2,Garbage in hours.xxx field
+	subi t,"0		;convert to number
+	aos (p)			;skip
+	popj p,			;return
+
+;;; HWRIT2 writes time as n.xx    Clobbers T, A, B, and C
+;;; HWRIT3 writes time as n.xxx   Clobbers T, A, B, and C
+hwrit2:	MOVMS A			;paranoia
+	addi a,180.*3.		;Round off correction.
+	movei c,3600.*30./100.	;smallest printing value, for 0 suppression
+;falls through
+hwrita:	idivi a,60.*60.*30.	;convert 30'ths of seconds to hours
+	push p,b		;save remainder, since NUMW clobbers B
+	pushj p,numw		;write the number
+	wchi ".			;decimal point
+	pop p,a			;recover saved remainder
+	idivi a,60.*60.*3.	;separate off the big part
+	pushj p,putdig		;put it out
+	camge b,c		;Is it aproximately 0??
+	  popj p,		;  yes, don't print any more digits
+	move a,b		;let's hack the rest
+	idivi a,60.*6.*3.	;separate off the 100'ths hours
+	pushj p,putdig		;put out this digit
+	camge b,c		;is the rest effectively 0?
+	  popj p,		;  yes, don't print any more digits
+	move a,b		;B has last digit
+	idivi a,3600.*30./1000.	;final convertion to 1000'th of hour from secs
+	jrst putdig		;write out last digit
+
+hwrit3:	movms a			;paranoia, inherited from MOON
+	addi a,18.*3.		;round, don't truncate!
+	movei c,3600.*30./1000.	;smallest printing val for zero supression
+	jrst hwrita		;write out all but last digit
+
+putdig:	movei t,"0(a)		;turn A into ascii digit
+	jrst wch		;and write out the digit
+
+] ;END IFN $$MCP,
+
+IFE $$MCP,[
+;Read DD!HH:MM:SS into A.  Buffer-back delimiter.  Clobber A, B, C, T.
+DHMSR:	SETZB B,C		;B seconds from HH:MM:SS, C days
+DHMSR0:	PUSHJ P,NUMR		;A gets a number
+	PUSHJ P,RCH		;T gets its delimiter
+	CAIN T,"!
+	 JRST DHMSR1
+	CAIN T,":
+	 JRST DHMSR2
+	PUSHJ P,UNRCH
+	IMULI C,24.*60.*60.
+	ADD A,C
+	IMULI B,60.
+	ADD A,B
+	imuli a,30.		;convert to seconds*30.
+	POPJ P,
+DHMSR1:	MOVE C,A
+	JRST DHMSR0
+DHMSR2:	IMULI B,60.
+	ADD B,A
+	JRST DHMSR0
+
+;Write DD!HH:MM:SS from A.  Clobber A, B, T.
+DHMSW:	MOVMS A			;paranoia
+	SETZM DHMSWF'		;frob-typed flag
+	idivi a,30.		;convert to seconds
+	IDIVI A,24.*60.*60.	;seperate days from HHMMSS
+	JUMPE A,DHMSW0		;suppress days
+	PUSH P,B
+	PUSHJ P,NUMW
+	WCHI "!
+	POP P,B
+	SETOM DHMSWF
+DHMSW0:	MOVE A,B
+	IDIVI A,60.*60.
+	SKIPN DHMSWF
+	 JUMPE A,DHMSW1
+	PUSH P,B
+	PUSHJ P,NUM2W
+	WCHI ":
+	POP P,B
+	SETOM DHMSWF
+DHMSW1:	MOVE A,B
+	IDIVI A,60.
+	SKIPN DHMSWF
+	 JUMPE A,DHMSW2
+	PUSH P,B
+	PUSHJ P,NUM2W
+	WCHI ":
+	POP P,B
+	SETOM DHMSWF
+DHMSW2:	MOVE A,B
+NUM2W:	SKIPN DHMSWF	;If a frob already typed, write number with two digits.
+	 JRST NUMW
+	IDIVI A,10.
+	WCHI "0(A)
+	WCHI "0(B)
+	POPJ P,
+]; END IFE $$MCP,
+
+
+;Read YY.MM.DD into A as SIXBIT/YYMMDD/.  Clobber T, B, C.  Buffer back delimiter.
+
+DATR:	SKIPA C,[".]
+
+;Read HH:MM:SS into A as SIXBIT/HHMMSS/.  Clobber T, B, C.  Buffer back delimiter.
+
+TIMR:	 MOVEI C,":
+	SETZ A,
+	MOVE B,[440600,,A]
+TIMR0:	PUSHJ P,RCH
+	CAMN T,C
+	 JRST TIMR0
+	CAIL T,"0
+	 CAILE T,"9
+	  JRST TIMR1
+	SUBI T,40
+	TLNN B,770000
+	 CLBFIL 1,Date/Time too long.
+	IDPB T,B
+	JRST TIMR0
+
+TIMR1:	MOVE B,A
+	AND B,[606060606060]
+	CAME B,[202020202020]
+	 CLBFIL 1,Date/Time short or garbaged.
+	JRST UNRCH
+
+;Write SIXBIT/YYMMDD/ in A as YY.MM.DD.  Clobber T, B, C.
+
+DATW:	SKIPA C,[".]
+
+;Write SIXBIT/HHMMSS/ in A as HH:MM:SS.  Clobber T, B, C.
+
+TIMW:	 MOVEI C,":
+	MOVE B,[440600,,A]
+TIMW0:	ILDB T,B
+	ADDI T,40
+	PUSHJ P,WCH
+	ILDB T,B
+	ADDI T,40
+	PUSHJ P,WCH
+	TLNN B,770000
+	 POPJ P,
+	MOVE T,C
+	PUSHJ P,WCH
+	JRST TIMW0
+
+SUBTTL	System message logging
+
+;This looks for SYSMSG messages starting with:
+;  "DSK: "
+;  "MEMORY: "
+;and files them in the file DRAGON; SYSMSG LOG
+;Clobbers all registers, uses OUCH
+
+DSKLOG:	SETOM DSKLGF		;Flag file not open yet
+	SETOM OUTBC		;Initialize output buffer routine
+	.SUSET [.SIDF1,,[%PIRLT]]  ;Defer real-time ints
+	MOVEI TT,8		;Compute number of words in SYSMBF
+	LSH TT,@SYSMLNG
+	MOVEM TT,SYSMBL
+	SUBI TT,1
+	MOVEM TT,SYSMBM
+DSKLG0:	MOVE TT,@SYSMPT		;Last message generated by system
+	CAMG TT,SYSMPU
+	 JRST DSKLGX		;No new messages
+	SUB TT,SYSMBL
+	CAMLE TT,SYSMPU
+	 MOVEM TT,SYSMPU	;Got behind, skip to catch up
+	MOVEI A,8
+	ADDB A,SYSMPU
+	AND A,SYSMBM		;Index in SYSMBF of message to do
+	ADD A,SYSMBF		;Address in system of message
+
+	HRRZ B,(A)		; Get pointer to ascii message
+	MOVE TT,SYCORE(B)	; Get first 5 characters
+	CAMN TT,[ASCII/DSK: /]
+	 JRST DSKLGA		; Go log DSK: message
+	CAME TT,[ASCII/MEMOR/]
+	 JRST DSKLG0		; Not relevant, ignore
+	MOVE TT,SYCORE+1(B)	; Get next 5 characters
+	TRZ TT,77777		; Reduce to next 3 characters
+	CAME TT,[ASCII/Y: /]
+	 JRST DSKLG0		; Not relevant, ignore
+				; Go log MEMORY: message
+DSKLGA:	AOSN DSKLGF		;Open file if necessary
+	 PUSHJ P,DSKLGO
+	WCHI 15			;crlf
+	WCHI 12
+	.RDATE TT,		;Time stamp
+	PUSHJ P,6BTW
+	WCHI 40
+	.RTIME TT,
+	PUSHJ P,6BTW
+	WCHI 40
+	WCHI 40
+	ADD B,[440700,,SYCORE]	;bp to asciz string to type
+	HLLZ D,(A)		;Get arg mode types
+DSKLG1:	ILDB T,B
+	JUMPE T,DSKLG2		;end
+	CAIGE T,10
+	 JRST DSKLG3		;insert that many arguments
+	PUSHJ P,WCH
+	JRST DSKLG1
+
+DSKLG2:	WCHI 40
+	PUSHJ P,DSKLG4
+	 JRST DSKLG0
+	JRST DSKLG2
+
+DSKLG3:	PUSH P,T		;Number of args to print
+DSKL3A:	PUSHJ P,DSKLG4
+	 JFCL
+	WCHI 40			;Space after each arg
+	SOSLE (P)
+	 JRST DSKL3A
+	SUB P,[1,,1]
+	JRST DSKLG1
+
+;Display next arg, using A and D.
+DSKLG4:	MOVEI C,0
+	LSHC C,3	;Pull arg-type out of D
+	JUMPE C,CPOPJ	;No more args, return with no skip
+	AOS (P)		;Normally skips, i.e. more args exist
+	AOS A
+	MOVE TT,(A)	;Get arg
+	XCT .(C)
+	JRST DSKLG5	;1 Octal
+	JRST DSKLG6	;2 Decimal
+	JRST DSKLG6	;3 Decimal with commas
+	POPJ P,		;4 crlf (ignore)
+	POPJ P,		;5 not used
+	JRST 6BTW	;6 Sixbit
+	JRST DSKLG7	;7 Asciz
+
+DSKLG7:	ADDI TT,SYCORE
+	JRST ASZW
+
+DSKLG5:	TLNN TT,-1
+	 JRST DSKLG9
+	PUSH P,TT
+	HLRZS TT
+	PUSHJ P,DSKLG9
+	WCHI ",
+	WCHI ",
+	POP P,TT
+	HRRZS TT
+DSKLG9:	SKIPA C,[8]
+DSKLG6:	 MOVEI C,10.
+	MOVE T,TT
+DSKLG8:	IDIV T,C
+	HRLM TT,(P)
+	SKIPE T
+	 PUSHJ P,DSKLG8
+	HLRZ T,(P)
+	ADDI T,"0
+	JRST WCH
+
+;Routine to open the disk log file
+DSKLGO:	.CALL [	SETZ
+		SIXBIT/OPEN/
+		JFFO TT		;error code
+		[100000+.BAO,,OUCH]	;Write over
+		[SIXBIT/DSK/]
+		[SIXBIT/SYSMSG/]
+		[SIXBIT/LOG/]
+		SETZ SNAME ]
+	 CAIA
+	  JRST DKLGO1
+	CAIE TT,%ENSFL
+	 JRST [	SUB P,[1,,1]
+		JRST DSKLGX ]	;Give it up
+	.CALL [	SETZ
+		SIXBIT/OPEN/
+		[.BAO,,OUCH]
+		[SIXBIT/DSK/]
+		[SIXBIT/SYSMSG/]
+		[SIXBIT/LOG/]
+		SETZ SNAME ]
+	 JRST [	SUB P,[1,,1]
+		JRST DSKLGX ]	;Give it up
+DKLGO1:	.CALL [	SETZ	;Seek to eof
+		'FILLEN
+		MOVEI OUCH
+		SETZM TT ]
+	 .LOSE %LSSYS
+	.ACCESS OUCH,TT
+	POPJ P,
+
+;Print next arg
+;Sixbit output from TT
+6BTW:	MOVEI T,0
+	LSHC T,6
+	ADDI T,40
+	PUSHJ P,WCH
+	JUMPN TT,6BTW
+	POPJ P,
+
+;Exit from DSKLOG
+DSKLGX:	SKIPL OUTBC		;If any buffered output, send it
+	 PUSHJ P,WBUF
+	.CLOSE OUCH,
+	.SUSET [.SADF1,,[%PIRLT]]	;Reenable real-time ints
+	POPJ P,
+
+ifn $$MCP,[
+;;; Access a shared page of MACSYMA
+
+maxget:	syscal open,[%CLBIT,,.uii  ;access MACSYMA
+	       %climm,,maxch	;on it's very own channel
+	       [sixbit /SYS/]
+	       [sixbit /TS/]
+	       [sixbit /MACSYM/]]
+	  .lose %lsfil
+	syscal corblk,[%clbit,,%cbndr
+	       %climm,,0
+	       %climm,,%jself
+	       %climm,,maxpag
+	       %climm,,maxch
+	       %climm,,maxshr]	;maxshr is page of file shared with MACSYMA
+	  .lose %lsfil
+	.close maxch,
+	popj p,
+
+
+;;; find all MACSYMA's and account for them
+;;; This should only be called with interrupts defered
+MAXSCN:	pushj p,maxmrk		   ;mark all the MACSYMA's
+	jrst maxswp		   ;scan and push all old macsymas
+
+maxlog:	movsi j,-ntrees
+maxlg1:	skipn mx.xun(j)		;is there one there?
+	  jrst maxlg9		;  nope, nothing further to do
+	pushj p,mxpsh1		;push the cruft, but don't reset it
+	setzm mx.ctm(j)		;don't count connect time twice
+maxlg9:	aobjn j,maxlg1		;for all MACSYMA's
+	popj p,			;don't do anything yet
+
+;;;  This routine is called every 100'th of an hour and finds all jobs with
+;;;	a page sharing with our MAXPAG, and if that job is already under
+;;;	survelance, (as determined by the same XUNAME, and runtime >
+;;;	than previous runtime) AOS's the connect time, and updates the run time
+;;;	If the slot is filled with a different job, it is pushed onto cruft
+;;;	table.  The flag half of MX.CTM is then set to -1 for new entries, and
+;;;	1 for new entries, for the sake of detecting timing screws that leave
+;;;	you in another page's circular list.  If this condition is detected,
+;;;	all new entries are purged in the sweep phase.
+;;;
+;;;	The sweep routine, which is called after the mark phase, and clears
+;;;	LH(MX.CTM) and pushes cruft for MACSYMA's that have disappeared, and
+;;;	deletes entries not active.
+
+MAXMRK:	move j,ruind		;in ourself
+	syscal cortyp,[%climm,,%jsnum(j)  ;start in our very own
+	       %climmm,,maxpag	;MACSYMA page
+	       %clout,,t	   ;ignore type of page
+	       %clout,,j	   ;job
+	       %clout,,i	   ;page# in job
+	       %clout,,t]	   ;determines non-shared page
+	  .lose %lssys		   ;  FOOBAR
+	hrrz t,t		   ;flush left-half bits!
+	sosle t			   ;any sharers?
+	  jrst markl1		   ;  yes, trace down that chain
+
+ifn $$stat,aos nomax		   ;nope!  Count this event!
+
+	popj p,			   ;but don't try to count MACSYMA's
+
+marklp:	syscal cortyp,[%climm,,%jsnum(j)  ;job we are hacking
+	       i		;page in job
+	       %clout,,t	;Ignore type of page
+	       %clout,,j	;job
+	       %clout,,i	;page # in job
+	       %clout,,t]	;determines non-shared page
+	  jrst newfls		;  lost chain somewhere, restart
+	hrrz t,t		;flush left-half bits!
+	sojle t,newfls		;if T is 1 or zero, no sharers, lost chain
+markl1:	camn j,ruind		;is it us?
+	  popj p,		;  yes, end of circle
+	jumpe j,newfls		;paranoia
+	movei r,(j)		;move pointer to R so we can hack abs addrs
+	imul r,lublk		;make absolute pointer
+
+	hlre tt,mx.ctm(j)	;have we already looked at this job?
+	jumpl tt,newfls		;  YES!  Invalidate new jobs!
+	jumpn tt,oldfls		;  YES!	 Invalidate ALL jobs!!!!!!  Lose!!!
+
+	pushj p,smjobp		;check to be sure it's the same job
+	  jrst markn		;  not same! or gone (0 -=> b)
+
+	movei tt,1		;note that this job was already there
+	hrlm tt,mx.ctm(j)	;marked!
+	jrst marklp		;loop til no more jobs in chain
+
+markn:	jumpe b,newfls		;if b is 0, retry
+	hrros mx.ctm(j)		;mark this job as new
+	jrst marklp		;keep on marking
+
+;; come here to flush all new entries and retry mark operation
+newfls:	movsi j,-ntrees		;for all trees
+
+ifn $$STATS,aos flsnew		;count the number of times we do this
+
+newfl1:	hlre t,mx.ctm(j)	;get the flag
+	skipge t		;if it's new
+	  pushj p,maxrst	;  reset the entry
+
+ifn $$STATS,[
+	skipge t		;if it's new
+	  aos cntnew		;  count this for our stats
+]; END IFN $$STATS,
+
+	aobjn j,newfl1		;for all trees
+	jrst maxmrk		;restart
+
+;; come here to flush all entries and retry mark operation
+oldfls:	movsi j,-ntrees		;for all tress
+
+ifn $$STATS,aos flsold		;count the number of times this gets done
+
+oldfl1:
+ifn $$STATS,[
+	skipn mx.xun		;if there's anything there
+	  aos cntold		;  count it as being flushed
+]; END IFN $$STATS,
+
+	pushj p,maxrst		;reset the entry (always, out of paranoia)
+	aobjn j,oldfl1		;play it again.
+	jrst maxmrk		;restart
+
+
+;;;; the sweep phase.  Pushes dead jobs, unmarks.
+
+maxswp:	movsi j,-ntrees		;for all MACSYMA's
+
+ifn $$STAT,setzm rmaxfl		;flag to notice if there are no running maximas
+
+maxsw0:	hlre t,mx.ctm(j)	;Get the marking
+	hrrzs mx.ctm(j)		;unmark it
+	skipn tt,mx.xun(j)	;is there a MACSYMA in this slot?
+	  jumpe t,maxsw9	;  no macsyma, no mark, ignore the slot
+	    jumpe tt,maxsw4	;    no macsyma, marked.  Initialize
+	      jumpe t,maxsw6	;      MACSYMA, no mark, just push old MACSYMA.
+	        jumpg t,maxsw4	;        MACSYMA, old MARK
+		  pushj p,maxpsh  ;	   MACSYMA, new marked.  Push first.
+
+maxsw4:	movei r,(j)		;get pointer into system for this job.
+	imul r,lublk		;convert to system pointer
+	move t,@ustp		;get info on run/stopped state
+	pushj p,smjobp		;is this the same job?  Get info
+	  jumpn tt,maxsw6	;  no, don't hack this entry
+	jumpe b,maxsw5		;job gone, don't hack this entry, push it
+
+	movem b,mx.xun(j)	;remember who you are
+
+	tlnn t,busrc		;Is it running?
+	  aos mx.ctm(j)		;  count this connect time
+	tlnn t,busrc		;is it running?
+	  setom rmaxfl		;  note that we found one
+	movem a,mx.rtm(j)	;save the runtime
+	
+	movei tt,9.		;default hour is 9. am
+	syscal rqdate,[%clout,,t]
+	  jrst [movem tt,mx.hor(j)  ;system doesn't know time, assume 9
+	        jrst maxsw9]
+	hrrs t
+	idivi t,2.*60.*60.	;convert to hour of day
+	movei tt,(t)		;get in TT
+	movem tt,mx.hor(j)
+
+	jrst maxsw9		;already pushed entry, if any
+
+maxsw5:	skipe mx.xun(j)		;if there is a job in this slot
+maxsw6:	  pushj p,maxpsh	;  Push this entry
+maxsw9:	aobjn j,maxsw0		;for all MACSYMA's
+
+ifn $$stat,[
+	skipn rmaxfl		;were there any running MACSYMA's?
+	  aos normax		;  nope, count this event
+]; end ifn $$stat,
+
+	popj p,			;return
+
+
+;;; SMJOBP skips if job pointed to by J is the same one recorded earlier
+;;; assumes R is already set to LUBLK*<J>
+;;; as a side effect, it returns runtime in A and XUNAME in B.
+;;; if the job is gone, it returns 0 in B
+;;; Does not clobber T or TT !!
+
+smjobp:	move a,@utrntm		;get runtime for this user
+	skipn b,@xuname		;get XUNAME for this user
+	  move b,@uname		;  Or UNAME if no XUNAME
+	skipn @uname		;paranoia, has the job disapeared?
+	  setz b,		;  if UNAME is 0, XUNAME should be too!
+	jumpe b,cpopj		;Paranoid of timing screws
+
+	skipn mx.xun(j)		;Is there already a job in that slot?
+	  popj p,
+	came b,mx.xun(j)	;is it this same job?
+	  popj p,		;  No, gotta push it first
+	camge a,mx.rtm(j)	;is it the same job?
+	  popj p,		;  No, gotta push it first
+	jrst popj1		;same job!
+
+;;; push the MACSYMA entry pointed to by J onto the cruft table and reset it.
+
+maxpsh:	pushj p,mxpsh1		;push the cruft
+maxrst:	setzm mx.xun(j)		;clear out the XUNAME
+	setzm mx.ctm(j)		;and connect time
+	setzm mx.rtm(j)		;and runtime
+	setzm mx.ort(j)		;and old runtime
+	setzm mx.hor(j)		;he didn't log in at a time yet!
+	popj p,			;done, return
+
+
+mxpsh1:
+
+ifn $$STAT,aos crftym		;count number of times pushed these
+
+	pushj p,getcor		;allocate a crufty
+	  popj p,		;  no core
+	move t,mx.xun(j)	;get the name
+	movem t,cf.unm(h)	;and name the crufty
+	move t,[sixbit /HACTRN/]  ;pretend it's a HACTRN
+	movem t,cf.jnm(h)
+	setzm cf.ctm(h)		;connect time is counted elsewhen
+	setzm cf.rtm(h)		;similarly the
+	setzm cf.swi(h)		;other tree-total resources.
+	setzm cf.tnm(h)		;similarly, since TRMNAM isn't used now.
+	hrrz t,mx.ctm(j)	;remember MACSYMA connect time
+	imuli t,30.*3600./100.	;units of 1/100'th of an hour to seconds*30.
+	movem t,cf.mct(h)
+	move t,mx.rtm(j)	;remember MACSYMA run time
+	sub t,mx.ort(j)		;this much has been counted already
+	addi t,4166.		;round,
+	idivi t,8333.		;converting to seconds*30.
+	movem t,cf.mrt(h)	;and put it into the cruft
+	addi t,30.*1800./1000.	;round it off
+	idivi t,30.*3600./1000.	;just like printing and re-reading it will
+	imul t,[<30.*3600./1000.>*8333.]  ;so that we don't accumulate error.
+	addm t,mx.ort(j)	;remember we've counted this much
+	pushj p,rdatim		;TT gets date, T gets time
+	movem tt,cf.dat(h)	;remember date
+	movem t,cf.tim(h)	;time
+	setom cf.val(h)		;etc.
+	popj p,			;return
+
+]; END IFN $$MCP,
+
+
+SUBTTL batch job launcher
+
+;;;Call this routine with a first file name in A.  Checks for files on
+;;;DRAGON with that first file name, which it then loads and launches.
+
+if1, .insrt system;fsdefs
+
+batdir:	sixbit /dragon/		;directory to check for batch jobs.
+
+batch:	syscal open,[[.bii,,batdsk] ? [sixbit /dsk/]
+		[sixbit /.file./] ? [sixbit /(dir)/] ? batdir]
+	 .lose %lssys
+	move tt,[-2000,,batufd]
+	.iot batdsk,tt
+	.close batdsk,
+	move t,batufd+udnamp
+batch1:	cail t,2000
+	 jrst batch3
+	came a,batufd+unfn1(t)
+	 jrst batch2
+	syscal open,[[.uii,,batdsk] ? [sixbit /dsk/]
+		a ? batufd+unfn2(t) ? batdir]
+	 jrst batch2
+	syscal open,[[.bio,,batusr] ? [sixbit /usr/]
+		movei 0 ? batufd+unfn2(t)]
+	 jrst batch2
+	syscal load,[movei batusr ? movei batdsk]
+	 jrst batch2
+	.iot batdsk,tt
+	hrrz tt,tt
+	.uset batusr,[.supc,,tt]
+	syscal disown,[%clbit,,5 ? movei batusr]
+	 jfcl
+batch2:	addi t,lunblk
+	jrst batch1
+
+batch3:	.close batdsk,
+	.close batusr,
+	popj p,
+
+SUBTTL	Variables, etc.
+
+	VARIABLES
+
+;Variables into which a line from accounting file is copied
+
+LVRBEG::
+UNAMEA:	0	;sixbit of uname
+UNAMEB:	0	;* mask for uname
+UNAMEC:	0	;# mask for uname
+JNAMEA:	0	;sixbit of jname
+JNAMEB:	0	;* mask for jname
+JNAMEC:	0	;# mask for jname
+JNAMEF:	0	;jname present flag
+ACCNTA:	0	;sixbit of accnt
+ACCNTB:	0	;* mask for accnt
+ACCNTC:	0	;# mask for accnt
+ACCNTF:	0	;account present flag
+FHOUR:	0	;first hour
+LHOUR:	0	;last hour
+HOURSF:	0	;hours present flag
+CTIME:	0	;connect time in seconds*30.
+CTIMEP:	0	;column position of .. + 1
+RTIME:	0	;run time in seconds*30.
+RTIMEP:	0	;column position of .. + 1
+SWAPS:	0	;number of swap ins
+SWAPSP:	0	;column position of .. + 1
+
+ifn $$MCP,[
+mctime:	0	;macsyma connect time in seconds*30.
+mctimp:	0	;column position of .. + 1
+mrtime:	0	;macsyma run time in seconds*30.
+mrtimp:	0	;column position of .. + 1
+]; END IFN $$MCP,
+
+LODAT:	0	;logout date
+LODATP:	0	;column position of .. + 1
+LOTIM:	0	;logout time
+LOTIMP:	0	;column position of .. + 1
+COLUMN:	0	;current column position
+OCOLUM:	0	;previous column position (for sake of TAB's)
+LVREND::
+
+;I/O Routines' Variables
+
+INBC:	0	;input bytes available
+INBP:	0	;input byte pointer
+OUTBC:	0	;output bytes left in buffer
+OUTBP:	0	;output byte pointer
+BBC:	-1	;.GE. 0 => buffered back character
+
+INBFL==200	
+INBUF:	BLOCK INBFL	;input buffer
+OUTBFL==200
+OUTBUF:	BLOCK OUTBFL	;output buffer
+
+;Variables for error routine
+
+NERRS:	0	;number of errors (index into ERRBFZ, ERRBFL)
+LERRBF==40
+ERRBFL:	BLOCK LERRBF	;line number
+ERRBFZ:	BLOCK LERRBF	;asciz message
+ERRBFA:	BLOCK LERRBF	;uname being hacked
+ERRBFB:	BLOCK LERRBF	;..
+ERRBFC:	BLOCK LERRBF	;..
+LINENO:	0	;current line number
+INTJPC:	0	;JPC at TSINT
+BUGJPC:	0	;JPC at BUGCHK
+BUGACS:	BLOCK 20 ;ACs at BUGCHK
+BUGMSG:	BLOCK 10 ;DMNPOP copies each message into here for benefit of BUGCHK
+
+;Variables for batch job launcher
+
+batufd: block 2000	;binary MFD of directory to search for batch jobs.
+
+;Variables for file updater etc.
+
+CHKALL:	1,,	;non-zero => check all lines for garbage, not just ones being updated.
+		;LH is modified by program; RH is a debugging switch.
+		;assembled non-zero so will check whole file when first starting up.
+UPDATR:	0	;name of person who last updated the file.
+UPDATJ:	0	;jname
+CLIFLG:	0	;0 normal, -1 do initial file update, 1 waiting for CLI completion.
+DWNTIM:	0	;time system went down.
+
+DRANDF:	0	;non-zero => delete useless randoms
+RANDF:	0	;non-zero => currently in random users section.
+TOTLF:	0	;non-zero => currently in totals section.
+STOTLF:	0	;non-zero => next line is subtotals.
+LASDAT:	0	;sixbit date file last updated
+YEARF:	0	;nonzero => year has just ticked over
+MONTHF:	0	;nonzero => month has just ticked over
+DAYF:	0	;nonzero => day has just ticked over
+MNTHLF:	0	;nonzero => doing monthly reset processing
+STCTIM:	0	;subtotal connect time
+STRTIM:	0	;subtotal run time
+STSWAP:	0	;subtotal swaps
+IFN $$MCP,[
+stmctm:	0	;subtotal MACSYMA connect time
+stmrtm:	0	;subtotal MACSYMA run time
+]; END IFN $$MCP,
+
+STLODT:	0	;subtotal logout date
+STLOTM:	0	;subtotal logout time
+GTCTIM:	0	;grand total connect time
+GTRTIM:	0	;grand total run time
+GTSWAP:	0	;grand total swaps
+
+IFN $$MCP,[
+gtmctm:	0	;grand total MACSYMA connect time
+gtmrtm:	0	;grand total MACSYMA run time
+]; END IFN $$MCP,
+		;don't change order of next 6 items
+OKDAT:	-1	;sixbit date last seen this execution of dragon
+OKTIM:	-1	;sixbit time ditto
+OKTMUP:	-1	;seconds*30. of up-time
+NOKDAT:	0	;last date from file
+NOKTIM:	0	;..
+NOKTMU:	0	;..
+
+LOTOLD:	BLOCK 5			;read from file into here
+	0
+LOTNEW:	ASCII\UNAME MM/DD/YY HH:MM:SS
+\				;build new in here
+IFN .-LOTNEW-5, .ERR LOTNEW loses
+
+;dmn-push message from system for login
+
+LI.==,,-1
+LI.TIM==0	;FIRST WORD IS TIME IN 30THS
+LI.IDX==1	;RH USER INDEX
+ LI%COD==10000	;LH IS THIS CODE
+LI.UNM==2	;UNAME
+LI.JNM==3	;JNAME
+LI.TNM==4	;TRMNAM
+
+;dmn-push message from system for logout
+
+LO.==,,-1
+LO.TIM==0	;FIRST WORD IS TIME IN 30THS
+LO.IDX==1	;RH USER INDEX
+ LO%COD==20000	;LH IS THIS CODE
+LO.UNM==2	;UNAME
+LO.JNM==3	;JNAME
+LO.RTM==4	;RUN TIME IN 4.069 MICROSECOND UNITS
+LO.SWI==5	;SWAP-IN REQUESTS
+
+;Fake logout message used at shutdown
+
+FAKMSG:
+	0	;LO.TIM
+	LO%COD,, ;LO.IDX
+	0	;LO.UNM
+	0	;LO.JNM
+	0	;LO.RTM
+	0	;LO.SWI
+
+;All stuff referenced frequently by DMNPOP etc. should be after this point.
+
+CONST.:	CONSTANTS
+
+;Cruft for each logged in tree
+
+NTREES==171		;SHOULD BE ENOUGH (BETTER BE MORE THAN MAXJ)
+TR.UNM:	BLOCK NTREES	;UNAME, 0 IF SLOT EMPTY
+TR.JNM:	BLOCK NTREES	;TOP JNAME
+TR.TNM:	BLOCK NTREES	;TRMNAM AT LOGIN
+TR.XUN:	BLOCK NTREES	;XUNAME
+TR.TIM:	BLOCK NTREES	;TIME AT LOGIN (FOR COMPUTING CONNECT)
+
+;Unless we miss a dmn-push, nothing can go away or change
+;its name without the system saying so.  Trees can appear
+;without the system saying so if they are created by disowning;
+;in that case we just won't charge connect time.
+
+IFN $$MCP,[
+mx.xun:	block ntrees  ;UNAME, 0 if slot empty
+mx.ctm:	block ntrees  ;<flag>,,<interval count> (flag is used to mark MACSYMAs
+		      ;  found on given scan;  the count -=> connect time)
+mx.rtm:	block ntrees  ;runtime of this MACSYMA
+mx.ort:	block ntrees  ;runtime of this MACSYMA which has already been recorded
+mx.hor:	block ntrees  ;hour this MACSYMA was started, for HOURS=
+]; END IFN $$MCP,
+
+;Cruft pushed for logged out trees (at end of core)
+
+CF.==,,-1
+
+CF.UNM==0	      ;XUNAME    (0 MARKS END OF CRUFT)
+CF.JNM==1	      ;JNAME
+CF.TNM==2	      ;TRMNAM (ACCOUNT)
+CF.HOR==3	      ;HOUR OF THE DAY LOGGED IN (0-23.)
+CF.CTM==4	      ;CONNECT TIME IN SECONDS*30.
+CF.RTM==5	      ;RUN TIME IN SECONDS*30.
+CF.SWI==6	      ;# SWAPINS
+
+ifn $$MCP,[
+CF.MCT==7	      ;# of times this MACSYMA was runable
+CF.MRT==10	      ;run time this MACSYMA observed to use
+CF.DAT==11	      ;SIXBIT DATE OF LOGOUT
+CF.TIM==12	      ;SIXBIT TIME OF LOGOUT
+CF.VAL==13	      ;VALID FLAG (0 => HAS BEEN PUT INTO ACCT FILE)
+CF.LEN==14	      ;# WDS/CRUFTY
+]; END IFN $MCP,
+
+ife $$MCP,[
+CF.DAT==7	      ;SIXBIT DATE OF LOGOUT
+CF.TIM==10	      ;SIXBIT TIME OF LOGOUT
+CF.VAL==11	      ;VALID FLAG (0 => HAS BEEN PUT INTO ACCT FILE)
+CF.LEN==12	      ;# WDS/CRUFTY
+]; END IFE $MCP,
+
+;data
+ruind:	0	      ;OUR user index
+
+;timers
+dmpcnt:	-31	;count till time to dump
+dmpinv:	-31	;# of clock cycles between file updates (25. = 15 minutes)
+maxcnt:	-1	;count till time to do acounting update on MACSYMAs
+maxinv:	-1	;count of ticks per 36. second period
+rltinv:	60.*36.	;36. seconds between ints, normally.
+
+CRUFTP:	CRUFT	;points at first unused entry in cruft table.
+CRUFTF:	CRUFT	;fence.  stuff below this is getting updated into file.
+CRUFTE:	CRUFTZ	;points at highest loc+1 allocated for cruft table.
+		; which had better be a page boundary.
+
+
+ifn $$STAT,[
+;; internal statistics
+
+updtct:	0			;count of file updates
+updtcp:	0			;position of above on line
+crftys:	0			;# of pieces of cruft pushed by logout dmnpush
+crftsp:	0			;position of above on line
+lrunt:	0			;last recorded runtime
+lruntp:	0			;position of above on line
+orunt:	0			;runtime consumed so far in this job
+coraos:	0			;# of times we've grown core.
+coraop:	0			;position of above on line
+
+ifn $$MCP,[
+rmaxfl:	0			;flag to notice no running MACSYMA's seen
+
+crftym: 0			;# of pieces of cruft pushed for MACSYMA's
+crftmp:	0			;position of above on line
+nomax:	0			;# of times no MACSYMA's seen
+nomaxc:	0
+nomaxp:	0			;position of above on line
+normax:	0			;# of times no running MACSYMA's seen
+normxc:	0
+normxp:	0			;position of above on line
+flsnew:	0			;# of times we've NEWFLS'd
+flsnwp:	0			;position of above on line
+cntnew:	0			;# of MACSYMA's we've NEWFLS'd
+cntnwp:	0			;position of above on line
+flsold:	0			;# of times we've OLDFLS'd
+flsolp:	0			;position of above on line
+cntold:	0			;# of MACSYMA's we've OLDFLS'd
+cntolp:	0			;position of above on line
+];  END IFN $$MCP,
+];  END IFN $$STAT,
+
+
+;Pointers to relevant system symbols
+
+DEDTIM:	0	;<0 system down.  0 Up.  Otherwise time till death.
+TIME:	0	;30ths since system up.
+USRHI:	0	;index of highest user +.
+LUBLK:	0	;length of user variables block.
+UNAME:	0	;user name.
+XUNAME:	0	;user's intended uname
+JNAME:	0	;job name.
+SUPPRO:	0	;superior pointer.
+USTP:	0	;run/stop flag
+UTRNTM:	0	;user run time.
+USIPRQ:	0	;user swapin requests.
+TRUNTM:	0	;run time of inferiors minus previously-logged.
+TSIPRQ:	0	;swapin requests of inferiors minus previously-logged.
+
+DMNBC:	0	;AOS'ed each time something is put in the buffer, before
+DMNBD:	0	;AOS'ed each time something is put in the buffer, after
+DMNBF:	0	;the buffer
+DMNBFE:	0	;the end of the buffer
+DMNBEL:	0	;# words per message
+
+LDMNBD:	0	;last value of DMNBD seen
+DMNBSZ:	0	;number of frobs that fit in the buffer
+
+SYSMPT:	0	;Pointer to index of message most recently inserted in SYSMBF
+SYSMLNG:0	;log(2) of number of 4-word entries in SYSMBF
+SYSMBF:	0	;Pointer to SYSMSG table in the system
+SYSMBL:	0	;Number of words in SYSMBF
+SYSMBM:	0	;That minus one (mask)
+SYSMPU:	0	;Index of last message processed
+DSKLGF:	0	;-1 means file not opened yet in DSKLOG
+
+;Cruft Table Starts Here
+
+CRUFT:	-1
+CRUFTZ==<CRUFT+1777>&<776000>	;address of first additional cruft page.
+crfmrg==20.			;ask for update this many crufties from full
+crfsiz==10.			;ten pages of cruft before panic dump
+
+maxpag==176			;page for sharing with MACSYMA
+maxshr==60			;page of SYS:TS MACSYM to share with
+
+CMPAGE=376000	;Communication page, see CLIINT.
+SYCORE=400000	;Upper Core is mapped into absolute.
+
+END GO
