@@ -1,6 +1,6 @@
 EMULATOR ?= simh
 
-SRC = system syseng sysen1 sysen2 sysnet kshack midas _teco_ rms klh
+SRC = system syseng sysen1 sysen2 sysnet kshack midas _teco_ rms klh dragon channa
 MINSYS = _ sys sys3 device
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
