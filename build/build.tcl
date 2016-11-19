@@ -140,7 +140,7 @@ respond "*" "purify\033g"
 respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas system;_its\r"
+respond "*" ":midas .;_system;its\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
