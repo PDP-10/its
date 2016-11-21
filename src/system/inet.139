@@ -158,11 +158,15 @@ IPRDGV:	CALL IPCKSM		; Compute checksum for IP header
 	 JRST [	METER("IP: Ifl bad cksm")
 		AOS IPMCKF	; Bump two meters
 		JRST IPRD90]	; Go flush it forthwith.
-	MOVE B,IP$DST(W)	; Get destination host, should be us
-IFE IPUNCP, CAME B,[IMPUS3_4]
-	 CAMN B,[IMPUS4_4]
-	  JRST IPRD10
-	; Packet is to be forwarded
+	LDB B,[IP$DST(W)]	; Get destination host, should be us
+REPEAT NNIFS,[
+	CAMN B,NIFIPA+.RPCNT	; Is it us?
+	 JRST IPRD10		; Yep!
+]
+	; Not for us, should we forward packet?
+	SKIPG IPFORW
+	 JRST [	METER("IP: Packets not forwarded")
+		JRST IPRD90]
 	METER("IP: Packets forwarded")
 	LDB B,[IP$TTL(W)]	; Decrement time to live
 	SOJLE B,[ METER("IP: Packets expired")
@@ -654,14 +658,13 @@ ICMPP2:	LDB A,[341000,,1(H)]	; Get pointer into bad IP header
 ; ICMP type 5 - Redirect
 
 ICMRD:	MOVEI D,IC$IPH(H)
-	MOVE A,IP$SRC(D)	; Get source addr of alleged IP header
-	CAME A,[IMPUS4_4]	; Must be a datagram WE sent.
-IFE IPUNCP,[
-	 CAMN A,[IMPUS3_4]
-	  CAIA
-	]
-	   JRST ICMP90		; Bah, flush.  Probably should log it.
-	LDB A,[IP$DST (D)]	; Get dest addr we used
+	LDB A,[IP$SRC(D)]	; Get source addr of alleged IP header
+REPEAT NNIFS,[
+	CAMN A,NIFIPA+.RPCNT	; Is it us?
+	 JRST ICMRD1		; Yep!
+]
+	 JRST ICMP90		; Bah, flush.  Probably should log it.
+ICMRD1:	LDB A,[IP$DST (D)]	; Get dest addr we used
 	GETNET A		; Derive net number
 	LDB B,[IC$GWA (H)]	; Get gateway addr recommended for this net
 	MOVEI C,NIPGW-1		; Scan backwards thru gateway table
@@ -670,7 +673,7 @@ ICMRD2:	CAMN A,IPGWTN(C)
 	 JRST [	SKIPN IPGWTG(C)	; Don't change a direct-route entry!
 		 JRST ICMP90
 		JRST ICMRD3 ]
-	CAIL C,NIPPGW		; Skip if prime gateway, not replaceable
+	CAIL C,NIPPGW		; Skip if permanent gateway, not replaceable
 	 JRST [	SKIPN IPGWTN(C)
 		 MOVEI T,(C)	; Save index of last free slot found
 		SKIPL TT
@@ -688,16 +691,20 @@ ICMRD2:	CAMN A,IPGWTN(C)
 	SUB T,IPGWTM(C)
 	CAIGE T,60.*60.*30.	; Flushing entry less than 1 hour old?
 	 BUG INFO,[ICMP: GW table full, net/gw ],OCT,IPGWTN(C),OCT,IPGWTG(C),[=>],OCT,A,OCT,B
-ICMRD3:	GETNET D,B		; Figure out which interface this gateway is on
-	MOVEI T,NIPPGW-1
-	SKIPN IPGWTG(T)
-	 CAME D,IPGWTN(T)
-	  SOJGE T,.-2
-	JUMPL T,ICMP90		; I can't figure out how to get to this gateway anyway
-	MOVEM A,IPGWTN(C)	; Set network number
+
+	; Figure out which interface this gateway is on
+ICMRD3:
+REPEAT NNIFS,[			; Check local interfaces
+	MOVE T,B		; Set up GW address
+	AND T,NIFIPM+.RPCNT	; Use interface netmask (may be subnetting)
+	CAMN T,NIFIPN+.RPCNT	; Does it match interface net?
+	 JRST [	MOVE T,NIFIPO+.RPCNT	; Yes!  Go use it!
+		JRST ICMRD4]
+]
+	 JRST ICMP90		; Failed, can't figure out how to get there.
+ICMRD4:	MOVEM A,IPGWTN(C)	; Set network number
 	MOVEM B,IPGWTG(C)	; and its corresponding gateway addr
-	MOVE T,IPGWTI(T)	; and its interface
-	MOVEM T,IPGWTI(C)
+	MOVEM T,IPGWTI(C)	; and its interface routine
 	MOVE T,TIME		; Pretend it was used so it
 	MOVEM T,IPGWTM(C)	; stays around for a while
 	JRST ICMP90		; Done!
@@ -1111,27 +1118,32 @@ IFN IPUNCP, MOVEI T,488.-40.	; This should be small enough...
 IF1,.ERR Amazing MIT-Specific crocks near IPMTU...
 
 ; IPBSLA - Best Local Address for a given destination
+;	Scans backward thru interface tables, so as to default to first entry.
 ;	A/ Destination IP Address
 ;	Return A/ Local Address to use
+; Clobbers T.
 
 IPBSLA:
-IFE IPUNCP,[
-	GETNET A
-	CAMN A,NW%CHW
-	 SKIPA A,[IMPUS4]	; Local Address on wrapped-chaos net
-	MOVE A,[IMPUS3]		; Default local host address to IMP
-] ;IFE IPUNCP
-IFN IPUNCP, MOVE A,[IMPUS4]
-	RET
+REPEAT NNIFS-1,[
+	MOVE T,A
+	AND T,NIFIPM+<NNIFS-1-.RPCNT>	; Mask to get net #
+	CAMN T,NIFIPN+<NNIFS-1-.RPCNT>	; Is it the net # for this interface?
+	 JRST [	MOVE A,NIFIPA+<NNIFS-1-.RPCNT>	; Yes, use our IP addr for it!
+		RET]
+]
+	MOVE A,NIFIPA		; Default - use first interface
+	RET			; (IMP, if it exists, else CHAOS)
+
 
 ; IPLCLH - Skip return if address in A is one of us.
 ;	Called with JSP T,IPLCLH
 
 IPLCLH:
-IFE IPUNCP, CAME A,[IMPUS3]
-	 CAMN A,[IMPUS4]
-	  JRST 1(T)
-	JRST (T)
+REPEAT NNIFS,[
+	CAMN A,NIFIPA+.RPCNT
+	 JRST 1(T)		; Yup, won
+]
+	JRST (T)		; Nope, no match
 
 ; IPKSND - Invoked by TCP to send off a segment.
 ;	Fills in the IP header fields, checksums, and puts on output queue.
@@ -1182,16 +1194,23 @@ IPKSNQ:	MOVSI T,(%PKODN)	; Clear the "output-done" flag.
 ; IPKSNI - Route packet to appropriate gateway and interface
 ;	A/ PE ptr to datagram - PK.BUF must be set up.
 ;	Clobbers A,B,T,Q
-IPKSNI:	PUSH P,C
-	SKIPLE C,PK.BUF(A)	; Get the packet buffer from the PE
-	 CAMG C,[2,,0]
+IPKSNI:	SKIPLE B,PK.BUF(A)	; Get the packet buffer from the PE
+	 CAMG B,[2,,0]
 	  BUG HALT,[IP: Null dgm being sent]
-	LDB C,[IP$DST(C)]	; Get destination address
+	LDB B,[IP$DST(B)]	; Get destination address
 
-	;; This is where to apply final gateway routing code, based on Internet address in C.
-	GETNET T,C		; Get network # into T
-	MOVSI Q,-NIPGW		; Search table of gateways and direct routes
-	CAME T,IPGWTN(Q)	; Skip if network # matches
+	;; This is where to apply final gateway routing code, based on Internet address in B.
+REPEAT NNIFS,[			; Check local interfaces first, quickly.
+	MOVE T,B
+	AND T,NIFIPM+.RPCNT	; Use interface netmask (may be subnetting)
+	CAMN T,NIFIPN+.RPCNT	; Does it match interface net?
+	 JRST [	MOVEM B,PK.DST(A)	; Yes!  Go use it now!
+		CALRET @NIFIPO+.RPCNT]
+]
+	; Didn't match any interface's network, so look for a gateway.
+	GETNET T,B		; Get net # in T, using standard class A/B/C
+	MOVSI Q,-NIPGW		; Search table of gateways
+	CAME B,IPGWTN(Q)	; Skip if network # matches
 	 AOBJN Q,.-1
 	JUMPL Q,IPSNI1		; Jump if found entry in table
 	AOS Q,IPGWPG		; No gateway known for this network, so try a
@@ -1199,61 +1218,87 @@ IPKSNI:	PUSH P,C
 	 SETZB Q,IPGWPG		; Try a different prime gateway each time
 IPSNI1:	MOVE T,TIME		; Remember that this gateway entry was used
 	MOVEM T,IPGWTM(Q)
-	SKIPE IPGWTG(Q)		; Skip if this is a direct route
-	 MOVE C,IPGWTG(Q)	; Get gateway address
-	MOVEM C,PK.DST(A)	; Save gateway address for interface to use
-	CALL @IPGWTI(Q)		; Dispatch to interface
-	POP P,C
-	RET
+	MOVE B,IPGWTG(Q)	; Get gateway address
+	MOVEM B,PK.DST(A)	; Save gateway address for interface to use
+	CALRET @IPGWTI(Q)	; Dispatch to interface
 
 EBLK
+
+; Network Interface tables.  Currently only knows about IMP and CHAOS.
+
+NIFIPA:	; IP Address for network interface
+	IFN IMPP, IMPUS3	; IP address on IMP interface
+	IFN CHAOSP, IMPUS4	; IP address on CHAOS interface
+IFN .-NIFIPA-NNIFS, .ERR Wrong size table - NIFIPA
+
+NIFIPM:	; IP Network Mask for network interface
+	IFN IMPP, NM%IMP	; Netmask for IMP interface
+	IFN CHAOSP, NM%CHA	; Netmask for CHAOS interface
+IFN .-NIFIPM-NNIFS, .ERR Wrong size table - NIFIPM
+
+NIFIPN:	; IP Network # for network interface
+	IFN IMPP, <IMPUS3>&<NM%IMP>
+	IFN CHAOSP, <IMPUS4>&<NM%CHA>
+IFN .-NIFIPN-NNIFS, .ERR Wrong size table - NIFIPN
+
+NIFIPO:	; IP Output routine for network interface
+	IFN IMPP, IPKSNA	; Send IP dgm to IMP output
+	IFN CHAOSP, IPKSNC	; Send IP dgm to Chaos, may fragment
+IFN .-NIFIPO-NNIFS, .ERR Wrong size table - NIFIPO
+
+;NIFNAM: ; Interface name (in case of PEEKing someday?)
+;	IFN IMPP, SIXBIT /IMP/
+;	IFN CHAOSP, SIXBIT /CHA/
+;IFN .-NIFNAM-NNIFS, .ERR Wrong size table - NIFNAM
+
+
+; Gateway routing tables.  Currently only routes by network, not by
+; specific host.  Note that the entries in IPGWTI (interface pointers) had
+; better be able to directly send to the corresponding IP addresses in IPGWTG
+; (IP addrs of GWs)! This saves another pass through the NIF tables.
+
+IPFORW:	NNIFS-1		; > 0 to forward IP packets.
 IPGWPG:	0		; Index of current prime gateway
 
-				; Network number
-IPGWTN:
-	NW%LCS			; LCS net
-	NW%AI			; MIT-AI-NET
-NIPMGW==<.-IPGWTN>		; Number of prime gateways
-IFE IPUNCP, NW%ARP		; ARPA Net
-	HOSTN 128,31,0,0	; MIT Chaosnet
-NIPPGW==<.-IPGWTN>		; Number of permanent gateways
-	BLOCK 64.		; Extra stuff to patch in and for redirects
-NIPGW==<.-IPGWTN>
+IFNDEF NIPGW, NIPGW==:64.	; Max # IP gateway entries
 
-; Internet address of gateway servicing given net number
-IPGWTG:
+IPGWTN:	BLOCK NIPGW	; Network # served by this gateway entry
+IPGWTG:	BLOCK NIPGW	; IP address of gateway
+IPGWTI:	BLOCK NIPGW	; Interface routine to use for this IP address
+IPGWTM:	BLOCK NIPGW	; TIME that entry was last used
+
+NIPPGW==0			; # of permanent GWs
+DEFINE GWDEF (NET,GW,NIF)	; Store permanent GW defs
+%%%GSV==.
+LOC IPGWTN+NIPPGW ? NET
+LOC IPGWTG+NIPPGW ? GW
+LOC IPGWTI+NIPPGW ? NIF
+LOC %%%GSV
+EXPUNGE %%%GSV
+NIPPGW==NIPPGW+1
+TERMIN
+
+	; Now define the prime & permanent gateways.
+	; Someday this really ought to be configurable either in CONFIG
+	; at assembly time, or from a file at runtime.
+IFE ITSMCH-SIXBIT/NX/,[
+	GWDEF 0,<HOSTN 139,185,5,1>,IPKSNA ; NPD cisco router, use for all.
+	NIPMGW==NIPPGW			; Number of prime gateways
+].ELSE [
 IFE IPUNCP,[
-	HOSTN 10,0,0,77		; MIT-GW
-	HOSTN 10,3,0,6		; MIT-AI-GW
+	GWDEF NW%LCS,<HOSTN 10,0,0,77>,IPKSNA 		; MIT-GW
+	GWDEF NW%AI, <HOSTN 10,3,0,6>, IPKSNA 		; MIT-AI-GW
 ] ;IFE IPUNCP
 IFN IPUNCP,[
-	HOSTN 128,31,6,1	; ???
-	HOSTN 128,31,6,2	; ???
+	GWDEF NW%LCS,<HOSTN 128,31,6,1>,IPKSNC 		; ???
+	GWDEF NW%AI, <HOSTN 128,31,6,2>,IPKSNC		; ???
 ] ;IFN IPUNCP
-IFE IPUNCP, 0			; Send direct to Arpanet
-	0			; Send direct to Chaosnet
-IFN .-IPGWTG-NIPPGW, .ERR Permanent gateway table at IPGWTG wrong size
-LOC IPGWTG+NIPGW
-
-IPGWTI:
-IFE IPUNCP,[
-	IPKSNA			; MIT-GW
-	IPKSNA			; MIT-AI-GW
-] ;IFE IPUNCP
-IFN IPUNCP,[
-	IPKSNC			; ???
-	IPKSNC			; ???
-] ;IFN IPUNCP
-IFE IPUNCP, IPKSNA		; direct to Arpanet
-	IPKSNC			; direct to Chaosnet
-IFN .-IPGWTI-NIPPGW, .ERR Permanent gateway table at IPGWTI wrong size
-REPEAT NIPGW-NIPPGW,IPKSNA
-
-IPGWTM:	BLOCK NIPGW		; TIME entry last used
+	NIPMGW==NIPPGW			; Number of prime gateways
+] ; IF NOT NX
 
 BBLK
 
-IFE IPUNCP,[
+IFN IMPP,[
 
 ; Queue packet for Arpanet interface
 IPKSNA:	MOVEI Q,IPOUTQ		; Otherwise use direct IP output queue.
@@ -1263,13 +1308,16 @@ IPKSNA:	MOVEI Q,IPOUTQ		; Otherwise use direct IP output queue.
 	 RET			; Not necessary, queue was not empty
 IPOGO:	CALRET IMPIOS		; Just means kicking IMP for now.
 
-] ;IFE IPUNCP
+] ;IFN IMPP
+
+IFN CHAOSP,[
 
 ; Queue packet for Chaosnet interface
 ; A has the pe
 ; PK.DST(A) has the Internet address to send to, 128.31.subnet.host
 ; The low 16 bits are Chaosnet address to send an UNC to
-IPKSNC:	PUSH P,H
+IPKSNC:	PUSH P,C
+	PUSH P,H
 	PUSH P,J
 	PUSH P,E
 	PUSH P,W
@@ -1351,7 +1399,10 @@ IPKSC9:	MOVE A,J		; The PE
 	POP P,E
 	POP P,J
 	POP P,H
+	POP P,C
 	POPJ P,
+
+] ; IFN CHAOSP
 
 IPKSN5:	MOVEI Q,IPUQHD+1	; Put on System Output queue
 	MOVE B,(Q)		; Save prev contents of header

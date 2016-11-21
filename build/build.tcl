@@ -140,14 +140,33 @@ respond "*" "purify\033g"
 respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas system;_its\r"
-respond "MACHINE NAME =" "AI\r"
+respond "*" ":midas .;_system;its\r"
+respond "MACHINE NAME =" "DB\r"
+respond "Configuration?" "RP06\r"
 expect ":KILL"
 
 respond "*" ":midas .;@ ddt_system;ddt\r"
 respond "cpusw" "3\r"
 respond "New One Proceed" "1\r"
 expect ":KILL"
+
+respond "*" ":midas .;_kshack;nsalv\r"
+respond "Which machine?" "KSRP06\r"
+expect ":KILL"
+
+shutdown
+start_dskdmp
+respond "DSKDMP" "l\033ddt\r"
+expect "\n"; type "t\033its bin\r"
+expect "\n"; type "\033u"
+respond "DSKDMP" "m\033nsalv bin\r"
+expect "\n"; type "d\033nits\r"
+expect "\n"; type "nits\r"
+expect "\n"; type "\033g"
+pdset
+
+respond "*" ":rename .;@ its, .;@ oits\r"
+respond "*" ":rename .;@ nits, .;@ its\r"
 
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
@@ -165,10 +184,6 @@ respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
-
-respond "*" ":midas .;_kshack;nsalv\r"
-respond "Which machine?" "KSRP06\r"
-expect ":KILL"
 
 respond "*" ":midas sysbin;_sysen1;pdset\r"
 expect ":KILL"

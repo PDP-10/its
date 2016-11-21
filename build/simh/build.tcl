@@ -13,6 +13,7 @@ proc restart_nsalv {} {
 }
 
 proc start_dskdmp {} {
+    respond "sim>" "at tu2 out/dskdmp.tape\r"
     respond "sim>" "b tu2\r"
     respond "MTBOOT" "\033g"
 }
