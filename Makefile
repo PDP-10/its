@@ -21,6 +21,7 @@ out/minsys.tape: $(ITSTAR)
 
 out/sources.tape: $(ITSTAR)
 	mkdir -p out
+	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
