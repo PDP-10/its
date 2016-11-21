@@ -168,6 +168,11 @@ respond "?" "ksrp06\r"
 respond "Assemble BOOT?" "yes\r"
 expect ":KILL"
 
+respond "*" ":midas sysbin;_kshack;ksfedr\r"
+expect ":KILL"
+respond "*" ":delete sys;ts ksfedr\r"
+respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
+
 respond "*" ":ksfedr\r"
 respond "!" "write\r"
 respond "Are you sure" "yes\r"
@@ -215,11 +220,6 @@ respond "*" ":midas sysbin;_sysen1;pdset\r"
 expect ":KILL"
 respond "*" ":delete sys;ts pdset\r"
 respond "*" ":link sys;ts pdset,sysbin;pdset bin\r"
-
-respond "*" ":midas sysbin;_kshack;ksfedr\r"
-expect ":KILL"
-respond "*" ":delete sys;ts ksfedr\r"
-respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
 
 respond "*" ":midas sysbin;_syseng;lock\r"
 expect ":KILL"
