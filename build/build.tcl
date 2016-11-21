@@ -150,6 +150,10 @@ respond "cpusw" "3\r"
 respond "New One Proceed" "1\r"
 expect ":KILL"
 
+respond "*" ":midas .;_kshack;nsalv\r"
+respond "Which machine?" "KSRP06\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
 respond "*" ":job teco\r"
@@ -166,10 +170,6 @@ respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
-
-respond "*" ":midas .;_kshack;nsalv\r"
-respond "Which machine?" "KSRP06\r"
-expect ":KILL"
 
 respond "*" ":midas sysbin;_sysen1;pdset\r"
 expect ":KILL"
