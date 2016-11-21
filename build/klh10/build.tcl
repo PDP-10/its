@@ -15,14 +15,16 @@ proc restart_nsalv {} {
 }
 
 proc start_dskdmp {} {
-    respond "KLH10>" "zero\r"
-    respond "KLH10>" "load @.ddt-u\r"
-    respond "KLH10>" "load dskdmp.216bin\r"
-    respond "KLH10>" "go\r"
+    #respond "KLH10>" "zero\r"
+    quit_emulator
+    uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
+    expect "EOF"
+    respond "KLH10#" "go\r"
 }
 
 proc start_its {} {
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
+    expect "EOF"
     respond "KLH10#" "go\r"
 }
 
