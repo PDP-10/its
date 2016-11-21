@@ -154,6 +154,20 @@ respond "*" ":midas .;_kshack;nsalv\r"
 respond "Which machine?" "KSRP06\r"
 expect ":KILL"
 
+shutdown
+start_dskdmp
+respond "DSKDMP" "l\033ddt\r"
+expect "\n"; type "t\033its bin\r"
+expect "\n"; type "\033u"
+respond "DSKDMP" "m\033nsalv bin\r"
+expect "\n"; type "d\033nits\r"
+expect "\n"; type "nits\r"
+expect "\n"; type "\033g"
+pdset
+
+respond "*" ":rename .;@ its, .;@ oits\r"
+respond "*" ":rename .;@ nits, .;@ its\r"
+
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
 respond "*" ":job teco\r"

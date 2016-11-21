@@ -33,9 +33,15 @@ from scratch.
    - DDT, debugger and HACTRN user login shell.
    - The ITS monitor (kernel).
    - Exec DDT, standalone debugger.
+   - NSALV, standalone file system tool.
+
+4. The system is restarted, the rebuilt monitor and salvager are
+   combined into a new ITS binary, which is then started.
+
+5. Remaining programs are rebuilt:
+
    - TECO, editor.
    - DUMP, tape backup and restore.
-   - NSALV, standalone file system tool.
    - PDSET, set time and date.
    - KSFEDR, manipulate front-end file system.
    - LOCK, shut down system.
@@ -44,4 +50,4 @@ from scratch.
    - PEEK, system monitoring.
    - ARCDEV, transparent file system access to archive files.
 
-4. Finally, the whole file system is dumped to tape.
+6. Finally, the whole file system is dumped to tape.
