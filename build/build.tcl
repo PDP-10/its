@@ -141,7 +141,8 @@ respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
 respond "*" ":midas .;_system;its\r"
-respond "MACHINE NAME =" "AI\r"
+respond "MACHINE NAME =" "DB\r"
+respond "Configuration?" "RP06\r"
 expect ":KILL"
 
 respond "*" ":midas .;@ ddt_system;ddt\r"
