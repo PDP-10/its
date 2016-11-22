@@ -21,6 +21,8 @@ The `$` character represents typing ESC.
 | ------------- | -------------------- | ------------------------ |
 | login user   	| user$u               | :login user              |
 | logout       	| $$u                  | :logout                  |
+| TERM=vt52     |                      | :tctyp vt52              |
+| TERM=vt100    |                      | :crtsty vt100            |
 | ls           	| ^F                   | :listf                   |
 | ls dir       	| dir^F                | :listf dir               |
 | ls /         	| ^R m.f.d. (file)     | :print m.f.d. (file)     |
