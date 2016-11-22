@@ -14,6 +14,8 @@ to operate ITS systems to this day.
 
 See the [`doc` subdirectory](doc) for documentation.
 
+There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
+
 ### Building it from scratch
 
 This repository contains source code, tools, and scripts to build ITS
