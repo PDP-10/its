@@ -167,10 +167,8 @@ respond "?" "ksrp06\r"
 respond "Assemble BOOT?" "yes\r"
 expect ":KILL"
 
-respond "*" ":midas sysbin;_kshack;ksfedr\r"
+respond "*" ":xfile build;ksfedr xfile\r"
 expect ":KILL"
-respond "*" ":delete sys;ts ksfedr\r"
-respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
 
 respond "*" ":ksfedr\r"
 respond "!" "write\r"
