@@ -34,9 +34,11 @@ from scratch.
    - The ITS monitor (kernel).
    - Exec DDT, standalone debugger.
    - NSALV, standalone file system tool.
+   - DSKDMP, disk bootstrap and file access.
+   - KSFEDR, manipulate front-end file system.
 
-4. The system is restarted, the rebuilt monitor and salvager are
-   combined into a new ITS binary, which is then started.
+4. The new DSKDMP is installed, and the rebuilt monitor and salvager
+   are combined into a new ITS binary, which is then started.
 
 5. Remaining programs are rebuilt:
 
@@ -44,7 +46,6 @@ from scratch.
    - EMACS, binaries only.
    - DUMP, tape backup and restore.
    - PDSET, set time and date.
-   - KSFEDR, manipulate front-end file system.
    - LOCK, shut down system.
    - ATSIGN DEVICE, load device drivers.
    - TCTYP and CRTSTY, terminal handling.
