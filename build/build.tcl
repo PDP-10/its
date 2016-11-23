@@ -53,6 +53,9 @@ proc shutdown {} {
     send "5kill"
     respond "GO DOWN?\r\n" "y"
     respond "BRIEF MESSAGE" "\003"
+    respond "_" "q"
+    expect ":KILL"
+    respond "*" ":logout\r"
     respond "NOW IN DDT" $emulator_escape
 }
 
@@ -84,7 +87,9 @@ expect "\n"; type "d\033its\r"
 expect "\n"; type "its\r"
 expect "\n"; type "\033g"
 pdset
-respond "*" ":ksfedr\r"
+respond "*" ":login db\r"
+sleep 1
+type ":ksfedr\r"
 respond "File not found" "create\r"
 expect -re {Directory address: ([0-7]*)\r\n}
 set dir $expect_out(1,string)
@@ -113,7 +118,9 @@ respond "DSKDMP" "its\r"
 type "\033g"
 maybe_pdset
 
-respond "*" $emulator_escape
+respond "*" ":login db\r"
+sleep 1
+type $emulator_escape
 mount_tape "out/sources.tape"
 type ":dump\r"
 respond "_" "reload "
@@ -196,7 +203,9 @@ expect "\n"; type "nits\r"
 expect "\n"; type "\033g"
 pdset
 
-respond "*" ":rename .;@ its, .;@ oits\r"
+respond "*" ":login db\r"
+sleep 1
+type ":rename .;@ its, .;@ oits\r"
 respond "*" ":rename .;@ nits, .;@ its\r"
 
 respond "*" ":print sys1;..new. (udir)\r"
