@@ -303,10 +303,7 @@ respond "*" ":xfile build;pdset xfile\r"
 
 respond "*" ":xfile build;lock xfile\r"
 respond "*" ":xfile build;@dev xfile\r"
-
-respond "*" ":midas sysbin;_syseng;tctyp\r"
-expect ":KILL"
-respond "*" ":link sys;ts tctyp,sysbin;tctyp bin\r"
+respond "*" ":xfile build;tctyp xfile\r"
 
 respond "*" ":midas sysbin;_syseng;crtsty\r"
 expect ":KILL"
