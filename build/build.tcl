@@ -302,11 +302,7 @@ expect ":KILL"
 respond "*" ":xfile build;pdset xfile\r"
 
 respond "*" ":xfile build;lock xfile\r"
-
-respond "*" ":midas sysbin;_syseng;@dev\r"
-expect ":KILL"
-respond "*" ":delete sys;atsign device\r"
-respond "*" ":link sys;atsign device,sysbin;@dev bin\r"
+respond "*" ":xfile build;@dev xfile\r"
 
 respond "*" ":midas sysbin;_syseng;tctyp\r"
 expect ":KILL"
