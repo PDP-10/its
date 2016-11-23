@@ -299,10 +299,7 @@ respond "*" ":link sys;ts load,sys;ts dump\r"
 respond "*" ":midas sys1;ts stink_sysen2;stink\r"
 expect ":KILL"
 
-respond "*" ":midas sysbin;_sysen1;pdset\r"
-expect ":KILL"
-respond "*" ":delete sys;ts pdset\r"
-respond "*" ":link sys;ts pdset,sysbin;pdset bin\r"
+respond "*" ":xfile build;pdset xfile\r"
 
 respond "*" ":midas sysbin;_syseng;lock\r"
 expect ":KILL"
