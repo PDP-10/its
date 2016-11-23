@@ -1,0 +1,4372 @@
+;-*-MIDAS-*- Must be first thing so EMACS knows this is a MIDAS source file
+
+; The official version of this program is the file
+;		[SRI-NIC] <NETPROG>HOSTS3.MID
+; However, development rarely ends, and people who want to improve it
+; should consult KLH@SRI-NIC for the latest changes.
+
+TITLE HOSTS3 Host-table Compiler
+
+; SYNOPSIS:	HOSTS3 /INSERT <input-filename> /OUTFIL <output-filename>
+
+; This program is a "host-table compiler" which accepts human-readable
+; text files describing nets, hosts, etc. and outputs a compact binary
+; file which can be easily mapped in and used by any program.
+
+; Input text files must be in either "RFC810" (the default) or "HOSTS2" format.
+;	Descriptions of these text formats can be found in:
+;		HOSTS2 - [MIT-MC]  SYSENG;HOSTS >
+;		RFC810 - [SRI-NIC] <NETINFO>RFC810.TXT
+;	There are also a number of keywords that are "pseudo-ops",
+;	meaningful only to the HOSTS3 compiler.  These are described later.
+; The output binary file can be in either "HOSTS2" or "HOSTS3" format.
+;	Both of these formats are described later in this program.
+
+; Relevant mailing lists:
+;		INFO-HOSTS @ MIT-MC		; For updates to data or pgm
+;		INFO-HOSTS-REQUEST @ MIT-MC	; To be added to above list
+
+; Canned procedures to make new versions of the host-tables:
+;	ITS:	Do	:XFILE MC:SYSENG;HOSTS XFILE
+;	SAIL:	Do	BATCH/NOW @HOSTS.
+
+; Software packages that help use the binary host table:
+;  MIDAS assembler:
+;	ITS:	[MIT-MC] DSK: SYSENG;NETWRK >		
+;	TNX:	[MIT-OZ] SS:<SYS.LIBRARY>NETWRK.MID
+
+SUBTTL	Program Use - Keywords, Defaults, etc.
+comment |
+
+	Normally the formats and filenames used by the compiler are specified
+by using certain keywords either in the JCL (job command line) or in
+the input text files.  However, if omitted, the compiler will try to
+default things according to the following tables:
+
+Default formats			Input text	Output bin
+		Normal start:	RFC810		HOSTS3
+		Start addr+1:	HOSTS2		HOSTS2
+		Start addr+2:	HOSTS2		HOSTS3
+		Start addr+3:	RFC810		HOSTS2
+
+Default filenames
+		Input (after JCL)	Output
+	ITS:	HOSTS >			HOSTS3 >		(or HOSTS2)
+	TNX:	HOSTS.TXT		HOSTS3.BIN		(or HOSTS2)
+	SAIL:	HOSTS.TXT[HST,NET]	HOSTS3.BIN[HST,NET]	(or HOSTS2)
+
+-----------------------------------------------------------------
+		COMPILER KEYWORDS
+
+	Keywords must always be the first thing on a line.  The only
+exception to this is when input is furnished as JCL, where "/" is
+interpreted as newline (double it to quote, like "//"); thus several
+keywords can be furnished on one line.  For example, the old HOSTS2
+compiler can be emulated with JCL of "/HOSTS2 /OUTFMT HOSTS2".
+The following list is functionally organized.
+
+NET	- Data entry, defines a network name and number.
+HOST	- Data entry, defines a network site (names, addresses, attributes)
+GATEWAY	- Data entry, same as HOST but claims to be an Internet Gateway.
+		Eventually GATEWAY will be flushed and gatewayness will
+		simply be indicated by a service/protocol name such as "IP/GW".
+
+HOSTS2	- Parse following input as HOSTS2 format.
+RFC810	- Parse following input as RFC810 format.
+OUTFMT <format>   - Specify output format, one of HOSTS2 or HOSTS3.  Once only.
+OUTFIL <filename> - Specify output file name.  Once only.
+INSERT <filename> - Insert specified file at this point.  The current input
+		format will be preserved across INSERTs.
+MERGE	 - Indicate that all following data should be "merged" in certain
+		cases where definitions conflict.  Meaning is still unclear.
+MERGEOFF - Turns off indicator for following data.
+ONLY <network> - Include only hosts with addresses on the specified network
+		(can be used more than once).  Makes a smaller table.
+	        (This feature has been IFNd out, since it disappeared
+		 from later versions of the source.   Ask KLH?)
+GWHOSTS	 - Do not report Gateway/Host duplicate addr errors
+HST2DUPS - Only allowed when /OUTFMT HOSTS2.  Specifies that if any
+	   duplicate HOSTS2 addresses are found, report and count
+	   them but do not consider them fatal. Useful when compiling
+	   Internet addresses which are the same except for the third byte;
+	   HOSTS2 cannot really represent such addresses correctly.
+	   The MIT "new Chaosnet wrapping" scheme's uses such addresses.
+ALLSERVER- Turn on the STFSRV flag for all entries in the table.  This is
+	   a kludge to allow the compiler to run in a single section for
+	   a little while longer.  Ask SRA@XX.
+
+
+-----------------------------------------------------------------
+		COMPILER ERROR MESSAGES
+
+	Most error messages are self-explanatory.  However, a basic
+notion of how the compiler works will make them easier to interpret.
+In general, the program tries to proceed as far as it can before stopping,
+in order to report as many errors as possible, and will only write out
+the resulting binary file if it thinks that none of the errors are serious.
+The definition of "serious" can depend on whether one is trying to use
+HOSTS2 or HOSTS3 format, and a few other things.
+
+	The first thing that the compiler does is read and parse ALL
+of the input into an internal format.  If there was anything wrong
+with the syntax of anything in the input files, it will be reported
+(along with the line number that the error happened on) and the
+internal tables will NOT be processed after parsing is done.
+
+	If all parsing was successful, the compiler will then print
+"Processing tables..." and will start building the output file image.
+During this processing, various checks are made both of the data (to
+verify completeness, merge or eliminate duplicates, etc) and of internal
+parameters.  Some warning messages may be printed; most of these have
+to do with duplicate definitions of host names or net addresses, and
+may or may not be considered serious errors.  In general, because processing
+large amounts of data is so time-consuming, the compiler will usually
+write out the binary anyway.
+
+	The way that duplicate definitions are handled is explained 
+to some extent by the comments prefacing the MERGE routine.
+
+| ; End of comment
+
+subttl FORMATS
+
+; Herein is the description of the compiled binary output file.  The
+; HOSTS2 and HOSTS3 binary files have almost the same format and most
+; of the following description applies to both; exceptions are noted.
+; General terms:
+;	"fileaddr" = a file address, relative to start of file.
+;	"netaddr" = a network address, in either HOSTS2 or HOSTS3 format.
+;
+; All strings (hostnames etc) are uppercase ASCIZ, word-aligned and
+; fully zero-filled in the last word.  The strings are stored in the
+; file in such a way that their locations are sorted, and only ONE
+; copy of any distinct string is stored - everything that references
+; the same string points to the same place.  Thus it is reasonable to
+; compare string pointers for = as well as < and >, which is much
+; faster than comparing the strings.
+
+;The format of the compiled output file is:
+
+HSTSID==:0	; wd 0	SIXBIT /HOSTS2/ or /HOSTS3/
+HSTFN1==:1	; wd 1	SIXBIT FN1 of source file (eg HOSTS)
+HSTVRS==:2	; wd 2	SIXBIT FN2 of source file (TNX: version #)
+HSTDIR==:3	; wd 3  SIXBIT directory name of source file (eg SYSENG)
+HSTDEV==:4	; wd 4  SIXBIT device name of source file (eg AI)
+HSTWHO==:5	; wd 5	SIXBIT login name of person who compiled this
+HSTDAT==:6	; wd 6  SIXBIT Date of compilation as YYMMDD
+HSTTIM==:7	; wd 7	SIXBIT Time of compilation as HHMMSS
+NAMPTR==:10	; wd 10 Fileaddress of NAME table.
+SITPTR==:11	; wd 11	Fileaddress of SITE table.
+NETPTR==:12	; wd 12 Fileaddress of NETWORK table.
+NTNPTR==:13	; wd 13 Fileaddress of NETNAME table.
+		;....expandable....
+  HDRLEN==:14	; length of header
+
+; NETWORK table
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (2)
+; This table contains one entry for each known network.
+; It is sorted by network number for HOSTS3, but alphabetically by name
+; for HOSTS2 (for compatibility, sigh)
+; Each entry contains:
+
+NETNUM==:0	; wd 0 network number (HOSTS2: 8-bit #) (HOSTS3: full netaddr)
+NTLNAM==:1	; wd 1 LH - fileaddr of ASCIZ name of network
+NTRTAB==:1	; wd 1 RH - fileaddr of network's ADDRESS table
+ NETLEN==:2
+
+; ADDRESS table(s)
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (HOSTS2 2, HOSTS3 3)
+; There is one of these tables for each network.  It contains entries
+; for each site attached to that network, sorted by network address.
+; These tables are used to convert a numeric address into a host name.
+; Also, the list of network addresses and services for a site is stored
+; within these tables.
+; Each entry contains:
+
+ADDADR==:0	; wd 0	Network address of this entry, in HOSTS2 or HOSTS3 fmt.
+ADLSIT==:1	; wd 1 LH - fileaddr of SITE table entry
+ADRCDR==:1	; wd 1 RH - fileaddr of next ADDRESS entry for this site
+		;	 0 = end of list
+ ADDLN2==:2	; HOSTS2 length of entry; 3rd word only used if HOSTS3
+ADLXXX==:2	; wd 2 LH - unused
+ADRSVC==:2	; wd 2 RH - fileaddr of services list for this address
+		;	0 = none, else points to SERVICE node of format:
+	SVLCNT==:0	;		<# wds>,,<fileaddr of next, or 0>
+	SVRCDR==:0
+	SVLFLG==:1	;		<flags>,,<fileaddr of svc name>
+	SVRNAM==:1
+	SVCARG==:2	;		<param1> ? <param2> ? ...
+ ADDLEN==:3
+.SCALAR ADDLNV,ADDLN1	; Holds values of ADDLEN and ADDLEN-1 to use.
+
+; SITE table
+;	wd 0	Number of entries in table.
+;	wd 1	Number of words per entry. (3)
+; This table contains entries for each network site,
+; not sorted by anything in particular. A site can have more
+; than one network address, usually on different networks.
+; This is the main, central table.
+; Each entry looks like:
+
+STLNAM==:0	; wd 0 LH - fileaddr of official host name
+STRADR==:0	; wd 0 RH - fileaddr of first ADDRESS table entry for this
+		;		site.  Successive entries are threaded
+		;		together through ADRCDR.
+STLSYS==:1	; wd 1 LH - fileaddr of system name (ITS, TIP, TENEX, etc.)
+		;		May be 0 => not known.
+STRMCH==:1	; wd 1 RH - fileaddr of machine name (PDP10, etc.)
+		;		May be 0 => not known.
+STLFLG==:2	; wd 2 LH - flags:
+STFSRV==:400000	;	4.9 1 => server site (has FTP or TELNET)
+STFGWY==:200000	;	4.8 1 => Internet Gateway site (HOSTS3 only)
+ SITLEN==:3
+
+; NAMES table:
+;	wd 0	Number of entries
+;	wd 1	Number of words per entry. (1)
+; This table is used to convert host names into network addresses.  It
+; contains entries sorted alphabetically by host name.
+
+NMLSIT==:0	; wd 0 LH - fileaddr of SITE table entry for this host.
+NMRNAM==:0	; wd 0 RH - fileaddr of host name
+		; This name is official if NMRNAM = STLNAM of NMLSIT.
+ NAMLEN==:1
+
+; NETNAME table:
+;	wd 0	Number of entries
+;	wd 1	Number of words per entry. (1)
+; This table is used to convert network names into network numbers.  It
+; contains entries sorted alphabetically by network name, exactly as
+; for the NAMES table.  Although the symbols below are different (in order
+; to make semantic distinctions), programs can depend on the fact
+; that the NETNAME table format is identical to that of the NAMES table.
+; NOTE: this table did not exist in the original HOSTS2 format, but its
+; addition doesn't break anything in HOSTS2.
+
+NNLNET==:0	; wd 0 LH - fileaddr of NETWORK table entry for this host.
+NNRNAM==:0	; wd 0 RH - fileaddr of network name
+ NTNLEN==:1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;		HOSTS3 Network Address Format           ;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	All network numbers and network addresses are stored
+;;;	internally in HOSTS3 format.  If the binary output is in
+;;;	HOSTS2 format, the addresses are converted as the last
+;;;	step before actual output begins.
+
+comment |
+HOSTS3 network address format:
+
+   4.9-4.6 - 4 bits of format type, which specify interpretation of
+		the remaining 32 bits.
+IN	0000 - Internet address (handles ARPA, RCC, LCS)
+		4.5-1.1 - 32 bits of IN address.
+UN	0001 - Unternet address.  Same format, but not part of Internet.
+		4.5-3.7 - HOSTS3-defined network number (1st 8-bit byte)
+		3.6-1.1 - address value in next 24 bits.
+			This handles CHAOS and any local nets.  The network
+			numbers are unique within the HOSTS3 table but
+			don't necessarily mean anything globally, as do
+			Internet network numbers.
+	0011 - String address.
+		4.5-3.7 - HOSTS3-defined network number (1st 8-bit byte)
+		3.6-3.1 - 0
+		2.9-1.1 - address of ASCIZ string in file/process space
+
+Note that the "network number" for all of these formats is located in
+the same place.  However, for fast deciphering of the entire range of
+possibilities, one could simply consider all of the high 12 bits as the
+network number.  Beware of the Internet class A, B, and C formats, though;
+the only truly general way to compare network numbers is to use their
+masked 36-bit values, although simpler checks are OK for specific nets.
+For this reason (among others) network numbers are represented by
+full 36-bit values with the "local address" portion zero.
+
+The 4-bit "String address" value is much more tentative than the IN or UN
+values.  Bit 4.9, the sign bit, is being reserved as usual for the possible
+advent of a truly spectacular incompatible format.
+|
+NT$NUM==:301400		; Byte pointer to network number (high 12 bits)
+NE%UNT==:040000,,0	; Escape bit indicating "Unternet" type address
+NE%STR==:100000,,0	; Escape bit indicating "string" type address
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;		HOSTS2 Network Address Format           ;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	This is the old pre-HOSTS3 format.  Only addresses for
+;;;	a few specific networks can be accepted, as the compiler
+;;;	must have built-in knowledge about each one.
+
+; The following networks are acceptable during HOSTS2 parsing:
+;	IN, ARPA, BBN-RCC, CHAOS, DSK, DIAL, LCS, SU, RU, ECL, ZOT.
+; To add more networks, add entries to the UNTTAB table.
+.see UNTTAB
+comment |
+HOSTS2 network address format:
+
+  4.9-4.1 network number.
+  3.9-1.1 network dependent.  In following descriptions, unused bits must be 0.
+
+Net - (0):	<small number> in octal
+	For HOSTS2-format INPUT only, if a net address has a zero net number
+	then the compiler assumes it is an "old-format"	ARPAnet address,
+	which looks like:
+		1.8-1.7 Host number
+		1.6-1.1 IMP number
+	However, it is instantly converted to a canonical format address
+	and thus "old-format" addresses will never appear in the tables.
+
+Net ARPA (12) and RCC (3): <imp>/<host> in decimal
+	3.7-2.1	IMP
+	1.8-1.1	Host
+
+Net DIAL (26): <string>		; Dialnet addresses are always ASCIZ strings.
+	2.9-1.1	(RH) fileaddress of ASCIZ phone number string
+
+Net CHAOS (7)	<address> in octal
+	2.7-1.1 address (2.7-1.9 subnet, 1.8-1.1 host)
+
+Net SU (44):	<subnet>#<host> in octal
+	2.7-1.1 address (2.7-1.9 subnet, 1.8-1.1 host)
+
+Net LCS (22):	<subnet>/<host> in octal
+	3.8-3.1	Subnet
+	1.8-1.1	Host
+
+Net RU (61):	<address> in octal
+	3.8-3.1 Subnet
+	1.8-1.1 Host
+
+Net DSK (777):	<address> in octal (becomes Unternet 1 in HOSTS3)
+Net ECL (776):	<address> in octal (becomes Unternet 2 in HOSTS3)
+Net ZOT (775):	<address> in octal (becomes Unternet 3 in HOSTS3)
+
+Net IN (*):	<a>.<b>.<c>.<d> in decimal
+	3.6-1.1 low 24 bits of Internet address
+
+	If the network number is not otherwise known to HOSTS2, it is
+	interpreted as the first octet of an Internet address
+	with the remaining 24 bits right justified (ie a gap
+	of 3 bits between 1st octet and next 3 octets).
+|
+NW$BYT==:331100	;Byte pointer to HOSTS2 network number
+
+comment |
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+The rest of this section talks about conversion from HOSTS2 to HOSTS3 netaddr
+formats and details the possible areas of confusion.
+
+Formats required for feeding to operating systems:
+	For ITS:
+		Both HOSTS2 and HOSTS3 addresses are accepted directly
+		for NCP/TCP.  Addresses are returned in HOSTS2 format
+		for NCP calls, HOSTS3 format for TCP calls.
+		CHAOS 16-bit addresses are extracted from the 36-bit word and
+			used in CHAOS-specific system calls.
+		No other unternets supported.
+	For 10X/20X:
+		ARPA addresses must be in HOSTS3 IN format (both NCP and TCP)
+		CHAOS probably not
+		LCS - could be, don't know.
+		DIAL needs conversion of course
+		SU is PUP net, pre-HOSTS2, so direct use unlikely.
+		RU, DSK - ?
+	Others:?
+
+HOSTS3 format network #'s that could be confused with valid HOSTS2 networks:
+	(If a HOSTS3 format # is given to a program that uses
+	a HOSTS2 BP to get the network number)
+		HOSTS3 #	HOSTS2 #
+	RCC	 3		0	(invalid)
+	Chaos	 7		0	(invalid)
+	Arpa	12 (10.)	1	(invalid)
+	LCS	22 (18.)	2	(invalid)
+	Dial	26 (22.)	2	(invalid)
+	SU	44 (36.)	4	(invalid)
+	RU	61 (49.)	6	(invalid)
+	various	3x ( 24-31)	3	RCC
+	undef	7x ( 56-63)	7	Chaos
+	undef	12x ( 80-87)	12	Arpa
+	undef	22x (144-151)	22	LCSnet
+	undef	26x (176-184)	26	Dialnet
+	-	UN  4x		44	SU
+	-	UN 21x		61	RU
+
+HOSTS2 values that could be confused with HOSTS3 networks:
+	(if a HOSTS2 value is given to program using a HOSTS3 BP)
+		HOSTS2 #	HOSTS3 #
+	RCC	3		30, 31	(24.,25. = BBN-LOCAL, RSRE-PPSN)
+	Chaos	7		70	(56. = undefined)
+	Arpa	12		120,121	(80.,81. = undefined)
+	LCS	22		220,221,222,223 (144.,145.,146.,147. = undefd)
+	Dial	26		260	(176. = undefined)
+	SU	44		UN 40	(undefined)
+	RU	61		UN 21x	(undefined)
+
+
+So the only real stinker is RCC; all other possible overlaps are
+merely with undefined values.  Since ITS won't be talking with RCC
+except via Internet (in which case HOSTS3 will be used), it can be
+ignored.  TNX sites should likewise be using IN format host numbers for
+RCC.  I have ignored "DSKnet" since I don't know if anything uses it,
+and it should be easy to stick local nets in with bit 4.6 set.
+Note, by the way, that CHAOS might be expressed as a subset of
+the LCS ("MIT") network, and consequently CHAOS addresses would be of
+Internet type.  Sort of a political decision.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+There are routines in MC:SYSENG;NETWRK > which will perform conversion
+of addresses from any format to either HOSTS2 or HOSTS3 format:
+
+	CVH2NA	- Convert network host address in A to HOSTS2 format.
+	CVH3NA	- Convert network host address in A to HOSTS3 format.
+
+|	; end of moby comment!
+
+;;;;;;;;;;;;;;;  INTERNAL TABLE FORMATS  ;;;;;;;;;;;;;;;;;
+
+; Both HOSTS2 and RFC810 format input files are parsed into the same
+; internal format prior to generating the output file.  During parsing,
+; the following internal tables are used:
+
+; NWKTAB - internal network table with entries of this form:
+
+NWKNUM==:0	; wd 0 -> network number
+NWKNAM==:1	; wd 1	LH  # sites for this net
+		;	RH -> asciz network name
+NWKPTR==:2	; wd 2	LH  fileaddr of ADDRESS table
+		;	RH  abs addr of NETWORK table entry
+NWKLEN==:3	; 3 words per network entry
+
+; HSTTAB - internal host table at with entries of this form:
+
+HSTNAM==:0	; wd 0	If = 0, entry is dead, should be ignored.  Else,
+		;	RH -> asciz host name
+		;	LH Flags.
+	HE%SEC==400000	; Sign bit = entry is secondary.
+	HE%2IN==200000	; Entry was read in HOSTS2 format (else RFC810)
+	HE%MRG==100000	; Entry was read with MERGE flag on.
+	HE%GWY==040000	; Entry was read as a GATEWAY, not a HOST
+HSTNUM==:1	; wd 1	-> 1st item of host number list.  Each item is 1 word,
+		;	NOT starting with HSTNUM:
+		;		LH -> host number
+		;		RH -> next item (or 0 if no more)
+HSTFLG==:2	; wd 2	LH Flags.  Filled out as for STLFLG.
+		;	RH -> SITE entry in file space (set late in processing)
+HSTSYS==:3	; wd 3	RH -> asciz system name (may be 0).
+HSTMCH==:4	; wd 4  RH -> asciz machine name (may be 0).
+HSTNIC==:5	; wd 5	nickname list.  Each item is 1 word,
+		;	starting with this word itself:
+		;		LH -> next item in list
+		;		RH -> asciz nickname
+		;	An all-zero item, rather than zero LH, terminates list.
+HSTSVC==:6	; wd 6	service list.  Same as ADRSVC; points to list of
+		;		service nodes.
+		;		Not used by HOSTS2.
+HSTSEC==:7	; wd 7	LH -> primary entry (if this one is secondary)
+		;	RH -> next secondary entry (0 if none or no more)
+		;		as part of list starting from primary entry.
+
+HSTLEN==:10	; # wds per internal host entry.
+
+; "Secondary" entries are created by MERGE.  A normal "primary" entry
+; will have a pointer in RH of HSTSEC if any secondaries exist for it;
+; each such secondary entry will likewise have a pointer to any further
+; secondaries.  A zero pointer terminates the chained list.
+; All secondary entries have a pointer (LH of HSTSEC) back to the primary
+; entry, for cross-checking.
+
+SUBTTL General definitions
+
+; Determine OS we're assembling for.
+
+IFNDEF ITSSW,ITSSW==IFE <.OSMIDAS-SIXBIT/ITS/>,[-1] .ELSE 0
+IFNDEF SAILSW,SAILSW==IFE <.OSMIDAS-SIXBIT/SAIL/>,[-1] .ELSE 0
+IFNDEF TNXSW,TNXSW==IFE <<.OSMIDAS-SIXBIT/TENEX/>&<.OSMIDAS-SIXBIT/TWENEX/>>,[-1] .ELSE 0
+IFNDEF ONLY,ONLY==0	;Switch controls the old ONLY feature
+;AC Defs
+
+F=0
+A=1
+B=2
+C=3
+D=4
+E=5
+G=6
+H=7
+T=10
+TT=11
+T3=12
+M=13
+N=14		; used as network table ptr in GHOST
+FA=15		; Pointer to file address 0
+;=16
+P=17
+
+IFNDEF MAXINS,MAXINS==8		; Max # of INSERT levels allowed.
+IFNDEF MAXFIL,MAXFIL==10.	; Max # of distinct files allowed.
+
+CALL=PUSHJ P,
+RET=POPJ P,
+INS$AC==270400,,	; AC field BP
+
+EQUALS VAR,.SCALAR	; More reasonable name for defining vars
+
+DEFINE TYPE6 (ADDR)
+	MOVE A,ADDR
+	CALL SIXOUT
+TERMIN
+DEFINE TYPE &STR&
+	PUSH P,[[ASCIZ STR]]
+	CALL TYPOUT
+TERMIN
+DEFINE TYPECR &STR&
+	TYPE STR
+	CALL CROUT
+TERMIN
+
+DEFINE MDBP7 AC		; Back up 7-bit BP in AC
+	ADD AC,[070000,,]	; Incr P
+	CAIG AC,		; If went to prev,
+	 SUB AC,[430000,,1]	; point to prev.
+TERMIN
+
+DEFINE	BABBLE *A,*B
+	PRINTX Á!B
+ŠTERMIN
+
+; Flags in LH of AC F (Global, not saved/restored across INSERTs)
+
+FL%R2I==1	; User requested HOSTS2 input parse (else RFC810)
+FL%R2O==2	; User requested HOSTS2 output
+FL%R3O==4	; User requested HOSTS3 output
+FL%2OU==20	; Currently outputting HOSTS2 binary format (otherwise HOSTS3)
+FL%MRG==40	; Currently merging new entries
+FL%2DH==100	; User says that HOSTS2 duplicate addrs are non-fatal
+
+; Flags in RH of AC F (local, saved and restored across INSERTs)
+
+FR%RCH==1	; Backed-up char for RCH
+FR%SIN==2	; String input for RCH
+FR%2IN==10	; Currently parsing HOSTS2 input format (otherwise RFC810)
+
+SUBTTL System-dependent assembly initializations
+
+IFN ITSSW, LOC 100	; ITS absolute assembly
+
+IFN TNXSW,[		; TENEX/TOPS-20
+	.DECSAV		; absolute assembly
+	LOC 140
+];IFN TNXSW
+
+IFN SAILSW,[		; SAIL relocatable assembly
+	HSTTAB=:400000	; This must *NOT* change!!
+];IFN SAILSW
+
+SUBTTL Error Handling
+
+DEFINE ERROR &STR&,?ARG=EVNONE
+	CALL [	PUSH P,[[ASCIZ STR]]
+		PUSH P,ARG
+		JRST ERRGO]
+TERMIN
+DEFINE FILERR &STR&,FILPT,?ARG=EVNONE
+	CALL [	PUSH P,[[ASCIZ STR]]
+		PUSH P,ARG
+		PUSH P,FILPT
+		JRST ERRGOF]
+TERMIN
+
+
+ERRGOF:	SOS -3(P)	; Decrement return addr so we re-try losing operation.
+	SOS -3(P)
+	EXCH A,-2(P)	; Get string
+	EXCH B,-1(P)	; Get error number arg
+	CALL ASZOUT	; Output the string
+	POP P,A		; Get pointer to filename
+	CALL SYSTFN	; Type it appropriately
+	JRST ERRGO5
+
+ERRGO:	EXCH A,-1(P)	; Get string
+	EXCH B,(P)	; Get error number arg
+	CALL ASZOUT	; Output the string
+ERRGO5:	CAME B,EVNONE
+	 JRST [	TYPE " - "
+		MOVE A,B
+		CALL SYSERR	; Output system error if one
+		JRST .+1]
+	CALL CROUT
+	POP P,B
+	POP P,A
+	JRST SYSHLT	; Act as if called SYSHLT directly.
+
+
+SUBTTL Start
+
+HTSIZE==:43.			; Number of K for internal host table
+NTSIZE==:3.			; Number of K for internal network table
+STSIZE==:120.			; Number of K for internal strings
+OFSIZE==:83.			; Number of K for output file image
+UPSIZE==:HTSIZE+NTSIZE+STSIZE+OFSIZE
+
+;; Actual space allocation moved to end of file so can do it on the fly.
+
+PATCH: PAT: BLOCK 40
+
+LPDL==100
+VAR PDL(LPDL+10)
+
+VAR ERRPAR		; # of parsing errors
+VAR ERRUNN		; # of hosts on unnamed network
+VAR ERRDHA		; # duplicate host addresses
+VAR ERRDGA		; # duplicate gateway-vs-host addrs
+VAR ERRDHN		; # duplicate host names
+VAR ERRDNA		; # duplicate network numbers
+VAR ERRDNN		; # duplicate network names (maybe counted twice)
+VAR ERRFTL		; # fatal internal consistency errors
+
+VAR	ENTOFF		; Saved entry offset
+
+START:	JRST START0
+	JRST START1
+	JRST START2
+	JRST START3
+
+START0:	TDZA A,A	; Put start offset into A
+START1:	 MOVEI A,1
+	JRST START3+1
+START2:	SKIPA A,[2]
+START3:	 MOVEI A,3
+	MOVEM A,ENTOFF	; Save for possible hackery
+	SETZ F,
+	TDO F,(A)[     FL%R3O,,		; 0 = Default - RFC810 in, HOSTS3 out
+		FL%R2I+FL%R2O,,		; 1 =		HOSTS2 in, HOSTS2 out
+		FL%R2I+FL%R3O,,		; 2 =		HOSTS2 in, HOSTS3 out
+		       FL%R2O,,]	; 3 =		RFC810 in, HOSTS2 out
+	MOVEI B,1
+	TLNE F,FL%R2O		; If selected by entry vector,
+	 MOVEM B,OFMTIX		; set output format index to HOSTS2
+	MOVE P,[-LPDL,,PDL-1]
+	MOVEI FA,OUTTAB		; Define file address space to start here
+	CALL SYSINI		; Perform system-dependent initializations
+
+	TLNE F,FL%R2I		; If requesting HOSTS2 input
+	 TRO F,FR%2IN		;  then claim now parsing that format.
+	TLNE F,FL%R2O		; If requesting HOSTS2 output
+	 TLO F,FL%2OU		;  then claim currently outputting that fmt.
+	MOVEI A,HDRLEN(FA)	; Set place to start writing into file
+	MOVEM A,OUTPT
+	SETZM (A)		; Ensure output file image is zeroed
+	HRLI A,(A)
+	ADDI A,1
+	BLT A,<OFSIZE*2000>-1(FA)
+	MOVE B,OFMTIX
+	MOVE A,OFMTBI(B)	; Get right ID for output file format
+	MOVEM A,HSTSID(FA)
+	MOVEI A,ADDLEN		; Set right value for ADDRESS-table length
+	TLNE F,FL%2OU	
+	 MOVEI A,ADDLN2
+	MOVEM A,ADDLNV
+	SUBI A,1
+	MOVEM A,ADDLN1
+
+IFN TNXSW,{			; Don't bother, just thrashes the pager
+				; and makes the fork's page map illegable
+	SETZM HSTTAB		; Ensure internal table space all zeroed
+	MOVE A,[HSTTAB,,HSTTAB+1]
+	BLT A,STREND-1
+};IFN TNXSW
+	MOVE A,[440700,,STRTAB]	; Set up pointer for storing strings
+	MOVEM A,TOKBP
+IFN ONLY,[SETZM ONLYLS]
+	MOVEI B,2000.		; Should be plenty!
+	CALL SYSJCL		; Get JCL if any
+	 ERROR "JCL too large for buffer!"
+	JUMPGE B,[MOVEI C,10.(B) ; Got JCL, adjust storage pointer past it.
+		IDIVI C,5
+		ADD C,A		; Get loc safely beyond end of JCL
+		HRLI C,440700
+		MOVEM C,TOKBP	; Set new storage pointer
+		JRST .+1]
+	CALL RHOSTF		; Given possible arg string, read in host file
+	SKIPE ERRPAR
+	 JRST [	TYPECR "Text file has parsing errors - not proceeding."
+		JRST SYSDON]
+
+	TYPECR "Processing tables..."
+	CALL HSTPRC	; Process table entries
+
+	CALL STATS	; Print out interesting stat stuff
+
+	; Last check... see if any errors during processing.
+	; We don't currently consider ERRDHA (dup hostaddrs) errors for
+	; HOSTS3 since that can legitimately happen for gateway entries.
+	; This will eventually be fixed when gateways are merged too.
+	SETZ A,
+	ADD A,ERRFTL	; Always die for internal consistency errors.
+	ADD A,ERRUNN	; Die for Un-Named Networks (unknown)
+	TLNN F,FL%2DH	; Unless user said they're non-fatal 
+	 ADD A,ERRDHA	;  count Duplicate Host Addrs too.
+	TLNE F,FL%2OU
+	 JRST [			; Check these errors only for HOSTS2 output
+		SKIPN FILCNT
+		 ADD A,ERRDHN	; Duplicate Host Names are bad if only 1 file!
+		JRST .+1]
+	JUMPN A,[CALL DECOUT
+		TYPECR / "serious" errors, so not writing binary file./
+		JRST SYSDON]
+
+	MOVE D,OFMTIX		; Get format index
+	MOVE A,OFMTBI(D)	; Get right ID for output file format
+	MOVEM A,HSTSID(FA)	; Set it in output - now complete!
+	TYPE "Writing "
+	CALL SIXOUT
+	TYPE " format binary file "
+	SKIPN A,OUTFNM		; Get output filename if any specified
+	 MOVE A,OFMTBF(D)	; None given, use default.
+	CALL SYSOUT		; Output host-table file (and filename to TTY)
+	TYPECR ""
+
+	JRST SYSDON	; Done, exit gracefully.
+
+
+; RHOSTF - Read in data, using JCL if a string is furnished, else default file.
+;	A/ BP to ASCIZ string.
+;	B/ # chars in string
+
+RHOSTF:	MOVEI H,HSTTAB		; Place to start host table
+	MOVEI N,NWKTAB		; Place to start network table
+
+	JUMPLE B,RHSTF2		; Skip JCL stuff if no JCL.
+	MOVEM A,RCHBP		; Set up to read from JCL string
+	TRO F,FR%SIN		; and flag to make RCH do so.
+	CALL GENTRY		; Do initial parsing
+	SKIPLE FILCNT		; Did we read in at least one file?
+	 JRST RHSTF5		; Yep, parsing all done!
+	SKIPE ERRPAR		; Maybe no input file cuz JCL parse error...
+	 ERROR "JCL parsing errors, aborting."
+
+	; No JCL or no input filename, so use default input file.
+RHSTF2:	SKIPL A,SYSIFN		; Specifying HOSTS file appropriate for sys,
+	 HRLI A,440700
+	CALL RDINS0		; go insert the file.
+
+RHSTF5:	MOVEM H,HSTTBE		; Save pointers to ends of tables
+	MOVEM N,NWKTBE
+	CAIG H,HSTTAB
+	 ERROR "No HOST/GATEWAY entries seen, aborting."
+	CAIG N,NWKTAB
+	 ERROR "No NET entries seen, aborting."
+	CAIL H,NWKTAB		; Host table overflowed into network table?
+	 ERROR "Host table alloc too small, increase HTSIZE."
+	CAIL N,STRTAB		; Net table overflowed into string table?
+	 ERROR "Net table alloc too small, increase NTSIZE."
+	HRRZ A,TOKBP
+	CAIL A,STREND
+	 ERROR "String table alloc too small, increase STSIZE."
+	RET
+
+HSTPRC:	CALL MRGNET	; Flush duplicate network entries if any
+IFN ONLY,[CALL FLSHST]	; Flush hosts on networks we don't care about
+	CALL ADDNET	; Add network entries if some are missing.
+	CALL CANON	; Canonicalize strings to save space
+	CALL MERGE	; Combine entries with same official name (or complain)
+	CALL MACH	; Figure out machine names for entries lacking them.
+	CALL FLGSET	; Figure out flags for entries (mainly "server")
+	CALL TABSET	; Set up allocations for all output tables
+	CALL BNT	; Build sorted NETWORK table
+	CALL BNTNAM	; Build sorted NETNAME table
+	CALL BAT	; Build sorted ADDRESS tables
+	CALL MT		; Build the SITE table (not sorted), finish ADDRESSes.
+	CALL MNAM	; Build NAMES table
+	CALL SRTNAM	; Sort the NAMES table
+	TLNE F,FL%2OU	; If we want to output a HOSTS2 format table,
+	 CALL H2OFIX	; Go fix up host and net addresses, etc.
+	RET
+
+; STATS - Print out various interesting stats after processing.
+
+STATS:	MOVE A,NNETS
+	CALL DECOUT
+	TYPE " nets, "
+	MOVE A,NSITS
+	CALL DECOUT
+	TYPE " sites, "
+	MOVE A,NNAMS
+	CALL DECOUT
+	TYPE " names; length "
+	MOVE A,ENDFIL
+	SUBI A,(FA)		; get # words in output file
+	CALL DECOUT
+	CALL CROUT
+	RET
+
+subttl ITS init, file reading, file writing
+
+IFN ITSSW,[
+
+SYSIFN:	[ASCIZ /HOSTS >/]	; Input filename
+
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT/A/ ? B ((SETZ))]
+TERMIN
+
+INCH==1		; Input channel
+ERRCHN==2	; Error input channel
+OCH==16		; File output channel
+TYOC==17	; TTY output channel, for error messages
+
+
+; SYSINI - Called at startup to initialize OS-dependent stuff.
+
+SYSINI:	.OPEN TYOC,[.UAO,,'TTY]
+	 .LOSE %LSFIL
+	MOVE A,[-UPSIZE,,HSTTAB/2000]	; Get core for internal tables
+	SYSCAL CORBLK,[MOVEI %CBNDW ? MOVEI %JSELF ? A ? MOVEI %JSNEW ]
+	 .LOSE %LSSYS
+	SKIPN ENTOFF			; If no special entry point,
+	 JRST [	.SUSET [.RXJNAM,,A]	; See if job's name is special
+		CAMN A,[SIXBIT /HOSTS2/]
+		 HRLI F,FL%R2I+FL%R2O	; Yes, use HOSTS2 in and out
+		CAMN A,[SIXBIT /HSTS23/]
+		 HRLI F,FL%R2I		; HOSTS2 in, HOSTS3 out.
+		CAMN A,[SIXBIT /HSTS32/]
+		 HRLI F,FL%R2O		; RFC810 in, HOSTS2 out
+		JRST .+1]	; Default is RFC810 in, HOSTS3 out.
+	.SUSET [.RXUNAME,,A]
+	MOVEM A,HSTWHO(FA)	; .SUSET arg can't do indexing
+	.RDATIM A,		; Init the auditing info at the front
+	MOVEM A,HSTTIM(FA)
+	MOVEM B,HSTDAT(FA)
+	RET
+
+; SYSJCL - Called to read in a JCL line if any.
+;	A/ address to read JCL into
+;	B/ # chars available
+; Returns .+1 if JCL too long for buffer.
+; Returns .+2:
+;	A/ BP to ASCIZ JCL string
+;	B/ # chars of JCL read  (-1 = no JCL at all)
+; Clobbers T, TT
+
+SYSJCL:	MOVEI T,(B)		; Save # chars avail
+	SETZ B,
+	.SUSET [.ROPTIO,,TT]
+	TLNN TT,%OPCMD		; Has our superior said it has a cmd?
+	 SOJA B,POPJ1		; Nope.
+	CAIG T,5*3		; Ensure reasonable JCL buffer size
+	 RET
+	IDIVI T,5		; Get # words we can use
+	ADDI T,(A)		; Get 1st non-usable addr
+	SETOM -1(T)		; Ensure last word non-zero
+	MOVEI TT,1(A)		; Zero the buffer
+	HRLI TT,(A)
+	SETZM (A)
+	BLT TT,-2(T)		; Zap!
+	HRLI A,5
+	.BREAK 12,A		; Try to read command string.
+	SETZM -1(T)		; Get rid of terminating -1
+	SKIPE -2(T)		; Next-to-last word should still be zero
+	 RET			; Ugh, didn't have room for all of it.
+	SKIPN (A)
+	 JRST POPJ1		; Nothing there.
+	HRLI A,440700		; Hurray, all's well!  Make a BP
+	MOVE TT,A		; Count # of chars in JCL.
+	ILDB T,TT
+	JUMPE T,POPJ1
+	AOJA B,.-2
+
+
+; SYSDON - Called to terminate program gracefully.
+
+SYSDON:	.LOGOUT 1,
+
+; SYSHLT - Called to halt program violently.  If user tries to continue,
+;	oblige resignedly.
+
+SYSHLT:	.VALUE
+	RET
+
+; SYSOPN - Called to open input file for reading
+
+SYSOPN:	TLNN A,-1		; Ensure string arg is a BP
+	 HRLI A,440700
+	SYSCAL SOPEN,[[.UAI,,INCH] ? A]
+	 .LOSE %LSFIL
+	SYSCAL RFNAME,[MOVEI INCH ? MOVEM B+F$DEV
+			MOVEM B+F$FN1
+			MOVEM B+F$FN2
+			MOVEM B+F$DIR]
+	 .LOSE %LSSYS
+	MOVEM B+F$DIR,HSTDIR(FA)
+	MOVEM B+F$FN1,HSTFN1(FA)
+	MOVEM B+F$FN2,HSTVRS(FA)
+	MOVEI A,B
+	CALL SYSTFN
+	SYSCAL SSTATU,[REPEAT 5,[ A ? ] MOVEM HSTDEV(FA)]
+	 .LOSE %LSSYS
+	RET
+
+
+; SYSRCH - Called to read one char from file
+; Returns
+;	A/ <char or ^C if EOF>
+
+SYSRCH:	.IOT INCH,A
+	HRRZS A			;Flush -1 in LH of EOF ^C
+	RET
+
+; SYSPSH - Called to effect a "push" of the input, prior to
+;	invoking SYSOPN again.
+
+SYSPSH:	.IOPUSH INCH,
+	RET
+
+; SYSPOP - Called to "pop" the input back, after having read enough
+;	of current file (which is closed by this routine if necessary).
+
+SYSPOP:	.IOPOP INCH,
+	RET
+
+; SYSCLS - Called when reading done, to close file or whatever is needed
+
+SYSCLS:	.CLOSE INCH,
+	RET
+
+; SYSTYO - Called to output char to terminal.
+;	A/ <char>	; Can clobber A but nothing else
+
+SYSTYO:	.IOT TYOC,A
+	RET
+
+; SYSOUT - Called to output the completed binary format file.
+
+SYSOUT:	TLNN A,-1
+	 HRLI A,440700
+	SYSCAL SOPEN,[[.UIO,,OCH] ? A]
+	 .LOSE %LSFIL
+	SYSCAL RFNAME,[MOVEI OCH ? MOVEM B+F$DEV
+			MOVEM B+F$FN1
+			MOVEM B+F$FN2
+			MOVEM B+F$DIR]
+	 .LOSE %LSSYS
+	MOVEI A,B
+	CALL SYSTFN		; Print output file name
+	MOVSI A,444400
+	HRRI A,(FA)		;get BP to data in core,
+	MOVE B,ENDFIL
+	SUBI B,(FA)		;and size of file.
+	SYSCAL SIOT,[MOVEI OCH ? A ? B]
+	 .LOSE %LSSYS
+	.CLOSE OCH,		; write and close, and we're done.
+	RET
+
+; SYSTFN - Type Filename.  Should take a system-dependent filename
+;	pointer in A and print out whatever filename it represents.
+;	If LH set, can assume it is a BP to ASCIZ string.
+;	A/ <filename ptr>
+
+SYSTFN:	TLNE A,-1	; Is it a BP?
+	 JRST BPZOUT	; Most likely, just go print it.
+	PUSH P,N	; Else assume its a ptr to filename block.
+	MOVEI N,(A)
+	MOVE A,F$DEV(N) ? CALL SIXOUT ? TYPE ":"
+	MOVE A,F$DIR(N) ? CALL SIXOUT ? TYPE ";"
+	MOVE A,F$FN1(N) ? CALL SIXOUT ? TYPE " "
+	MOVE A,F$FN2(N) ? CALL SIXOUT
+	POP P,N
+	RET
+
+; SYSERR - Takes error # in A, outputs corresponding error string.
+;	-1 means use last system call error.
+
+SYSERR:	PUSH P,B
+	MOVEI B,4	; Assume # specified,
+	CAIGE A,	; But if want "last error",
+	 MOVEI B,1	; ask system for that.
+	SYSCAL OPEN,[MOVEI ERRCHN
+		[SIXBIT/ERR/] ? B ? A ]
+	 JRST [	TYPE "Can't find error msg"
+		JRST SYSER5]
+SYSER2:	.IOT ERRCHN,A
+	CAIGE A,40
+	 JRST SYSER5
+	CALL SYSTYO
+	JRST SYSER2
+SYSER5:	.CLOSE ERRCHN,
+	POP P,B
+	RET
+
+];IFN ITSSW
+
+SUBTTL TNX init, file reading, file writing
+
+IFN TNXSW,[
+
+SYSIFN:	[ASCIZ /HOSTS.TXT/]	; Input file name
+
+.SCALAR	FL20X		; Zero if 10X, -1 if 20X.
+.SCALAR	INJPTR		; Pointer to JFN currently in use
+.VECTOR	INJPDL(MAXINS)	; Table holding JFNs for inserted files
+.VECTOR	TMPSTR(10.)	; Long enough for 39-char filename components
+
+
+SYSINI:	SETZM FL20X		; Default assumes TENEX.
+	MOVEI A,INJPDL
+	MOVEM A,INJPTR
+	MOVE A,['LOADTB]
+	SYSGT			; See if LOADTB table defined...
+	CAIN B,
+	 SETOM FL20X		; If not, must be Twenex.
+	SETO B,
+	SETZ D,
+	ODCNV
+	HLRZ E,B
+	SUBI E,1900.
+	IDIVI E,10.
+	ADDI E,'0
+	ADDI G,'0
+	DPB E,[360600,,T]
+	DPB G,[300600,,T]
+	MOVEI E,1(B)
+	IDIVI E,10.
+	ADDI E,'0
+	ADDI G,'0
+	DPB E,[220600,,T]
+	DPB G,[140600,,T]
+	HLRZ E,C
+	ADDI E,1
+	IDIVI E,10.
+	ADDI E,'0
+	ADDI G,'0
+	DPB E,[060600,,T]
+	DPB G,[000600,,T]
+	MOVEM T,HSTDAT(FA)
+	MOVEI B,(D)
+	IDIVI B,60.*60.
+	IDIVI C,60.
+	PUSH P,C
+	IDIVI B,10.
+	MOVEI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	POP P,B
+	IDIVI B,10.
+	LSH A,6
+	ADDI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	IDIVI D,10.
+	LSH A,6
+	ADDI A,'0(D)
+	LSH A,6
+	ADDI A,'0(E)
+	MOVEM A,HSTTIM(FA)
+	RET
+
+SYSJCL:	SKIPN FL20X
+	 JRST SYSJCT	; Jump to handle Tenex differently.
+	MOVEI TT,(A)	; Save buffer addr
+	HRLI TT,440700	; Make a BP out of it.
+	SETZ A,		; Check RSCAN.
+	RSCAN		; See if have anything in RSCAN buffer.
+	 SETO A,	; Huh?  Shouldn't happen, but ignore it.
+	CAIL A,(B)	; Ensure there's enough room for the input.
+	 RET		; No, take failure return.
+	SKIPG B,A	; Find # chars waiting for us
+	 JRST [	MOVE A,TT	; None, just return.
+		JRST POPJ1]
+	MOVEI T,(B)
+	PUSH P,C
+	MOVNI C,(A)	; Aha, set up cnt for SIN
+	MOVE B,TT
+	MOVEI A,.PRIIN	; Now ready for business...
+	SIN
+	POP P,C
+	SETZ A,
+	IDPB A,B	; Ensure string is ASCIZ.
+	MOVE A,TT	; Set up original BP
+	MOVEI B,(T)	; and original length
+
+	; Now must flush cruft that crufty EXEC sticks in crufty
+	; front of crufty line!!
+	IRP PRE,,[RUN,ERUN]		; Cruft to flush
+	CAILE B,<.LENGTH /PRE/>
+	 JRST [	IRPC X,,[PRE]
+			ILDB T,A
+			CAIE T,"X
+			 CAIN T,"X-40
+			  CAIA
+			   JRST .+1
+			TERMIN
+		ILDB T,A
+		CAIE T,40
+		 JRST .+1
+		SUBI B,1+<.LENGTH /PRE/>
+		JRST SYSJC2]
+	MOVE A,TT		; Restore original BP
+	TERMIN
+	; Now flush the crufty name of the program or file being run.
+SYSJC2:	ILDB T,A		; Flush spaces
+	CAIN T,40
+	 SOJA B,.-2
+	JUMPLE B,POPJ1		; Return if zero cnt (with right BP)
+	ILDB T,A
+	CAILE T,40
+	 SOJA B,.-2		; Flush until random ctl seen (space, ^M)
+	SUBI B,1
+	CAIE T,40		; If it wasn't a space,
+	 SETZ B,		; then forget about the whole thing.
+	JRST POPJ1
+
+; Get JCL if on TENEX
+
+SYSJCT:	MOVEI TT,(A)
+	HRLI TT,440700
+	MOVEI T,(B)
+	SETZ B,
+	MOVEI A,.PRIIN
+	BKJFN		; Get prev char
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Shouldn't happen, but claim no JCL if so
+	PBIN		; Get the char
+	CAIE A,40	; Space?
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Nope, no JCL.
+
+	; TENEX "JCL" desired, must read directly from .PRIIN.
+	; This code provides a very crude rubout facility.
+	PUSH P,TT	; Save original BP
+SYSJC4:	PBIN
+	CAIE A,^_	; TENEX EOL?
+	 CAIN A,^M	; or CR?
+	  JRST SYSJC5
+	CAIN A,177	; Rubout?
+	 SOJA B,[CAIGE B,
+		 AOJA B,SYSJC4
+		MOVEI A,"/
+		PBOUT
+		LDB A,TT
+		PBOUT
+		MDBP7 TT
+		JRST SYSJC4]
+	IDPB A,TT
+	CAIL B,-3(T)		; Ensure enough room for terminator chars
+	 JRST POPAJ		; Ugh!  Restore BP and take failure return.
+	AOJA B,SYSJC4
+
+SYSJC5:	MOVEI A,^M
+	IDPB A,TT
+	SETZ A,
+	IDPB A,TT		; Ensure string is ASCIZ.
+	POP P,A			; Restore BP to start of string.
+	AOJA B,POPJ1		; Include terminating CR in count.
+
+SYSDON:	HALTF
+	JRST .-1	; Never allow continuation
+SYSHLT:	HALTF
+	RET
+
+SYSOPN:	MOVE B,A		; Get pointer to file in B
+	TLNN B,-1		; If not already a BP,
+	 HRLI B,440700		; make it one.
+	MOVSI A,(GJ%SHT\GJ%OLD)
+	MOVE C,B		; Save filename ptr in case of err
+	GTJFN
+	 FILERR "Failed to GTJFN input file ",C,A
+	MOVEI A,(A)		; Flush any bits in LH
+	MOVEM A,@INJPTR		; Store JFN on the JFN PDL.
+	MOVE B,[<70000,,0>\OF%RD]
+	OPENF
+	 FILERR "Failed to OPENF input file ",@INJPTR,A
+
+	CALL SYSTFN		; Output filename to TTY
+	MOVE E,[-4,,	[100000,,HSTDEV]	; Dev name
+			[ 10000,,HSTDIR]	; Dir name
+			[  1000,,HSTFN1]	; File name
+			[    10,,HSTVRS]]	; Version #
+SYSOP3:	HRROI A,TMPSTR
+	MOVE B,@INJPTR
+	HLLZ C,(E)		; Get bits indicating field
+	JFNS
+	MOVE A,[440700,,TMPSTR]
+	CALL CVSSIX		; Get sixbit for string
+	MOVE B,(E)
+	ADDI B,(FA)
+	MOVEM A,(B)		; Store it in fileaddr space
+	AOBJN E,SYSOP3
+
+	GJINF			; Get user # in A (10X: dir #)
+	MOVE B,A
+	HRROI A,TMPSTR
+	DIRST			; Get username string
+	 ERROR "DIRST failed",EVLAST
+	MOVE A,[440700,,TMPSTR]
+	CALL CVSSIX
+	MOVEM A,HSTWHO(FA)		; Store sixbit user name
+
+IFN 0,[
+	MOVE A,['SYSVER]
+	SYSGT
+	CAIN B,
+	 .VALUE
+	MOVEM A,TMPSTR
+	MOVE A,B
+	HRLI A,1		; Get 2nd word of system name
+	GETAB
+	 .VALUE
+	MOVEM A,TMPSTR+1
+	MOVE A,[440700,,TMPSTR]
+	CALL CVSSIX
+	MOVEM A,OUT+HSTDEV		; Store sixbit machine name
+] ; IFN 0
+	RET
+
+SYSRCH:	PUSH P,B
+	MOVE A,@INJPTR
+	BIN
+	 ERJMP SYSRC2		; When EOF happens, put in ITSish EOF
+	JUMPE B,[GTSTS
+		TLNE B,(GS%EOF)	; Really an EOF?
+		 JRST SYSRC2	; Yes, must be a Tenex 'cause ERJMP didn't fire
+		SETZ B,		; Nope, return the null.
+		JRST .+1]
+	SKIPA A,B
+SYSRC2:	 MOVEI A,^C		; Put in an EOF
+	POP P,B
+	RET
+
+SYSPSH:	AOS INJPTR		; Point to next slot on JFN PDL
+	RET
+
+SYSPOP:	CALL SYSCLS		; Close current open JFN
+	SOS INJPTR		; and point back to previous slot.
+	RET
+
+SYSCLS:	MOVE A,@INJPTR
+	CLOSF
+	 JFCL			; Ignore error
+	SETZM @INJPTR
+	RET
+
+SYSTYO:	PBOUT
+	RET
+
+
+SYSOUT:	TLNN A,-1
+	 HRLI A,440700
+	MOVE B,A
+	MOVSI A,(GJ%SHT\GJ%NEW\GJ%FOU)
+	MOVE C,B		; In case of error
+	GTJFN
+	 FILERR "Failed to GTJFN output file ",C,A
+	MOVE B,[<440000,,0>\OF%WR]
+	OPENF
+	 FILERR "Failed to OPENF output file ",C,A
+	CALL SYSTFN		; Print output filename
+	MOVSI B,444400
+	HRRI B,(FA)
+	MOVEI C,(FA)
+	SUB C,ENDFIL		; Get negative size of file
+	SOUT
+	 ERJMP [ERROR "SOUT of output file failed",EVLAST]
+	CLOSF
+	 ERROR "CLOSF of output file failed",A
+	RET
+
+; SYSTFN - Type out filename
+
+SYSTFN:	TLNE A,-1		; If it's a BP
+	 JRST BPZOUT		; just type it out.
+	PUSH P,B
+	PUSH P,C		; Else it's a JFN, let system do it.
+	MOVEI B,(A)		; Print output filename
+	MOVEI A,.PRIOU
+	MOVE C,[111110,,1]
+	JFNS
+	MOVEI A,(B)
+	POP P,C
+	POP P,B
+	RET
+
+; SYSERR - Takes error # in A, outputs corresponding error string.
+;	-1 means use last system call error.
+
+SYSERR:	PUSH P,B
+	PUSH P,C
+	MOVEI B,(A)
+	MOVEI A,.PRIOU
+	HRLI B,.FHSLF
+	SETZ C,
+	ERSTR
+	 JRST [	TYPE "Undefined error"
+		JRST SYSER5]
+	 JRST [	TYPE "(ERSTR failed)"
+		JRST SYSER5]
+SYSER5:	POP P,C
+	POP P,B
+	RET
+
+];IFN TNXSW
+
+SUBTTL SAIL init, file reading, file writing
+
+IFN SAILSW,[
+SYSIFN:	[ASCIZ/HOSTS.TXT[HST,NET]/]	; Input file name
+
+ICH==0	; Initial input channel # (must be zero)
+OCH==17
+INCHAN:	ICH	; Current input channel #
+
+IBFHLN==3	; Length of each input buffer header
+IBUFH:	REPEAT MAXINS,BLOCK IBFHLN	; Input buffer headers
+
+SYSINI:	MOVEI A,<HSTTAB+UPSIZE*2000>-1	; Get core for internal tables
+	CORE2 A,			; Make us an upper (NOTE: If pgm
+	 ERROR "CORE2 failed",EVLAST	; moved to Tops-10 this needs fixing!)
+	GETPPN A,
+	 CAI			; Fastest no-op in the West!
+	HRLZM A,HSTWHO(FA)
+	DATE B,
+	IDIVI B,12.*31.
+	ADDI B,64.
+	IDIVI C,31.
+	ADDI C,1
+	ADDI D,1
+	PUSH P,C
+	IDIVI B,10.
+	MOVEI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	POP P,B
+	IDIVI B,10.
+	LSH A,6
+	ADDI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	IDIVI D,10.
+	LSH A,6
+	ADDI A,'0(D)
+	LSH A,6
+	ADDI A,'0(E)
+	MOVEM A,HSTDAT(FA)
+	MSTIME B,
+	IDIVI B,1000.
+	IDIVI B,60.*60.
+	IDIVI C,60.
+	PUSH P,C
+	IDIVI B,10.
+	MOVEI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	POP P,B
+	IDIVI B,10.
+	LSH A,6
+	ADDI A,'0(B)
+	LSH A,6
+	ADDI A,'0(C)
+	IDIVI D,10.
+	LSH A,6
+	ADDI A,'0(D)
+	LSH A,6
+	ADDI A,'0(E)
+	MOVEM A,HSTTIM(FA)
+	RET
+
+; SYSJCL - Called to read in a JCL line if any.
+;	A/ address to read JCL into
+;	B/ # chars available
+; Returns .+1 if JCL too long for buffer.
+; Returns .+2:
+;	A/ BP to ASCIZ JCL string
+;	B/ # chars of JCL read  (-1 = no JCL at all)
+; Clobbers T, TT, T3.
+
+SYSJCL:	MOVEI TT,(A)		; Save buffer addr
+	HRLI TT,440700		; Make a BP out of it.
+	SETZ T3,		; Initialize count
+	RESCAN			; Rescan command line
+SYSJC1:	INCHWL T		; Get a char
+	CAIN T,12		; Look for line feed
+	 JRST SYSJC4		; End of line, so fail
+	CAIE T,";		; Beginning of JCL?
+	 JRST SYSJC1		; No, keep scanning
+SYSJC2:	INCHWL T		; Get a char
+	SOJL B,APOPJ		; Count down and return if overflowed
+	IDPB T,TT		; Store char
+	CAIE T,12		; End of line?
+	 AOJA T3,SYSJC2		; No, count up and back for more
+SYSJC3:	HRLI A,440700		; Byte ptr to string
+	AOSA B,T3		; Character count including terminator
+SYSJC4:	SETO B,			; Return saying no JCL
+	JRST POPJ1
+
+SYSDON:	EXIT
+	JRST .-1		; Who knows?
+SYSHLT:	JRST 4,.+1
+	RET
+
+SYSOPN:	PUSH P,H		; Preserve H
+	MOVE H,A		; Save pointer to filename
+	CALL SYSPFN		; Parse filename
+	MOVEM B,HSTDEV(FA)	; Store fields
+	MOVEM C,HSTFN1(FA)
+	MOVEM D,HSTVRS(FA)
+	MOVEM E,HSTDIR(FA)
+	MOVE G,INCHAN		; Get current input channel #
+	MOVEI B,0		; .IOASC input mode
+	MOVE C,HSTDEV(FA)	; Device
+	MOVEI D,IBFHLN
+	IMULI D,(G)
+	ADDI D,IBUFH		; Point to right buffer header
+	SETZM (D)		; Ensure it's zapped.
+	MOVE A,[OPEN B]
+	DPB G,[INS$AC A]	; Deposit channel # in AC field of OPEN
+	XCT A
+	 FILERR "Failed to OPEN input file ",H,EVLAST
+
+	MOVE B,HSTFN1(FA)	; Name
+	MOVE C,HSTVRS(FA)	; Extension
+	SETZ D,
+	MOVE E,HSTDIR(FA)	; PPN
+	MOVE A,[LOOKUP B]
+	DPB G,[INS$AC A]
+	XCT A
+	 FILERR "Failed to LOOKUP input file ",H,EVLAST
+	
+	MOVE A,H
+	CALL SYSTFN		; Type out filename
+	POP P,H			; Restore H
+	RET
+
+
+SYSRCH:
+SYSRC0:	SOSG IBUFH+2
+SYSRC1:	 IN
+	  CAIA			;Buffer not empty or IN succeeded
+	   SKIPA A,[^C]		;IN failed, assume EOF
+SYSRC2:	    ILDB A,IBUFH+1
+	JUMPE A,SYSRCH		;Flush nulls (from E, etc.)
+	RET
+
+SYSPSH:	AOS A,INCHAN
+	DPB A,[INS$AC SYSRC1]
+	MOVEI A,IBFHLN		; Point to next buff header
+	ADDM A,SYSRC0
+	ADDM A,SYSRC2
+	RET
+
+SYSPOP:	CALL SYSCLS		; Close currently open channel
+	SOS A,INCHAN
+	DPB A,[INS$AC SYSRC1]
+	MOVNI A,IBFHLN		; Point to prev buff header
+	ADDM A,SYSRC0
+	ADDM A,SYSRC2
+	RET
+
+SYSCLS:	MOVE B,INCHAN
+	MOVE A,[CLOSE]
+	DPB B,[INS$AC A]
+	XCT A
+	MOVE A,[RELEASE]
+	DPB B,[INS$AC A]
+	XCT A
+	RET
+
+
+SYSTYO:	OUTCHR A
+	RET
+
+SYSOUT:	PUSH P,H		; Preserve H
+	MOVE H,A		; Save filename pointer
+	CALL SYSPFN		; Parse filename
+	PUSH P,C		; Save fields for ENTER
+	PUSH P,D
+	PUSH P,E
+	MOVE C,B		; Device to use (usually DSK)
+	MOVEI B,17		; .IODUMP mode (one moby record!)
+	SETZ D,			; No buffer headers needed.
+	OPEN OCH,B
+	 FILERR "Failed to OPEN output file ",H,EVLAST
+	POP P,E			; Put fields in place for ENTER
+	POP P,C			; (note D is still zero)
+	POP P,B
+	ENTER OCH,B
+	 FILERR "Failed to ENTER output file ",H,EVLAST
+	MOVE A,H
+	CALL SYSTFN		; Type out filename
+	MOVEI B,(FA)
+	SUB B,ENDFIL		; Get neg of file size
+	HRLZ A,B
+	HRRI A,-1(FA)		; Make IOWD -n, loc-1
+	SETZ B,			; End of command list
+	OUT OCH,A
+	 CAIA
+	  ERROR "Output to output file failed",EVLAST
+	CLOSE OCH,		; and close
+	POP P,H			; Restore H
+	RET
+
+; SYSPFN - Parses a WAITS filename pointed to by A.  Returns:
+;	B: device
+;	C: name
+;	D: extension
+;	E: PPN
+; Clobbers A, T, TT, T3.
+SYSPFN:	MOVSI B,'DSK		; Set default fields
+	SETZB D,E
+	CALL SYSPFF		; Get a field
+	CAIE T,":		; Is it end of device field?
+	 JRST SYSPF1		; No
+	HLLZ B,TT		; Yes, set device
+	CALL SYSPFF		; Get name
+SYSPF1:	MOVE C,TT		; Set name
+	CAIE T,".		; Do we have an extension?
+	 JRST SYSPF2		; No
+	CALL SYSPFF		; Yes, get it
+	HLLZ D,TT
+SYSPF2:	CAIE T,"[		; Start of PPN?
+	 JRST SYSPF3		; No
+	CALL SYSPFF		; Get project
+	TLNN TT,77		; Right-aligned in halfword?
+	 LSH TT,-6		; No, fix it
+	TLNN TT,77		; Right-aligned now?
+	 LSH TT,-6		; No, fix it some more
+	TLNN TT,77		; Right-aligned finally?
+	 JRST SYSPF4		; No, [,FOO] is illegal
+	HLLZ E,TT		; Set project
+	CAIE T,",		; This better be here
+	 JRST SYSPF4
+	CALL SYSPFF		; Get programmer
+	TLNN TT,77		; Right-align as above
+	 LSH TT,-6
+	TLNN TT,77
+	 LSH TT,-6
+	TLNN TT,77
+	 JRST SYSPF4		; [FOO,] is illegal also
+	HLR E,TT		; Set programmer
+	CAIN T,"]		; We expect this to end filename
+	 RET			; Normal return
+SYSPF3:	JUMPE T,APOPJ		; End of string is OK here
+SYSPF4:	ERROR "Bad format for filename"
+	RET
+	
+;Subroutine to parse a sixbit string into TT.
+SYSPFF:	SETZ TT,		; Clear output word
+	MOVE T3,[440600,,TT]	; Byte ptr to start of TT
+SYSFF1:	ILDB T,A		; Get a char
+	JUMPE T,APOPJ		; Return if any of these delimiters
+	CAIE T,":
+	 CAIN T,".
+	  RET
+	CAIE T,"[
+	 CAIN T,",
+	  RET
+	CAIN T,"]
+	  RET
+	CAIL T,140
+	 SUBI T,40		; Uppercase force
+	SUBI T,40		; Convert to sixbit
+	TLNE T3,770000		; Skip if at end of word - ignore char
+	 IDPB T,T3		; Deposit in TT
+	JRST SYSFF1		; Back for more
+
+; Type out WAITS-style filename pointed to by A.
+; Clobbers A
+SYSTFN:	JRST ASZOUT		; Print the string
+
+; SYSERR - Takes error # in A, outputs corresponding error string.
+;	-1 means use last system call error.
+
+SYSERR:			; Dunno if anything works here.
+	RET
+
+];IFN SAILSW
+
+; MRGNET - Flush duplicate network entries if any exist.
+
+MRGNET:	MOVEI N,NWKTAB		; Get addr of network entry table
+	MOVE E,NWKTBE		; Use E to store current val of NWKTBE
+	CAIA
+MRGN05:	 ADDI N,NWKLEN
+	CAIL N,(E)
+	 JRST [	MOVEM E,NWKTBE	; All done!  Restore new end-of-table val
+		RET]
+	MOVE C,NWKNUM(N)	; Set up net number to hunt for
+	MOVE B,NWKNAM(N)	; and pointer to net name.
+	MOVEI D,(N)
+MRGN10:	ADDI D,NWKLEN		; Point to next entry
+MRGN11:	CAIL D,(E)		; Ensure still in table
+	 JRST MRGN05		; Nope, back to top loop.
+	CAME C,NWKNUM(D)	; Same network #?
+	 JRST MRGN10
+
+	; Two entries with same number, check to see if they have same
+	; name as well.  Must do this via string compare since strings
+	; havent been canonicalized yet.
+	MOVE A,NWKNAM(D)
+	CALL STREQ
+	 JRST MRGN10		; Not equal, will lose later on.
+
+	; Networks are identically defined.  Flush the second one.
+	CAIL D,-NWKLEN(E)	; If 2nd entry is last one in table,
+	 JRST MRGN30		; then don't need to move anything.
+	MOVEI A,(D)
+	HRLI A,NWKLEN(D)
+	BLT A,-NWKLEN-1(E)
+MRGN30:	SUBI E,NWKLEN		; Reduce length of table!
+	SOS NNETS		; and # of nets
+	SOS NNTNS		; and # of net names
+
+	TYPE /Flushing duplicate net def "/
+	MOVE A,NWKNAM(N)
+	CALL ASZOUT
+	TYPE /" = /
+	MOVE A,NWKNUM(N)
+	CALL HADOUT
+	CALL CROUT
+	JRST MRGN11
+
+; STREQ - Utility for MRGNET.
+;	A, B addrs of ASCIZ strings.
+; Skips if strings equal.  Clobbers T, TT, T3
+
+STREQ:	MOVEI T,(A)
+	MOVEI TT,(B)
+STREQ1:	MOVE T3,(T)
+	CAME T3,(TT)
+	 JRST APOPJ
+	TRNN T3,377
+	 JRST POPJ1
+	ADDI T,1
+	AOJA TT,STREQ1
+
+VAR NWKOTE	; Old value of NWKTBE, prior to ADDNET invocation
+
+; ADDNET - Add network entries if some appear to be missing.
+;	When this routine finishes, the NWKTAB table entries will be:
+;		wd 0 network address (internet)
+;		wd 1 <# sites on this net>,,<addr of ASCIZ net name>
+
+ADDNET:	MOVE A,NWKTBE
+	MOVEM A,NWKOTE		; Save old table end value
+	MOVEI B,HSTTAB		; Point to start of host entries
+ADDN10:	SKIPE HSTNAM(B)		; Ignore dead entries
+	 SKIPN E,HSTNUM(B)	; Get ptr to host number list
+	  JRST ADDN80		; Hmm, no host number???  Continue, barf later.
+ADDN20:	HLRZ C,(E)		; Get addr of host number
+	MOVE C,(C)		; Get host number
+	MOVE D,C		; Save in D
+	CALL NETCHK		; See if network exists.
+	 JRST ADDN60		; Yup, skip hair.
+
+	; Host number exists with a network we don't know about.
+	; Create fake network entry to handle it.
+	MOVE A,NWKTBE		; Get ptr to 1st free entry
+	MOVEM C,NWKNUM(A)	; Store new network number
+	MOVEI G,[ASCIZ /UNKNOWN-NET/]
+	HRRZM G,NWKNAM(A)	; Store fake network name
+	MOVEI G,NWKLEN(A)	; Update ptr
+	CAILE G,STRTAB		; Make sure haven't exceeded bounds
+	 JRST [	TYPECR "Net table space exceeded, increase NTSIZE."
+		JRST SYSDON]
+	MOVEM G,NWKTBE		; Update size of network table.
+	AOS NNETS
+
+ADDN60:	MOVSI G,1		; Found network (real or faked), now
+	ADDM G,NWKNAM(A)	; increment count of sites for this net.
+	MOVEI A,(A)
+	CAMGE A,NWKOTE		; See if net is legit, for barf purposes.
+	 JRST ADDN70		; Yup, not a faked entry.
+
+	AOS ERRUNN		; Sigh, loser needs to define this net.
+	PUSH P,A
+	TYPE "No network entry for "
+	MOVE A,C
+	CALL HADOUT		; Type network number
+	TYPE " = "
+	POP P,A
+	MOVE A,NWKNAM(A)	; Type faked network name
+	CALL ASZOUT
+	TYPE ", site "
+	MOVE A,D		; Retrieve and
+	CALL HADOUT		; Show losing host number
+	TYPE " = "
+	HRRZ A,HSTNAM(B)	; Show losing host name
+	CALL ASZOUT
+	CALL CROUT
+		
+ADDN70:	HRRZ E,(E)		; Get ptr to next host number for site
+	JUMPN E,ADDN20		; If exists, back to check it.
+ADDN80:	ADDI B,HSTLEN
+	CAMGE B,HSTTBE		; More entries?
+	 JRST ADDN10		; Still some, hack em.
+	RET
+
+
+; NETFND - Find address of NET entry in NWKTAB table, given
+; an Internet address in C.  Clobbers C, returns addr in A.
+
+NETFND:	MOVEM C,NETFSV'	; Save original address for error report
+	CALL NETCHK
+	 RET		; Won, return straightaway
+
+	AOS ERRFTL	; Fatal error, should have caught earlier.
+	TYPE "No network name for address "
+	MOVE A,NETFSV
+	CALL HADOUT	; Output host address
+	CALL CROUT
+	MOVEI A,NWKTAB	; We're losing, but keep going; pretend to win.
+	RET
+
+; NETCHK - subroutine to find address of internal network entry,
+;	given host number in C.
+; Returns .+1: won,
+;	A/ addr of network table entry
+;	C/ network number
+; Returns .+2: failed,
+;	A/ addr of 1st unused network table entry
+;	C/ network number searched for
+
+NETCHK:	CALL NETMSK		; Mask off network number in C
+	MOVN A,NNETS
+	HRLZ A,A
+	HRRI A,NWKTAB	; Now have -<# entries>,,<addr of 1st entry>
+NETFN2:	CAMN C,NWKNUM(A)
+	 RET
+	ADDI A,NWKLEN-1
+	AOBJN A,NETFN2
+	AOS (P)		; Skip return is lossage.
+	RET
+
+; NETMSK - Mask off network number from address.
+;	C/ <host address>
+; Returns
+;	C/ <net number>
+
+NETMSK:	;; This kludge is to save us some memory by reducing the size of
+	;; the network table.  (By making the network table almost
+	;; useless.)  It does mean that NETWRK will have to be fixed to
+	;; understand that we no longer bother to know about class B and C
+	;; networks, and that all its .INSRTers will have to be reassembled.
+	TDZ C,[<1_24.>-1]
+	RET
+
+IFN 0,[
+NETMSK:	TLNN C,(17_32.)	; Check high 4 bits of address word, for escapes.
+			; Resulting TDZ wins for all currently defined escape
+			; bits, but this may change if new escapes are created.
+	TLNN C,(1_31.)	; Internet address - check high bit for class
+	 JRST [	TDZ C,[77,,777777]	; 0, Class A network; zap low 3 bytes
+		RET]
+	TLNN C,(1_30.)	; 1, Check next
+	 TRZA C,177777	; 10, Class B network
+	  TRZ C,377	; 110, Class C network
+	RET
+] ;IFN 0
+
+HADOUT:	TRNE F,FR%2IN
+	 JRST OCTOUT	; If using HOSTS2 input, report number as octal.
+	PUSH P,A
+	TLNE A,(17_32.)	; Internet address?
+	 JRST [	LDB A,[.BP <17_32.>, (P)]	; No, so exhibit high 4 bits.
+		CALL OCTOUT
+		TYPE ":"
+		JRST .+1]
+REPEAT 4,[
+	IFN .RPCNT, TYPE "."
+	LDB A,[.BP <377_<8.*<3-.RPCNT>>>, (P)]
+	CALL DECOUT
+]
+	POP P,A
+	RET
+
+SUBTTL String area construction
+
+; CANON - store ALL strings into the file, storing each
+; distinct string only once.  We first build the internal sort-string
+; table with ADDSTR, and then store unique strings into the file
+; in their sorted order.  We replace each string pointer
+; with a pointer (in our address space) to the string stored
+; into the file (the "interned" string).
+; Secondary entries are not skipped, because other routines
+; will want to do string compares on their data.
+; Sets OUTPT (1st free addr following interned-string and misc stuff)
+
+CANON:	SETZM NNAMS	; Clear # official names seen
+
+	; First handle predefined strings
+	MOVE D,[-NPDSTR,,PDSTRS]
+CAN01:	MOVEI A,(D)
+	CALL ADDSTR		; Put string into table
+	AOBJN D,CAN01
+
+	; Loop over all site entries
+	MOVEI H,HSTTAB		; H points at data of next host to hack.
+CANLP:	SKIPN HSTNAM(H)		; Ignore dead entries
+	 JRST CAN39		; (get next entry)
+	MOVEI A,HSTSYS(H)	; Store the system name if necessary.
+	CALL ADDSTR
+	MOVEI A,HSTMCH(H)	; Do the same thing with the machine name.
+	CALL ADDSTR
+
+	; Check for "string" type host addrs
+	HRRZ E,HSTNUM(H)	; ptr to host number list
+CNTL20:	HLRZ A,(E)		; ptr to first host number
+	MOVE C,(A)		; Get host addr
+	TLNN C,(NE%STR)		; "String" bit set?
+	 JRST CNTL25		; Nope, needn't worry
+	CALL ADDSTR		; Intern the string (pointed to thru A)
+CNTL25:	HRRZ E,(E)		; Not string-type, try next
+	JUMPN E,CNTL20		; Loop back for more addresses
+
+	; Now handle the official name
+	MOVEI A,HSTNAM(H)
+	CALL ADDSTR		; Stash it away
+	AOS NNAMS		; Count number of official names
+
+	; Now handle nicknames
+	MOVEI E,HSTNIC(H)
+	JRST CNTLP2
+CNTLP1:	MOVEI A,(E)		; Point to word with ASCIZ addr in RH
+	CALL ADDSTR
+	AOS NNAMS		; Count number of nicknames.
+	HLRZ E,D		; Get CDR
+CNTLP2:	SKIPE D,(E)		; CDR
+	 JRST CNTLP1
+
+	; Hack service names similarly
+	TLNN F,FL%2OU		; If output is HOSTS2, ignore service names.
+	 SKIPN E,HSTSVC(H)
+	  JRST CNTLP4
+CNTLP3:	HLRZ D,SVLCNT(E)	; Check node size
+	CAIGE D,1		; Must have at least the name
+	 ERROR "Internal error - bad service list"
+	MOVEI A,SVRNAM(E)	; Get ptr to service name
+	CALL ADDSTR
+	SKIPN E,(E)
+	 JRST CNTLP4
+	TRNE E,-1
+	 JRST CNTLP3
+CNTLP4:
+
+CAN39:	ADDI H,HSTLEN
+	CAMGE H,HSTTBE
+	 JRST CANLP
+
+	; Sites all done, now handle network names.
+	MOVEI N,NWKTAB		; Point to internal network table
+CAN40:	SKIPN C,1(N)
+	 JRST CAN50		; Jump out when none left.
+	MOVEI A,1(N)
+	CALL ADDSTR
+	ADDI N,NWKLEN
+	JRST CAN40
+
+	; All strings now entered into the internal sort-string table
+	; which ISTRP points to.  Run through table, storing each
+	; unique string into output file space ("intern" it) and
+	; update all pointers which point to that string.
+CAN50:	MOVE TT,ISTRP
+	MOVEI T,(TT)
+	SUBI T,STREND
+	HRLI TT,(T)		; Get AOBJN to ISTR table
+	SETZ D,			; Clear "prev entry" value
+CAN52:	MOVE E,(TT)		; Get entry
+	CAIN D,(E)		; Same string as previous entry?
+	 JRST CAN55		; Yes, already set up for this!
+
+	; Copy string
+	MOVEI B,(E)		; Get new string addr
+	MOVE C,OUTPT		; Get current ptr
+CAN53:	MOVE A,(B)
+	MOVEM A,(C)
+	ADDI C,1		; Always bump output ptr
+	TRNE A,376		; Copy until hit end
+	 AOJA B,CAN53
+	CAIL C,OUTEND
+	 ERROR "Output file alloc too small, increase OFSIZE"
+	EXCH C,OUTPT		; Update output ptr, and get back original val
+
+CAN55:	HLRZ A,E		; Find addr of ptr to update
+	HRRM C,(A)		; Store address of copied string!
+	MOVEI D,(E)		; Save RH of entry as "prev entry".
+	AOBJN TT,CAN52		; Loop over all ISTR entries
+
+	; Whew, all done!  OUTPT points to 1st free fileaddr.
+	RET
+
+; ADDSTR - Adds ASCIZ string to internal sorted table of strings.
+;	The ISTR table grows upwards from STREND (note strings themselves
+;	are stored downward from STRTAB during parsing).
+;	Note this table is internal; it is not part of the output file.
+;	Entries in the table have this form:
+;		<addr of ARH>,,<addr of ASCIZ>	; RH is RH(c(addr))
+;	Identical strings will have identical RHs but not LHs.
+; Takes
+;	A/ <address of ARH>	; ARH is a word with RH pointing to ASCIZ
+; Clobbers A, T, TT.
+
+ADDSTR:	HRLI A,(A)		; Copy RH into LH
+	JUMPE A,APOPJ		; Ensure valid address
+	SKIPE T,(A)		; Get the word
+	 TRNN T,-1		; Ensure valid ASCIZ address
+	  RET			; Null addr or no string, ignore.
+	HRRI A,(T)		; Now have new table entry word.
+	SKIPN TT,ISTRP		; Get current ptr to start of table
+	 JRST [	MOVEI T,STREND-1
+		MOVEM T,ISTRP	; Initialize pointer and table.
+		MOVEM A,(T)
+		RET]
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	PUSH P,A
+
+	; TT/ Base addr of start of table entries
+	; T3/ # of table entries to check, starting with TT
+	; A/ addr of new string
+	; T/ addr of table string
+IFN 0,[
+	SKIPE FASTER'
+	 JRST ASTR20		; Try binary search
+	MOVEI T,(TT)
+	SUBI T,STREND		; Find negative # of entries
+	HRLI TT,(T)		; Now have AOBJN to internal sorted table
+ASTR10:	MOVE A,(P)		; Set up A -> new string
+	HRRZ T,(TT)		; Set up T -> table string
+ASTR15:
+	SKIPL B,(A)		; Get word of new string
+	 JRST [	SKIPL C,(T)
+		 JRST ASTR17	; Both positive, do compare.
+		JRST ASTR50]	; Table str is greater, found place to insert
+	SKIPL C,(T)		; Get word of table string
+	 JRST ASTR19		; New string greater, keep looking.
+
+	; Sign bit same in both words, must do a compare.
+ASTR17:	CAMLE B,C
+	 JRST ASTR19		; New str greater than table, keep looking
+	CAMGE B,C
+	 JRST ASTR50		; New str less, found place to insert.
+	TRNN B,377		; Words equal!  See if last word
+	 JRST [	MOVE A,(TT)	; Strings completely equal.  Copy RH of
+		HRRM A,(P)	; existing string (to canonize),
+		JRST ASTR50]	; and go store entry.
+	ADDI A,1
+	AOJA T,ASTR15		; Go test next word.
+ASTR19:	AOBJN TT,ASTR10		; Try next entry
+	JRST ASTR50
+
+] ;IFN 0
+	; Fast binary-search insertion
+	; D has <# entries possible>,,<base addr of these entries>
+	; T3/ <# possibles>/2
+	; TT/ <current probe point> = D + T3
+	
+ASTR20:	MOVEI T3,STREND
+	SUBI T3,(TT)		; Get # of entries upwards in core from here
+	MOVEI D,(TT)
+	HRLI D,(T3)		; LH = # entries including base addr
+	LSH T3,-1
+	JRST ASTR33
+
+	; Move probe point higher in core.  Define new area
+	; between TT+1 and D+<# entries>-1 inclusive.
+	; D/ <# entries>,,<Base addr>
+	; TT/ Current probe point
+	; T3/ <# entries>/2
+ASTR31:	HRRI D,1(TT)		; Make current+1 be new base
+	HLRZ T,D		; Get old # entries
+	SUBI T,1(T3)		; Find # entries left
+	CAIG T,			; If no more entries,
+	 AOJA TT,ASTR50		; then must insert after current probe.
+	HRLI D,(T)		; Save new # entries
+	MOVEI T3,(T)
+	LSH T3,-1		; Find offset to new probe point
+	AOJA TT,ASTR33
+IFN 0,[
+	ROT T3,-1
+	JUMPG T3,ASTR33		; Straight to test if no rem and nonzero.
+	TRNN T3,-1		; If # entries was 0 or 1,
+	 AOJA TT,ASTR50		; we're done.
+	TLZ T3,(SETZ)		; If there was a remainder,
+	AOJA T3,ASTR33		; preserve it in count.
+]
+	; Move probe point lower in core.  Set up new area from
+	; D to D+<# entries>/2
+ASTR32:	JUMPE T3,ASTR50		; If zero, we just tested last one.
+	HRLI D,(T3)		; Set new # entries possible
+	MOVEI TT,(D)		; Get back base addr of previous probe
+	LSH T3,-1		; and make a smaller probe distance.
+
+ASTR33:	ADDI TT,(T3)		; Point to new probe point
+
+	; Compare strings at sample point
+	MOVE A,(P)		; Set up A -> new string
+	HRRZ T,(TT)		; Set up T -> table string
+ASTR35:	SKIPL B,(A)		; Get word of new string
+	 JRST [	SKIPL C,(T)
+		 JRST ASTR37	; Both positive, do compare.
+		JRST ASTR32]	; Table string is greater, hunt lower.
+	SKIPL C,(T)		; Get word of table string
+	 JRST ASTR31		; New string greater, hunt higher.
+
+	; Sign bit same in both words, must do a compare.
+ASTR37:	CAMLE B,C
+	 JRST ASTR31		; New str greater than table, go higher.
+	CAMGE B,C
+	 JRST ASTR32		; New str less, must hunt lower now!
+	TRNN B,377		; Words equal!  See if last word
+	 JRST [	MOVE A,(TT)	; Strings completely equal.  Copy RH of
+		HRRM A,(P)	; existing string (to canonize),
+		JRST ASTR50]	; and go store entry.
+	ADDI A,1
+	AOJA T,ASTR35		; Go test next word.
+
+	; TT has address of entry to insert IN FRONT of.
+	; All previous entries must be bumped up, and new entry put in
+	; (TT)-1. Table grows upwards in order to use BLT for bumping.
+ASTR50:	SOS B,ISTRP		; Get new start of table
+	HRRZ C,TOKBP		; Check to avoid collision with strings
+	CAIG B,1(C)		; Check overlap!
+	 ERROR "String table alloc too small, increase STSIZE"
+	CAIL B,-1(TT)		; Make sure something to move
+	 JRST ASTR52		; We're at top, just store entry!
+	HRLI B,1(B)		; Copy from old start of table
+	BLT B,-2(TT)		; Bump up!
+ASTR52:	POP P,-1(TT)		; Store the new entry!
+
+	POP P,D
+	POP P,C
+	POP P,B
+	RET
+
+; TABSET - Allocates room for all output tables, and initializes
+;	various pointers needed for building then.
+;	Converts NWKTAB entry format as side effect, while allocating
+;	the ADDRESS tables.
+
+TABSET:	MOVE G,OUTPT		; Get pointer to 1st free wd in file area
+
+	; Count misc stuff (currently just service nodes)
+	TLNE F,FL%2OU		; If output is HOSTS2, ignore service names.
+	 JRST TBST10
+	MOVEI H,HSTTAB
+	CAIA
+TBST02:	 ADDI H,HSTLEN
+	CAML H,HSTTBE
+	 JRST TBST10
+	SKIPE HSTNAM(H)		; Ignore dead entries
+	 SKIPN E,HSTSVC(H)
+	  JRST TBST02
+TBST03:	HLRZ D,SVLCNT(E)	; Check node size
+	CAIGE D,1		; Must have at least the name
+	 ERROR "Internal error - bad service list"
+	ADDI G,1(D)		; Account for service node length
+	SKIPE E,(E)
+	 TRNN E,-1
+	  JRST TBST02		; Get next host
+	JRST TBST03		; Get next service node
+
+	; Now convert NWKTAB table format.
+TBST10:	MOVEM G,ENDHSN		; Set new ptr to end of misc area!
+	CAIL G,OUTEND
+	 ERROR "Output file alloc too small, increase OFSIZE"
+	MOVN B,NNETS
+	HRLZ B,B
+	HRRI B,NWKTAB
+TABST2:	HLRZ C,NWKNAM(B)	; Pluck out # of sites for this net
+	JUMPE C,TABST3		; If no sites, just leave LH zero
+	MOVE A,G		; Has some sites, so find rel ptr to
+	SUBI A,(FA)		; its future ADDRESS block, and
+	HRLZM A,NWKPTR(B)	; save that value.
+	SETZM (G)		; Clear # entries (BAT will set up)
+	MOVE A,ADDLNV
+	MOVEM A,1(G)		; Set # wds/entry
+	ADDI G,2
+	CAIL G,OUTEND
+	 ERROR "Output file alloc too small, increase OFSIZE"
+	IMULI C,(A)		; Multiply # entries by # wds/entry
+	ADD G,C			; Bump up to next table
+TABST3:	ADDI B,NWKLEN-1
+	AOBJN B,TABST2
+
+	; NWKTAB table entries are now:
+	;	wd 0 network address (internet)
+	;	wd 1 <rel ptr to ADDRESS blk>,,<addr of ASCIZ net name>
+
+	MOVE A,NNETS		; Must set # network names = to # networks.
+	MOVEM A,NNTNS
+IRP TBL,,[NET,NTN,SIT,NAM]	; Set up 4 tables in that order.
+	MOVEM G,TBL!P		; Table starts here
+	MOVEI A,(G)
+	SUBI A,(FA)		; Find fileaddr for table
+	MOVEM A,TBL!PTR(FA)	; Store it in file header
+	MOVE M,N!TBL!S
+	MOVEM M,(G)		; Set number of entries in table
+	MOVEI A,TBL!LEN
+	MOVEM A,1(G)		; Set number of words per entry
+	IMUL M,A		; Compute total length
+	ADDI G,2(M)		; And thus get the position of next table
+	CAIL G,OUTEND
+	 ERROR "Output file alloc too small, increase OFSIZE"
+TERMIN
+
+	MOVEM G,ENDFIL		; No more tables, say this is end.
+	MOVE A,NAMP
+	ADDI A,2		; Allow for 2 table header words
+	MOVEM A,NAMEP		; Set pointer for storing into NAMES table.
+	RET
+
+;; Dump out literals accumulated so far, this program uses so many
+;; that MIDAS barfs assembling it....
+..LIT1:	CONSTANTS
+
+; MERGE - Combine entries that refer to same "site", resolving conflicts.
+;	Currently this is determined by checking official name - if same,
+;	entries are combined.  This does make it harder to catch some
+;	kinds of errors.
+
+MERGE:	MOVEI H,HSTTAB		; Start of table
+MRG01:	SKIPG A,HSTNAM(H)	; If dead or already marked secondary,
+	 JRST MRG80		; Needn't recheck!
+
+	MOVEI G,(H)		; Search rest of entry table for a match.
+MRG10:	HRRZ A,HSTNAM(H)
+	JRST MRG25
+MRG20:	MOVE B,HSTNAM(G)	; Get whole word
+	CAIN A,(B)		; But only compare RH
+	 JRST MRG30		; Equal, found a match!
+MRG25:	ADDI G,HSTLEN
+	CAMGE G,HSTTBE
+	 JRST MRG20
+	JRST MRG80		; Search all done.
+
+	; Found a matching entry (official names are identical).
+	; Must check for equality of system/mach
+	; and then merge address lists.
+	; If system/mach are equal and 2nd isn't merging, combine them.
+	;	If merging, depends on address.
+	; (Yes this seems backwards, but...)
+	; If system/mach are NOT equal, then check address overlap.
+	;	If share an address, link them up.
+	;		If merging, combine nicknames too.
+	
+MRG30:	SETZ C,			; Clear flag
+	MOVE B,HSTSYS(H)
+	CAME B,HSTSYS(G)
+	 JRST MRG32		; Error, system mismatch
+	MOVE B,HSTMCH(H)
+	CAME B,HSTMCH(G)
+	 AOJA C,MRG32		; Error, machine mismatch
+
+	; OS/mach both match.  If not merging, verify no address overlap.
+	CALL MRGHST
+	 JRST MRG48		; No overlap, just link together.
+	MOVE A,HSTNAM(G)	; Address overlap!  If not merging, complain.
+	TLNE A,HE%MRG
+	 JRST MRG40		; Merging, go do it.
+	; Here print warning then merge them together.
+	AOS ERRDHN
+	TYPE "Warning: Duplicate host def for "
+	MOVE A,HSTNAM(H)
+	CALL ASZOUT
+	CALL CROUT
+	JRST MRG40		; Go merge the entries.
+
+	; OS or MACH don't match, see if any addresses do.
+MRG32:	MOVE A,HSTNAM(G)	; But only allow if merging allowed.
+	TLNN A,HE%MRG
+	 JRST MRG50		; Not merging so must complain since OS/m diff
+	CALL MRGHST		; Can merge, check out dup addrs
+	 JRST MRG50		; None, so complain.
+
+	; Name and addr both same, merge.
+	; OK, these two entries are probably referring to the same site, and
+	; we assume site has multiple addresses.
+	; Check to see whether there is any address overlap.
+	; If no overlap, entries are linked together (1st becomes primary)
+	; If partial overlap, also linked together (with hair).
+	; If complete overlap, action depends on whether HE%MRG was
+	;	specified for either entry.
+	;	If neither, an info message is printed and second one flushed.
+	;	If one, that one is flushed quietly.
+	;	If both, the second one is flushed quietly.
+
+	; If secondary has HE%MRG set,
+	; then try to merge address lists by flushing duplicates from
+	; the secondary list.
+	MOVE A,HSTNAM(G)
+	TLNN A,HE%MRG
+	 JRST MRG48		; Naw, just link them together (barf later)
+MRG40:	CALL MRGHST
+	 JRST MRG45		; No overlap, done
+	HRRM E,(T)		; Match! Flush this entry, by pointing prev to
+				; the next one after this.
+	JRST MRG40		; Then scan again.
+MRG45:	SKIPE HSTNUM(G)		; If all addrs were removed for 2nd entry
+	 JRST MRG48
+	SETZM HSTNAM(G)		; Then flush this entry completely, mark dead.
+	JRST MRG49
+
+	; Assume entries represent multi-address site.
+	; Link together the entries.
+MRG48:	HRRZ B,HSTSEC(H)	; Get link for prime entry
+	HRRM B,HSTSEC(G)	; Set link in secondary entry
+	HRLM H,HSTSEC(G)	; Set back-link too (point back to prime)
+	HRRM G,HSTSEC(H)	; Now point prime entry to sec; cons done.
+	MOVSI B,HE%SEC
+	IORM B,HSTNAM(G)	; Mark added entry as secondary.
+MRG49:	SOS NSITS		; And decrement # of primary site entries.
+	SOS NNAMS		; and decrement # of name table entries.
+
+	; Now merge nicknames onto primary entry's list.
+	SKIPN HSTNIC(G)		; Check for trivial cases
+	 JRST MRG10		; No nicknames in secondary
+	SKIPN HSTNIC(H)
+	 JRST [	MOVE A,HSTNIC(G)	; No nicknames in primary
+		MOVEM A,HSTNIC(H)
+		SETZM HSTNIC(G)
+		JRST MRG10]
+	MOVEI E,HSTNIC(G)	; Get 1st nickname entry
+	JRST MRG65
+MRG61:	MOVEI A,(D)
+	
+	; For each nickname in secondary entry, scan primary for match.
+	MOVEI C,HSTNIC(H)
+	JRST MRG63
+MRG62:	CAIN A,(B)		; Compare strings
+	 JRST [	SOS NNAMS	; Yes, subtract one for each nickname dup
+		JRST MRG64]	; Cuz we're flushing the extra reference.
+	HLRZ C,B
+MRG63:	SKIPE B,(C)
+	 JRST MRG62
+	; Nickname not in primary entry, must add it!
+	; C points to last wd in primary list (zero)
+	; D has secondary entry, E has addr it came from
+	HRRM D,(C)		; Store ptr to nickname string in zero wd
+	HRLM E,(C)		; and make "next" ptr point to the place
+				; that secondary entry was in.
+	SETZM (E)		; Ensure it's a zero list terminator.
+MRG64:	HLRZ E,D
+MRG65:	SKIPE D,(E)
+	 JRST MRG61
+
+; Might be part of new list, so dont clobber this wd.
+;	SETZM HSTNIC(G)
+	JRST MRG10
+
+
+
+	MOVEI B,HSTNIC(G)	; Find # of nicknames
+	JRST MRG36
+MRG35:	SOS NNAMS		; Subtract one for each nickname
+	HLRZ B,B
+MRG36:	SKIPE B,(B)
+	 JRST MRG35
+	JRST MRG10		; Go check for more.
+
+MRG50:	AOS ERRDHN
+	PUSH P,A
+	TYPE "Duplicate hostname "
+	MOVE A,HSTNAM(H)
+	CALL ASZOUT
+	TYPE " = "
+	MOVE A,HSTSYS(H)
+	MOVE B,HSTSYS(G)
+	JUMPN C,[MOVE A,HSTMCH(H)
+		MOVE B,HSTMCH(G)
+		JRST .+1]
+	CALL ASZOUT
+	TYPE ", "
+	MOVE A,B
+	CALL ASZOUT
+	CALL CROUT
+	POP P,A
+	JRST MRG25		; Go check for more.
+
+MRG80:	ADDI H,HSTLEN
+	CAMGE H,HSTTBE
+	 JRST MRG01
+	RET
+
+
+; MRGHST - Skips if two entries share an address.
+;	G, H point to entries
+; Clobbers B,C,D,E,T
+; On win return,
+;	T/ addr of node previous to duplicate (on list G)
+;	E/ duplicate node contents (list G)
+
+MRGHST:	SKIPN D,HSTNUM(H)	; Get addr list for primary
+	 RET
+MRGH40:	TRNN D,-1		; If no RH ptr to next,
+	 RET			; Done.
+	MOVE D,(D)		; Get next
+	HLRZ B,D
+	MOVE B,(B)		; Get a host addr from primary
+
+	MOVEI T,HSTNUM(G)	; Get addr list for secondary
+	SKIPN E,(T)
+	 RET
+	CAIA
+MRGH41:	 MOVE T,(T)		; Save addr of prev node
+	TRNN E,-1		; If no more,
+	 JRST MRGH40		; done with secondary list.
+	MOVE E,(E)
+	HLRZ C,E
+	CAME B,(C)		; Compare primary addr with secondary
+	 JRST MRGH41		; No match, try another.
+	AOS (P)
+	RET
+	; Host addresses match!!  If secondary has HE%MRG set,
+	; then try to merge address lists by flushing duplicates from
+	; the secondary list.
+;	MOVE A,HSTNAM(G)
+;	TLNN A,HE%MRG
+;	 JRST MRGH49		; Naw, just link them together (barf later)
+;	HRRM E,(T)		; Flush this entry, by pointing prev to
+;				; the next one after this.
+;	JRST MRGH42
+
+; MACH - Figure out the type of machine from the system name, if possible,
+;	in case we currently have no info on machine type.
+
+MACH:	MOVEI A,HSTTAB
+MACHL:	SKIPG HSTNAM(A)		; Ignore secondary entries for now
+	 JRST MACHNX
+	MOVE B,HSTSYS(A)
+	SKIPE C,HSTMCH(A)	;If machine type not already known,
+	 JRST MACHNX
+	CAME B,ITS		;try to determine it from system name.
+	 CAMN B,TENEX
+	  MOVE C,PDP10
+	CAME B,TOPS10
+	 CAIN B,TOPS20
+	  MOVE C,PDP10
+	CAME B,TOPS1X
+	 CAMN B,TOPS2X
+	  MOVE C,PDP10
+	CAMN B,WAITS
+	 MOVE C,PDP10
+	CAMN B,TIP
+	 MOVE C,TIP
+	CAMN B,MULTIC
+	 MOVE C,MULTIC
+	CAME B,HYDRA
+	 CAMN B,RSX11
+	  MOVE C,PDP11
+	CAME B,ELF
+	 CAMN B,UNIX
+	  MOVE C,PDP11
+	MOVEM C,HSTMCH(A)
+MACHNX:	ADDI A,HSTLEN
+	CAMGE A,HSTTBE
+	 JRST MACHL
+	RET
+
+; FLGSET - Run through internal site entries fixing up whatever flags
+;	can be fixed up at this point.  Currently this mostly means
+;	setting the "server" flag if the services list looks reasonable.
+
+FLGSET:	MOVEI H,HSTTAB		; Run through entries
+FLST05:	SKIPG C,HSTNAM(H)	; Ignore secondary entries for now
+	 JRST FLST35
+	SKIPE ASERVE		; If user wants STFSRV for all entries
+	 JRST FLST30		; just go turn it on.
+	TLNE C,HE%2IN		; If entry was in HOSTS2 format,
+	 JRST FLST35		; also ignore since SERVER explicitly spec'd.
+	SKIPN C,HSTSVC(H)	; Get our service list if any
+	 JRST FLST35		; None
+FLST10:	HRRZ B,SVRNAM(C)	; Get addr of service name
+	CAME B,SNTEL
+	 CAMN B,STTEL
+	  JRST FLST30
+	CAME B,SNFTP
+	 CAMN B,STFTP
+	  JRST FLST30
+	CAME B,SNSMTP
+	 CAMN B,STSMTP
+	  JRST FLST30
+	SKIPE C,SVRCDR(C)
+	 TRNN C,-1
+	  CAIA
+	   JRST FLST10
+
+	; Sigh, couldn't find a plausible service, so let's cheat and
+	; check the system type...
+	MOVE A,HSTSYS(H)	; Get addr of system name
+	CAME A,TENEX
+	 CAMN A,TOPS20
+	  JRST FLST30
+	CAME A,WAITS
+	 CAMN A,TOPS10
+	  JRST FLST30
+	CAME A,TOPS1X
+	 CAMN A,TOPS2X
+	  JRST FLST30
+	CAME A,ITS
+	 CAMN A,UNIX
+	  JRST FLST30
+	CAME A,MULTIC
+	 CAMN A,VMS
+	  JRST FLST30
+
+	; Sigh, give up on "server" flag.
+	JRST FLST35
+
+FLST30:	MOVSI A,STFSRV		; OK, we think it's a "server", so set up flag
+	IORM A,HSTFLG(H)	; and set it!
+FLST35:	ADDI H,HSTLEN
+	CAMGE H,HSTTBE
+	 JRST FLST05
+	RET
+
+; BNT - Build sorted NETWORK table
+
+BNT:	MOVEI N,NWKTAB		;Source
+	MOVE C,NNETS		;Number of times to do
+	MOVE A,NETP		;Destination
+	ADDI A,2		;Skip header
+BNT1:	MOVE D,NWKNUM(N)	; Network number
+	MOVEM D,NETNUM(A)
+	HRRZ E,NWKNAM(N)	; Now the name
+	SUBI E,(FA)		; Make fileaddr
+	HRLZM E,NTLNAM(A)
+
+	; Set up NT pointers for the ADDRESS tables to fill in
+	HRRM N,NTRTAB(A)	; Save back-pointer to NWKTAB entry for sort
+	HRRM A,NWKPTR(N)	; and set ptr in NWKTAB to NETWORK entry.
+
+	ADDI A,NETLEN		;Next slot in line
+	ADDI N,NWKLEN		;Done with this network, try next
+	SOJG C,BNT1
+
+	; NETWORK table entries are now:
+	;	wd 0 network address
+	;	wd 1 <fileaddr of ASCIZ net name>,,<abs addr of NWKTAB entry>
+	; NWKTAB table entries are now:
+	;	wd 0 network address
+	;	wd 1 <# sites in net>,,<addr of ASCIZ net name>
+	;	wd 2 <fileaddr of ADDRESS tbl>,,<abs addr wd1 of NETWORK entry>
+
+	CALL SRTNET	; Sort the NETWORK table (invalidates NWKTAB wd2 RH)
+
+	MOVN N,NNETS
+	MOVSI N,(N)
+	HRR N,NETP
+	ADDI N,2		; Get AOBJN to NETWORK table
+BNT50:	HRRZ A,NTRTAB(N)	; Get backlink to NWKTAB
+	MOVE B,NWKNUM(A)	; Get net number for entry
+	CAME B,NETNUM(N)	; Should match
+	 ERROR "Internal error - NWKTAB backlink inconsistency"
+	HRRM N,NWKPTR(A)	; OK, update NWKTAB's ptr to NETWORK entry!
+	HLRZ C,NWKPTR(A)	; And get back its ADDRESS table fileaddr
+	HRRM C,NTRTAB(N)	; Store to finalize NETWORK table entry
+	ADDI N,NETLEN-1
+	AOBJN N,BNT50
+	RET
+
+	; NETWORK table entries are now in their final file format!
+	;	wd 0 network address
+	;	wd 1 <fileaddr of ASCIZ net name>,,<fileaddr of ADDRESS tbl>
+	; NWKTAB entries have had RH(NWKPTR) updated properly.
+
+; BNTNAM - Build the sorted NETNAME table
+
+BNTNAM:	SKIPG G,NTNP		; Get pointer to NETNAME table
+	 RET			; No table defined, don't do it.
+	ADDI G,2		; Point to 1st loc to store into
+	MOVE N,NETP		; Get pointer to already built NETWORK table
+	MOVN A,(N)		; Get # of entries
+	ADDI N,2
+	HRLI N,(A)		; Now have AOBJN ptr to NETWORK table
+BNTN10:	MOVEI A,(N)		; Get addr of this entry
+	SUBI A,(FA)		; Make it a fileaddr
+	HLL A,NTLNAM(N)		; Get ptr to ASCIZ (already a fileaddr)
+	MOVSM A,(G)		; Store in NETNAME table
+	ADDI G,1
+	ADDI N,NETLEN-1
+	AOBJN N,BNTN10
+
+	MOVEI A,-2(G)
+	SUB A,NTNP		; Find # entries filled in
+	CAMN A,NNTNS		; Should match # entries predicted
+	 CAME G,SITP		; And should have filled table exactly
+	  ERROR "Internal error - NETNAME size inconsistency"
+
+	; Now sort the resulting table...
+	CALL SRTNTN		; Sort NETNAME table
+	RET
+
+; BAT - Build the sorted ADDRESS tables
+;	First stage (BAT) fills in all the numbers, using insertion sort.
+;	Second stage (MT) fills in the address lists and SITE pointers.
+; Note "secondary" entries are treated just like primary entries here.
+
+BAT:	MOVEI H,HSTTAB		; Step through all site entries
+BAT0:	SKIPN HSTNAM(H)		; Ignore dead entries
+	 JRST BAT80
+	HRRZ B,HSTNUM(H)	; For each address of that host
+	JUMPN B,BAT1		; insert an entry in some address table.
+	TYPE "Internal error - "
+	HRRZ A,HSTNAM(H)	; If no addresses, barf
+	PUSHJ P,ASZOUT
+	ERROR " has no addresses"
+
+BAT1:	HLRZ E,(B)		; CAR
+	MOVE A,(E)		; Is a network address for this site
+	MOVE G,E		; Save addr of original HOSTS3-format # here.
+	TLNE F,FL%2OU		; If output format is HOSTS2
+	 CALL H2ADR		; Then convert address to HOSTS2 for sorting
+	MOVE E,A		; Put it in E for compares
+	MOVE C,(G)		; Then use HOSTS3 fmt # to
+	CALL NETFND		; Find addr of internal network entry.
+	HRRZ D,NWKPTR(A)	; Get abs addr to NETWORK entry
+
+	MOVE D,NTRTAB(D)	; Get offset for start of ADDRESS block
+	ADDI D,(FA)		; Get absolute addr for it
+	AOS C,(D)		; Get 1+ number of entries in table
+	SUBI C,1
+	IMUL C,ADDLNV		;Index into table of last+1 entry
+	ADDI C,2(D)		;Address
+	MOVE M,C		;Save upper bound
+BAT2:	SUB C,ADDLNV		;Next guy to compare against
+	CAIGE C,2(D)		;Anybody there?
+	 JRST BAT3		;No, put this one in at bottom of table
+	CAMN E,ADDADR(C)	; Compare host addresses
+	 CALL BATDHA		; Duplicate address, report it!
+	CAMG E,ADDADR(C)	; Does new guy go after this one?
+	 JRST BAT2		; No, keep looking
+
+	;Address in C is last guy before new guy
+	;BLT (C)+ADDLEN ... (M)-ADDLEN up by ADDLEN
+BAT3:	ADD C,ADDLNV		; 1st guy to move up, also where new frob goes
+	HRROI A,-1(M)		; Get "PDL ptr" to last active wd
+	MOVEI T,(M)
+	SUBI T,(C)		; Find # words to move
+	ADD M,ADDLN1		; and addr of 1st place to move to
+	JUMPLE T,BAT5		; If no words to move, don't try!
+BAT4:	POP A,(M)		; Move word...
+	SUBI M,1		; Fix index (Geez why isn't there a SOBJN???)
+	SOJG T,BAT4
+	
+BAT5:	MOVEM E,ADDADR(C)	; Store new guy
+	HRLM H,ADLSIT(C)	; Store abs ptr to host entry
+	TLNE F,FL%2OU		; If addrs are in HOSTS2 fmt,
+	 HRRM G,ADRCDR(C)	; Temporarily remember loc of HOSTS3 fmt #
+	HRRZ B,(B)		; CDR
+	JUMPN B,BAT1
+BAT80:	ADDI H,HSTLEN		; Next host
+	CAMGE H,HSTTBE
+	 JRST BAT0
+
+	TLNE F,FL%2OU		; If we were storing HOSTS2 fmt numbers,
+	 CALL H3AFIX		; must re-convert back to HOSTS3 format
+				; for rest of processing.
+
+	; Maybe later should expand NWKTAB for another word to hold
+	; count, etc for cross-checking final length of each table.
+
+	RET
+
+; BATDHA - Report duplicate host address while building ADDRESS tables.
+;	Can clobber A only.
+;	H/ ptr to internal site entry
+;	G/ addr of HOSTS3 format netaddr
+;	C/ addr of existing ADDRESS table entry
+
+BATDHA:	PUSH P,B
+	HLRZ B,ADLSIT(C)	; Get back ptr to existing internal site entry
+	MOVE A,HSTFLG(B)	; Get its flags
+	XOR A,HSTFLG(H)		; Compare with new (duplicate) entry
+	TLNE A,STFGWY		; Is one a Gateway and the other a Host?
+	 JRST [	SKIPE GWHSTS
+		 JRST BATDH9
+		TYPE "Gateway/Host duplicate addr "
+		AOS ERRDGA	; Bump cnt of gateway vs host duplicates
+		JRST BATDH2]
+	TYPE "Duplicate address "
+	AOS ERRDHA		; Bump cnt of errs
+BATDH2:	MOVE A,(G)		; Use HOSTS3 format #
+	PUSHJ P,HADOUT
+	TYPE " = "
+	HRRZ A,HSTNAM(B)	; Get official hostname for existing addr
+	CALL ASZOUT
+	TYPE ", "
+	HRRZ A,HSTNAM(H)	; Get current hostname
+	PUSHJ P,ASZOUT
+	CALL CROUT
+BATDH9:	POP P,B
+	RET
+
+
+
+; H3AFIX - This routine scans through the ADDRESS tables for each
+;	network, to convert the HOSTS2 addresses to HOSTS3 format
+;	after the ADDRESS tables have been properly sorted.
+
+H3AFIX:	MOVE N,NETPTR(FA)	; Get pointer to NETWORK table
+	MOVEI A,(N)
+	ADDI A,(FA)
+	MOVN A,(A)		; Get # entries
+	HRLI N,(A)		; Set up -<# entries> in LH
+	ADDI N,2(FA)		; Now have AOBJN ptr to NETWORK table
+
+	; Now restore each address for this net.
+H3AFX2:	HRRZ H,NTRTAB(N)	; Get file addr of ADDRESS table
+	JUMPE H,H3AFX4
+	ADDI H,2(FA)		; Make absolute, point to 1st entry
+	MOVN A,-2(H)		; Find # of entries
+	JUMPGE A,H3AFX4		; Jump if none
+	HRLI H,(A)		; Now have AOBJN ptr
+
+H3AFX3:	MOVE B,ADRCDR(H)	; Get word of entry with H3-fmt ptr in RH
+	MOVE A,(B)		; Get original HOSTS3 format addr
+	MOVE C,A		; Save it
+	CALL H2ADR		; Convert it
+	CAME A,ADDADR(H)	; Results should match exactly
+	 ERROR "Internal error - BAT routine blew H2 conversion"
+	MOVEM C,ADDADR(H)	; Store original HOSTS3 format value!
+	HLLZM B,ADRCDR(H)	; Clear out the temporary pointer from entry.
+
+	ADD H,ADDLN1		; ADDLEN-1
+	AOBJN H,H3AFX3
+
+H3AFX4:	ADDI N,NETLEN-1
+	AOBJN N,H3AFX2
+	RET
+
+
+;Now build the contents of the SITE table, which does not need to be sorted,
+; and fill in rest of the ADDRESS table.
+
+MT:	MOVEI H,HSTTAB		; H points at data of next host to hack.
+	MOVE A,SITP
+	ADDI A,2		;A is pointer for storing SITES table entries.
+MTLP:	SKIPG HSTNAM(H)		; Ignore secondary entries at this level
+	 JRST MT80
+	HRRM A,HSTFLG(H)	; Got a primary, save SITE entry ptr for it.
+
+	; Fill in SITE entry values from primary entry.
+	; Sets STLSYS, STRMCH, STLFLG, STLNAM (everything but STRADR)
+	SKIPE E,HSTSYS(H)
+	 SUBI E,(FA)		; Get ptr to system name (in file addr space).
+	HRLZM E,STLSYS(A)	; Stash away
+	SKIPE E,HSTMCH(H)
+	 SUBI E,(FA)
+	HRRM E,STRMCH(A)	; Store machine name.
+	HLLZ E,HSTFLG(H)	; Just copy flag word
+	MOVEM E,STLFLG(A)
+	HRRZ E,HSTNAM(H)
+	SUBI E,(FA)		; Now get fileaddr for official name
+	HRLZM E,STLNAM(A)	; and store a pointer to the copy.
+
+	; Now must fill in the ADDRESS table entries for this site.
+	; Must scan secondary SITE entries as well in order to do this.
+	; The algorithm arranges for the primary entry to be the last one
+	; processed, so that its ADDRESS entries are the first on list.
+	; This is not terribly important, but seems appropriate.
+	; A points to file SITE entry.
+	; G always points to primary entry
+	; H points to current internal entry (= G means last scan)
+	MOVEI G,(H)		; Save pointer to primary entry
+MT30:	HRRZ H,HSTSEC(H)	; Get ptr to next secondary entry
+	JUMPE H,[MOVEI H,(G)	; If none, just use primary entry,
+		JRST MT31]	; and skip over some error checks.
+	SKIPL HSTNAM(H)		; Secondary entry must have flag set!
+	 ERROR "Internal error - entry HDRSEC/flag conflict"
+	HLRZ B,HSTSEC(H)	; And must point back to
+	CAIE B,(G)		; its primary!
+	 ERROR "Internal error - bad HDRSEC backlink"
+MT31:
+	SETZ M,			; Initialize service list for entry
+	TLNN F,FL%2OU		; Ignore if outputting HOSTS2
+	 CALL CPYSVC		; Copy service list, leave ptr in M
+
+	;; For each address of this entry, fill in ADDRESS table entry
+	;; Also, make STRADR point to list of them
+	HRRZ C,HSTNUM(H)	; List of addresses
+MT35:	HLRZ D,(C)		; CAR
+	MOVE D,(D)		; Network address
+	CALL ADRFND		; Find address entry in tables, return ptr in E
+	HRRZ B,STRADR(A)	; CONS onto existing STRADR
+	HRRM B,ADRCDR(E)	; Threaded through ADRCDR
+	TLNE F,FL%2OU		; If building HOSTS2 format,
+	 JRST MT37		; Skip the service list stuff below.
+	HRRZ B,ADRSVC(E)	; Get existing services list
+	CAIE B,			; Should be nothing there!
+	 ERROR "Internal error - addr/site service conflict"
+	HRRM M,ADRSVC(E)	; Store services list we consed up earlier.
+MT37:
+	; Link together the SITE and ADDRESS entries
+	MOVEI B,(E)		; Get fileaddr of
+	SUBI B,(FA)		;  ptr to ADDRESS entry
+	HRRM B,STRADR(A)	; Stash away, setting STRADR finally
+	MOVEI B,(A)		; Now do same for
+	SUBI B,(FA)		;  ptr to SITE entry
+	HRLM B,ADLSIT(E)	; Stash it away in ADDRESS entry
+
+	HRRZ C,(C)		; Get CDR for next net address to link in.
+	JUMPN C,MT35
+	CAIE G,(H)		; Entry done, any more secondary entries?
+	 JRST MT30		; Maybe, go check.
+
+	; All's done for this SITE entry.
+	ADDI A,SITLEN		; Advance A to store next entry next time.
+MT80:	ADDI H,HSTLEN
+	CAMGE H,HSTTBE
+	 JRST MTLP
+
+	CAME A,NAMP		; Check that SITES table has predicted size
+	 ERROR "Internal error - SITES table size inconsistency"
+	SUB A,SITP		; Get space allocated to SITES table.
+	SUBI A,2
+	MOVE B,@SITP		; Check that right number of SITES
+	IMULI B,SITLEN		; entries were made.
+	CAME A,B
+	 ERROR "Internal error - SITES table count inconsistency"
+
+	MOVE B,OUTPT		; Check that host names & misc exactly filled
+	CAME B,ENDHSN		; the space allotted.
+	 ERROR "Internal error - string/misc area size inconsistency"
+	RET
+
+; Subroutines for MT
+
+; CPYSVC - Copy service list from internal tables to filespace.
+;	H/ ptr to internal entry
+;	Conses onto list in M, leaves ptr in M.
+;	Clobbers B,C,T,TT and bumps OUTPT
+
+CPYSVC: SKIPN B,HSTSVC(H)	; Get 1st service name, ptr to rest
+	 RET			; Nothing there, oh well.
+	MOVE T,OUTPT
+CPSV10:	HLRZ TT,SVLCNT(B)	; Find # words in service node (-1)
+	JUMPE TT,CPSV19
+	MOVEI C,(T)
+	HRLI C,(B)
+	ADDI TT,(C)		; Get last addr to copy into
+	BLT C,(TT)		; Copy the service node!
+	HRRZ C,SVRNAM(T)	; Get ptr to svc name
+	SUBI C,(FA)		; Make it a fileaddr
+	HRRM C,SVRNAM(T)
+	HRRM M,SVRCDR(T)	; Cons existing list onto end
+	MOVEI M,(T)		; Save ptr to new head of list
+	SUBI M,(FA)		; Make it a fileaddr
+	HLRZ TT,SVLCNT(B)	; Get back size of node again
+	ADDI T,1(TT)
+	MOVEM T,OUTPT		; Update free ptr
+CPSV19:	SKIPN B,SVRCDR(B)	; Get next service name
+	 RET
+	TRNE B,-1		; Did we just hack last one?
+	 JRST CPSV10
+	RET
+
+; ADRFND - Look up ADDRESS table entry
+;	D/ network address
+;	H/ ptr to internal SITE entry
+; Returns
+;	E/ ptr to ADDRESS table entry
+; Clobbers T,TT
+
+ADRFND:	PUSH P,A
+	PUSH P,C
+	MOVE C,D
+	CALL NETFND		; Find net entry for address
+	HRRZ E,NWKPTR(A)	; Get abs addr of NETWORK entry, which holds
+	POP P,C			; fileaddr of ADDRESS blk (sigh)
+	POP P,A
+
+	MOVE E,NTRTAB(E)	; Get fileaddr of ADDRESS table for this net
+	ADDI E,(FA)		; Make it absolute
+	SKIPG T,(E)		; Get number of entries for this net
+	 ERROR "Internal error - empty address table"
+	ADDI E,2		; Point to start of ADDRESS table entries
+ADRFN2:	CAMN D,ADDADR(E)	; Linear search for specified number
+	 JRST [	HLRZ TT,ADLSIT(E)	; Found right number, see if
+		CAIE TT,(H)		; site ptr matches too?
+		 JRST .+1		; Nope, keep searching
+		RET]			; Matched, found entry!
+	ADD E,ADDLNV		; Point to next entry
+	SOJG T,ADRFN2
+	ERROR "Internal error - addr not found in address table"
+	RET
+
+; MNAM - Make NAMES table.  Must come after SITES table is done,
+;	since it contains pointers into SITES table.
+
+MNAM:	MOVEI H,HSTTAB		; Driven by HSTTAB
+	MOVE G,NAMEP		; Get pointer for writing into NAMES table
+MNAM10:	SKIPG HSTNAM(H)		; Only use names of primary entries!
+	 JRST MNAM50
+
+	; Make the official name's entry.  Get SITES entry addr in LH.
+	HRRZ A,HSTFLG(H)	; Get abs ptr to SITES entry
+	MOVEI D,(A)
+	SUBI D,(FA)		; Make it a fileaddr
+	MOVSI D,(D)		; in LH
+	HLR D,STLNAM(A)		; Set RH to fileaddr of hostname
+	MOVEM D,(G)		; Now store <NMLSIT,,NMRNAM>
+	MOVEI E,HSTNIC(H)	; E points to list of nickname pointers.
+	AOJA G,MNAM39		; Bump deposit ptr and jump into loop
+
+MNAM30:	HRRI D,(E)		; Get ptr to nickname
+	SUBI D,(FA)		; Get fileaddr of copy
+	MOVEM D,(G)		; Store another table entry (note LH unchanged)
+	ADDI G,1
+	HLRZ E,E		; Get CDR for next nickname entry
+MNAM39:	SKIPE E,(E)		; Get nickname
+	 JRST MNAM30
+
+MNAM50:	ADDI H,HSTLEN		; Finished making NAMES entry for this host.
+	CAMGE H,HSTTBE		; Hack the next...
+	 JRST MNAM10
+	MOVEM G,NAMEP		; Store back write-ptr into NAMES table
+
+	SUB G,NAMP		; Check that expected number of NAMES
+	SUBI G,2		; entries were made.
+	CAME G,@NAMP
+	 ERROR "Internal error - NAMES table size inconsistency"
+	RET
+
+; SRTNAM - Sort the NAMES table.  Uses fact that all strings are
+;	already sorted and can just examine file-address for compares!
+; SRTNTN - Sort the NETNAME table.
+
+SRTNAM:	MOVE A,NAMP		; Get addr of NAMES table
+	MOVEI H,SRTN60		; Set addr of duplicate err routine
+	JRST SNAM01
+SRTNTN:	MOVE A,NTNP		; Get addr of NETNAME table
+	MOVEI H,SRTN70		; Set addr of duplicate err rtn
+
+SNAM01:	MOVEI E,2(A)		; Addr of start of entries
+	MOVN C,(A)		; Get -<# entries>
+	CAMN C,[-1]
+	 RET
+	HRLI E,1(C)		; Make AOBJN with count of 1 less than # ents.
+
+SNAM:	SETZ B,			; No exchanges yet this pass.
+	MOVE A,E		; Set up AOBJN
+SNAML:	HRRZ C,NMRNAM(A)	; Get string addr for this entry
+	HRRZ D,NMRNAM+NAMLEN(A)	; and that of next one
+	CAILE C,(D)		; Skip if ordered OK
+	 AOJA B,[MOVE C,(A)	; Out of order, must exchange!
+		EXCH C,NAMLEN(A)
+		MOVEM C,(A)
+		JRST .+1]
+	AOBJN A,SNAML		; Each pass scan whole table.
+	JUMPN B,SNAM		; do another pass if anything exchanged.
+
+	; Table sorted, now scan through for any duplicates.
+	MOVE A,E		; Get AOBJN once more
+SRTN50:	HRRZ C,NMRNAM(A)
+	HRRZ D,NMRNAM+NAMLEN(A)
+	CAIN C,(D)
+	 CALL (H)		; Error, go handle it
+	AOBJN A,SRTN50
+	RET
+
+	; Handle duplicate host name situation - possible error.
+	; A has ptr to 1st of 2 duplicate entries.
+	; Can clobber B,C,D
+SRTN60:	AOS ERRDHN		; Bump cnt of duplicates
+	MOVE B,A		; Save current aobjn
+	TYPE "Duplicate host name "
+	HRRZ A,NMRNAM(B)	; Get addr of ASCIZ name string
+	ADDI A,(FA)		; Make abs
+	CALL ASZOUT
+	TYPE " = "
+	HLRZ A,NMLSIT(B)	; Get file addr of SITE entry for 1st name
+	ADDI A,(FA)		; Make abs
+	HRRZ A,STRADR(A)	; Get file addr of its 1st ADDRESS entry
+	ADDI A,(FA)		; Make abs
+	MOVE A,ADDADR(A)	; Get its 1st host addr
+	CALL HADOUT
+	TYPE ", "		; Now do same thing for 2nd
+	HLRZ A,NAMLEN+NMLSIT(B)	; Get file addr of SITE entry for 2nd name
+	ADDI A,(FA)		; Make abs
+	HRRZ A,STRADR(A)	; Get file addr of its 1st ADDRESS entry
+	ADDI A,(FA)		; Make abs
+	MOVE A,ADDADR(A)	; Get its 1st host addr
+	CALL HADOUT
+	CALL CROUT
+	MOVE A,B		; Restore aobjn ptr
+	RET			; Continue check loop
+
+	; Handle duplicate net name situation - possible error.
+	; A has ptr to 1st of 2 duplicate entries.
+	; Can clobber B,C,D
+SRTN70:	AOS ERRDNN		; Bump cnt of duplicates
+	MOVE B,A		; Save current aobjn
+	TYPE "Duplicate net name "
+	HRRZ A,NNRNAM(B)	; Get addr of ASCIZ name string
+	ADDI A,(FA)		; Make abs
+	CALL ASZOUT
+	TYPE " = "
+	HLRZ A,NNLNET(B)	; Get file addr of NETWORK entry for 1st name
+	ADDI A,(FA)		; Make abs
+	MOVE A,NETNUM(A)	; Get its number
+	CALL HADOUT
+	TYPE ", "		; Now do same thing for 2nd
+	HLRZ A,NTNLEN+NNLNET(B)	; Get file addr of SITE entry for 2nd name
+	ADDI A,(FA)		; Make abs
+	MOVE A,NETNUM(A)	; Get its number
+	CALL HADOUT
+	CALL CROUT
+	MOVE A,B		; Restore aobjn ptr
+	RET			; Continue check loop
+
+; SRTNET - Sort the NETWORK table numerically or alphabetically.
+;	Uses fact that all strings are already sorted and can
+;	just examine file-address for compares!
+
+SRTNET:	MOVE A,NETP		; Get addr of NETWORK table
+	MOVEI E,2(A)		; Addr of start of entries
+	MOVN C,(A)		; Get -<# entries>
+	CAMN C,[-1]		; If there is only one network
+	 RET			;  don't bother to incorectly sort the table!
+	HRLI E,1(C)		; Make AOBJN with count of 1 less than # ents.
+SNET:	SETZ B,			; No exchanges yet this pass.
+	MOVE A,E		; Set up AOBJN (of sorts)
+SNET1:	TLNN F,FL%2OU
+	 JRST [	MOVE C,NETNUM(A)	; HOSTS3 format sorts numerically
+		MOVE D,NETNUM+NETLEN(A)
+		JRST SNET11]
+	HLRZ C,NTLNAM(A)	; Get string addr for this entry
+	HLRZ D,NTLNAM+NETLEN(A)	; and that of next one
+SNET11:	CAMG C,D		; Skip if ordered wrong
+	 JRST SNET1Z
+	MOVSI D,-NETLEN		; Set up to switch entries
+	HRRI D,(A)
+SNET1A:	MOVE C,(D)		; Out of order, must exchange!
+	EXCH C,NETLEN(D)
+	MOVEM C,(D)
+	AOBJN D,SNET1A
+	ADDI B,1		; Count one more exchange
+SNET1Z:	ADD A,[1,,NETLEN]	; Each pass scan whole table.
+	JUMPL A,SNET1
+	JUMPN B,SNET		; do another pass if anything exchanged.
+
+	; Table sorted, now scan through for any duplicates.
+	MOVE A,E		; Get AOBJN once more
+SNET2:	TLNN F,FL%2OU
+	 JRST [	MOVE C,NETNUM(A)	; HOSTS3 sorts numerically
+		MOVE D,NETNUM+NETLEN(A)
+		CAMN C,D
+		 CALL SNET3E		; Duplicate net number, report.
+		JRST SNET22]
+	HLRZ C,NTLNAM(A)
+	HLRZ D,NTLNAM+NETLEN(A)
+	CAIN C,(D)
+	 CALL SNET2E		; Error, go handle it
+SNET22:	ADD A,[1,,NETLEN]
+	JUMPL A,SNET2
+	RET
+
+	; Handle duplicate name situation - possible error.
+	; A has ptr to 1st of 2 duplicate entries.
+	; Can clobber B,C,D
+SNET2E:	AOS ERRDNN		; Bump cnt of duplicates
+	MOVE B,A		; Save current aobjn
+	TYPE "Duplicate network name "
+	HLRZ A,NTLNAM(B)	; Get addr of ASCIZ name string
+	ADDI A,(FA)		; Make abs
+	PUSHJ P,ASZOUT
+	TYPE " = "
+	MOVE A,NETNUM(B)	; Get 1st network addr
+	CALL HADOUT
+	TYPE ", "		; Now do same thing for 2nd
+	MOVE A,NETLEN+NETNUM(B)	; Get 2nd network addr
+	CALL HADOUT
+	CALL CROUT
+	MOVE A,B		; Restore aobjn ptr
+	RET			; Continue check loop
+
+	; Handle duplicate network number situation - possible error.
+	; A has ptr to 1st of 2 duplicate entries.
+	; Can clobber B,C,D
+SNET3E:	AOS ERRDNA		; Bump cnt of duplicates
+	MOVE B,A		; Save current aobjn
+	TYPE "Duplicate network number "
+	MOVE A,NETNUM(B)	; Get network number
+	CALL HADOUT
+	TYPE " = "
+	HLRZ A,NTLNAM(B)	; Get addr of ASCIZ name string for 1st
+	ADDI A,(FA)		; Make abs
+	PUSHJ P,ASZOUT
+	TYPE ", "
+	HLRZ A,NTLNAM+NETLEN(B)	; Now do same thing for 2nd entry
+	ADDI A,(FA)
+	CALL ASZOUT
+	CALL CROUT
+	MOVE A,B		; Restore aobjn ptr
+	RET			; Continue check loop
+
+SUBTTL Internal format -> HOSTS2 output fixup
+
+; This routine scans through the NETWORK table, and
+; the ADDRESS tables for each network, to convert the host/net addresses
+; to HOSTS2 format.  Currently this is the only thing that needs to
+; be munged.
+
+H2OFIX:	MOVE N,NETPTR(FA)	; Get pointer to NETWORK table
+	MOVEI A,(N)
+	ADDI A,(FA)
+	MOVN A,(A)		; Get # entries
+	HRLI N,(A)		; Set up -<# entries> in LH
+	ADDI N,2(FA)		; Now have AOBJN ptr to NETWORK table
+
+	; First, smash network number
+H2FX10:	MOVE A,NETNUM(N)	; Get network number
+	CALL H2ADR		; Convert to HOSTS2 format
+	LDB B,[NW$BYT,,A]	; Extract net number
+	MOVEM B,NETNUM(N)
+
+	; Now convert each address for this net.
+	HRRZ H,NTRTAB(N)	; Get file addr of ADDRESS table
+	JUMPE H,H2FX35
+	ADDI H,2(FA)		; Make absolute, point to 1st entry
+	MOVN A,-2(H)		; Find # of entries
+	JUMPGE A,H2FX35		; Jump if none
+	HRLI H,(A)		; Now have AOBJN ptr
+
+H2FX30:	MOVE A,ADDADR(H)	; Get host address
+	CALL H2ADR		; Convert it
+	MOVEM A,ADDADR(H)
+	ADD H,ADDLN1		; ADDLEN-1
+	AOBJN H,H2FX30
+
+H2FX35:	ADDI N,NETLEN-1
+	AOBJN N,H2FX10
+	RET
+
+
+; H2ADR - Given a HOSTS3 host address in A, converts to HOSTS2 form
+;	as nearly as possible.
+
+H2ADR:	PUSH P,B
+	PUSH P,C
+	MOVE C,A
+	CALL NETMSK		; Mask off network number
+	SKIPA B,[UNTTAB]
+H2ADR2:	 ADDI B,UNTLEN
+	SKIPN UNTNAM(B)
+	 JRST H2ADR3		; Table end, unknown net number
+	CAME C,UNTNUM(B)
+	 JRST H2ADR2
+
+	PUSH P,A
+	SETZ A,
+	MOVE C,UNTH2N(B)
+	DPB C,[NW$BYT,,A]
+	POP P,C
+	CALL @UNTH32(B)
+H2ADR9:	POP P,C
+	POP P,B
+	RET
+
+	; Not a known network, but try to do something plausible.
+H2ADR3:	LDB B,[NT$NUM,,A]
+	ANDCM A,[7777_24.]	; Preserve low 24 bits
+	DPB B,[NW$BYT,,A]	; Put net # into HOSTS2 field.
+	JRST H2ADR9
+
+; Conversion routines, pointed to by UNTTAB.
+;  A/ HOSTS2 net field already set up
+;  B scratch
+;  C/ HOSTS3 address
+
+H32CV1:	LDB B,[201000,,C]	; Get "host" field (2nd byte)
+	DPB B,[001000,,A]	; Deposit host
+	DPB C,[112000,,A]	; Deposit "imp" field (2 bytes)
+	RET
+
+H32CV2:	HRRI A,(C)
+	RET
+
+H32CV3:	LDB B,[201000,,C]	; Get 2nd byte
+	DPB B,[221100,,A]	; Deposit subnet
+	DPB C,[001100,,A]	; and host
+	RET
+
+SUBTTL File parsing routines
+
+; Note the term "SCO" stands for "Single Char Object".
+
+; RCH - Get input character in A
+
+RCH:	TRNE F,FR%RCH+FR%SIN	; Skip if nothing unusual to do.
+	 JRST RCH20		; Hmm, do special stuff.
+	CALL SYSRCH		; Nothing special, get char from input file
+	CAIN A,^J		; Count lines read from file.
+	 AOS LINENO
+	RET
+RCH20:	SKIPL A,UNRCHF
+	 JRST [	SETOM UNRCHF
+		RET]
+	SKIPL A,UNRCH2		; Handle secondary backup
+	 JRST [	SETOM UNRCH2
+		RET]
+	TRZE F,FR%RCH		; No backup left, ensure flag zeroed.
+	 JRST RCH		; We were backing up, assume nothing else.
+	ILDB A,RCHBP		; Something else, must be FR%SIN.
+	CAIN A,"/		; Special escape char?
+	 JRST [	ILDB A,RCHBP	; Yes, get next one
+		CAIN A,"/	; If another escape char,
+		 RET		; then just return it (quoted)
+		JUMPE A,.+1
+		CALL UNRCH	; Else back up one char
+		MOVEI A,^J	; and pretend we saw a LF!
+		RET]
+	JUMPN A,APOPJ		; Got a char, return it.
+	SETZM RCHBP		; No more input!  Clear BP
+	TRZ F,FR%SIN		; and flag
+	MOVEI A,^C		; and return EOF char.
+	RET
+
+; UNRCH - Back up the character in A, so next RCH will see it.
+
+UNRCH:	TRO F,FR%RCH		; Say char is backed up, do special stuff.
+	EXCH A,UNRCHF		; Store it, get prev backed-up char if any
+	CAIL A,			; Was there a prev backed-up char?
+	 MOVEM A,UNRCH2		; Yes, must save it in next place.
+	RET
+
+RCHCON:	CALL RCH
+	TRNE F,FR%2IN	; HOSTS2 format doesn't allow continuation lines
+	 RET
+	CAIN A,^M	; But if RFC810, check for continuation.
+	 JRST [	CALL RCH
+		CAIN A,^J	; Next char should be LF
+		 JRST .+1
+		JRST RCHC9]	; Ugh, back up and pretend hit LF.
+	CAIE A,^J	; When we see a LF, check for continuation line
+	 RET
+	CALL RCH
+	CAIE A,40
+	 CAIN A,^I
+	  RET		; Hurray, continuation line!  Keep going as if saw wsp.
+RCHC9:	CALL UNRCH	; Nope, must re-read this one
+	MOVEI A,^J
+	RET		; and return LF as terminator.
+
+
+; RTOKEN - Read token (string or delimiter)
+;	Note this routine uppercases the returned token.  If preserving
+;	lowercase ever becomes important, another entry point can be made.
+; Returns .+1:
+;	A/ positive char (delim), ^C at EOF, or negative BP to ASCIZ string
+;	Clobbers B
+
+RTOKEN:	TRNE F,FR%2IN
+	 JRST RTOK01		; HOSTS2 skips RTKCOM stuff
+	SETOM RTKCOM'
+	CAIA
+RFIELD:	 SETZM RTKCOM
+
+RTOK01:	CALL RCHCON		;First, skip white space and comments
+	CAIN A,^C
+	 RET			;EOF
+	CAIN A,";
+	 JRST [	CALL RTOKCM	; Handle comment
+		JRST RTOK01]
+	CAIN A,^J		;LF is an SCO
+	 RET
+	CAIG A,40
+	 JRST RTOK01		;White space
+	TRNE F,FR%2IN
+	 JRST RTOK02
+
+	CAIN A,":		; Colon is field delimiter for RFC810
+	 RET
+	SKIPN RTKCOM		; If reading whole field, ignore comma etc.
+	 JRST [	SETZM RTKSBP'
+		JRST RTOK0]
+
+RTOK02:	CAIN A,",		;Comma is an SCO
+	 RET
+	TRNN F,FR%2IN
+	 JRST RTOK0		; Don't allow brackets if RFC810
+	CAIE A,"[		; HOSTS2 - Brackets are SCO
+	 CAIN A,"]
+	  RET
+
+	;; OK, this is going to be a long symbol
+RTOK0:	MOVE B,TOKBP		; Start of this symbol
+RTOK1:	CAIL A,"a		; Make all chars uppercase before deposit.
+	 CAILE A,"z
+	  CAIA
+	  SUBI A,40
+	IDPB A,TOKBP
+	CALL RCHCON		; Read stuff, allowing continuation lines
+	TRNE F,FR%2IN
+	 JRST RTOK15		; Skip a bunch of stuff if HOSTS2
+
+	SKIPN RTKCOM		; If gobbling whole field,
+	 JRST [	CAIGE A,40	; need special path
+		 JRST RTOK21
+		CAIN A,40
+		 JRST [	MOVE A,TOKBP
+			SKIPN RTKSBP
+			 MOVEM A,RTKSBP
+			MOVEI A,40
+			JRST RTOK1]
+		CAIE A,":
+		 CAIN A,";
+		  JRST RTOK21
+		SETZM RTKSBP	; Valid char, so any spaces were included.
+		JRST RTOK1]
+
+RTOK15:	CAILE A,40		;Check for termination
+	 CAIN A,";
+	  JRST RTOK2
+	TRNN F,FR%2IN		; Don't allow ":" as HOSTS2 delimiter
+	 CAIE A,":
+	  CAIN A,",
+	   JRST RTOK2
+	TRNN F,FR%2IN
+	 JRST RTOK1		; If RFC810, check done
+	CAIE A,"[		; HOSTS2 also checks for brackets.
+	 CAIN A,"]
+	  JRST RTOK2
+	JRST RTOK1
+
+	; Crock to flush trailing blanks from a complete field-gobble.
+	; If RTKSBP is set, an IDPB on it will smash the first trailing
+	; blank.
+	; Not used by HOSTS2.
+RTOK21:	CALL UNRCH		; Back up this char
+	SKIPN A,RTKSBP
+	 JRST RTOK22		; No trailing blanks
+	TLNN A,760000		; Make sure pointing at a char pos
+	 JRST [	SETZM 1(A)	; Last char position, so smash next wd.
+		JRST RTOK22]
+	PUSH P,A
+	LDB A,[360600,,(P)]	; Get P field of the BP
+	DPB A,[301400,,(P)]	; Deposit 0,P into P,S
+	SETZ A,			; get a zero ac
+	DPB A,(P)		; Deposit, clearing rest of word.
+	POP P,A
+	CAIA
+
+RTOK2:	CALL UNRCH		; Back up this char
+RTOK22:	MOVEI A,0
+	IDPB A,TOKBP
+	MOVE A,B		;Return value is negative BP to ASCIZ
+	AOS B,TOKBP		;Advance BP to next word
+	HRLI B,440700
+	MOVEM B,TOKBP
+	RET
+
+EOLFLS:
+RTOKCM:	CALL RCH		; Skip comment
+	CAIE A,^J
+	 CAIN A,^C		; EOF shouldn't happen, but...
+	  CAIA
+	   JRST RTOKCM
+	CALL UNRCH		; Comment ended, back up to check terminator
+	RET
+
+; RTOKLN - Get a line as token.  Stops either when hit a control char,
+;	or when a comment is seen (defined as a semicolon preceded by
+;	whitespace).
+; RTOKLI - Ditto but doesn't flush whitespace at front
+
+RTOKLN:	CALL RWSPFL
+RTOKLI:	MOVE B,TOKBP
+RTOKL2:	CALL RCH
+RTOKL3:	CAIGE A,40
+	 JRST [	CAIN A,^I
+		 JRST .+1
+		JRST RTOKL9]
+	IDPB A,TOKBP
+	CAIE A,^I
+	 CAIN A,40
+	  CAIA
+	   JRST RTOKL2
+	CALL RCH
+	CAIE A,";
+	 JRST RTOKL3
+	CALL RTOKCM
+	CAIA
+RTOKL9:	 CALL UNRCH
+	MOVE A,B		;Return value is negative BP to ASCIZ
+	AOS B,TOKBP		;Advance BP to next word
+	HRLI B,440700
+	MOVEM B,TOKBP
+	RET
+
+; RWSPFL - Flushes whitespace.  Next char read will be first non-WSP char.
+
+RWSPFL:	CALL RCH
+	CAIE A,40
+	 CAIN A,^I
+	  JRST RWSPFL
+	JRST UNRCH	; Not a WSP char, push back and return.
+
+; Miscellaneous routines that invoke RCH and RTOKEN.
+
+;Require a field terminator here (comma), or a CRLF.  Skip if comma
+
+RCOMLF:	CALL RTOKEN
+	CAIN A,^J
+	 RET
+	TRNN F,FR%2IN		; HOSTS2 doesn't term on ":"
+	 CAIE A,":
+	  CAIN A,",
+	   JRST POPJ1
+	MOVEI A,[ASCIZ/Missing comma or CRLF/]
+	JRST BARF
+
+;Require a comma here
+
+RCOMMA:	CALL RTOKEN
+	CAIN A,",
+	 RET
+	MOVEI A,[ASCIZ/Missing comma/]
+	JRST BARF
+
+;Require a field terminator here
+
+RFTERM:	CALL RTOKEN
+	TRNE F,FR%2IN		; Field term for HOSTS2 is comma
+	 JRST [	CAIN A,",
+		 RET
+		MOVEI A,[ASCIZ /Missing comma/]
+		JRST BARF]
+	CAIN A,":
+	 RET
+	MOVEI A,[ASCIZ /Missing colon/]
+	JRST BARF
+
+
+; Require comma or colon - skip if colon.  Fail if anything else.
+; Not used by HOSTS2
+RFNEXT:	CALL RTOKEN
+	CAIN A,":
+	 AOSA (P)
+	  CAIN A,",
+	   RET
+	MOVEI A,[ASCIZ /Missing colon or comma/]
+	JRST BARF
+
+; Terminal output routines
+
+CROUT:	PUSH P,A
+	MOVEI A,[ASCIZ /
+/]
+	CALL ASZOUT
+	POP P,A
+	RET
+
+TYPOUT:	EXCH A,(P)
+	EXCH A,-1(P)
+	CALL ASZOUT
+	POP P,A
+	RET
+
+BPZOUT:	PUSH P,B
+	MOVE B,A
+	JRST ASZOU2	
+
+ASZOUT:	PUSH P,B
+	HRLI A,440700
+	SKIPA B,A
+ASZOU1:	 CALL SYSTYO
+ASZOU2:	ILDB A,B
+	JUMPN A,ASZOU1
+	POP P,B
+	RET
+
+SIXOUT:	JUMPE A,APOPJ
+	PUSH P,B
+	MOVE B,A
+SIXOU1:	SETZ A,
+	ROTC A,6
+	ADDI A,40
+	PUSHJ P,SYSTYO
+	JUMPN B,SIXOU1
+	JRST POPBJ
+
+DECOUT:	PUSH P,B
+	CALL DECOU1
+	POP P,B
+	RET
+DECOU1:	IDIVI A,10.
+	HRLM B,(P)
+	SKIPE A
+	 PUSHJ P,DECOU1
+	HLRZ A,(P)
+	ADDI A,"0
+	CALL SYSTYO
+	RET
+
+OCTOUT:	PUSH P,B
+	CALL OCTOU1
+	POP P,B
+	RET
+
+OCTOU1:	IDIVI A,8
+	HRLM B,(P)
+	SKIPE A
+	 PUSHJ P,OCTOU1
+	HLRZ A,(P)
+	ADDI A,"0
+	CALL SYSTYO
+	RET
+
+POPJ1:	AOS (P)
+APOPJ:	RET
+POPBJ:	POP P,B
+	RET
+POPAJ:	POP P,A
+	RET
+
+; GENTRY - Host-table file reader.
+;	H points to next free HOST entry slot,
+;	N points to next free NET entry slot.
+
+GENTRY:	MOVEM P,PARSVP'		; Save PDL ptr for throws
+	CALL RTOKEN		; Get initial token - should be HOST, etc.
+	JUMPGE A,[CAIN A,^J	; SCO - see if EOF or blank line
+		  JRST GENTRY	; Blank line
+		CAIN A,^C
+		 RET		; EOF
+		MOVEI A,[ASCIZ/Randomness when expecting keyword/]
+		JRST BARF]	; Nope, error.
+	MOVE B,(A)
+	MOVSI D,-NKYWDS
+GENTR2:	MOVS C,KYWDTB(D)
+	CAME B,(C)
+	 JRST GENTR4
+	TRNN B,377
+	 JRST GENTR5		; Won!
+	MOVE T,1(A)
+	CAME T,1(C)
+	 JRST GENTR4
+	TRNN T,377
+	 JRST GENTR5		; Won!
+	MOVE T,2(A)
+	CAMN T,2(C)
+	 JRST GENTR5
+GENTR4:	AOBJN D,GENTR2
+GENTR9:	MOVEI B,(A)
+	MOVEI A,[ASCIZ /Unknown or illegal keyword: /]
+	JRST BARF2		; Error, no match.
+
+GENTR5:	HLRZ C,C
+	CALL (C)		; Execute function
+	JRST GENTRY
+	
+; Keyword function table.  Names up to 15 chars long are allowed.
+
+KYWDTB:	[ASCIZ /HOST/]	,,GHOST
+	[ASCIZ /NET/]	,,GNET
+	[ASCIZ /GATEWAY/],,[TRNE F,FR%2IN
+			 JRST GENTR9	; If HOSTS2, don't allow this keyword.
+			JRST GGWAY]
+	[ASCIZ /HOSTS2/],,[TRO F,FR%2IN ; Say now processing HOSTS2 format!
+			JRST EOLFLS]
+	[ASCIZ /RFC810/],,[TRZ F,FR%2IN	; Now processing RFC810 format!
+			JRST EOLFLS]
+	[ASCIZ /INSERT/],,RDINSF	; Read insert file!
+	[ASCIZ /MERGE/]	,,[TLO F,FL%MRG	; Merge entries from here on
+			JRST EOLFLS]
+	[ASCIZ /MERGEOFF/],,[TLZ F,FL%MRG	; Stop merging
+			JRST EOLFLS]
+	[ASCIZ /OUTFMT/],,OFMT		; Specify output format!
+	[ASCIZ /OUTFIL/],,OUTFIL	; Specify output filename
+	[ASCIZ /HST2DUPS/],,H2DAOK
+	[ASCIZ /GWHOSTS/],,[SETOM GWHSTS ? JRST EOLFLS]
+	[ASCIZ /ALLSERVER/],,[SETOM ASERVE ? JRST EOLFLS]
+IFN ONLY,[
+	[ASCIZ /ONLY/],,ONLYCM		; Specify only network to include
+];ONLY
+	[ASCIZ /BEGIN/],,EOLFLS		; Ignore this keyword.
+	[ASCIZ /END/],,EOLFLS		; Ignore this keyword.
+NKYWDS==<.-KYWDTB>
+
+
+; BARF - Parsing error seen.  Print message, flush to EOL,
+;	continue reading.  Bump error count so won't process tables.
+; BARF2 - Like BARF but adds 2nd error message in B.
+
+BARF:	SETZ B,
+BARF2:	PUSH P,A		; Save err message
+	SKIPGE A,LINENO
+	 JRST [	TYPE "Error in JCL"
+		JRST BARFR5]
+	TYPE "Error on line "
+	PUSHJ P,DECOUT
+BARFR5:	TYPE ": "
+	POP P,A
+	CALL ASZOUT
+	SKIPE A,B		; Add 2nd string if any
+	 CALL ASZOUT
+	CALL CROUT
+	AOS ERRPAR		; Bump error count
+	MOVE P,PARSVP		; Restore PDL ptr for main parsing loop
+	CALL RTOKCM		; Now flush to LF
+	JRST GENTRY		; Continue...
+
+; Here to handle INSERT keyword.
+;	Read rest of line into a filename buffer for parsing.  Some
+;	cleverness exerted in order to handle comments properly.
+
+RDINSF:	CALL RTOKLN		; Get single line (no continuations)
+RDINS0:	JUMPGE A,[MOVEI A,[ASCIZ/No filename for INSERT/]
+		JRST BARF]
+	MOVE B,A		; Save ptr to filename
+	MOVE A,FILCNT
+	CAIL A,MAXFIL-1		; Ensure there will be enough room.
+	 JRST [	TYPE "Too many files, cannot insert "
+		MOVE A,B
+		CALL ASZOUT
+		CALL CROUT
+		ERROR "File table too small, increase MAXFIL"
+		MOVEI A,[ASCIZ /Too many files, cannot insert /]
+		JRST BARF2]
+	MOVEM B,FILTBN+1(A)	; Will be enough, save filename.
+	AOS C,RDINCT
+	CAIL C,MAXINS
+	 JRST [	SOS RDINCT
+		ERROR "INSERT depth too deep, possibly looping."
+		MOVEI A,[ASCIZ /INSERT depth too deep, cannot insert /]
+		JRST BARF2]
+	PUSH P,FA
+	SKIPG C,RDINCT
+	 JRST [	TYPE "Reading text file "	; If 1st file, skip some stuff
+		JRST RDINS3]
+	MOVEI A,[ASCIZ /   /]	; Type 3 spaces per level
+	CALL ASZOUT
+	SOJG C,.-2
+	TYPE "Inserting file "
+	CALL SYSPSH		; Push current stuff
+	MOVEI FA,JUNKHD		; and point to fake output file header.
+
+RDINS3:	MOVE A,B
+	CALL SYSOPN		; Open this file and type filename.
+	POP P,FA		; OK, restore pointer to real header.
+	TYPECR ""
+	PUSH P,FILIDX		; Save old index
+	PUSH P,LINENO
+	PUSH P,UNRCHF
+	PUSH P,UNRCH2
+	PUSH P,RCHBP
+	PUSH P,PARSVP
+	PUSH P,F
+	AOS C,FILCNT		; Get new index
+	MOVEM C,FILIDX		; Set new index
+	SETZM LINENO		; and new # lines
+	TRZ F,FR%RCH+FR%SIN
+	CALL GENTRY		; Grovel over the inserted file.
+	POP P,A
+	HRRI F,(A)		; Restore flags in RH.
+	POP P,PARSVP
+	POP P,RCHBP
+	POP P,UNRCH2
+	POP P,UNRCHF
+	POP P,LINENO
+	POP P,FILIDX
+	SOSGE RDINCT		; Pop up a level
+	 JRST [	CALL SYSCLS	; If popped completely out, close file.
+		RET]
+	CALL SYSPOP		; When done, pop back.
+	RET			; Back to scan for tokens.
+
+
+
+OUTFIL:	CALL RTOKLN	; Get line
+	JUMPGE A,[MOVEI A,[ASCIZ /No filename given for OUTFIL/]
+		JRST BARF]
+	SKIPE OUTFNM
+	 JRST [	MOVE B,A
+		MOVEI A,[ASCIZ /Output file already specified, ignoring OUTFIL /]
+		JRST BARF2]
+	MOVEM A,OUTFNM
+	RET
+
+
+; OFTM - Handle "OUTFMT <format>" keyword to specify binary output format.
+
+OFMT:	CALL RTOKEN		; Get argument
+	JUMPGE A,[MOVEI A,[ASCIZ /Bad syntax for OUTFMT/]
+		JRST BARF]
+	MOVE B,A		; Save ptr to arg
+	CALL CVSSIX		; Get word in sixbit in A
+	MOVEI D,NOFMTS-1
+	CAME A,OFMTBI(D)
+	 SOJGE D,.-1
+	JUMPL D,[MOVEI A,[ASCIZ /Bad arg to OUTFMT - /]
+		JRST BARF2]
+
+	SKIPE OFMTSL		; Output format already selected?
+	 JRST [	CAMN D,OFMTIX	; Yes, is it identical?
+		 JRST EOLFLS	; Yes, can ignore it then.
+		MOVEI A,[ASCIZ /Only one OUTFMT allowed/]
+		JRST BARF]
+	MOVEM D,OFMTIX		; Hurray, store format # to use!
+	SETOM OFMTSL		; Say format selected
+	TLZ F,FL%R2O+FL%R3O+FL%2OU
+	XCT OFMTBX(D)		; Set up output format flags
+	JRST EOLFLS
+
+OFMTBI:	SIXBIT /HOSTS3/		; Format ID table
+	SIXBIT /HOSTS2/
+NOFMTS==.-OFMTBI
+
+	; Output Format Execution Table
+OFMTBX:	TLO F,FL%R3O
+	TLO F,FL%R2O+FL%2OU
+
+	; Output Format Filename table (defaults)
+OFMTBF:
+  IFN ITSSW,[
+	440700,,[ASCIZ /HOSTS3 >/]
+	440700,,[ASCIZ /HOSTS2 >/]
+	]
+  IFN TNXSW,[
+	440700,,[ASCIZ /HOSTS3.BIN/]
+	440700,,[ASCIZ /HOSTS2.BIN/]
+	]
+  IFN SAILSW,[
+	440700,,[ASCIZ /HOSTS3.BIN[HST,NET]/]
+	440700,,[ASCIZ /HOSTS2.BIN[HST,NET]/]
+	]
+F$DEV==0	; Indices into SIXBIT filename spec block
+F$DIR==1
+F$FN1==2
+F$FN2==3
+
+; H2DAOK - Allow duplicate HOSTS2 addresses
+
+H2DAOK:	SKIPN OFMTSL
+	 JRST [	MOVEI A,[ASCIZ /HST2DUPS before OUTFMT/]
+		JRST BARF ]
+	TLNN F,FL%2OU
+	 JRST [	MOVEI A,[ASCIZ /HST2DUPS only allowed for HOSTS2/]
+		JRST BARF ]
+	TLO F,FL%2DH
+	JRST EOLFLS
+
+
+; ONLY command
+IFN ONLY,[
+ONLYLS:	0			; List of network name (asciz),,cdr
+ONLYCM:	CALL RTOKEN		; Get argument
+	JUMPGE A,[MOVEI A,[ASCIZ /Bad syntax for ONLY/]
+		  JRST BARF]
+	AOS B,TOKBP		; Allocate a cons
+	HRL A,ONLYLS		; Pick up cdr
+	MOVSM A,-1(B)
+	MOVEI B,-1(B)
+	MOVEM B,ONLYLS
+	RET
+; Flush hosts that are on networks we don't care about
+FLSHST:	SKIPN ONLYLS
+	 RET			; Nothing to do
+	MOVEI H,HSTTAB
+FLSHS1:	SKIPG HSTNAM(H)		; Ignore secondary entries
+	 JRST FLSHS9
+	CALL HOSTOK
+	 CAIA
+	  JRST FLSHS9
+	SETZM HSTNAM(H)		; No good, flush it
+	SOS NSITS		; And decrement # of primary site entries.
+	SOS NNAMS		; and decrement # of name table entries.
+	MOVEI B,HSTNIC(H)	; Find # of nicknames
+	JRST FLSHS3
+FLSHS2:	SOS NNAMS		; Subtract one for each nickname
+	HLRZ B,B
+FLSHS3:	SKIPE B,(B)
+	 JRST FLSHS2
+FLSHS9:	ADDI H,HSTLEN
+	CAMGE H,HSTTBE
+	 JRST FLSHS1
+	RET
+; Skip if this host (H) is okay to include in the output file
+HOSTOK:	HRRZ D,HSTNUM(H)	; List of addresses
+HSTOK1:	HLRZ C,(D)		; CAR
+	MOVE C,(C)		; Network address
+	CALL NETFND		; Find the network in A
+	HRRZ A,NWKNAM(A)	; Get addr of network's name
+	MOVE C,ONLYLS		; Compare against list of good guys
+HSTOK2:	HLRZ B,(C)
+	CALL CMPSTR
+	 JRST POPJ1		; Succeed
+	HRRZ C,(C)		; Cdr list of good networks
+	JUMPN C,HSTOK2
+	HRRZ D,(D)		; Cdr host's list of addresses
+	JUMPN D,HSTOK1
+	RET			; Fail
+
+];ONLY
+
+; Here to gobble a NET entry
+
+GNET:	SETZ C,
+	TLNE F,FL%MRG
+	 MOVSI C,HE%MRG		; Set MERGE flag in entry
+	MOVEM C,HSTNAM(H)
+	TRNE F,FR%2IN
+	 JRST GNET2		; Go hack HOSTS2 style
+
+	; RFC810 format NET entry
+	CALL RFTERM
+	CALL RTOKEN		; Get net number
+	JUMPGE A,GNET99		; Foo
+	CALL GNETAD		; Munch into net address in C
+	MOVEM C,NWKNUM(N)	; Store net number
+	CALL RFTERM
+	CALL RTOKEN		; Next should be network name
+	JUMPGE A,GNET95
+	HRRZM A,NWKNAM(N)	; LH zero for net-sites count
+	CALL RFTERM
+	JRST GNET80
+
+GNET2:	CALL RTOKEN		; Next should be network name
+	JUMPGE A,GNET95
+	HRRZM A,NWKNAM(N)	; LH zero for net-sites count
+	CALL RCOMMA
+	CALL RTOKEN
+	CALL GDECN		; Parse number into C (terminator in B)
+	JUMPN B,GNET99		; Jump if error
+	SKIPA A,[UNTTAB]	; Scan for funny nets (note B is zero!)
+GNET25:	 ADDI A,UNTLEN
+	SKIPN UNTNAM(A)		; If at end of table,
+	 JRST GNET26		;  we just deposit net number in field.
+	CAME C,UNTH2N(A)	; Number matches?
+	 JRST GNET25		; No, keep looking
+	SKIPA B,UNTNUM(A)	; Yes, get internal net number for it!
+GNET26:	 DPB C,[NT$NUM,,B]	; Come here for unspecial net number.
+	MOVEM B,NWKNUM(N)	; Store network number
+
+GNET80:	SETZM NWKPTR(N)
+	CALL RTOKEN
+	CAIE A,^J		;Should be end of line
+	 JRST [	MOVEI A,[ASCIZ /Garbage where end of line expected/]
+		JRST BARF]
+	ADDI N,NWKLEN
+	AOS NNETS
+	RET
+GNET95:	MOVEI A,[ASCIZ/Random character when expecting net name/]
+	JRST BARF
+GNET99:	MOVEI A,[ASCIZ/Random character when expecting net number/]
+	JRST BARF
+
+; Here to gobble a HOST/GATEWAY entry
+
+GGWAY:	MOVSI C,HE%GWY		; Set GATEWAY flag in entry
+	MOVSI B,STFGWY		; For now, also set it in site flags.
+	CAIA			; Later will hack this at FLGSET.
+GHOST:	 SETZB B,C
+	TLNE F,FL%MRG
+	 TLO C,HE%MRG		; Set MERGE flag in entry
+	MOVEM C,HSTNAM(H)
+	MOVEM B,HSTFLG(H)	; Set/clear site flags (later just clear)
+	SETZM HSTNUM(H)
+	SETZM HSTSYS(H)
+	SETZM HSTMCH(H)
+	SETZM HSTNIC(H)
+	SETZM HSTSVC(H)
+	TRNE F,FR%2IN
+	 JRST GHST2		; Handle HOSTS2 format
+
+	CALL RFTERM
+GHST31:	CALL RTOKEN		; Get Internet addr
+	CALL GHOSTN		; Process it
+	CALL RFNEXT		; See if more in field
+	 JRST GHST31		; Comma, more stuff.
+
+	CALL RTOKEN		; Next is host name
+	JUMPGE A,GHST91		; Jump if bad hostname field
+	HRRM A,HSTNAM(H)	; Store official hostname
+GHST33:	CALL RFNEXT		; More?
+	 JRST [	CALL RTOKEN
+		CALL GNICKN	; Handle as nicknames.
+		JRST GHST33]
+
+	CALL RFIELD		; Next is machine type
+	JUMPL A,[HRRZM A,HSTMCH(H)
+		CALL RTOKEN
+		JRST .+1]
+	CAIE A,":
+	 JRST GHST92		; Bad machine field
+
+	CALL RFIELD		; Next is system name
+	JUMPL A,[HRRZM A,HSTSYS(H)
+		CALL RTOKEN
+		JRST .+1]
+	CAIE A,":
+	 JRST GHST92	; Bad system field
+
+GHST35:	CALL RTOKEN		; Next is list of services
+	JUMPL A,[CALL GSVCN	; Get service name like nickname
+		CALL RFNEXT
+		 JRST GHST35
+		JRST .+1]
+	CAIE A,":
+	 JRST GHST93	; Bad service field
+
+GHST37:	CALL RTOKEN	; Should now be at EOL.
+	CAIE A,^J	; For now, flush remaining fields.
+	 CAIN A,^C
+	  CAIA
+	   JRST GHST37
+
+GHSTOK:	TLNE F,FL%2OU	; If outputting HOSTS2 format,
+	 JRST [	MOVE B,HSTFLG(H)
+		TLNE B,STFGWY	; We ignore gateway entries after parse check!
+		 RET		; Ignore this one
+		JRST .+1]	; Else OK to add it.
+	ADDI H,HSTLEN
+	AOS NSITS
+	RET		; That's all!
+
+GHST90:	MOVEI A,[ASCIZ /Bad net address field/] 
+	JRST BARF
+GHST91:	MOVEI A,[ASCIZ /Bad site name field/] 
+	JRST BARF
+GHST92:	MOVEI A,[ASCIZ /Bad system type field/] 
+	JRST BARF
+GHST93:	MOVEI A,[ASCIZ /Bad services field/]
+	JRST BARF
+GHST94:	MOVEI A,[ASCIZ /Garbage at end of entry/]
+	JRST BARF
+	
+
+
+	; HOSTS2 format parsing for HOST entry
+GHST2:	MOVSI B,HE%2IN		; Set flag for entry to mark HOSTS2 format.
+	IORM B,HSTNAM(H)
+	CALL RTOKEN		; Next should be host name
+	JUMPGE A,[MOVEI A,[ASCIZ/Random character when expecting host name/]
+		JRST BARF ]
+	HRRM A,HSTNAM(H)
+	CALL RCOMMA		;Next should be comma
+	CALL RTOKEN		;Should be either a host# or a bracketed list of such
+	CAIE A,"[		;]
+	 JRST [	CALL GHOSTN
+		JRST GHOST3 ]
+GHOST2:	CALL RTOKEN
+	CALL GHOSTN		;
+	CALL RTOKEN
+	CAIN A,",
+	 JRST GHOST2		;[
+	CAIE A,"]
+	 JRST [	MOVEI A,[ASCIZ/Missing close bracket/]
+		JRST BARF ]
+GHOST3:	CALL RCOMMA		;Next a comma
+	CALL RTOKEN		;Status	
+	MOVE B,(A)
+	MOVSI C,STFSRV
+	CAMN B,[ASCII/SERVE/]
+	 IORM C,HSTFLG(H)
+	CALL RCOMLF
+	 JRST GHOST6		;CRLF
+	CALL RTOKEN		;Optional system name
+	JUMPGE A,[CALL UNRCH
+		JRST GHST22]
+	HRRZM A,HSTSYS(H)
+GHST22:	CALL RCOMLF
+	 JRST GHOST6		;CRLF
+	CALL RTOKEN		;Optional machine name
+	JUMPGE A,GHST23
+	HRRZM A,HSTMCH(H)
+	CALL RTOKEN
+
+	;Here A is comma before nicknames, or CRLF
+GHST23:	CAIE A,",
+	 JRST GHOST6
+	CALL RTOKEN		;Single nickname or bracket that begins list
+	CAIE A,"[		;]
+	 JRST [	CALL GNICKN
+		JRST GHOST5 ]
+GHOST4:	CALL RTOKEN
+	CALL GNICKN
+	CALL RTOKEN
+	CAIN A,",
+	 JRST GHOST4		;[
+	CAIE A,"]
+	 JRST [	MOVEI A,[ASCIZ/Missing close bracket/]
+		JRST BARF ]
+GHOST5:	CALL RTOKEN
+GHOST6:	CAIE A,^J		;Should be end of line
+	 JRST [	MOVEI A,[ASCIZ/Garbage where end of line expected/]
+		JRST BARF ]
+
+	JRST GHSTOK		; Successful parse of entry
+
+;;; This parses up a host address and conses it onto list in HSTNUM(H)
+;;; First token is in A
+
+GHOSTN:	CALL GNETAD		; Parse net addr into result in C
+	MOVE B,TOKBP		; 2 words to CONS into
+	MOVEM C,1(B)		; Full word of host number
+	MOVSI C,1(B)		; car,,cdr
+	HRR C,HSTNUM(H)
+	MOVEM C,0(B)
+	HRRZM B,HSTNUM(H)
+	ADDI B,2
+	MOVEM B,TOKBP
+	RET
+
+; GNETAD - Parse a net address and return value in C.
+;	First token already in A.
+
+GNETAD:	MOVE B,A
+	ILDB C,B		; Check 1st char of address
+	CAIL C,"0
+	 CAILE C,"9		; If not a number (implying Internet)
+	  JRST GADR20		; then it's a non-Internet addr, go hack it.
+	TRNN F,FR%2IN		; For RFC810,
+	 CALL GINUM		;   parse an Internet address into C
+	TRNE F,FR%2IN		; For HOSTS2,
+	 JRST [	MOVEI D,UNTTAB	;   parse host/imp Arpanet address into C
+		MOVE C,UNTPAR(D)
+		JRST GADR26]
+GADR80:	RET
+
+
+	; Parse non-Internet address.  Token is network name; identify
+	; it and continue parsing as specified by network definition.
+GADR20:	MOVEI D,UNTTAB		; Point to unternet def table
+	MOVE B,(A)		; Get first word of token
+	CAMN B,[ASCIZ /IN/]	; Special hack: Internet?
+	 JRST [	CALL RTOKEN	; Get next token, should be
+		CALL GINUM	; an Internet address.
+		JRST GADR80]
+	CAMN B,[ASCIZ /UN/]	; Special hack: Unternet?
+	 JRST [	CALL RTOKEN	; Get next token, should be
+		CALL GINUM	; an Internet-style address.
+		TLO C,(NE%UNT)	; Add the Unternet bit!
+		JRST GADR80]
+
+GADR21:	SKIPN B,UNTNAM(D)	; Get pointer to name string
+	 JRST [	MOVEI A,[ASCIZ /Undefined network name in address field/]
+		JRST BARF]	; Ran out of definitions
+	CALL CMPSTR		; Compare strings pointed to by A and B
+	 JRST GADR25		; Won!
+	ADDI D,UNTLEN		; No match, try next entry
+	JRST GADR21
+
+	; Found network definition.  For now, use quick hack of jumping
+	; to specific parse types.  Later generalize.
+GADR25:	SKIPL C,UNTPAR(D)	; Get parsing type
+	 JRST [	CALL RTOKEN	; Unless sign bit set, get next token
+		JUMPGE A,GADR92	; Barf if no next token.
+		JRST .+1]
+GADR26:	CALL @GADRPT(C)		; Get number into C
+	 CAIA			; (Skip to avoid net-number insertion)
+	  JRST GADR80
+	ANDCM C,UNTMSK(D)	; Mask out the network-number field
+	IOR C,UNTNUM(D)		; and stash in the net number for this net!
+	JRST GADR80
+
+UNTNAM==:0	; Net name
+UNTNUM==:1	; Net number
+UNTMSK==:2	; Mask for net number
+UNTPAR==:3	; Parsing routine for this net's addresses
+UNTH2N==:4	; HOSTS2 net number
+UNTH32==:5	; Rtn for internal to HOSTS2 format conversion (see H2ADR)
+  UNTLEN==:6
+DEFINE DEFUNT NAME,TYP,VAL,PARSE,CVT,H2VAL
+%%UVAL==<<VAL>_24.>
+	IRPC CHAR,,[TYP]
+	IFSE CHAR,U, %%UVAL==%%UVAL+NE%UNT
+	IFSE CHAR,S, %%UVAL==%%UVAL+NE%STR
+	TERMIN
+[ASCIZ /NAME/] ? %%UVAL ? 7777_24. ? $UP!PARSE
+	IFSE [H2VAL][] VAL
+	.ELSE H2VAL
+CVT
+TERMIN
+	
+UNTTAB:	DEFUNT ARPA,,12,ARP,H32CV1
+	DEFUNT RCC,,3,ARP,H32CV1
+	DEFUNT LCS,,22,LCS,H32CV3
+	DEFUNT SU,U,44,PUP,H32CV2
+	DEFUNT RU,U,61,OCT,H32CV3
+	DEFUNT DSK,U,1,OCT,H32CV2,777	; Note HOSTS2 netnum very different
+	DEFUNT CHAOS,U,7,OCT,H32CV2
+	DEFUNT DIAL,US,26,STR,H32CV2
+	DEFUNT ECL,U,2,OCT,H32CV2,776	; For JSOL (USC-ECL)
+	DEFUNT ZOT,U,3,OCT,H32CV2,775	; For JSOL (USC-ECL)
+	0
+
+$UPIN==:0
+$UPOCT==:1
+$UPARP==:2
+$UPLCS==:3
+$UPPUP==:4
+$UPSTR==:5
+GADRPT:	GADR30			; IN - Hack Internet-style number
+	GADR31			; OCT - Hack single octal number
+	GADR32			; ARP - Hack Arpa-style host/imp
+	GADR34			; LCS - Hack subnet/host
+	GADR36			; PUP - Hack subnet#host
+	GADR38			; STR - Hack string
+
+	; Internet-style number (4 decimal octets)
+GADR30:	CALL GINUM
+	RET
+
+	; Single octal number
+GADR31:	CALL GOCTN
+	JUMPN B,GADR93
+	RET
+
+	; Arpanet host/imp (decimal)
+GADR32:	CALL GDECN
+	CAIE B,"/		; Should get slash
+	 JRST GADR93
+	PUSH P,C
+	CALL GDECN		; Continue reading next number
+	JUMPN B,GADR93
+	POP P,B			; Host # in B, Imp # in C
+	CAILE C,177777		; 16 bits allowed for Imp #
+	 JRST GADR94
+	CAILE B,377
+	 JRST GADR94
+	DPB B,[201000,,C]	; Stick host # into address
+	RET
+
+	; Hack subnet/host
+GADR34:	CALL GOCTN
+	CAIE B,"/		; Should get slash
+	 JRST GADR93
+	PUSH P,C
+	CALL GOCTN
+	JUMPN B,GADR93
+	POP P,B			; Subnet # in B, Host # in C
+	CAILE C,377
+	 JRST GADR94
+	CAILE B,377
+	 JRST GADR94
+	DPB B,[201000,,C]	; Stick subnet # into address
+	RET
+
+	; Hack subnet#host
+GADR36:	CALL GOCTN
+	CAIE B,"#		; Should get pound-sign
+	 JRST GADR93
+	PUSH P,C
+	CALL GOCTN
+	JUMPN B,GADR93
+	POP P,B			; Subnet # in B, Host # in C
+	CAILE C,377
+	 JRST GADR94
+	CAILE B,377
+	 JRST GADR94
+	DPB B,[101000,,C]	; Stick subnet # into address
+	RET
+
+	; Hack string
+GADR38:	MOVEI C,(A)		; Use address of string
+	RET
+
+GADR91:	MOVEI A,[ASCIZ /Non-digit when digit expected in address/]
+	JRST BARF
+GADR92:	MOVEI A,[ASCIZ /No number given in address field/]
+	JRST BARF
+GADR93:	MOVEI A,[ASCIZ /Bad syntax for address number/]
+	JRST BARF
+GADR94:	MOVEI A,[ASCIZ /Address number out of range/]
+	JRST BARF
+
+GINUM:	JUMPGE A,GADR91		; SCO?
+	PUSH P,[0]		; Put zero word on stack
+	MOVE E,[401000,,(P)]	; and set up ptr into it
+REPEAT 3,[
+	CALL GDECN		; Get first octet
+	CAIE B,".		; Verify terminated OK
+	 JRST GADR93
+	IDPB C,E
+] ; For 3 octets
+	CALL GDECN
+	JUMPN B,GADR93
+	IDPB C,E
+	POP P,C			; Number finished, stash in AC
+	RET
+
+; Get a nickname.  Make HSTNIC be pointer to vector of addresses of ASCIZ,
+;	end by zero.
+; Nickname is already in A, just needs to be CONSed onto list.
+GNICKN:	HRL A,TOKBP		; CDR is next free loc, in LH
+	EXCH A,HSTNIC(H)	; Store first CONS, get set to store previous
+	MOVEM A,@TOKBP		; Store previous
+	AOS TOKBP		; Bump free ptr
+	RET
+
+; Store service name, similar to nickname list (but parameters possible)
+; For now, no params are parsed.
+; Not used by HOSTS2
+
+GSVCN:	MOVE T,TOKBP		; Get ptr to free loc
+	HRRZM A,SVRNAM(T)	; Store service name ptr in new node
+	MOVE TT,HSTSVC(H)	; Get previous ptr
+	HRLI TT,1		; Say just 1 extra wd
+	MOVEM TT,SVRCDR(T)	; Store 1st word of service node
+	HRRZM T,HSTSVC(H)	; Store new ptr to list
+	HLRZ A,SVLCNT(T)	; Retrieve # words in node
+	ADDI T,1(A)		; Bump free-ptr past stored node
+	MOVEM T,TOKBP
+	RET
+
+
+; Routine to fetch an octal number from an input string
+; Entry:   a = str ptr to number string
+; Call:    GOCTN  -- begin loading digits
+;	   GOCTN0 -- 1st digit already in b
+; Return:  +1, a = updated str ptr, b = terminating char, c = number
+GOCTN:	ILDB B,A		; b _ first digit
+GOCTN0:	SETZ C,			; Clear starting value
+GOCTN1:	CAIL B,"0		; b = octal digit?
+	 CAILE B,"7
+	  RET			; No
+	LSH C,3			; c _ 8 * (old value)
+	ADDI C,-"0(B)		; c _ c + (new digit)
+	ILDB B,A		; b _ next input char
+	JRST GOCTN1		; Check it out
+	
+; Routine to fetch a decimal number from an input string
+; Entry:   a = str ptr to number string
+; Call:    GDECN  -- begin loading digits
+;	   GDECN0 -- 1st digit already in b
+; Return:  +1, a = updated str ptr, b = terminating char, c = number
+GDECN:	ILDB B,A		; b _ first digit
+GDECN0:	SETZ C,			; Clear starting value
+GDECN1:	CAIL B,"0		; b = decimal digit?
+	 CAILE B,"9
+	  RET			; No
+	IMULI C,10.		; c _ 10 * (old value)
+	ADDI C,-"0(B)		; c _ c + (new digit)
+	ILDB B,A		; b _ next input char
+	JRST GDECN1		; Check it out
+
+
+
+; CVSSIX - Converts ASCIZ string to SIXBIT word.
+;	A/ BP to ASCIZ string,
+;	Returns SIXBIT word in A.  Clobbers nothing else.
+
+CVSSIX:	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	MOVE D,A
+	SETZ A,
+	MOVE B,[440600,,A]
+	JRST CVSSX3
+CVSSX2:	CAIL C,140
+	 SUBI C,40	; Uppercase force
+	SUBI C,40	; cvt to 6bit
+	IDPB C,B	; deposit
+	TLNN B,770000	; If BP at end of word,
+	 JRST CVSSX5	; leave loop.
+CVSSX3:	ILDB C,D
+	JUMPN C,CVSSX2
+CVSSX5:	POP P,D
+	POP P,C
+	POP P,B
+	POPJ P,
+
+
+; CMPSTR - Compare two strings pointed to by A and B.
+;	Currently assumes word-aligned ASCIZ, case dependent.
+; Returns .+1 if strings match,
+; 	.+2 if they don't.
+
+CMPSTR:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+CMPST1:	ADDI A,1
+	MOVE C,-1(A)
+	CAME C,(B)
+	 JRST CMPST8
+	TRNE C,376	; Last char zero?
+	 AOJA B,CMPST1
+	CAIA		; Won, take non-skip return.
+CMPST8:	 AOS -3(P)
+	POP P,C
+	POP P,B
+	POP P,A
+	RET
+
+; UPPERA - Uppercase the ASCIZ string pointed to by A,
+;	modifying it in place.  Clobbers T, TT.
+
+UPPERA:	MOVEI T,(A)
+	HRLI T,440700
+UPPER4:	ILDB TT,T
+	JUMPE TT,APOPJ
+	CAIL TT,"a
+	 CAILE TT,"z
+	  JRST UPPER4
+	SUBI TT,"a-"A
+	DPB TT,T
+	JRST UPPER4
+
+; CPSTR - Copy ASCIZ string B to BP in A
+
+CPSTR:	TLNN B,-1		; If LH is zero
+	 HRLI B,440700		; Furnish BP to ASCIZ string
+	CAIA
+CPSTR2:	 IDPB T,A
+	ILDB T,B
+	JUMPN T,CPSTR2
+	MOVE B,A
+	IDPB T,A
+	MOVE A,B
+	RET
+
+SUBTTL Storage
+
+;; Dump out literals to make purification possible
+..LIT2:	CONSTANTS
+ENDPUR::
+IF2,BABBLE "Pure  code ends at ",\ENDPUR
+
+;; Round up to (twenex) page boundry for pure code
+.=<<.+777>&<#777>>
+BEGDAT::	; Beginning of small data section
+
+
+;; Initialized variables.  Some of these used to live up top mixed
+;; in with the code.
+
+NWKTBE:	0	; First unused addr in internal network table
+HSTTBE:	0	; First unused addr in internal host table
+TOKBP:	0	; Byte ptr to end of internal string table, for adding stuff
+ISTRP:	0	; Ptr to start of internal sort-string table (ends at STREND)
+		; Error if RH of TOKBP is > ISTRP (overlap)
+
+OUTPT:	0	; Pointer for storing into file string & misc area
+ENDHSN:	0	; Set to predicted end of above area.
+NETP:	0	; Addr of place to put NETWORK table.
+NTNP:	0	; Addr of place to put NETNAME table.
+SITP:	0	; Addr of place to put SITES table.
+NAMP:	0	; Addr of place to put NAMES table.
+NAMEP:	0	; Ptr for storing into NAMES table.
+ENDFIL:	0	; Predicted end of fileaddr space
+
+NNETS:	0	; Number of networks
+NNTNS:	0	; Number of network names (should be same as NNETS)
+NSITS:	0	; Number of active site entries
+NNAMS:	0	; Number of names (for NAMES table)
+
+UNRCHF:	-1	; 1st char backup
+UNRCH2:	-1	; 2nd char backup
+RCHBP:	0	; BP for string input, if FR%SIN is set.
+
+EVLAST:	-1	; For using last system error #
+EVNONE:	0	; For using no system error
+
+LINENO:	-1	; # lines read in current file (-1 for JCL)
+RDINCT:	-1	; Depth of insert so far
+
+FILIDX:	0		; Index of file currently being read
+FILCNT:	0		; Highest index thus far
+FILTBN:	BLOCK MAXFIL	; Pointer to ASCIZ file name
+
+JUNKHD:	BLOCK HDRLEN
+
+OUTFNM:	0	; If non-zero points to ASCIZ output filename string
+
+OFMTSL:	0	; -1 if user has explicitly specified a format
+OFMTIX:	0	; Always indicates current output format
+
+GWHSTS:	0	; GWHOSTS keyword switch
+ASERVE:	0	; ALLSERVE keyword switch
+
+;; End of initialized variables
+
+SUBTTL Pre-defined file strings
+
+; Here are strings which are "pre-defined" by CANON so that their
+; values are easy to test for (in MACH for example) simply by comparing
+; addresses.  Note that CANON changes the addresses in this table to
+; point at the actual stored strings in the file.
+;
+; Now, it might seem a little odd to you that these are all down here
+; in the variables section.  Yup.  The compiler does fixups on these
+; silly things, for absolutely no reason at all except that they are
+; in the string pointer table when it starts doing fixups.  Good thing
+; nobody ever tries to use the core image of this program twice in a
+; row...
+
+PDSTRS:
+PDP10:	[ASCIZ "PDP10"]		;Note: PDP10, not PDP-10, so fits in 1 word.
+PDP11:	[ASCIZ "PDP11"]
+TIP:	[ASCIZ "TIP"]
+ITS:	[ASCIZ "ITS"]
+TENEX:	[ASCIZ "TENEX"]
+TOPS10:	[ASCIZ "TOPS10"]	; RFC810 source uses this variant.
+TOPS20:	[ASCIZ "TOPS20"]
+TOPS1X:	[ASCIZ "TOPS-10"]	; Sigh... HOSTS2 source has this variant
+TOPS2X:	[ASCIZ "TOPS-20"]
+WAITS:	[ASCIZ "WAITS"]
+ELF:	[ASCIZ "ELF"]
+UNIX:	[ASCIZ "UNIX"]
+RSX11:	[ASCIZ "RSX-11"]
+HYDRA:	[ASCIZ "HYDRA"]
+MULTIC:	[ASCIZ "MULTICS"]
+VMS:	[ASCIZ "VMS"]
+SNTEL:	[ASCIZ "NCP/TELNET"]	; For fast comparison in FLGSET
+STTEL:	[ASCIZ "TCP/TELNET"]
+SNFTP:	[ASCIZ "NCP/FTP"]
+STFTP:	[ASCIZ "TCP/FTP"]
+SNSMTP:	[ASCIZ "NCP/SMTP"]
+STSMTP:	[ASCIZ "TCP/SMTP"]
+NPDSTR==.-PDSTRS
+
+...VAR::VARIABLES		; Dump out .SCALARs
+...NAM:	CONSTANTS		; Dump out more literals (see prev page)
+ENDDAT::			; First free location
+
+IF2,BABBLE "Small data ends at ",\ENDDAT
+
+;; Now allocate the big buffers.  The hell with the 20X symbol table,
+;; we don't have the address space to spare for it anymore.  Just
+;; round up to next page boundry.  Use IDDT's ;O and ;W commands to
+;; debug on 20X.
+
+PAGDAT==<<.+777>&<#777>>	; [Default] beginning of paged data
+
+IFNDEF HSTTAB,HSTTAB=:PAGDAT	; Location of internal host entry table
+NWKTAB=:HSTTAB+2000*HTSIZE	; Location of internal network table
+STRTAB=:NWKTAB+2000*NTSIZE	; Location of internal strings table
+STREND=:STRTAB+2000*STSIZE-1	; End of string area
+OUTTAB=:STREND+1		; Location of output file image
+OUTEND=:OUTTAB+2000*OFSIZE-1	; End of string area
+
+ENDINT=:OUTEND			; Last word of internal buffers and junk
+IFG ENDINT-775777,{		; Barf city
+	BABBLE "ENDINT=",\ENDINT
+	.FATAL Internal buffers overflow available address space!!!
+}
+
+IF2,{
+BABBLE "Large data ends at ",\ENDINT
+PRINTX "
+Large data configuration:
+"
+BABBLE "HSTTAB = ",\HSTTAB
+BABBLE "NWKTAB = ",\NWKTAB
+BABBLE "STRTAB = ",\STRTAB
+BABBLE "OUTTAB = ",\OUTTAB
+PRINTX "
+"
+}
+
+;; Zee End
+
+IFN TNXSW,	END <4,,START>
+.ELSE		END START

@@ -56,5 +56,33 @@ from scratch.
    - ATSIGN TARAKA, starts dragons.
    - Dragons: DMPCPY, MODEMS, NETIME, PFTHMG.
    - MTBOOT, make bootable tapes.
+   - HOSTS3, the host table compiler.
+   - H3MAKE, a job that requests DRAGON to build host table.
+   
+6. A brand new host table is built from the host table source and
+   installed into SYSBIN; HOSTS3 > using H3MAKE.
 
-6. Finally, the whole file system is dumped to tape.
+7. Finally, the whole file system is dumped to tape.
+
+### Network Support
+
+Currently, networking is only supported under the KLH10 emulator. SIMH does
+not have the necessary support. As of this release, only the ITS monitor,
+host table tools, and binary host table are installed. There are no network
+daemons or user networking tools. These will come in a subsequent release.
+
+The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP 
+address (192.168.0.45) configured for the ITS system. The IP address 
+matches the address configured in SYSTEM; CONFIG > (as IMPUS3). Finally,
+the HOST table source (SYSHST; H3TEXT >) and binary (SYSBIN; HOSTS3 >)
+defined a host called DB-ITS.EXAMPLE.COM at the IP address 192.168.1.100.
+
+In order to change the IP address of the host, you must update multiple
+places and rebuild ITS and the host table. You will also have to modify
+dskdmp.ini.  Here are the places where the IP address is configured (and all
+of these must agree):
+
+dskdmp.ini (in build/klh10 directory on the host)  
+SYSTEM; CONFIG > (ITS configuration file)  
+SYSHST; H3TEXT > (host table source file)  
+SYSBIN; HOSTS3 > (binary file compiled from SYSHST; H3TEXT >)

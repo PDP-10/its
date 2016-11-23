@@ -289,6 +289,18 @@ respond "*" ":link sys; ts p,sys; ts peek\r"
 respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
 expect ":KILL"
 
+respond "*" ":midas syshst;_syshst;hosts3\r"
+expect ":KILL"
+
+respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
+
+respond "*" ":midas syshst;_syshst;h3make\r"
+expect ":KILL"
+
+respond "*" ":job h3make\r"
+respond "*" ":load syshst;h3make bin\r"
+respond "*" "\033g"
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape
