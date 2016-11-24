@@ -297,9 +297,29 @@ respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
 respond "*" ":midas syshst;_syshst;h3make\r"
 expect ":KILL"
 
+# submit job to daemon to build binary host table
 respond "*" ":job h3make\r"
 respond "*" ":load syshst;h3make bin\r"
 respond "*" "\033g"
+
+# basic TCP support
+respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
+expect ":KILL"
+
+respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
+
+# telnet server
+respond "*" ":midas sysbin;telser_sysnet;telser\r"
+expect ":KILL"
+
+# port 23 (telnet) uses TELSER
+respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
+
+# telnet client
+respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
+expect ":KILL"
+
+respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
