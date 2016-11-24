@@ -199,6 +199,13 @@ pdset
 respond "*" ":rename .;@ its, .;@ oits\r"
 respond "*" ":rename .;@ nits, .;@ its\r"
 
+respond "*" ":print sys1;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":print sys2;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":print sys3;..new. (udir)\r"
+type ":vk\r"
+
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
 respond "*" ":job teco\r"
@@ -208,14 +215,9 @@ respond "*" "dumpit\033g"
 sleep 2
 respond "TECPUR" "\r"
 respond "*" ":kill\r"
-respond "*" ":print sys3;..new. (udir)\r"
-type ":vk\r"
 respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
 
-respond "*" ":print sys2;..new. (udir)\r"
-type ":vk\r"
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
-
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
 expect "EINIT"
@@ -283,8 +285,6 @@ respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
 respond "*" ":midas sysbin;_ar1:cstacy;whoj\r"
 expect ":KILL"
-respond "*" ":print sys1;..new. (udir)\r"
-type ":vk\r"
 respond "*" ":link sys1;ts talk,sysbin;whoj bin\r"
 type ":vk\r"
 respond "*" ":link sys1;ts who,sysbin;whoj bin\r"
