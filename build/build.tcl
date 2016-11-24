@@ -321,6 +321,18 @@ expect ":KILL"
 
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
 
+# supdup port (95) uses telser
+respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
+
+# supdup client
+respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
+expect ":KILL"
+
+respond "*" ":print sys1;..new. (udir)\r"
+type ":vk\r"
+
+respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape
