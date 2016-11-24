@@ -22,6 +22,8 @@ out/minsys.tape: $(ITSTAR)
 
 out/sources.tape: $(ITSTAR)
 	mkdir -p out
+	rm -f src/system/config.*
+	cp build/$(EMULATOR)/config.* src/system
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
