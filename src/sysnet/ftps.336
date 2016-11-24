@@ -1,0 +1,2873 @@
+.SYMTAB 5001.,7000.	;-*-MIDAS-*-
+
+TITLE FTPS	;New FTP server
+		; Written by KLH @ MIT-AI using UUO package.
+
+;;; After months of frustration I cannot stand it any more.
+;;; Since those pinheads at Thinking Machines insist on 
+;;; writing broken copies of the NAMES file to .MAIL., I have
+;;; disallowed that from now on. -- Gumby
+
+IFNDEF $.ARPA,$.ARPA==0		;1 to do .ARPA kludges
+IFNDEF $$DM,$$DM==0		;1 to include COMSYS interface
+
+.MLLIT==1
+
+	; Service Port assignments
+SPNFTP==3	; NCP FTP socket for ICP
+SPTFTP==25	; TCP FTP port
+SPSMTP==31	; SMTP port (both NCP/TCP)
+
+F=0		; Flag reg
+A=1		; A-E general utility
+B=2
+C=3
+D=4
+E=5
+T=6		; Needed for NETWRK
+TT=7
+R=10		; Holds IDX into rcpt string array.
+I=11		; Interrupt handler acc
+OC=12		; Output channel index
+U1=13		;UUO accs
+U2=14
+U3=15
+U4=16
+P=17		; Standard PDL reg
+
+	; I/O Channel assignments
+NETICP==1	; Net ICP channel.  Keep this, NETI, NETO on these numbers!
+NETI==2		; Net input
+NETO==3		; Net output
+NETD==4		; Net data channel
+DC==5		; general purpose dsk channel (in and out)
+DMC==6		; dsk chan for mail file output on DM
+ERRCHN==15	; for OUT error output
+STRC==16	; UUO string output channel
+TMPC==17	; temp UUO chan
+
+	;LH flags
+%DMSW==1	; set when on DM
+%ICPFF==2	; Set during ICP phase
+%LTCP==4	; Set if using TCP (not NCP)
+%LSMTP==10	; Set if pretending to be SMTP
+%LCHAOS==20	; Set if Chaosnet SMTP
+
+	; RH flags
+%NTDIR==1	; 0 when attempting input net data conn, 1 for output.
+%TMP==2		;random temp
+%CR==4		;set when last net input char was CR
+%DEC==10	;used by numerical parser to indicate # is decimal
+
+	; Random params
+SKTNUM==10	; # of sockets available (limited by ITS)
+UBPFJ==10	; Magic bit for .OPEN on USR device to not reown
+
+LPAREN==:"(	; All right, so I'm paranoid
+RPAREN==:")
+
+SUBTTL Random locations and Interrupt handler
+
+LOC 41
+	JSR UUOH	; To UUO package.
+	JSR TSINT
+LOC 100
+			;also use time routines
+DATIME"$$OUT==0		; Use the OUT package's printing rtns
+DATIME"$$DSTB==1	; DST bit in time words
+DATIME"$$ABS==1		; Absolute days/seconds conversions
+DATIME"$$OUTT==1	; Tables for pretty output
+DATIME"$$UPTM==1	; Rtns for system time-in-30'ths conversions
+.INSRT DSK:SYSENG;DATIME >
+
+;Use standard NETWRK routines (to get host table file)
+IFE $.ARPA,$$NEW3==1
+$$HST3==1
+$$HSTMAP==1	;access HOSTS3 file
+$$HSTSIX==1	;want sixbit host name abbreviations 
+$$SERVE==1	;Server ICP 
+$$SYSDBG==1	;We handle SYSDBG ourselves 
+$$ARPA==1	;Support Arpanet
+$$CHAOS==1	;Support Chaosnet too
+$$OWNHST==1	;Want OWNHST routine
+;$$CVH==1	;Need host-number conversion routines
+ 
+.INSRT SYSENG;NETWRK >
+
+.INSRT SYSENG; FSDEFS >
+
+$$OUT==1		; Use new output stuff
+$$OTIM==1		; With time output stuff
+$$OERR==1		; and error output
+$$OHST==1		; and host output
+UAREAS==1		; Assemble UUO areas
+USTRGS==1		; and string hackery.
+.INSRT KSC;NUUOS >
+			;and wonderful filename parser
+.INSRT KSC;NFNPAR >
+
+CONSTANTS
+
+;;; Additional FWRITE goodies:
+
+DEFINE CCONC LOC,LIST	; For concatenating stuff to existing string.
+	PUSHJ P,[BCONC LOC
+		 FWRITE STRC,[LIST]
+		 ECONC LOC
+		 POPJ P,]
+TERMIN
+
+DEFWR EOL,,OXEOL
+
+
+PAT:
+PATCH:	BLOCK 100
+PDLLEN==100
+PDL:	BLOCK PDLLEN
+
+	; Losing sites list.
+LUZRL==10.
+LUZRS:	BLOCK LUZRL
+	; Very sad feature.
+ASSMSG:	ASCSTR [530 Your host prohibited]
+
+	; Apply salt & butter here.
+POPBA1:	AOS -2(P)
+POPBAJ:	POP P,B
+	POP P,A
+	POPJ P,
+POPJ1:	AOS (P)
+	POPJ P,
+
+POPAJ1:	AOS -1(P)
+POPAJ:	POP P,A
+CPOPJ:
+APOPJ:	POPJ P,
+
+POPCBJ:	POP P,C
+POPBJ:	POP P,B
+	POPJ P,
+
+JUNK:	0	;for random useless writes
+ARPHST:	0	;junk for NETWRK
+SMTPSW:	0	; -1 = Refuse SMTP service (for when COMSAT gronked).
+SENDSW:	0	; If sending,  -1 don't mail. 0 mail if failed.  1 always mail.
+SORMSW:	0	; 0 mail, -1 send.
+DEBUG:	0	; Non-zero when debugging.
+		; +1 => don't logout when done
+		; -1 => just say "debug" in greeting
+		; -1 => don't logout if error, but currently we never
+		;	logout if error (see code at AUTPSY)
+VERSHN:	.FNAM2
+
+
+	;Interrupt handler - mostly for fatal conditions
+TSINT:	0
+	0
+	MOVEM I,ISAVE'		;for debugging, just in case
+	SKIPGE I,TSINT
+	 .DISMIS TSINT+1	;if not 1st wd interrupt, ignore.
+	TDNE I,[%PIIOC]
+	 JSR IOCERR
+	TDNN I,[%PIRLT]
+	 JSR AUTPSY		;die here for unknown 1st wd interrupt
+	TLNE F,%ICPFF
+	 JSR LOGOUT		;die here if .REALT interrupt within ICP...
+	MOVE I,ALIVEC		; Get activity count as of last int
+	CAMN I,LASTRI		; See if aliveness count changed
+	 JSR LOGOUT		; No, die of boredom.
+	MOVEM I,LASTRI
+	.DISMIS TSINT+1		;else stay alive and continue
+
+IOCERR:	0
+	.SUSET [.RBCHN,,I]	;Find erring channel.
+	CAIE I,DC		;Disk error?
+	 JRST IOCER1		; No.
+	SKIPE STOIOC		;Writing some data file?
+	 JRST STOIOC+1		; Yes - handle it.
+IOCER1:	CAIL I,NETICP		;Else better be IOC error on network.
+	 CAILE I,NETD
+	  JSR AUTPSY		;Unknown IOC error, die.
+	JSR LOGOUT		;Ah, user end closed connections, die quietly
+
+LASTRI:	0
+ALIVEC:	0
+
+	;; Disk writing IOC error handling
+
+STOIOC:	0				;Return addr.
+	SYSCAL DELEWO,[%CLIMM,,DC]	;Flush file being written.
+	 NOP
+	.CLOSE DC,
+	SYSCAL DISMIS,[	%CLIMM,,TSINT ? STOIOC ? [0] ? [0]]
+
+	;; Ways out.
+
+LOGOUT:	0		;JSR'd to for more or less normal disappearance.
+	SKIPG DEBUG	; If +1, never logout
+	 .LOGOUT
+	.VALUE
+
+AUTPSY:	0		;JSR'd to for oddball condition or bug.
+			;(referenced by UUO handler)
+	.VALUE
+	JRST .-1
+
+
+BUFFAR:	BLOCK $ARSIZ	; ARBLK for buffer area holding stuff transferred.
+TMPAR:	BLOCK $ARSIZ	; ARBLK for temp translation buffer (TCP image mode)
+DIRAR:	BLOCK $ARSIZ	; ARBLK for directory buffer
+DCTYPE:	0	; Transfer Type.  0=ASCII, -1=Image, 1=Local-byte
+DCBYTE:	0	; Byte size. One of 8., 32., 36.
+USRNAM:	0	; User name, as set by USER.
+ERRCOD:	0	; Error code returned by last .CALL
+
+LDSOC:	0	;lcl skt for data skt open
+FDSOC:	0	;frn skt for data skt open
+FDHST:	0	;frn hst for data skt open
+FSDSKT:	0	; Foreign Specially-specified data socket to use
+FSDHST:	0	; ditto, site to use
+
+
+DEFDEV:	SIXBIT /DSK/		; Initial default file spec for a transfer.
+DEFDIR:	SIXBIT /(NIL)/
+DEFFN1:	SIXBIT /_FTPS_/
+DEFFN2:	SIXBIT />/
+
+DEFSTR:	BLOCK 4			;Starred default stuff for NLST
+MASK1:	0
+MASK2:	0
+
+FILDEV:	0			; Actual file spec in use.
+FILDIR:	0
+FILFN1:	0
+FILFN2:	0
+
+RCHDEV:	0		; To hold file spec as returned by RCHST.
+RCHDIR:	0
+RCHFN1:	0
+RCHFN2:	0
+
+FTPOF1:	SIXBIT /_FTPS_/		; Filenames to use for writing
+FTPOF2:	SIXBIT /OUTPUT/
+
+AIMDEV:	SIXBIT /DSK/		; File spec for COMSAT mail request.
+AIMDIR:	SIXBIT /.MAIL./
+AIMFN1:	SIXBIT /MAIL/
+AIMFN2:	SIXBIT />/
+AIMXF1:	SIXBIT /XMAIL/		; Debug file spec, if XDBG seen.
+
+DMMDEV:	SIXBIT /DSK/		; File spec for COMSYS mail request.
+DMMDIR:	SIXBIT /COMSYS/
+DMMFN1:	SIXBIT /M/
+DMMFN2:	SIXBIT />/
+
+NETDEV:	SIXBIT /NET/	; Device for NET.
+
+DEFFLG:	0		; Default startup flags for F
+ICPSOC:	SPNFTP		; Initial port/socket # to receive conn on
+LOCSOC:	0		; Holds base local socket # (S)
+FRNSOC:	0		; Holds   "  foreign  "     (U)
+FRNHST:	0		; Holds host # we're serving. (new format, with network-number)
+OLDHSN:	0		; Old-format, without network-number, temporary for mailers
+
+RCHBLK:	BLOCK 10	;used by .RCHST calls
+SYSDBG:	0	; System debug switch
+MACHNM:	0	; Machine name (AI,MC,ML,DM)
+ITSVER:	0	; ITS version # in sixbit
+OWNHST:	0	; # of own site.
+OWNNAM:	0	; Addr of ASCIZ string for own site-name.
+XDBGSW:	0	; -1 if XDBG command seen
+SUBTTL Start and ICP
+
+	; Start of program
+GO:	MOVEI P,PDL			; Init PDL pointer
+	MOVE C,0			; Save possible arg from invoker
+	MOVE F,DEFFLG			; Set default startup flags.
+	CALL DATIME"UPINI	   	; Find the time.
+	 JSR LOGOUT			;  Give up if unknown.
+	; Find out what kind of server we're supposed to be.
+	.SUSET [.RXJNAM,,B]		; Get JNAME
+	CAMN B,[SIXBIT /FTP/]
+	 MOVE C,[SIXBIT /RFC003/]
+	HLRZ D,C			; Get possible 'SYN or 'RFC
+	CAMN B,[SIXBIT /TCP/]		; Invoked by TCP handler?
+	 JRST [	TLO F,%LTCP		; Yup, say we're hacking TCP conns
+		.SUSET [.SXJNAM,,[SIXBIT /FTPS/]] ; set JNAME
+		MOVEI B,SPTFTP		; Set up default port #
+		CAIE D,'SYN		; Was specific port given?
+		 JRST GO4		; Nope
+		JRST GO2]		; Yup, decipher it.
+	CAMN B,[SIXBIT /CHAOS/]
+	 JRST GOCHA
+	CAIE D,'RFC
+	 JRST [	.SUSET [.RSNAM,,A]
+		HLRZ D,A
+		CAIE D,'RFC
+		 JRST GO5		; No match, assume ICPSOC set up.
+		JRST .+1]
+GO2:	MOVE A,C
+	MOVEI B,(A)			; Convert RH of SIXBIT to port #
+	ANDI B,7			; Get low 3 bits
+	LDB C,[.BP 700,A]		; Get and add next 3 higher bits
+	LSH C,3
+	ADDI B,(C)
+	LDB C,[.BP 70000,A]		; Then next 3 bits
+	LSH C,6
+	ADDI B,(C)
+GO4:	MOVEM B,ICPSOC
+
+	; Now set flags and thence SNAME to right stuff for port.
+	; %LTCP has already been set if it was going to be.
+	; Default is flags from DEFFLG.
+GO5:	MOVE B,ICPSOC
+	CAIN B,SPSMTP		; Using SMTP service port?
+	 JRST [	TLO F,%LSMTP	; Yeah, say to act like SMTP.
+		.SUSET [.SXJNAM,,[SIXBIT /SMTP/]] ; say that's who we are
+		JRST .+1]
+	; Set timer to log out if icp not finished within 60 sec.
+	TLO F,%ICPFF			;indicate icp phase
+	MOVE A,[600000,,[60.*60.]]	;flush old ticks, start
+	.REALT A,			;new rate, 60 sec frame(ints).
+	.SUSET [.SMASK,,[%PIIOC+%PIRLT]] ;enable ioc and realt
+	.SUSET [.SPICLR,,[-1]]		;enable ints
+
+	; Start ICP
+	TLNE F,%LTCP		; If not hacking TCP, use NCP.
+	 JRST GOTCP		; Aha, must listen with TCP.
+
+	; NCP listen open.
+	MOVEI A,NETICP		;Group of 3 channels
+	MOVE B,ICPSOC		; Get ICP socket # to use
+	MOVE C,[40+.UAI,,40+.UAO]	;I,,O Modes
+	PUSHJ P,NETWRK"ARPSRV		;Do server ICP for Arpanet
+	 JSR LOGOUT		;Timed out
+	MOVEM B,FRNHST		; Save host, find out sockets
+	SYSCAL RCHST,[MOVEI NETI ? CRET A ? CRET LOCSOC ? CRET A] 
+	 JSR LOGOUT 
+	SUBI A,3
+	MOVEM A,FRNSOC
+	JRST GO99		; C nonzero if locked out by SYSDBG
+
+GOCHA:	TLO F,%LSMTP+%LCHAOS	;Chaosnet SMTP server
+	MOVEI A,NETI
+	MOVEI C,[ASCIZ/SMTP/]
+	MOVEI D,8
+	PUSHJ P,NETWRK"CHASRV
+	 JSR LOGOUT
+	TLO B,NETWRK"NW%CHS
+	MOVEM B,FRNHST
+	.SUSET [.SMASK,,[%PIIOC+%PIRLT]] ;enable ioc and realt
+	.SUSET [.SPICLR,,[-1]]		;enable ints
+	MOVE A,[600000,,[5*60.*60.]]	;check connection every 5 minutes
+	.REALT A,
+	JRST MAINIT
+
+GOTCP:	SYSCAL TCPOPN,[MOVEI NETI ? MOVEI NETO ? ICPSOC
+		[-1] ? [-1]]		; Wild fgn port and host.
+	 JSR LOGOUT		; Bah, failed for some reason.
+	MOVEI A,%NSLSN		; Initial state to hang on.
+GOTCP2:	SYSCAL NETBLK,[MOVEI NETO ? A ? MOVEM A]
+	 JSR LOGOUT		; Gack??
+	CAIN A,%NSRFC		; If in SYN-RECEIVED state
+	 JRST GOTCP2		; then it's OK to keep waiting.
+	CAIE A,%NSOPN		; Else should be open now.
+	 CAIN A,%NSRFN
+	  CAIA
+	   JSR LOGOUT		; Aw, phooie.
+
+	; TCP connection open now.
+	SYSCAL RFNAME,[MOVEI NETO ? MOVEM A
+			MOVEM LOCSOC	; Local port # (should be = ICPSOC)
+			MOVEM FRNSOC
+                        MOVEM A]	;Foreign host
+	 JSR LOGOUT		
+;	PUSHJ P,NETWRK"CVH2NA		; Convert to format mailer expects
+	MOVEM A,FRNHST
+					; Drop through
+
+GO99:	TLNN F,%LTCP			; If TCP, don't turn off clock.
+	 .SUSET [.SAMASK,,[%PIRLT]]	; Now can turn off REALT, because
+	TLNE F,%LTCP
+	 JRST [	MOVE A,[600000,,[5*60.*60.]]	;flush old ticks, start
+		.REALT A,			;new rate, 5 min frame(ints).
+		JRST .+1]
+	AOS ALIVEC
+	TLZ F,%ICPFF			; ICP finished!
+	JRST MAINIT			; ICP done, fall through to initialization.
+SUBTTL Post-ICP Initialization
+
+MAINIT:	OUTOPN NETO,		; Initialize .IOT/SIOT output channel.
+	SYSCAL SSTATU,[CRET JUNK ? CRET SYSDBG
+		REPEAT 3, CRET JUNK
+		CRET MACHNM
+		CRET ITSVER]
+	 JSR AUTPSY
+	SKIPGE SYSDBG
+	 JRST [	MOVEI A,[ASCSTR [421 System is being debugged, sorry.]]
+		TLNN F,%LTCP	   ;Message is different for NCP.
+		 MOVEI A,[ASCSTR [401 System is being debugged, sorry.]]
+		PUSHJ P,NETREP
+		JSR LOGOUT]
+	;From this point on we are committed to coming up.
+	HRRZ A,ARPAGS		;Map in the hosts file 
+	MOVEI B,NETICP		;Use this I/O channel for disk
+	PUSHJ P,NETWRK"HSTMAP 
+	 JSR AUTPSY
+	SUB A,ARPAGS		;RH(A) gets number of pages used
+	HRL A,A 
+	ADDM A,ARPAGS		;use them up
+	UARINIT ARPAGS		;initialize core
+	STRINIT			;initialize strings
+	MOVE A,[NETWRK"NW%ARP]	; Look us up on Arpanet
+	PUSHJ P,NETWRK"OWNHST	; Get # of own site.
+	 JRST [	MOVE A,[NETWRK"NW%CHS]	; Hmm, maybe we're chaos-only?
+		PUSHJ P,NETWRK"OWNHST
+		 JSR AUTPSY	; Guess not
+		JRST .+1 ]	; Yep, CHAOS/SMTP or something
+	MOVEM A,OWNHST		; Save # of own site.
+	CAMN A,[NETWRK"NW%ARP+<1_16.>+6]	; Host addr for MIT-DM
+	 TLO F,%DMSW
+	MOVE B,OWNHST
+	PUSHJ P,NETWRK"HSTSRC	;RH(A) -> host name, D -> numbers table entry 
+	 JSR AUTPSY		;We don't exist?
+	HRRZM A,OWNNAM		;store (points to ASCIZ site name)
+	MOVE A,FRNHST		;Get sixbit host name 
+	PUSHJ P,NETWRK"HSTSIX 
+	 JSR AUTPSY 
+	MOVE E,A
+	.SUSET [.RINTB,,B]	; See if toplevel and can login
+	JUMPGE B,MAIN40		;if sign bit not set, nope.  skip login.
+	MOVE A,FRNHST
+	TLZ A,777000		;Clear network number
+	TDNN A,[177700000]	;Try to reduce to old-style number
+	 TRNE A,374
+	  JRST BIGHST		;Can't
+	LDB B,[000200,,A]
+	LSH B,6
+	LSH A,-9
+	IOR A,B
+BIGHST:	MOVEM A,OLDHSN		;Save old-format host# for mailer
+	SETZ B,			; Else begin messy algorithm to produce UNAME...
+REPEAT 3,[LSHC A,-3
+	LSH B,-3
+	TLO B,200000
+]
+	.SUSET [.RUNAME,,A]
+	ANDI A,7777
+	HRRI B,'F_12.
+	TLNE F,%LSMTP		; If we're supposed to be SMTP,
+	 HRRI B,'M_12.		; use nnnMjj for Mail server.
+	IOR B,A			;nnnFjj (nnn= site #, jj= job #)
+	SYSCAL LOGIN,[B ? E]
+	 AOJA B,.-1		; Keep trying.
+
+MAIN40:	.SUSET [.SSNAME,,E]	; For PEEK
+	MOVE A,FRNHST
+	PUSHJ P,ASSHOL		; Vandelous host?
+	 JRST [ MOVEI A,ASSMSG	;  Sigh, go away.
+		PUSHJ P,NETREP
+		JSR LOGOUT]	; See yah!
+	TLNE F,%LSMTP
+	 JRST MAIN41		;SMTP protocol works differently
+	SKIPE SYSDBG
+	 JRST [	MOVEI A,[ASCSTR [050 System is being debugged -- proceed with caution!]]
+		PUSHJ P,NETREP
+		JRST .+1]
+	SKIPE DEBUG
+	 JRST [	MOVEI A,[ASCSTR [050 FTP server is being debugged -- proceed with caution!]]
+		PUSHJ P,NETREP
+		JRST .+1]
+	TLNN F,%LTCP
+	 JRST [ MAKSTR REPLY,[[300- ],TZ,@OWNNAM,[ ITS ],6F,ITSVER,[,  FTP server ],6F,VERSHN,[ on ],WBI,,[
+300 Bugs/gripes to BUG-FTP @ MIT-MC]]
+		JRST MAIN45 ]
+
+	MAKSTR REPLY,[[220- ],TZ,@OWNNAM,[ ITS ],6F,ITSVER,[,  FTP server ],6F,VERSHN,[ on ],WBI,,[
+220 Bugs/gripes to BUG-FTP @ MIT-MC]]
+	JRST MAIN45
+
+;In SMTP, not allowed to send preliminary replies, so just send one long line.
+MAIN41:	MAKSTR REPLY,[[220 ],TZ,@OWNNAM,[ ITS ],6F,ITSVER,[, SMTP server ],6F,VERSHN,[ on ],WBI,,]
+	SKIPE SYSDBG
+	 CCONC REPLY,[[; ITS is being debugged -- proceed with caution!]]
+	SKIPE DEBUG
+	 CCONC REPLY,[[; Server is being debugged -- proceed with caution!]]
+
+MAIN45:	MOVEI A,REPLY
+	PUSHJ P,NETREP
+
+	SETZM DCTYPE		; Initialize TYPE to ASCII
+	MOVEI A,8.
+	MOVEM A,DCBYTE		; and correspondingly BYTE size must be 8.
+				;drop thru to mainline
+SUBTTL MAIN LOOP
+
+	; Very simple command dispatcher.
+	SETZM NCMXCT		; Zero # FTP commands executed.
+MAIN:	AOS ALIVEC
+	PUSHJ P,GETNLN		;get a line (into LINPUT)
+	MOVEI B,40		; Parse up to space
+	PUSHJ P,PRSWRD		; parse a word off, ptr to word string in B, rest in A.
+	MAKSTR ARGSTR,[TS,(A)]	; Store rest of line in ARGSTR.
+	MOVE A,B		; Now convert the word
+	PUSHJ P,CVSIX		; to sixbit.
+	MOVE C,[-NCOMS,,COMTAB]	; Default to FTP commands
+	TLNE F,%LSMTP		; and if using SMTP
+	 MOVE C,[-NSCOMS,,SCMTAB] ; then use a somewhat different table.
+MAIN10:	MOVE B,(C)		; Loop thru command table testing...
+	CAME A,(B)
+	 AOBJN C,MAIN10
+	JUMPGE C,MAIN70		; Counted out => Bad command!
+	HLRZ B,(C)		; Aha, get the routine for it.
+	MOVEI A,ARGSTR		; Set up pointer to arg
+	PUSHJ P,STRIM		; Perform helpful trimming of blanks front and rear.
+	PUSHJ P,(B)		; and execute command,
+	AOS NCMXCT		; bumping "executed" count and
+	JRST MAIN		; returning to loop when done.
+
+MAIN70:	MAKSTR REPLY,[[500 Unrecognized command: ],6F,A]
+	MOVEI A,REPLY
+	PUSHJ P,NETREP
+	JRST MAIN
+
+NCMXCT:	0		; # FTP commands executed since startup.
+
+
+	; Command dispatch table.  Routines for commands are
+	; allowed to use ACs A-E freely, since the MAIN loop
+	; requires nothing saved between commands.
+DEFINE COMM NAME,ADDR
+ADDR,,[SIXBIT /NAME/]
+TERMIN
+
+COMTAB:	COMM USER,USER		; Log in as <arg>.  Just sets default directory.
+	COMM XCWD,XCWD		; Change working dir to <arg>.  Almost same as USER.
+	COMM CWD,XCWD		; Goddamn brain damage
+	COMM PASS,PASS		; <arg> is a (gasp! shudder!) PASSWORD??
+	COMM ACCT,ACCT		; <arg> purports to be (ugh bletch!) Account??
+	COMM BYTE,BYTE		; Set byte size of data conn to <arg> (8, 36)
+	COMM SOCK,SOCK		; <arg> = socket # to connect data chan to.
+	COMM TYPE,TYPE		; Set data conn type to <arg> (A, I)
+	COMM STRU,STRU		; Set structure mode to <arg> (F only)
+	COMM MODE,MODE		; Transfer mode. S only.
+	COMM DELE,DELE		; Delete <file>
+	COMM RNFR,RNFR		; Rename From <file>, followed by RNTO
+	COMM RNTO,RNTO		; Rename To <file>, completes RNFR.
+	COMM LIST,LIST		; List <directory> on data connection
+	COMM RETR,RETR		; Send <file> over data connection.
+	COMM STOR,STOR		; Write data to <file>
+	COMM MLFL,MLFL		; Mail junk to <name> over data connection.
+	COMM MAIL,MAIL		; Mail junk to <name>
+	COMM XRSQ,XRSQ		; Specify <scheme> to use with XRCP.
+	COMM XRCP,XRCP		; Specify <name> as rcpt for message text.
+	COMM XSEN,XSEN		; Like MAIL, but do CLI only. (SEND)
+	COMM XSEM,XSEM		; SEND, and Mail if fail.
+	COMM XMAS,XMAS		; Mail And Send text as gift.
+	COMM NOOP,NOOP		; NOOP as in JFCL.
+	COMM ALLO,NOOP		; Don't need ALLOCATE, so treat as NOOP.
+	COMM BYE,BYE		; Bye bye.
+	COMM QUIT,BYE		; Ditto
+	COMM REIN,UNIMPL	; Reinitialize, not implemented.  Could be.
+	COMM APPE,UNIMPL	; Append, not implemented.(Could be for ASCII file/conn)
+	COMM PASV,UNIMPL	; Passive, not implem.  (don't know if possible)
+	COMM REST,UNIMPL	; Restart (File xfer).  Ugh.
+	COMM NLST,NLST		; Name-list for directory.
+	COMM SITE,UNIMPL	; Site parameters, but we have nothing special.
+	COMM STAT,STAT		; Status of server or (if <arg>) specified file. Ugh.
+	COMM HELP,UNIMPL	; Info re server implementation status.  Could, but why?
+	COMM ABOR,UNIMPL	; Abort current command, like xfer.  Ugh!!
+	COMM XLBT,XLBT		; Loop-back test
+
+	; New stuff for TCP FTP
+	COMM PORT,PORT		; New cmd similar to SOCK
+	COMM MSND,XSEN		; Official name for XSEN
+	COMM MSOM,XSEM		; Official name for XSEM
+	COMM MSAM,XMAS		; Official name for XMAS (sigh)
+	COMM MRSQ,XRSQ		; Ditto for XRSQ
+	COMM MRCP,XRCP		; Ditto for XRCP
+
+	COMM XDBG,XDBG		; Hack debug stuff
+NCOMS==.-COMTAB
+
+	; SMTP command dispatch table
+SCMTAB:	COMM HELO,SMHELO
+	COMM MAIL,SMMAIL
+	COMM RCPT,SMRCPT
+	COMM DATA,SMDATA
+	COMM RSET,SMRSET
+	COMM NOOP,SMNOOP
+	COMM QUIT,SMQUIT
+	COMM SEND,SMSEND
+	COMM SOML,SMSOML
+	COMM SAML,SMSAML
+	COMM VRFY,UNIMPL
+	COMM EXPN,UNIMPL
+	COMM HELP,UNIMPL
+	COMM XDBG,XDBG		; Hack debug stuff
+NSCOMS==.-SCMTAB
+
+	; Commonly used return addresses
+ACKENR:	MOVEI A,REPLY	; PJRST ACKENR uses whatever string is in REPLY.
+ACKEND:			; PJRST ACKEND is also common; same as NETREP.
+			; Fall thru...
+
+; NETREP - Network Reply, sends string pointed to by A out over
+;	command connections and follows up with terminating CRLF.
+NETREP:	OUTS NETO,(A)
+	OUTS NETO,[ASCSTR [
+]]
+	.NETS NETO,		; Kick it right along...
+	POPJ P,
+
+; FILERR - From ERRCOD and the FILDEV file block, composes
+;	a "file error" message and sends it out.  Clobbers A, B!
+
+FILERR:	PUSHJ P,FILSTR		; Compose string containing file name.
+	MOVE B,A
+	PUSHJ P,ERRSTR		; And string containing error description.
+	TLNE F,%LSMTP
+	 JRST [	MAKSTR REPLY,[[452 File error for ],TS,(B),[ - ],TS,(A)]
+		PJRST ACKENR]
+	TLNN F,%LTCP
+	 JRST [	MAKSTR REPLY,[[455 File error for ],TS,(B),[ - ],TS,(A)]
+		PJRST ACKENR]
+	MAKSTR REPLY,[[555 File error for ],TS,(B),[ - ],TS,(A)]
+	PJRST ACKENR
+
+
+; PROTER - Protection error.  Like FILERR but returns amusing error
+;        messages for files FTPS itself protects
+;;; should say something like "Don't FTP to XXX; use MLDEV"
+PROTER:	PUSHJ P,FILSTR		; Compose string containing file name.
+	;; This is the same syntax that (bletch) unix uses in its error msg!
+	MAKSTR REPLY,[[550 ],TS,(A),[: permission denied]]
+	PJRST ACKENR
+
+; ASSHOL - Prevent assholes
+;          Skips if the host in A is OK.
+;          Does not skip for losing hosts.
+;
+; Sigh, I put the following in when a random Internet host (which did not
+; have any liaison or mailboxes) decided to keep connecting to us and ship
+; monster-sized random unknown binary files into the .TEMP. directory.
+;                         -- CSTACY, 2 February 1984
+
+ASSHOL:	PUSH P,B		; Smash only T.
+	MOVSI T,-LUZRL		; AOBJN for losers table.
+ASSHO1:	MOVE B,LUZRS(T)		; Get host address.
+	JUMPE B,ASSHO2		; Ignore zero ones.
+	CAMN A,B		; Is this a losse?
+	 JRST [	POP P,B		;  Yeah - restore stack
+		POPJ P,]	;         take non-skip return.
+ASSHO2:	AOBJN T,ASSHO1		; Keep checking.
+	POP P,B			; All through - host is OK.
+	AOS (P)			; Winskip.
+	POPJ P,
+
+SUBTTL SMTP command routines
+
+
+SMHELO:	HRRZ B,(A)
+	JUMPE B,SMERR
+	MAKSTR FGNNAM,[TS,ARGSTR]	; Copy argument into hostname string
+IFN $.ARPA, MAKSTR REPLY,[[250 ],TZ,@OWNNAM,[.ARPA]]
+.ELSE,	MAKSTR REPLY,[[250 ],TZ,@OWNNAM]
+	SKIPE NCMXCT			; Is this the first command seen?
+	 PJRST ACKENR			; Nope, just return.
+	MOVEI A,REPLY
+	PJRST SMRST2			; Yes, so reset things on our way back.
+
+SMRSET:	MOVEI A,[ASCSTR [250 Reset]]
+SMRST2:	SETZM RCPIDX		; Simple, just clear index
+	SETZM FRMSTR		; and return-path string
+	SETZM GOTFRM'
+	SETOM RSCHEM		; Say hacking rcpts-first.
+	PJRST ACKEND
+
+SMNOOP:	MAKSTR REPLY,[[250 JFCL]]
+	PJRST ACKENR
+
+SMERR:	MAKSTR REPLY,[[500 Error in command string]]
+	PJRST ACKENR
+
+;;; SMTP send and mail commands
+
+SMSEND:	SETOM SENDSW		;Don't mail if send fails
+SMSN05:	SETOM SORMSW		;Sending, not mailing
+	JRST SMSN10
+
+SMSAML:	MOVEI A,1		;Send and mail
+	MOVEM A,SENDSW
+	JRST SMSN05
+
+SMSOML:	SETZM SENDSW		;Mail if send fails
+	JRST SMSN05
+
+SMMAIL:	SETZM SORMSW		;Mailing, not sending
+SMSN10:	SKIPE GOTFRM		; Mustn't already have anything.
+	 JRST [	MOVEI A,[ASCSTR [503 Bad sequence, MAIL already seen?]]
+		PJRST ACKEND]
+	SKIPN NCMXCT
+	 JRST [	MOVEI A,[ASCSTR [503 Must give HELO first]]
+		PJRST ACKEND]
+	MOVEI B,":
+	CALL PRSWRD		; Get initial word
+	EXCH A,B
+	CALL CVSUPR		; Make uppercase
+	EQUSTR A,[ASCSTR [FROM]]
+	 JRST SMERR		; Must have "FROM:"
+	MOVE A,B
+	CALL STRIMA		; Strip off angle brackets
+	 JRST [	MOVEI A,[ASCSTR [553 Bad syntax, no brackets]]
+		PJRST ACKEND]
+	MOVE B,A		; Save ptr to stripped string
+	CALL CVRCP		; Convert SMTP rcpt (hack hack!), return A
+	 PJRST ACKEND		; Ugh!  Error reply in A.
+	MAKSTR FRMSTR,[TS,(B)]	; Store return path, use stripped string.
+	SETOM GOTFRM
+	MOVEI A,[ASCSTR [250 OK]]
+	SKIPE SORMSW
+	 PJRST ACKEND
+	CALL BLOATP		; Make sure it's OK to write mail file.
+	 JRST [	MOVEI A,[ASCSTR [421 Sorry, big mail backlog! Try again later.]]
+		PUSHJ P,NETREP	; Send the reply,
+		JSR LOGOUT ]	;  then punt.
+	PJRST ACKEND
+
+SMRCPT:	SKIPN GOTFRM
+	 JRST [	MOVEI A,[ASCSTR [503 Must give MAIL first]]
+		PJRST ACKEND]
+	MOVEI B,":
+	CALL PRSWRD		; Get initial word
+	EXCH A,B
+	CALL CVSUPR
+	EQUSTR A,[ASCSTR [TO]]
+	 JRST SMERR		; Must have "TO:"
+	MOVE A,B
+	CALL CVRCPT		; Convert SMTP rcpt (hack hack!), return A
+	 PJRST ACKEND		; Ugh!  Error reply in A.
+	CALL RCPSTO		; Store recipient name
+	 JRST [	MOVEI A,[ASCSTR [553 Null rcpt]]
+		PJRST ACKEND]
+	MOVEI A,[ASCSTR [250 OK]]
+	PJRST ACKEND
+
+SMDATA:	SKIPN GOTFRM
+	 JRST [	MOVEI A,[ASCSTR [503 Must give MAIL first]]
+		PJRST ACKEND]
+	JUMPLE R,[MOVEI A,[ASCSTR [503 No recipients?]]
+		PJRST ACKEND]
+	MOVEI A,[ASCSTR [354 Hello mailer!]]
+	TLNE F,%DMSW
+	 MOVEI A,[ASCSTR [354 Hello sailor!]]
+	CALL NETREP		; Send the response
+	CALL GETML		; Get mail text
+	 PJRST SMRST2		; Shit, reset and report error in A
+	SKIPN SORMSW
+	 JRST SMDAT9		;Just mailing
+	SETZ R,			; Initialize for plucking rcpts
+SMDAT1:	PUSHJ P,RCPSEQ		; From table into RCPSTR...
+	 JRST SMDAT8		; Exit when no more.
+	MOVEI A,RCPSTR
+	PUSHJ P,CVSIXH		; Convert name to 6bit...
+	MOVE B,A
+	PUSHJ P,ONLINE		; See if online...
+	 JRST [	SKIPL SENDSW
+		 JRST SMDAT9	;Forget sending, mail instead
+		MOVEI A,[ASCSTR [450 That user is not on-line now.]]
+		PJRST RCLACK ]
+	PUSHJ P,SENDIT		; Try to :SEND it...
+	 JRST [	SKIPL SENDSW
+		 JRST SMDAT9	;Forget sending, mail instead
+		MOVEI A,[ASCSTR [450 That user is either not on-line or not accepting messages.]]
+		PJRST RCLACK]
+	JRST SMDAT1		;Try next RCPT in case multiple
+
+SMDAT8:	SKIPG SENDSW		;Send succeeded, mail also?
+	 JRST SMDAT7
+SMDAT9:	CALL MAILIT		; Do it!
+	 PJRST SMRST2		; Ugh, error here.
+SMDAT7:	MOVEI A,[ASCSTR [250 OK, mail sent.]]
+	PJRST SMRST2
+
+
+; Design for SMTP interactive sends.   --- CSTACY 12/29/83.
+;  (partially implemented)
+;
+; The subroutine ITSRCP takes a mailbox and looks to see if it is a
+; plausible ITS uname (username of any six chars and a host of MC, ML,
+; DM, or AI).  If it is, it returns true with the uname and device name
+; in some ACs, otherwise it returns false.
+;
+; SMSEND, SMSAML, and SMSOML set a switch (SENDSW) to indicate which has
+; been called, then jumps into common code at SMSN10, which checks for
+; proper command sequences as in SMMAIL, then set a switch indicating
+; that we are hacking sends (SORMSW).
+;
+; The RCPT handler (SMRCPT) is modified so that if SORMSW is set, we
+; call ITSRCP to examine the recipient.  If ITSRCP returns true, we
+; probe for a HACTRN on the appropriate device.
+; 
+; If not found, and we are SENDing, we reject the recipient with a 450
+; reply ("User not online or refusing sends now").  If not found and if
+; we are SAMLing, we also reject.  If found, or if we don't care because
+; we are SOMLing, we accept and store the recipient as usual.
+;
+;  The routine which is named SENDIT is renamed CLISND or something, and
+;  the NCP/FTP mail commands (like XMAS) which call it are modified; we
+;  usurp the name SENDIT for something more like MAILIT.
+;
+;  Also, the routine in MAILIT which actually writes the request file is
+;  abstracted out into a subroutine.
+;
+; Next, the DATA handler (SMDATA) is modified so that if SORMSW if set,
+; we call SENDIT instead of MAILIT.
+;
+; Like MAILIT, SENDIT makes sure that the message text is not too long;
+; a message over 5400 characters is too long.  We process each recipient
+; by calling ITSRCP and if this returns true, calling CLISND.  
+;
+; If CLISND fails and the command was SEND, we lost and for this
+; recipient.  It is too late to reject the recipient, but if there was
+; only one recipient in the list we can reply RESET.  If there was more
+; than one recipient in this case, we send the message as a "Failing
+; Qsend" in mail.
+;
+; If CLISND fails and the command was SOML, we mail and continue on happily.
+; If CLISND fails and the command was SAML, we mail and continue on happily,
+; since I can't think of anything better to do.
+;
+; When all the recipients have been mailed and/or sent to, we reply with
+; a success code and return from the SMDATA command
+
+
+; CVRCPT - Takes SMTP path in string in A,
+;	returns hacked COMSAT/COMSYS rcpt string in A.
+;	Converts "<@A,@B,@C:rcpt@D>" to "rcpt@D@C@B@A"
+; Fails to skip if some problem (leaves err message in A)
+CVRPSW:	0		; Count of stuff added to output string
+
+CVRCPT:	CALL STRIMA	; Strip off angle brackets
+	 JRST [	MOVEI A,[ASCSTR [553 Bad path syntax]]
+		RET]
+CVRCP:	PUSHAE P,[B,C,D,E]
+	SETZM CVRPSW
+	BCONC		; Start output of a new string
+	HRRZ D,(A)	; Get count
+	MOVE E,1(A)	; Get BP
+	JUMPLE D,CVRP90	; Allow null path "<>"
+
+	; See if first char is "@", if not, then no routing info.
+	MOVE B,E
+	ILDB B,B
+	CAIE B,"@
+	 JRST [	OUT(STRC,S(D,E))	; No routing, copy whole string.
+		JRST CVRP80]
+
+	; Have routing info, must start hacking.
+	; First scan forward for the ":".  If none found, we still scan
+	; for commas anyway, for benefit of old SMTPs.
+CVRP10:	ILDB B,E
+	CAIE B,":
+	 SOJG D,CVRP10
+	SOJLE D,CVRP15		; Possible to have a null rcpt or something?
+	OUT(STRC,S(D,E))	; First part is mailbox
+	AOS CVRPSW		; Say we got mailbox part.
+	ADDI D,1		; Pretend we used up the ":" too.
+
+	; Okay, hack routing.  If a ":" existed, it has been processed.
+CVRP15:	SKIPGE B,D
+	 SETZ B,
+	HRRZ D,(A)	; Get back total length
+	MOVE E,1(A)	; and BP to start of string
+	SUBI D,(B)	; Find # chars of routing info.
+	MOVE C,E
+	PTSKIP D,C	; Get BP to last char
+	MOVE B,D	; Copy count
+	JRST CVRP30
+
+	; Got recipient portion, copy it over
+CVRP20:	MOVEI A,(D)
+	SUBI A,(B)		; Find # chars used
+	CAIGE A,2		; Route spec must have at least "@X"
+	 JRST CVRP99
+	OUT(STRC,S(A,C))	; Copy into output string
+	MOVE A,C
+	ILDB A,A		; Check the first char
+	CAIE A,"@		; Must be "@"!
+	 JRST [	SKIPN CVRPSW	; If not, only allow if it's mailbox.
+		 JRST .+1
+		JRST CVRP99]	; Ugh, complain.
+	AOS CVRPSW
+	SOJLE B,CVRP80
+	MOVEI D,(B)		; Set up new count of chars left
+	D7BPT C			; Move over the comma we found.
+CVRP30:	LDB A,C
+	CAIN A,",
+	 JRST CVRP20
+	D7BPT C
+	SOJG B,CVRP30
+	JRST CVRP20
+
+CVRP80:	ECONC TMPSTR
+	MOVEI A,TMPSTR
+CVRP90:	AOSA -4(P)
+CVRP99:  MOVEI A,[ASCSTR [553 Bad path syntax]]
+	POPAE P,[E,D,C,B]
+	RET
+
+STRIMA:	CALL STRIM	; Just in case.
+	PUSHAE P,[B,C,D,E]
+	HRRZ D,(A)
+	JUMPE D,STRMA9
+	MOVE E,1(A)		;get cnt and bp for string.
+	ILDB B,E
+	CAIE B,"<		; > should be this.
+	 JRST STRMA9
+	SOJLE D,STRMA9		; Decrement count
+	MOVEM E,1(A)		; Store trimmed start ptr
+	PTSKIP D,E		; Increment ptr by # chars remaining
+	LDB B,E			; Get last char, <
+	CAIE B,">
+	 JRST STRMA9		; Sigh.
+	SOJL D,STRMA9
+	HRRM D,(A)		; Store new cnt back.
+	AOS -4(P)
+STRMA9:	POPAE P,[E,D,C,B]
+	POPJ P,
+
+
+SUBTTL Minor command routines
+
+UNIMPL:	MOVEI A,[ASCSTR [502 This command is not implemented, sorry.]]
+	PJRST ACKEND
+
+XDBG:	SETOM XDBGSW
+	MOVEI A,[ASCSTR [200 OK, debug stuff turned on]]
+	PJRST ACKEND
+
+	; NOOP  - acknowlege gravely.
+NOOP:	MOVEI A,[ASCSTR [200 JFCL]]
+	PJRST ACKEND
+
+	; BYE  - Log out and so forth.  Maybe should print a BYE-pgm msg??
+BYE:	MOVEI A,[ASCSTR [231 BCNU]]
+	TLNE F,%LTCP
+SMQUIT:	 MOVEI A,[ASCSTR [221 BCNU]]
+	PUSHJ P,NETREP
+	TLNN F,%LCHAOS
+	 JSR LOGOUT
+	;; TCP finish reputedly hangs up if done here.
+	;; No one seems to have failed to get the response either.
+	;; CHAOS otherwise manages to close before data received,
+	;; though, so finish it.
+	SYSCAL FINISH,[MOVEI NETO]
+	 JFCL
+	JSR LOGOUT
+
+	; USER <uname>  - "Login", just sets default directory name.
+USER:	HRRZ B,(A)		; Get count of string.
+	TLNN F,%LTCP
+	 JUMPE B,[MAKSTR REPLY,[[230 Null USER was given; user name remains ],6F,USRNAM]
+		PJRST ACKENR]
+	JUMPE B,[MAKSTR REPLY,[[230 Null USER was given; user name remains ],6F,USRNAM]
+		PJRST ACKENR]
+	PUSHJ P,CVSIX		; Convert argument to SIXBIT
+	MOVEM A,USRNAM		; and store as specified user name.
+	MOVEM A,DEFDIR		; and make it the default directory to reference.
+	MAKSTR REPLY,[[230 OK, your user name is ],6F,USRNAM]
+	PJRST ACKENR
+
+	; XCWD <sname>  - Change working directory, just sets default dir name.
+XCWD:	HRRZ B,(A)		; Get count of string.
+	JUMPE B,[MAKSTR REPLY,[[250 Null XCWD was given; dir name remains ],6F,DEFDIR]
+		PJRST ACKENR]
+	PUSHJ P,CVSIX		; Convert argument to SIXBIT
+	MOVEM A,DEFDIR		; and make it the default directory to reference.
+	MAKSTR REPLY,[[250 OK, your directory by default is ],6F,DEFDIR]
+	PJRST ACKENR
+
+	; PASS <pwd>  - Loser obviously on wrong machine.
+PASS:	MOVEI A,[ASCSTR [230 What makes you think you need a password?]]
+	PJRST ACKEND		; Do a little kidding.  2xx code really accepts.
+
+	; ACCT <acct>  - Loser also obviously on wrong machine!
+ACCT:	MOVEI A,[ASCSTR [430 Account ID is not in hash table; add 1 and try again.]]
+	PJRST ACKEND		; More kidding.  This time, DON'T accept!
+
+	; MODE <char>  - Set transfer mode.  (only S=Stream accepted)
+MODE:	PUSHJ P,CVSUPR		; Convert arg to uppercase.
+	EQUSTR A,[ASCSTR [S]]
+	 SKIPA A,[[ASCSTR [504 Only Stream I/O is implemented here.]]]
+	MOVEI A,[ASCSTR [200 Mode Stream]]
+	PJRST ACKEND
+
+	; STRU <char>  - Set structure type.  Only F=File accepted.
+STRU:	PUSHJ P,CVSUPR		; Convert arg to uppercase.
+	EQUSTR A,[ASCSTR [F]]
+	 SKIPA A,[[ASCSTR [504 Only FILE structure is allowed.]]]
+	MOVEI A,[ASCSTR [200 FILE structure]]
+	PJRST ACKEND
+
+	; TYPE <char>  - Set transfer type (A=Ascii, I=Image)
+TYPE:	PUSHJ P,CVSUPR		; Convert arg to uppercase.
+	EQUSTR A,[ASCSTR [L 36]]
+	 CAIA
+	  JRST [SETOM DCTYPE	; Pretend Image 36-bit.
+		MOVEI B,36.
+		MOVEM B,DCBYTE
+		JRST TYPE40]
+	EQUSTR A,[ASCSTR [L 8]]
+	 CAIA
+	  JRST TYPE18
+	EQUSTR A,[ASCSTR [L]]	; Local?
+	 CAIA
+TYPE18:	  JRST [MOVEI A,1	; Yes, set to Local.
+		MOVEM A,DCTYPE
+		TLNN F,%LTCP	; If TCP, always use bytesize 8
+		 JRST TYPE40
+		MOVEI A,8.
+		MOVEM A,DCBYTE
+		JRST TYPE40]
+TYPE30:	EQUSTR A,[ASCSTR [I N]]
+	 CAIA
+	  JRST TYPE32
+	EQUSTR A,[ASCSTR [I]]	; Image?
+	 CAIA
+TYPE32:	  JRST [SETOM DCTYPE	; Aha. Set to Image.
+		TLNN F,%LTCP
+		 JRST TYPE40	; For NCP, byte size is independent
+		MOVEI B,36.	; But for TCP, implies 36-bit words.
+		MOVEM B,DCBYTE
+		JRST TYPE40]
+	EQUSTR A,[ASCSTR [A N]]
+	 CAIA
+	  JRST TYPE34
+	EQUSTR A,[ASCSTR [A]]	; Ascii?
+	 JRST TYPE60
+TYPE34:	SETZM DCTYPE		; Yep, set to that.
+	MOVEI A,8.		; And force byte size, ASCII must always be 8.!
+	MOVEM A,DCBYTE
+TYPE40:	MAKSTR REPLY,[[200 Type ],TS,ARGSTR]
+	PJRST ACKENR
+TYPE60:	MAKSTR REPLY,[[504 Invalid Type: ],TS,ARGSTR]
+	PJRST ACKENR
+
+	; BYTE <dec #>  - Set transfer byte size.
+BYTE:	TLNE F,%LTCP
+	 PJRST UNIMPL		; No such command in TCP version, always 8.
+	PUSHJ P,CVSDEC		; Convert decimal string.
+	 JRST [	MAKSTR REPLY,[[501 Bad numeric argument: ],TS,ARGSTR]
+		PJRST ACKENR]
+	CAIL A,1		; Well, is the # anything we grok?
+	 CAILE A,36.
+	  JRST [MOVEI A,[ASCSTR [402 Byte sizes only between 1 and 36, please.]]
+		PJRST ACKEND]
+	MOVEM A,DCBYTE		; Ah, store new (?) byte size.
+	MAKSTR REPLY,[[200 Byte ],N9,DCBYTE]
+	PJRST ACKENR
+
+
+	; DELE <filename>  - do as it says.
+DELE:	MOVE B,[DEFDEV,,FILDEV]
+	PUSHJ P,FILPAR		; Parse filename, using given defaults.
+	HLRZ B,FILDIR
+	CAIN B,'.MA		; Don't allow deletion on .MAIL. directories
+	 PJRST PROTER		; Fuck off, asshole!
+	SYSCAL OPEN,[CERR ERRCOD ? CIMM DC ? FILDEV ? FILFN1 ? FILFN2 ? FILDIR]
+	 PJRST FILERR
+	PUSHJ P,RCHSTR		; Find true filenames and make string of it.
+	MOVE B,[RCHFN1,,FILFN1]
+	BLT B,FILFN2		; Make sure that what gets deleted is what we say!
+	SYSCAL DELETE,[CERR ERRCOD ? FILDEV ? FILFN1 ? FILFN2 ? FILDIR]
+	 PJRST FILERR		; File error of sorts, report & return.
+	MAKSTR REPLY,[[250 Deleted ],TS,(A)]
+	TLNN F,%LTCP
+	 JRST [	MAKSTR REPLY,[[254 Deleted ],TS,(A)]
+		PJRST ACKENR ]
+	PJRST ACKENR
+
+	; LIST <dirname>  - Send listing of specified dir over data connection.
+LIST:	MOVE B,[DFLDEV,,FILDEV]	; Use special defaults to parse arg
+	PUSHJ P,FILPAR
+	SKIPN A,FILDIR		; Was directory specified?
+	 JRST [	SKIPN A,FILFN1	; If not, try "Fn1".
+		 SKIPE A,USRNAM	; If no "Fn1", try given USER name.
+		  JRST .+1
+		MOVEI A,[ASCSTR [503 USER name was not given.]]
+		PJRST ACKEND]
+	MOVEM A,FILDIR
+	MOVE A,[[SIXBIT /.FILE.(DIR)/],,FILFN1]
+	BLT A,FILFN2		; Set up Fn1 and FN2 for directory.
+	PUSHAE P,[DCBYTE,DCTYPE]
+	SETZM DCTYPE		; Temporarily make type ASCII,
+	MOVEI A,8.
+	MOVEM A,DCBYTE		; and set corresponding size.
+	PUSHJ P,RETR05		; And send user the "file".
+	POPAE P,[DCTYPE,DCBYTE]
+	POPJ P,
+
+DFLDEV:	SIXBIT /DSK/	; Special "default fnm" when parsing LIST arg.
+	REPEAT 3, 0
+SUBTTL RNFR/RNTO - Renaming commands
+
+	; RNFR <filename> - Specifies file to be renamed
+	; RNTO <filename> - specifies filename to rename to.
+	;		Ordinarily RNTO should immediately follow RNFR.
+	;		The RNFRCT var is meant to enforce this.
+
+RNFR:	MOVE B,[DEFDEV,,FILDEV]	; Set up defaults
+	PUSHJ P,FILPAR		; And parse given filename.
+	HLRZ A,FILDIR
+	CAIN A,'.MA		; Don't allow rename on .MAIL. directories
+	 PJRST PROTER	; Bah, error.  Report that and return.
+	SYSCAL OPEN,[CERR ERRCOD ? [.UAI,,DC]
+		FILDEV ? FILFN1 ? FILFN2 ? FILDIR]	; See if exists.
+	 PJRST FILERR		; Bombed, report.
+	PUSHJ P,RCHSTR		; Ah, find true FN's and compose reply.
+	TLNN F,%LTCP
+	JRST [	MAKSTR REPLY,[[200 OK, renaming ],TS,(A),[ to...]]
+		JRST RNFR1]
+	MAKSTR REPLY,[[350 OK, renaming ],TS,(A),[ to...]]
+RNFR1:	MOVE A,NCMXCT		; Now find # of FTP cmds so far
+	MOVEM A,RNFRCT		; and save it for RNTO to check.
+	PJRST ACKENR
+
+RNFRCT:	0	; Holds NCMXCT at time of last RNFR.
+
+RNTO:	MOVE B,NCMXCT		; Check to see if RNTO follows RNFR.
+	SUB B,RNFRCT		; Should differ by 1 only.
+	SOJN B,[MOVEI A,[ASCSTR [503 RNTO is valid only immediately after a RNFR!]]
+		PJRST ACKEND]
+	MOVE B,[FILDEV,,FILDEV]	; Use previous, RNFR values as defaults.
+	PUSHJ P,FILPAR		; Parse filename.
+	PUSHJ P,RCHSTR		; Get string for previously opened file...
+	MOVE B,FILDEV		; now check dev, dir for compatibility
+	MOVE C,FILDIR
+	CAMN B,RCHDEV
+	 CAME C,RCHDIR
+	  JRST [MOVEI A,[ASCSTR [553 Operation failed, because renaming cannot change device or directory.]]
+		.CLOSE DC,
+		PJRST ACKEND]
+	SYSCAL RENMWO,[CERR ERRCOD ? CIMM DC ? FILFN1 ? FILFN2]	; Try rename.
+	 PJRST FILERR
+	MAKSTR REPLY,[[250 ],TS,(A),[ renamed to ]]
+	TLNN F,%LTCP
+	 JRST [	MAKSTR REPLY,[[253 ],TS,(A),[ renamed to ]]
+		JRST .+1]
+	PUSHJ P,RCHSTR		; Get genuine filenames
+	.CLOSE DC,
+	CONC REPLY,[TS,(A)]	; Concatenate new filename onto reply.
+	PJRST ACKENR		; Return successfully
+SUBTTL SOCK - Socket to use for data connection
+
+	; SOCK [<host>,]<decimal #>  -  Use given # for data connection,
+	;	perhaps with optional (decimal) host # to use as well.
+
+SOCK:	TLNE F,%LTCP
+	 PJRST UNIMPL		; Not in TCP version, use PORT.
+	SETZM FSDHST		; Clear so non-write is obvious.
+	MOVEI B,",		; Parse argument up to comma, if any.
+	PUSHJ P,PRSWRD
+	HRRZ C,(A)		; See what count is for remainder...
+	JUMPE C,SOCK50		; 0 => No remainder, hence no host spec.
+	EXCH A,B		; Aha, word with remainder! Word is host spec...
+	PUSHJ P,CVSDEC		; Convert from decimal...
+	 JRST SOCK70		; org?
+	MOVEM A,FSDHST		; Store as host # to use.
+SOCK50:	MOVE A,B		; Now get remainder into A - it's the socket #.
+	PUSHJ P,CVSDEC		; Convert that
+	 JRST SOCK70
+	MOVEM A,FSDSKT		; and store it for later.
+	SKIPN A,FSDHST		; Now get specified host # for acknowledgement
+	 MOVE A,FRNHST		; (use # of connected host if none specified).
+	TLZ A,777000		;Clear network number
+	MAKSTR REPLY,[[200 Host ],N9,A,[, socket ],N9,FSDSKT]
+	PJRST ACKENR
+
+SOCK70:	MAKSTR REPLY,[[501 Bad argument for SOCK: ],TS,ARGSTR]
+	SETZM FSDHST
+	SETZM FSDSKT
+	PJRST ACKENR
+
+; PORT <h1,h2,h3,h4,p1,p2> - Use given host/port for data connection.
+
+PORT:	TLNN F,%LTCP		; TCP version only!
+	 PJRST UNIMPL
+	SETZB D,FSDHST		; Clear so non-write is obvious.
+	SETZM FSDSKT
+
+	MOVSI C,-6		; Hack 6 octets
+	PUSH P,[401000,,D]	; Set up BP into D and E
+PORT2:	MOVEI B,",
+	CALL PRSWRD		; Get the ascii octet
+	HRRZ T,(A)		; See if this is last thing
+	JUMPE T,[AOBJP C,.+1	; Keep going if OK to be last thing.
+		JRST PORT70]	; Else ended too soon!
+	EXCH A,B
+	CALL CVSDEC		; Convert ascii to number (decimal)
+	 JRST PORT70		; Barf?
+	IDPB A,(P)		; Store it away
+	MOVE A,B		; Put back ptr to arg string
+	AOBJN C,PORT2		; Keep going
+
+	; We could check here for junk after arg, but don't bother.
+	; Go put away the stuff we parsed.
+	MOVEM D,FSDHST		; Store host (Internet = HOSTS3 fmt)
+	LSH E,-<36.-16.>	; Right justify the 16-bit port number
+	MOVEM E,FSDSKT		; and store that.
+	POP P,JUNK
+	CAMN D,FRNHST		; See if host is same as one connected to.
+	 JRST [	MAKSTR REPLY,[[200 OK, port ],N9,E]
+		PJRST ACKENR]		; Win!
+	MAKSTR REPLY,[[200 OK, port ],N9,E,[ (WARNING: host ],OCT,D,[, not ],OCT,FRNHST,[!)]]
+	PJRST ACKENR
+
+PORT70:	POP P,JUNK
+	MAKSTR REPLY,[[501 Bad argument for PORT: ],TS,ARGSTR]
+	PJRST ACKENR
+SUBTTL STOR - Write file received from net.
+
+	; STOR <filename>  - User wants to store data in that filename.
+
+STOR:	MOVE B,[DEFDEV,,FILDEV]
+	PUSHJ P,FILPAR		; Parse filename with given default/dest
+	HLRZ A,FILDIR
+	CAIN A,'.MA		; Don't allow rename on .MAIL. directories
+	 PJRST PROTER		; Bah, error.  Report that and return.
+	SKIPN USRNAM		; If no USER name specified,
+	 JRST [	MOVE B,FILDIR	; then resulting directory becomes default.
+		MOVEM B,DEFDIR
+		JRST .+1]
+	MOVEI C,.BIO
+	SKIPN DCTYPE		; Open dsk output in correct mode for type.
+	 MOVEI C,.UAO		; ASCII needs Unit Ascii Out.
+	SKIPLE DCTYPE		; Local needs
+	 MOVEI C,.UIO		;   Unit Image Out.
+	SYSCAL OPEN,[CERR ERRCOD ? CTL C
+		CIMM DC ? FILDEV ? FTPOF1 ? FTPOF2 ? FILDIR]
+	 JRST [	MOVE A,FTPOF1	; Failed??? Indicate filename actually tried.
+		MOVEM A,FILFN1
+		MOVE A,FTPOF2
+		MOVEM A,FILFN2
+		PJRST FILERR]	; and go report.
+
+	; File opened for writing, now attempt to open data connection...
+	MOVEI A,[ASCSTR [150 Socket to me!]]
+	TLNE F,%LTCP
+	 CALL NETREP
+	PUSHJ P,DATCNI		; Like so.
+	 POPJ P,		; Failed?? oh well.  (DATCNI reports lossage itself)
+	TLNN F,%LTCP
+	 JRST [	MOVEI A,[ASCSTR [250 Socket to me!]]
+		PUSHJ P,NETREP
+		JRST .+1]
+	; Data connection open! Now begin data transfer...
+	MOVEI T,STOBIG
+	MOVEM T,STOIOC		;If any IOC lossage, give user error response.
+	MOVEI A,NETD
+	MOVEI B,DC		; Set up input and output channel #'s
+	PUSHJ P,XFR		; Xfer from NETD to DC in appropriate mode.
+	SETZM STOIOC
+STOR40:	SYSCAL RENMWO,[CERR ERRCOD		; When done, rename to right thing!
+		CIMM DC ? FILFN1 ? FILFN2]	; (i.e. originally specified names)
+	 PJRST FILERR
+	PUSHJ P,RCHSTR		; Find true filenames before closing.
+	.CLOSE DC,
+	MAKSTR REPLY,[[226 FINIS - ],TS,(A)]	; And report what it was.
+	TLNN F,%LTCP
+	 JRST [ MAKSTR REPLY,[[252 FINIS - ],TS,(A)]	; And report what it was.
+		JRST .+1]
+	TLNN F,%DMSW
+	 PJRST ACKENR		; and return forthwith if not on DM.
+	MOVE A,FILDIR
+	CAME A,['NETWRK]	; If on DM, see if we just wrote to NETWRK; dir
+	 PJRST ACKENR
+	SYSCAL DEMSIG,[['NETRJS]]	; and wake up RJE demon to gobble if so.
+	 JFCL
+	PJRST ACKENR
+
+;;; Note - disk IOC's while writing: err, drop the connection, and don't return.
+
+STOBIG:	SETZM STOIOC			;Unset IOC handler.
+	OUTS NETO,[ASCSTR [452 File System failure - maybe disk full
+
+]]
+	.NETS NETO,		; Kick it right along...
+	TLNN F,%LCHAOS
+	 JSR LOGOUT
+	SYSCAL FINISH,[MOVEI NETO]
+	 JFCL
+	JSR LOGOUT
+
+SUBTTL STAT - Status report
+
+STAT:	PUSH P,A	   ;Save pointer to argument string.
+	PUSHJ P,FNPARD	   ;Parse as filename, DDT style.
+	JUMPN A,STAT1	   ;Was anything parsed out of there?
+	JUMPN B,STAT1
+	JUMPN C,STAT1
+	JUMPE D,STAT2
+STAT1:	POP P,A		   ;Yes - Recover string for reparsing,
+	PJRST NLST	   ;    and proceed like NLST command.
+
+STAT2:	POP P,JUNK	   ;No filename - just give general information.
+	MAKSTR REPLY,[[211-],TZ,@OWNNAM,[ ITS ],6F,ITSVER,[,  FTP server ],6F,VERSHN,[ on ],WBI,,EOL, ]
+	SKIPE SYSDBG
+	 CCONC REPLY,[[211-Caution: System is being debugged.],EOL, ]
+	SKIPE DEBUG
+	 CCONC REPLY,[[211-Caution: FTP server is being debugged.],EOL, ]
+	CCONC REPLY,[[211-Hacking FILE structure STREAM mode transfers in ],N9,DCBYTE,[ bit ]]
+	MOVEI A,[ASCIZ "ASCII"]	   ;0 means ascii
+	SKIPLE DCTYPE
+	 MOVEI A,[ASCIZ "image"]
+	SKIPGE DCTYPE
+	 MOVEI A,[ASCIZ "local"]
+	CONC REPLY,[TZ,(A),[ bytes.],EOL, ]
+	CONC REPLY,[[211-Working directory is: ],6F,DEFDIR]
+	SKIPN USRNAM
+	 JRST [ CONC REPLY,[[  (You are not logged in.)],EOL, ]
+		JRST STAT3 ]
+	CONC REPLY,[[  (Logged in as ],6F,USRNAM,[)],EOL, ]
+STAT3:	SKIPN ERRCOD
+	 JRST STAT9
+	PUSHJ P,FILSTR	   ;Let's report most recent error.
+	MOVE B,A	   ;Compose string containing file name.
+	PUSHJ P,ERRSTR	   ;And string containing error description.
+	CONC REPLY,[[211-Most recent file error was:  ],TS,(B),[ - ],TS,(A)]
+STAT9:	MOVEI A,[ASCIZ "closed"]
+	.STATUS NETD,B
+	SKIPE B
+	 MOVEI A,[ASCIZ "open"]	
+	CONC REPLY,[[211 Data connection is ],TZ,(A),[.  My socket: ],N9,LDSOC,[, your socket: ],N9,FDSOC]
+	PJRST ACKENR
+
+SUBTTL NLST - wildcard-type directory listing
+
+NLST:	MOVE B,DEFDEV		;Set defaults to DEV:DIR;* *
+	MOVEM B,DEFSTR
+	MOVE B,DEFDIR
+	MOVEM B,DEFSTR+1
+	MOVSI B,(SIXBIT/*/)
+	MOVEM B,DEFSTR+2
+	MOVEM B,DEFSTR+3
+	MOVE B,[DEFSTR,,FILDEV]
+	PUSHJ P,FILPAR		;Get wild file name argument command.
+	SYSCAL OPEN,[CERR ERRCOD ? CTLI .BII	;Read the directory
+		CIMM DC ? FILDEV ? [SIXBIT/.FILE./] ? [SIXBIT/(DIR)/] ? FILDIR]
+	 PJRST FILERR		; Bombed, report file error & return.
+	UAROPN [%ARTCH+%ARTZM,,DIRAR ? [2000]]	; Get buffer
+	MOVE C,DIRAR+$ARRPT	; Get BP to beg of buffer
+	HRLI C,-2000
+	.IOT DC,C		;Read in the dir
+	.CLOSE DC,
+	PUSHAE P,[DCBYTE,DCTYPE]
+	SETZM DCTYPE		; Temporarily make type ASCII,
+	MOVEI A,8.
+	MOVEM A,DCBYTE		; and set corresponding size.
+	MAKSTR REPLY,[[150 Begin dir listing for ],6Q,FILDEV,[: ],6Q,FILDIR,[; ],6Q,FILFN1,[ ],6Q,FILFN2]
+	MOVEI A,REPLY
+	TLNE F,%LTCP
+	 CALL NETREP
+	PUSHJ P,DATCNO		;Now open data connection
+	 JRST NLSTX		;Foo.
+	TLNN F,%LTCP
+	 JRST [	MAKSTR REPLY,[[250 Begin directory listing for ],6Q,FILDEV,[: ],6Q,FILDIR,[; ],6Q,FILFN1,[ ],6Q,FILFN2]
+		MOVEI A,REPLY
+		PUSHJ P,NETREP
+		JRST .+1]
+REPEAT 2,[			;Convert stars to zeros
+	SETO C,
+	MOVE B,FILFN1+.RPCNT
+	CAMN B,[SIXBIT/*/]
+	 SETZ C,
+REPEAT 6,[			;Generate mask
+	MOVEI A,0
+	LSHC A,6
+	CAIN A,'*
+	 TLZ C,770000
+	ROT C,6
+];INNER REPEAT 
+	MOVEM C,MASK1+.RPCNT
+	ANDM C,FILFN1+.RPCNT
+];REPEAT
+	OUTOPN NETD,		;Will send directory listing to NETD
+	HRRZ C,DIRAR+$ARRPT	;Pointer to binary directory
+	MOVEI D,2000(C)		;End
+	ADD C,UDNAMP(C)
+NLST1:	CAML C,D
+	 JRST NLST3		;Done
+	MOVE A,UNFN1(C)		;Test file name against pattern
+	MOVE B,UNFN2(C)
+	AND A,MASK1
+	AND B,MASK2
+	CAMN A,FILFN1
+	 CAME B,FILFN2
+	  JRST NLST2
+	FWRITE NETD,[6Q,FILDEV,[: ],6Q,FILDIR,[; ],6Q,UNFN1(C),[ ],6Q,UNFN2(C)]
+	CRLF NETD,
+NLST2:	ADDI C,LUNBLK
+	JRST NLST1
+
+NLST3:	SYSCAL FINISH,[MOVEI NETD]	; Force output NOW.
+	 JSR IOCERR
+	.CLOSE NETD,
+	TLNE F,%LTCP		; If using TCP,
+	 .CLOSE NETICP,		; must also flush other direction.
+	MOVEI A,[ASCSTR [226 That's all, folks!]]
+	TLNN F,%LTCP
+	 MOVEI A,[ASCSTR [252 That's all, folks!]]
+	PUSHJ P,ACKEND
+NLSTX:	POPAE P,[DCTYPE,DCBYTE]
+	UARCLS DIRAR
+	POPJ P,
+SUBTTL RETR - Send file over net.
+
+	; RETR <filename>  - User wants to retrieve specified file
+
+RETR:	MOVE B,[DEFDEV,,FILDEV]
+	PUSHJ P,FILPAR		; Parse filename as usual...
+	SKIPN USRNAM		; If no USER name given,
+	 JRST [	MOVE B,FILDIR	; use resulting dir as default in future.
+		MOVEM B,DEFDIR
+		JRST .+1]
+	; Entry pt when FILDEV set up.
+RETR05:	MOVEI C,.UAI		; Use Unit Ascii In, unless
+	SKIPE DCTYPE		; 36-bit Image requested.
+	 MOVEI C,.BII
+	SKIPLE DCTYPE		; For Local type,
+	 MOVEI C,.UII		; use Unit Image In.
+	SYSCAL OPEN,[CERR ERRCOD ? CTL C	; Open, using mode in C
+		CIMM DC ? FILDEV ? FILFN1 ? FILFN2 ? FILDIR]
+	 PJRST FILERR		; Bombed, report file error & return.
+
+	; Desired file opened, now open data connection to xfer it!
+	PUSHJ P,RCHSTR		; Get true filename of what we're reading.
+	MAKSTR REPLY,[[150 Look out!  Here comes ],TS,(A)]
+	MOVEI A,REPLY
+	TLNE F,%LTCP
+	 CALL NETREP
+	PUSHJ P,DATCNO		; Attempt open for output...
+	 POPJ P,		;Foo?
+
+	; File and Data conn both open, now xfer...
+	TLNN F,%LTCP
+	 JRST [	PUSHJ P,RCHSTR		; Get true filename of what we're reading.
+		MAKSTR REPLY,[[250 Look out! Here comes ],TS,(A)]
+		MOVEI A,REPLY
+		PUSHJ P,NETREP
+		JRST .+1]
+	MOVEI A,DC
+	MOVEI B,NETD		; Set up input and output chans
+	PUSHJ P,XFR		; Now xfer from DC to NETD.
+	SYSCAL FINISH,[MOVEI NETD]	; Ensure all pushed out.
+	 JSR IOCERR
+RETR40:	.CLOSE NETD,
+	TLNE F,%LTCP		; If using TCP,
+	 .CLOSE NETICP,		; also close other direction.
+	MOVEI A,[ASCSTR [226 That's all, folks!]]	
+	TLNN F,%LTCP
+	 MOVEI A,[ASCSTR [252 That's all, folks!]]
+	PJRST ACKEND
+SUBTTL Data Transfer Routines
+
+XFRBFL==4000		; ASCII buffer area length to use, in words.
+
+; Transfer data from channel in A to channel in B, using appropriate
+; mode - Image, Local or ASCII.  Closes input channel and clobbers A.
+
+XFR:	SKIPGE DCTYPE	; Use appropriate mode - Image or ASCII.
+	 JRST [	CALL XFRIMG	; Use image.
+		JRST XFR9]
+	SKIPLE DCTYPE
+	 JRST [	CALL XFRLCL	; Use Local byte
+		JRST XFR9]	; Drop thru for ASCII.
+	CALL XFRASC
+XFR9:	TRNE F,%NTDIR		; Skip if we were hacking input
+	 RET			; Nope, net chans left open.
+	TLNE F,%LTCP		; If using TCP, must ensure that the
+	 .CLOSE NETICP,		; output channel gets closed too!
+	RET
+
+	; ASCII transfer
+XFRASC:	PUSHAE P,[C,D]
+	UAROPN [%ARTCH+%ARTZM,,BUFFAR ? [XFRBFL]]	; Get buffer
+	MOVE C,BUFFAR+$ARRPT	; Get BP to beg of buffer
+	MOVEI D,5		;First read ahead one word.
+	SYSCAL SIOT,[A ? C ? D]	;When we output the buffer we always save 1 word, so that
+	 JSR AUTPSY		;We can always flush up to 5 chars of padding (^C's or ^@'s).
+	AOS ALIVEC
+	JUMPG D,XFRAS2		;Didn't get even 1 word => at EOF.
+XFRASL:	MOVE C,BUFFAR+$ARRPT	;Try to fill up buffer, assuming already have 1 word.
+	ADDI C,1
+	MOVEI D,XFRBFL*5-5
+	SYSCAL SIOT,[A ? C ? D]
+	 JSR AUTPSY
+	JUMPG D,XFRAS1		;Didn't fill it all up => at EOF, flush some padding.
+	MOVE C,BUFFAR+$ARRPT
+	MOVEI D,XFRBFL*5-5	;Did fill it => output it, but save the last word,
+	SYSCAL SIOT,[B ? C ? D]
+	 JSR AUTPSY
+	MOVE C,BUFFAR+$ARLOC
+	MOVE C,(C)XFRBFL-1	;which we move into the first word.
+	MOVEM C,@BUFFAR+$ARLOC
+	JRST XFRASL
+
+XFRAS2:	ADDI D,XFRBFL*5-5
+XFRAS1:	MOVNS D
+	ADDI D,XFRBFL*5		;# chars we have in buffer now.
+	SYSCAL CLOSE,[A]
+	 JSR AUTPSY
+	SETZ A,
+	PTSKIP A,C	; get canonical BP (SIOT may return 440700,,)
+
+XFRAS4:	JUMPE D,XFRAS9		;Discard any number of ^@'s or ^C's, then one ^L.
+	LDB A,C
+	CAIE A,^C
+	 JUMPN A,XFRAS3
+	D7BPT C
+	SOJA D,XFRAS4
+
+XFRAS3:	CAIE A,^L
+	 JRST XFRAS5
+	D7BPT C
+	SOJE D,XFRAS9
+XFRAS5:	MOVE C,BUFFAR+$ARRPT	;Output what's left after flushing padding.
+	SYSCAL SIOT,[B ? C ? D]
+	 JSR AUTPSY
+XFRAS9:	UARCLS BUFFAR
+	POPAE P,[D,C]
+	POPJ P,
+
+	; Local-byte Transfer.
+	; Unfortunately %NTDIR (0=netin, 1=netout) must be used to
+	; select two different algorithms, because ITS is still
+	; too stupid to know about byte sizes other than 7 or 36
+	; when talking to the disk.
+XFRLCL:	PUSHAE P,[C,D,E]
+	UAROPN [%ARTZM,,BUFFAR ? [XFRBFL]]	; Set up buffer area
+	MOVE C,$ARLOC+BUFFAR		; and a BP to it
+	MOVE D,DCBYTE			; Get byte-size
+	DPB D,[$SFLD,,C]		; Stick into size field of BP
+	TLO C,440000			; Start at beg of word
+	MOVEI D,36.
+	IDIV D,DCBYTE		; Find # bytes in a word
+	MOVEM D,XFRBPW		; Save
+	IMULI D,XFRBFL		; Find # bytes in buffer
+	MOVE E,D		; Save cnt
+	PUSHAE P,[C]		; Save BP
+
+XFRLC2:	MOVE D,E		; Get # bytes max to read
+	MOVE C,(P)		; Restore BP
+	TRNE F,%NTDIR		; All's well if input is from NET
+	 JRST [	MOVEI D,XFRBFL	; Nope, DSK... set # wds
+		HRLI C,444400	; and use word-size bytes.
+		JRST .+1]	;
+	SYSCAL SIOT,[A ? C ? D]	; Slurp up
+	 JSR AUTPSY
+	AOS ALIVEC
+	TRNE F,%NTDIR		; If input was from DSK,
+	 IMUL D,XFRBPW		; convert count to # bytes.
+	SUBM E,D		; Get # bytes read in D
+	JUMPLE D,XFRLC9
+	TRNN F,%NTDIR		; If output is to DSK,
+	 JRST [	PUSH P,E	; Pad out.
+		IDIV D,XFRBPW	; Find # words
+		CAILE E,	; Round up
+		 AOS D
+		CAILE E,	; Pad out with zeros
+		 PUSHJ P,[PUSH P,D ? SETZ D, ? IDPB D,C ? POP P,D
+			SOS (P) ? SOS (P)	; Call again til done.
+			SOJA E,APOPJ]
+		POP P,E
+		JRST .+1]
+	MOVE C,(P)		; Restore BP
+	TRNN F,%NTDIR		; Again, if output is to DSK,
+	 HRLI C,444400		; use word-size bytes.
+	SYSCAL SIOT,[B ? C ? D]	; Output them
+	 JSR AUTPSY
+	JRST XFRLC2
+	
+XFRLC9:	POP P,C
+	UARCLS BUFFAR
+	POPAE P,[E,D,C]
+	POPJ P,
+.SCALAR XFRBPW		; # bytes per word
+
+	; Image Transfer.
+XFRIMG:	TLNE F,%LTCP
+	 JRST XFRIT			; Go hack TCP image transfer
+	PUSH P,C
+	UAROPN [%ARTZM,,BUFFAR ? [XFRBFL]]	; Set up buffer area
+	MOVE C,$ARLOC+BUFFAR		; and an AOBJN ptr
+	HRLI C,-XFRBFL
+	PUSH P,C			; Save it.
+XFRIM4:	SYSCAL IOT,[A ? C]
+	 JSR AUTPSY
+	AOS ALIVEC
+	JUMPGE C,[MOVE C,(P)		; Restore AOBJN ptr
+		SYSCAL IOT,[B ? C]	; And use to output buffer.
+		 JSR AUTPSY
+		MOVE C,(P)		; Restore again for more input.
+		JRST XFRIM4]
+	SYSCAL CLOSE,[A]		; Aha, got it all. Close empty input chan.
+	 JSR AUTPSY
+	POP P,A			; Partially counted out, recover original ptr.
+	HLRES C			; Put partial neg cnt in RH
+	HRLOI C,XFRBFL-1(C)	; Put <#wds-1> in LH, -1 in RH
+	EQVI C,(A)		; And convert to AOBJN pointing to buffer.
+	SYSCAL IOT,[B ? C]	; And output rest of stuff.
+	 JSR AUTPSY
+	UARCLS BUFFAR		; Done!
+	POP P,C
+	POPJ P,
+
+	; Net into area, ASCII.  Gobbles stuff from data connection into
+	; BUFFAR.
+GETNAR:	PUSH P,A
+	UAROPN [%ARTCH+%ARTZM,,BUFFAR ? [2000]]	; Open text area with 1K increment.
+GETNA2:	MOVM A,BUFFAR+$ARCHL	; Get # chars available
+	SYSCAL SIOT,[CIMM NETD ? BUFFAR+$ARWPT ? A]	; Slurp.
+	 JSR AUTPSY
+	MOVNM A,BUFFAR+$ARCHL	; Restore proper $ARCHL.
+	JUMPG A,POPAJ1		; Jump out if reached EOF. (Skip return)
+	MOVEI A,2000		; Not yet,  expand by this much
+	UAREXP A,BUFFAR
+	JRST GETNA2		; Read in more.
+
+; XFRIT - TCP Image transfer.  Network 8-bit bytes are packed into
+;	disk 36-bit words, and vice versa.
+;	A/ input channel
+;	B/ output channel
+
+XFRIT:	PUSHAE P,[C,D,E,R]
+	TRNE F,%NTDIR
+	 JRST XFRITO		; Output, from disk to net.
+
+	; TCP Image Input, network 8-bit bytes must be packed into
+	; 36-bit words.
+XFR8BL==<<<XFRBFL*9>+7>/8.>	; # words in 8-bit byte buffer
+	UAROPN [%ARTZM,,BUFFAR ? [XFRBFL]]
+	UAROPN [%ARTZM,,TMPAR ? [XFR8BL]]
+	MOVE E,$ARLOC+BUFFAR
+	HRLI E,-XFRBFL		; Set up initial AOBJN to word buffer
+	MOVEI R,0		; Point to beginning of cycle
+
+XFRIT2:	MOVEI D,4*XFR8BL	; # bytes to slurp from net
+	PUSH P,D
+	MOVE C,$ARLOC+TMPAR
+	HRLI C,441000
+	SYSCAL SIOT,[A ? C ? D]	; Get input
+	 JSR AUTPSY
+	AOS ALIVEC		; Say we're still active
+	TRZ F,%TMP
+	CAILE D,
+	 TRO F,%TMP		; Set flag if last slurp.
+	POP P,C			; Restore # bytes we asked for
+	SUBI C,(D)		; Find # bytes we got
+	IDIVI C,4		; Get # words (rem in D)
+	JUMPE C,[HRR C,$ARLOC+TMPAR	; If no full words, skip stuff.
+		JRST XFRIT4]
+	MOVN C,C
+	HRLZS C
+	HRR C,$ARLOC+TMPAR	; Now have AOBJN to the fullwords we got
+	JRST @XFITCT(R)		; Re-enter cycle at right place
+
+	; C has AOBJN to full words we received (4 8-bit bytes)
+	; D has # remaining bytes in last word
+	; E has AOBJN to disk output buffer
+	; R has # nibbles needed to fill out word in T.  If 0, nothing in T.
+XFITC0:
+	MOVE T,(C)		; Get word with 4 bytes left justified
+	LSH T,-4		; Right-justify it.
+	AOBJP C,[MOVEI R,1		; Jump if no more words
+		JRST XFRIT4]		; Handle wrapup stuff
+IRP CNT,,[1,2,3,4,5,6,7,8]
+XFITC!CNT:	MOVE TT,(C)		; Get next one
+		LSHC T,CNT*4		; Shift in to fill up word in T
+		MOVEM T,(E)		; Deposit word in buff
+		AOBJN E,.+2		; Increment ptr, skip unless full
+		 CALL XFITCB		; Force out word buff, reset E
+IFN CNT-8,[	LSHC T,<32.-<CNT*4>>	; Shift in unused portion
+		AOBJP C,[MOVEI R,CNT+1		; Jump if no more input
+			JRST XFRIT4]		; Go handle wrapup stuff
+] ; all but last subcycle
+TERMIN
+	AOBJN C,XFITC0		; Back to start of cycle
+	MOVEI R,0		; No more data.  Say no nibbles needed
+				; Drop through
+
+	; No more 32-bit full words from input buffer.  
+	; T contains partial data, right-justified.
+	; TT is empty, awaiting the next input word.
+	; D contains the # of bytes in the next input word.
+	; R has the # of nibbles left to fill out word in T (0-8)
+
+XFRIT4:	JUMPE D,XFRIT5	; If no remaining data, just get new entry point!
+	MOVE TT,(C)	; Get last data word
+	LSH D,1		; Turn # bytes into # nibbles
+	JUMPE R,XFRIT3	; If nothing currently in T, must skip some stuff.
+	MOVEI C,(R)	; Assume enough data to fill last word
+	CAIG D,(R)
+	 MOVEI C,(D)	; Not enough data nibbles, just shift in all
+	LSH C,2		; 4 bits per nibble
+	LSHC T,(C)	; Shift in desired amount
+	CAIGE D,(R)	; Did we have enough to fill out the word?
+	 JRST XFRIT3	; Nope, don't deposit anything.
+	MOVEM T,(E)	; Have full word for deposit
+	AOBJN E,.+2
+	 CALL XFITCB	; Output buff full, force out.
+
+	; Now shift in unused portion of data
+XFRIT3:	SUBI R,(D)	; Get new # nibbles needed
+	JUMPGE R,XFRIT5	; If zero or positive, easy to set up.
+	MOVE C,R	; Negative, has # of data nibbles left in TT
+	IMUL C,[-4]	; 4 bits per nibble (make positive)
+	LSHC T,(C)	; Right-justify remaining data in T
+	ADDI R,9.	; Find # nibbles needed to fill out word
+
+XFRIT5:	TRNN F,%TMP		; Last slurp?
+	 JRST XFRIT2		; Nope, go get another slurp.
+
+	; Last slurp, so must left-justify any remaining data and deposit it.
+	; This code applies a heuristic to determine whether the remaining
+	; data should actually be written or not.  Normally if the user
+	; FTP isn't buggy, R will either be 0 (no nibbles left) or
+	; 8 (1 nibble left over, since end fell in middle of an octet).
+	; If R isn't one of these, there was at least one full data byte
+	; that shouldn't have been sent.  In that case we pad out the word
+	; and write it anyway.
+	JUMPN R,[
+		CAIN R,8.	; If only 1 nibble left (partial byte)
+		 JRST .+1	; then ignore and assume all's well.
+		LSH R,2		; 4 bits per nibble
+		LSH T,(R)	; Note pad with zeros!
+		MOVEM T,(E)	; Store last (partial) word.
+		AOBJN E,.+1
+		JRST .+1]
+	CALL XFITCB	; Always force out.
+	JRST XFRIT9
+
+XFITCT:	XFITC0 ? XFITC1 ? XFITC2 ? XFITC3
+	XFITC4 ? XFITC5 ? XFITC6 ? XFITC7 ? XFITC8
+
+
+	; Force out word buffer, and reset write pointer in E
+XFITCB:	HRRZS E
+	SUB E,$ARLOC+BUFFAR	; Find # words deposited
+	MOVNS E
+	HRLZS E
+	HRR E,$ARLOC+BUFFAR	; Make it an AOBJN pointer
+	SYSCAL IOT,[B ? E]	; Image output (E has AOBJN)
+	 JSR AUTPSY
+	MOVE E,$ARLOC+BUFFAR	; Now initialize write ptr again
+	HRLI E,-XFRBFL
+	RET
+
+
+	; XFR TCP Image Output, Disk to Net
+XFRITO:	UAROPN [%ARTZM,,BUFFAR ? [XFRBFL]]
+	UAROPN [%ARTZM,,TMPAR ? [XFR8BL]]
+	
+XFRIT6:	MOVSI C,-XFRBFL
+	HRR C,$ARLOC+BUFFAR
+	MOVE D,C
+	SYSCAL IOT,[A ? C]	; Slurp stuff up
+	 JSR AUTPSY
+	AOS ALIVEC
+	TRZ F,%TMP
+	CAIGE C,
+	 TRO F,%TMP		; Not counted out, this is last slurp.
+	HLRES C
+	HRLOI C,XFRBFL-1(C)
+	EQVI C,(D)		; Now have AOBJN to words we read in.
+	JUMPGE C,XFRIT9
+
+	HLRE D,C
+	IMUL D,[-9.]		; Find # of 4-bit nibbles
+	ADDI D,1
+	IDIVI D,2.		; Find # of 8-bit bytes.
+	PUSH P,D
+	HRRZ E,$ARLOC+TMPAR
+	SUBI E,1		; Allow for increment of first PUSH
+	TLO E,(SETZ)		; Make PDL ptr
+
+XFRIT7:	MOVE TT,(C)		; Get word 0
+	LSHC T,32.		; Get 1st 32 bits right justified
+	LSH T,4.		; Left justify it
+	PUSH E,T		; Store bytes 0-3
+	AOBJP C,XFRIT8	; If counted out, must store last 4 bits.
+
+REPEAT 7,[
+	LSHC T,4*<.RPCNT+1>	; Get low 4 bits of wd 0
+	MOVE TT,(C)		; Glom onto wd 1
+	LSHC T,<32.-<4*<.RPCNT+1>>> ; Fill out to 32 bits from wd 1
+	LSH T,4			; Make left justified
+	PUSH E,T		; Store bytes 4-7
+	AOBJP C,XFRIT8	; If counted out, store last 8 bits.
+]	
+	PUSH E,TT	; Reached alignment, store last wd directly
+	JRST XFRIT7	; then repeat the cycle
+
+XFRIT8:	PUSH E,TT
+	POP P,D
+	MOVE C,$ARLOC+TMPAR
+	HRLI C,441000
+	SYSCAL SIOT,[B ? C ? D]
+	 JSR AUTPSY
+
+	TRNN F,%TMP
+	 JRST XFRIT6
+	
+XFRIT9:	UARCLS TMPAR
+	SYSCAL CLOSE,[A]
+	 JSR AUTPSY
+	UARCLS BUFFAR
+	POPAE P,[R,E,D,C]
+	RET
+
+SUBTTL Opening Data Connection
+
+; DATCNI - Opens Data connection for Input
+; DATCNO - Ditto for Output.  Both use appropriate byte/size.
+;	Skips when connection successfully opened.  Else reports an
+;	error and doesn't skip on return.
+
+DATCNI:	TRZA F,%NTDIR		; Clear flag to indicate Input direction.
+DATCNO:	 TRO F,%NTDIR		; Set to indicate Output.
+	PUSHJ P,CNNCHK		; Check data type and byte size, and set up OPEN bits
+	 POPJ P,		; Bleah?  Oh well, return.
+	TLNE F,%LTCP		; If hacking TCP conns,
+	 JRST DATTCP		; must use special routine.
+	PUSH P,A
+	MOVE A,LOCSOC		; Get local socket # (S) that was sent to User.
+	ADDI A,2		; Use S+2 as local socket for receiving input, unless
+	TRNE F,%NTDIR		; outputting onto net, in which case
+	 ADDI A,1		; use S+3.
+	MOVEM A,LDSOC		; Store as default Local Data socket #
+	MOVE A,FRNSOC		; Similarly, get foreign socket # (U)
+	ADDI A,5		; And use U+5 for foreign send
+	TRNE F,%NTDIR		; Unless outputting, in which case
+	 SUBI A,1		; U+4 is the right default Foreign Data skt #.
+	SKIPE FSDSKT
+	 MOVE A,FSDSKT		; But if socket explicitly specified, use that.
+	MOVEM A,FDSOC		; and store whatever it was.
+	MOVE A,FRNHST
+	SKIPE FSDHST		; Ditto for foreign host.
+	 MOVE A,FSDHST
+	TLZ A,777000		;Clear network number (cretinous bug in old ITS)
+	MOVEM A,FDHST
+
+	MOVEI A,40+.UAI		; Use either unit ascii
+	SKIPE DCTYPE
+	 MOVEI A,44040+.BII	;or 36-bit block image
+	SKIPLE DCTYPE
+	 JRST [	MOVE A,DCBYTE	; Local byte.  Get bytesize to use
+		LSH A,9.	; put into right place
+		IORI A,40+.UII	; and set for Unit-Image.
+		JRST .+1]
+	TRNE F,%NTDIR
+	 TRO A,1		;set output bit if necessary
+	TRO A,100		;and always use 3.7 to get 8x ITS buffer size.
+	SYSCAL OPEN,[CTL A ? CIMM NETD ? NETDEV ? LDSOC ? FDSOC ? FDHST]
+	 JRST DATCN9
+
+	MAKSTR REPLY,[[255 SOCK ],N9,LDSOC]
+	MOVEI A,REPLY
+	PUSHJ P,NETREP		; Send SOCK reply informing user which skt to use.
+	MOVEI A,NETD
+	TRNE F,%NTDIR		; Skip for input
+	 JRST DATCN5		;go wait for net output conn
+	NETHANG 900.,A,%NSRFS,[%NSOPN,%NSCLI,%NSINP]
+	 JRST DATCN9		; Connection failed.
+	JRST POPAJ1
+
+DATCN5:	NETHANG 900.,A,%NSRFS,%NSOPN
+	 JRST DATCN9		; Connection attempt failed?
+	JRST POPAJ1		; Won!
+
+DATCN9:	.CLOSE NETD,
+	POP P,A
+	MAKSTR REPLY,[[454 Can't connect to your socket ],N9,FDSOC]
+	PJRST ACKENR
+
+
+	
+; CNNCHK - Simple thingy to make sure byte size & type are consistent.
+CNNCHK:	SKIPLE DCTYPE		; For Type L, any size 1-36 is ok.
+	 JRST POPJ1
+	PUSH P,A
+	MOVE A,DCBYTE
+	SKIPN DCTYPE
+	 JRST [	CAIN A,8.	;type ascii. size should be 8
+		 JRST POPAJ1	; Win...
+		MOVEI A,[ASCSTR [Only size 8 is allowed with Type A.]]
+		JRST CNNCH5]	; Ugh.
+	CAIN A,36.		;type image, size should be 36
+	 JRST POPAJ1		; Win...
+	MOVEI A,[ASCSTR [Only size 36 is allowed with type I; maybe you want type L?]]
+CNNCH5:	PUSH P,B
+	MOVE B,[SIXBIT /ASCII/]
+	SKIPE DCTYPE		; Set up proper type description...
+	 MOVE B,[SIXBIT /IMAGE/]
+	MAKSTR REPLY,[[505- Type/Byte-size conflict!  Type ],6F,B,[, Byte ],N9,DCBYTE,[??]]
+	CONC REPLY,[[
+505 ],TS,(A)]
+	POP P,B
+	POP P,A			; Flush saved A, doesn't matter now.
+	PJRST ACKENR
+
+	; Open TCP data connection 
+DATTCP:	PUSH P,A		; Save ACs
+	PUSH P,B
+	MOVE A,LOCSOC
+	SUBI A,1		; Use server port # - 1 for local port
+	CAIG A,
+	 JSR AUTPSY		; Just in case clobbered.
+	MOVEM A,LDSOC		; Store as Local Data port #
+	SKIPN A,FSDSKT		; If user's data port explicitly given, use it
+	 MOVE A,FRNSOC		; else use control connection port.
+	MOVEM A,FDSOC		; Store as Foreign Data port #
+	SKIPN A,FSDHST		; Same procedure for foreign host.
+	 MOVE A,FRNHST
+	MOVEM A,FDHST
+
+; Assume bytesize is correct.	
+;	MOVE A,DCBYTE		; Make absolutely sure that bytesize right
+;	CAIE A,8.
+;	 JRST [	MAKSTR REPLY,[[560 Byte size must be 8, is ],N9,A,[???]]
+;		JRST DATTC9]
+	MOVEI A,NETD		; I/O chan to use (default input)
+	MOVEI B,NETICP		; Scratch channel #
+	TRNE F,%NTDIR		; Default wins if want input data chan
+	 EXCH A,B		; Oops, want output, swap chans.
+	SYSCAL TCPOPN,[ A ? B ? LDSOC ? FDSOC ? FDHST ? CERR A]
+	 JRST [	MAKSTR REPLY,[[425 Can't connect to your port ],N9,FDSOC,[ - ],ERR,A]
+		JRST DATTC8]
+
+	; Wait for connection (output chan) to become open
+	MOVEI A,900.		; Time to wait
+	SYSCAL NETBLK,[B ? MOVEI %NSRFS ? A ? CRET A]
+	 JRST [	MAKSTR REPLY,[[425 Can't connect to your port ],N9,FDSOC,[ - timed out.]]
+		JRST DATTC8]
+	CAIE A,%NSOPN
+	 CAIN A,%NSRFN
+	  CAIA
+	JRST [	MAKSTR REPLY,[[425 Can't connect to your port ],N9,FDSOC,[ - state ],OCT,A]
+		JRST DATTC8]
+	POP P,B			; Open! Take win return.
+	PJRST POPAJ1
+
+DATTC8:	.CLOSE NETD,
+	.CLOSE NETICP,
+DATTC9:	POP P,B
+	POP P,A
+	PJRST ACKENR
+
+SUBTTL XRSQ, XRCP - Select multi-rcpt scheme, and specify rcpts.
+
+	; XRSQ <scheme> - Specifies a multi-rcpt scheme to use,
+	;	or inquires preference.  Always resets stuff.
+
+XRSQ:	HRRZ B,(A)	; Get count for argument string
+	JUMPLE B,[SETZM RSCHEM	; No argument means reset to no scheme.
+		MOVEI A,[ASCSTR [200 OK, we're now using no scheme.]]
+		JRST XRSQ70]	; Reset stuff and send message.
+	PUSHJ P,CVSUPR	; Convert arg to uppercase
+	EQUSTR A,[ASCSTR [?]]
+	 CAIA
+	  JRST [MOVEI A,[ASCSTR [215 R The preferred scheme is recipients first.]]
+		JRST XRSQ70]
+	EQUSTR A,[ASCSTR [R]]
+	 CAIA
+	  JRST [SETOM RSCHEM	; Aha, want to use R scheme!
+		MOVEI A,[ASCSTR [200 OK, we're now using scheme R.]]
+		JRST XRSQ70]
+	; If here, didn't recognize anything.
+	MAKSTR REPLY,[[501 This site can't use scheme ],TS,(A),[.]]
+	MOVEI A,REPLY		; Point to reply string, and drop thru.
+
+	; Come here to reset all schemes and return reply.
+XRSQ70:	SETZM RCPIDX		; Simple, just clear index.
+	PJRST ACKEND
+
+RSCHEM:	0	; Scheme in use. 0 is none, -1 is (R)cpts first; in future
+		; +1 may mean (T)ext first.
+
+
+	; XRCP <rcpt>  - Specifies a recipient for the text of
+	;	a following MLFL or MAIL, using R scheme.
+
+XRCP:	SKIPL RSCHEM		; Make sure R scheme is being used.
+	 JRST [	MOVEI A,[ASCSTR [507 No scheme is selected yet; use XRSQ.]]
+		PJRST ACKEND]
+	PUSHJ P,RCPSTO		; Store argument string in tables.
+	 PJRST NLREND		; If null rcpt, complain.
+	PUSHJ P,BLOATP		; Die immediately if can't accept mail now
+	 JSR LOGOUT
+	MOVEI A,[ASCSTR [200 Check.]]
+	PJRST ACKEND		; Affirm that rcpt is stored.
+
+NLREND:	MOVEI A,[ASCSTR [450 No recipient?]]
+	PJRST ACKEND
+
+
+; RCPSTO - Stores current argument string in recipient
+; tables and sets R to current RCPIDX.
+
+RCPSTO:	MOVE R,RCPIDX		; Get current IDX into rcpt table
+	HRRZ B,(A)		; Get count of string
+	CAIN B,0		; Null?
+	 POPJ P,		; If so, return w/o skipping or changing R.
+	JUMPLE R,[UAROPN [RTABAR ? [10]]	; If first rcpt, initialize array table
+		UAROPN [%ARTCH,,RSTRAR ? [20]]	; And string storage area.
+		JRST .+1]
+	MOVEI C,2(R)		; See if there will be enough room in array...
+	CAMLE C,$ARLEN+RTABAR	; Skip if enough.
+	 JRST [	MOVEI B,10	; Nope, need to expand by 10.
+		UAREXP B,RTABAR	; (it's just a nice small round number)
+		JRST .-1]	; Re-try check, just to be sure.
+	OUTOPN TMPC,[$UCUAR,,RSTRAR]	; Open (or re-open) temp chan
+	MOVE C,$ARWPT+RSTRAR	; And before writing into string area, save
+	SUB C,$ARLOC+RSTRAR	; its relative write BP.
+	OUTS TMPC,(A)		; Now store string!
+	MOVE B,$ARLOC+RTABAR		; Get start addr of array,
+	ADDI B,(R)		; So as to get abs addr of new slot
+	MOVEM C,1(B)		; And store relative BP to string
+	HRRZ C,(A)		; Along with
+	MOVEM C,(B)		; its char count.
+	ADDI R,2		; Now officially enter, by bumping idx!
+	MOVEM R,RCPIDX
+	AOS (P)
+	POPJ P,
+
+RCPIDX:	0		; Holds IDX to first free rcpt slot in RTABAR.
+RTABAR:	BLOCK $ARSIZ	; Rcpt table, a  "String array" of 2-wd string descriptors.
+RSTRAR:	BLOCK $ARSIZ	; Area holding string text for above.
+RCPSTR:	BLOCK 2	; Holds descriptor for a selected rcpt - NOT a normal string var! See RCPSEQ.
+
+
+
+
+; RCPSEQ - Given idx to rcpt in R, stuffs string descriptor
+; for that rcpt into RCPSTR, and increments R to point at next rcpt.
+
+RCPSEQ:	CAML R,RCPIDX		; At or past limit yet?
+	 POPJ P,		; Non-skip return if so.
+	PUSHAE P,[A,B]
+	MOVE A,$ARLOC+RTABAR	; Get start addr of array
+	ADDI A,(R)		; Get abs addr of selected rcpt descr.
+	MOVE B,1(A)		; Get rel. BP for string
+	ADD B,$ARLOC+RSTRAR	; Make abs
+	MOVEM B,RCPSTR+1	; Store
+	MOVE B,(A)	; Get char cnt
+	MOVEM B,RCPSTR		; And store that too to finish.
+	POPAE P,[B,A]
+	ADDI R,2		; Bump R to point at next rcpt...
+	AOS (P)		; Skip on win...
+
+	POPJ P,
+
+SUBTTL MLFL, MAIL, XSEN/XSEM/XMAS - Mailing Commands/Routines.
+	
+; RCLRET - Rcpt Clear Return, commonly PJRST'd to after
+; error reported in a mail routine.
+RCLRET:	SETZM RCPIDX		; Clear recipient storage.
+	POPJ P,			; And return.
+
+
+; RCLACK - Clear recipients then exit through ACKEND
+; A has string pointer to ack message to send.
+RCLACK:	SETZM RCPIDX
+	PJRST ACKEND
+
+	; MLFL <rcpt>  - Receives text over data connection to mail to
+	;	specified recipient.
+
+MLFL:	SKIPE DCTYPE		; Make sure current type is ASCII...
+	 JRST [	MOVEI A,[ASCSTR [402 MLFL is implemented only for ASCII mode.]]
+		PJRST RCLACK]
+	PUSHJ P,RCPSTO		; Store argument as rcpt...
+	 JUMPLE R,NLREND	; Null rcpt, error unless some rcpts already
+				; stored, which implies R scheme in use.
+	PUSHJ P,BLOATP		; Punt if mailer's dir is getting full
+	 JSR LOGOUT
+	PUSHJ P,DATCNI		; Open data connection
+	 PJRST RCLRET		; foo, didn't win.
+	MOVEI A,[ASCSTR [250 Hello, mailer!]]
+	PUSHJ P,NETREP
+	PUSHJ P,GETNAR		; Now pull stuff into area over data conn!
+	 PJRST RCLRET		; Whoops? well, it does own reporting.
+	PUSHJ P,MAILIT		; Now mail the area!
+	 PJRST RCLRET		; tsk tsk
+	MOVEI A,[ASCSTR [252 Thanks for the mail.]]
+	PJRST RCLACK
+
+	; MAIL <rcpt>  - Collect text over command connections until a
+	;	<CRLF>.<CRLF> seen, and mail to recipient.
+
+MAIL:	PUSHJ P,RCPSTO	; Store arg as rcpt...
+	 JUMPLE R,NLREND	; If twas null, error if no other rcpts.
+	PUSHJ P,BLOATP		; Don't accept mail if mailer dir is full
+	 JSR LOGOUT
+	MOVEI A,[ASCSTR [350 Hello, mailer!]]
+	PUSHJ P,NETREP
+	PUSHJ P,GETML		; Pull in the mail!
+	 PJRST RCLRET		; If error, reset rcpt storage.
+	PUSHJ P,MAILIT		; Now mail it!
+	 PJRST RCLRET		; As above.
+	MOVEI A,[ASCSTR [256 Thanks for the blurb.]]
+	PJRST RCLACK
+
+	; XSEN <rcpt>  - eXperimental, SENd. Collects text just like MAIL but
+	;	instead of mailing, tries to :SEND to recipient.
+
+XSEN:	PUSHJ P,RCPSTO		; Store rcpt name for mailing purposes
+	 JUMPLE R,NLREND	; Error if null rcpt and no others stored.
+	CAIE R,2
+	 JRST [	MOVEI A,[ASCSTR [450 You can't XSEN to more than one recipient.]]
+		PJRST RCLACK]
+	PUSHJ P,CVSIX		; Convert name to 6bit...
+	MOVE B,A
+	PUSHJ P,ONLINE		; See if online...
+	 JRST [	MOVEI A,[ASCSTR [450 That user is not on-line now.]]
+		PJRST RCLACK]
+	MOVEI A,[ASCSTR [350 That user is on-line; proceed with message.]]
+	PUSHJ P,NETREP
+	PUSHJ P,GETML		; Get messge text!
+	 JRST RCLRET
+	PUSHJ P,SENDIT		; Try to :SEND it...
+	 JRST [	MOVEI A,[ASCSTR [450 That user is either not on-line or not accepting messages.]]
+		PJRST RCLACK]
+	MOVEI A,[ASCSTR [256 Message was sent successfully.]]
+	PJRST RCLACK
+
+	; XSEM <rcpt>  - Like XSEN, but Mails if the :SEND fails.
+
+XSEM:	PUSHJ P,RCPSTO		; Store rcpt name for mailing purposes
+	 JUMPLE R,NLREND	; Error if null rcpt and no others stored.
+	CAIE R,2
+	 JRST [	MOVEI A,[ASCSTR [450 You can't XSEM to more than one recipient.]]
+		PJRST RCLACK]
+	PUSHJ P,CVSIX
+	MOVE B,A
+	MOVEI A,[ASCSTR [350 Proceed with message.]]
+	PUSHJ P,NETREP
+	PUSHJ P,GETML
+	 JRST RCLRET
+	PUSHJ P,SENDIT
+	 CAIA
+	  JRST [MOVEI A,[ASCSTR [256 Message was sent successfully.]]
+		PJRST RCLACK]
+	PUSHJ P,BLOATP		; Punt now if mailer busy
+	 JSR LOGOUT
+	PUSHJ P,MAILIT
+	 JRST RCLRET
+	MOVEI A,[ASCSTR [256 Message was not sent but was mailed.]]
+	PJRST RCLACK
+
+
+	; XMAS <rcpt>  - Mail And Send.  Does both XSEN and MAIL.
+
+XMAS:	PUSHJ P,RCPSTO		; Store rcpt name for mailing purposes
+	 JUMPLE R,NLREND	; Error if null rcpt and no others stored.
+	CAIE R,2
+	 JRST [	MOVEI A,[ASCSTR [450 You can't XMAS to more than one recipient.]]
+		PJRST RCLACK]
+	PUSHJ P,BLOATP		; Punt now if mailer busy
+	 JSR LOGOUT
+	PUSHJ P,CVSIX
+	MOVE B,A
+	MOVEI A,[ASCSTR [350 Proceed with message.]]
+	PUSHJ P,NETREP
+	PUSHJ P,GETML
+	 JRST RCLRET
+	PUSHJ P,SENDIT
+	 JRST [	PUSHJ P,MAILIT
+		 JRST RCLRET
+		MOVEI A,[ASCSTR [256 Message was not sent but was mailed.]]
+		PJRST RCLACK]
+	PUSHJ P,MAILIT
+	 JRST RCLRET
+	MOVEI A,[ASCSTR [256 Message was both sent and mailed.]]
+	PJRST RCLACK
+
+
+; ONLINE - See if UNAME in B is logged in.
+
+ONLINE:	SYSCAL OPEN,[[UBPFJ+.UII,,DC] ? ['USR,,] ? B ? ['HACTRN]]
+	 CAIA
+	  AOS (P)
+	.CLOSE DC,
+	POPJ P,
+
+; SENDIT - Sends stored mail to UNAME specified by B.  Skips if
+;	successfully sent.
+SENDIT:	SYSCAL OPEN,[[.UAO,,DC] ? ['CLI,,0] ? B ? ['HACTRN]]
+	 POPJ P,
+	OUTOPN DC,		;open as .IOT UUO channel
+	FWRITE DC,[TI,177,[TTY msg from ],HST,FRNHST,[:
+],TA,BUFFAR]
+	.CLOSE DC,
+	AOS (P)
+	POPJ P,
+	
+
+; GETML - Get Mail over command connections.  Reads lines until a
+;	<crlf>.<crlf> seen.  Skips if successfully read.  A clobbered.
+
+GETML:	UAROPN [%ARTCH+%ARTZM,,BUFFAR ? [2000]]
+	OUTOPN TMPC,[$UCUAR,,BUFFAR]
+GETML2:	PUSHJ P,GETNLN
+	EQUSTR A,[ASCSTR [.]]		; Message terminator?
+	 CAIA				; Nope
+	  JRST GETML5			; Yep, go end msg.
+	TLNN F,%LSMTP		; Using SMTP transparency?
+	 JRST GETML4		; Nope, skip it.
+	HRRZ B,(A)
+	JUMPE B,GETML4
+	MOVE C,1(A)
+	ILDB B,C		; Get 1st char of line
+	CAIE B,".		; If it starts with a period,
+	 JRST GETML4
+	MOVEM C,1(A)		; Then must flush it from line.
+	SOS (A)
+GETML4:	OUTS TMPC,(A)		; Squirp line into storage area.
+	CRLF TMPC,		; With tasteful CRLF.
+	JRST GETML2
+
+GETML5:	MOVE A,$ARRPT+BUFFAR
+	PTRDIF A,$ARWPT+BUFFAR		; Compare read with write ptr to see how big.
+	JUMPE A,[MOVEI A,[ASCSTR [256 Message was empty and thus not mailed.]]
+		PJRST ACKEND]
+	AOS (P)
+	POPJ P,
+
+; Refuse to accept mail if mailer directory is close to full.
+; This is an attempt to avoid bloating the mailer so the dir fills up and
+; it dies needing human intervention.
+
+.VECTOR UFD(<LUFD==:2000>+1)	; OK, so the server is a page larger now...
+UFDBMX==:<LUFD-UDDESC>*UFDBPW	; Max number of bytes in a directory
+
+IFN UFDBYT-6, .ERR UFDBYT HAS CHANGED!
+UFDBPS:	440600,,UFD+UDDESC
+	360600,,UFD+UDDESC
+	300600,,UFD+UDDESC
+	220600,,UFD+UDDESC
+	140600,,UFD+UDDESC
+	060600,,UFD+UDDESC
+
+BLOATP:	PUSHAE P,[A,B,C,D,E]
+	SKIPE SMTPSW		;Maybe someone manually decided COMSAT
+	 JRST BLOTP8		; is bloated, in which case we should die.
+	MOVEI A,AIMDEV
+; DM runs COMSAT now.
+;	TLNE F,%DMSW
+;	 MOVEI A,DMMDEV
+	SYSCAL OPEN,[[.BII,,DC] ? MOVE (A)
+			[SIXBIT /.FILE./] ? [SIXBIT /(DIR)/]
+			MOVE 1(A)]
+	 JRST BLOTP9
+	MOVE A,[-<LUFD+1>,,UFD]
+	.IOT DC,A
+	CAME A,[-1,,UFD+LUFD]
+	 JRST BLOTP9
+	.CLOSE DC,
+	MOVEI C,UFDBMX		; C: available room in bytes
+	SKIPA A,UFD+UDNAMP	; A: -> current name block
+BLOTP1:	 ADDI A,LUNBLK
+	CAIL A,LUFD
+	 JRST BLOTP7
+	SKIPN UFD+UNFN1(A)
+	 JRST BLOTP1
+	SUBI C,LUNBLK*UFDBPW
+	MOVE B,UFD+UNRNDM(A)
+	LDB D,[UNDSCP B]
+	IDIVI D,UFDBPW
+	ADD D,UFDBPS(E)
+	TLNE B,UNLINK
+	 JRST BLOTP5
+BLOTP3:	ILDB B,D
+	SOJ C,
+	JUMPE B,BLOTP1
+	TRNN B,40
+	 JRST BLOTP3
+REPEAT NXLBYT, ILDB B,D ? SOJ C,
+	JRST BLOTP3
+
+BLOTP5:	ILDB B,D
+	SOJ C,
+	JUMPE B,BLOTP1
+	CAIE B,':
+	 JRST BLOTP5
+	ILDB B,D
+	SOJA C,BLOTP5
+
+BLOTP7:	; Leave dir 25% free.  This is about the right amount of room to
+	; allow LISTS MSGS to get garbage collected even if it gets huge
+	; (like 1700 blocks or more).  Of course this is a function of how
+	; fragmented the disk is -- your results may vary...
+	CAIL C,<UFDBMX*25.>/100.
+	 JRST BLOTP9
+BLOTP8:	; The directory is bloated, so we should temporarily refuse
+	; this message.  For SMTP we can return a good temp error, but
+	; for FTP we can't since FTP reply codes are so
+	; non-standardized -- so in the latter case we just die,
+	; which will get treated as a temporary error.
+	TLNN F,%LSMTP		; Are we SMTP?
+	 JSR LOGOUT		; No, just die.
+	CAIA			; Take non-skip loss return
+BLOTP9:	 AOS -5(P)
+	POPAE P,[E,D,C,B,A]
+	POPJ P,
+
+IFN 0,[	; Old version that tries to count MAIL files.
+;Refuse to accept the mail if more than 30 queued mail files.
+;This is an attempt to avoid bloating the mailer so the dir fills
+;up and it dies needing human intervention.
+BLOATP:	PUSHAE P,[A,B,C]
+	SKIPE SMTPSW		;Maybe someone manually decided COMSAT
+	 JRST BLOTP8		; is bloated, in which case we should die.
+	MOVEI A,AIMDEV
+; DM runs COMSAT now.
+;	TLNE F,%DMSW
+;	 MOVEI A,DMMDEV
+ 	SYSCAL OPEN,[[.UAI,,DC] ? (A) ? 2(A) ? [SIXBIT/>/] ? 1(A)]
+	 JRST BLOTP9
+	SYSCAL RFNAME,[MOVEI DC ? MOVEM B ? MOVEM B ? MOVEM B]
+	 .LOSE %LSSYS
+ 	SYSCAL OPEN,[[.UAI,,DC] ? (A) ? 2(A) ? [SIXBIT/</] ? 1(A)]
+	 JRST BLOTP9
+	SYSCAL RFNAME,[MOVEI DC ? MOVEM C ? MOVEM C ? MOVEM C]
+	 .LOSE %LSSYS
+	.CLOSE DC,
+	;At this point B has the largest version mail request
+	;and C has the smallest.
+	TRNN B,77		;Right-justify (can't be zero)
+	 JRST [	LSH B,-6 ? JRST .-1 ]
+	TRNN C,77
+	 JRST [ LSH C,-6 ? JRST .-1 ]
+	TRNN C,7700		;Make sure 2 digits
+	 TRO C,'00
+	ADDI C,300		;Add 30
+	LDB A,[060600,,C]	;Carry
+	CAILE A,'9
+	 ADDI C,<1_12.>-<':_6>
+	;Don't worry about additional carries, close enough for gov't work
+	CAMG B,C
+	 JRST BLOTP9
+BLOTP8:	; There are more than 30 versions, so we should temporarily refuse
+	; this message.  For SMTP we can return a good temp error, but
+	; for FTP we can't since FTP reply codes are so
+	; non-standardized -- so in the latter case we just die,
+	; which will get treated as a temporary error.
+	TLNN F,%LSMTP		; Are we SMTP?
+	 JSR LOGOUT		; No, just die.
+	CAIA			; Take non-skip loss return
+BLOTP9:	 AOS -3(P)
+	POPAE P,[C,B,A]
+	POPJ P,
+
+] ; IFN 0
+
+; MAILIT - Routine that actually mails stored message text to recipient
+;	specified in ARGSTR.  Clobbers A.
+
+MAILIT:	PUSH P,B
+	MOVE A,$ARWPT+BUFFAR	; Get write pointer (end of used area)
+	SUB A,$ARLOC+BUFFAR	; Make relative to beg
+	MULI A,5		; do bp hack
+	ADD B,UADBP7(A)		; Get # chars.
+	MOVE A,B
+	POP P,B
+	CAILE A,16.*5000.	; Big enough that Comsat will probably reject?
+	 JRST TOOBIG
+
+IFN $$DM,[
+	TLNN F,%DMSW
+	 JRST MALT50		;"normal" non-DM
+	; DM mail
+	MOVSI A,DMMDEV		; Set up file name block for error message
+	HRRI A,FILDEV
+	BLT A,FILDEV+3
+	MOVEI A,DMMDEV
+	SYSCAL OPEN,[CERR ERRCOD ? [.UAO,,DC] ? (A) ? FTPOF1 ? FTPOF2 ? 1(A)]
+	 PJRST MLTERR		; Couldn't open for write?? Report & return.
+	OUTOPN DC,
+	OUTOPN DMC,[$UCXCT,,[PUSHJ P,DMOUT]]
+	FWRITE DC,[["RECEIVED-FROM-HOST" ],N9,FRNHST,[
+"SCHEDULE" ("SENDING")
+"TO" (]]
+	SETZ R,			; Initialize for plucking rcpts
+MALT20:	PUSHJ P,RCPSEQ		; From table into RCPSTR...
+	 JRST MALT30		; Exit when no more.
+	OUTI DC,""
+	OUTS DMC,RCPSTR		; Output rcpt as muddle string
+	OUTI DC,""
+	OUTI DC,40		; Separate each w/space.
+	JRST MALT20		; Get another.
+MALT30:	FWRITE DC,[[)
+"TEXT"
+"]]
+	FWRITE DMC,[TA,BUFFAR]		;out goes the message text
+	FWRITE DC,[[
+"
+]]
+	SYSCAL RENMWO,[CERR ERRCOD ? CIMM DC ? 2(A) ? 3(A)]
+	 PJRST MLTERR			; Failed??
+	SYSCAL FINISH,[CERR ERRCOD ? CIMM DC]
+	 PJRST MLTERR			; Write out file + directory to disk
+	.CLOSE DC,
+	SYSCAL DEMSIG,[['COMSYS]]
+	 JFCL
+	JRST MALT90			;won
+];$$DM
+
+
+	; AI,ML,MC mail
+MALT50:	MOVSI A,AIMDEV		; Set up file name block for error message
+	HRRI A,FILDEV
+	BLT A,FILDEV+3
+	MOVEI A,STOBIG
+	MOVEM A,STOIOC		;If any IOC lossage, give user error response.
+	MOVEI A,AIMDEV
+	SYSCAL OPEN,[CERR ERRCOD ? [.UAO,,DC] ? (A) ? FTPOF1 ? FTPOF2 ? 1(A)]
+	 PJRST MLTERR		; Failed on open???
+	OUTOPN DC,		; Open UUO chan for .IOT/SIOT
+	FWRITE DC,[[NET-MAIL-FROM-HOST:],OCT,FRNHST,[
+]]
+	TLNN F,%LSMTP
+	 JRST MALT59	; Skip SMTP hacking
+	SKIPE FRMSTR	; Any return-path given?
+	 OUTCAL(DC,("RETURN-PATH:"),TS(FRMSTR),EOL)
+MALT59:	SETZ R,		;Initialize for plucking off rcpts.
+	PUSH P,A
+MALT60:	PUSHJ P,RCPSEQ	; Get descriptor into RCPSTR.
+	 JRST MALT70		; Done...
+	FWRITE DC,[[TO:"]]
+	MOVE A,RCPSTR+1	;Check first character in rcpt
+	ILDB A,A	;To see if structured rcpt
+	CAIE A,"(
+	 CAIN A,"[
+	  JRST MALT61
+	CAIE A,""	;or quoted
+	 CAIN A,"{
+	  JRST MALT61
+	TLNE F,%LSMTP		; Don't quote SMTP rcpts for now.
+	 JRST MALT61
+	OUT(DC,LPAR,(|"|),TS(RCPSTR),(|"|),RPAR,EOL) ;Not structured, quote it
+	JRST MALT60
+MALT61:	FWRITE DC,[TS,RCPSTR,[
+]]			;Structured or quoted, take as is
+	JRST MALT60		; Get another.
+
+.SCALAR	FGNHST,FGNDEV		; Foreign dev and host for received lines
+
+MALT70:	SYSCAL RFNAME,[MOVEI NETI ? MOVEM A ? REPEAT 3,[ ? MOVEM FGNHST]]
+	 SETZM FGNHST		; Get type of net conn and foreign address
+	CAMN A,[SIXBIT 'CHAOS']
+	 HRRZS FGNHST		; Clear out HOSTS3 gubbish for Chaos
+	SKIPN FGNHST		; Total lossage?
+	 MOVSI A,'???		; Yeah, make sure user knows we're senile
+	MOVEM A,FGNDEV		; Save net type away
+	POP P,A
+	OUT(DC,CRLF,("TEXT;-1"),CRLF,("Received: from "),TS(FGNNAM),SP)
+	OUT(DC,C(LPAREN),6F(FGNDEV),SP,O(FGNHST),C(RPAREN))
+;Note: the Received-from line contains the .ARPA kludge!!
+IFN $.ARPA, 	OUT(DC,(" by "),TZ(@OWNNAM),(".ARPA; "),TIM(RFC1))
+.ELSE,		OUT(DC,(" by "),TZ(@OWNNAM),("; "),TIM(RFC1))
+	OUT(DC,CRLF,TA(BUFFAR))
+	SKIPE XDBGSW
+	 JRST [	SYSCAL RENMWO,[CERR ERRCOD ? CIMM DC ? AIMXF1 ? 3(A)]
+		 PJRST MLTERR
+		JRST MALT75]
+	SYSCAL RENMWO,[CERR ERRCOD ? CIMM DC ? 2(A) ? 3(A)]
+	 PJRST MLTERR		; Argh? Report file error & return.
+MALT75:	SYSCAL FINISH,[CERR ERRCOD ? CIMM DC]
+	 PJRST MLTERR		; Write out file + directory to disk
+	.CLOSE DC,
+	SETZM STOIOC
+MALT90:	AOS (P)
+	POPJ P,
+
+MLTERR:	SETZM STOIOC		; Just a little paranoia
+	PJRST FILERR
+
+;Mail too big, reject it
+TOOBIG:	MOVEI A,[ASCSTR [552 Message is too large to mail; use FTP.]]
+	PUSHJ P,NETREP
+	POPJ P,			;Error return
+
+IFN $$DM,[
+	; Hack, XCT'd for each character of DM mail (!!) which
+	; ensures that data is quoted properly for MUDDLE parsing.
+DMOUT:	PUSHAE P,[40,UUOH,U2]
+	CAIN U1,^C		;CATCH ^C'S
+	 JRST DMOUT3
+	CAIE U1,""		;catch quote mark
+	 CAIN U1,"\		;or MUDDLE quoting char
+	  JRST DMOUT3
+DMOUT2:	OUTI DC,(U1)		;before outputting.
+	POPAE P,[U2,UUOH,40]
+	POPJ P,
+DMOUT3:	PUSH P,U1
+	OUTI DC,"\		;and quote either
+	POP P,U1
+	JRST DMOUT2
+];$$DM
+
+SUBTTL String hacking rtns
+
+UUODEF EQUSTR,UEQSTR	;extra UUO for easy string comparision
+
+UEQSTR:	MOVE U1,40
+	LDB U2,[$ACFLD,,U1]
+	MOVE U2,(U2)	;get addr of string AC points to
+	HRRZ U3,(U1)	;GET CNT 1
+	HRRZ U4,(U2)	;AND 2
+	CAIE U3,(U4)
+	 JRST UUORET	;NOT EQUAL, DIFFERENT LENGTHS
+	MOVE U1,1(U1)
+	MOVE U2,1(U2)
+	PUSH P,U3	; Save cnt on stack.
+UEQST2:	SOSGE (P)
+	 JRST UEQST5
+	ILDB U3,U1
+	ILDB U4,U2
+	CAIN U3,(U4)
+	 JRST UEQST2
+	SUB P,[1,,1]
+	JRST UUORET
+UEQST5:	SUB P,[1,,1]
+	AOS UUOH
+	JRST UUORET
+
+
+	; Parse a word off string pointed to by A, leaves ptr to word in
+	; B and updates string read from.  B furnishes char to break on.
+PRSWRD:	PUSHAE P,[C,D]
+	MOVE D,B		; Save desired break char in D.
+	BCONC
+	HRRZ C,(A)		;make sure something there
+	JUMPG C,PRSW5
+	JRST PRSW6
+PRSW2:	ILDB B,1(A)
+	CAIN B,(D)
+	 JRST PRSW6
+	OUTI STRC,(B)		; Collect string.
+PRSW5:	SOJGE C,PRSW2
+	SETZ C,
+PRSW6:	ECONC WRDSTR
+	HRRM C,(A)
+	MOVEI B,WRDSTR
+	POPAE P,[D,C]
+	POPJ P,
+
+	;takes ptr in A to string, clobbers so that leading/trailing blanks flushed.
+STRIM:	PUSHAE P,[B,C,D,E]
+	HRRZ D,(A)
+	JUMPE D,STRIM9
+	MOVE E,1(A)		;get cnt and bp for string.
+STRIM1:	MOVE C,E		;save so don't have to D7BPT it.
+	ILDB B,E
+	CAIN B,40
+	 JRST [	SOJG D,STRIM1
+		JRST STRIM8]	;all blanks.
+	MOVEM C,1(A)		;store trimmed start ptr (perhaps same as original)
+	PTSKIP D,C		;increment ptr by # chars remaining
+STRIM2:	LDB B,C
+	CAIN B,40
+	 JRST [	D7BPT C
+		SOJG D,STRIM2
+		JRST STRIM8]	;all blanks and first loop missed??
+STRIM8:	HRRM D,(A)		;store new cnt back.
+STRIM9:	POPAE P,[E,D,C,B]
+	POPJ P,
+
+; GETNLN - Get Network Line.  Reads input over NETI until CRLF seen,
+;	returns ptr in A to resulting string.  If NETI input vanishes
+;	an immediate logout is done.
+
+GETNLN:	BCONC			; Begin string
+	TRZ F,%CR
+	JRST GETLN4
+GETLN2:	TRZE F,%CR
+	 JRST [	CAIN A,^J	; CR followed by LF => terminate line.
+		 JRST GETLN7
+		OUTI STRC,^M	; Otherwise, it's either a
+		JUMPE A,GETLN4	; CR-NULL, meaning use a bare CR, or
+		JRST .+1]	; it's a "violation", but pass sequence anyway.
+	CAIN A,^M
+	 TROA F,%CR
+GETLN3:	  OUTI STRC,(A)
+GETLN4:	.IOT NETI,A
+	AOS ALIVEC
+	CAIN A,377		; Is it an IAC?
+	 JRST GETLN5		; Barf!  Go flush the TELNET negotiation
+	JUMPGE A,GETLN2
+	JSR LOGOUT		; Die if connection closed on us.
+
+GETLN5:	.IOT NETI,A		; Get next byte
+	CAIL A,251.
+	 CAILE A,254.		; If it's one of the usual DO/DONT/WILL/WONT
+	  JRST GETLN4		; (if not, flush IAC and its arg)
+	.IOT NETI,A		; Then flush the option code following it.
+	JRST GETLN4
+
+GETLN7:	ECONC LINPUT		; End string...
+	MOVEI A,LINPUT
+	POPJ P,
+
+
+; CVSIX - converts a string var in A to 6bit wd in A
+;	stops when reach 0 or get 6 chars, or hit blank and previous
+;	chars were nonblank
+
+CVSIXH:	PUSHAE P,[B,C,D,E,R]	;CVSIXH stops at @
+	MOVEI R,"@
+	JRST CVSIX0
+
+CVSIX:	PUSHAE P,[B,C,D,E,R]
+	MOVEI R,-1
+CVSIX0:	MOVE C,1(A)
+	HRRZ B,(A)
+	CAILE B,6
+	 MOVEI B,6
+CVT760:	SETZ A,
+	MOVE D,[440600,,A]
+CVT761:	ILDB E,C
+	CAIN E,40
+	 JUMPN A,CVT762	;if hit blank, stop only if something already accumulated
+	JUMPE E,CVT762
+	CAMN E,R
+	 JRST CVT762	;delimiter
+	CAIL E,141	;convert to uppercase
+	 CAILE E,172
+	  CAIA
+	   SUBI E,40
+	SUBI E,40	;convert to 6bit
+	IDPB E,D
+	SOJG B,CVT761
+CVT762:	POPAE P,[R,E,D,C,B]
+	POPJ P,
+
+CVSUPR:	PUSHAE P,[B,C,D]
+	MOVE B,1(A)
+	HRRZ C,(A)
+	JUMPG C,CVSUP5
+	JRST CVSUP7
+CVSUP2:	ILDB D,B
+	CAIL D,"a
+	 CAILE D,"z
+	  JRST CVSUP5
+	SUBI D,40
+	DPB D,B
+CVSUP5:	SOJGE C,CVSUP2
+CVSUP7:	POPAE P,[D,C,B]
+	POPJ P,
+
+
+; A - ptr to string descriptor
+; B - [default file block],,[result file block]
+
+FILPAR:	PUSHAE P,[A,B,C,D,E]
+	HRRZ E,B	;get result addr
+	BLT B,3(E)	;zap default values into result block
+	PUSHJ P,FNPARD	;parse string as filename, DDT style
+	CAIE A,
+	 MOVEM A,(E)	;device
+	CAIE B,
+	 MOVEM B,1(E)	;dir
+	CAIE C,
+	 MOVEM C,2(E)	;fn1
+	CAIE D,
+	 MOVEM D,3(E)	;fn2
+	POPAE P,[E,D,C,B,A]
+	POPJ P,
+
+; FILGET -  File Getter.  A has <ARPT>,,<FILPT>; specified file
+;	is opened and read into specified area; if <ARPT>=0 then
+;	an area is created.  In either case the ARPT is returned in A,
+;	and routine skips.  If the OPEN fails, its error code is
+;	returned instead with no skip.
+; TXFIN - similar, but assumes DC already open on channel, and never skips,
+;	since no lossage is possible. (!)
+
+FILGET:	.CALL OPNBII		; Try to open FILBLK specified.
+	 JRST [	MOVE A,OPNERR	; For failure, return error code.
+		POPJ P,]
+	AOS (P)
+FILIN:	PUSH P,B
+	MOVE B,[DC,,FGTDEV]
+	.RCHST B,		;get channel status for possible later ref.
+	SYSCAL FILLEN,[CIMM DC ? CRET B ? CERR OPNERR]
+	 JRST [	MOVE B,OPNERR	; Failed?  Should only happen if
+		CAIE B,34	; error = wrong type dev.
+		 JSR SYSLOS	; no. this shouldn't happen.
+		MOVEI B,400	; If no length available, use 1/4 page
+		JRST .+1]
+	ADDI B,1		;add 1 so .IOT ptr won't count out completely
+	HLRZS A			; put ARPT into RH.
+	UAROPN A,[(A) ? B]	;open area, with length at least that of file
+	MOVN B,B		;neg
+	HRLZ B,B		;for .iot ptr
+	HRR B,$ARLOC(A)		;get addr to store it...starting addr of area
+FILGT5:	.IOT DC,B		;grab
+	HRRZM B,$ARWPT(A)	;set write ptr for area.
+	JUMPGE B,[MOVEI B,400	; If counted completely out,
+		UAREXP B,(A)	; expand and get more.
+		HRRZ B,$ARWPT(A)
+		HRLI B,-400
+		JRST FILGT5]
+	.CLOSE DC,
+	POP P,B
+	POPJ P,
+
+OPNBII:	SETZ ? SIXBIT /OPEN/ ? [.BII,,DC] ? CERR OPNERR
+	(A) ? 2(A) ? 3(A) ? SETZ 1(A)
+OPNERR:	0
+
+FGTDEV:	BLOCK 10	;channel status info
+
+
+; TXFGET - Text File Getter.  Like FILGET, but assumes file is text
+;	and converts area to text, adjusting EOF properly.
+; TXFIN - similar conversion but like FILIN assumes DC is open and
+;	never skips.
+
+TXFGET:	PUSHJ P,FILGET		; Open and get file into area.
+	 POPJ P,		; failed.
+	AOSA (P)		; Won, skip into conversion & skip on return.
+TXFIN:	 PUSHJ P,FILIN
+	UARTYP [%ARTCH,,(A)]	; Convert area to text, adjusting EOF automatically.
+	POPJ P,
+
+SUBTTL Randomness
+; IPNUM - takes addr to string in A,
+;	tries to parse as a number (oct or dec). returns value in A,
+;	doesn't skip if bad parse.
+
+IPNUM8:	TRZA F,%DEC	;don't force to decimal.
+CVSDEC:
+IPNUM:	 TRO F,%DEC	;do!
+	PUSH P,B
+	HRRZ B,(A)	;get cnt
+	MOVE A,1(A)	;and bp
+	MOVEM A,NUMPTR'	;save ptr to string
+IPNUM0:	JUMPE B,POPBJ
+	ILDB A,NUMPTR	;loop to flush leading blanks
+	CAIE A,40
+	 CAIN A,^I
+	  SOJA B,IPNUM0
+
+	TRO F,%TMP		;set flag to negate result
+	CAIE A,"-
+	 JRST [	TRZ F,%TMP	;unless not negative #
+		D7BPT NUMPTR	;in which case must decr. bp
+		JRST .+1]
+	PUSHAE P,[C,D]
+	SETZB C,D
+IPNUM2:	SOJL B,IPNUM6		;decrement cnt; if count out here, it's octal.
+	ILDB A,NUMPTR		;get ascii digit
+	CAIL A,"0		;check to be sure it's a digit
+	 CAILE A,"9
+	  JRST IPNUM3		;foo! non-numeric char.
+	LSH C,3			; octal*8
+	IMULI D,10.		; decimal*10
+	ADDI C,-"0(A)
+	ADDI D,-"0(A)
+	JRST IPNUM2
+
+IPNUM3:	CAIE A,".		;is non-numeric char a decimal pt?
+	 JRST IPNUM5		;no, go flush blanks/tabs
+	MOVE C,D		;ah yes, use decimal accumulator.
+	;now flush blanks/tabs
+IPNUM4:	SOJL B,IPNUM6
+	ILDB A,NUMPTR
+IPNUM5:	CAIE A,40
+	 CAIN A,^I
+	  JRST IPNUM4
+	JRST IPNUM7	;foo, lose again. can't do fractions.
+
+IPNUM6:	TRNE F,%DEC
+	 SKIPA A,D	;use decimal if flag set.
+	  MOVE A,C
+	AOS -3(P)
+	TRNE F,%TMP
+	 MOVN A,A
+IPNUM7:	POPAE P,[D,C,B]
+	POPJ P,
+
+;XLBT decimal-ITS-host-address
+;If a loop-back plug is present, this is the wrong address and
+;we return 529 wrong address.  If it's the right address we return
+;200 right address.  500 Illegal command indicates that the right
+;host was probably reached, anyway not one that knows about XBLT.
+
+XLBT:	PUSHJ P,CVSDEC		; Convert decimal string.
+	 JRST [	MAKSTR REPLY,[[501 Bad numeric argument: ],TS,ARGSTR]
+		PJRST ACKENR ]
+	PUSHJ P,NETWRK"STDHST	; Standardize the number.
+	CAME A,OWNHST
+	 JRST [	MAKSTR REPLY,[[529 Wrong host.  This is ],HND,OWNHST,[.]]
+		PJRST ACKENR ]
+	MOVEI A,[ASCSTR [200 Right address]]
+	PJRST ACKEND
+
+	; Compose filename string from RCHST results & return ptr in A.
+RCHSTR:	SYSCAL RCHST,[CIMM DC ? CRET RCHDEV
+		CRET RCHFN1 ? CRET RCHFN2 ? CRET RCHDIR]
+	 JSR AUTPSY
+	MAKSTR FILNAM,[6F,RCHDEV,[:],6F,RCHDIR,[;],6F,RCHFN1,[ ],6F,RCHFN2]
+	MOVEI A,FILNAM
+	POPJ P,
+
+	; Compose filename string from FILDEV block & return ptr in A.
+FILSTR:	SKIPN A,FILDIR
+	 MOVE A,[SIXBIT /(NIL)/]
+	MAKSTR FILNAM,[6Q,FILDEV,[:],6Q,A,[;],6Q,FILFN1,[ ],6Q,FILFN2]
+	MOVEI A,FILNAM
+	POPJ P,
+
+	; Compose error string for last failing .CALL and return ptr in A.
+ERRSTR:	PUSH P,B
+	SYSCAL OPEN,[CIMM TMPC ? ['ERR,,] ? [4] ? ERRCOD]
+	 JSR AUTPSY
+	BCONC
+	CAIA
+ERRST2:	OUTI STRC,(A)
+	.IOT TMPC,A
+	CAIN A,^M
+	 JRST ERRST5
+	CAIE A,^L
+	 CAIN A,^C
+	  CAIA
+	   JUMPGE A,ERRST2
+ERRST5:	ECONC STRERR
+	MOVEI A,STRERR
+	POP P,B
+	POPJ P,
+
+STRNAM FGNNAM	; Foreign host name as furnished in SMTP HELO command
+STRNAM FRMSTR	; Return-path name given in SMTP MAIL, SEND, etc.
+STRNAM TMPSTR
+STRNAM REPLY
+STRNAM WRDSTR
+STRNAM LINPUT
+STRNAM FILNAM
+STRNAM STRERR
+STRNAM ARGSTR
+
+STRNGS:	SBLOCK
+	NSTRS==<.-STRNGS>/2
+
+
+CONSTANTS
+VARIABLES
+
+ARPAGS:	<LSTPAG-400>,,LSTPAG	; Define free area to be everything above this.
+LSTPAG==<.+1777>/2000
+
+END GO

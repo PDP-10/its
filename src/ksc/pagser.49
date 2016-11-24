@@ -1,0 +1,879 @@
+; -*- Mode: MIDAS -*-
+.BEGIN PAGSER	; New page/core manager.
+
+IFNDEF $$PDBG,$$PDBG==0	; 1 - include debugging printout routines
+IFNDEF $$PPGS,$$PPGS==0	; 1 - include GETPAG
+
+comment |
+
+	PAGSER is a storage allocation management package.  It will
+allocate, expand, and release areas of memory in units of either pages
+or words.  All the core which PAGSER knows about is divided into
+"blocks" which are either "active" (in use by the program) or
+"unactive" (free, available for allocation requests).  At
+initialization, PAGSER will control a single large "unactive" block;
+all future allocate requests will be satisfied from this primal block.
+	Because PAGSER's data structures are themselves allocated
+dynamically, there is no space problem for them.  Because they are
+localized and distinct from the areas they refer to, page faults
+are minimized and allocation can be done with respect to the theoretical
+address space only, without implying that anything actually exists
+within a block.  This is useful for programs which need to dynamically
+hack their page map.
+
+	In PAGSER's data structures, each block (active or not) is
+described by a single node, which is $PNSIZ words long and
+has the following format:
+
+$PNPTR	0: <C-pred>,,<C-succ>	; Corelist pointers
+$PNSPP	1: <S-pred>,,<S-succ>	; Spacelist pointers (0 if active)
+$PNFLG  2: <ID> ,,<unused>	; Consistency check.
+$PNBLK	3: <# wds>,,<addr>	; Size & location of block.
+
+There are three lists composed of these nodes: the Corelist, Spacelist,
+and Freelist.
+
+The FREELIST is simply a list of all unused nodes, which describe
+no blocks at all.  When a node is required (e.g. when a new block is
+created, and needs a new node to describe it) one is procured from
+this list.  Freelist nodes use the RH of the first word to point
+to the next free node; zero implies no more.
+
+The CORELIST holds ALL nodes which represent a block, in an order
+corresponding EXACTLY to their sequence in memory.  <C-pred> points at
+the node for the block preceding this one in core, and <C-succ>
+similarly points at the node for the block immediately succeeding this
+one in core.  The Corelist is used to determine the state of blocks
+preceding and succeeding a particular block, and always completely
+describes the state of the entire section of memory entrusted to
+PAGSER.
+
+The SPACELIST is an efficiency hack.  The <S-pred> and <S-succ>
+pointers are used to string together all UNACTIVE blocks, so that when
+an allocation request is made, no time is wasted checking active
+blocks.  An "active" block is one for which the Spacelist pointer word
+($PNSPP) is zero.  The current algorithm for constructing and searching
+the Spacelist favors the most recently freed blocks.
+
+About $PNBLK, note that <# wds>,,<addr> specify the location and
+length of the core block that the node represents.  There need not
+necessarily be any actual core there, especially for the LAST block
+on the Corelist (<C-succ> zero).  The code tries to keep unmapped
+all pages in the last block, if it is unactive.
+
+$PNFLG is primarily used for verifying that a "node address",
+as furnished to some PAGSER routines by the user program,
+actually does refer to an active PAGSER node.  This helps to quickly
+catch any bugs that give invalid arguments to the core routines,
+which otherwise might be extremely hard to uncover.  It isn't
+foolproof, but is much better than nothing.
+|
+
+	; Indices into a node.
+	OFFSET -.
+$PNPTR:: 0	; <pred>,,<succ> for Corelist
+$PNSPP:: 0	; <pred>,,<succ> for Spacelist
+$PNBLK:: 0	; <# wds>,,<addr>
+$PNFLG:: 0	; <ID chk>,,<flags>	; RH not really used now.
+; $PNPGS:: 0	; <# pages included>
+$PNSIZ::	; Size of a node.
+	OFFSET 0
+
+$PVLID==:<(SIXBIT /PSR/)>	; ID value used in LH of $PNFLG.
+				; Note only used for active nodes.
+
+	; Other random parameters
+IFNDEF $PMAKN,$PMAKN==:40	; # nodes to create each time need more.
+IFNDEF $PTRIV,$PTRIV==:10	; # words OK to waste when satisfying request.
+
+	; Page size parameters
+IFNDEF PG$BTS,{	IFN OS%TNX, PG$BTS==:9.
+		IFN OS%ITS, PG$BTS==:10.
+}
+PG$SIZ==:1_PG$BTS
+PG$MSK==:PG$SIZ-1
+
+
+;;; PSRERR is an error macro which can be skipped over.
+;;; The user may define this for us, otherwise it is a .VALUE.
+;;; PSRERR is called with the PAGSER error code.
+
+IFNDEF PSRERR,[
+
+DEFINE	PSRERR CODE
+	.VALUE [CODE]
+TERMIN
+];IFNDEF PSRERR
+
+;;; Preliminary list of error codes.
+
+ERBAD==0	;Internal error
+ERARG==1	;Bad argument
+EROOM==2	;Not enough room
+
+;;; User may also supply the similar macro CORLUZ,
+;;; which is called when a CORBLK fails.
+
+
+
+subttl Initialization - PSRINI
+
+.SCALAR SPCLST	; Ptr to Spacelist
+.SCALAR CORLST	; Ptr to Corelist
+.SCALAR FRELST	; Ptr to Freelist, 0 when none left.
+.SCALAR FRESAV	; Ptr to saved node, used when getting block for more.
+.SCALAR FFPAGE	; # of first free page
+
+.VECTOR INILST($PNSIZ)	; Initial list node, set up pointing at free core.
+.VECTOR INIFSV($PNSIZ)	; Initial scratch node for FRESAV to point at.
+
+
+; PSRINI - Initialize PAGSER routines
+;	U1 - -<# pages>,,<1st page #>   defines area available for hacking.
+
+.M"PSRINI:
+.M"CORINI:
+	PUSH P,U1
+	JUMPGE U1,.+3		; If already positive skip convert hack.
+	TLC U1,-1
+	ADD U1,[1,,]		; Make count positive
+	TRNE U1,-1		; Make sure page # isn't 0.
+	 TLNN U1,-1		; Likewise make sure # pages isn't 0.
+	  PSRERR ERARG		; Ugh, zero component!
+	HRRZM U1,FFPAGE
+	LSH U1,PG$BTS		; Get in terms of words
+	MOVEM U1,$PNBLK+INILST	; Initialize count of first, unactive, node.
+	MOVSI U1,SPCLST-$PNSPP
+	MOVEM U1,$PNSPP+INILST	; and initialize spacelist pointer
+	MOVSI U1,CORLST-$PNPTR
+	MOVEM U1,$PNPTR+INILST	; and corelist pointer
+
+	MOVEI U1,INILST		; Initialize
+	MOVEM U1,SPCLST		; Spacelist, and
+	MOVEM U1,CORLST		; Corelist, and
+	SETZM FRELST		; Freelist.
+	MOVEI U1,INIFSV
+	MOVEM U1,FRESAV		; Point to extra node...
+	SETZM INIFSV		; Clear it out.
+	MOVE U1,[INIFSV,,INIFSV+1]
+	BLT U1,INIFSV+$PNSIZ-1
+
+	POP P,U1
+	POPJ P,
+
+
+;;; PSRP - See if enough space available.
+;;;	U1 - # words needed
+;;; Skips if enough space is available, does not skip if not enough.
+
+.M"PSRP:			;Bash UUO ACs with abandon!
+	SKIPN U2,SPCLST		;Get spacelist.
+	 JRST PSRP9		; If missing take failure return.
+PSRP2:	HLRZ U4,$PNBLK(U2)	;Get core spec.
+	CAILE U1,(U4)		;Loop until we find one big enough.
+	 JRST [ HRRZ U2,$PNSPP(U2)
+		JUMPN U2,PSRP2
+		JRST PSRP9 ]	; If no more left, failure return.
+	AOS (P)			;On success, skip return. 
+PSRP9:	RET
+
+
+
+subttl PSRGET - Get a block
+
+; PSRGET - Get core.
+;	U1 - # words needed
+; Returns
+;	U1 - actual # words available in block
+;	U2 - <addr of block>,,<node addr> ; COREXP -  0,,<addr of blk>
+
+.M"CORGET:
+	PUSHJ P,PSRGET
+	HLRZ U2,U2		; Return block addr only.
+	POPJ P,
+
+.M"PSRGET:
+	PUSH P,U3
+	PUSH P,U4
+	SKIPN U2,SPCLST
+	 PSRERR ERBAD		; No spacelist???
+PSRGT2:	HLRZ U4,$PNBLK(U2)	; Get core spec
+	CAIG U1,(U4)
+	 JRST PSRGT4		; Found block big enough...
+	HRRZ U2,$PNSPP(U2)	; Nope, get next
+	JUMPN U2,PSRGT2
+	PSRERR EROOM		; Failed to find big enough block?!
+
+	; Found block big enuf.  See if want to split or swallow whole.
+PSRGT4:	CAILE U4,$PTRIV(U1)	; Excess greater than some trivial value?
+	 JRST [	PUSHJ P,PSRADJ	;  Yes, split block...
+		JRST PSRGT8]
+
+	; Here when block needn't be split up.  Must remove from spacelist.
+	MOVEI U3,(U2)
+IFN OS%ITS,{			; If on ITS,
+	MOVE U4,$PNPTR(U3)	; and gobbling very last block,
+	TRNN U4,-1		; we're bypassing PSRADJ
+	 PUSHJ P,PSRCOR		; so must make sure core exists for it.
+}
+	PUSHJ P,PSRACT		; Remove from spacelist.
+
+	; All done with split or whatever, U1 still has size and U2
+	; address of node for block we want.
+PSRGT8:	HLRZ U1,$PNBLK(U2)	; Update U1 to actual size
+	HRL U2,$PNBLK(U2)	; and U2 to <block addr>,,<node addr>.
+	POP P,U4
+	POP P,U3
+	POPJ P,
+
+
+subttl GETPAG - Get pages.
+
+ifn $$ppgs,{
+
+; GETPGN - Variant of GETPAG that returns negative rather than positive
+;	count in LH, AOBJN style.
+
+.M"PAGGTN:PUSHJ P,PSRPGT
+	TLC U1,-1
+	ADD U1,[1,,]
+	POPJ P,
+
+; GETPAG - Get block of pages.
+;	U1 - # of pages desired
+; Returns
+;	U1 - <# pages>,,<1st page #>
+
+.M"GETPAG:
+.M"PSRPGT:
+	PUSH P,U2
+	PUSH P,U3
+	PUSH P,U4
+
+	LSH U1,PG$BTS		; Get # words
+	SKIPN U2,SPCLST
+	 PSRERR ERBAD		; No spacelist??
+PSRPG2:	HLRZ U4,$PNBLK(U2)
+	CAIG U1,(U4)
+	 JRST PSRPG4
+PSRPG3:	HRRZ U2,$PNPTR(U2)
+	JUMPN U2,PSRPG2
+	PSRERR EROOM		; Couldn't find enough pages!!
+
+PSRPG4:	MOVE U3,$PNBLK(U2)	; Get address core block starts at
+	ANDI U3,PG$MSK		; Find # words past page boundary it starts at
+	CAIE U3,
+	 SUBI U3,PG$SIZ		; Get -<# words to next boundary>
+	ADD U4,U3		; Thus get # wds in block past first boundary	
+	CAIGE U4,(U1)		; Compare (U4 may be neg), have enuf words?
+	 JRST PSRPG3		; Nope, keep searching.
+
+	MOVMS U3
+	CAILE U3,$PTRIV
+	 JRST [	PUSH P,U1
+		PUSH P,U4
+		MOVM U1,U3
+		PUSHJ P,PSRADJ	; Split off low end.
+		EXCH U2,U3	; Get low-end node in U3, and
+		PUSHJ P,PSRMKU	; put it on spacelist.
+		POP P,U4
+		POP P,U1
+		JRST .+1]
+
+	CAILE U4,$PTRIV(U1)	; Need to split things up at high end?
+	 JRST [	PUSHJ P,PSRADJ	; Get block of right size.
+		JRST PSRPG8]
+;IFN OS%ITS,{			; If on ITS,
+;	MOVE U4,$PNPTR(U3)	; and gobbling very last block,
+;	TRNN U4,-1		; we're bypassing PSRADJ
+;	 PUSHJ P,PSRCOR		; so must make sure core exists for it.
+;}
+PSRPG8:	TRNE U1,PG$MSK
+	 PSRERR ERARG		; Just a check...
+	LSH U1,<18.-PG$BTS>	; Before shifting # pages out into LH.
+	HRRZ U3,$PNBLK(U2)
+	ADDI U3,PG$SIZ-1
+	LSH U3,-PG$BTS
+	HRRI U1,(U3)		; Now have <# pages>,,<page # starts at>
+
+	POP P,U4
+	POP P,U3
+	POP P,U2
+	POPJ P,
+
+} ; end ifn $$ppgs
+
+subttl PSREXP - Expand block
+
+; PSREXP - Expand core block.
+;	U1 - # wds to increase by
+;	U2 - node of block to increase 	; COREXP - addr of block
+; Returns
+;	U1 - new # wds total in block
+;	U2 - <new addr of block>,,<new node> ; COREXP -  0,,<new addr of blk>
+
+comment |
+There are 4 cases possible, listed in order of optimality:
+	1) Enough room in unactive successor.
+		Merge and perhaps split.
+	2) Enough room in unactive predecessor.
+		Must copy up and perhaps split.
+	3) Enough room if both predecessor and successor combined.
+		Must copy up, then merge with following, then perhaps split.
+	4) No free blocks on either side, or not enough room.
+		Must find completely new block and copy into it.  Old
+		block must be released.
+|
+
+.M"COREXP:
+	PUSHJ P,PSREQV		; Chg blk addr to node addr for compatibility
+	PUSHJ P,PSREXP
+	HLRZ U2,U2		; Return block addr only.
+	POPJ P,
+
+.M"PSREXP:
+	PUSH P,U3
+	PUSH P,U4
+	
+	; Verify that node is kosher.
+	HLRZ U3,$PNFLG(U2)	; Get ID-check value from where it should be
+	CAIE U3,$PVLID		; and make sure it's what it should be...
+	 PSRERR ERBAD			; Yuckity yuck!
+
+	; See if enough room in successor.
+	MOVE U3,$PNPTR(U2)	; Get ptr to successor
+	TRNE U3,-1		; Not there?
+	 SKIPN $PNSPP(U3)	; or Active?
+	  JRST [HLRZS U3	; Yes, can't hack succ, check pred.
+		CAIN U3,CORLST-$PNPTR
+		 JRST PSRXP7	; Not there?
+		SKIPN $PNSPP(U3)
+		 JRST PSRXP7	; Can't hack pred either, need new block.
+		HLRZ U4,$PNBLK(U3)
+		SUBI U4,(U1)
+		JUMPL U4,PSRXP7	; If not enough words, also can't hack.
+		JRST PSRXP2]	; Can, go hack predecessor.
+	HLRZ U4,$PNBLK(U3)	; Check successor - get # words in it.
+	SUBI U4,(U1)		; Find diff.
+	JUMPGE U4,[HLRZ U4,$PNBLK(U2)
+		ADDI U1,(U4)
+		JRST PSRXP4]	; Jump if successful.
+
+	HLRZS U3		; Fooey, but see if predecessor can save day.
+	CAIE U3,CORLST-$PNPTR	; No predecessor?
+	 SKIPN $PNSPP(U3)	; or not available?
+	  JRST PSRXP7		; Ugh, must find whole new block.
+	HLRZ U3,$PNBLK(U3)	; Get # words
+	ADDI U4,(U3)
+	JUMPL U4,PSRXP7		; Again, jump if must get new block.
+
+	; Here, can win by combining pred & succ blocks.
+PSRXP2:	HLRZ U3,$PNPTR(U2)	; Get ptr to pred.
+	PUSHJ P,PSRACT		; Make U3 block active.
+	EXCH U2,U3
+	PUSHJ P,PSRCPY		; Copy into U2 from U3.
+	HLLZ U4,$PNBLK(U3)	; Get count of old block
+	ADDM U4,$PNBLK(U2)	; Add into pred block.
+	HLRZS U4		; While still have count,
+	ADDI U1,(U4)		; Find total # words required
+	PUSHJ P,PSRFRX		; Put U3 block on Freelist.
+
+	HLRZ U4,$PNBLK(U2)	; Find how much room we have now.
+	CAIG U1,(U4)
+	 JRST PSRXP6		; Aha, got enough.
+
+	; Here, can win by adding successor block.
+PSRXP4:	HRRZ U3,$PNPTR(U2)	; Get succ
+	JUMPE U3,PSRXP7
+	PUSHJ P,PSRMRG		; Merge successor in with U2 block.
+
+	; Here have block all together, see if want to split some off.
+PSRXP6:	HLRZ U4,$PNBLK(U2)	; Find total # words we have
+	CAIGE U4,(U1)
+	 PSRERR EROOM		; somehow didn't get enough???
+	CAIG U4,$PTRIV(U1)	; More than a trivial amount?
+	 JRST PSRXP8		; No, return.
+	PUSHJ P,PSRADJ		; Split them up...
+	PUSHJ P,PSRMKU		; Put split-off block in U3 on spacelist.
+	JRST PSRXP8
+
+
+	; Here, must find a whole new block.
+PSRXP7:	HLRZ U4,$PNBLK(U2)
+	ADDI U1,(U4)		; Find # words total we need.
+	MOVE U3,U2		; Save U2
+	PUSHJ P,PSRGET		; Get a block of right size (node ptr in U2)
+	PUSHJ P,PSRCPY		; Copy U3 into U2.
+	MOVEI U1,(U3)
+	PUSHJ P,PSRREL		; Free up old core.
+
+PSRXP8:	HLRZ U1,$PNBLK(U2)	; Return U1 - <# words>
+	HRL U2,$PNBLK(U2)	; Return U2 - <block addr>,,<node addr>
+	POP P,U4
+	POP P,U3
+	POPJ P,
+
+subttl PSRREL - Release Block
+
+; PSRREL - Release core block.
+;	U1 - addr of node to release. (CORREL - addr of block)
+
+.M"CORREL:
+	PUSH P,U2
+	MOVEI U2,(U1)
+	PUSHJ P,PSREQV		; Temp hack - change block addr to node addr
+	JRST PSRRL1
+
+.M"PSRREL:
+	PUSH P,U2
+	MOVEI U2,(U1)
+PSRRL1:	PUSH P,U3
+	PUSH P,U4
+
+	; Verify that node is kosher.
+	HLRZ U3,$PNFLG(U2)	; Get ID-check value from where it should be
+	CAIE U3,$PVLID		; and make sure it's what it should be...
+	 PSRERR ERBAD		; Yuckity yuck!
+
+	HLRZ U3,$PNPTR(U2)	; Get <pred>
+	CAIE U3,CORLST-$PNPTR	; Special check before taking look at "node".
+	 SKIPN $PNSPP(U3)	; Is predecessor unactive?
+	  JRST PSRRL2		; No, or not real node, don't merge.
+	EXCH U2,U3
+	PUSHJ P,PSRMRG		; Merge if so
+
+PSRRL2:	HRRZ U3,$PNPTR(U2)	; Get <succ>
+	JUMPE U3,PSRRL4
+	SKIPE $PNSPP(U3)	; Is successor unactive?
+	 PUSHJ P,PSRMRG
+	SKIPN $PNSPP(U2)	; Is block itself on spacelist by now?
+	 PUSHJ P,PSRMK2		; Make it unactive, put on spacelist.
+
+	; Could check here for freeing up pages.
+PSRRL4:
+PSRRL8:	PUSHJ P,PSRGC
+	POP P,U4
+	POP P,U3
+	POP P,U2
+	POPJ P,
+
+; PSREQV - Temporary hack which converts a block address to a node address,
+;	so as to maintain compatibility with CORSER.  In future the node
+;	address will be returned to caller of CORGET so as to eliminate this
+;	searching overhead.
+; Takes U2 - block addr
+; Returns U2 - node addr for the block
+
+PSREQV:	PUSH P,U3 ? PUSH P,U4
+	MOVEI U3,CORLST-$PNPTR
+	JRST PSREQ4
+PSREQ2:	HRRZ U4,$PNBLK(U3)
+	CAIN U2,(U4)
+	 JRST PSREQ6
+PSREQ4:	HRRZ U3,$PNPTR(U3)
+	JUMPN U3,PSREQ2
+	PSRERR ERBAD		; No block corresponds to this address!!
+PSREQ6:	MOVEI U2,(U3)
+	POP P,U4 ? POP P,U3
+	POPJ P,
+
+subttl Primitives - OS dependent page hacking
+
+; PSRGC - Frees up core from U2 block insofar as possible.
+;	U2 - block just freed
+; Clobbers U3,U4
+
+PSRGC:	MOVE U4,$PNPTR(U2)
+	TRNE U4,-1
+	 POPJ P,
+
+	MOVE U4,$PNBLK(U2)	; Get <# wds>,,<addr>
+	MOVEI U3,PG$SIZ-1(U4)
+	LSH U3,-PG$BTS		; Find 1st page # freed.
+	MOVE U4,FFPAGE
+	SUBI U4,(U3)
+	JUMPLE U4,PSRGC9
+IFN OS%ITS,{
+	IMUL U4,[-1,,]
+	HRRI U4,(U3)
+	SYSCAL CORBLK,[MOVEI 0
+		MOVEI %JSELF
+		U4]
+	 PSRERR ERARG	; Should only happen if bad args.
+}
+IFN OS%TNX,{
+	PUSH P,1 ? PUSH P,2 ? PUSH P,3
+	SETO 1,
+	MOVEI 2,(U3)
+	HRLI 2,.FHSLF
+	MOVEI 3,(U4)
+	TLO 3,(PM%CNT)
+	PMAP
+	 ERJMP .+1
+	POP P,3 ? POP P,2 ? POP P,1
+}
+	MOVEM U3,FFPAGE
+
+PSRGC9:	POPJ P,
+
+
+; PSRADJ - Splits up block of core into 2 blocks.
+;	This is the ONLY PLACE where new nodes/blocks are added to
+;	the corelist!!
+;	U1 - # words to put in active new block
+;	U2 - ptr to block to split up (unactive, on spacelist)
+; Returns
+;	U2 - ptr to active new block
+; Clobbers U3,U4
+
+PSRADJ:	MOVEI U3,(U2)		; Put big unactive node in U3
+	PUSHJ P,PSRGTN		; Get a new node in U2
+	HLRZ U4,$PNBLK(U3)
+	SUBI U4,(U1)
+	CAIG U4,		; Make sure block is big enough for split...
+	 PSRERR ERARG		; Ugh?? Caller messed up.
+	HRLM U4,$PNBLK(U3)	; Store reduced size for big unactive block
+	HRLM U1,$PNBLK(U2)	; and set desired size for new block.
+	MOVE U4,$PNBLK(U3)	; Get addr of big block,
+	HRRM U4,$PNBLK(U2)	; and store it as addr for new block
+	ADDI U4,(U1)		; and find new addr of big unactive block.
+	HRRM U4,$PNBLK(U3)	; Store away, all block-size specs done.
+
+	; Insert new block into corelist, and make it active!
+	MOVE U4,$PNPTR(U3)	; Get <pred>,,<succ> for old node
+	HRRI U4,(U3)		; <succ> for new node is old one.
+	MOVEM U4,$PNPTR(U2)	; Fix up new node...
+	HLRZS U4		; Now get <pred>,
+	HRRM U2,$PNPTR(U4)	; So as to zap predecessor to point at new.
+	HRLM U2,$PNPTR(U3)	; And zap successor also.
+	MOVEI U4,$PVLID		; Final touch to active node is ID...
+	HRLM U4,$PNFLG(U2)	; set it.
+IFN OS%ITS,{
+	MOVE U4,$PNPTR(U3)
+	TRNN U4,-1
+	 PJRST PSRCOR
+}
+	POPJ P,
+
+IFN OS%ITS,{
+
+IFDEF CORLUZ,.SCALAR CBKERR
+
+PSRCOR:	HLRZ U4,$PNBLK(U2)	; Get length of block
+	ADD U4,$PNBLK(U2)	; Find first unused addr
+	MOVEI U4,PG$SIZ-1(U4)	; Clear LH and adjust for
+	LSH U4,-PG$BTS		; finding 1st unused page #.
+	CAMG U4,FFPAGE
+	 POPJ P,
+	PUSH P,U4
+	SUB U4,FFPAGE
+	IMUL U4,[-1,,]
+	HRR U4,FFPAGE
+IFDEF CORLUZ,[
+	SETZM CBKERR
+	SYSCAL CORBLK,[	MOVEI %CBNDR+%CBNDW
+			MOVEI %JSELF
+			U4
+			MOVEI %JSNEW
+			%CLERR,,CBKERR]
+	CORLUZ
+]
+.ELSE,[
+	SYSCAL CORBLK,[	MOVEI %CBNDR+%CBNDW
+			MOVEI %JSELF
+			U4
+			MOVEI %JSNEW]
+	 PSRERR EROOM
+]
+	POP P,FFPAGE
+	POPJ P,
+
+};OS%ITS
+
+
+subttl Primitives - Merging, Freeing, Copying
+
+; PSRMKU - Make unactive, put node on spacelist.
+;	U3 - ptr to node to put on spacelist.
+; Clobbers U4
+
+PSRMK2:	MOVEI U3,(U2)
+PSRMKU:	MOVE U4,SPCLST
+	HRLI U4,SPCLST-$PNSPP
+	MOVEM U4,$PNSPP(U3)
+	TRNE U4,-1		; If successor exists,
+	 HRLM U3,$PNSPP(U4)	; zap it.
+	HRRZM U3,SPCLST		; and zap predecessor.
+	HRRZS $PNFLG(U3)	; Also zap ID check.
+	POPJ P,
+
+; PSRMRG - Merge two adjacent blocks
+;	U2 - ptr to node, 1st block (only count is changed)
+;	U3 - ptr to node, 2nd block (can be on Spacelist or Corelist)
+; Clobbers U3,U4
+
+PSRMRG:	HRRZ U3,$PNPTR(U2)	; Get addr of succ
+	CAIN U3,		; Make sure actually have a successor.
+	 PSRERR ERARG		; Caller screwed up.
+	HLLZ U4,$PNBLK(U3)	; Get # words in U3 node, and use to
+	ADDM U4,$PNBLK(U2)	; increment count of current block.
+	PUSHJ P,PSRFRE		; Free U3 node.
+	POPJ P,
+
+
+
+; PSRACT - Make U3 block active (already on corelist, just take off
+;	the spacelist)
+; Clobbers U4
+
+PSRACT:	MOVEI U4,$PVLID		; Insert ID check
+	HRLM U4,$PNFLG(U3)	; into node for future refs by user prog.
+PSRACX:	MOVE U4,$PNSPP(U3)
+	TRNE U4,-1		; Test for successor
+	 HLLM U4,$PNSPP(U4)	; Zap successor if there's one.
+	MOVSS U4
+	HLRM U4,$PNSPP(U4)	; Zap predecessor (always)
+	SETZM $PNSPP(U3)
+	POPJ P,
+
+
+; PSRFRE - Puts U3 block on Freelist.  Takes it off Spacelist/Corelist as nec.
+; PSRFRX - Ditto but assumes block isn't on Spacelist.
+; PSRFR  - Ditto but assumes block isn't on Corelist or Spacelist.
+;  All clobber U4.
+
+PSRFRE:	SKIPE $PNSPP(U3)	; On spacelist?
+	 PUSHJ P,PSRACX		; Take it off, so it's only on corelist.
+PSRFRX:	MOVE U4,$PNPTR(U3)	; Get <pred>,,<succ>
+	TRNE U4,-1
+	 HLLM U4,$PNPTR(U4)	; Zap successor if one.
+	MOVSS U4
+	HLRM U4,$PNPTR(U4)	; Zap predecessor (always)
+
+PSRFR:	MOVE U4,FRELST
+	MOVEM U4,$PNPTR(U3)
+	HRRZM U3,FRELST
+	POPJ P,
+
+; PSRCPY - Copy block from U3 to U2.  Overlap is OK as long as
+;	U2 < U3.
+; Clobbers U4
+
+PSRCPY:	PUSH P,U2
+	MOVE U2,$PNBLK(U2)	; Get <dest> address
+	HRL U2,$PNBLK(U3)	; Get <source> address
+	HLRZ U4,$PNBLK(U3)	; Get # words to copy
+	ADDI U4,-1(U2)		; Find last word to copy into
+	BLT U2,(U4)
+	POP P,U2
+	POPJ P,
+
+
+subttl Primitives - PSRGTN - Get free node.
+
+; PSRGTN - Get a node.
+;	Returns addr in U2.
+
+PSRGTN:	SKIPN U2,FRELST		; Get pointer to current free list
+	 JRST PSRGN3		; None left?  Make more.
+	HRL U2,(U2)		; Get ptr to next free node
+	HLRZM U2,FRELST		; and store it away.
+	POPJ P,
+
+	; Must make new nodes.  Requires getting new block recursively,
+	; with special hack.
+PSRGN3:	MOVE U2,FRESAV		; Make a freelist pointing to special
+	MOVEM U2,FRELST		; node saved just for this occasion.
+	PUSH P,U1		; Because PSRGET will need one...
+	MOVEI U1,$PNSIZ*$PMAKN	; Get this many words for new block
+	PUSHJ P,PSRGET		; Call recursively.
+	HLRZ U2,U2		; Get blk addr by itself
+	PUSHJ P,PSRMKF		; Make a freelist out of block.
+	HRRZ U1,(U2)		; Get ptr to second node on list,
+	MOVEM U1,FRELST		; and make that the new freelist.
+	SETZM (U2)		; While first node on list becomes the
+	HRRZM U2,FRESAV		; saved node.
+	POP P,U1
+	JRST PSRGTN
+
+
+; PSRMKF - Makes freelist out of piece of core.
+;	U1 - # words
+;	U2 - address of block
+; Clobbers U1.  U2 (same) will point to 1st node on freelist.
+
+PSRMKF:	CAIGE U1,$PNSIZ*2	; Must be able to make at least two.
+	 PSRERR ERARG		; Caller screwed up.
+	PUSH P,U2
+
+	PUSH P,U1	; First must zap whole block...
+	ADDI U1,(U2)	; addr to last wd + 1
+	HRLI U2,(U2)
+	ADDI U2,1	; addr,,addr+1
+	SETZM -1(U2)
+	BLT U2,-1(U1)	; Clear all of block.
+	POP P,U1	; restore size.
+
+	IDIVI U1,$PNSIZ	; Find # possible nodes.
+	MOVE U2,(P)	; Restore addr of block
+	MOVNI U1,(U1)
+	HRLI U2,(U1)	; Have -<# nodes>,,<addr>
+
+PSRMF2:	MOVEI U1,$PNSIZ(U2)	; Get ptr to next node
+	MOVEM U1,(U2)		; Store in current node
+	ADDI U2,$PNSIZ-1
+	AOBJN U2,PSRMF2
+
+	SETZM -$PNSIZ(U2)	; Clear out last node to terminate list.
+	POP P,U2
+	POPJ P,
+
+
+
+subttl Debugging aid - DEBCOR
+
+; Debugging printout routine.  Requires MACROS/NUUOS/OUT.
+
+IFN $$PDBG,{
+DBC==17
+
+DEBRET:	JSR DEBRST
+	POPJ P,
+
+DEBCOR:	JSR DEBSAV
+	SKIPN A,CORLST
+	 JRST [	FWRITE DBC,[[  No Corelist!!!
+]]
+		JRST DEBRET]
+	FWRITE DBC,[[Core list:]]
+DEBCR2:	FWRITE DBC,[[
+Node ],RHV,A,[ Blk ],RHV,$PNBLK(A),[/ ],LHV,$PNBLK(A),[ wds, ]]
+	HRRZ B,$PNBLK(A)
+	ANDI B,PG$MSK
+	CAIE B,
+	 SUBI B,PG$SIZ
+	HLRZ C,$PNBLK(A)
+	ADDI B,(C)
+	ASH B,-PG$BTS
+	CAIGE B,
+	 SETZ B,
+	FWRITE DBC,[N8,B,[ pgs ]]
+	SKIPN $PNSPP(A)
+	 JRST [	FWRITE DBC,[[ACTIVE]]
+		JRST DEBCR4]
+	FWRITE DBC,[[FREE, Spacelist ptrs: ],LHV,$PNSPP(A),[,,],RHV,$PNSPP(A)]
+DEBCR4:	FWRITE DBC,[[
+]]
+	; Now verify ID, if active.
+	SKIPN $PNSPP(A)		; Active?
+	 JRST [	HLRZ B,$PNFLG(A)	; Yes, get ID.
+		CAIN B,$PVLID		; See if valid.
+		 JRST .+1		; Yup.
+		FWRITE DBC,[[	Bad ID!  Should be ],RHV,[[$PVLID]],[, is ],RHV,B,[
+]]
+		JRST .+1]
+
+	; Now verify that next node points back to this node.
+	HRRZ C,$PNPTR(A)	; Get addr of successor
+	JUMPE C,DEBC60		; No successor?  Done.
+	HLRZ B,$PNPTR(C)	; Get successor's pred
+	CAIN A,(B)		; Should point back to current node.
+	 JRST DEBC40		; Yep, no sweat here.
+
+	; Ugh, list failure!!
+	FWRITE DBC,[[	Succ node has bad pred!
+	This node: ],RHV,A,[/ ],LHV,$PNPTR(A),[,,],RHV,$PNPTR(A),[
+	Next node: ],RHV,C,[/ ],LHV,$PNPTR(C),[,,],RHV,$PNPTR(C),[
+]]
+	; Probably screwed from here on, but continue anyway.
+
+	; Now verify that next node's block is successor to current block.
+DEBC40:	HRRZ D,$PNBLK(A)	; Get block addr
+	HLRZ C,$PNBLK(A)	; and # wds
+	ADDI D,(C)		; to find next addr after this block.
+	HRRZ B,$PNPTR(A)	; Get ptr to successor node
+	JUMPE B,DEBC60		; If no successor, done with corelist.
+	HRRZ C,$PNBLK(B)	; Get address next block starts at.
+	CAIN C,(D)		; Compare...
+	 JRST DEBC50		; Equal, all's well, so process next.
+
+	; Ugh, next block isn't contiguous to this one!
+	FWRITE DBC,[[	Next block not contiguous!!
+	Should start at ],RHV,D,[, but succ node claims ],RHV,C,[
+]]
+
+DEBC50:	HRRZ B,$PNPTR(A)
+	JUMPE B,DEBC60
+	MOVEI A,(B)
+	JRST DEBCR2
+
+	; Corelist done, now write out Spacelist.
+DEBC60:	FWRITE DBC,[[End of Corelist, last managed addr is ]]
+	HRRZ C,$PNBLK(A)	; Get 1st inaccessible addr
+	HLRZ D,$PNBLK(A)	; according to last node on spacelist
+	ADDI C,-1(D)		; via <blk addr>+<# wds>-1
+	FWRITE DBC,[N8,C,[
+First free page is ],N8,FFPAGE,[ at ]]
+	MOVE B,FFPAGE
+	IMULI B,PG$SIZ
+	FWRITE DBC,[N8,B,[
+-----------------------------
+Spacelist:]]
+	SKIPN A,SPCLST
+	 JRST [	FWRITE DBC,[[ 0 ??]]
+		JRST DEBRET]
+	MOVEI A,SPCLST-$PNSPP
+DEBC70:	HLRZ B,$PNSPP(A)
+	SETZ C,
+	CAIE B,
+	 HRRZ C,$PNSPP(B)
+	CAIE A,(C)
+	 JRST [	FWRITE DBC,[N8,B]
+		JRST .+1]
+	CAIN A,(C)
+	 JRST [	FWRITE DBC,[[*]]
+		JRST .+1]
+	FWRITE DBC,[[.]]
+	HRRZ A,$PNSPP(A)
+	JUMPE A,[FWRITE DBC,[[0]]
+		JRST DEBC90]
+DEBC75:	FWRITE DBC,[[* -> ],N8,A,[:]]
+	JRST DEBC70
+
+DEBC90:	FWRITE DBC,[[
+Done.
+]]
+	JRST DEBRET
+
+; Save/restore support for PAGSER debug stuff.  Requires MACROS/NUUOS/OUT.
+
+LVAR	DEBSAV:	0 ? JRST DEBSV0	; jump to pure
+LVAR	DEBACS:	BLOCK 20
+
+DEBSV0:	PUSH P,U40
+IFE $$UCAL,PUSH P,UUORPC
+	MOVEM 17,DEBACS+17
+	MOVEI 17,DEBACS
+	BLT 17,DEBACS+16	; Save ACs
+	MOVE 17,DEBACS+17
+IFN OS%ITS,[
+	.OPEN DBC,[.UAO,,'TTY]
+	 .VALUE
+	OUT(DBC,OPEN(UC$IOT))
+]
+IFN OS%TNX, OUT(DBC,OPEN(UC$IOT,[.PRIOU]))
+	JRST @DEBSAV
+
+LVAR	DEBRST:	0 ? JRST DEBRS0	; jump to pure
+
+DEBRS0:
+IFN OS%ITS,.CLOSE DBC,
+	MOVSI 17,DEBACS
+	BLT 17,17
+IFE $$UCAL,POP P,UUORPC
+	POP P,U40
+	JRST @DEBRST
+
+} ;end ifn $$pdbg
+
+.END PAGSER

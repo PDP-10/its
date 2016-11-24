@@ -320,6 +320,7 @@ respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
 expect ":KILL"
 
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
+respond "*" ":link sys;ts tn,sys;ts telnet\r"
 
 # supdup port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
@@ -332,6 +333,25 @@ respond "*" ":print sys1;..new. (udir)\r"
 type ":vk\r"
 
 respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
+
+respond "*" ":link syseng;fsdefs 999999,system;fsdefs >\r"
+
+# these two links are expected by sysnet; ftps > and are present
+# in the PI distribution
+respond "*" ":link ksc;nuuos 999999,klh;nuuos >\r"
+respond "*" ":link ksc;macros 999999,klh;macros >\r"
+respond "*" ":link ksc;out 999999,klh; out >\r"
+
+respond "*" ":midas sysbin;ftps_sysnet;ftps \r"
+expect ":KILL"
+
+respond "*" ":link device;tcp syn025,sysbin;ftps bin\r"
+respond "*" ":link device;tcp syn031,sysbin;ftps bin\r"
+
+respond "*" ":midas sysbin;ftpu_sysnet;ftpu \r"
+expect ":KILL"
+
+respond "*" ":link sys;ts ftp,sysbin;ftpu bin\r"
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

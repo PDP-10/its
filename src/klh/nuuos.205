@@ -1,0 +1,1356 @@
+;;;-*-MIDAS-*-
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ included in this assembly.
+/
+
+;;;-----------------------------------------------------
+;;; Necessary external defs for UUOs
+;;;
+;;; 	U1,U2,U3,U4	; Sequential ACs which UUO rtns clobber with abandon.
+;;; 	P		; PDL AC
+;;;	L		; LSE pointer AC (optional, only need if ULISTS set)
+;;;	AUTPSY		; Routine JSR'd to if fatal UUO error occurs.
+;;;			; and file containing wonderful "FWRITE" macro etc.
+
+IFE .OSMIDAS-SIXBIT/ITS/, .INSRT KSC;MACROS >	; Note file contains OS defs.
+IFN .OSMIDAS-SIXBIT/ITS/, .INSRT <NICPROG>MACROS.MID
+
+;;;----------------------------------------------------
+;;; Assembly switches (for optional features and hacks).
+;;; The only default UUOs are byte-ptr operations.
+				; If set...
+IFNDEF $$UJSR,$$UJSR==0		; UUO vector is JSR UUOH
+IFNDEF $$UCAL,$$UCAL==0		; UUO vector is CALL UUOH (PUSHJ P,)
+IFNDEF $$UJSP,$$UJSP==0		; UUO vector is JSP X,UUOH (not yet)
+IFE $$UJSR\$$UCAL\$$UJSP,$$UJSR==1	; Default is JSR.
+
+				; Set 1 to assemble:
+IFNDEF UBONES,UBONES==0		; Nothing but dispatcher
+IFNDEF $$OUUO,$$OUUO==0		; Old output UUOs for compatibility
+IFNDEF UAREAS,UAREAS==0		; Area hackery
+IFNDEF USTRGS,USTRGS==0		; String hackery (requires UAREAS)
+IFNDEF ULISTS,ULISTS==0		; List hackery   (   "       "   )
+IFNDEF USCALL,USCALL==0		; Obsolete .CALL execution UUO.
+IFNDEF $$UPSR,$$UPSR==0		; New PAGSER instead of CORSER.
+
+	IFN ULISTS,UAREAS==1		; List hackery needs area hackery.
+	IFN USTRGS,UAREAS==1		; ditto string variable hackery
+
+IFN $$OUUO,[	; Stuff for compatibility with old output UUO code
+
+IFNDEF $$OFLT,$$OFLT==<IFDEF UFLOAT,{UFLOAT}.ELSE {0}>	; Assemble floating
+				; point output code (compatibility crock)
+IFNDEF $$OERR,$$OERR==<IFDEF UERROR,{UERROR}.ELSE {0}>	; Assemble ERR output
+				; type (on ITS, also need ERRCHN def'd)
+
+IFNDEF OC, OC=:U2		; Define Output Channel for standard-out rtns
+] ; IFN $$OUUO
+IFNDEF $$SAV2,{			; Should routines save U2 or not?
+	$$SAV2==0		; No, unless either $$OUUO or $$OUT is set,
+	IFN $$OUUO, IFE U2-OC, $$SAV2==1		; and U2 = OC.
+	IFDEF $$OUT,IFN $$OUT, IFE U2-OC, $$SAV2==1
+}
+DEFINE IFSVU2
+IFN $$SAV2!TERMIN
+
+;;;;;;;;;;;;;;;;;;;;  Storage & External Definitions   ;;;;;;;;;;;;;;;;;;;;;;;;
+
+U40=:40		; Location of UUO instruction after trapping
+UUOBEG==.	; Mark beginning of code for UUO pkg.  UUOEND will be last.
+
+BVAR		; Trap via JSR here when hit some fatal condition.
+IF2 IFNDEF AUTPSY, AUTPSY:	; Define labels here if not done externally.
+IF2 IFNDEF SYSLOS, SYSLOS:
+		0		; JSR-call, impure.
+IFN OS%ITS,	.VALUE
+.ELSE		HALT .
+
+ILU40:	0	; Holds illegal UUO if one detected
+ILULOC:	0	; and location it trapped from.
+
+EVAR
+
+;;;;;;;;;;;;;;;;;;;;;;;;;  UUO Dispatcher  ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	Two different dispatch methods are coded here; the old, used when
+;;;	$$UJSR==1, is a traditional JSR.  The new, used when
+;;;	$$UCAL==1, is a PUSHJ.  The latter is slightly slower but allows
+;;;	more flexibility in the UUO routines, and makes output UUO's
+;;;	a bit faster.  A switch $$UJSP also exists for possible future
+;;;	use of a JSP dispatch; this is mostly to remind hackers that
+;;;	the UUO dispatch method is not just a binary proposition.
+
+IFN $$UJSR,BVAR			; UUO dispatcher must be in impure if JSR.
+
+UUOH:	IFN $$UJSR, 0		; If JSR, need smashable word here.
+	LDB U1,[330600,,U40]	; Get bottom 6 bits of opcode (0 - 77)
+	JRST @UUOTAB(U1)	; Dispatch fearlessly - table is full.
+IFN $$UJSR, EVAR
+UACFLD:	$ACFLD,,U40	; Byte ptr to UUO's AC field (used often)
+
+	;;; UUOCAL - Define UUO vector instruction
+
+UUOCAL=:<IFN $$UCAL,{PUSHJ P,UUOH} IFN $$UJSR,{JSR UUOH}>
+TMPLOC 41,{UUOCAL}		; This vectors UUO's to handler above.
+
+	;;; UUOXRT - Define UUO return instruction
+	;;;	 (can't be UUORET, compat screw.)
+
+UUOXRT=:<IFN $$UCAL,{POPJ P,} IFN $$UJSR,{JRST @UUOH}>
+
+	;;; UUORTL - Define UUO return location for JRST'ing.
+
+IFN $$UCAL,{DEFINE UUORTL
+[POPJ P,]!TERMIN }
+IFN $$UJSR,{DEFINE UUORTL
+@UUOH!TERMIN }
+	; Compatibility kludge.  Want to stop using UUORET for UUORTL.
+	; When nothing uses UUORET any more, make it = to UUOXRT.
+IFN $$UJSR,EQUALS UUORET,UUORTL
+
+	;;; UUORPC - Define UUO return PC location (for things like AOS'ing).
+	;;;	Dangerous since easy to forget PDL level is important.
+IFN $$UCAL,{DEFINE UUORPC
+(P)!TERMIN }
+IFN $$UJSR,{DEFINE UUORPC
+UUOH!TERMIN }
+
+;;;;;;;;;;;;;;;;;;;;;;;;;  General Dispatch Support ;;;;;;;;;;;;;;;;;;;;;;;;
+
+	;;; UUO dispatch table, indexed by UUO opcode.  Unused entries go to
+	;;; illegal-uuo routine.
+
+UUOTAB:	REPEAT 100,SETZ ILUUO
+
+	; An illegal UUO dispatches here...
+ILUUO:	EXCH U1,U40		; Illegal UUO!!  Save info for debugging.
+	MOVEM U1,ILU40		; Save illegal uuo being xct'd
+	EXCH U1,U40		; Restore
+	EXCH U1,UUORPC		; Get return PC for UUO
+	MOVEM U1,ILULOC		; Save location+1 of illegal uuo
+	EXCH U1,UUORPC		; Restore
+	JSR AUTPSY		; Signal fatal error.
+
+;;; UUODEF <uuo>,<dispatch addr>
+;;;	Macro to define UUO's; defines <uuo> as a UUO name which will dispatch
+;;;	to <dispatch addr> when executed.
+
+IF1 .M"%%UCNT==0
+DEFINE UUODEF NAMEL,HANDLR
+IRPS NAME,,[NAMEL]
+IF1 [.M"%%UCNT==.M"%%UCNT+1
+IFE .M"%%UCNT-40,.M"%%UCNT==50
+IFG .M"%%UCNT-77,.ERR Too many UUO's def'd.
+IFG .M"%%UCNT-47,PRINTC /Warning - "!NAME!" will be a SLOW UUO!/
+.M"NAME=.M"%%UCNT_27.
+]
+TMPLOC <UUOTAB+.M"NAME_-27.>, HANDLR
+TERMIN TERMIN
+
+;;; Now define two subclasses of UUOs - those which only use their AC or E
+;;;	field for arguments, rather than both.
+;;; The U.OPER subclass of UUOs (after the similar ITS call named .OPER)
+;;;	use only their AC field for arguments and are thus indexed by the
+;;;	(unused) E field.  The number of such UUO's is effectively infinite.
+;;; The U.CALL subclass of UUOs (after the similar ITS call named .CALL)
+;;;	use only their E field for arguments and are thus indexed by the
+;;;	(unused) AC field.  Up to 16. sub-UUO's can be defined for each
+;;;	opcode used this way; currently only U.CALL is so used.
+;;;
+;;; UUODFE defines a UUO that uses E only.	= U.CALL <n>,
+;;; UUODFA defines a UUO that uses AC only.	= U.OPER <n>
+;;; UUODFN defines a UUO that uses neither.	= U.OPER <n>
+
+;;;;;;;;;;;;;;;;;;   U.OPER - UUODFA, UUODFN   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+UUODEF U.OPER:,U.OPR	; UUO to handle UUODFA's and UUODFN's, which only use
+			; their AC field.  These UUO's are thus indexed by E.
+U.OPR:	HRRZ U3,U40
+	CAIGE U3,UOPMAX	; Check index high end, and skip if illegal.
+	 JRST @UOPTAB(U3)
+	JRST ILUUO	; Sigh...
+
+	; Dispatch table for U.OPER UUO's.
+IFNDEF UOPMAX,UOPMAX==:20.	; Can vary table size at will.
+UOPTAB:	REPEAT UOPMAX,ILUUO
+
+	; Macro for UUODFA (defining U.OPER's)
+IF1 .M"%%UOPC==-1
+DEFINE UUODFA NAMEL,HANDLR
+IRPS NAME,,[NAMEL]
+IF1 [.M"%%UOPC==.M"%%UOPC+1
+IFGE .M"%%UOPC-UOPMAX,.ERR Too many U.OPER's, increment UOPMAX!
+.M"NAME=U.OPER .M"%%UOPC
+]
+TMPLOC UOPTAB+.M"NAME,HANDLR
+TERMIN TERMIN
+EQUALS UUODFN,UUODFA	;UUO's not using E are dispatched in same way.
+
+;;;;;;;;;;;;;;;;;;   U.CALL - UUODFE   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	;;; U.CALL routine and UUODFE macro
+UUODEF U.CALL:,U.CAL	; UUO to handle UUODFE's, which only use E field.
+			; These UUO's are thus indexed by AC.
+U.CAL:	LDB U3,UACFLD		; Get ac field
+	JRST @UCLTAB(U3)	; Dispatch (safely since table is full)
+
+	; Dispatch table for U.CALL UUO's.
+UCLTAB:	REPEAT 20,ILUUO
+	
+IF1 .M"%%UCLC==-1
+DEFINE UUODFE NAMEL,HANDLR
+IRPS NAME,,[NAMEL]
+IF1 [.M"%%UCLC==.M"%%UCLC+1
+IFGE .M"%%UCLC-20,.ERR Too many U.CALL's!
+.M"NAME=U.CALL .M"%%UCLC,
+]
+TMPLOC UCLTAB+<17&<.M"NAME_-23.>>,HANDLR
+TERMIN TERMIN
+
+	; If only want "bare-bones" (dispatcher), ignore rest of file
+	; by halting input here.
+IFN UBONES, CONSTANTS ? .INEOF
+
+SUBTTL Byte Pointers - DBP7, DBP, PTSKIP, PTRDIF, ADJBP
+
+; Byte pointer hacking uuos.  DBP and ADJBP work for any size byte,
+; whereas DBP7, PTSKIP, and PTRDIF assume byte size = 7 (ASCII char)
+
+; Could add DLDB, DDPB to oppose ILDB, IDPB?
+; Add general form of PTSKIP, PTRDIF?
+
+;  DBP7 [bp]		decrements 7-bit byte ptr at E.
+
+UUODFE DBP7:,UDBP7
+UDBP7:	SKIPGE U1,@U40		; Get c(E) and check for beginning ptr.
+	 UUOXRT			; It's either 440700,, or -1,,
+	MDBP7 U1,		; Decrement, using macro.
+	MOVEM U1,@U40		; store result
+	UUOXRT
+EQUALS D7BPT,DBP7	; Remain compatible with old name
+
+
+; DBP [bp]	General-purpose byte ptr decrement.  Works for
+;			any size byte.
+
+UUODFE DBP:,UDBPT
+UDBPT:	MOVE U1,@U40		; Get c(E)
+	LDB U4,[300600,,U1]	; Get byte size
+	LDB U3,[360600,,U1]	; Get offset within word
+	ADD U3,U4		; Move offset back up
+	CAIL U3,44		; Still within word?
+	 JRST UDBPT1		; No.
+	DPB U3,[360600,,@U40]	; Yes, put new offset back in (directly!)
+	UUOXRT
+UDBPT1:	MOVEI U3,44		; Outside word. get # bits in wd.
+	IDIV U3,U4		; Get u3=#bytes in wd.,u4=remainder, i.e.# bits remaining
+	DPB U4,[360600,,U1]	; at low end. store as new offset.
+	HRRI U1,-1(U1)		; Get addr-1 pointed to, and store in result.
+	MOVEM U1,@U40		; and store result
+	UUOXRT			; and return
+
+EQUALS DECBPT,DBP	; Preserve compatibility with old name
+
+;  PTSKIP AC,[byte ptr]		Skips (increments) byte ptr in E by
+;	# of chars specified in AC.  Assumes 7-bit bytes.  Works for
+;	both positive and negative skip values.
+
+UUODEF PTSKIP:,U7SKP
+U7SKP:	MOVE U1,@U40		; Get c(E)
+IFSVU2,[MOVE U3,U1
+	MULI U3,5
+	ADD U4,UADBP7(U3)
+	MOVE U3,U4 ]		; Keeping away from U2 requires extra MOVE
+.ELSE [	MOVE U2,U1		; Make copy in U2
+	MULI U2,5
+	ADD U3,UADBP7(U2) ]	; Convert to canonical form
+	LDB U4,UACFLD		; Get AC
+	ADD U3,(U4)		; Add in desired change
+	IDIVI U3,5		; Now change back from canonical
+	HRRI U1,(U3)		; Store new addr
+	TLZ U1,770000		; Mask off old p
+	SUB U1,U7BPT2(U4)	; Put in new p (with maybe a -1 fix to addr)
+	MOVEM U1,@U40		; Store new ptr.
+	UUOXRT
+
+U7BPT2:	770000,,1	; 0 chs left in wd, produce 5 chs in this addr-1 (p=01)
+	430000,,0	; produce p=35
+	520000,,0	; p=26
+	610000,,0	; p=17
+	700000,,0	; p=10  (4 chs in wd)
+
+
+DEFINE MADBP7 BP,CNT
+MULI BP,5
+ADD BP+1,UADBP7(BP)
+ADD BP+1,CNT
+MOVE BP,BP+1
+IDIVI BP,5
+SUB BP,UHADB7(BP+1)
+TERMIN
+
+	; Subtracted from 0,,addr to give appropriate BP pointing at
+	; indexed char (ILDB to get it).
+UHADB7:	-010700,,1
+	-350700,,0
+	-260700,,0
+	-170700,,0
+	-100700,,0
+	-010700,,0	; 5th char, may want to index table by UHADB7+1(A)
+			; so as to get pointer for LDB, not ILDB.
+
+;  PTRDIF AC,[bp]		Pointer difference.  Takes two byte ptrs,
+;	one in c(E) and the other from AC, and returns in AC the char position
+;	difference (E bp)-(AC bp).  Assumes 7-bit bytes.  Can return positive
+;	or negative values.
+
+UUODEF PTRDIF:,U7PTDF
+U7PTDF:	MOVE U1,@U40		; Get c(E), bp to subtract from.
+	LDB U4,UACFLD		; Get AC
+IFSVU2,	PUSH P,U2
+	MOVE U2,(U4)		; Get c(AC), bp to subtract.
+	HRRI U1,@U1		; Put actual addresses in RH, doing
+	HRRI U2,@U2		; necessary indexing/indirection!
+	PUSHJ P,UPDIF7		; mung them.
+	MOVEM U2,(U4)		; store result back in ac
+IFSVU2,	POP P,U2
+	UUOXRT
+
+	; I don't think anything uses this table any more.
+	; It gives # chars in a word, indexed by lower 3 bits of P
+	; in a 7-bit byte ptr.
+U7BPTB:	4		;10
+	5		;01
+	0 ? 0
+	0		;44
+	1		;35
+	2		;26
+	3		;17
+
+
+DEFINE BP7DIF AC,BP1,BP2
+MOVE AC,BP2
+MULI AC,5
+ADD AC+1,UADBP7(AC)
+PUSH P,AC+1
+MOVE AC,BP1
+MULI AC,5
+ADD AC+1,UADBP7(AC)
+SUBM AC+1,(P)
+POP P,AC
+TERMIN
+
+	; U1-U2 => U2, clobbering U1 and U3.
+UPDIF7:	MULI U2,5
+	TLNE U3,777774		; if LH originally zero,
+	 ADD U3,UADBP7(U2)	; needn't add anything.
+	MULI U1,5
+	TLNE U2,777774
+	 ADD U2,UADBP7(U1)
+	SUB U2,U3
+	POPJ P,
+
+	133500,,0	; to handle -5 produced by 440700
+	repeat 4,0
+UADBP7:	-54300,,5
+	-104300,,4
+	-134300,,3
+	-164300,,2
+	-214300,,1
+
+; IBPN, ADJBP - Software simulation of ADJBP instruction, which is just
+;	IBP with non-zero AC.
+; Following description taken from DEC hardware manual.  Integer
+; divisions, of course.
+; Let A = rem((36-P)/S)
+; If S > 36-A	set no divide & exit
+; If S = 0	set (E) -> (AC)
+; If 0 < S <= 36-A:		NOTE: Dumb DEC doc claims < instead of <= !!!
+;	L = (36-P)/S = # bytes to left of P
+;	B = L + P/S  = # bytes to left + # bytes to right = # bytes/word
+;	Find Q and R, Q*B + R = (AC) + L
+;		where 1 <= R <= B	; that is, not neg or zero!
+;	Then:
+;		Y + Q	-> new Y	; must wraparound correctly.
+;	36 - R*S - A	-> new P
+;	Put new BP in AC.  Only P and Y fields changed, not S, I, X.
+
+IFN CPU%KL, EQUALS IBPN,ADJBP
+IFE CPU%KL,[		; If assembling specifically for KL, can skip all this.
+
+UUODEF IBPN:,UIBP		; Define IBPN
+IFE CPU%X, EQUALS ADJBP,IBPN	; Redefine ADJBP too if no chance of conflict.
+				; (i.e. we are assembling specifically for
+				; a non-KL processor)
+UIBP:
+	MOVE U3,@U40	; Get BP in U3
+
+	; First get S
+	LDB U1,[300600,,U3]	; Get S
+	JUMPE U1,[LDB U1,UACFLD	; If S = 0 just set (AC) to (E).
+		MOVEM U3,(U1)
+		UUOXRT ]
+	CAILE U1,36.
+	 JRST UIBP9		; In theory should set "no divide"
+IFSVU2,	PUSH P,U2
+	PUSH P,U3		; Save BP (a little faster access)
+
+	; Now get A and test.
+	LDB U3,[360600,,U3]	; Get P
+	MOVE U2,U3		; Save copy
+	SUBI U3,36.		; Get -(36-P)
+	IDIVI U3,(U1)		; Get -( Alignment = rem (36-P)/s )
+	CAILE U1,36.(U4)	; Compare S <= 36 - A
+	 JRST UIBP8		; Ugh, err return.
+
+	; Get L and B
+	PUSH P,U4		; Save - rem = A = # unbyted bits to left of P
+	MOVM U4,U3		; Save quotient = L = # bytes to left of P
+	IDIVI U2,(U1)		; Now get P/S
+	ADDI U2,(U4)		; L + P/S = B bytes per wd.
+
+	LDB U3,UACFLD		; Find AC to use
+	MOVE U3,(U3)		; Get # bytes to adjust by. Don't optimize if 0
+				; because want canonicalization effect.
+	ADDI U3,(U4)		; Get (AC) + L
+	IDIVI U3,(U2)		; Find  (AC + L)/B = Q and R
+	JUMPLE U4,[ADDI U4,(U2)	; If R <= 0 then adjust to 0 < R.
+		SOJA U3,.+1]	; which means adjusting Q also.
+	
+	IMULI U4,(U1)		; Get R*S
+	POP P,U1		; Restore -A
+	SUBI U1,-36.(U4)	; Now have new P = (36 - R*S - A)
+
+	POP P,U2		; Get byte pointer again
+	DPB U1,[360600,,U2]	; Deposit new P
+	ADDI U3,(U2)		; Find new Y = Y + Q
+	HRRI U2,(U3)		; Set this way to wrap properly.
+	LDB U4,UACFLD
+UIBP5:	MOVEM U2,(U4)		; Finally store new pointer!
+IFSVU2,	POP P,U2
+	UUOXRT
+UIBP8:
+IFSVU2,	POP P,U2
+UIBP9:			; In theory should set Trap 1, Ovfl, No Div.
+	UUOXRT
+
+] ; IFE CPU%KL
+
+IFN 0,[
+; Temp routine to test IBP to make sure it works
+TSTIBP:	PUSHAE P,[A,B,C,D]
+	MOVSI D,-TSTTLN
+TSTI2:	MOVN C,TSTLIM		; # times to hack a BP
+TSTI3:	MOVE A,C
+	MOVE B,C
+	IBP A,TSTTBL(D)
+	IBPN B,TSTTBL(D)
+	CAME A,B
+	 JRST [	FWRITE TYOC,[[Failed: ],H,TSTTBL(D),[for increment ],N9,C,[ IBP=],H,A,[ IBPN=],H,B,[
+]]
+		JRST .+1]
+	CAMGE C,TSTLIM
+	 AOJA C,TSTI3
+	AOBJN C,TSTI3
+	FWRITE TYOC,[N9,TSTLIM,[ tests of ],H,[TSTTBL(D)],[ completed.
+]]
+	AOBJN D,TSTI2
+	FWRITE TYOC,[[Done!
+]]
+	POPAE P,[D,C,B,A]
+	POPJ P,
+
+TSTLIM:	50000
+TSTTBL:	440700,,1234
+	120333,,54321
+	444400,,0
+	071000,,100
+	010203,,040506
+	430700,,0
+	111100,,0
+TSTTLN==.-TSTTBL
+	BLOCK 20	; for more at runtime
+]
+;}
+
+SUBTTL ECALL macro and supporting UCALL UUO; .CALL error dispatch/hanging
+
+	; This is a crock that should be done away with someday soon
+	; by a macro/routine stuck after a failing .CALL.
+IFN USCALL,[
+UUODEF .ECALL:,UCALL	;performs special .call error hacking
+
+DEFINE ECALL LOC,LIST
+	.ECALL [LOC
+	IRP ITEM,,[LIST]
+IRP ERRCOD,VECTOR,[ITEM]
+IFSN ERRCOD,*,	ERRCOD,,VECTOR
+.ELSE [IRP EC,VC,[VECTOR]
+	EC,,VC(400000) ? .ISTOP ? TERMIN ]
+.ISTOP ? TERMIN
+TERMIN
+	0]
+TERMIN
+
+BVAR
+UCMAXR:	10	;holds max. no. of times to re-try call (for '*' spec)
+UCSLEP:	30.*30.	;holds time to sleep between re-tries (for '*' spec)
+UCECOD:	0	;holds error code from ucall
+UCECNT:	0	;holds a retry count for whatever wants to use it. ecall clears
+EVAR		;whenever it wins.
+
+UCALL:	SETOM UCLFLG'		;clear flag to indicate from outside
+UCALL1:	MOVE U1,@U40		;get ptr to call
+	.CALL @U1		;execute the call
+	 CAIA			;aha, failed...go do our stuff
+	  JRST UCALWN		;won, return straightaway
+
+	HRRZ U2,U40		;get ptr-1 to errlist
+	AOJ U2,
+	.SUSET [.RBCHN,,U1]	;get chan #
+	MOVE U3,[.STATUS U3]	;set up instr
+	DPB U1,[$ACFLD,,U3]	;put in chan #
+	XCT U3			;and get status word into u3
+	LDB U1,[$ERRCD,,U3]	;and isolate error code.
+	MOVEM U1,UCECOD		;store code
+
+UCALL2:	MOVE U1,(U2)		;get errlist entry
+	JUMPE U1,UCALSE
+	HLRZ U3,U1		;get lh into u3
+	ANDI U3,777		;take 3.9-3.1 as error field
+	CAME U3,UCECOD		;matches .call error?
+	 AOJA U2,UCALL2		;no match, keep searching errlist
+	JUMPL U1,UCALL3		;ah, match! if 4.9 bit set, use repeat hackery
+UCALL7:	HRRZM U1,UUORPC
+	UUOXRT			;else just go to specified neutral place.
+UCALL3:	AOSE UCLFLG		;set flag and skip if wasn't set already
+	 JRST UCALL4		;if it was, just repeat
+	MOVE U3,UCMAXR		;first time...get repeat count
+	MOVEM U3,UCECNT		;store in countdown reg
+UCALL4:	SOSGE UCECNT
+	 JRST UCALL7		;counted out. go to addr specified.
+	MOVE U3,UCSLEP		;get sleep time
+	.SLEEP U3,
+	JRST UCALL1		;now try again.
+
+UCALWN:	SETZM UCECOD		;clear error code
+	AOS UUORPC		;to win, skip
+UCALSE:	SETZM UCECNT		;zero loss count
+	UUOXRT			;return
+
+]	;end of ifn uscall
+
+SUBTTL Old Output UUOs (obsolete)
+
+IFN $$OUUO\USTRGS\ULISTS,[
+	; USTRGS needs OUT package for init & BCONC.
+	; ULISTS needs OUT package for %LTSAO in MAKELN.
+IFN OS%ITS,.INSRT KSC;OUT >
+IFN OS%TNX,.INSRT <NICPROG>OUT.MID
+] ;IFN $$OUUO\USTRGS\ULISTS
+
+IFN $$OUUO\USTRGS,[
+
+	;;; UIOINIT - old output initialization.
+DEFINE UIOINIT			; Make them work.
+IFE $$UCAL,PUSH P,UUORPC	; Get return PC on stack.
+LDB OC,UACFLD
+TERMIN
+
+; OUTOPN CH,[<type>,,[<arg>]]
+;		"Opens" a UUO channel for output.  Note <type>
+;		is in AC field!!  This allows <arg> address to be indexed etc.
+
+;Formats:
+;	OUTOPN CH,			;same as type $UCIOT.
+;	OUTOPN CH,[$UCIOT,,0]		;uses .IOT and SIOT
+;	OUTOPN CH,[$UCIOT,,[JFN]]	; uses BOUT, SOUT (TNX only)
+;	OUTOPN CH,[$UCBPT,,[byte ptr]]	;uses idpb starting at ptr
+;	OUTOPN CH,[$UCXCT,,[instr]]	;XCT's the instr (arg will lie in U1)
+;	OUTOPN CH,[$UCUAR,,<ARPT>]	;uses byte ptr into specified area
+;	OUTOPN CH,[SETZ $UCUAR,,<ARPT>]	;as above, but resets area
+;	OUTOPN CH,[$UCTRN,,[channel #]]	;Translates into another UUO channel.
+
+	; UUO Channel types.  Bits start in AC field, so as not to infringe
+	; on indexing/indirect bits!
+.M"$UCUAR==<.M"UC$UAR==:0>	; UAR (UUO area) chan type 0 for easy check.
+.M"$UCXCT==UC$XCT_5		; XCT
+.M"$UCBPT==UC$BPT_5		; Byte PTr
+.M"$UCIOT==UC$IOT_5		; .IOT/SIOT (or BOUT/SOUT)
+.M"$UCBUF==UC$BUF_5		; Buffered UC$IOT
+.M"$UCTRN==UC$TRN_5		; Translate into another chan.
+.M"$UCNUL==UC$NUL_5		; Null output sink
+.M"$UCSAO==UC$SAO_5		; SAO - Like UAR for LSE's String-Area.
+
+	UUODEF OUTOPN:,UCHOPN
+UCHOPN:	UIOINIT			; Get channel # (AC field)
+	HRRZ U3,U40		; Get E
+	CAIN U3,		; In case of OUTOPN CH,0
+	 TLOA U3,($UCIOT,,)	; provide default.
+	  HLL U3,(U3)		; Get LH stuff from c(E)
+	LDB U1,[$ACFLD,,U3]	; Get channel type (AC field of c(E))
+	; OC - Channel #
+	; U1 - channel type
+	; U3 - <flags> <type>,[<arg1addr> ? <arg2addr> ? ... ]
+	PJRST OUT"UOPEN3
+
+
+; OUTPTV CH,[<returned cnt>]	For use with UUO channels.
+;	Returns to c(E) the cnt of chars outputted on channel since
+;	opened.  For channels opened into an area, this is
+;	the # of chars between start of area and current Write BP.
+
+	UUODEF OUTPTV:,UCHPTV
+UCHPTV:	LDB OC,UACFLD		; Get channel #.
+	CALL OUT"UPTV
+	MOVEM U1,@U40		; Store result
+	UUOXRT
+
+; OLD OUTPUT UUOS.  All should avoid clobbering U4 before
+; reading args, since FWRITE macro may be using it to set
+; up UUO calls.
+
+UUODEF OUTI:,U7I	; Immediate - E is char
+UUODEF OUTZ:,U7Z	; E->ASCIZ string
+UUODEF OUTC:,U7C	; c(E) = <# chars>,,<wd addr of string>
+UUODEF OUTPZ:,U7PZ	; c(E) = BP to ASCIZ string
+UUODEF OUTPC:,UTPC	; c(E) = <# chars>,,[BP]
+UUODEF OUTS:,U7S	; c(E) = <# chars> ? <BP>
+UUODEF OUT6F:,U6F	; outputs c(E) as 6bit, ignores trailing blanks.
+  EQUALS .M"OU6F,OUT6F
+UUODEF OUT6W:,U6W	; outputs c(E) as 6bit, all 6 chars.
+  EQUALS .M"OU6W,OUT6W
+UUODEF OUT6Q:,U6Q	; outputs c(E) as 6bit, quotes punct chars with ^Q, drops tr blnk
+  EQUALS .M"OU6Q,OUT6Q
+UUODEF OUT10.:,UN10	; outputs c(E) as decimal value, with point.
+  EQUALS .M"OUN10,OUT10.
+UUODEF OUT10:,UN9	; like OUN10 but no decimal point.
+  EQUALS .M"OUN9,OUT10
+UUODEF OUT8:,UN8	; outputs c(E) as octal value.
+  EQUALS .M"OUN8,OUT8
+UUODEF OUNRH:,UNRH	; outputs RH of c(E) as 6 octal digits.
+UUODFA CRLF:,UCRLF	; outputs CRLF, ignores E.
+
+U7I:	UIOINIT		; Entry pt for OUTI UUO
+	HRRZ U1,U40
+	PJRST OUT"OXC
+UCRLF:	UIOINIT		; Entry pt for CRLF UUO
+	PJRST OUT"OXEOL
+U7Z:	UIOINIT		; Entry pt for OUTZ UUO
+	MOVE U3,U40	; get addr of string
+	PJRST OUT"OXZA
+U7PZ:	UIOINIT		; Entry pt for OUTPZ UUO
+	MOVE U3,@U40
+	PJRST OUT"OXZ
+UTPC:	UIOINIT		; Entry pt for OUTPC UUO
+	MOVE U3,@U40	; Get <cnt>,,[bp]
+	PJRST OUT"OXPC
+U7C:	UIOINIT			; Entry pt for OUTC UUO
+	MOVE U3,@U40
+	PJRST OUT"OXTC
+U7S:	UIOINIT			; Entry pt for OUTS UUO
+	MOVE U3,U40		; Get addr to string descriptor
+	PJRST OUT"OXS
+
+U6W:	UIOINIT		; Entry pt for OUT6W UUO
+	MOVE U3,@U40	; Get 6bit wd
+	PJRST OUT"OX6W
+U6F:	UIOINIT		; Entry pt for OUT6F UUO
+	SKIPN U3,@U40
+	 RET
+	PJRST OUT"OX6F
+U6Q:	UIOINIT
+	MOVE U3,@U40
+	PJRST OUT"OX6Q
+UN10:	UIOINIT		; Entry pt for OUT10. UUO
+	MOVE U3,@U40
+	PJRST OUT"OXN10.
+
+UN8:	SKIPA U1,[8.]	; Entry pt for OUT8 UUO
+UN9:	 MOVEI U1,10.	; Entry pt for OUT10 UUO
+	UIOINIT
+	MOVE U3,@U40
+	PJRST OUT"OXNTYP
+UNRH:	UIOINIT			; Entry pt for OUNRH UUO
+	MOVE U3,@U40		; Get word
+	PJRST OUT"OXRH
+
+IFN $$OFLT,[
+	UUODEF OUNFLT:,UNFL10	; Outputs c(E) as floating decimal
+	EQUALS .M"OUNFL,OUNFLT
+UNFL10:	UIOINIT
+	MOVE U3,@U40
+	PJRST OUT"OXNFL
+
+] ;IFN $$OFLT
+IFN UAREAS,[
+	UUODEF OUTAR:,U7XA
+	EQUALS .M"OUTA,OUTAR
+; OUTAR CH,<ARPT>	Outputs char-mode area on CH.
+
+U7XA:	UIOINIT			; Entry pt for OUTAR UUO
+	MOVE U1,U40		; Get ARPT to area.
+	PJRST OUT"OXAR
+] ;IFN UAREAS
+
+IFN ULISTS,[
+; OUTLS CH,[slp]	Outputs string that SLP points to, on channel CH.
+
+	UUODEF OUTLS:,U7LS
+U7LS:	UIOINIT
+	MOVE U3,@U40		; Get SLP.
+	PJRST OUT"OXLS
+
+] ;IFN ULISTS
+
+] ;IFN $$OUUO\USTRGS
+
+SUBTTL UUO AREAS - Tables & Initialization
+IFN UAREAS,[
+	; ARBLK Definitions - words used in an ARBLK.
+	OFFSET -.	; Define following symbols as if starting at 0.
+$AROPN:: 	; Non-z when area is active and info valid. 0 when "closed".
+$ARLOC:: 0	; Location of area = addr of first word in area.  This must be
+		;   the FIRST word in the ARBLK, as it is the only item
+		;   intended to be referenced without using the $ARxxx symbol
+		;   and is very common.
+$ARNOD:: 0	; PAGSER "node" addr, for use in calls to PAGSER rtns.
+		;	If the ARBLK is a dynamically allocated one, the
+		;	LH of this word contains node addr for ARBLK itself.
+$ARLEN:: 0	; Length of area in words.
+$ARTOP:: 0	; Last addr + 1 of area (Loc+Len) for easier reference.
+$ARWPT:: 0	; Write pointer into area.  (BP in char mode)
+$ARRPT:: 0	; Read pointer into area.
+$ARCHL:: 0	; -<Chars Left> in area (Char mode only).
+$ARTYP:: 0	; Type bits, in LH only. (See below for description)
+$ARIMD:: 0	; Increment Modulus.  Additional allocations are modulo this.
+
+$ADFIM==1000		; Default $ARIMD; allocate in 1000-wd chunks.
+$ARSIZ==.-$ARLOC	; Minimum # words in an ARBLK.
+	OFFSET 0	;back to normal.
+
+	; $ARTYP bits.
+%ART==-1,,525240		; For bit-typeout mode.
+%ARTCH==100	; If 1, character mode.  If 0, word mode.
+%ARTZM==200	; Indicates all core allocated should be cleared.
+%ARTSS==400	; Indicates this area is String-Space.
+%ARTLH==1000	; Indicates this area is a LSE Header area.
+%ARTLA==2000	; Indicates this area is a LA (List-Area)
+%ARTDY==4000	; Indicates this ARBLK was dynamically allocated.
+
+; UARINIT [-<# pgs>,,<pg # to start at>]  Defines space available for area hackery,
+;		and initializes tables thusly.  MUST be called before any
+;		other area-manipulating UUO's.
+
+UUODFE UARINIT,UXINIT
+UXINIT:	MOVE U1,@U40		; Get arg for CORINI.
+	PUSHJ P,CORINI		; Initialize core blocks.
+	SETZM UXPDLP		; Reset uuo-area PDL pointer.
+	UUOXRT			; Done.
+
+
+SUBTTL    UAROPN - Open an area
+
+; UAROPN AC,[<type bits>,,<ARPT> ? [<inc>,,<size>]]
+;	Creates an area, using ARPT-indicated
+;	ARBLK for storage of area variables.  <Size> contains the
+;	minimum initial allocation desired, <inc> the desired increment
+;	modulus when expanding ($ADFIM used if <inc>=0), and the <type bits>
+;	are exactly those defined for $ARTYP.  If the given ARPT is
+;	zero, or E of the call itself is zero, then a unique ARBLK 
+;	will be created dynamically.  If AC is specified, the ARPT
+;	will be returned in it; it is an error to request ARBLK creation
+;	and not specify an AC!
+;   --> NOTE: ARPT is accessed indirectly, and the type bits do not
+;	infringe on the I or @ fields, so all addressing modes work.
+
+UUODEF UAROPN,UXOPN
+UXOPN:	HRRZ U3,U40		;get E
+IFSVU2,	PUSH P,U2
+	CAIN U3,0
+	 MOVEI U3,[0,,0 ? [$ADFIM]]	;set up default if nothing specified.
+	MOVEI U4,@(U3)		;get ARPT, allowing indirection & indexing.
+	JUMPN U4,UXOPN5		;does caller want an ARBLK created? Jump if not (whew!)
+
+	; Wants an ARBLK created.  Cons one up.
+	LDB U2,UACFLD		; First check to be sure that
+	CAIN U2,0		; an AC field exists!
+	 JSR AUTPSY		; Requested ARBLK creation but no way to return the ARPT!
+	MOVEI U1,$ARSIZ		; Get block big enuf for ARBLK.
+	PUSHJ P,PSRGET		; Get from PAGSER!
+	HLRZ U4,U2		; Store address of block as new ARPT,
+	SETZM $ARLOC(U4)	; and indicate free.
+	HLL U4,(U3)		; Get desired type bits, and set bit
+	TLO U4,%ARTDY		; indicating ARBLK was dynamically allocated.
+	HRLZM U2,$ARNOD(U4)	; And save PAGSER node addr in LH
+	JRST UXOPN6		; since user isn't ever going to see it!
+
+UXOPN5:	SKIPE $ARLOC(U4)	; Is area in use?
+	 PUSHJ P,UXCLSA		; Foo, close it and free up the core.
+	HLL U4,(U3)		; Get desired type bits.
+UXOPN6:	MOVE U1,@1(U3)		; Get desired increment modulus & allocation.
+	HLRZM U1,$ARIMD(U4)	; Store modulus for further requests.
+	HRRZS U1		; And isolate desired initial allocation
+	CAIG U1,1
+	 MOVEI U1,2		; Must be at least 2 words in an area!!
+	PUSHJ P,PSRGET		; Get block of that much.
+			; Returns U1 - <# wds>, U2 - <blk addr>,,<node addr>
+	HRRM U2,$ARNOD(U4)	; Store PAGSER node addr.
+	HLLZM U4,$ARTYP(U4)	; Store type bits.
+	HLRZM U2,$ARLOC(U4)	; Store starting addr (also declares open)
+	MOVEM U1,$ARLEN(U4)	; Store length
+	ADD U1,$ARLOC(U4)
+	MOVEM U1,$ARTOP(U4)	; Store lastaddr+1
+	CALL UXRST		; Reset the area.
+IFN ULISTS,[
+	TLNN U4,%ARTLA		; Is area a LA area?
+	 JRST UXOPN8		; No, skip.
+	; Opening a LA area.  Initialize its addressing table in HDR.
+	MOVE U1,L		; Get current HDR loc.
+	HRLI U1,UHDRDF		; BLT AC - <initial table>,,<loc of table>
+	BLT U1,(L)$LHLTB-1	; Zap it.
+	MOVE U2,L		; Get addr of table again.
+	HRLI U2,-$LHLTB		; AOBJN thru table now.
+	MOVE U1,$LLLOC(L)	; Increment is loc of LA, since init RH is 0
+	ADDM U1,(U2)
+	AOBJN U2,.-1		; That's it.
+UXOPN8:]
+
+	LDB U3,UACFLD		; Now see if must return the ARPT.
+	CAIE U3,		; Return immediately if not.
+	 HRRZM U4,(U3)		; Else pass it back.
+IFSVU2,	POP P,U2
+	UUOXRT			; All's done now.
+
+	; Internal routine to reset area.
+UXRST:	MOVE U3,$ARLOC(U4)	; Get start addr of area
+	TLNN U4,%ARTCH		; Char-type area?
+	 JRST UXRST2
+	MOVN U1,$ARLEN(U4)	; Find -size available.
+	IMULI U1,5.		; -<# chars worth of room>
+	MOVEM U1,$ARCHL(U4)	; Store as countdown #
+	HRLI U3,440700		; Form new Write BP.
+UXRST2:	MOVEM U3,$ARWPT(U4)	; Store Write ptr to area
+	MOVEM U3,$ARRPT(U4)	; Also set read ptr.
+	TLNN U4,%ARTZM		; Should we re-zero?
+	 RET			; No, now done.
+	HRL U3,U3		; Start addr still in U3...
+	ADDI U3,1		; Get start,,start+1
+	SETZM -1(U3)		; Zap first loc
+	MOVE U1,$ARTOP(U4)	; Get lastaddr+1
+	BLT U3,-1(U1)		; Now zap whole area.
+	RET
+
+SUBTTL    UARCLS - Close an area
+
+; UARCLS <ARPT>		Close area, free up its core.
+
+UUODFE UARCLS,UXCLS
+UXCLS:	MOVE U4,U40		; Get ARPT for area desired to close
+	SKIPE $ARLOC(U4)	; Is it already closed?
+	 PUSHJ P,UXCLSA		; No...well, go close it and free core.
+	MOVE U1,$ARTYP(U4)	; Get type bits
+	TLNN U1,%ARTDY		; Was it a dynamic ARBLK?
+	 UUOXRT			; No, all's done.
+	HLRZ U1,$ARNOD(U4)	; Uh-oh, must free ARBLK also!  Get node addr.
+	PUSHJ P,PSRREL		; There it goes...
+	UUOXRT
+
+	; Auxiliary rtn for UAROPN & UARCLS, closes an area & frees its core.
+	; ( Takes ARPT in U4)
+UXCLSA:	PUSH P,U1
+IFN ULISTS,[
+	MOVE U1,$ARTYP(U4)
+	TLNE U1,%ARTLH		; List Header?
+	 JRST [	PUSHAE P,[U4,L]
+		MOVE L,$ARLOC(U4)
+		MOVEI U4,$LSAR(L)	; Close SA area.
+		PUSHJ P,UXCLSA		; Recursively!
+		MOVEI U4,$LLAR(L)	; And LA area.
+		PUSHJ P,UXCLSA
+		POPAE P,[L,U4]
+		JRST .+1]
+]
+	MOVE U1,$ARNOD(U4)	; Get node addr of area
+	PUSHJ P,PSRREL		; Release it!
+	SETZM $ARLOC(U4)	; Indicate area closed.
+	POP P,U1
+	POPJ P,
+
+SUBTTL     UARTYP - Change area type
+
+; This is a gross crock which should probably be replaced someday.
+
+; UARTYP [type,,<ARPT>]		Changes area to specified type, and
+;	tries to be clever about converting from wds to chars...
+;	(Flushes ^C's, ^L's and ^@'s from last word in that case)
+;	 Only bits specified in UXFGTB can be changed with this UUO.
+
+UUODFE UARTYP,UXTYP
+UXTYP:	MOVE U3,U40		;get E-> type,,<ARPT>
+IFSVU2,	PUSH P,U2
+	MOVEI U4,@(U3)		;get ARPT with indirection/indexing enabled.
+	HLLZ U3,(U3)		;get new bits in U3.
+	HLL U4,$ARTYP(U4)	;get old type bits in U4.
+	MOVSI U2,-NARFGS
+UXTYP0:	HLLZ U1,UXFGTB(U2)	;get a changeable type bit.
+	TDNN U3,U1
+	 JRST [	TDNN U4,U1
+		 JRST UXTYP2	;both 0
+		JRST UXTYP1]	; old 0, new 1.
+	TDNE U4,U1
+	 JRST UXTYP2		;both 1
+UXTYP1:	TDC U4,U1		;change this bit.
+	MOVE U1,UXFGTB(U2)
+	PUSHAE P,[U2,U3]
+	PUSHJ P,(U1)		;go hack it.
+	POPAE P,[U3,U2]
+UXTYP2:	AOBJN U2,UXTYP0
+	HLLM U4,$ARTYP(U4)	;store new type bits.
+IFSVU2,	POP P,U2
+	UUOXRT		;all bits munged.
+
+	
+UXFGTB:	%ARTCH,,UXTCH		;table of possible bits, with rtns to process.
+	%ARTZM,,UXTZM
+NARFGS==.-UXFGTB
+
+	;changing %ARTCH (chars or wds)
+UXTCH:	TLNE U4,%ARTCH		;Wants to become words?
+	 JRST UXTCH5		;no, words->chars. ugh!
+
+	;Changing from chars to words.
+	MOVE U1,$ARWPT(U4)	;get current write ptr
+	LDB U3,[360600,,U1]	;isolate the P field of ptr
+	CAIE U3,44		;is it pointing to beg of wd?
+	 ADDI U1,1		;no, use addr+1.
+	HRRZM U1,$ARWPT(U4)	;then store addr above last char.
+UXTCH2:	MOVE U1,$ARRPT(U4)
+	LDB U3,[360600,,U1]
+	CAIE U3,44
+	 ADDI U1,1
+	HRRZM U1,$ARRPT(U4)
+	POPJ P,			;done with chars->wds
+
+	;Changing from words to chars.
+UXTCH5:	MOVEI U1,440700		;read ptr is easy,
+	HRLM U1,$ARRPT(U4)	;just point to first char of word it points to.
+	HRRZ U1,$ARWPT(U4)	;get current write addr
+	CAMG U1,$ARLOC(U4)
+	 JRST UXTCH8		;if points to beg of area, this is all.
+	MOVEI U2,5		;cnt of chars to search backwards thru.
+	HRLI U1,350700		;form ptr to first after last possible char position
+
+	;now loop til find true end of area (disregard nulls, ^c's, ^l's)
+UXTCH6:	MDBPT U1,		;decrement ptr
+	LDB U3,U1		;get a char
+	CAIE U3,0		;^@?
+	 CAIN U3,^C		;or ^C?
+	  SKIPA			;go to sojg if so
+	   CAIN U3,^L		;or ^L?
+	    SOJG U2,UXTCH6	;ignore char, loop unless counted out.
+	CAIG U2,0
+UXTCH8:	 HRLI U1,440700		;if word was all padding, point to first char.
+	MOVEM U1,$ARWPT(U4)	;now store correct write ptr
+	HRRZ U2,$ARTOP(U4)	;get "ptr" to last char+1
+	PUSHJ P,UPDIF7		;find difference U1-U2
+	MOVEM U2,$ARCHL(U4)	;and store that as -<# chars left>.
+	POPJ P,
+
+	; %ARTZM bit changed. (To clear, or not to clear..)
+UXTZM:	TLNN U4,%ARTZM		;changing to zeroifying?
+	 POPJ P,		;no, need do nothing.
+	MOVE U1,$ARWPT(U4)	;get write ptr
+	TLNN U4,%ARTCH		;character mode?
+	 JRST UXTZM5		;no, words.  clear out remaining words in area.
+	LDB U2,[360300,,U1]	;Char mode.  Get low 3 bits of P in BP
+	CAIN U2,4
+	 JRST UXTZM4		; P was 44, zap nothing, no increment.
+	CAIN U2,1
+	 AOJA U1,UXTZM4		; P was 01, zap nothing (avoid mem ref!!!)but increment.
+	MOVE U3,UBPMSK(U2)	;get mask
+	ANDM U3,(U1)		;clobber nasty little bits we don't want.
+	ADDI U1,1
+UXTZM4:	HRRZS U1
+UXTZM5:	MOVE U2,$ARTOP(U4)	;get end+1 addr of area.
+	CAML U1,U2		;check,
+	 POPJ P,		;nothing to zero if write ptr points to end.
+	SETZM (U1)		;clear word at ptr
+	CAIL U1,-1(U2)		;only a single word to clear?
+	 POPJ P,		;yes. Must check for this because BLT always xfers a wd.
+	HRLS U1
+	ADDI U1,1		;set up ptr,,ptr+1
+	BLT U1,-1(U2)		;and clear rest of area.
+	POPJ P,
+
+	; Indexed by low 3 bits of P field, gives mask for chars so far in wd.
+UBPMSK:	-1,,777400	;P = 10, 4 chars
+	-1,,777776	;P = 01, 5 chars
+	0
+	0
+	0		;P = 44, 0 chars
+	774000,,0	;P = 35, 1
+	777760,,0	;P = 26, 2
+	-1,,077777	;P = 17, 3
+
+SUBTTL    UAREXP - Expand area,  OUTAR - output area
+
+; UAREXP AC,<ARPT>	Expands indicated area according to
+;	contents of AC - if c(AC) positive, adds c(AC) words; if
+;	negative, deletes -c(AC) words.  Both operations apply to high end.
+;	Unlike "auto-expand" in that the area is expanded only by the
+;	specified amount; the increment modulus is ignored.
+
+UUODEF UAREXP,UXEXP
+UXEXP:	MOVE U4,U40		; Get ARPT for area
+	LDB U3,UACFLD		; Get ac
+	SKIPG U1,(U3)		; Get c(AC) and skip if positive (normal)
+	 JRST UXEXP3		; Ugh, must delete.
+IFSVU2,	PUSH P,U2
+	CALL UABMP		; Expand the area exactly like so.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+	; Must flush some core from high end of area.  Cannot reduce
+	; an area to less than 1 word!
+UXEXP3:	UUOXRT		; Unimplemented at moment!
+
+
+SUBTTL    UARPUSH, UARPOP, UARFLS - Area PDL
+
+; These UUOs implement a PDL mechanism for areas.  UXPDLP
+; points to a list of blocks, each of which is $ARSIZ+1 words long.
+; The first word is a pointer to the next block and the remaining
+; words store the ARBLK for some area.  When UXPDLP is 0, the
+; PDL is empty; else it points to the first ARBLK on the stack.
+
+LVAR UXPDLP:	0	; UUO-Area PDL pointer
+
+; UARPUSH <ARPT> - Push the given ARBLK words on the stack, and "close"
+;		the actual ARBLK it was copied from.
+
+	UUODFE UARPUSH,UXPUSH
+UXPUSH:	MOVE U4,U40		; Get ARPT argument
+IFSVU2,	PUSH P,U2
+	MOVEI U1,$ARSIZ+1	; Get a block of this many words
+	PUSHJ P,PSRGET		; From friendly neighborhood allocator
+	MOVS U2,U2		; Get <node addr>,,<blk addr>
+	MOVE U1,UXPDLP		; Get current PDL ptr
+	MOVEM U1,(U2)		; Store it in new entry
+	MOVEM U2,UXPDLP		; And store new PDL ptr - entry on stack now!
+	HRLZ U1,U4		; Source for BLT is ARPT given
+	HRRI U1,1(U2)		; Destination is rest of new entry block.
+	BLT U1,$ARSIZ+1-1(U2)	; Copy!
+	SETZM $ARLOC(U4)	; Now render original ARBLK inactive.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+; UARPOP <ARPT> - Pop UUO area from stack into specified ARBLK.
+;	If any active area existed in the ARBLK, it is closed!!
+
+	UUODFE UARPOP,UXPOP
+UXPOP:	SKIPN U1,UXPDLP		; Anything to pop?
+	 JSR AUTPSY		; Nope, error!
+	MOVE U4,U40		; Get ARPT argument
+	SKIPE $ARLOC(U4)	; Area already open in this ARBLK?
+	 PUSHJ P,UXCLSA		; Close it!
+	HRLZI U3,1(U1)		; Get source for BLT - addr of PDL ARBLK
+	HRR U3,U4		; and destination - new ARBLK
+	BLT U3,$ARSIZ-1(U4)	; Xfer the ARBLK info back!
+	MOVE U3,(U1)		; Now take off stack.  Get ptr to previous,
+	MOVEM U3,UXPDLP		; store as new PDL ptr to effect pop,
+	HLRZ U1,U1		; get node addr for entry,
+	PUSHJ P,PSRREL		; and now release the entry's core!
+IFN ULISTS,[
+	HLL U4,$ARTYP(U4)	; Get type bits for area...
+	TLNN U4,%ARTLH		; Was it a LSE HDR area?
+	 UUOXRT
+	MOVE U3,$ARLOC(U4)	; Yes, must reset $LHARP var properly.
+	HRRZM U4,$LHARP(U3)	; Set it.
+]
+	UUOXRT
+
+; UARFLS - Flushes the UUO area stack.  Closes all areas found on it!
+
+	UUODFN UARFLS,UXFLS
+UXFLS:	SKIPN U3,UXPDLP		; Check PDL pointer...
+	 UUOXRT			; Nothing to do if nothing pushed!
+UXFLS1:	MOVEI U4,1(U3)		; Set up ARPT to first thing on stack
+	SKIPE $ARLOC(U4)	; And, unless already closed,
+	 PUSHJ P,UXCLSA		; Close it!
+	HLRZ U1,U3		; Now get node addr for doomed entry,
+	MOVE U3,(U3)		; Get ptr to next,
+	PUSHJ P,PSRREL		; and zap entry as foretold...
+	JUMPN U3,UXFLS1		; Loop til we've killed last entry,
+	SETZM UXPDLP		; and clear PDL ptr to start anew.
+	UUOXRT
+
+SUBTTL    Area shift routine - UABUMP
+
+; UABUMP - very important routine that does the actual
+;	expanding of areas which need more room.
+;	U1 - ARPT for area that needs more room.
+;	ARUNIT - # words it needs.
+
+LVAR ARUNIT:	0	; Arg for UABUMP, contains # words desired to add.
+
+UABUMP:	SKIPGE ARUNIT
+	 JSR AUTPSY		; Error if negative.
+	PUSHAE P,[U1,U2,U3,U4]
+	MOVE U4,U1		; Put ARPT here.
+	SKIPG U3,$ARIMD(U4)	;get modulus to increment in;
+	 MOVEI U3,$ADFIM	;if none, use default.
+	SKIPG U1,ARUNIT
+	 MOVEI U1,1		; Backup to catch zero.
+	ADDI U1,-1(U3)
+	IDIVI U1,(U3)
+	IMULI U1,(U3)		; Make increment MOD <$ARimd>
+	CALL UABMP0		; Go do everything.
+	POPAE P,[U4,U3,U2,U1]
+	RET
+
+; UABMP - Basic expand-area routine, no modulus forcing.
+;	U1 - <# wds to add>	; Must be positive.
+;	U4 - <ARPT to area>
+; Clobbers U1,U2,U3,U4 !!!
+
+UABMP:	CAIG U1,		; Make sure request is positive.
+	 JSR AUTPSY
+UABMP0:	HLL U4,$ARTYP(U4)	; Get area type bits for later use.
+	MOVE U2,$ARNOD(U4)	; PAGSER node addr of area that needs it
+	PUSHJ P,PSREXP		; Expand the area!
+	HRRM U2,$ARNOD(U4)	; Save new node addr
+	HLRZ U2,U2		; Get blk addr by itself.
+	CAMN U2,$ARLOC(U4)	; Is area in same place?
+	 JRST UABMP5		; Yes, needn't worry about anything bumped.
+
+	; Fooey, area was moved, must figure out difference in addresses,
+	; and adjust everything necessary.	
+	PUSHAE P,[U1,U2]	; Save returned size and ptr
+	MOVE U1,$ARLOC(U4)	; Get old start addr in U1
+	MOVEM U2,$ARLOC(U4)	; and store new one.
+	SUB U2,U1		; Get difference in locations, new-old
+	MOVEM U2,UBMPDF'	; Save it for UBMPP use.
+	ADDM U2,$ARRPT(U4)	; Update R/W pointers
+	ADDM U2,$ARWPT(U4)
+	MOVE U2,$ARLEN(U4)	; Now get original size, so as to get
+	ADD U2,U1		; last+1 of orig area. U1, U2 now delimit it.
+	PUSHJ P,UBMPP		; And go bump special stuff if necessary.
+	POPAE P,[U2,U1]		; Restore size, addr
+
+UABMP5:	ADD U2,U1		; Find new lastaddr+1
+	MOVEM U2,$ARTOP(U4)	; and store for easy ref.
+	EXCH U1,$ARLEN(U4)	; Store new size, and recover old len in U1
+	TLNE U4,%ARTCH
+	 JRST [	MOVE U3,U1
+		SUB U3,$ARLEN(U4)	; Get -<# words added>
+		IMULI U3,5		; Get -<# chars added>
+		ADDM U3,$ARCHL(U4)	; Add into count of chars left.
+		JRST .+1]
+	TLNN U4,%ARTZM		; Must new core be zeroed?
+	 RET			; Nope, just return.
+	ADD U1,$ARLOC(U4)	; Get addr new core starts at (loc+old len)
+	ADDI U1,1		; plus 1
+	MOVE U2,$ARTOP(U4)	; Get lastaddr+1 of new core.
+	SETZM -1(U1)		; Clear first new word
+	CAML U1,U2		;make sure there's a 2nd word.
+	 RET			;no? well, it's possible. BLT would have zapped another.
+	HRLI U1,-1(U1)		;get <addr>,,<addr+1>
+	BLT U1,-1(U2)		;clear new core.
+	RET
+
+; UBMPP - does special 'bumping' when area in U4 is moved.
+;Takes in U1 the original addr, in U2 the original last+1 addr; these delimit the
+;original area boundaries.  Updates stuff in UBPSTB if addr listed falls within
+;range defined by U1 and U2.
+; Note possibility of lossage if one tries to check a ILDB/IDPB byte ptr of form
+; 010700,,ADDR since while it really refers to something in ADDR+1, it will be
+; seen here as belonging to ADDR, and if U1 or U2 contains ADDR+1 then the
+; pointer will respectively not get updated, or clobbered by unnecessary
+; 'updating'.  Solution is to do a temporary IBP on such things if
+; they are known to be ILDB/IDPB ptrs.  Check for BP-ness is presence of bits in
+; 7700,,0 (i.e., S) field.
+
+UBMPP:	PUSH P,U4		;save ARPT and flags.
+	MOVSI U4,-OUT"NUSPBP	;Check UCHSTB and any additional locs.
+UBMPP1:	MOVE U3,OUT"UCHSTB(U4)
+	TLNE U3,7700		;use this as a BP check. If anything in S, then
+	 IBP U3			;it's a BP, and must be IBP'd! (see above comments)
+	HRRZS U3		;want RH only
+	CAML U3,U1		;not inside if addr less than start
+	 CAML U3,U2		;not inside if addr GE lastaddr+1.
+	  JRST UBMPP2		;not inside!
+	MOVE U3,UBMPDF		;Inside.  Get am't to adjust by
+	ADDM U3,OUT"UCHSTB(U4)	;Do it.
+UBMPP2:	AOBJN U4,UBMPP1
+	POP P,U4		;restore ARPT and flags.
+	MOVE U2,UBMPDF
+IFN ULISTS,[
+	TLNN U4,%ARTLA		;is this area a LA?
+	 JRST UABMP4		;no...
+	MOVSI U3,-$LHLTB	;ach, must update LA addressing tables!  Get count
+	HRR U3,L		;get start address of current HDR area where table is.
+	ADDM U2,(U3)
+	AOBJN U3,.-1		;add the (in/de)crement to all table entries.
+UABMP4:]
+IFN USTRGS,[
+	TLNE U4,%ARTSS		;is this area String-Space?
+	 PUSHJ P,USTBMP		;ugh, go adjust all string pointers!!
+]	
+	POPJ P,
+
+] ;at long last, end of IFN UAREAS.
+
+SUBTTL Strings - USINIT, BCONC, ECONC
+IFN USTRGS,[
+;	Strings are represented by a 2 descriptor words in the following
+;SAIL-type format:
+;	<name>:	<gensym>,,<# chars>
+;		<b.p. to string>  (ILDB gets 1st char)
+
+;  For constant strings, whose descriptors can be stored anywhere,
+;<gensym> should be 0.  Variable string descriptors are stored in a table
+;beginning at STRNGS and containing NSTRS string variables.
+;The macro STRNAM <name> creates an entry in this area at assemble
+;time with the label <name>, and <gensym> will be some unique index
+;when the string is not null.  Initializing the string hackery with
+;a STRINIT UUO has the side effect of setting all variable strings null.
+;(NOTE: References to a variable string should be by address of its descriptors, i.e.
+;	its name, since it is possible for the byte pointer to change
+;	unexpectedly due to expansion or shifting of the core area containing
+;	the strings, as well as to GC'ing of the stringspace!!)
+;BCONC is used to begin forming a string; output operations on
+;channel STRC will then be accumulated into a string which is
+;formally stored by ECONC.
+;  The string variable table must be declared, anytime after
+;  all STRNAM's have been processed, as
+;	STRNGS: SBLOCK
+;		<any more string vars, 2 wds per var label>
+;		NSTRS==<.-STRNGS>/2
+
+
+
+BLKINI SBLOCK		; Initialize SBLOCK as a text-block macro.
+DEFINE STRNAM NAME	; Define macro using BLKADD to add strings to string var table
+BLKADD SBLOCK,[NAME: 0 ? 0]
+TERMIN
+
+DEFINE STRBLK		; Define macro to be put at end of pgm (after all STRNAM's).
+BVAR
+STRNGS:	SBLOCK
+	NSTRS==<.-STRNGS>/2
+EVAR
+TERMIN
+
+IFNDEF STRC,STRC==0	; Standard output channel for forming strings
+NULSTR:	0 ? 0		; Standard null string.
+BVAR
+STRNAM UCNCST		; String descriptor used during concatenation.
+USTIDX:	0		; AOS'd to produce gensym index for new string.
+USTRAR:	BLOCK $ARSIZ	; ARBLK descriptor for area holding strings.
+EVAR
+
+	; Routine to initialize string hackery.
+UUODFN STRINIT,USINIT
+USINIT:
+IFE $$UCAL,PUSH P,UUORPC		; Calling UUO's within UUO handler!
+	UARCLS USTRAR			; Close any previous string area.
+	UAROPN [%ARTSS+%ARTZM+%ARTCH,,USTRAR		; Open string area
+		[1000]]			; with 1000 wds initial allocation.
+	OUT(STRC,OPEN(UC$UAR,USTRAR))	; Open standard string channel
+	SETZM USTIDX			; Clear gensym counter for string idx.
+	SETZM STRNGS			; Zero 1st wd of string var table, and
+	MOVE U1,[STRNGS,,STRNGS+1]	; propagate to
+	BLT U1,STRNGS+<NSTRS*2>-1	; nullify entire string var table.
+	MOVE U1,USTRAR+$ARWPT		; Get current BP to stringspace
+	MOVEM U1,UCNCST+1		; and store to init conc string; also,
+	SETOM UCNCST			; make 1st desc. wd uneq to any other!
+	RET			; Return (note return addr always put on PDL)
+
+
+; BCONC <strloc>	starts composing new string, beginning with given one
+;	(if E zero, null string used.)
+
+UUODFE BCONC,UBCONC
+UBCONC:	HRRZ U1,U40		; Get addr of string to begin with
+	CAIN U1,0		; If creating fresh string,
+	 MOVEI U1,NULSTR	; Use null string as initial.
+	MOVE U4,(U1)		; Get 1st wd of string descriptor
+	CAMN U4,UCNCST		; Init string same as one last written on top?
+	 UUOXRT			; Yes, nothing to do.
+
+	; Must copy initial string over again -- first set up new temp string
+	MOVE U3,USTRAR+$ARWPT	; Get current byte ptr to top
+	MOVEM U3,UCNCST+1	; Store as beginning ptr
+	AOS U3,USTIDX		; Increment and get unique index #
+	HRLZM U3,UCNCST		; and store as 1st wd of descriptor, cnt=0
+
+	; Now copy string over
+	MOVEI U4,(U4)		; Get char cnt only
+	JUMPE U4,UBCNC4		; often is null...
+	MOVE U3,1(U1)		; Get BP
+	PUSH P,OC		; Note uses OUT package here!
+	MOVEI OC,STRC
+	CALL @OUT"USCOPT(OC)	; Copy string over at top.
+	POP P,OC
+UBCNC4:	UUOXRT
+
+
+; ECONC <strloc>	makes <strloc> describe the string conc'd thus far
+
+UUODFE ECONC,UECONC
+UECONC:	MOVE U1,USTRAR+$ARWPT	;get byte ptr to top
+IFSVU2,	PUSH P,U2
+	MOVE U2,UCNCST+1	;compare with ptr to beginning of string
+	MOVE U4,U2		; save ptr for later.
+	PUSHJ P,UPDIF7		;get # chars in string in U2
+	HLL U2,UCNCST		; Form 1st wd of descriptor
+	MOVE U3,U40		;get addr of string var to store in
+	MOVEM U2,(U3)		;store the 2 descriptor wds.
+	MOVEM U4,(U3)+1
+IFSVU2,	POP P,U2
+	UUOXRT
+
+; string garbage collector; determines if strings should
+;actually be GC'd or not, and does dirty work if necessary.
+
+USTRGC:	POPJ P,
+	PUSHAE P,[U1,U2,U3]
+	MOVSI U3,-NSTRS
+	SETZ U2,		;zero cumulative # of chars
+USGC2:	MOVE U1,STRNGS(U3)	;get 1st descriptor for string
+	ADDI U2,(U1)		;add in char cnt.
+	ADDI U3,1
+	AOBJN U3,USGC2
+
+	;U2 now has # chars actually used in string space...
+	;must determine whether or not to munch.
+
+	POPAE P,[U3,U2,U1]	;for time being, don't.
+	POPJ P,
+
+	;Stringspace bumped, adjust all byte ptr addrs.  UBMPDF contains
+	;adjustment to add in.  Later, handle case of a String PDL (SP).
+USTBMP:	PUSHAE P,[U1,U2]
+	MOVE U1,UBMPDF
+	MOVSI U2,-NSTRS
+	ADDM U1,STRNGS+1(U2)	;bump up addr of string's byte ptr
+	ADDI U2,1
+	AOBJN U2,.-2
+	POPAE P,[U2,U1]
+	POPJ P,
+] ;end of ifn ustrgs
+
+IFN UAREAS,[	IFN OS%ITS, .INSRT DSK:KSC;PAGSER >
+		IFN OS%TNX, .INSRT <NICPROG>PAGSER.MID
+]
+IFN ULISTS,[	IFN OS%ITS, .INSRT DSK:KSC;NLISTS >
+		IFN OS%TNX, .INSRT <NICPROG>NLISTS.MID
+]
+CONSTANTS	; So UUO stuff doesn't muck up anything else
+
+UUOEND==.
