@@ -62,6 +62,8 @@ from scratch.
    - TELSER, Telnet/Supdup server
    - TELNET, Telnet client
    - SUPDUP, Supdup client
+   - FTPS, FTP Server
+   - FTPU, FTP Client
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
@@ -76,7 +78,8 @@ host table tools, and binary host table are installed.
 
 Currently, basic TCP network support is in the build, in addition to
 both a TELNET/SUPDUP server, and both TELNET and SUPDUP clients.
-Other network services will appear in a subsequent release.
+Additionally, both an FTP server and client are included. Other network
+services will appear in a subsequent release.
 
 The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP 
 address (192.168.0.45) configured for the ITS system. The IP address 
