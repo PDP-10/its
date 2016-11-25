@@ -10,6 +10,27 @@ the PDP-10 computer family.  It was written by hackers at MIT in the
 1960s.  The MIT site was shut down in 1990, but enthusiasts continue
 to operate ITS systems to this day.
 
+### About this project
+
+The goals are:
+
+- To provide an automated build from start to end.  No user
+  invervention is necessary.
+
+- To check whether source code exists for all programs.  Actually, we
+  already found a few cases where they don't.
+
+- To ensure that we know how to build all programs.  In many cases we
+  can just invoke MIDAS, but some require the use of DDT.
+
+- To update programs with the latest bug fixes and enhancements.
+
+- To be able to set configurable options across the whole system, such
+  as host name, IP address, hardware devices.
+
+The build currently runs on the SIMH and KLH10 emulators.  Of course,
+we'd be delighted to test this on a real KS10.
+
 ### Documentation
 
 See the [`doc` subdirectory](doc) for documentation.
