@@ -280,6 +280,9 @@ expect ":KILL"
 respond "*" ":link sys;ts find,sysbin;find bin\r"
 type ":vk\r"
 
+respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
+expect ":KILL"
+
 respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
