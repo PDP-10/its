@@ -275,6 +275,11 @@ type ":vk\r"
 respond "*" ":link sys2;ts u,sys2;ts users\r"
 type ":vk\r"
 
+respond "*" ":midas sysbin;_sysen2;find\r"
+expect ":KILL"
+respond "*" ":link sys;ts find,sysbin;find bin\r"
+type ":vk\r"
+
 respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
