@@ -91,6 +91,7 @@ from scratch.
    - CHTN, CFTP, Chaosnet TELNET and FTP support
    - FIND, search for files.
    - TTLOC, Advertises physical location of logged in users
+   - SRCCOM, Compares/merges source files, compares binary files
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
