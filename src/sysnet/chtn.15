@@ -1,0 +1,886 @@
+
+;;;  -*-MIDAS-*-
+
+	TITLE CHTN -- Chaosnet user telnet
+
+;;; simple minded chaosnet user telnet, negotiates as little as possible
+
+F=0
+A=1
+B=2
+C=3
+D=4
+E=5
+S=7
+T=10
+TT=11
+N=12
+O=13
+BP=15
+CH=16
+P=17
+
+TTYICH=0
+TTYOCH=1
+FILECH=7
+ICPCH=10			;for arpanet icp
+CHAICH=12
+CHAOCH=13
+
+FRCNAM==1			;have an explicit connection name
+FRARPA==2			;use the ARPA net instead
+
+ICPSKT==27			;default arpanet socket number
+
+TRNBIN==0			;transmit binary
+ECHO==1				;echo
+SUPRGA==3			;supress go-ahead
+TIMMRK==6			;timing mark
+WILL==373
+WONT==374
+DO==375
+DONT==376
+IAC==377
+
+;; flag bit definitions for vt52 escape code handling
+ES%CAR==1
+ES%ABS==2
+ES%ASF==4
+ES%EPD==10	
+
+ESTATE: 0			;flags for vt52 escape code handling
+EXPOS:	0			;saved xpos for vt52 hacking
+EYPOS:	0			;saved ypos for vt52 hacking
+DEBUG:	0			;non-zero this is the debugging version
+MOREP:	0			;do **More** processing
+TTOMOD:	0			;doing superimage output
+TBINP:	0			;non-zero if we are sending binary
+ECHOP:	0			;non-zero we are echoing locally
+FRNHST:	0			;36 bit host number
+HSTSIX:	0			;sixbit of host
+OLDTLP:	-1			;non-zero until know we are talking new telnet ptcl
+STATE:	0			;deferred iac, deferred will, etc
+ESCCHR:	^^			;default escape character
+JCLBUF:	BLOCK 10
+CONNAM:	ASCIZ /TELNET/		;default connection name
+	BLOCK 10
+ NPDL==77
+PDL:	BLOCK NPDL
+ BUFSIZ==488.
+NETBUF:	BLOCK <BUFSIZ+3>/4
+TTYBUF:	BLOCK <BUFSIZ+4>/5
+
+LOC .\1777+1
+TSINT:	LOC 42
+	-TSINTL,,TSINT
+LOC TSINT			;interrupt vector
+	1007,,P			;save ac's 10 thru 16
+	%PIIOC ? 0 ? -1 ? -1 ? IOCERR
+	0 ? 1_TTYICH ? 0 ? 1_TTYICH ? TTYINT
+	0 ? 1_CHAICH ? 0 ? 1_CHAICH ? CHAINT
+	0 ? 1_TTYOCH ? 0 ? 1_TTYOCH\1_CHAICH\1_TTYICH ? MORINT
+TSINTL==.-TSINT
+
+GO:	MOVE P,[-NPDL,,PDL-1]
+	.CALL [	SETZ		;open up tty for output
+		SIXBIT /OPEN/
+		MOVSI %TJDIS+.UAO
+		MOVEI TTYOCH
+		SETZ [SIXBIT /TTY/]]
+	 .LOSE %LSSYS
+	.CALL [	SETZ		;open tty for input
+		SIXBIT /OPEN/
+		MOVSI %TIINT+%TINWT+%TIFUL+.UAI
+		MOVEI TTYICH
+		SETZ [SIXBIT /TTY/]]
+	 .LOSE %LSSYS
+
+	pushj p,lsrchk		;see if they're a loser
+	 pushj p,lsrwrn		;yep; warn them off
+	.iot ttyoch,[^P] ? .iot ttyoch,["A]	;get a fresh line.
+
+	.SUSET [.ROPTION,,T]
+	TLO T,OPTINT		;new style interrupts
+	.SUSET [.SOPTION,,T]
+	.SUSET [.SDF1,,[-1]]	;defer all interrupts until things get going
+	.SUSET [.SDF2,,[-1]]
+	.SUSET [.SMASK,,[%PIIOC]]	;will want to wtch for ioc errors, 
+	.SUSET [.SMSK2,,[1_TTYICH\1_CHAICH]]	;and tty and network input
+	MOVE BP,[440700,,JCLBUF]
+	TLNN T,OPTCMD		;was there jcl?
+	 JRST NOJCL		;no, get it from user then
+	.BREAK 12,[..RJCL,,JCLBUF]	;yes, read it in
+JCLOO1:	MOVE A,BP		;save the byte pointer to start
+	ILDB CH,BP
+	CAIN CH,<" >		;<">ignore spaces
+	 JRST JCLOO1
+
+JCLOO2:	ILDB CH,BP
+	CAILE CH,40		;go until get a control char
+	 JRST JCLOO2
+	MOVEI TT,0
+	DPB TT,BP		;make this part asciz
+	CAIE CH,33		;specifying contact name as well?
+	 JRST JCL2		;no, use default then
+	TRO F,FRCNAM		;remember we had a connection name
+	MOVE T,[440700,,CONNAM]
+
+JCLOO3:	ILDB CH,BP
+	CAIGE CH,40
+	 JRST JCL1
+	IDPB CH,T
+	JRST JCLOO3
+
+NOJCL:	.SUSET [.RXJNAME,,TT]	;no jcl, try to use jname
+	SETZM JCLBUF
+	SETZM JCLBUF+1
+NOJCL1:	SETZ T,
+	LSHC T,6
+	ADDI T,40
+	IDPB T,BP
+	JUMPN TT,NOJCL1
+	JRST JCL2
+
+JCL1:	IDPB TT,T		;make this asciz as well
+JCL2:	MOVEI A,HSTPAG
+	MOVEI B,FILECH
+	PUSHJ P,NETWRK"HSTMAP	;load in the hosts2 data base
+	 .VALUE
+	MOVEI A,JCLBUF
+	PUSHJ P,NETWRK"HSTLOOK	;get host number into a, network number into tt
+	 JRST [	MOVEI T,[ASCIZ /Unrecognized host name/]
+		PUSHJ P,OUTSTR
+		JRST DIE]
+	MOVEM A,FRNHST		;stash host number
+	CAIN TT,NETWRK"NW%ARP
+	 JRST ARPCON		;connection over the arpanet
+;	JRST GETCON		;have the host and contact name, go try to open things up
+
+GETCON:	MOVEI A,CHAICH
+	MOVE B,FRNHST
+	MOVEI C,CONNAM
+	MOVEI D,5
+	PUSHJ P,NETWRK"CHACON	;try to open the connection
+	 JRST NOCONN
+	JRST GOTCON
+
+ARPCON:	TRO F,FRARPA		;using the arpanet
+	TRNN F,FRCNAM		;specified the socket number?
+	 JRST ARPCN2		;no, use default then
+	MOVE BP,[440700,,CONNAM]
+	SETZ C,			;build number here
+ARPCN1:	ILDB CH,BP
+	JUMPE CH,ARPCN3
+	CAIL CH,"0
+	 CAILE CH,"7
+	 JRST [	MOVEI T,[ASCIZ /Specify arpanet socket number in octal/]
+		PUSHJ P,OUTSTR
+		JRST DIE]
+	LSH C,3
+	IORI C,-"0(CH)
+	JRST ARPCN1
+
+ARPCN2:	MOVEI C,ICPSKT		;default socket number
+ARPCN3:	MOVEI A,ICPCH		;first of 4 channels to icp with
+	MOVE B,FRNHST		;host to icp to
+	MOVE D,[08040+.UII,,08040+.UIO]	;8 bit image (no crlf hacking)
+	PUSHJ P,NETWRK"ARPICP	;do it all
+	 JRST NOCONN+1		;lost
+
+;connection now opened ok
+GOTCON:	MOVE A,FRNHST
+	PUSHJ P,NETWRK"HSTSIX	;get sixbit name of host
+	 .VALUE
+	MOVEM A,HSTSIX		;save for command prompt
+	.CORE HSTPAG		;we don't need hosts2 any more
+	 .LOSE %LSSYS
+	SETZM NETWRK"HSTADR
+	MOVEI T,[ASCIZ /C/]
+	PUSHJ P,OUTSTR
+	.SUSET [.SWHO1,,[1,,660000]]	;.who3 as 6 sixbit chars, no space
+	.SUSET [.SWHO3,,HSTSIX]
+
+	.CALL [	SETZ		;get ttyopt variable
+		SIXBIT /CNSGET/
+		MOVEI TTYOCH
+		MOVEM T
+		MOVEM T
+		MOVEM T
+		MOVEM T
+		SETZM T]
+	 .LOSE %LSSYS
+	.CALL [	SETZ		;get ttysts variable
+		SIXBIT /TTYGET/
+		MOVEI TTYOCH
+		MOVEM E
+		MOVEM E
+		SETZM E]
+	 .LOSE %LSSYS
+	MOVEI TT,%TXTOP+"B	;escape char is [BREAK] for TVs
+	TLNN T,%TOFCI
+	 TLOA E,%TSSII		;non-TVs need superimage mode for  to win
+	 MOVEM TT,ESCCHR
+	.CALL [	SETZ		;set ttysts
+		SIXBIT /TTYSET/
+		MOVEI TTYOCH
+		[030303030303]	;everything activates, but doesnt echo
+		[030303030303]
+		SETZ E]
+	 .LOSE %LSSYS
+	TLNN T,%TOMOR		;want more processing?
+	 JRST GOTCN1		;no
+	SETOM MOREP		;initally more processing on
+	.SUSET [.SIMSK2,,[1_TTYOCH]]
+GOTCN1:	MOVEI T,%TJDIS		;normal output not in display mode
+	MOVEM T,TTOMOD
+	.SUSET [.SDF1,,[0]]	;allow interrupts to take effect now
+	.SUSET [.SDF2,,[0]]
+
+WAIT:	JFCL			;complicated main program level
+	 .HANG
+
+;connection failed
+NOCONN:	MOVEI A,CHAICH
+	PUSHJ P,NETWRK"ANALYZ
+	 .VALUE
+
+DIE:	SKIPE DEBUG
+	 .VALUE
+	.LOGOUT 1,
+	 JRST DIE
+
+;escape character typed
+DOESC:	MOVEI T,[ASCIZ /SZLCMND (/]
+	PUSHJ P,OUTSTR
+	.CALL [	SETZ
+		SIXBIT /SSTATU/
+		MOVEM TT
+		MOVEM TT
+		MOVEM TT
+		MOVEM TT
+		MOVEM TT
+		SETZM TT]
+	 .LOSE %LSSYS
+	PUSHJ P,OUTSIX
+	MOVEI T,[ASCIZ / to /]
+	PUSHJ P,OUTSTR
+	MOVE TT,HSTSIX
+	PUSHJ P,OUTSIX
+	MOVEI T,[ASCIZ /) ->/]
+	PUSHJ P,OUTSTR
+
+	.CALL [	SETZ
+		SIXBIT /IOT/
+		MOVSI %TINWT	;do wait for this char
+		MOVEI TTYICH
+		SETZM CH]
+	 .LOSE %LSSYS
+
+	PUSH P,CH		;save char
+	MOVEI T,[ASCIZ /ZL/]	;beggining of line, clear to end of line
+	PUSHJ P,OUTSTR
+	POP P,CH		;get command char back
+
+	TRZ CH,%TXSFT		;flush shift bit
+	ANDI CH,177		;only want ascii side of things
+	CAMN CH,ESCCHR		;quoting the escape character?
+	 JRST TTYINC		;yes, send it
+	CAIE CH,"?		;don't uppercasify ? please
+	 CAIGE CH,"a		;uppercasify character
+	  SKIPA
+	 TRZ CH,40
+	MOVSI T,-NESCS
+DOESCL:	HLRZ TT,ESCTAB(T)	;look to match this command
+	CAIE TT,(CH)
+	 AOBJN T,DOESCL
+	JUMPGE T,DOESCX
+	HRRZ TT,ESCTAB(T)
+	JRST (TT)		;go do command
+
+ESCTAB:	"P,,PROCED
+	"D,,DDT
+	"L,,QUIT		;maybe should do IAC DO LOGOUT?
+	"Q,,QUIT
+	"M,,MORE
+	"E,,CHECHO
+	"?,,GHELP		;GIVE HELP (?)
+	"G,,SIOU
+	"V,,VTT			;TOGGLE VT52 SIMULATION
+	"S,,SHOMOD
+	^Z,,DDT
+	177,,DOESCR
+NESCS==.-ESCTAB
+
+PROCED:	.SUSET [.SAIFPIR,,[1_TTYICH]]	;clear interrupt from this char
+	.VALUE [ASCIZ /:PROCED 1J/]
+	JRST TTYINX		;dismiss interrupt
+
+DDT:	.SUSET [.SAIFPIR,,[1_TTYICH]]
+	.SUSET [.SIPIRQC,,[%PIC.Z]]
+	JRST DOESCR
+
+QUIT:	.CLOSE CHAOCH,
+	.CLOSE CHAICH,
+	JRST DIE
+
+MORE:	SETCMM MOREP
+	PUSHJ P,SMMORE
+	JRST DOESCR
+
+CHECHO:	SETCMM ECHOP
+	PUSHJ P,SMECHO
+	JRST DOESCR
+
+SIOU:	MOVEI T,%TJSIO
+	XORM T,TTOMOD
+	PUSHJ P,SMSIO
+	JRST DOESCR
+
+VTT:	MOVEI T,%TJDIS		;TOGGLE DISPLAY MODE OUTPUT
+	XORM T,TTOMOD
+	MOVEI T,ES%CAR		;TOGGLE TRANSLATIONS
+	XORM T,ESTATE
+	PUSHJ P,SMVTT		;show mode: vt52
+	JRST DOESCR
+
+GHELP: MOVEI T,[ASCIZ /CPossible Commands are:
+P	=> Proceed (Valrets :PROCEED)
+D	=> Go up to DDT
+E	=> Toggle local Echo
+L	=> Quit and logout (doesn't log you out yet!)
+Q	=> Quit (just close connection, don't do a logout)
+M	=> Toggle Local More processing
+G	=> Toggle Super Image output
+V	=> Toggle VT52 Simulation
+S	=> Show state of modes
+^Z	=> Same as "D" (Go to DDT)
+?	=> Type this cruft
+/]
+	PUSHJ P,OUTSTR
+	JRST DOESCR
+
+SHOMOD:	PUSHJ P,SMECHO
+	PUSHJ P,SMMORE
+	PUSHJ P,SMSIO
+	PUSHJ P,SMVTT
+	JRST DOESCR
+
+SMECHO:	SKIPE ECHOP
+	 SKIPA  T,[[ASCIZ /Local echo on.  /]]
+	  MOVEI T,[ASCIZ /Local echo off.  /]
+	JRST OUTSTR
+
+SMMORE:	SKIPE MOREP
+	 SKIPA  T,[[ASCIZ /More processing on.  /]]
+	  MOVEI T,[ASCIZ /More processing off.  /]
+	JRST OUTSTR
+
+SMSIO:	MOVE T,TTOMOD
+	TRNE T,%TJSIO
+	 SKIPA  T,[[ASCIZ /Super image output on.  /]]
+	  MOVEI T,[ASCIZ /Super image output off.  /]
+	JRST OUTSTR
+
+SMVTT:	MOVE T,ESTATE
+	TRNE T,ES%CAR
+	 SKIPA  T,[[ASCIZ /VT52 mode on.  /]]
+	  MOVEI T,[ASCIZ /VT52 mode off.  /]
+	JRST OUTSTR
+
+
+DOESCX:	.IOT TTYOCH,[^G]	;feep if not a known command
+DOESCR:	MOVEI T,[ASCIZ /R/]	;restore cursor position
+	PUSHJ P,OUTSTR
+;	JRST TTYINL
+
+;interrupt handlers
+TTYINT:	.CALL [	SETZ		;acknowledge interrupt
+		SIXBIT /WHYINT/
+		SETZI TTYICH]
+	 JFCL
+TTYINL:	.IOT TTYICH,CH
+	JUMPL CH,TTYINX		;no more, dismiss the interrupt
+	TRZ CH,%TXSFT		;ignore shift
+	CAMN CH,ESCCHR		;this the escape character?
+	 JRST DOESC		;yes, go handle it
+TTYINC:	TRZE CH,%TXCTL		;canonicalize the character
+	 ANDI CH,37
+	ANDI CH,177		;only send ascii
+	SKIPE ECHOP		;local echoing?
+	 .IOT TTYOCH,CH		;yes, must do it then
+	.IOT CHAOCH,CH
+	CAIN CH,^M
+	 SKIPE TBINP
+	  SKIPA
+	   .IOT CHAOCH,[^J]	;if ^M and not transmitting binary
+	JRST TTYINL
+
+TTYINX:	.NETS CHAOCH,
+INTX:	.CALL [	SETZ
+		SIXBIT /DISMIS/
+		MOVSI 1007
+		SETZ P]
+	 .LOSE %LSSYS
+
+IOCERR:	.SUSET [.RBCHN,,T]
+	CAIE T,CHAICH
+	 CAIN T,CHAOCH
+	 JRST NOCONN		;ioc error for chaosnet, go analyze and die
+	.VALUE [ASCIZ /:IOC ERROR FOR NON CHAOSNET CHANNELKILL /]
+
+MORINT:	.CALL [	SETZ
+		SIXBIT /WHYINT/
+		SETZI TTYOCH]
+	 .LOSE %LSSYS
+	SKIPN MOREP
+	 JRST INTX
+	MOVEI T,[ASCIZ /**More**/]
+	PUSHJ P,OUTSTR
+	.CALL [	SETZ
+		SIXBIT /IOT/
+		MOVSI %TINWT+%TIPEK	;peek it and wait for it
+		MOVEI TTYICH
+		SETZM CH]
+	 .LOSE %LSSYS
+	TRZ CH,%TXSFT
+	CAIN CH," 		;if it is a space,
+	 .IOT TTYICH,CH		;flush it
+	MOVEI T,[ASCIZ /
+/]
+	PUSHJ P,OUTSTR
+	JRST INTX
+
+CHAINT:	.CALL [	SETZ
+		SIXBIT /WHYINT/
+		MOVEI CHAICH
+		MOVEM T
+		MOVEM S
+		SETZM TT]
+	 .LOSE %LSSYS
+	CAIE T,%WYCHA		;chaosnet?
+	 JRST WHYARP		;no, see what arpanet up to
+	TRNE F,FRARPA		;just in case
+	 .VALUE
+	HLRES TT		;get number of packets
+	JUMPLE TT,INTX		;go away if no input there
+	CAIN S,%CSOPN		;still open?
+	 JRST CHAIN1		;yes, go see if input there
+	CAIE S,%CSCLS		;if closed,
+	 CAIN S,%CSLOS		;or los
+	 SOJG TT,CHAIN1		;if there are data packets as well, handle them
+	JRST NOCONN		;else tell user what happened and die
+
+WHYARP:	CAIN T,%WYNET
+	 TRNN F,FRARPA
+	 .VALUE
+	HRRZS S			;get state
+	CAIN S,%NSOPN		;spurious?
+	 JRST INTX
+	CAIE S,%NSCLI
+	 CAIN S,%NSINP		;some input waiting?
+	 TLZA TT,-1		;get number of bytes waiting
+	 JRST NOCONN		;no, bad state, figure out why
+	JUMPE TT,INTX
+	SETZ E,			;nothing in from network
+	SKIPA N,TT		;must count number left though
+CHAIN1:	 SETZB E,N		;no chars in from network yet
+	MOVEI O,BUFSIZ		;or to be output to tty
+	MOVE BP,[440700,,TTYBUF]
+CHAINL:	PUSHJ P,NETI		;get character from network
+	 JRST CHAINX		;none waiting, return
+	CAIN CH,IAC		;command of some sort?
+	 JRST DOIAC		;yes, handle it
+	SKIPN TT,STATE		;saw iac or something last time?
+	 JRST CHAINO		;no, ordinary character to be output
+	JUMPL TT,@WILTAB-WILL(TT)	;saw iac will before, handle this option
+	CAIL CH,WILL		;character after an iac, start of option?
+	 CAILE CH,DONT
+	 JRST CHAINF		;of range, flush it
+	HRROM CH,STATE		;yes, remember what was deferred
+	JRST CHAINL		;and go handle next character
+
+;CHAINO:	TRNN CH,200		;ignore random old telnet characters
+;	 PUSHJ P,TTYO		;type out ordinary character
+;	JRST CHAINL
+
+CHAINO:	TRNE CH,200		;IGNORE RANDOM OLD TELNET CHARACTERS
+	 JRST CHAINL
+	MOVE TT,ESTATE
+	TRNN TT,ES%CAR		;DO WE EVEN CARE ABOUT TRANSLATING ESCAPES
+	 JRST [PUSHJ P,TTYO	;NOPE, JUST OUTPUT STUFF
+	       JRST CHAINL]
+	TRNN TT,ES%EPD		;ESCAPE PENDING?
+	 JRST [CAIE CH,33	;DO WE HAVE AN ESCAPE CHARACTER
+	        JRST ENORM	;HANDLE AS NORMAL CHARACTER
+	       MOVE TT,ESTATE
+	       TRO TT,ES%EPD
+	       MOVEM TT,ESTATE
+	       JRST CHAINL]	;ALL DONE FOR NOW
+	TRNN TT,ES%ABS		;ASB CURSOR POSITIONING IN PROGRESS?
+	 JRST HESC		;NOPE PROCESS OTHER POSSIBLE ESCAPES
+	TRNN TT,ES%ASF		;ABS POS, RECEIVED YPOS?
+	 JRST [TRO TT,ES%ASF
+	       MOVEM TT,ESTATE	;NOPE, THIS IS IT, SO SET FLAG
+	       SUBI  CH,30	;VT52 HAS 40 ADDED TO POSITION
+	       MOVEM CH,EYPOS	;SAVE IT AWAY
+	       JRST CHAINL]	;AND DONE FOR NOW
+	SUBI CH,30		;THIS IS XPOS, SUBTRACE THE 40 ADDED FOR VT52
+	MOVEM CH,EXPOS		;SAVE IT AWAY
+	MOVEI TT,ES%CAR		;CLEAR PENDING FLAGS (IE ONLY CARE FLAG REMAINS)
+	MOVEM TT,ESTATE
+	MOVEI CH,20		;DO ^P CODE 20 = ^P
+	PUSHJ P,TTYO		;OUTPUT IT
+	MOVEI CH,"H		;HORIZONTAL FIRST
+	PUSHJ P,TTYO
+	MOVE CH,EXPOS		;GET REMEMBERED XPOS
+	PUSHJ P,TTYO		;OUTPUT IT
+	MOVEI CH,20		;SECOND ^P CODE FOR VERTICAL POSITION
+	PUSHJ P,TTYO
+	MOVEI CH,"V
+	PUSHJ P,TTYO
+	MOVE CH,EYPOS		;GET SAVED YPOS
+	PUSHJ P,TTYO
+	JRST CHAINL
+
+ENORM:	CAIN CH,177		;IGNORE RUBOUTS (THEY ARE PADS)
+	 JRST CHAINL
+	CAIN CH,000		;NULLS ARE ALSO PADS
+	 JRST CHAINL
+	CAIE CH,40		;OUTPUTING A SPACE
+	JRST [	CAIN CH,^P	;IS IT ^P?
+		 PUSHJ P,[
+			PUSHJ P,TTYO	;OUTPUT THE ^P
+			MOVEI CH,"P	;"AND ALSO OUTPUT A P TO SEND A ^P
+			POPJ P,]
+		PUSHJ P,TTYO
+		JRST CHAINL]
+	MOVEI CH,20	;YEP, CLEAR CHAR POSITION BEFORE ADVANCING CURSOR
+	PUSHJ P,TTYO
+	MOVEI CH,"K
+	PUSHJ P,TTYO
+	MOVEI CH,40
+	PUSHJ P,TTYO
+	JRST CHAINL
+
+HESC:	CAIN CH,"Y		;ABSOLUTE CURSOR POS
+	 JRST [MOVE TT,ESTATE
+	       TRO TT,ES%ABS
+	       MOVEM TT,ESTATE
+	       JRST CHAINL]
+	PUSHJ P,FCHAR		;TRANSLATE TO ^P CODE CHAR
+	 JRST CHAINL		;IGNORE UNKOWN CODES FOR NOW
+	JRST DHESC		;OUTPUT ^P CODE AND BACK TO MAIN LOOP
+
+;; FCHAR: TRANSLATE TELERAY 1061 ESCAPE CODE TO ^P CODE
+;; ACCEPTS INPUT IN CH, PUTS RESULT IN CH OR -1 IF NOT FOUND	
+;; SKIP RETURN INDICATES SUCCESS ALSO
+
+FCHAR:	MOVSI T,-NCTAB
+FCHARL:	HLRZ TT,CTAB(T)
+	CAIE TT,(CH)
+	 AOBJN T,FCHARL
+	JUMPGE T,[SETO CH,
+	          POPJ P,]
+	HRRZ CH,CTAB(T)
+	AOS (P)
+	POPJ P,
+
+CTAB:	"A,,"U
+	"B,,"D
+	"C,,"F
+	"H,,"T
+	"J,,"E
+	"K,,"L
+	"L,,"[
+	"P,,"^
+	"Q,,"_
+	"M,,"\
+
+NCTAB==.-CTAB
+
+;; BRANCH HERE WITH ^P CODE LETTER IN CH, HERE WE OUTPUT ^P CODE AND CONTINUE
+;; BACK TO MAIN LOOP
+;; ALSO CLEARS THE ESCAPE PENDING FLAG
+
+DHESC:	MOVE TT,ESTATE
+	TRZ TT,ES%EPD
+	MOVEM TT,ESTATE
+	PUSH P,CH
+	MOVEI CH,20		;CONTROL P
+	PUSHJ P,TTYO
+	POP P,CH
+	PUSHJ P,TTYO
+	JRST CHAINL
+
+CHAINF:	SETZM STATE		;flush this char, but reset state
+	JRST CHAINL
+
+CHAINX:	PUSHJ P,TTYS		;send any buffered tty output
+	JRST INTX
+
+DOIAC:	SKIPE STATE		;iac in middle of command
+	 JRST CHAINF		;probably quoted, just flush it since doesnt print
+	MOVEM CH,STATE		;state now deferred iac
+	AOSE OLDTLP		;this the first we have heard of new telnet?
+	 JRST CHAINL		;no, go get more
+	MOVE T,[440800,,[.BYTE 8 ? IAC ? DO ? ECHO ? IAC ? DO ? SUPRGA]]
+	MOVEI TT,6
+SNDOPT:	.CALL [	SETZ
+		SIXBIT /SIOT/
+		MOVEI CHAOCH
+		T
+		SETZ TT]
+	 .LOSE %LSSYS
+	.NETS CHAOCH,		;request ordinary state
+	JRST CHAINL
+
+WILTAB:	DOWILL
+	DOWONT
+	DODO
+	DODONT
+
+DOWILL:	CAIN CH,ECHO		;will echo
+	 JRST WILECO		;yes, fine
+	CAIN CH,SUPRGA		;will supress go-ahead
+	 JRST CHAINF		;we requested it, so ok
+	CAIN CH,TRNBIN		;losing tenex?
+SNDDO:	 TROA CH,DO_8		;yes, just respond do always
+SNDDNT:	 IORI CH,DONT_8
+DOOPT:	LSH CH,4+8
+	IOR CH,[.BYTE 8 ? IAC ? 0 ? 0]
+	MOVE T,[440800,,CH]
+	MOVEI TT,3
+	SETZM STATE
+	JRST SNDOPT
+
+DODO:	CAIN CH,ECHO		;do echo
+	 JRST DOECO		;oh well, guess we have to
+	CAIN CH,TRNBIN
+	 JRST [	SETOM TBINP
+		JRST SNDWIL]
+	CAIN CH,TIMMRK
+	 JRST SNDWIL
+
+SNDWIL:	 TROA CH,WILL_8		;yes, always say will
+SNDWNT:	 IORI CH,WONT_8
+	JRST DOOPT
+
+DOWONT:	CAIN CH,ECHO		;wont echo?
+	 JRST DOECO		;ok, we will
+	CAIN CH,TRNBIN		;wont transmit binary
+	 JRST SNDDNT
+	JRST CHAINF		;flush everything else
+
+DODONT:	CAIN CH,ECHO
+	 JRST WILECO
+	CAIN CH,TRNBIN
+	 JRST [	SETZM TBINP
+		JRST SNDWNT]
+	JRST CHAINF
+
+WILECO:	SKIPN ECHOP		;is he echoing now?
+	 JRST CHAINF		;yes, not a change of state, ignore it
+	SETZM ECHOP
+	JRST SNDDO		;else ok for him to echo now
+
+DOECO:	SKIPE ECHOP		;are we echoing now?
+	 JRST CHAINF		;yes, not a change of state, ignore
+	SETOM ECHOP
+	JRST SNDWIL		;else we will have to do it
+
+NETI0:	TRNE F,FRARPA
+	 JRST NTIARP
+	JUMPN N,CPOPJ		;didnt get a full bufferful last time, no more input waiting
+	MOVE T,[440800,,NETBUF]
+	MOVEI N,BUFSIZ		;try to get whole buffer full
+	.CALL [	SETZ
+		SIXBIT /SIOT/
+		MOVSI 10	;no hang mode
+		MOVEI CHAICH
+		T
+		SETZ N]
+	 .LOSE %LSSYS
+	MOVEI E,BUFSIZ
+	SUBI E,(N)		;get number of bytes we really got
+	JUMPE E,CPOPJ		;didnt get any
+	MOVE D,[440800,,NETBUF]
+NETI:	SOJL E,NETI0
+	ILDB CH,D
+	JRST POPJ1
+
+NTIARP:	JUMPLE N,CPOPJ		;got it all last time
+	CAIG N,BUFSIZ		;get as much as possible
+	 SKIPA E,N		;can get all in one bufferful
+	 MOVEI E,BUFSIZ
+	SUBI N,(E)
+	MOVE T,[440800,,NETBUF]
+	MOVEI TT,(E)		;number of bytes to get
+	.CALL [	SETZ
+		SIXBIT /SIOT/
+		MOVEI CHAICH
+		T
+		SETZ TT]
+	 .LOSE %LSSYS
+	MOVE D,[440800,,NETBUF]
+	JRST NETI
+
+TTYO:	IDPB CH,BP		;store away this character
+	SOJG O,CPOPJ		;still room for more
+	PUSHJ P,TTYS		;else send it out to tty
+	MOVEI O,BUFSIZ
+	MOVE BP,[440700,,TTYBUF]
+	POPJ P,
+
+TTYS:	MOVEI TT,BUFSIZ
+	SUBI TT,(O)		;get number of character put in buffer
+	JUMPE TT,CPOPJ		;none put in
+	MOVE T,[440700,,TTYBUF]
+	.CALL [	SETZ
+		SIXBIT /SIOT/
+		MOVS TTOMOD
+		MOVEI TTYOCH
+		T
+		SETZ TT]
+	 .LOSE %LSSYS
+	POPJ P,
+
+	subttl LSRCHK and LSRWRN -- see if user is loser
+
+;;; This checks to see if the loser is an AI or LCS member or on a
+;;; winners list.  If not, a warning net-hopping message is printed
+;;; and the program offers to kill itself off.
+
+;;; The winner-p check has been extracted so that if at some point in
+;;; the future this program is modified to check if it's running from
+;;; a CRTSTY, those people may not be warned.
+
+;;; skips unless the luser should be warned.
+lsrchk:	pushj p,winchk		;are they a winner?
+	 skipa			;nope
+	  jrst popj1		;yea; so skip
+	;; check to see if they're in loser table
+	move t,[-loslen,,lostab]
+	;; winchk left xuname in tt
+lsloop:	camn tt,(t)
+	 popj p,		;loser -> don't skip
+	aobjn t,lsloop
+	;; check inquir entry
+	movei a,filech
+	move b,[-lsrpgs,,hstpag];map lsr where host table will be
+	pushj p,lsrtns"lsrmap
+	 jrst lsrlos		;something wrong; print loser message
+	.suset [.rxuname,,b]	;xuname into b
+	pushj p,lsrtns"lsrunm	;find our entry in database
+	 jrst lsrlos		;no inquir entry; must be loser
+	.close filech,		;close lsr file
+	movei a,lsrtns"i$grp	;we want to check group
+	pushj p,lsrtns"lsritm
+	 popj p,		;none means guest
+	ildb a,a		;get field
+	caie a,"A		;"A" means AI lab
+	 cain a,"L		;"L" means LCS
+	  jrst dvwiaa
+	caie a,"V
+	 cain a,"Z
+	  jrst dvwiaa
+	caie a,"C
+	 popj p,		;they're not a lab member
+dvwiaa:	movei a,lsrtns"i$rel	;get relation
+	pushj p,lsrtns"lsritm
+	 popj p,		;none means loser
+	ildb a,a		;get field
+	caie a,"X		;some losers put AX when they mean XA
+	;; These names are for NETWRK
+popj1:   aos (p)		;otherwise skip
+cpopj:	popj p,			;when returning
+
+lsrlos:	.close filech,		;close lsr file
+	popj p,			;don't skip
+
+;;; Skip means these people know what they're doing; don't hassle them
+winchk:	.suset [.rxuname,,tt]
+	move t,[-winlen,,wintab]
+wnloop:	camn tt,(t)
+	 jrst popj1		;winner; skip
+	aobjn t,wnloop
+	popj p,
+
+;;; these people aren't hassled
+wintab:	irp x,,[gumby,alan,cstacy,cent,dph,oaf,jnc,jtw,sra]
+	sixbit/x/
+termin
+winlen==.-wintab
+
+;;; These people are always hassled
+lostab: irp x,,[tk,hewitt,rms]
+	sixbit/x/
+termin
+loslen==.-lostab
+
+;;; warn loser that net-hopping is a waste of the machine
+lsrwrn:	movei t,[asciz/
+Using this machine to access another will needlessly
+drain resources, slowing the system both for you and other users.
+You'll probably get better response by connecting directly.
+
+You should not do this unless you have a good reason to do so.  If
+you have any questions, typing :LUSER to DDT will request a system
+programmer to assist you.
+
+Are you sure you want to net-hop?/]
+	pushj p,outstr
+	.call [	setz ? sixbit /iot/
+		movsi %tinwt	;do wait for this char
+		movei ttyich ? setzm a]
+	 .lose %lssys	
+	caie a,"y
+	 cain a,"Y
+	  popj p,		;it was a Y
+	caie a,40		;maybe it was a space?
+	 .logout 1,
+	popj p,
+
+OUTSTR:	HRLI T,440700		;type asciz string out of T
+OUTST1:	ILDB CH,T
+	JUMPE CH,CPOPJ
+	.IOT TTYOCH,CH
+	JRST OUTST1
+
+OUTSIX:	SETZ T,			;type sixbit out of TT
+	LSHC T,6
+	ADDI T,40
+	.IOT TTYOCH,T
+	JUMPE TT,CPOPJ
+	JRST OUTSIX
+
+PUTCHR:	.IOT TTYOCH,T
+	POPJ P,
+
+$$ARPA==1			;support both arpa and chaos nets
+$$CHAOS==1
+$$HOSTNM==1
+$$SYMLOOK==1
+$$ICP==1
+$$HSTSIX==1
+$$ANALYZE==1
+$$HST3==1
+
+.INSRT SYSTEM;CHSDEF >
+.INSRT SYSENG;NETWRK >
+
+;;; Inquir database hackery
+;;; don't assemble useless gubbage
+$$ulnm==0	;don't care about last name
+$$ulnp==0	;even if abbreviated
+$$unam==0	;no never!
+lsrpgs==20			;number of pages for lsrtab
+
+.insrt syseng;lsrtns >
+
+PAT": PATCH":	BLOCK	50
+
+VARIAB ? CONSTA
+
+HSTPAG==<.+1777>/2000		;place to map in the hosts2 file
+
+END GO

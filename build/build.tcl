@@ -120,7 +120,7 @@ respond "_" "reload "
 respond "ARE YOU SURE" "y"
 respond "\n" "links crdir sorry\r"
 respond "FILE=" "*;* *\r"
-expect "E-O-T"
+expect -timeout 200 "E-O-T"
 respond "_" "quit\r"
 expect ":KILL"
 
@@ -403,6 +403,18 @@ respond "*" ":midas device;atsign mlslv_sysen2;mlslv\r"
 expect ":KILL"
 
 respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
+
+respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
+respond "KLp==" "0\r"
+expect ":KILL"
+
+respond "*" ":link device;chaos telnet,sysbin;telser bin\r"
+respond "*" ":link device;chaos supdup,sysbin;telser bin\r"
+
+respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
+expect ":KILL"
+
+respond "*" ":link sys2;ts chtn,sysbin;supdup bin\r"
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

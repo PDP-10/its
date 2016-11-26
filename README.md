@@ -88,6 +88,7 @@ from scratch.
    - NAME, Shows logged in users and locations, aka FINGER
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:)
+   - CHTN, CFTP, Chaosnet TELNET and FTP support
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
@@ -102,8 +103,11 @@ host table tools, and binary host table are installed.
 
 Currently, basic TCP network support is in the build, in addition to
 both a TELNET/SUPDUP server, and both TELNET and SUPDUP clients.
-Additionally, both an FTP server and client are included. Other network
-services will appear in a subsequent release.
+Additionally, both an FTP server and client are included. Chaosnet TELNET 
+and FTP (CHTN and CFTP), but this requires support and configuration
+in the emulator to actually use.
+
+Other network services will appear in subsequent releases.
 
 The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP 
 address (192.168.0.45) configured for the ITS system. The IP address 

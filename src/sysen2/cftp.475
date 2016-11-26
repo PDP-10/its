@@ -1,0 +1,3490 @@
+;-*-Midas-*-
+
+	Title :CFTP - Chaos File Transfer for ITS (ala MMcM)
+
+ F=0	;Flag word
+ A=1	;General porpoise
+ B=2
+ C=3
+ D=4
+ E=5
+ T=6	;Temporary
+TT=7
+T3=10
+ I=11
+ J=12
+ H=13
+ U=14
+ Q=15
+BC=16
+ P=17
+
+  Call=<PUSHJ P,>
+Return=<POPJ P,>
+  Save=<PUSH P,>
+  Rest=<POP P,>
+  Noop=<TRN>
+
+.INSRT SYSTEM;CHSDEF
+
+ PDLen==40	;PDList
+ JCLen==20	;JCL buffer
+BufLen==2000	;Binary buffer, words made from %CODAT packets
+ HostP==100	;Page to maps HOSTS2 in
+AscBLn==<%CPMXC*2+4>/5
+
+  TTYi==1
+  TTYo==2
+CHAOSi==3	;Control connection.
+CHAOSo==4
+  DSKi==5	;For the sent/got file.
+  DSKo==6
+ HOSTi==7	;For mapping on HOSTS2
+cDATAi==10	;Data connection.
+cDATAo==11
+  ERRi==12
+  YOWi==13	;You don't wanna know.
+ TTYoo==14
+ TESTi==15	;For testing whether a device/directory exists.
+
+PUOMin==23	;Minimum UUO opcode.
+
+ .CHNL==215
+%coSYN==201
+%coASY==202
+%coNOT==203	;Notification packet
+
+;;;
+;;;	Right-half flags
+;;;
+
+ F%EOL==:1_0	;EOL in input line?
+ F%TNX==:1_1	;You are connected to a TENEX or TWENEX
+ F%CTL==:1_2	;You have a control connection to a site.
+ F%NOD==:1_3	;No Default transfer mode, since was explicitly set.
+  F%10==:1_4	;You are connected to a PDP-10
+F%UNIX==:1_5	;You are connected to a UNIX
+ F%LOG==:1_6	;You are logged in to the connected site.
+ F%DAT==:1_7	;A data connection is open.
+ F%OFI==:1_8.
+ F%IFI==:1_9.
+		;free
+F%TYPE==:1_11.
+F%HEAD==:1_12.
+ F%SUB==:1_13.
+ F%VAX==:1_14.	;Connected to a VAXen
+ F%SPC==:1_16.
+ F%ITS==:1_17.
+
+;;;
+;;;	Left-half flags
+;;;
+
+F%SEND==:1_18.		;This is a SEND, as opposed to a GET.
+ F%ODD==:1_19.		;Last packet didn't end on word boundry
+F%LEFT==:1_20.
+F%RIGH==:1_21.
+F%NOEK==:1_22.		;Do not echo input.
+F%QUOT==:1_23.		;Found a ^Q (quote) in LPARSE
+ F%FN1==:1_24.	;We have a FN1 in LPARSE
+
+;;;
+;;;	YOW database offsets
+;;;
+
+LYOW==8.
+NYOW==2000/LYOW
+
+ Y$WHEN==0
+ Y$FROM==1
+   Y$TO==2
+ Y$BITS==3
+ Y$BAUD==4
+Y$UNAME==5
+  Y$TAG==6
+   Y$UN==7
+
+IFNDEF KLp,[
+PRINTX /Assemble for a KL?  Non-0 if so.  KLp==/
+.TTYMAC FOO
+  KLp==FOO
+TERMIN
+];IFNDEF
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	Macros
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Define SYSCAL op,args
+	.Call [Setz ? Sixbit /op/ ? args ((Setz))]
+	Termin
+
+Define CMD &string
+	[Asciz string],,.kark.
+	.kark.==.kark.+1
+	Termin
+
+Define DEFUUO name,handle
+	name=.gack._<9.*3>
+	handle
+	.gack.==.gack.+1
+	Termin
+
+Define TYPE &string
+	AType [Asciz string]
+	Termin
+
+Define ETYPE &string
+	%Type [Asciz string]
+	Termin
+
+Define BSTART &string
+	CBINIT [Asciz string]
+	Termin
+
+Define BTEXT &string
+	CBText [Asciz string]
+	Termin
+
+Define .SAVE list
+	IRPS FOOBAR,,[list]
+		Save FOOBAR
+	Termin
+	Termin
+
+Define .REST list
+	IRPS FOOBAR,,[list]
+		Rest FOOBAR
+	Termin
+	Termin
+
+Define EXHALE chnl=CHAOSo
+	Syscal PKTIOT,[%Climm,,chnl
+		       %Climm,,Packet]
+	Termin
+
+Define INHALE chnl=CHAOSi
+	Syscal PKTIOT,[%Climm,,chnl
+		       %Climm,,Packet]
+	Termin
+
+Define DBP ac
+	Add ac,[70000,,0]
+	Skipge ac
+	  Sub ac,[430000,,1]
+	Termin
+
+Define SPACE
+	Movei T,40
+	Idpb T,Q
+	Termin
+
+Define NL
+	Movei T,.CHNL
+	Idpb T,Q
+	Termin
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	Random storage
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Loc 100
+
+UUOH:	0
+	Ldb U,[331100,,40]	;Get Opcode
+	Cail U,PUOMin
+	  Caile U,PUOMax
+	    .Break
+	Movem A,ACsave+A
+	Move A,[B,,ACsave+B]	;Save registers A-U
+	BLT A,ACsave+U
+	Hrrz A,40		;E.A. in A
+	Call @UUOTAB-PUOMin(U)	;Dispatch
+	Move U,[ACsave+A,,A]
+	BLT U,U			;Restore regs, and then return.
+	Jrst 2,@UUOH
+
+UUOTab:
+.gack.==PUOMin
+	DEFUUO AType,UATYP
+	DEFUUO FType,UFTYP
+	DEFUUO %Type,UETYP
+	DEFUUO 6Type,U6TYP
+	DEFUUO LType,ULTYP
+	DEFUUO CBInit,UBST
+	DEFUUO CBText,UBTEX
+	DEFUUO CBNum,UBNUM
+PUOMax==.gack.
+
+TSint:
+LOC 41
+	Jsr UUOH
+	-TSintL,,TSint
+LOC TSint
+	P
+	%PiIOC ? 0 ? 0 ? -1 ? IOCerr
+	0 ? 1_TTYi ? 0 ? 1_TTYi ? TTYint
+	0 ? 1_TTYoo ? 0 ? 1_TTYoo+1_TTYi ? More
+TSintL==.-TSint
+
+PDList:	-PDLen,,.
+	Block PDLen
+
+JCLbuf:	Block JCLen
+	-1
+
+	1.0^32.		;Random floating-point output cruft
+	1.0^16.
+FT8:	1.0^8
+	1.0^4
+	1.0^2
+	1.0^1
+FT:	1.0^0
+	1.0^-32.
+	1.0^-16.
+	1.0^-8
+	1.0^-4
+	1.0^-2
+FT01:	1.0^-1
+FT0==FT01+1
+
+FCP:	Camle A,FT0(C)
+	Camge A,FT(C)
+	0, FT0(C)
+
+EXPSGN:	"- ? "+
+
+	.AOP .RDATE
+CDate:	.BYTE 7
+	<.LDB 220600,.AVAL1,>+40 ? <.LDB 140600,.AVAL1,>+40 ? "/
+	<.LDB 060600,.AVAL1,>+40 ? <.LDB 000600,.AVAL1,>+40 ? "/
+	<.LDB 360600,.AVAL1,>+40 ? <.LDB 300600,.AVAL1,>+40 ? 0
+	.BYTE
+
+Verse:	Ascii /1.6/
+Ralph:	.FNAM2			;FN2 of this program (Ed#)
+
+Debug:	0	;Non-zero if debugging.
+Alpha:	0	;Flag for hacking ^W rubout correctly.
+Lowerp:	0	;Lowercasing wildcarding mumble mumble?
+UsITS:	0	;Out ITS-name: {AI|ML|DM|MC}
+Mode:	0	;.uao/.uio
+gPromp:	0	;BP to prompt you have PARSE
+HostN:	0	;subnet,,host# where you are connected.
+Tem1:	0	;Temporary stuff for floating-point output.
+DatMod:	0	;0=Ascii, -1=Binary full word, +1=Binary n-bit byte
+RawMod:	0	;Raw-mode ASCII transfer?
+DatBSz:	0	;Byte-size of binary transfer
+BytSiz:	0
+oChan:	0	;Channel we are outputting to.
+NBytes:	0	;Number of bytes transferred...
+MTypea:	0	;Address in HSOST2 are of connected machines type
+MOpera:	0	;Likewise, for the machine's OS
+TabTop:	0	;Used in PARSE - Top of command table.
+STime:	0	;Start time, in 60th, of transfer.
+Time:	0	;Total time of transfer, in 60ths.
+NBits:	0	;Number of bits sent/got in last file
+LastW:	0	;LastWidth, for doing columnation in PARSE ?
+TranID:	0	;Transaction ID, for FILE protocol niceity
+Yow:	0	;Are we having fun yet??
+Place:	0	;How do you rate?
+gLinBP:	0	;BP to buffer where text is going, in GLINE
+BinBP:	0	;BP to BINBUF, for approriate size bytes.
+BPW:	0	;Bytes Per Word
+ErrCod:	0	;Error code, 5-char max ASCII string
+ErrTyp:	0	;Error type, one character ascii
+RespBP:	0	;Response BP \
+RespNB:	0	;Response NB /
+Base:	0	;Base for typing, used by %D and %O
+TempT:	0	;Temporary crap
+Uname:	0
+XUNAME:	0
+SNAME:	0
+OurNum:	0
+RFilBP:	0	;BP to "real" filename returned by OPEN
+TypeBP:	0	;BP to type of file in the -*- xxx -*- line
+
+ACsave:	Block 20
+IFH:	Ascii /I/
+OFH:	Ascii /O/
+Connam:	Asciz /FILE/
+
+Number:	Block 2
+TimBuf:	Block 10
+CmdBuf:	Block 50
+String:	Block 20
+TSite:	Block 20
+Site:	Block 20
+CProm:	Block 20
+User:	Block 20
+Pass:	Block 20
+File:	0
+OFile:	Block 20
+NFile:	Block 20
+DFile:	Block 20
+Dirfil:	Block 20
+Dirnam:	Block 20
+AscBuf:	Block AscBLn
+
+ODevic:	0
+Device:	0
+Direct:	0
+FN1:	0
+FN2:	0
+
+DDev:	0
+DDir:	0
+DFN1:	0
+DFN2:	0
+
+TemDev:	0
+TemSna:	0
+TemFN1:	Sixbit /_CFTP_/
+TemFN2:	Sixbit /OUTPUT/
+
+DirAut:	Block 5
+DirBSz:	0
+DirCre:	Block 5
+DirDel:	0
+DirNRp:	0
+DirBlk:	Block 2
+DirByt:	Block 2
+DirLnk:	Block 10
+DirNBk:	0
+DirPVm:	0
+DirLst==.-1
+
+.kark.==-1
+
+HlpCmd:	CMD "*"
+TopCmd:	CMD "ACCESS"
+	CMD "ASCII"
+	CMD "BINARY"
+	CMD "BYTE-SIZE"
+	CMD "CONNECT"
+	CMD "CWD"
+	CMD "DELETE"
+	CMD "DIRECTORY"
+	CMD "DISABLE"
+	CMD "DISCONNECT"
+	CMD "ENABLE"
+	CMD "EXIT"
+	CMD "EXPUNGE"
+	CMD "GET"
+	CMD "HELP"
+	CMD "INFORMATION"
+	CMD "LOGIN"
+	CMD "PDP-10"
+	CMD "PUT"
+	CMD "QUIT"
+	CMD "RAW-ASCII"
+	CMD "RENAME"
+	CMD "SEND"
+	CMD "SET"
+	CMD "SUBMIT"
+	CMD "TYPE"
+	CMD "WINNERS"
+ncmd1==.-TopCmd
+	0
+
+CmdLoc:	.ACESS
+	.ASKI
+	.BINAR
+	.BYTES
+	.CONNE
+	.CWD
+	.DELET
+	.DIREC
+	.DISAB
+	ClsAll
+	.ENABL
+	.EXIT
+	.EXPUN
+	.GET
+	.HELP
+	Status
+	.LOGIN
+	.PDP10
+	.SEND
+	.EXIT
+	.RAW
+	.RENAM
+	.SEND
+	.SET
+	.SUBMI
+	.TTYPE
+	.WINNE
+ncmd2==.-CmdLoc
+
+IFN ncmd2-ncmd1, .FATAL Command table mismatch
+
+SetCmd:	[Asciz /DEBUGGING/],,.DEBUG
+	[Asciz /LOWER-CASING/],,.LOWER
+	[Asciz /TRANSFER-MODE/],,.TRANS
+	[Asciz /YOW-MODE/],,.YOWP
+	0
+
+TraCmd:	[Asciz /ASCII/],,.ASKI
+	[Asciz /BINARY/],,.BINAR
+	[Asciz /BYTE-SIZE/],,.BYTES
+	[Asciz /PDP-10/],,.PDP10
+	[Asciz /RAW-ASCII/],,.RAW
+	0
+
+YNCmd:	[Asciz /FALSE/],,0
+	[Asciz /NIL/],,0
+	[Asciz /NO/],,0
+	[Asciz /OFF/],,0
+	[Asciz /ON/],,-1
+	[Asciz /T/],,-1
+	[Asciz /TRUE/],,-1
+	[Asciz /YES/],,-1
+	0
+
+DirTab:	[Asciz /AUTHOR/],,DirAut
+	[Asciz /BYTE-SIZE/],,DirBSz
+	[Asciz /CREATION-DATE/],,DirCre
+	[Asciz /DELETED/],,DirDel
+	[Asciz /DONT-REAP/],,DirNRP
+	[Asciz /LENGTH-IN-BLOCKS/],,DirBlk
+	[Asciz /LENGTH-IN-BYTES/],,DirByt
+	[Asciz /LINK-TO/],,DirLnk
+	[Asciz /NOT-BACKED-UP/],,DirNBK
+	[Asciz /PHYSICAL-VOLUME/],,DirPVm
+	0
+
+TypTab:	[Asciz "FAIL"],,[Asciz "FAI"]
+	[Asciz "Fundamental"],,[Asciz "TXT"]
+	[Asciz "MACRO"],,[Asciz "MAC"]
+	[Asciz "MIDAS"],,[Asciz "MID"]
+	[Asciz "SCHEME"],,[Asciz "SCM"]
+	[Asciz "TECO"],,[Asciz "EMACS"]
+	[Asciz "TEXT"],,[Asciz "TXT"]
+	0
+
+Lower:	0.0	;delta
+	5.0	;5
+	10.0	;5
+	25.0	;15
+	50.0	;25
+	100.0	;50
+	150.0	;50
+	225.0	;75
+	350.0	;125
+nCats==.-Lower
+
+Cats:	[Asciz "?DEAD?"]
+	[Asciz "Crawl"]
+	[Asciz "Walk"]
+	[Asciz "Trot"]
+	[Asciz "Run"]
+	[Asciz "Fly"]
+	[Asciz "*Whoosh*"]
+	[Asciz "-Zoom->"]
+	[Asciz "--Warp-->"]
+
+ComBuf:	Block %CPMXW
+Packet:	Block %CPMXW
+
+  $$CHAOS==1
+ $$HSTMAP==1
+ $$HST3==1
+ $$HOSTNM==1
+$$SYMLOOK==1
+$$ANALYZE==1
+ $$ERRHAN==1
+$$CONNECT==1
+ $$OWNHST==1
+ $$HSTSIX==1
+
+.INSRT SYSENG;NETWRK
+
+$$OUT==1
+
+.INSRT SYSENG;DATIME
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	Actual body of the program.   Gee...
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+Begin:	Move P,PDList			;Book 1, Chapter 1, Verse I.
+	Setz F,
+	Syscal OPEN,[%Clbit,,.uao\%TjDIS
+		     %Climm,,TTYo
+		     [Sixbit /TTY/]]
+	  .Lose %lsFile
+	Syscal OPEN,[%Clbit,,.uai
+		     %Climm,,TTYi
+		     [Sixbit /TTY/]]
+	  .Lose %lsFile
+	Movei A,HostP			;Page#
+	Movei B,HOSTi
+	Call NETWRK"HSTMAP
+	  Jrst [Type "Can't get HOSTS3 databse"
+		Jrst Die]
+	Move A,[NETWRK"NW%CHS]
+	Call NETWRK"OWNHST
+	  .Lose
+	Movem A,OurNum
+	Syscal SSTATU,[Repeat 5,%Clout,,T
+		       %Clout,,UsITS]
+	  .Lose %lsSYS
+	.Suset [-6,,[.rUIND,,T			;For making I&O File-Handles
+		     .sOPTION,,[OPTINT,,]	;New-style interrupts
+		     .sMASK,,[%PiIOC]		;Catch IOC errors
+		     .rUNAME,,Uname
+		     .rXUNAME,,XUNAME
+		     .rSNAME,,SNAME]]
+	Move A,DDir
+	Movem A,DFN1
+	Move A,[350700,,IFH]		;File-Handle in form Ixxx and Oxxx,
+	Move B,[350700,,OFH]		;where xxx is your job# backwards.
+MIandH:	IDivi T,10.
+	Addi TT,"0
+	Idpb TT,A
+	Idpb TT,B
+	Jumpn T,MIandH
+
+	Move T,[030202,,020202]	;Interrupts still on,
+	Move TT,T		;but only <CR> echoes.
+	Syscal TTYSET,[%Climm,,TTYi ? T ? TT]
+	  .Lose
+
+	Move A,UsITS
+	Movei B,Verse
+	Move C,Ralph
+	Movei D,CDate
+	EType "MIT-%1' CFTP Version %2S Ralph %3' [%4S]
+Type '?<cr>' for a list of commands, or 'HELP' for full help."
+	.Break 12,[..rJCL,,JCLbuf]
+	Skipn JCLbuf
+	  Jrst Comand
+	Move J,[440700,,JCLbuf]
+	.Iot TTYo,[^M]
+	Jrst Coman1
+
+Unwind:	Trne F,F%IFI
+	  Call ClsIFI
+	Trne F,F%OFI
+	  Jrst [Trnn F,F%CTL
+		  Jrst .+1
+		Call DELEWO
+		Call ClsOFI
+		Jrst .+1]
+Comand:	Move P,PDList
+	Movei A,[Asciz /CFTP>/]
+	Trne F,F%CTL
+	  Movei A,CProm
+	Movei I,CmdBuf
+	Call gLine		;Get a line of TTY input.
+	  Jrst Comand		;Nothing specified.
+Coman1:	Movei H,TopCmd
+	Call Parse		;Is this a top-level command?
+	  Jrst Lazy
+	Call @CmdLoc(B)
+	Jrst Comand
+
+Lazy:	Movei A,String
+	Call NETWRK"HSTLOOK
+	  Jrst [Movei T,[Asciz /?Unknown: /]
+		Skipe ErrTyp
+		  Movei T,[Asciz /?Ambiguous: /]
+		AType (T)
+		AType String
+		Jrst Comand]
+	Call Con1
+	Jrst Comand
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	All the rest is subroutines to do the commands...
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+.HELP:	Movei H,HlpCmd
+	Call Parse
+	  Jrst [Movei A,BadHlp
+		Skipe ErrTyp
+		  Movei A,HlpAll
+		AType (A)
+		Return]
+	Cail B,777777
+	  Jrst .HELP0
+	AType @HlpTxt(B)
+	Return
+
+BadHlp:	Asciz "I dunno about that.  Type '?<cr>' for a list of commands."
+
+HlpAll:	Asciz "Type 'HELP *<cr>' for full help, or 'HELP command<cr>' for help
+with a specific command.  '?<cr>' lists all the commands known,
+and then some."
+
+.HELP0:	Type |
+CFTP is the ITS user interface to a foreign Chaosnet FILE server
+(FILE is the Lisp Machine file service protocol).
+
+CFTP can be invoked from DDT with a command line, e.g.,
+
+	:CFTP CONNECT OZ
+
+(or, using the "lazy connect" facility)
+
+	:CFTP OZ
+
+Briefly, the CFTP commands are (where lowercase denotes metasyntax,
+and foreign-filename is an uninterpreted string where every character is
+significant except for leading white space):
+
+|
+	Setz A,
+.HELP1:	Skipn TopCmd(A)
+	  Return
+	AType @HlpTxt(A)
+	.Iot TTYo,[^M]
+	.Iot TTYo,[^M]
+	Aoja A,.HELP1
+
+HlpTxt:	[Asciz | ACCESS tops-20-directory
+	Equivalent to doing a TOPS-20 ACCESS command on the remote system
+	(you must supply brackets in the directory name, e.g. <FOO>)|]
+
+	[Asciz | ASCII
+	Sets transfer mode to 7-bit ASCII, translated from the 8-bit
+	LispMachine character set.  Same as SET TRANSFER-MODE ASCII.|]
+
+	[Asciz | BINARY
+	Sets the transfer mode to binary, 16-bit data.  Equivalent to
+	SET TRANSFER-MODE BINARY|]
+
+	[Asciz | BYTE-SIZE n
+	Sets the transfer mode to binary, with n-bit bytes.  Same as
+	SET TRANSFER-MODE BYTE-SIZE n|]
+
+	[Asciz | CONNECT hostname
+	Requests FILE service from the foreign host named.
+	Sets the data tranfer mode to PDP-10 if foreign host is a PDP-10,
+	otherwise, sets the transfer mode to ASCII;
+	sets the lower-casing switch on iff the foreign host is a UNIX.|]
+
+	[Asciz | CWD tops-20-directory
+	Equivalent to a TOPS-20 CONNECT command on the remote system
+	(you must supply brackets in the directory name, e.g., <FEE>)|]
+
+	[Asciz | DELETE foreign-filename
+	Delete the specified file|]
+
+	[Asciz | DIRECTORY foreign-filename
+	Gives a directory listing of any files on the foreign system
+	which match the (potentially "wild-carded") foreign-filename;
+	the fields listed are:
+
+	 D	  if the file is deleted, a D appears at the left margin
+	 V	  physical volume on which the file resides, if any
+	 Name	  the full filename
+	 Blocks   number of system-dependent "blocks" the file occupies
+	 Bytes	  length of the file in bytes
+	 size	  the size of bytes in the file
+	 N	  if !, means the file is not backed up yet
+	 R	  if $, means the file is marked as "resisting archival"
+	 Created  the time and date the file was created or last written
+	 Author   the user who created or last wrote the file|]
+
+	[Asciz | DISABLE
+	Disable your TWENEX capabilities.|]
+
+	[Asciz | DISCONNECT
+	Shut down the current session|]
+
+	[Asciz | ENABLE
+	Enable your TWENEX capabilities.|]
+
+	[Asciz | EXIT
+	Does a disconnect and exits CFTP|]
+
+	[Asciz | EXPUNGE tops-20-directory
+	Equivalent to the TOPS-20 command EXPUNGE tops-20-directory|]
+
+	[Asciz | GET foreign-filename
+ Local file: local-filename
+	Retrieves the file named by foreign-filename in the prevailing
+	transfer mode (see SET TRANSFER-MODE) to the local file named
+	by local-filename; tries to be helpful by defaulting the local
+	filename|]
+
+	[Asciz | HELP command or *
+	Prints this type of help text for the specified command (and
+	all it's subcommands), or on ALL commandsw if * is given.|]
+
+	[Asciz | INFORMATION
+	Tells relevant information about the current session (to which
+	host you're currently connected, as whom you're logged in,
+	the current data transfer mode, whether lower-casing is in
+	effect, etc.)|]
+
+	[Asciz | LOGIN foreign-username [password]
+	Attempts to log you in as the given foreign username;
+	it will prompt you for a password if it needs it|]
+
+	[Asciz | PDP-10
+	Sets the transfer mode to be PDP-10 words, 36-bit binary|]
+
+	[Asciz | PUT local-filename
+ Foreign file: foreign-filespec
+	Is the same as SEND (see below)|]
+
+	[Asciz | QUIT
+	Is a synonym of EXIT|]
+
+	[Asciz | RAW-ASCII
+	Sets the transfer mode to ASCII, and does not translate the LispM
+	character set, or quote funny characters - Takes it raw.  Same as
+	SET TRANSFER-MODE RAW-ASCII|]
+
+	[Asciz | RENAME foreign-filename-1
+ New file: foreign-filename-2
+	Renames the first foreign file to the given second foreign file
+	name|]
+
+	[Asciz | SEND local-filename
+ To foreign file:
+	Sends the specified local file (non-wildcarded) to the given
+	foreign file; or, if the local-filename is wildcarded,
+ Prefix string for each foreign file:
+	Sends each local file implied by the wildcarded local-filename
+	to a remote file of the same name and type (NAME.TYP), possibly
+	prefixed by the string prompted for; if the generation is
+	wildcarded in local-filename (e.g., FOO.BAR.*), then sends
+	each local file to a remote file of the same name, type, and
+	generation (NAME.TYP.i); SET LOWER-CASING controls whether
+	the resulting foreign filename is lower-cased or not (useful
+	for transfers to UNIX systems)
+
+	Sorry, ffolks, but wildcard sending is not yet done.|]
+
+	[Asciz | SET DEBUGGING ON, OFF, or similar booleans
+	Turns debugging (tracing) information on or off (default is ON)
+
+ SET LOWER-CASING boolean
+	Turns lower-casing on or off (default is ON); see SEND and CONNECT
+
+ SET TRANSFER-MODE ASCII
+	Sets the data transfer mode to ASCII
+	(top-level synonym: ASCII)
+
+ SET TRANSFER-MODE BINARY
+	Sets the data transfer mode to binary, 16-bit data
+	(top-level synonym: BINARY)
+
+ SET TRANSFER-MODE BYTE-SIZE n
+	Sets the data transfer mode to binary, n-bit data
+	(top-level synonym: BYTE-SIZE)
+
+ SET TRANSFER-MODE PDP-10
+	Sets the data transfer mode to be PDP-10 style: 36-bit, binary.
+	(top-level synonym: PDP-10)|]
+
+	[Asciz | SUBMIT local-filename
+ Foreign file: foreign-filename
+	Is the same as the SEND command, except the sent file is also
+	submitted as a batch file (to be run NOW) on the foreign site.|]
+
+	[Asciz | TYPE foreign-filename
+	Types the given file (GETs it in ASCII mode) on the terminal|]
+
+	[Asciz | WINNERS
+	Show the list of current transfer winners|]
+
+ncmd3==.-HlpTxt
+
+IFN ncmd3-ncmd1, .FATAL You are missing help for some commands!
+
+Constants
+
+.WINNE:	Syscal OPEN,[%Clbit,,.uii
+		     %Climm,,YOWi
+		     [Sixbit /DSK/]
+		     [Sixbit /YOW/]
+		     [Sixbit /BIN/]
+		     [Sixbit /GREN/]]
+	  Jrst [EType "Can't find database?  %Eî"
+		Return]
+	Move T,[444400,,Yowloc]
+	Movei TT,2000
+	Syscal SIOT,[%Climm,,YOWi ? T ? TT]
+	  .Lose
+	.Close YOWi,
+	Movei T3,1
+	Setz Q,
+	Type "
+Rank	Who	Speed	From	To	When
+----    ---	------	------	------	-----------------î"
+.WIN1:	Skipn Yowloc(Q)
+	  Return
+	EType " #%10D	"
+	Move B,[440700,,Yowloc+Y$TAG(Q)]
+	Skipe Yowloc+Y$TAG(Q)
+	  AType (B)
+IFN KLp,FIXR C,Yowloc+Y$BAUD(Q)
+.ELSE [
+	MOVE C,Yowloc+Y$BAUD(Q)
+	MULI C,400
+	TSC C,C
+	ASH D,-243(C)
+	MOVE C,D
+];Not KL
+	EType "	%3D	"
+	Move A,Yowloc+Y$FROM(Q)
+	Call NETWRK"HSTSIX
+	  Move A,[0]
+	EType "%1'	"
+	Move A,Yowloc+Y$TO(Q)
+	Call NETWRK"HSTSIX
+	  Move A,[0]
+	EType "%1'	"
+	Move A,Yowloc+Y$WHEN(Q)
+	Move D,[440700,,TimBuf]
+	Call DATIME"TWDASC
+	Movei A,TimBuf
+	EType "%1Sî"
+	Addi Q,LYOW
+	Caig Q,LYOW*NYOW
+	  Aoja T3,.WIN1
+	Return
+
+.SET:	Movei H,SetCmd
+	Call Parse
+	  Jrst [Type "Invalid SET option"
+		Jrst Comand]
+	Jrst (B)
+
+.DEBUG:	Movei H,YNCmd
+	Call Parse
+	  Seto B,
+	Hrl B,B
+	Movem B,Debug
+	Return
+
+.LOWER:	Movei H,YNCmd
+	Call Parse
+	  Seto B,
+	Movem B,Lowerp
+	Return
+
+.YOWP:	Movei H,YNCmd
+	Call Parse
+	  Seto B,
+	Hrl B,B
+	Movem B,Yow
+	Return
+
+.TRANS:	Movei H,TraCmd
+	Call Parse
+	  Jrst [Type "Invalid TRANSFER-MODE"
+		Jrst Comand]
+	Jrst (B)
+
+.ASKI:	Tro F,F%NOD
+.ASKJ:	Setzm DatMod
+	Setzm RawMod
+	Setzm DatBSz
+	Return
+
+.BINAR:	Setom DatMod
+	Setzm RawMod
+	Setzm DatBSz
+	Tro F,F%NOD
+	Return
+
+.Raw:	Setzm DatMod
+	Setom RawMod
+	Setzm DatBSz
+	Tro F,F%NOD
+	Return
+
+.BYTES:	Call gNumber
+	  Jrst [Type "Byte-size expected"
+		Jrst Comand]
+	Cail B,1
+	  Caile B,16.
+	    Jrst [Type "Byte-size must be from 1 to 16 bits"
+		  Jrst Comand]
+	Movem B,DatBSz
+	Setom DatMod
+	Setzm RawMod
+	Tro F,F%NOD
+	Return
+
+.PDP10:	Tro F,F%NOD
+.PDP11:	Movei T,1
+	Movem T,DatMod
+	Setzm RawMod
+	Movei T,12.
+	Movem T,DatBSz
+	Return
+
+.CONNE:	Movei A,TSite
+	Call gString
+	  Jrst [Type "You must specify a site to connect to"
+		Jrst Comand]
+	Movei A,TSite
+	Call NETWRK"HSTLOOK
+	  Jrst [Type "Unknown site: "
+		AType TSite
+		Jrst Comand]
+Con1:	Movem A,HostN
+	Call ClsAll
+	Hlrz T,(B)
+	Add T,NETWRK"HSTADR	;Address of SITE entry in T
+	Hrrz TT,1(T)
+	Add TT,NETWRK"HSTADR	;Address of machine type in TT
+	Movem TT,MTypea
+	Move T3,(TT)
+	Trz F,F%10\F%UNIX\F%TNX\F%ITS\F%VAX
+	Came T3,[Ascii "DEC-10"]	;(Really only comparing 1st
+	  Camn T3,[Ascii "PDP10"]	;5 characters...)
+	    Tro F,F%10
+	Came T3,[Ascii "DEC-KS10"]
+	  Camn T3,[Ascii "DEC-20"]
+	    Tro F,F%10
+	Hlrz TT,1(T)
+	Add TT,NETWRK"HSTADR
+	Movem TT,MOpera
+	Move T3,(TT)
+	Camn T3,[Ascii /UNIX/]
+	  Tro F,F%UNIX
+	Came T3,[Ascii "TOPS20"]
+	  Camn T3,[Ascii /TOPS-/]
+	    Tro F,F%TNX
+	Camn T3,[Ascii "TOPS10"]
+	  Tro F,F%TNX
+	Camn T3,[Ascii /ITS/]
+	  Tro F,F%ITS
+	Move B,HostN
+	Call NETWRK"HSTSRC
+	  Movei A,[Asciz /HOST-WITH-NO-NAME/]	;This should not fail
+	Hrli A,440700
+	Push P,A
+	Move B,[440700,,Site]
+	Move C,[440700,,CProm]
+Con2:	Ildb T,A
+	Jumpe T,Con3
+	Idpb T,B
+	Jrst Con2
+
+Con3:	Pop P,A
+Con4:	Ildb T,A
+	Jumpe T,Con5
+	Cain T,".
+	  Jrst Con5
+	Idpb T,C
+	Jrst Con4
+
+Con5:	Movei T,">		;Finish off prompt,
+	Idpb T,C
+	Setz T,
+	Idpb T,B		;and tie them off.
+	Idpb T,C
+	Trnn F,F%NOD
+	  Jrst [Call .PDP11
+		Trnn F,F%10	;If no particular mode specified, try
+		  Call .ASKJ	;to do the right thing.
+		Jrst .+1]
+	Trne F,F%UNIX
+	  Setzm Lowerp		;No lowercasing on Unix's.
+	Call OPNCTL		;Open a control connection.
+	
+Status:	Movei A,Site
+	Move B,MTypea
+	Move C,MOpera
+	Trne F,F%CTL
+	  EType " Connected to %1S (a %2S running %3S)î"
+	Movei A,User
+	Trne F,F%LOG
+	  EType " You are logged in as %1Sî"
+	Call ShoMod
+	Skipe Lowerp
+	  Type " Lower-casing filenames in wildcard sendsî"
+	Skipe Yow
+	  Jrst [Type " You're having fun!î"
+		Skipe A,Place
+		  EType " In fact, you're currently ranked #%1D!î"
+		Jrst .+1]
+	Skipe Debug
+	  Type " Debugging"
+	Return
+
+ShoMod:	Movei A,[Asciz /ASCII/]
+	Skipe DatMod
+	  Movei A,[Asciz /BINARY/]
+	Setz B,
+	Skiple DatMod
+	  Movei B,[Asciz /PDP10 /]
+	Skipe RawMod
+	  Movei B,[Asciz /Raw /]
+	EType " %2S%1S mode transfers"
+	Skipn A,DatBSz
+	  Jrst Shom1
+	Skiple DatMod
+	  Movei A,36.
+	EType ", %1D-bit bytes"
+Shom1:	.Iot TTYo,[^M]
+	Return
+
+
+.ACESS:	Skipa H,[[Asciz / ACCESS/]]
+.CWD:	Movei H,[Asciz / CWD/]
+	Trnn F,F%CTL
+	  Jrst NoConn
+	Call gDir
+	  Jrst Comand
+	Call gPass1
+.CWD0:	CBInit (H)
+	NL
+	Skipe Dirnam
+	  Jrst [CBText Dirnam
+		NL
+		Skipn Pass
+		  Jrst .+1
+		CBText Pass
+		NL
+		Jrst .+1]
+	Call ComSnd
+	Call ComRs1
+	  Skipa
+	    Jrst .CWD1
+	Move A,ErrCod
+	Came A,[Ascii /IP?/]
+	  Camn A,[Ascii /PI?/]
+	    Skipa
+	      Jrst PktErr
+	Call gPass2
+	  Return
+	Jrst .CWD0
+
+.CWD1:	Move A,RespBP
+	EType " Connected to %1S"
+	Return
+
+.DELET:	Trnn F,F%CTL
+	  Jrst NoConn
+	Call gOFile
+	  Jrst Comand
+	Call oProbe
+	BStart " DELETE"
+	NL
+	CBText OFile
+	NL
+	Call ComSnd
+	Call ComRs1
+	  Jrst PktErr
+	Movei A,OFile
+	EType " %1S deleted"
+	Return
+
+DELEWO:	CBInit OFH
+	BText " DELETE"
+	Call ComSnd
+;	Call SndSyn
+	Call ComRs1
+	  Jrst PktErr
+	Return
+
+.DIREC:	Trnn F,F%CTL
+	  Jrst NoConn
+	Setzm Dirfil
+	Movei A,Dirfil
+	Call gString
+	  Jfcl
+	Call ChkDat
+.DIR0:	CBInit IFH
+	BText " DIRECTORY"
+	NL
+	CBtext Dirfil
+	NL
+	Call ComSnd
+	Call ComRsl
+	  Jrst .DIR0
+	Tro F,F%IFI
+	Trz F,F%HEAD
+.DIR1:	Setzm File
+	Setzm DirAut			;Zero status stuff and snag
+	Move T,[DirAut,,DirAut+1]	;a new file.
+	BLT T,DirLst
+	Move A,[440700,,File]
+	Call DatLin
+	  Jrst ClsIFI			;No more?  We're done...
+.DIR2:	Move C,[440700,,String]
+.DIR3:	Call DatByt			;Grab a directory option.
+	  Return
+	Caie T,40
+	  Cain T,.CHNL
+	    Jrst .DIR4
+	Idpb T,C
+	Jrst .DIR3
+.DIR4:	Camn C,[440700,,String]
+	  Jrst DirPrt		;No more options - Print this line.
+	Movem T,TempT
+	Setz T,
+	Idpb T,C
+	Movei H,DirTab
+	Call Parse1
+	  Jrst DirFll
+	Move T,TempT
+	Cain T,.CHNL
+	  Jrst [Move A,[Ascii /T/]
+		Movem A,(B)
+		Jrst .DIR2]
+	Move A,[440700,,(B)]
+	Call DatLin
+	  Noop
+	Jrst .DIR2
+
+DirFll:	Call DatByt			;Skip over the data part of
+	  Return			;this option and continue.
+	Caie T,.CHNL
+	  Jrst DirFll
+	Jrst .DIR2
+
+DirPrt:	Skipn File
+	  Jrst .DIR1
+	Tron F,F%HEAD
+	  Type "
+DV   Filename                  Blocks Bytes(size) NR       Created     Authorî"
+	Movei T,40
+	Skipn A,DirDel
+	  Move B,[Ascii /NIL/]
+	Came B,[Ascii /NIL/]
+	  Movei T,"D"
+	.Iot TTYo,T
+	.Iot TTYo,[" ]
+	Skipe DirPVm
+	  AType DirPVm
+	Movei T,5
+	Call DirPos
+	AType File
+	Movei T,33.
+	Call DirPos
+	Skipe DirLnk
+	  Jrst [Type "==> "
+		AType DirLnk
+		Jrst Dirp1]
+	Skipe DirBlk
+	  Jrst [AType DirBlk
+		Movei T,38.
+		Call DirPos
+		AType DirByt
+		Jrst .+1]
+	Skipe DirBSz
+	  Jrst [.Iot TTYo,["(]
+		AType DirBSz
+		.Iot TTYo,[")]
+		Jrst .+1]
+	Movei T,50.
+	Call DirPos
+	Movei T,40
+	Skipn B,DirNBk
+	  Move B,[Ascii /NIL/]
+	Came B,[Ascii /NIL/]
+	  Movei T,"!
+	.Iot TTYo,T
+	Movei T,40
+	Skipn B,DirNRp
+	  Move B,[Ascii /NIL/]
+	Came B,[Ascii /NIL/]
+	  Movei T,"$
+	.Iot TTYo,T
+Dirp1:	Movei T,53.
+	Call DirPos
+	AType DirCre
+	.Iot TTYo,[" ]
+	AType DirAut
+	.Iot TTYo,[^M]
+	Jrst .DIR1
+
+DirPos:	Syscal RCPOS,[%Climm,,TTYo
+		      %Clout,,A]
+	  .Lose %lsSys
+	Hrrz A,A
+	Caml A,T
+	  Jrst [.Iot TTYo,[^M]
+		Jrst Dirps1]
+	Sub T,A
+Dirps1:	Sojl T,CPopj
+	.Iot TTYo,[" ]
+	Jrst Dirps1
+
+
+.ENABL:	Trnn F,F%CTL
+	  Jrst NoConn
+	BStart " ENABLE-CAPABILITIES ALL"
+	NL
+	Call ComSnd
+	Call ComRs1
+	  Jrst PktErr
+	Type "Capabilities enabled."
+	Return
+
+
+.DISAB:	Trnn F,F%CTL
+	  Jrst NoConn
+	BStart " DISABLE-CAPABILITIES ALL"
+	NL
+	Call ComSnd
+	Call ComRs1
+	  Jrst PktErr
+	Type "Capabilities disabled."
+	Return
+
+
+.QUIT:
+.EXIT:	Call ClsAll
+	Jrst Die
+
+
+.EXPUN:	Trnn F,F%CTL
+	  Jrst NoConn
+	Call gDir
+	  Noop
+.EXP1:	BStart " EXPUNGE"
+	NL
+	Skipe Dirnam
+	  Jrst [CBText Dirnam
+		NL
+		Jrst .+1]
+	Call ComSnd
+	Call ComRsl
+	  Jrst .EXP1
+	Move A,RespBP
+	Move B,RespNB
+	Move C,[440700,,Number]
+.EXP2:	Sojl B,.EXP3
+	Ildb T,A
+	Cail T,"0
+	  Cail T,"9
+	    Jrst .EXP3
+	Idpb T,C
+	Aoja D,.EXP2
+
+.EXP3:	Setzb T,Dirnam
+	Idpb T,C
+	Move C,[440700,,Dirnam]
+.EXP4:	Sojl B,.EXP5
+	Ildb T,A
+	Caie T,40
+	  Cain T,.CHNL
+	    Jrst .EXP5
+	Idpb T,C
+	Jrst .EXP4
+
+.EXP5:	Setz T,
+	Idpb T,C
+	Movei A,Dirnam
+	Movei B,Number
+	EType " %1S expunged, %2S page(s) freed"
+	Return
+
+.TTYPE:	Setzm DatMod
+	Setzm RawMod
+	Setzm DatBSz
+	Movei T,TTYoo
+	Movem T,oChan
+	.Suset [.sIMSK2,,[1_TTYoo]]
+	Tro F,F%TYPE
+	Jrst .GEY
+
+.GET:	Movei T,DSKo
+	Movem T,oChan
+.GEY:	Trnn F,F%CTL
+	  Jrst NoConn
+	Tlz F,(F%SEND)
+	Call ChkDat
+	Call gFFile
+	  Return
+.GET0:	CBInit IFH
+	BText " OPEN READ"
+	Movei T,OFile
+	Movem T,File
+	Call ComOpn
+	  Jrst .GET0
+	Call gSize			;Get size of incoming file.
+	Move A,RFilBP			;BP to real filename
+	EType "Truename: %1Sî"
+	Call ITSify			;Make default local filespec
+	Syscal OPEN,[%Clbit,,.uii
+		     %Climm,,TESTi
+		     DDev
+		     [Sixbit ".FILE."]
+		     [Sixbit "(DIR)"]
+		     DDir]
+	  Jrst [Call Dunno0	;Default device and sname
+		Jrst .+2]
+	.Close TESTi,
+	Tro F,F%IFI
+	Trne F,F%TYPE
+	  Jrst [Movsi T,(Sixbit /TTY/)
+		Movem T,TemDev
+		Exch T,Device
+		Movem T,ODevice
+		Jrst .GET1]
+	Call gLFile
+	  Jfcl
+	Call Merge		;Merge in defaults
+	Movei T,.UIO
+	Skipn RawMod
+	  Skipn DatMod
+.GET1:	    Movei T,.UAO
+	Movem T,Mode
+	Syscal OPEN,[%Clbtw,,Mode
+		     oChan
+		     TemDev
+		     TemFN1
+		     TemFN2
+		     TemSna]
+	  Jrst [Movei A,TemDev
+		EType "Can't open temporary file %1L -- %E"
+		Jrst Unwind]
+	Skipn B,DatBSz
+	  Jrst [Movei B,7
+		Skipe DatMod
+		  Movei B,16.
+		Jrst .+1]
+	Movem B,BytSiz
+	Movei A,OFile
+	Movei B,Device
+	EType " %1S --> %2L ...î"
+	Setzm NBytes
+	.PDTime T,
+	Movem T,STime	;Start time
+	Call RedLup
+	.PDTime T,
+	Sub T,STime
+	Movem T,Time
+	Trne F,F%TYPE
+	  Jrst .GET2
+	Syscal RENMWO,[oChan ? FN1 ? FN2]
+	  Jrst [EType "Can't rename to real names -- %E"
+		Jrst Unwind]
+.GET2:	Syscal CLOSE,[oChan]
+	  .Lose %lsSys
+	Call ClsIFI
+	Trnn F,F%TYPE
+	  Jrst pZoom
+	Move T,ODevice
+	Movem T,Device		;Restore the device default
+	Trz F,F%TYPE
+	Jrst pZoom
+
+.LOGIN:	Trnn F,F%CTL
+	  Jrst NoConn
+	Call gUser
+	  Jrst Comand
+	Call gPass1
+.LOG1:	BStart " LOGIN "
+	CBText User
+	SPACE
+	Skipe Pass
+	  Jrst [CBText Pass
+		SPACE
+		Jrst .+1]
+.LOG2:	Call ComSnd
+	Call ComRs1
+	  Skipa
+	    Jrst Logdin
+	Move A,ErrCod
+	Came A,[Ascii /IP?/]
+	  Camn A,[Ascii /PI?/]
+	    Skipa
+	      Jrst PktErr
+	Call gPass2
+	  Return
+	Jrst .LOG1
+
+Logdin:	Tro F,F%LOG
+	Move A,RespBP
+	Move B,RespNB
+	Move C,[440700,,User]
+Logdun:	Sojl B,Logdpr
+	Ildb T,A
+	Cain T,40
+	  Jrst Logdpr
+	Idpb T,C
+	Jrst Logdun
+
+Logdpr:	Setz T,
+	Idpb T,C
+FndNam:	Sojl B,CPopj
+	Ildb T,A
+	Caie T,.CHNL
+	  Jrst FndNam
+	Movem A,NameBP'
+FndCma:	Sojl B,CPopj
+	Ildb T,A
+	Cain T,",
+	  Jrst AhaCma
+	Caie T,.CHNL
+	  Jrst FndCma
+	Move A,NameBP
+	Push P,A
+	Jrst Fnord
+
+AhaCma:	Push P,A
+AhaCm0:	Sojl B,CPopj
+	Ildb T,A
+	Cain T,40
+	  Jrst [Movem A,(P)
+		Jrst AhaCm0]
+Fnord:	Ildb T,A
+	Caie T,40
+	  Cain T,.CHNL
+	    Skipa
+	   Jrst Fnord
+	Setz T,
+	Dpb T,A
+	Pop P,A
+SayHi:	EType "Hello, %1Sî"
+	Return
+
+.RENAM:	Trnn F,F%CTL
+	  Jrst NoConn
+	Call gOFile
+	  Jrst Comand
+	Call gNFile
+	  Jrst Comand
+	Call oProbe
+	BStart " RENAME"
+	NL
+	CBText OFile
+	NL
+	CBText NFile
+	NL
+	Call ComSnd
+	Call ComRs1
+	  Jrst PktErr
+	Call nProbe
+	Movei A,OFile
+	Movei B,NFile
+	EType " %1S renamed to %2S"
+	Return
+
+
+.SUBMI:	Troa F,F%SUB
+.SEND:	  Trz F,F%SUB
+	Trnn F,F%CTL
+	  Jrst NoConn		;No connection yet.
+	Tlo F,(F%SEND)
+	Call ChkDat		;Get a data connection if needed
+	Call gLFile		;Get the local filename.
+	  Jrst Comand
+	Call Dunno		;Set up DDev/etc
+	Call Merge		;and set Device, etc from them.
+	Call Wildp
+	  Jrst .SEND1
+	Type "Wildcard sending not yet supported"
+	Return
+
+.SEND1:	Skipn B,DatBSz
+	  Jrst [Movei B,7
+		Skipe DatMod
+		  Movei B,16.
+		Jrst .+1]
+	Movem B,BytSiz
+	Movei T,.UAI
+	Skipe DatMod
+	  Movei T,.UII
+	Syscal OPEN,[%Clbtw,,T
+		     %Climm,,DSKi
+		     Device ? FN1 ? FN2 ? Direct]
+	  Jrst [Movei A,Device
+		EType "Can't open local file %1L -- %E"
+		Return]
+	Syscal RFNAME,[%Climm,,DSKi
+		       %Clout,,Device ? %Clout,,FN1
+		       %Clout,,FN2 ? %Clout,,Direct]
+	  Jfcl
+	Call SXLate		;Translate this filename for the default.
+	Movei A,Device
+	EType "Truename: %1Lî"
+	Syscal FILLEN,[%Climm,,DSKi
+		       %Clout,,T ? %Clout,,TT]
+	  Setz T,
+	IMul T,TT
+	Movem T,NBits
+	Call gFFile
+	  Jrst [Skipn DFile
+		  Jrst [Type "There's no foreign file default!"
+			.Close DSKi,
+			Jrst Comand]
+		Call FdFalt
+		Jrst .+1]
+SndLu1:	CBInit OFH
+	Movei A,[Asciz / OPEN WRITE/]
+	Trne F,F%SUB
+	  Movei A,[Asciz / OPEN WRITE SUBMIT/]
+	CBText (A)
+	Movei T,OFile
+	Movem T,File
+	Call ComOpn
+	  Jrst SndLu1
+	Tro F,F%OFI
+	Movei A,OFile
+	Movei B,Device
+	EType " %2L --> %1S ...î"
+	Setzm NBytes
+	.PDTime T,
+	Movem T,STime
+	Call WrtLup
+	.PDTime T,
+	Sub T,STime
+	Movem T,Time
+	Call ClsOFI
+	Call GetTru
+	.Close DSKi,
+	Jrst pZoom
+
+
+NoConn:	Type "(Not connected to any host)"
+	Return
+
+Die:	Skipe Debug
+	  .Value
+	.Logout 1,
+
+Constants
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	The good stuff - Chaosnet frotzing
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+OpnCtl:	Call ClsAll
+	Movei A,CHAOSi
+	Move B,HostN
+	Movei C,Connam
+	Movei D,5
+	Call NETWRK"CHACON
+	  Jrst [Type "î(Can't get control connection)î"
+		Jrst Unwind]
+	Skipe Debug
+	  Type "<D> Opened control connectionî"
+	Setzm TranID
+	Tro F,F%CTL
+	Return
+
+ClsAll:	Trne F,F%DAT
+	  Call ClsDat
+	Trne F,F%CTL
+	  Call ClsCtl
+	Trz F,F%LOG
+	Return
+
+ClsCtl:	Skipe Debug
+	  Call SndEOF
+	.Close CHAOSi,
+	.Close CHAOSo,
+	Trz F,F%CTL
+	Movei A,Site
+	EType " Closing connection to %1Sî"
+	Return
+
+ClsDat:	Movei A,OFH
+	Skipe Debug
+	  EType "<D> Closing data connection [%1S]î"
+	.Close cDATAi,
+	.Close cDATAo,
+	Trz F,F%DAT
+	Return
+
+ChkDat:	Trne F,F%DAT
+	  Return
+OpnDat:	BStart " DATA-CONNECTION "
+	CBText IFH
+	SPACE
+	CBText OFH
+	Call ComSnd
+	Movei A,cDATAi
+	Move B,HostN
+	Movei C,OFH
+	Movei D,5
+	Call NETWRK"CHALSN
+	  Jrst [Type "î(Can't get data connection)î"
+		Jrst Unwind]
+	Call ComRs1
+	  Jrst PktErr
+	Movei A,OFH
+	Skipe Debug
+	  EType "<D> Got data connection [%1S]î"
+	Tro F,F%DAT
+	Return
+
+ComSnd:	Setz T,
+	Idpb T,Q		;Ascizize command buffer.
+	Move A,[440800,,Packet+%CPKDT]
+	Move B,[440800,,ComBuf]
+	Setz C,
+ComSn1:	Ildb T,B
+	Jumpe T,ComSn2
+	Idpb T,A
+	Aoj C,
+	Caie C,%CPMXC
+	  Jrst ComSn1
+ComSn2:	Dpb C,[$CPKNB Packet]
+	Movei T,%coDAT
+	Dpb T,[$CPKOP Packet]
+	Skipn Debug
+	  Jrst ComSn3
+	Type "<D> Sending:
+<D> "
+	Call PrtBuf
+ComSn3:	Exhale
+	  Jrst BadCon
+	Return
+
+
+SndEOF:  Type "<D> Sending EOF on control channelî"
+	Movei T,%coEOF
+	Dpb T,[$CPKOP Packet]
+	Exhale
+	  Noop
+	Return
+
+
+ComRsl:	Call ComRs1
+	  Skipa
+	    Jrst Popj1
+	Move A,ErrCod
+	Came A,[Ascii /NLI/]
+	  Jrst PktErr
+	EType "Error: %1Mî"
+	Call gUser1
+	  Jrst Unwind
+	Call .LOG1
+	Return
+
+
+ComRs1:	Call CtlPkr
+ComRse:	Skipn Debug
+	  Jrst ComRs0
+	Type "<D> Received:
+<D> "
+	Call PrtBuf
+ComRs0:	Move A,[440800,,Packet+%CPKDT]
+	Ldb B,[$CPKNB Packet]
+	Call gAtom	;TID
+	Call gAtom	;FH
+	Call gAtom
+	Came T,[Ascii /ERROR/]
+	  Jrst [Aos (P)
+		Jrst ComRs2]
+	Call gAtom
+	Movem T,ErrCod
+	Call gAtom
+	Lsh T,-<4*7+1>
+	Movem T,ErrTyp
+ComRs2:	Movem A,RespBP
+	Movem B,RespNB
+	Return
+
+
+CtlPkr:	Setzm Packet
+	Move T,[Packet,,Packet+1]
+	BLT T,Packet+%CPMXW-1	;Zero the packet
+	Inhale
+	  Jrst BadCon
+	Ldb T,[$CPKOP Packet]
+	Cain T,%coDAT
+	  Return
+	Cain T,%coASY
+	  Jrst AsyErr
+	Move A,[440800,,Packet+%CPKDT]
+	Ldb B,[$CPKNB Packet]
+	Movem A,RespBP
+	Movem B,RespNB
+	Cain T,%coNOT			;Notification packet
+	  Jrst CtlNot
+	Cain T,%coLOS
+	  Jrst [Type "LOS! - Connection lostî"
+		Call ClsAll
+		Jrst Unwind]
+	Cain T,%coCLS
+	  Jrst [Type "CLS! - Connection closedî"
+		Call ClsAll
+		Jrst Unwind]
+UnKnop:	EType "Received packet with unknown opcode - %6O??î"
+	Call ClsAll
+	Jrst Unwind
+
+CtlNot:	EType "Notification from FILE server:
+%M"
+	Jrst CtlPkr
+
+gAtom:	Setz T,
+	Move TT,[440700,,T]
+	Movei C,5
+gAtom1:	Sojl B,CPopj
+	Ildb D,A
+	Caie D,40
+	  Cain D,.CHNL
+	    Return
+	Jumpe C,gAtom1
+	Idpb D,TT
+	Soja C,gAtom1
+
+
+PrtBuf:	Move A,[440800,,Packet+%CPKDT]
+	Ldb B,[$CPKNB Packet]
+Prtb1:	Sojl B,PrtEOP
+	Ildb T,A
+	Xct LMASCP(T)
+	Jrst Prtb1
+PrtEOP:	Type "<EOP>î"
+	Return
+
+
+BadCon:	Call ClsAll
+	Type "îConnection broken (foreign server probably died)"
+	Trz F%IFI\F%OFI
+	Jrst Unwind
+
+
+PktErr:	EType "Error: %M"
+	Jrst Unwind
+
+
+AsyErr:	Call ComRse
+	EType "(Error: %M)"
+	Jrst Unwind
+
+
+ClsIFI:	Trz F,F%IFI
+	CBInit IFH
+	BText " CLOSE"
+	Call ComSnd
+	Call ComRs1
+	  Jrst PktErr
+	Call SmrKin
+	Return
+
+
+ClsOFI:	Trz F,F%OFI
+	CBInit OFH
+	BText " CLOSE"
+	Call ComSnd
+;	Call SndSyn
+	Call ComRs1
+	  Jrst PktErr
+	Return
+
+
+SndSyn:	Skipe Debug
+	  Type "<D> Sending control synchronous markî"
+	Movei T,%coSYN
+	Dpb T,[$CPKOP Packet]
+	Exhale
+	  Jrst BadCon
+	Return
+
+
+Smrkin:	Inhale cDATAi			;Wait for a synch mark.
+	  Jrst BadCon
+	Ldb T,[$CPKOP Packet]
+	Cain T,%coSYN
+	  Return
+	Cain T,%coASY
+	  Jrst AsyErr
+	Cain T,%coNOT
+	  Jrst MorNot
+	Cain T,%coEOF
+	  Jrst Smrkin
+	Caie T,%coDAT
+	  Cain T,%coDWD
+	    Jrst Smrkin
+	Jrst Unknop
+
+MorNot:	EType "
+Notification from FILE server (while awaiting synch mark):
+%M"
+	Jrst Smrkin
+
+
+nProbe:	Skipa T,[NFile]
+oProbe:	Movei T,OFile
+	Movem T,File
+Probe1:	BStart " OPEN PROBE"
+	Call ComOp1
+	  Jrst Probe1
+	Return
+
+
+ComOpn:	Movei A,[Asciz / CHARACTER/]
+	Skipe DatMod
+	  Movei A,[Asciz / BINARY/]
+	CBText (A)
+	Skipe RawMod
+	  BText " RAW SUPER-IMAGE"
+ComOp1:	Skipn DatBSz
+	  Jrst ComOp2
+	BText " BYTE-SIZE "
+	CBNum DatBSz
+ComOp2:	NL
+	CBText @File
+	NL
+	Call ComSnd
+	Call ComRsl
+	  Return
+	Aos (P)
+	Jrst GetTru
+
+
+gSize:	MOVE A,[440800,,Packet+%CPKDT]
+	MOVEI C,6
+GSIZE1:	ILDB T,A
+	CAIE T,40
+	  JRST GSIZE1
+	SOJN C,GSIZE1
+	Setz C,
+GSize2:	Ildb T,A
+	Cail T,"0
+	  Caile T,"9
+	    Jrst gSize3
+	IMuli C,10.
+	Addi C,-"0(T)
+	Jrst gSize2
+gSize3:	SKIPN RAWMOD		;This stuff purloined, obviously.
+	  SKIPN DATMOD
+	    JRST [IDIVI C,5	;Turn ASCII bytes into words.
+		  JRST GSIZE4]
+	MOVEI T,^D36
+	IDIV T,DATBSZ
+	IDIV C,T
+GSIZE4:	IMULI C,^D36
+	MOVEM C,NBITS
+	Ildb T,A
+	Caie T,200\^M
+	  Jrst .-2
+	Movem A,RFilBP		;Save BP to real filename.
+	Ildb T,A
+	Caie T,200\^M
+	  Jrst .-2
+	Setz T,
+	Dpb T,A			;Make filename ASCIZ
+	Return
+
+
+GetTru:	Move A,RespBP
+	Move B,RespNB
+Gett1:	Sojl B,[Type "(Badly formatted response)"
+		Jrst Unwind]
+	Ildb T,A
+	Caie T,.CHNL
+	  Jrst Gett1
+	Move TT,File
+	Move C,[440700,,(TT)]
+Gett2:	Sojl B,Gett3
+	Ildb T,A
+	Cain T,.CHNL
+	  Jrst Gett3
+	Idpb T,C
+	Jrst Gett2
+Gett3:	Setz T,
+	Idpb T,C
+	Return
+
+;;;
+;;;	DATpkr/lin/byt are for grabbing text out of a packet
+;;;	received on the DATA-CONNECTION pair.  All of them
+;;;	non-skip if there is no more data.
+;;;
+
+DatPkr:	Inhale cDATAi
+	  Jrst BadCon
+	Ldb T,[$CPKOP Packet]
+	Cain T,%coEOF
+	  Return
+	Cain T,%coASY
+	  Jrst [Trz F,F%IFI
+		Jrst AsyErr]
+	Caie T,%coDAT
+	  Cain T,%coDWD
+	    Jrst Popj1
+	Jrst Unknop
+
+
+DatLin:	Call DatByt
+	  Return
+DatLn1:	Cain T,.CHNL
+	  Jrst DatLnf
+	Idpb T,A
+	Call DatByt
+	  Skipa
+	    Jrst DatLn1
+DatLnf:	Setz TT,
+	Idpb TT,A
+	Jrst Popj1
+
+
+DatByt:	Sojge BC,[Ildb T,Q
+		  Jrst Popj1]
+	Call DatPkr
+	  Return
+	Move Q,[440800,,Packet+%CPKDT]
+	Ldb BC,[$CPKNB Packet]
+	Jrst DatByt
+
+;;;
+;;;	The goods for grabbing incoming packets and stuffing them
+;;;	down the oChan channel (which may actually be open on TTY or
+;;;	something)
+;;;
+
+RedLup:	.Suset [.sIMSK2,,[1_TTYi]]	;Turn on TTY interrupts
+	Skipe RawMod
+	  Jrst RedRaw
+	Skipn DatMod
+	  Jrst RedAsc
+
+	Movei A,36.
+	Skipn C,DatBSz
+	  Movei C,16.
+	IDiv A,C
+	Movem A,BPW			;Bytes per Word
+
+	Lsh C,3*8.
+	Add C,[440000,,E]
+	Movem C,BinBP			;n-bit byte pointer into AC E.
+	Setz D,
+
+RedBin:	Call DatPkr
+	  Jrst [Call Binfls
+		Jrst TTYoff]
+	Move T,[442000,,Packet+%CPKDT]	;16-bit pointer into data portion...
+	Ldb TT,[$CPKNB Packet]		;Number of 8-bit bytes -->
+	Lsh TT,-1			;Number of 16-bit bytes.
+	Addm TT,NBytes
+
+	Tlne F,(F%ODD)			;Don't reset these pointers/BPs
+	  Jrst Redb2			;if we got smeared out over a
+Redb1:	Move A,BinBP			;couple of packets last time.
+	Move B,BPW
+	Setz E,
+
+Redb2:	Sojl TT,Redb3			;Grab BPW 16-bit bytes from packet
+	Ildb T3,T			;and build them in E, making a full
+	Idpb T3,A			;36-bit word.
+	Sojg B,Redb2
+	Movem E,BinBuf(D)
+	Cail D,Buflen-1			;We have filled a buffer... dump it
+	  Call Binfla			;to disk and reset stuff.
+	Aoja D,Redb1
+
+Redb3:	Came B,BPW			;Did we end on a packet boundry?
+	  Tloa F,(F%ODD)
+	    Tlz F,(F%ODD)
+	Jrst RedBin
+
+Binfla:	Aoj D,
+Binfls:	Move I,[444400,,BinBuf]
+	Syscal SIOT,[oChan ? I ? D]
+	  .Lose %lsSys
+	Seto D,
+	Return
+
+RedRaw:	Call DatPkr
+	  Jrst TTYoff
+	Move T,[440800,,Packet+%CPKDT]
+	Ldb TT,[$CPKNB Packet]
+	Addm TT,NBytes
+	Syscal SIOT,[oChan ? T ? TT]
+	  .Lose
+	Jrst RedRaw
+
+RedAsc:	Setz BC,			;Force a get of a new packet
+	Movei A,AscBLn*5
+	Move B,[440700,,AscBuf]
+RedAs1:	Call DatByt
+	  Jrst [Call Redfls
+		Jrst TTYoff]
+	Xct LM2Asc(T)
+	  Call Redout
+	Jrst RedAs1
+
+Redout:	Sosge A
+	  Call Redfls-1			;Output this buffer
+Redou1:	Idpb T,B
+	Return
+
+	Setz A,
+Redfls:	Move T3,[440700,,AscBuf]
+	Movei TT,AscBLn*5
+	Sub TT,A			;Number of fresh bytes...
+	Addm TT,NBytes
+	Syscal SIOT,[oChan ? T3 ? TT]
+	  .Lose
+	Movei A,AscBLn*5-1		;Reset counter/BP
+	Move B,[440700,,AscBuf]
+	Return
+
+Quote:	Save T
+	Movei T,177			;Quote with a RUBOUT
+	Call Redout
+	Rest T
+	Return
+
+;;;
+;;;	Grab input from the file open on DSKi, stuff it into packets,
+;;;	and cram down down the DATA-CONNECTION
+;;;
+
+WrtLup:	Skipe RawMod
+	  Jrst WrtRaw
+	Skipn DatMod
+	  Jrst WrtAsc
+
+	Movei A,36.
+	Skipn C,DatBSz
+	  Movei C,16.
+	IDiv A,C
+	Movem A,BPW			;Bytes per Word
+
+	Lsh C,3*8.
+	Add C,[440000,,BinBuf]
+	Movem C,BinBP
+	Setz D,
+
+WrtBin:	Move A,[442000,,Packet+%CPKDT]	;Pointer to start of data area.
+	Movei B,<%CPMXC/2>		;Number of 16-bit bytes.
+
+WrtBon:	Sojl D,[Move T,[444400,,BinBuf]			;If we have run
+		Movei TT,Buflen				;of buffered
+		Syscal SIOT,[%Climm,,DSKi ? T ? TT]	;disk input, get
+		  .Lose					;another slab.
+		Movei D,Buflen
+		Sub D,TT
+		Jumpe D,[Call Pktfls	;End of file.  Flush the partially
+			 Jrst WrtEOF]	;made packet and we're done.
+		Move C,BinBP
+		IMul D,BPW		;Number of words * bytes per word
+		Jrst .]			;is the number of 16-bit bytes.
+	Ildb T,C
+	Idpb T,A
+	Sosg B				;We just filled a packet.  Send
+	  Call Pktfls			;it off...
+	Jrst WrtBon
+
+Pktfls:	Movei T3,%coDWD			;Binary data...
+	Dpb T3,[$CPKOP Packet]
+	Movei T3,<%CPMXC/2>
+	Sub T3,B
+	Addm T3,NBytes
+	Lsh T3,1			;Turn number of 16-bit bytes into
+	Dpb T3,[$CPKNB Packet]		;number of 8-bit ones.
+	Exhale cDATAo
+	  Jrst BadCon
+	Move A,[442000,,Packet+%CPKDT]
+	Movei B,<%CPMXC/2>
+	Return
+
+
+WrtRaw:	Move T,[440800,,Packet+%CPKDT]
+	Movei TT,%CPMXC
+	Syscal SIOT,[%Climm,,DSKi ? T ? TT]	;Such data directly into
+	  .Lose %lsSys				;the packet...
+	Movei T,%CPMXC
+	Sub T,TT
+	Jumpe T,WrtEOF				;Eck, there was no data.
+	Addm T,NBytes
+	Dpb T,[$CPKNB Packet]
+	Movei TT,%coDAT				;Plain old data.
+	Dpb TT,[$CPKOP Packet]
+	Exhale cDATAo
+	  Jrst BadCon
+	Jrst WrtRaw
+
+WrtAsc:	Setz BC,
+	Movei A,%CPMXC
+	Move B,[440800,,Packet+%CPKDT]
+WrtAs1:	Call Ascin
+	  Jrst AscEOF				;No more characters.
+	Skipn DatMod
+	  Xct Asc2LM(T)				;If not RAW mode, do the
+	Idpb T,B				;translation stuff...
+	Sosg A
+	  Call AscFls
+	Jrst WrtAs1
+
+AscFls:	Movei TT,%CPMXC
+	Sub TT,A
+	Dpb TT,[$CPKNB Packet]
+	Movei TT,%coDAT
+	Dpb TT,[$CPKOP Packet]
+	Exhale cDATAo
+	  Jrst BadCon
+	Movei A,%CPMXC
+	Move B,[440800,,Packet+%CPKDT]
+	Return
+
+Ascin:	Sojge BC,[Ildb T,C
+		  Jrst Popj1]
+	Movei D,AscBLn*5
+	Move E,[440700,,AscBuf]
+	Syscal SIOT,[%Climm,,DSKi ? E ? D]
+	  .Lose %lsSys
+	Movei BC,AscBLn*5
+	Sub BC,D
+	Jumpe BC,CPopj			;Out of data
+	Cail BC,AscBln*5		;Is this the last bufferful?
+	  Jrst Ascin2			;  Nope.
+	Ibp E				;Sort-of normalize us to pointing after
+Ascin1:	DBP E				;last byte, then start backing up...
+	Ldb T,E				;Get byte from end...
+	Cain T,^C			;Last-word ^C padding?
+	  Soja BC,Ascin1		;real stuff.
+Ascin2:	Addm BC,NBytes
+	Move C,[440700,,AscBuf]
+	Jrst Ascin
+
+
+AscEOF:	Call AscFls
+WrtEOF:	Call DatEOF
+	Skipe Debug
+	  Type "<D> Sending data synchronous markî"
+	Movei T,%coSYN
+	Dpb T,[$CPKOP Packet]
+	Exhale cDATAo
+	  Jrst PktErr
+	Return
+
+
+DatEOF:	Skipe Debug
+	  Type "<D> Sending EOF on data channelî"
+	Movei T,%coEOF
+	Dpb T,[$CPKOP Packet]
+	Exhale cDATAo
+	  Jrst PktErr
+	Syscal FINISH,[%Climm,,cDatao]	;Wait for the EOF to be ACK'd
+	  Noop
+	Return
+
+
+TTYoff:	.Suset [.sMSK2,,[0]]		;Disable TTY interrupts.
+	Return
+
+LMASCP:	Type "<NUL>"
+	Repeat 210-1,.Iot TTYo,T
+	Type "<BS>"
+	Type "<TAB>"
+	Type "<FF>"
+	Type "<213>"
+	Type "<214>"
+	Type "<NL>"
+	Repeat 377-216,.Iot TTYo,T
+	Type "<377>"
+
+LM2Asc:	Repeat 10,Noop		;0 through 7, leave alone
+	Repeat 3,Call Quote
+	Noop			;^M stays as uparrow
+	Repeat 2,Call Quote
+	Repeat 177-16,Noop
+	Repeat 11,Call Quote
+	Repeat 3,Trz T,200
+	Call Quote
+	Trz T,200
+	Call [Movei T,^M
+	      Call Redout
+	      Movei T,^J
+	      Return]
+	Repeat 377-216,Call Quote
+	SKIPA
+
+Asc2LM:	Repeat 10,Noop
+	Repeat 3,Tro T,200
+	Noop
+	Tro T,200
+	Call [Call Ascin
+		Jrst AscEOF
+	      Movei T,.CHNL
+	      Return]
+	Repeat 177-16,Noop
+	Call [Call Ascin
+		Jrst AscEOF
+	      Xct AscQ(T)
+	      Return]
+
+AscQ:	Repeat 10,Tro T,200
+	Repeat 3,Noop
+	Tro T,200
+	Repeat 2,Noop
+	Repeat 177-16,Tro B,200
+	Noop
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	User interface
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+6Typer:	Setz TT,
+	Rotc T,6
+	Addi TT,40
+	.Iot TTYo,TT
+	Jumpn T,6Typer
+	Return
+
+ATyper:	Hrli A,440700
+AT1:	Ildb T,A
+	Jumpe T,CPopj
+	.Iot TTYo,T
+	Jrst AT1
+
+pZoom:	Move A,NBytes
+	IMul A,BytSiz
+	Move B,Time
+IFN KLp,FLTR B,B	;Float
+.ELSE	FSC B,233
+	FDVR B,[60.0]	;Seconds in B
+	Move C,A
+IFN KLp,FLTR C,C
+.ELSE	FSC C,233
+	FDVR C,B
+	FDVR C,[1000.0]
+	EType "%1D bits in %2F seconds = %3F KBaud"
+pZoom1:	Skipn Yow
+	  Return
+	Movsi T,-nCats
+	Caml C,Lower(T)
+	  Aobjn T,.-1
+	Move A,Cats-1(T)
+	EType " [%1S]î"
+
+pZoom2:	Syscal OPEN,[%Clbit,,.uii
+		     %Climm,,YOWi
+		     [Sixbit /DSK/]
+		     [Sixbit /YOW/]
+		     [Sixbit /BIN/]
+		     [Sixbit /GREN/]]
+	  Jrst [EType "No YOW database?  %Eî"
+		Return]
+	Movsi T,-1
+	Syscal CORBLK,[%Climm,,%CBNDW\%CBNDR
+		       %Climm,,%JSelf
+		       %Climm,,YOWpage
+		       %Climm,,YOWi
+		       T]
+	  Jrst [EType "Can't map in YOW databse?  %Eî"
+		.Close YOWi,
+		Return]
+	Setz A,
+pZoom3:	Caml C,Yowloc+Y$BAUD(A)
+	  Jrst pZoom4
+	Addi A,LYOW
+	Caig A,NYOW*LYOW
+	  Jrst pZoom3
+	.Close YOWi,
+	Type "Sorry, but you don't place."
+	Return
+
+pZoom4:	Move D,A
+	IDivi D,LYOW
+	Aoj D,			;This rating.
+	Caml D,Place
+	  Movem D,Place		;Only update if this rating is better.
+	EType "
+Congradulations!!  You just placed #%4D in our all-time transfers!î"
+	Cail A,NYOW
+	  Jrst pZoom5		;Last place, nobody scrolls off.
+	Hrroi E,-NYOW(D)	;NYOW - (D) = #blocks to scroll,
+	Imuli E,-LYOW		;is number of words.
+	Hrli E,40000(E)		;400000+#words,,0
+	Hrri E,LYOW*<NYOW-1>+YOWLoc-1
+; Foop
+	Pop E,LYOW(E)
+	Jumpl E,.-1
+
+pZoom5:	Move Q,A
+	Call DATIME"TIMGET
+	Movem A,Yowloc+Y$WHEN(Q)
+	Tlnn F,(F%SEND)
+	  Jrst [Move T,HostN		;Getting: From them, to us.
+		Movem T,Yowloc+Y$FROM(Q)
+		Move T,OurNum
+		Movem T,Yowloc+Y$TO(Q)
+		Jrst pZoomm]
+	Move T,OurNum			;Sending: From us, to them.
+	Movem T,Yowloc+Y$FROM(Q)
+	Move T,HostN
+	Movem T,Yowloc+Y$TO(Q)
+pZoomm:	Move T,NBytes
+	IMul T,BytSiz
+	Movem T,Yowloc+Y$BITS(Q)
+	Movem C,Yowloc+Y$BAUD(Q)
+	Move T,Uname
+	Movem T,Yowloc+Y$UNAME(Q)
+	Setz B,
+	Caile D,10.
+	  Jrst pZoom7
+	Type "
+-----
+Please enter your initials: "
+	Move A,[440700,,B]
+	Movei TT,3		;Get 3 characters.
+pZoom6:	.Iot TTYi,T
+	Cail T,"a
+	  Trz T,40		;lc -> UC
+	Cail T,"A
+	  Caile T,"Z
+	    Jrst pZoom6		;Only letters, please.
+	Idpb T,A
+	.Iot TTYo,T		;Save and echo.
+	Sojn TT,pZoom6
+	Type "
+-----
+"
+pZoom7:	Movem B,Yowloc+Y$TAG(Q)
+	.Close YOWi,
+	Type "You have been saved in the database.î"
+	Return
+
+
+gOFile:	Movei A,OFile
+	Call gITStr
+	  Skipa
+	    Jrst Popj1
+	Movei A,[Asciz /Old filename: /]
+gOF1:	Movei I,OFile
+	Call gLine
+	  Return
+	Tro F,F%EOL
+	Jrst Popj1
+
+gFFile:	Movei A,OFile
+	Call gITStr
+	  Skipa
+	    Jrst Popj1
+	Tlne F,(F%SEND)
+	  Jrst [Movei A,DFile
+		Skipe DFile
+		  EType /[Default is "%1S"]/
+		Jrst .+1]
+	Movei A,[Asciz /Foreign filename: /]
+	Movei I,OFile
+	Call gLine
+	  Return
+	Tro F,F%EOL
+	Jrst Popj1
+
+FdFalt:	Skipa B,[440700,,OFile]
+LdFalt:	  Move B,[440700,,NFile]
+	Move A,[440700,,DFile]
+FdF1:	Ildb T,A
+	Idpb T,B
+	Jumpn T,FdF1
+	Return
+
+gNFile:	Movei A,NFile
+	Call gITStr
+	  Skipa
+	    Jrst Popj1
+	Movei A,[Asciz /New filename: /]
+gNF1:	Movei I,NFile
+	Call gLine
+	  Return
+	Jrst Popj1
+
+gLFile:	Movei A,NFile
+	Call gStr0
+	  Skipa
+	    Jrst gLF1
+	Movei A,DDev
+	Tlnn F,(F%SEND)
+	  EType /[Default is "%1L"]/
+	Movei A,[Asciz /Local filename: /]
+	Movei I,NFile
+	Call gLine
+	  Jrst [Tlnn F,(F%SEND)
+		  Aos (P)
+		Return]
+	Tro F,F%EOL
+gLF1:	Movei A,NFile
+	Movei B,Device
+	Call LParse
+	Jrst Popj1
+
+Merge:
+IRP default,,[DDev,DDir,DFN1,DFN2]final,,[Device,Direct,FN1,FN2]
+	Move T,default
+	Skipn final
+	  Movem T,final
+TERMIN
+	Move T,Device
+	Movem T,TemDev
+	Move T,Direct
+	Movem T,TemSna
+	Return
+
+
+gUser:	Movei A,User
+	Call gString
+	  Skipa
+	    Jrst Popj1
+gUser1:	Movei A,[Asciz /Username: /]
+	Movei I,User
+	Call gLine
+	  Return
+	Tro F,F%EOL
+	Jrst Popj1
+
+
+gPass1:	Setzm Pass
+	Movei A,Pass
+	Call gString
+	  Noop
+	Return
+
+
+gPass2:	Movei A,[Asciz /Password: /]
+	Tlo F,(F%NOEK)
+	Movei I,Pass
+	Call gLine
+	  Jrst .+3
+	Tro F,F%EOL
+	Aos (P)
+	Tlz F,(F%NOEK)
+	Return
+
+
+gDir:	Setzm Dirnam
+	Movei A,Dirnam
+	Call gString
+	  Skipa
+	    Jrst Popj1
+	Movei A,[Asciz /Directory: /]
+	Movei I,Dirnam
+	Call gLine
+	  Return
+	Tro F,F%EOL
+	Jrst Popj1
+
+
+;;;
+;;;	GLINE:  Grab a line from the TTY into CMDBUF.  Handles <rubout>,
+;;;		^W (delete word), ^R (re-type line), and ^U (delete line).
+;;;		Skips if there was any input (which is Ascizized)
+;;;
+
+
+gLine:	Hrli I,440700
+	Movem I,gLinBP
+	Movem A,gPrompt
+	Setz B,
+	Trz F,F%EOL
+
+tProm:	.Iot TTYo,[^P]
+	.Iot TTYo,["A]
+	LType gPrompt
+
+tText:	Jumpe B,gChar
+	Tlne F,(F%NOEK)
+	  Jrst gChar
+	Move A,gLinBP
+	Move TT,B
+tT1:	Ildb T,A
+	.Iot TTYo,T
+	Sojn TT,tT1
+
+gChar:	.Iot TTYi,T
+	Cain T,^M
+	  Jrst gLined
+	Cain T,177
+	  Jrst [Jumpe B,Beep
+		Call R$U$B
+		Jrst gChar]
+	Cain T,^L
+	  Jrst [.Iot TTYo,[^P]
+		.Iot TTYo,["C]
+		Jrst tProm]
+	Cain T,^W
+	  Jrst Ctrl$W
+	Cain T,^R
+	  Jrst [Call Cline
+		Jrst tProm]
+	Caie T,^D
+	  Cain T,^U
+	    Jrst [Call CLine
+		  Setz B,
+		  Move I,gLinBP
+		  Jrst tProm]
+	Caie T,^V		;Quoting characters locally and on
+	  Cain T,^Q		;TENEX/TWENEX
+	    Jrst dChar
+	Caige T,40
+	  Jrst Beep			;Don't like random control chars
+dChar:	Idpb T,I			;the same TTYSTx group!!
+	Tlnn F,(F%NOEK)
+	  .Iot TTYo,T
+	Aoja B,gChar
+
+gLined:	.Iot TTYo,T			;Echo that CRLF
+	Setz T,
+	Idpb T,I
+	Move TT,gLinBP
+	Ildb T,TT
+	Caie T,";			;Comment lines.
+	  Cain T,"!
+	    Jrst [Setz B,
+		  Move I,gLinBP
+		  Jrst tProm]
+	Move J,gLinBP
+	Skipe B
+	  Aos (P)
+	Return
+
+Beep:	.Iot TTYo,[^G]
+	Jrst gChar
+
+Ctrl$W:	Jumpe B,Beep
+	Setzm Alpha
+CW1:	Jumpe B,gChar
+	Ldb T,I
+	Cail T,"a
+	  Trz T,40		;lc -> UC
+	Cail T,"A
+	  Caile T,"Z
+	    Jrst [Skipe Alpha
+		    Jrst gChar
+		  Jrst .+2]
+	Setom Alpha
+	Call R$U$B
+	Jrst CW1
+
+R$U$B:	Ldb T,I
+	Setz TT,
+	Dpb TT,I
+	DBP I
+	Soj B,
+	.Iot TTYo,[^P]
+	.Iot TTYo,["X]
+	Return	
+
+
+CLine:	.Iot TTYo,[^P]	;Goes to leftmost column of the current line
+	.Iot TTYo,["H]	;and does a Clear-EOL.
+	.Iot TTYo,[8.]
+	.Iot TTYo,[^P]
+	.Iot TTYo,["L]
+	Return
+
+;;;
+;;;	SCHAFF: Wades through the input line skipping whitespaces
+;;;		until something interesting is found.  Skip-returns
+;;;		if there is munchable input.
+;;;
+
+sChaff:	Ildb T,J
+	Caie T,40
+	  Cain T,^I
+	    Jrst sChaff
+	Jumpe T,[Tro F,F%EOL
+		 Return]
+	DBP J
+Popj1:	Aos (P)
+CPopj:	Return
+
+;;;
+;;;	GSTRING: Get a string of characters (terminated by <space> or
+;;;		 <eol>) from the input line, store starting at the
+;;;		 address given in A.  Skip-returns if there is a non-
+;;;		 null string.
+;;;
+
+gITStr:	Trne F,F%ITS
+gStr0:	Troa F,F%SPC
+gStrin:	Trz F,F%SPC
+	Trne F,F%EOL
+	  Return		;Can't get a string if nothing there.
+	Call sChaff
+	  Return
+	Hrli A,440700
+	Setz B,
+
+gS1:	Ildb T,J
+	Caie T,^M
+	  Skipn T
+	    Jrst [Tro F,F%EOL
+		  Jrst gS2]
+	Cain T,",
+	  Jrst gS2
+	Cain T,40
+	  Trne F,F%SPC
+	    Skipa
+	      Jrst gS2
+	Idpb T,A
+	Aoja B,gS1
+
+gS2:	Setz T,
+	Idpb T,A
+	Skipe B
+	  Aos (P)
+	Return
+
+;;;
+;;;	GNUMBER: Get a decimal number from the input line.  Skips if there
+;;;		 were some digits ending in <space> or <eol>
+;;;
+
+gNumbe:	Trne F,F%EOL
+	  Return
+	Call sChaff
+	  Return
+	Setzb B,C		;Accumulated number.
+
+gN1:	Ildb T,J
+	Jumpe T,[Tro F,F%EOL
+		 Jrst gN2]
+	Cain T,40
+	  Jrst gS2
+	Cail T,"0
+	  Caile T,"9
+	    Jrst [Type "Non-digit in numeric field"
+		  Return]
+	IMuli B,10.
+	Addi B,-"0(T)
+	Aoja C,gN1
+
+gN2:	Skipe C
+	  Aos (P)
+	Return
+
+TBLUK:	Move J,A
+	Trz F,F%EOL
+	Jrst Parse0
+
+;;;
+;;;	PARSE:  Parse for a command-name.  Takes in H the location of
+;;;		the command-name table.  Skip-returns if there was a
+;;;		unique match, with B having the RH of the table-word.
+;;;		C has the number of matches: C=0 means none, C>1 means
+;;;		the command was ambiguous.
+;;;
+
+Parse:	Trne F,F%EOL
+	  Return
+Parse0:	Call sChaff
+	  Return
+	Movei A,String
+	Call gString
+	  Return
+Parse1:	Movem H,TabTop
+	Setz C,		;Number of matches.
+
+P1:	Skipn (H)
+	  Jrst Check
+	Hlrz A,(H)	;Address of command string...
+	Hrli A,440700
+	Move D,[440700,,String]
+	Call UpCase	;Uppcase the token we're matching.
+
+P2:	Ildb T,D
+	Jumpe T,PWin
+	Cain T,"?
+	  Jrst ShoOpt
+	Ildb TT,A
+	Skipe TT
+	  Came T,TT
+	    Jrst P3
+	Jrst P2
+
+ShoOpt:	Type "Keyword, one of:î"
+	Move B,TabTop
+Shoo0:	Movei D,4
+	Movei E,8.
+Shoo1:	Skipn (B)
+	  Jrst Comand
+	Hlrz A,(B)
+	Hrli A,440700
+	Setz C,
+	.Iot TTYo,[^I]
+	Caige E,8.
+	  .Iot TTYo,[^I]
+Shoo2:	Ildb T,A
+	Jumpe T,Shoo3
+	.Iot TTYo,T
+	Aoja C,Shoo2
+Shoo3:	Soje D,[.Iot TTYo,[^M]
+		Aoja B,Shoo0]
+	Move E,C
+	Aoja B,Shoo1
+
+PWin:	Aoj C,
+	Hrrz B,(H)
+P3:	Aoja H,P1
+
+Check:	Movem C,ErrTyp
+	Cain C,1
+	  Aos (P)
+	Return
+
+
+;;;
+;;;	UPCASE: Uppercase string pointed to by D, in place.
+;;;
+
+UPCASE:	Push P,D
+UpCas0:	Ildb T,D
+	Jumpe T,UpCas1
+	Cail T,"a
+	  Trz T,40
+	Dpb T,D
+	Jrst UpCas0
+UpCas1:	Pop P,D
+	Return
+
+;;
+;;	SXLATE: Translate this filename into an approximation of the
+;;	others machines filespec, for defaulting purposes.
+;;
+
+SXLATE:	Setzm DFile
+	Trne F,F%ITS		;Other machine an ITS?
+	  Jrst [Move A,[440700,,DFile]
+		Move T,Device
+		Call 6TCopy
+		Movei B,":
+		Idpb B,A
+		Move T,SName
+		Call 6TCopy
+		Movei B,";
+		Idpb B,A
+		Move T,FN1
+		Call 6TCopy
+		Movei B,40
+		Idpb B,A
+		Move T,FN2
+		Call 6TCopy
+		Setz B,
+		Idpb B,A
+		Return]
+	Move T,FN2
+	Call Nump		;See if FN2 is a number
+	  Jrst SX0		;  Nope.
+	Skipe DatMod
+	  Jrst [Move T,[444400,,CmdBuf]
+		Movei A,80./5
+		Jrst .+3]
+	Move T,[440700,,CmdBuf]	;Yes, so suck in first 80. characters
+	Movei A,80.		;of the file
+	Syscal SIOT,[%Climm,,DSKi ? T ? A]
+	  Jrst UnkTyp
+	.Access DSKi,[0]	;Set pointer back to top.
+	Skipe DatMod
+	  Jrst [Movei TT,80./5
+		Sub TT,A
+		IMuli TT,5
+		Jrst .+3]
+	Movei TT,80.
+	Sub TT,A		;#Bytes read from file.
+	Move T,[440700,,CmdBuf]	;and have a little look at it.
+	Movei TT,80.
+FndTyp:	Sojl TT,UnkTyp
+	Ildb A,T
+FndTy0:	Caie A,"-		;We're looking for "-*-"
+	  Jrst FndTyp
+	Sojl TT,UnkTyp
+	Ildb A,T
+	Caie A,"*
+	  Jrst FndTy0
+	Sojl TT,UnkTyp
+	Ildb A,T
+	Caie A,"-
+	  Jrst FndTy0
+	Call SkpSpc
+	  Jrst UnkTyp
+	Movem T,TypeBP		;Found it!  Save BP to following text.
+FTypEn:	Sojl TT,UnkTyp		;This is cheating.  Should really look
+	Ildb A,T		;for -*- again.
+	Cain A,":		;Oops, look for TAG:VALUE
+	  Jrst ChkTag		;type construct.
+	Cain A,40
+	  Jrst FndEnd
+	Caie A,";		;Multi-tag things have values ending in ";"
+	  Cain A,"-		;else (ahem) assume this is the - in -*-
+	    Jrst FndEnd
+	 Jrst FTypEn
+
+ChkTag:	Setz A,			;Found a tag, sigh.
+	Dpb A,T
+	Move A,TypeBP		;See if it's MODE:something
+	Move B,[440700,,[Asciz "Mode"]]
+	Call STCMP
+	  Jrst NxtMod		;Nope, look for next tag.
+	Call SkpSpc
+	  Jrst UnkTyp
+Harumf:	Movem T,TypeBP		;save BP to next start-of-type
+	Aoja TT,FTypEn		;and look again
+
+SkpSpc:	Sojl TT,CPopj		;Yep!  Skip past whitespace...
+	Ildb A,T
+	Caie A,^I
+	  Cain A,40
+	    Jrst .-3
+	DBP T
+	Jrst Popj1
+
+NxtMod:	Sojl TT,UnkTyp		;skip ahead to the next mode.
+	Ildb A,T
+	Cain A,"*
+	  Jrst UnkTyp
+	Caie A,";
+	  Jrst NxtMod
+	Call SkpSpc
+	  Jrst UnkTyp
+	Jrst Harumf
+
+FndEnd:	Setz A,			;Write over the terminating byte.
+	Dpb A,T
+	Jrst LukTyp		;and look it up.
+LukTyp:	Move A,TypeBP
+	Movei H,TypTab
+	Call TBLUK
+	  Skipa B,TypeBP
+	    Hrli B,440700
+	Movem B,TypeBP
+	Jrst SX0
+
+UnkTyp:	Move A,[440700,,[Asciz "TXT"]]
+	Movem A,TypeBP
+SX0:	Trne F,F%TNX		;TENEX/TWENEX?
+	  Jrst TNXify
+;	Trne F,F%UNIX
+;	  Jrst [ ...
+;		Call UNIXfy
+;		Return]
+	Return			;Something we don't know about.
+
+Nump:	Setzm Number
+Nump0:	Setz TT,
+	Rotc T,6
+	Cail TT,'0
+	  Caile TT,'9
+	    Return
+	Jumpn T,Nump0
+	Setom Number
+	Jrst Popj1
+
+STCMP:	.Save [T,TT]
+STCMP0:	Ildb T,A
+	Cail T,"a
+	  Trz T,40
+	Ildb TT,B
+	Cail TT,"a
+	  Trz TT,40
+	Came T,TT
+	  Jrst STCMP1
+	Skipn T
+	  Skipe TT
+	    Jrst STCMP0
+	Aos -2(P)
+STCMP1:	.Rest [TT,T]
+	Return
+
+;;;
+;;;	ITSIFY: Parse the foreign filespec (if twenex) and turn
+;;;		it into a ITS-style one, in DFILE.  AC A has BP
+;;;		to file to be translated.
+;;;
+
+ITSify:	Setzm Device		;Always look here
+	Setzm Direct
+	Setzm FN1
+	Setzm FN2
+	Trnn F,F%ITS
+	  Jrst TNXp
+	Movei B,DDev
+	Jrst LParse
+
+TNXp:	Trnn F,F%TNX
+	  Jrst Dunno
+	Tlz F,(F%RIGHT\F%LEFT)
+	Setz TT,
+	Move B,[440700,,DFile]
+	Movem B,StDev'
+
+TNX1:	Ildb T,A
+	Caie T,"[
+	  Cain T,"<
+	    Jrst [Tlo F,(F%LEFT)
+		  JRST TNX1]
+	Caie T,">
+	  Cain T,"]
+	    Jrst [Tlo F,(F%RIGHT)
+		  Movei T,";
+		  Jrst TNX2]
+	Cain T,".
+	  Jrst [Tlne F,(F%LEFT)
+		  Tlne F,(F%RIGHT)
+		    Skipa
+		      Jrst [Move B,StDev
+			    Jrst TNX1]
+		Jumpn TT,[Setz T,
+			  Jrst TNX2]
+		Movei T,40
+		Aoja TT,TNX2]
+TNX2:	Idpb T,B
+	Cain T,":
+	  Movem B,StDev
+	Jumpn T,TNX1
+	Movei A,DFile
+	Movei B,DDev
+	Jrst LParse
+
+IFN 0,[
+VAXp:	Trnn F,F%VAX
+	  Jrst UNIXp
+;
+;	eventually
+;
+	Return
+
+UNIXp:	Trnn F,F%UNIX
+	  Return
+;
+;	more eventually
+;
+	Return
+];Vax, Unix, etc
+
+Dunno:	Move T,XUNAME
+	Movem T,DFN1
+	Movsi T,(Sixbit ">")
+	Movem T,DFN2
+Dunno0:	Movsi T,(Sixbit "DSK")
+	Movem T,DDev
+	Move T,SNAME
+	Movem T,DDir
+	Return
+
+;;;
+;;;	TNXIFY: Turn an ITS-filespec into a TNX one.
+;;;
+
+TNXify:	Move A,[440700,,DFile]
+	Skipe T,Device
+	  Jrst [Call 6TCopy
+		Movei B,":
+		Idpb B,A
+		Jrst .+1]
+	Skipe T,Direct
+	  Jrst [Movei B,"[
+		Idpb B,A
+		Call 6TCopy
+		Movei B,"]
+		Idpb B,A
+		Jrst .+1]
+	Skipe T,FN1
+	  Jrst [Call 6TCopy
+		Movei B,".
+		Idpb B,A
+		Jrst .+1]
+	Skipe T,FN2
+	  Jrst [Skipe Number
+		  Call CpyTyp
+		Call 6TCopy
+		Jrst .+1]
+	Setz B,
+	Idpb B,A
+	Return
+
+CpyTyp:	Move T,TypeBP
+	Ildb B,T
+	Jumpe B,[Movei B,".
+		 Idpb B,A
+		 Move T,FN2
+		 Return]
+	Idpb B,A
+	Jrst CpyTyp+1
+
+6TCopy:	Movei B,^V
+7TCopy:	Setz TT,
+	Rotc T,6
+	Addi TT,40
+	Caie TT,40
+	  Cain TT,":
+	    Idpb B,A
+	Caie TT,".
+	  Cain TT,";
+	    Idpb B,A
+	Idpb TT,A
+	Jumpn T,7TCopy
+	Return
+
+;;;
+;;;	WILDP: See if the ITS filespec has some wildcards.
+;;;
+
+WILDP:	Setz A,
+	Move C,[440600,,FN1]
+	Call Wild1
+	Move C,[440600,,FN2]
+	Call Wild1
+	Skipe A
+	  Aos (P)
+	Return
+
+Wild1:	Ildb T,C
+	Cain T,'*
+	  Aoja A,CPopj
+	Tlne C,770000
+	  Jrst Wild1
+	Return
+
+;;;
+;;;	LPARSE: Parse (A) and turn into DEVICE/DIRECT/FN1/FN2 (B)
+;;;
+
+LParse:	Tlz F,(F%FN1\F%QUOTE)
+	Setzm (B)
+	Setzm 1(B)
+	Setzm 2(B)
+	Setzm 3(B)
+	Tlnn A,-1
+	  Hrli A,440700
+LP0:	Move C,[440600,,D]
+	Setz D,
+LP1:	Ildb T,A
+	Jumpe T,LP3
+	Tlne F,(F%QUOTE)
+	  Jrst [Tlz F,(F%QUOTE)
+		Jrst LP1a]
+	Cain T,^Q
+	  Jrst [Tlo F,(F%QUOTE)
+		Jrst LP1]
+	Cain T,":
+	  Jrst SavDev
+	Cain T,";
+	  Jrst [Jumpe D,LP1
+		Movem D,1(B)
+		Jrst LP0]
+	Cain T,40
+	  Jrst LP2
+LP1a:	Tlnn C,770000
+	  Jrst LP1
+	Cail T,"a
+	  Trz T,40
+	Subi T,40
+	Idpb T,C
+	Jrst LP1
+
+SavDev:	Jumpe D,LP1
+	Trne F,F%TNX
+	  Jrst [Camn D,[Sixbit "PS"]
+		  Movsi D,(Sixbit "DSK")
+		Came D,[Sixbit "OZ"]
+		  Camn D,[Sixbit "EE"]
+		    Movsi D,(Sixbit "DSK")
+		Came D,[Sixbit "XX"]
+		  Camn D,[Sixbit "SPEECH"]	;Is this right for Speech?
+		    Movsi D,(Sixbit "DSK")
+		Jrst .+1]
+	Trne F,F%ITS
+	  Jrst [Came D,[Sixbit "AI"]
+		  Camn D,[Sixbit "MC"]
+		    Movsi D,(Sixbit "DSK")
+		Jrst .+1]
+	Movem D,0(B)
+	Jrst LP0
+
+LP2:	Jumpe D,LP1
+	Skipa
+LP3:	  Jumpe D,CPopj
+	Movei TT,2(B)
+	Tlne F,(F%FN1)
+	  Movei TT,3(B)
+	Movem D,(TT)
+	Tlo F,(F%FN1)
+	Skipe T
+	  Jrst LP0
+	Return
+
+PutChr:	.Iot TTYo,T
+	Return
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	UUOs
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+ULTYP:	Move A,(A)
+UATYP:	Hrli A,440700
+UA1:	Ildb C,A
+	Jumpe C,CPopj
+	.Iot TTYo,C
+	Jrst UA1
+
+UFTYP:	Hrli A,440700
+	Move B,A
+	Ldb C,[220400,,40]
+	Setz D,
+UF1:	Ildb E,B
+	Skipe E
+	  Aoja D,UF1
+	Sub C,D
+UF2:	Sojl C,UA1
+	.Iot TTYo,[" ]
+	Jrst UF2
+
+U6TYP:	Move A,(A)
+U61:	Setz B,
+	Rotc A,6
+	Addi B,40
+	Caie B,40
+	  Cain B,";
+	    .Iot TTYo,[^Q]
+	Cain B,":
+	  .Iot TTYo,[^Q]
+	.Iot TTYo,B
+	Jumpn A,U61
+	Jrst CPopj
+
+UBST:	Move Q,[440800,,ComBuf]
+	Movei B,"T
+	Idpb B,Q
+	Aos B,TranID
+	Call UBN0
+	Movei B,40
+	Idpb B,Q
+UBTEX:	Hrli A,440700
+UBST3:	Ildb B,A
+	Jumpe B,CPopj
+	Idpb B,Q
+	Jrst UBST3
+
+
+UBNUM:	Move B,(A)
+UBN0:	Setz D,
+UBN1:	IDivi B,10.
+	Save C
+	Aoj D,
+	Jumpn B,UBN1
+UBN2:	Rest C
+	Addi C,"0
+	Idpb C,Q
+	Sojn D,UBN2
+	Return
+
+;;;
+;;;	GP typeout macro.  Types a string on the terminal, with
+;;;	special functions turned on with "%":
+;;;
+;;;	%nS	Print the ASCIZ string at (ACn)
+;;;	%nD	Print ACn as decimal
+;;;	%nO	Print ACn as octal
+;;;	%nF	Print ACn as a floating-point number
+;;;	%n'	Print ANc as a sixbit word
+;;;	%nL	Print ITS filespec starting at (ACn), Dev/Dir/FN1/FN2.
+;;;		Knows not to print extra stuff for TTY device.
+;;;	%M	Print remainder of control packet (usually an error code)
+;;;	%E	Print last ITS error message (.BCHNL)
+;;;
+
+UETYP:	Move U,A
+	Hrli U,440700
+UE1:	Ildb B,U
+	Jumpe B,CPopj
+	Caie B,"%
+	  Jrst [.Iot TTYo,B
+		Jrst UE1]
+	Setz B,
+UEAN:	Ildb A,U
+	Cail A,"0
+	  Caile A,"7
+	    Jrst [Move C,A
+		  Cail C,"a
+		    Trz C,40
+		  Jrst UE2]
+	Lsh B,3
+	Addi B,-"0(A)
+	Jrst UEAN
+
+UE2:	Caie C,"S		;String output.
+	  Jrst UE3
+	Move D,ACsave(B)
+	Jumpe D,UE1
+	Tlnn D,-1
+	  Hrli D,440700
+UES1:	Ildb B,D
+	Jumpe B,UE1
+	.Iot TTYo,B
+	Jrst UES1
+
+UE3:	Caie C,"D		;Decimal output.
+	  Jrst UE4
+	Movei E,10.
+UERAD:	Movem E,Base
+	Move B,ACsave(B)
+	Setz D,
+UED1:	IDiv B,Base
+	Push P,C
+	Aoj D,
+	Jumpn B,UED1
+UED2:	Rest B
+	Addi B,"0
+	.Iot TTYo,B
+	Sojn D,UED2
+	Jrst UE1
+
+UE4:	Caie C,"O
+	  Jrst UE5
+	Movei E,8.
+	Jrst UERAD
+
+UE5:	Caie C,"F		;Floating-point output.
+	  Jrst UE6
+	Move A,ACsave(B)
+	Call UEF0
+	Jrst UE1
+
+UEF0:	Jumpg A,UEF1
+	Jumpe A,UEF2
+	Movns A
+	.Iot TTYo,["-]
+	Tlze A,400000
+	  Jrst UEF2
+
+UEF1:	Setz B,
+	Tlnn A,400
+	  .Iot TTYo,["#]	;Not normalized.
+	Camge A,FT01
+	  Jrst UEF4
+	Caml A,FT8
+	  Aoja B,UEF4
+
+UEF2:	Setzb C,Tem1
+	Muli A,400
+	Ashc B,-243(A)
+	Move A,B
+	Call UEF5
+	.Iot TTYo,[".]
+	Movni A,10
+	Add A,Tem1
+	Move T,C
+UEF3:	Move D,T
+	Muli D,10.
+	Addi D,"0
+	.Iot TTYo,D
+	Skipe T
+	  Aojl A,UEF3
+	Return
+
+UEF4:	Movni C,6
+	Setz T3,
+UEF4A:	Addi T3,1(T3)
+	Xct FCP(B)
+	Sosa T3
+	  Fmpr A,@FCP+1(B)
+	Aojn C,UEF4A
+	Save EXPSGN(B)
+	Call UEF2
+	.Iot TTYo,["E]
+	Rest D
+	.Iot TTYo,D
+	Move A,T3
+
+UEF5:	Skipe A
+	  Aos Tem1
+	IDivi A,10.
+	Hrlm B,(P)
+	Jumpe A,UEF5A
+	Call UEF5
+
+UEF5A:	Hlrz D,(P)
+	Addi D,"0
+	.Iot TTYo,D
+	Return
+
+UE6:	Caie C,"M
+	  Jrst UE7
+	Move A,RespBP
+	Move B,RespNB
+UE6A:	Sojl B,CPopj
+	Ildb T,A
+	.Iot TTYo,T
+	Jrst UE6A
+
+UE7:	Caie C,"E
+	  Jrst UE8
+	Syscal OPEN,[%Clbit,,.uai
+		     %Climm,,ERRi
+		     [Sixbit /ERR/]
+		     %Climm,,1]
+	  Return
+UE7A:	.Iot ERRi,T
+	Caige T,40
+	  Jrst [.Close ERRi,
+		.Iot TTYo,[^M]
+		Return]
+	.Iot TTYo,T
+	Jrst UE7A
+
+UE8:	Caie C,"L
+	  Jrst UE9
+	Save A
+	Move D,ACSave(B)
+	Move A,0(D)
+	Call U61
+	.Iot TTYo,[":]
+	Trne F,F%TYPE
+	  Jrst UE8A
+	Move A,1(D)
+	Call U61
+	.Iot TTYo,[";]
+	Move A,2(D)
+	Call U61
+	.Iot TTYo,[" ]
+	Move A,3(D)
+	Call U61
+UE8A:	Rest A
+	Jrst UE1
+
+UE9:	Caie C,"'
+	  Jrst UE10
+	Move A,ACSave(B)
+	Call U61
+	Jrst UE1
+
+UE10:	.Iot TTYo,["%]
+	.Iot TTYo,C
+	Jrst UE1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;;
+;;	Interrupt level routines
+;;
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+TTYint:	Save T
+	Movei T,TTYi
+	.ITYIC T,
+	  Jrst Disms1
+	Cain T,^P
+	  Jrst pStats
+	Caie T,^S
+	  Cain T,^G
+	    Skipa
+	   Jrst Disms1
+	Type "îAborting...î"
+	Call TTYoff
+
+Abort:	Trnn F,F%SEND
+	  Jrst Abort1
+	.Close DSKi,		;Abort sending of local file.  Close it,
+	Call DatEOF
+	Call DELEWO		;reset flags and go back to command...
+	Call ClsOFI
+	Jrst Dismis
+
+Abort1:	Syscal DELEWO,[oChan]		;Abort reception of foreign
+	  Noop				;file:  Close and delete the
+Abort2:	Syscal CLOSE,[oChan]		;local copy...
+	  .Lose %lsSys
+	Call ClsIFI
+IFN 0,[
+	Skipe Debug
+	  Type "<D> Waiting for synchronous markî"
+Abort3:	Inhale cDATAi
+	  Jrst PktErr
+	Ldb T,[$CPKOP Packet]
+	Caie T,%coSYN
+	  Jrst Abort3
+];IFN 0
+
+Dismis:	Rest T				;Clean stack...
+	Syscal TTYFLS,[%Clbit,,0
+		       %Climm,,TTYi]
+	  Noop
+	Syscal DISMIS,[P ? %Climm,,Comand]
+	  .Lose
+
+
+pStats:	.SAVE [A,B,C]			;^P while you are in a transfer
+	Move A,NBytes			;gives us the stats...
+	IMul A,BytSiz
+	Move B,A
+	IMuli B,100.
+	IDiv B,NBits
+	EType "[%1D bits = %2D%]î"
+	.REST [C,B,A]
+	Jrst Disms1
+
+More:	Type "--More--"
+	Save T
+	.Iot TTYi,T
+	Caie T,40
+	  Jrst [Type "Flushingî"
+		Jrst Abort2]
+	.Iot TTYo,[^M]
+Disms1:	Rest T
+	Syscal TTYFLS,[%Clbit,,0
+		       %Climm,,TTYi]
+	  Noop
+	Syscal DISMIS,[P]
+	  .Lose
+
+IOCerr:	Type "îYow!  Something is seriously wrong!  IOC error!!...
+Closing everything...  turning off all flags...  flushing world.îî"
+	Trz F,F%DAT\F%CTL\F%LOG\F%IFI\F%OFI
+	.Close cDATAi,
+	.Close cDATAo,				;reset EVERYTHING
+	.Close CHAOSi,
+	.Close CHAOSo,
+	.Close DSKi,				;Just in case, close
+	Syscal DELEWO,[oChan]			;anything that might
+	  Skipa					;be open...
+	Syscal CLOSE,[oChan]
+	  Noop
+	Syscal DISMIS,[P ? %Climm,,Unwind]
+	  .Lose %lsSys
+
+BinBuf:	Block Buflen
+
+Variables
+Constants
+
+YOWpag==<._-12>+1
+	LOC YOWpag*2000
+YOWloc:	0
+	Block 1777
+
+Expunge .kark.,.gack.
+
+
+	End Begin
