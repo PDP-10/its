@@ -1,0 +1,3782 @@
+; -*- Midas -*-
+
+TITLE FIND -- directory search program  PDL (3/12/76)
+
+.MLLIT=1
+
+; ================================================================
+;		ac definitions
+; ================================================================
+
+A=1
+B=2
+C=3
+D=4
+E=5
+F=6
+G=7
+
+TP=7	; pointer to searching data buffer
+UP=10	; pdl pointer to three-word device blocks
+FP=11	; pdl pointer to search blocks
+DP=12	; pdl pointer to two-word directory blocks
+PP=13	; pdl pointer to parsing stack
+
+H=10
+I=11
+J=12
+K=13
+L=14	; only for super-temp uses under these names
+M=15	; only for super-temp uses
+
+ALT=14	; copy from DIR, use to hack world, then copy back
+DIR=16	; aobjn pointer to dir vector
+P=17	; PDL pointer
+
+; ================================================================
+;		channels
+; ================================================================
+
+TYIC==1	; tty input
+TYOC==2	; tty output
+IC==3
+ERR==4
+DSKBI==5
+MFDBI==6
+
+; ================================================================
+;		flags
+; ================================================================
+
+%MATCH==400000	; means not a match
+%FOUND==200000	; means already looked at
+%NATCH==100000	; saved matches from previous try
+
+; ================================================================
+;		its file system definitions
+; ================================================================
+
+.INSRT SYSTEM;FSDEFS >
+
+; ================================================================
+;		variables
+; ================================================================
+
+PDL:	BLOCK 101.		; PDL
+UPDL:	BLOCK 52.
+TPDL:	BLOCK 201
+FPDL:	BLOCK 51.
+DPDL:	BLOCK 1001.
+
+LNKBUF:	BLOCK 3			; link file cons'ed up here
+
+BUFFER:	BLOCK 2000		; printing buffer for :COMB
+
+DIRBUF:	BLOCK 2000		; directory lives here
+DIRVCT:	BLOCK 200.		; directory vector lives here
+
+MFDBUF:	BLOCK 2000.
+MFDVCT:	BLOCK 500.
+MFDSAV:	0			; cptr to mfd entries
+
+COMMND:	BLOCK 400
+COMPTR:	0
+
+ERROPN:	SIXBIT /   ERR/ ? 4 ? 0
+STAR:	SIXBIT /*     *           /
+
+DATNOW:	0	; current date in disk format
+
+DIRTMP:	SIXBIT /DSK   .FILE.(DIR) SYSTEM/
+
+FILE:
+DEV:	SIXBIT /DSK/
+NM1:	SIXBIT /_EDIT_/
+NM2:	SIXBIT />/
+SNM:	0			; sname default
+
+; ddt file default
+PDISK:	0
+PFILE:	0	; dev
+	0	; snm
+	0	; nm1
+	0	; nm2
+
+; :COMB file default (for hysterical reasons)
+COMDEF:	SIXBIT /DSK/
+	SIXBIT /PLAN/
+	0
+	'COMBAT
+
+FONE:	SIXBIT /DSK   _EDIT_>     / ? 0
+MONE:	BLOCK 3
+
+FTWO:	BLOCK 4
+MTWO:	BLOCK 2
+
+TTWO:	BLOCK 4
+
+OUTFIL:	SIXBIT /TTY   FIND  OUTPUTFOOBAR/
+OUTMOD:	21
+OUTOPN:	SETZ
+	SIXBIT /OPEN/
+	MOVS OUTMOD
+	MOVEI TYOC
+	OUTFIL
+	OUTFIL+1
+	OUTFIL+2
+	OUTFIL+3
+	SETZB LSTERR
+
+MSNAME:	0
+
+NODEFL:	0	; -1 if shouldn't set filename default
+
+MORLOK:	0	; set in PREXIT to inhibit more interrupt
+
+LCLITS:	0	; pointer to table slot for local its
+DISK:	0	; do it first if its asked for
+
+ITSPDL:	BLOCK 10		; room for expansion....
+ITSPTR:	-<.-ITSPDL>,,ITSPDL-1	; aobjn to its's
+ITSSAV:	-<ITSPTR-ITSPDL>,,ITSPDL
+
+; call block for .call /sstatu/
+
+RDSYST:	SETZ
+	'SSTATU
+	2000,,0
+	2000,,0
+	2000,,0
+	2000,,0
+	2000,,0
+	SETZM LCLITS
+
+QPTR:	0
+TRESRV:	BLOCK 20
+TPKID:	BLOCK 20
+
+DEVTBL:	SIXBIT /TPL/ ? ALLTPL
+	SIXBIT /COM/ ? ALLCOM
+	SIXBIT /SYS/ ? ALLSYS
+	SIXBIT /DSK/ ? ALLDSK
+	SIXBIT /AR*/ ? ALLARC
+	SIXBIT /*/ ? ALLDEV
+	SIXBIT /**/ ? ALLNET
+ITSTBL:	SIXBIT /AI/ ? ALLITS
+	SIXBIT /MC/ ? ALLITS
+	SIXBIT /MX/ ? ALLITS
+MNITSS==:<.-ITSTBL>/2
+MNDEVS==:<.-DEVTBL>/2
+REPEAT 9, 0 ? ALLITS
+MXITSS==:<.-ITSTBL>/2
+
+ITSS:	BLOCK MXITSS		; Table of known ITSs from system
+
+DEVPTR:	-MNDEVS,,DEVTBL
+ITSAOB:	-MNITSS,,ITSTBL
+
+; ================================================================
+;		start up
+; ================================================================
+
+START:	SETOM	SYLCNT'
+	MOVEI	A,DIRBUF
+	MOVEM	A,THEDIR'		; origin of directory buffer
+	MOVE	P,[-100.,,PDL+1]	; set up pdls
+	MOVE	TP,[TPDL-1]
+	MOVE	FP,[FPDL-1]
+	MOVE	DP,[DPDL-1]
+	MOVE	UP,[UPDL-1]
+
+; general useful info collection time...
+	.CALL	RDSYST			; what ITS are we on?
+	 JFCL
+	.CALL	[SETZ ? 'RQDATE ? SETZM DATNOW ]
+	 JFCL				; who cares?
+	HLLZS	DATNOW			; truncate to date
+	.SUSET	[.RSNAM,,MSNAME]	; on start .SNAM==MSNAM
+	MOVE A,[-<MXITSS+1>,,ITSS]	; 1 more than we can handle
+	MOVE B,[SIXBIT /ITSNMS/]
+	.GETSYS A,
+	 JRST START2
+	SKIPL A
+	 .LOSE			; WOW!  Up to our eyebrows in ITSs!
+	MOVNI A,-ITSS(A)
+	HRLZ B,A
+	HRLM A,ITSAOB
+	MOVEI A,MNITSS-MNDEVS(A)
+	HRLM A,DEVPTR
+	MOVEI A,ITSTBL
+START1:	MOVE C,ITSS(B)
+	MOVEM C,(A)
+	MOVEI A,2(A)
+	AOBJN B,START1
+START2:
+
+; open ttys and set up tty interrupt
+	.OPEN	TYIC,[SIXBIT /   TTYFIND  INPUT /]
+	 .VALUE	[ASCIZ /:CAN'T OPEN TTY/]
+	.CALL	OUTOPN
+	 .VALUE	[ASCIZ /:CAN'T OPEN TTY/]
+; set up TTY interrupt
+	.CALL	[SETZ
+		'TTYGET
+		1000,,TYIC
+		2000,,A
+		402000,,B]
+	.VALUE	[ASCIZ /:CANT GET CONSOLE TYPE/]
+; make only ^G and ^S interrupt
+	MOVE	0,[SIXBIT / !!!!!/]
+	ANDCAM	0,A
+	MOVE	0,[SIXBIT / !!!!!/]
+	ANDCAM	0,B
+	.CALL	[SETZ
+		'TTYSET
+		1000,,TYIC
+		A
+		400000,,B]
+	 .VALUE	[ASCIZ /:CANT SET CONSOLE TYPE/]
+
+; enable cretinous moreage
+	.CALL	[SETZ
+		 'TTYGET
+		 MOVEI TYOC
+		 MOVEM A
+		 MOVEM B
+		 MOVEM C
+		 SETZB LSTERR']
+	 .VALUE	[ASCIZ /:CANT GET CONSOLE TYPE/]
+	TLZ	C,%TSMOR
+	.CALL	[SETZ
+		 'TTYSET
+		 MOVEI TYOC
+		 A
+		 B
+		 C
+		 SETZB LSTERR]
+	 .VALUE	[ASCIZ /:CANT SET CONSOLE TYPE/]
+
+	.SUSET	[.SMASK,,[1]]
+	.SUSET	[.SMSK2,,[<1_TYIC>#<1_TYOC>]]
+
+; ================================================================
+;		read a command line or two
+; ================================================================
+
+; get command line from superior
+	SETOM	LEFTAR'
+	SETZM	LISTF'
+	.SUSET	[.ROPTIO,,A]		; get superiors option word
+	MOVEM	A,OPTION'
+;	TLNN	A,OPTBRK		; OPTBRK can it handle all .BREAK?
+;	 JRST	JCLARG
+; if can handle all breaks, then maybe we should be a :LISTF?
+	.SUSET	[.RXJNAM,,B]
+	CAMN B,[SIXBIT /FDIR/]	;>>
+	  SETOM BRIEFP
+	CAMN	B,[SIXBIT /COMPAR/]
+	 SETOM	CMPFLG'
+	CAME	B,[SIXBIT /LISTF/]
+	 CAMN	B,[SIXBIT /LF/]
+	  SETOM	LISTF
+	CAMN	B,[SIXBIT /LIST/]
+	 SETOM	LISTF
+	CAME	B,[SIXBIT /COMB/]
+	 JRST	.+3
+	  SETOM	CMBFLG'
+	  SETOM	FLPRT
+	SKIPE	LISTF
+	 .BREAK	12,[..RPFILE,,PFILE]	; read DDT print defaults
+
+; has jcl for us?
+JCLARG:	TLNN	A,OPTCMD		; OPTCMD has JCL?
+	 JRST	TTYARG
+	.BREAK	12,[..RJCL,,COMMND]
+	SKIPE	COMMND			; none there?
+	 JRST	CMDIN
+
+; no arg, must get one from tty unless we are :LISTF
+TTYARG:	SKIPE	CMPFLG
+	 JRST	COMRMF			; if :COMPAR, no JCL, then compare MFD
+	SKIPE	LISTF
+	 JRST	SETLF
+	SKIPE	CMBFLG
+	 JRST	SETCOM
+	OASC	[ASCIZ /FIND./]
+	OSIX	[.FNAM2]
+	OASCR	[0]
+
+; here to get and process a line from tty
+QQLOOP:	OASC	[ASCIZ /FIND=/]
+	PUSHJ	P,READ			; read a command line
+	JRST	CRLOOP
+
+CMDIN:	MOVE	A,COMMND
+	SKIPN	CMPFLG
+	 JRST	CRLOOP
+	CAMN	A,[ASCIZ /*î/]
+	 JRST	COMRMF
+
+; here to process command line
+CRLOOP:	MOVE	A,[440700,,COMMND]
+	MOVEM	A,COMPTR
+
+	SKIPE	LEFTAR
+	 PUSHJ	P,FILOUT		; try to find script file spec
+
+	SKIPN	CMPFLG
+	 JRST	CRLOO1
+	MOVE	A,[DIRTMP,,CMPONE]
+	MOVE	B,A
+	BLT	A,3(B)
+	MOVEI	D,CMPONE
+	PUSHJ	P,SCNAME
+	MOVE	A,[DIRTMP,,CMPTWO]
+	BLT	A,3(B)
+	MOVEI	D,CMPTWO
+	PUSHJ	P,SCNAME
+
+CRLOO1:	PUSHJ	P,PARSE			; parser itself
+	 JRST	QQLOOP			; fails to skip if wants more
+
+; here for final cleanup and fall through to actual search
+
+; set up default if necessary and return
+PAREND:	PUSHJ	P,PUSHIT		; if accumulating a file, put it out
+
+; fix up default device
+	CAIE	UP,UPDL-1
+	 JRST	PARST1
+	SKIPN	CMBFLG		; only default this way if not funny jname
+	SKIPE	LISTF
+	 SKIPA
+	  PUSHJ	P,PSHDSK
+	SETZ	B,
+	SKIPE	CMBFLG
+	 MOVE	B,COMDEF
+	SKIPE	LISTF
+	 MOVE	B,PFILE		; default device
+	JUMPE	B,PARST1
+	 PUSHJ	P,DEVICE
+
+PARST1:	SKIPN	LISTF		; default sname for :LISTF
+	 JRST	PARCOM
+	MOVE	B,PFILE+1
+	JRST	PARST3
+
+PARCOM:	SKIPN	CMBFLG		; default sname for :COMB
+	 JRST	PARDEF
+	MOVE	B,COMDEF+3
+
+PARST3:	SETO	E,
+	CAIN	DP,DPDL-1
+	 PUSHJ	P,PSHSNM
+
+; do right thing if no file has been given
+PARDEF:	CAIE	FP,FPDL-1
+	 JRST	PARSET
+; put out default of search all dsk
+	MOVE	A,[SKIPA]
+	SKIPE	CMBFLG
+	 MOVE	A,[PUSHJ P,COMCHK]
+	PUSH	TP,A
+	PUSH	FP,TP
+	PUSH	TP,[SWOR]		; this is an OR operation
+
+; local its is default if no host given
+PARSET:	MOVE	B,ITSPTR
+	SKIPE	(B)
+	 JRST	PARST2
+	AOBJN	B,.-2
+	MOVSI	B,'DSK
+	MOVEM	B,ITSPDL
+
+; fix up right halves of pdl pointers
+PARST2:	HRRI	DP,DPDL			; list of directories
+	HLRZ	DP
+	MOVNS
+	HRL	DP,
+	HRRI	FP,FPDL			; list of searches
+	HLRZ	FP
+	MOVNS
+	HRL	FP,
+	HRRI	UP,UPDL			; list of devices
+	HLRZ	UP
+	MOVNS
+	HRL	UP,		; fix up to make an aobjn ptr
+	JRST	FIND
+
+; set up fake default JCL for LISTF of no arguments
+
+SETCOM:	MOVE	B,COMDEF
+	PUSHJ	P,DEVICE
+	MOVE	B,COMDEF+3
+	SETO	E,
+	PUSHJ	P,PSHSNM
+	JRST	PARDEF
+
+SETLF:	MOVE	B,PFILE
+	PUSHJ	P,DEVICE
+	MOVE	B,PFILE+1
+	SETO	E,
+	PUSHJ	P,PSHSNM
+	JRST	PARDEF		; jump back and hack its default
+
+; ================================================================
+;		read in and search directories
+; ================================================================
+
+FIND:	.CALL	OUTOPN
+	 .VALUE	[ASCIZ /:CANT OPEN OUTPUT FILE/]
+
+	SETZB	F,FILES		; number of files found
+	SETZM	LINKS		; number links found
+	SETZM	BLOCKS		; number blocks found
+
+	MOVE	ITSSAV
+	MOVEM	ITSPTR
+	MOVEM	DP,DPSAVE'	; DP now is used for "found" dirs
+	MOVEM	FP,FPSAVE'
+	MOVEM	UP,UPSAVE'
+
+; here move file compares to front
+	MOVE	E,FPSAVE
+FPSLU1:	MOVEI	D,0
+	MOVE	FP,E
+FPSORT:	MOVE	A,(FP)
+	SKIPN	B,1(FP)
+	 JRST	FPSEND
+	MOVE	C,1(B)
+	CAMN	C,[SWSAVE]
+	 JRST	FPSEND
+	MOVE	C,(B)
+	CAME	C,[PUSHJ P,MSTAR]
+	 JRST	FPSLUP
+	MOVE	C,(A)
+	CAMN	C,[PUSHJ P,MSTAR]	
+	 JRST	FPSLUP
+	MOVEI	D,1	
+	MOVEM	B,(FP)
+	MOVEM	A,1(FP)
+	JRST	FPSORT
+FPSLUP:	AOBJN	FP,FPSORT
+	JUMPN	D,FPSLU1
+
+FPSEND:	ADD	FP,[2,,2]
+	MOVE	E,FP
+	JUMPL	FP,FPSLU1
+
+; maybe we are actually a compare?
+	SKIPE	CMPFLG
+	 JRST	COMPAR
+
+; here for an mfd or so
+	SKIPN	A,LCLITS	; find the local MFD if it is
+	 JRST	NXTMFD		; in the list and do it
+	MOVE	B,ITSPTR
+	CAMN	A,(B)
+	 JRST	NEWMF1
+	AOBJN	B,.-2
+
+NXTMFD:	MOVE	B,ITSPTR	; find the next MFD we haven't done
+NXTMF1:	SKIPE	(B)
+	 JRST	NEWMF1
+	AOBJN	B,NXTMF1
+	JRST	SUMMAR		; go print summary
+
+NEWMF1:	MOVE	A,(B)
+	SETZM	(B)		; zero it
+	PUSHJ	P,GETMFD	; returns DP/ aobjn to dirs
+	 JRST	NXTMFD		; no MFD there!
+	JUMPGE	DP,NXTMFD	; should have some matches
+
+; cretinous job devices log out and clog cretinous system console,
+; so make cretinous thing happy by not overdoing remote searches.
+	CAME	A,LCLITS
+	CAMN	A,[SIXBIT /DSK/]
+	 JRST	FINDLP		; win on local ITS
+	HLRE	A,DP		; how many on foreign host?
+	CAML	A,[-4]		; enough for SYS*; on other ITS
+	 JRST	FINDLP
+	OASCR	[0]
+	OSIX	DISK
+	OASCR	[ASCIZ /: == ANTI-SOCIALLY LARGE SEARCH NOT PERFORMED ==/]
+	JRST	NXTMFD
+
+; now perform search using MFD we got
+FINDLP:	MOVE	B,(UP)
+	CAMN	B,[SIXBIT /DSK/]
+	 MOVE	B,DISK			; normal case	
+	MOVEM	B,FONE
+	MOVE	C,1(UP)
+	MOVEM	C,FONE+1
+	MOVE	C,2(UP)
+	MOVEM	C,FONE+2
+	MOVE	C,(DP)
+	MOVEM	C,FONE+3
+	MOVE	C,3(UP)		; instruction, JFCL except for archives
+; search directory specified in FONE
+	MOVEI	A,FONE
+	PUSHJ	P,SEARCH	; fone set up get dir
+	 JRST	FINEX0
+	 JRST	FINEX1
+
+; here print matches found in this directory
+	SETZ	E,
+; loop through directory looking for files marked as matches
+FINPRT:	MOVE	A,(ALT)
+	TLNN	A,%MATCH+%NATCH
+	 JRST	FINPNX		; this one isn't a match
+
+; first print device and sname found in
+	SKIPN	FLPRT		; always print header if :COMB
+	 JRST	GOTON1
+	OCTLP	"C		; and clear screen too
+	JRST	GOTON2
+GOTON1:	SKIPE	TECFLG
+	 JRST	GOTON3
+	JUMPN	E,PRTFIL	; print its:snm;arc: if haven't yet
+GOTON2:	SKIPE	NOLIST
+	 JRST	PRTFIL		; oh well, just totaling matches
+
+	SKIPN	E,OLDISK'		; previous disk?
+	 JRST	.+3
+	CAME	E,DISK
+	 OASCR	[0]
+
+GOTON3:	PUSH	P,ALT
+	MOVE	E,DISK
+	MOVEM	E,OLDISK
+	SKIPE	TECFLG
+	 JRST	.+3
+	CAMN	E,[SIXBIT /DSK/]
+	 MOVE	E,LCLITS
+	OSIX	E
+	OASCI	":
+	SKIPE	TECFLG
+	 OASCI	11
+	OSIX	FONE+3
+	OASC	[ASCIZ /;/]
+	SKIPE	TECFLG
+	 OASCI	11
+	MOVE	E,1(UP)
+	CAMN	E,[SIXBIT /.FILE./]
+	 JRST	GOTFNY		; check if funny
+	OSIX	1(UP)
+	JRST	DOCOLN
+
+GOTFNY:	MOVE	E,(UP)		; here for funny directory
+	CAMN	E,[SIXBIT /DSK/]
+	 JRST	JSTDSK
+	OSIX	(UP)		; print funny disk-like device
+DOCOLN:	OASCI	":
+	SKIPE	TECFLG
+	 OASCI	11
+JSTDSK:	SKIPN	TECFLG
+	 OASCR	[0]
+	SETO	E,
+	POP	P,ALT
+				; fall through for file names
+; print files found
+PRTFIL:	MOVE	A,1(UP)		; funny device?
+	CAMN	A,[SIXBIT /.FILE./]
+	 MOVE	A,(UP)		; if not, use real one
+	MOVEM	A,PFILE		; default device
+	MOVE	A,FONE+3
+	MOVEM	A,PFILE+1	; default sname
+	ADDI	F,1		; count of files found
+	MOVE	A,(ALT)
+	MOVE	(A)
+	MOVEM	PFILE+2		; default nm1
+	MOVE	1(A)
+	MOVEM	PFILE+3		; default nm2
+	MOVE	DISK
+	MOVEM	PDISK
+	SKIPE	TECFLG
+	 JRST	FINPN1
+	PUSHJ	P,LFPRNT	; print file
+	JRST	FINPNX
+
+FINPN1:	OSIX	UNFN1(A)
+	OASCI	11 
+	OSIX	UNFN2(A)
+	OASCR	[0]
+
+; here to move to next file
+FINPNX:	PUSHJ	P,ANEXT
+	JRST	FINPRT		; loop
+
+; after printing files, move to next device in directory
+FINEX1:	Skipe BriefP	;>>
+	  Jrst [OAscr [0]
+		Setzm BCount
+		Jrst .+1]
+	ADDI	UP,3		; move to next device
+	AOBJN	UP,FINDLP
+
+; after devices exhausted move to next directory
+	MOVE	UP,UPSAVE'	; move to next directory
+	AOBJN	DP,FINDLP
+	JRST	NXTMFD
+
+; here after dir open fails
+FINEX0:	MOVE	1(UP)
+	CAIN	[SIXBIT /.FILE./]
+	 JRST	FINWHY
+	CAIE	A,%ETMLK	; link depth exceeded
+	 CAIN	A,%EBDLK	; link to non-existent file
+	  JRST	FINWAR		; print that archive was a loser
+	CAIE	A,%ENAFL	; file locked
+	 CAIN	A,%ENAPK	; pack not mounted
+	  JRST	FINWAR
+	CAIN	A,%ENSFL	; no such file --  archive types are done via opening
+	 JRST	FINEX1		; the appropriate its file
+FINWHY:	CAIE	A,%ENSDR	; no such directory?
+	 CAIN	A,%ENSDV	; no such device?
+	  JRST	FINEX1
+; print reason for open of directory failing if not one of the "reasonable" reasons.
+	MOVEM	A,ERROPN+2
+	OASCR	[0]
+	OSIX	DISK
+	OASCI	":
+	OSIX	(DP)
+	OASC	[ASCIZ /; == CAN'T READ DIR == /]
+	PUSHJ	P,EXPLAI
+	OASCR	[ASCIZ / ==/]
+	JRST	NXTMFD
+
+; print why archive lost
+FINWAR:	MOVEM	A,ERROPN+2
+	OASCR	[0]
+	OSIX	DISK
+	OASCI	":
+	OSIX	(DP)
+	OASCI	";
+	OSIX	1(UP)
+	OASC	[ASCIZ /: == NOT READABLE == /]
+	PUSHJ	P,EXPLAI
+	OASCR	[ASCIZ / ==/]
+	JRST	FINEX1
+
+; after directories exhausted, print total of files found and quit
+SUMINT:	OASCR	[0]		; come here after interrupt
+
+SUMMAR:	SKIPN	TOTFLG		; come here on normal exit
+	 JRST	EXIT
+	OASC	[ASCIZ /(Found /] ; done, print total found
+	ODEC	FILES'
+	OASC	[ASCIZ / files, /]
+	ODEC	BLOCKS'
+	OASC	[ASCIZ / blocks, /]
+	ODEC	LINKS'
+	OASC	[ASCIZ / links)/]
+
+; here for tasteful exit
+EXIT:	MOVE	A,OPTION
+	TLNN	A,OPTBRK
+	 JRST	DEATH		; none of this works if not OPTBRK
+	MOVE	A,PDISK		; 10/3/80 PDL Sigh, maybe this fixes
+	MOVEM	A,PFILE		;   the DSK: bug?
+	SKIPE	PFILE+1		; only set print defaults if we have
+	 SKIPE	NODEFL		; found at least one file and user
+	  SKIPA			; didn't disable it
+	   .BREAK 12,[..SPFILE,,PFILE]
+
+DEATH:	.LOGOUT			; disowning is fun too
+	.BREAK	16,160000	; quit -- if can't do .break, tough
+	JRST	.-1		; should never happen...
+
+
+; for single directory, loop through searches defined by user
+; A/ ptr to open block
+; C/ inst. to execute
+SEARCH:	MOVE	FP,FPSAVE	; restore search spec
+	PUSHJ	P,GETDIR	; read a u.f.d.
+	 POPJ	P,		; not there?
+	 JRST	SEARCX		; not really an archive, tho looked like one...
+	PUSHJ	P,PRSDIR	; set up aobjn to it
+	MOVE	DIR,ALT
+	JUMPGE	DIR,SEARCX	; nothing in directory?
+
+; set up matching
+SEARL1:	HRRZ	TP,(FP)		; pick up test block pointer
+	PUSHJ	P,MARK		; mark matches
+	AOBJN	FP,SEARL1	; continue for each test
+	AOS	(P)
+SEARCX:	AOS	(P)
+	POPJ	P,
+
+
+; ================================================================
+;		print short info blurb
+; ================================================================
+
+CINFO:	ASCIZ %
+:FIND output_dir;... dev:... file... switch
+
+output -- put file names found here instead of TTY:.
+dir -- any number of directory names, each followed by ;.
+       default is all directories.  * in dir matches any char.
+dev -- any number of disk-like devices, each followed by :.
+       default is DSK:.  AR*: is any archive.  *: is DSK:AR*:.
+file -- any number of file specs separated by space or comma.
+       * in a file name matches any character.
+switch -- any number of legal switches, preceded by / (OR),
+       & (AND), /NOT (NOR), &NOT (NAND).  Some switches are:
+       LINK, DUMPED, CDATE, RDATE, TO (Linked to), REAP, SIZE.
+
+Typing ^S or ^G at any time kills FIND.
+:FIND <you>; and :FIND ; are similar to :LISTF <msname>;.
+
+See .INFO.;FIND INFO for more details.
+%
+
+INFO:	OASCR	CINFO
+	JRST	EXIT
+
+; ================================================================
+;		read a command line
+; ================================================================
+
+; set up buffer
+READ:	PUSH	P,A
+	PUSH	P,B
+	SETZM	COMMND
+	MOVE	[COMMND,,COMMND+1]
+	BLT	0,COMMND+17
+; command reader
+RCMD:	MOVE	B,[440700,,COMMND]
+	MOVEM	B,COMPTR
+	MOVEI	C,0
+RCMD1:	.IOT	TYIC,A
+	CAIN	A,177
+	JRST	RUB
+	CAIN	A,^D
+	JRST	RREPEA
+	CAIN	A,^L
+	JRST	RCLEAR
+	CAIN	A,^J
+	JRST	RCMD1
+	CAIN	A,^Q
+	JRST	RQUOTE
+	CAIN	A,^M
+	JRST	RCMDX
+RCMDL:	IDPB	A,B
+	CAMGE	B,[350700,,COMMND+17]
+	AOJA	C,RCMD1
+
+RCFUL:	IDPB	A,B
+	MOVEI	A,15
+	IDPB	A,B
+
+RCMDX:	IDPB	A,B
+	MOVEI	A,0
+	IDPB	A,B
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+RREPEA:	OASCR	[0]
+	JRST	REPPER
+RCLEAR:	OCTLP	"C
+REPPER:	OASC	[ASCIZ /FIND=/]
+	OASC	COMMND
+	JRST	RCMD1
+
+RQUOTE:	IDPB	A,B
+	CAML	B,[350700,,COMMND+17]
+	JRST	RCFUL
+	SETOM	QUTFLG
+	ADDI	C,1
+	.IOT	TYIC,A
+	SETZM	QUTFLG'
+	JRST	RCMDL
+
+RUB:	PUSHJ	P,RUBBER
+	JRST	RCMD
+	JRST	RCMD1
+
+RUBBER:	SOJL	C,[POPJ P,]	; erasure rubout handler
+	MOVEI	A,0
+	DPB	A,B
+	OCTLP	"X
+	ADD	B,[070000,,]
+	TLNE	B,400000
+	ADD	B,[347777,,-1]
+	AOS	(P)
+	POPJ	P,
+
+; ================================================================
+;		parse a command line
+; ================================================================
+
+PARSE:	PUSHJ	P,FINIT			; initialize file stuff
+
+; read and dispatch on a syllable and its terminator
+PARLUP:	PUSHJ	P,GETSYL		; A/ terminator
+	JUMPN	B,PARFIL		; B/ syllable
+	JUMPE	A,PARLUP		; if syl and term both 0, loop
+	JUMPL	A,PAREND
+
+PARFIL:	JUMPLE	A,FILBEG		; if space, hack it
+	CAIN	A,',
+	 JRST	FILEND
+
+	PUSHJ	P,PUSHIT		; else clean up mess
+
+; dispatch on terminators
+	CAIN	A,';
+	 JRST	FILSNM			; <sname>;  a directory pattern
+	CAIE	A,'&
+	 CAIN	A,'/
+	  JRST	READSW			; /<switch-name> -- this is a kludge
+	CAIN	A,':
+	 JRST	FILDEV			; <foo>:  a device pattern
+	CAIN	A,'+
+	 JRST	PAREND			; .... +  signal for more commands
+	JUMPG	A,SYNERR
+
+	CAIE	A,'+
+	 AOS	(P)
+	POPJ	P,
+
+; ================================================================
+;		individual command handlers
+; ================================================================
+
+; FIND TPL_ -- scripting device
+
+FILOUT:	SETZM	FONE
+	SETZM	FONE+1
+	SETZM	FONE+2
+	SETZM	FONE+3
+	PUSH	P,COMPTR
+	MOVEI	D,FONE
+	PUSHJ	P,SCNAME
+	SETZM	SLASH
+	SETZM	AMPERS
+	SETZM	LEFTAR
+	CAIE	A,'_
+	JRST	FILNOT			; no scripting
+	SKIPN	FONE
+	SKIPE	FONE+1
+	JRST	FILWIN
+	SKIPN	FONE+2
+	SKIPE	FONE+3
+	JRST	FILWIN
+FILNOT:	POP	P,COMPTR
+	SETOM	SYLCNT
+	POPJ	P,
+
+FILWIN:	MOVEI	A,1
+	MOVEM	A,OUTMOD
+	SKIPN	A,FONE
+	 MOVSI	A,(SIXBIT /DSK/)
+	MOVEM	A,OUTFIL
+	SKIPN	A,FONE+1
+	 MOVE	A,[SIXBIT /FIND  /]
+	MOVEM	A,OUTFIL+1
+	SKIPN	A,FONE+2
+	MOVE	A,[SIXBIT /OUTPUT/]
+	MOVEM	A,OUTFIL+2
+	SKIPN	A,FONE+3
+	MOVE	A,MSNAME
+	MOVEM	A,OUTFIL+3
+	POP	P,0
+	POPJ	P,
+
+; FIND AR*:
+; FIND *:
+; FIND DSK:AR2:  -- device search specifications
+
+FILDEV:	PUSHJ	P,DEVICE
+	JRST	PARSE
+
+DEVICE:	MOVE	A,DEVPTR
+FILDLP:	CAMN	B,(A)
+	 JRST	@1(A)
+	ADDI	A,1
+	AOBJN	A,FILDLP
+
+; here for funny AR* pattern
+	MOVE	A,B
+	AND	A,[777700,,0]
+	CAMN	A,[SIXBIT /AR/]
+	 JRST	ONEARC
+
+; here for packs given as devices
+	CAMN	A,[SIXBIT /PK/]
+	 JRST	PKN
+	AND	A,[770000,,0]
+	CAMN	A,[SIXBIT /P/]
+	 JRST	PNN
+
+; here for funny SECOND: THIRD:, etc. junk.
+	SKIPN	QPTR
+	 PUSHJ	P,GETRSR
+	MOVE	A,QPTR
+	CAMN	B,(A)
+	 JRST	SECWIN
+	AOBJN	A,.-2
+
+; here for give up, never heard of this device
+BADDEV:	OASC	[ASCIZ /Never heard of device "/]
+	OSIX	B
+	OASCR	[ASCIZ /:"?  Ignoring it./]
+       	POPJ	P,
+
+PKN:	MOVE	A,B
+	LSH	A,12.
+	JRST	PCKNUM
+PNN:	MOVE	A,B
+	LSH	A,6
+
+PCKNUM:	MOVEI	C,0
+PCKNLP:	MOVEI	0,0
+	LSHC	0,6
+	JUMPE	0,PCKNND
+	CAIL	0,'0
+	 CAILE	0,'9
+	  JRST	BADDEV
+	ANDI	0,17
+	IMULI	C,10.
+	ADD	C,0
+	JRST	PCKNLP
+PCKNND:	MOVE	B,C
+	JRST	SECWI1
+
+; here we have a funny secondary device
+SECWIN:	SUBI	A,TRESRV
+	MOVE	B,TPKID(A)
+SECWI1:	MOVE	A,SWDEV		;SWAND or SWNAND
+	MOVEM	A,SWTYPE
+	JRST	SPACK		;will popj
+
+DSKDEV:	PUSHJ	P,GETSYL
+	CAIE	A,':
+	 JUMPG	A,SYNERR
+	PUSHJ	P,PSHDSK
+	POPJ	P,
+
+ARCDEV:	PUSHJ	P,GETSYL
+	CAIE	A,':
+	 JUMPG	A,SYNERR
+	PUSHJ	P,PSHARC
+	POPJ	P,
+
+DSKDIR:	SIXBIT /DSK/
+	SIXBIT /.FILE./
+	SIXBIT /(DIR)/
+	SKIPA
+
+ARCDIR:	SIXBIT /DSK/
+	SIXBIT /ARC/
+	SIXBIT />/
+	PUSHJ P,ARCFIX
+
+; skip return if this is a new device not already stacked
+DEVDUP:	PUSH	P,B
+	HLRE	B,UP
+	MOVNS	B
+	HRLS	B
+	HRRI	B,UPDL
+	JUMPGE	B,DEVNEW
+DEVDUL:	MOVE	(A)
+	CAME	(B)
+	 JRST	DEVNXT
+	MOVE	1(A)
+	CAME	1(B)
+	 JRST	DEVNXT
+	MOVE	2(A)
+	CAME	2(B)
+	 JRST	DEVNXT
+	MOVE	3(A)
+	CAMN	3(B)
+	 JRST	DEVOLD
+DEVNXT:	ADDI	B,3
+	AOBJN	B,DEVDUL
+
+DEVNEW:	AOS	-1(P)
+DEVOLD:	POP	P,B
+	POPJ	P,
+
+; here to push a dsk device data block
+PSHDSK:	MOVEI	A,DSKDIR
+	PUSHJ	P,DEVDUP
+	 POPJ	P,
+       	PUSH	UP,DSKDIR	; this is ignored now?
+	PUSH	UP,DSKDIR+1
+	PUSH	UP,DSKDIR+2
+	PUSH	UP,DSKDIR+3
+	SUB	UP,[3,,0]
+	POPJ	P,
+
+; here to push an archive device data block (archives must be fixed up)
+PSHARC:	MOVEM	B,ARCDIR+1
+	MOVEI	A,ARCDIR
+	PUSHJ	P,DEVDUP
+	 POPJ	P,
+       	PUSH	UP,ARCDIR
+	PUSH	UP,ARCDIR+1
+	PUSH	UP,ARCDIR+2
+	PUSH	UP,ARCDIR+3
+	SUB	UP,[3,,0]
+	POPJ	P,
+
+ONEARC:	PUSHJ	P,PSHARC		; push a single archive spec
+	POPJ	P,
+
+ALLTPL:	MOVE	B,[SIXBIT /.LPTR./]
+	JRST	ALLSNM
+ALLCOM:	MOVE	B,[SIXBIT /COMMON/]
+	JRST	ALLSNM
+
+ALLSYS:	MOVE	B,[SIXBIT /SYS/]	; SYS: --> SYS; and SYS1; and SYS2;
+	PUSHJ	P,PSHSNM
+	MOVE	B,[SIXBIT /SYS1/]
+	PUSHJ	P,PSHSNM
+	MOVE	B,[SIXBIT /SYS2/]
+	PUSHJ	P,PSHSNM
+	MOVE	B,[SIXBIT /SYS3/]
+
+ALLSNM:	PUSHJ	P,PSHSNM
+	POPJ	P,
+
+PSHITS:	PUSH	P,B
+	MOVE	B,ITSSAV
+	CAMN	A,(B)
+	 JRST	PSHITX
+	AOBJN	B,.-2
+	SKIPL	B,ITSPTR
+	 JRST	PSHITX
+	PUSH	B,A
+	MOVEM	B,ITSPTR
+PSHITX:	POP	P,B
+	POPJ	P,
+
+ALLNET:	PUSH	P,B
+	MOVE	B,ITSAOB
+ALLNT1:	MOVE	A,(B)
+	PUSHJ	P,PSHITS
+	ADDI	B,1
+	AOBJN	B,ALLNT1
+	POP	P,B
+	POPJ	P,
+
+ALLITS:	MOVE	A,B
+ONEITS:	PUSHJ	P,PSHITS
+	POPJ	P,
+
+ALLDSK:	PUSHJ	P,PSHDSK		; push a dsk spec
+	POPJ	P,
+
+ALLDEV:	PUSHJ	P,PSHDSK		; push a dsk spec and all archive specs
+
+ALLARC:	MOVSI	B,(SIXBIT /ARC/)	; push all archive specs
+	PUSHJ	P,PSHARC
+	MOVSI	B,(SIXBIT /AR0/)
+ALLLUP:	PUSHJ	P,PSHARC
+	ADD	B,[1,,0]
+	CAMG	B,[SIXBIT /AR9   /]
+	 JRST	ALLLUP
+	POPJ	P,
+
+; here to push one name of a file spec
+;  B/ file name
+;  E/ mask for file name search
+FILBEG:	JUMPE	A,FILSTO
+	CAMN	B,[SIXBIT /?/]
+	SKIPE	SYLCNT			; initialized to -1
+	JRST	FILSTO
+	JRST	INFO
+FILSTO:	MOVEM	B,(C)
+	MOVEM	E,3(C)
+	AOBJN	C,PARLUP
+
+; finish a file spec we have been accumulating
+FILEND:	MOVEM	B,(C)
+	MOVEM	E,3(C)
+	PUSHJ	P,PUSHER
+	JRST	PARLUP
+
+; pushes a file spec search block if it needs pushing
+PUSHIT:	CAMN	C,[-2,,FONE+1]
+	POPJ	P,
+; pushes a file spec search block
+PUSHER:	PUSH	TP,[PUSHJ P,MSTAR]
+	PUSH	FP,TP
+	PUSH	TP,[SWOR]
+	PUSH	TP,FONE+1
+	PUSH	TP,MONE
+	PUSH	TP,FONE+2
+	PUSH	TP,MONE+1
+FINIT:	MOVE	C,STAR
+	MOVEM	C,FONE+1		; initialize fnms to "*"
+	MOVEM	C,FONE+2
+	MOVE	C,[-2,,FONE+1]		; initialize fnm pointer
+	SETZM	MONE			; which matches anything
+	SETZM	MONE+1
+	POPJ	P,
+
+; FIND FOO; -- pushes an sname search pattern
+
+FILSNM:	JUMPN	B,.+3
+	MOVE	B,MSNAME
+	SETO	E,
+	PUSHJ	P,PSHSNM
+	MOVSI	'DSK
+	SKIPN	LISTF		; if in LISTF,
+	 MOVEM	PFILE		; this clobbers the print defaults
+	JRST	PARSE
+
+PSHSNM:	CAME	E,[-1]		; if starred, dups are flushed during search
+	 JRST	PSHSN1
+; eliminate duplicates in non-starred snames
+	PUSH	P,A
+	MOVE	A,DP
+	HRRI	A,DPDL-1	; wander through names already pushed
+PSHSNL:	CAMN	A,DP		; done?
+	 JRST	PSHSN3		; yes, name is new
+	CAME	B,1(A)		; same?
+	 JRST	PSHSN2		; no, move to next
+	MOVE	2(A)		; same mask?
+	CAME	E		; E/ -1 at this point
+	 JRST	PSHSN2		; star mask, false alarm
+	POP	P,A		; here is duplicate, so just return
+	POPJ	P,
+PSHSN2:	ADDI	A,2		; move to next entry
+	JRST	PSHSNL
+
+PSHSN3:	POP	P,A
+PSHSN1:	PUSH	DP,B		; push an sname search pattern
+	ANDM	E,(DP)
+	PUSH	DP,E
+	SUB	DP,[1,,0]
+	POPJ	P,
+
+; here to process special switches.  these are input as /<switchname>
+; but through the magic of GETSYL are output as <switchname>/.
+; same for &<switch>, of course.
+
+READSW:	CAIN	A,'/
+	MOVE	A,[SWOR]
+	CAIN	A,'&
+	MOVE	A,[SWAND]
+	MOVEM	A,SWTYPE		; / or & -- OR or AND
+	MOVEM	A,SWDEV
+; enters here after not
+READTY:	JUMPE	B,SYNERR		; bad switchname
+	MOVE	C,SWPTR
+SWLOOK:	CAMN	B,(C)			; dispatch on switchname
+	JRST	SWFIND			; got one
+	ADDI	C,1
+	AOBJN	C,SWLOOK
+	JRST	SYNERR
+SWFIND:	XCT	1(C)			; go off to handle switch's
+	JRST	PARSE			; special arguments
+
+SWTYPE:	SWAND		; AND or OR switch?
+SWDEV:	SWAND		; switch for devices
+
+; both default and normal OR
+SWNOR:	TLC	D,%MATCH
+SWOR:	IORM	D,(ALT)
+
+SWEND:	HRLZI	%FOUND
+	IORM	(ALT)
+	POPJ	P,
+
+; normal AND, invokes default if new object
+SWNAND:	TLC	D,%MATCH
+SWAND:	CAMN	FP,FPSAVE		; if first switch is just like or
+	JRST	SWOR
+	MOVE	(ALT)
+	TLNN	%FOUND
+	JRST	SWEND
+	HRRI	D,-1
+	TLO	D,%NATCH		; lets not clobber, hey?
+	ANDM	D,(ALT)
+	JRST	SWEND
+
+; macro defining command table
+DEFINE	COM DIS,NMS
+IRP NM,,[NMS]
+	SIXBIT /!NM!/
+	PUSHJ P,DIS
+TERMIN
+TERMIN
+
+; table of switches
+SWTABL:	SIXBIT /NOT/
+	JRST SWNOT			; special hack to comp switches
+
+	COM SIZEB,[S,SIZE,SIZEB]
+	COM SIZEW,[SIZEW]
+	COM EXTRA,[EXTRA]
+	COM CDATE,[C,CDATE,DATE,CREATE]
+	COM BETWEE,[BTW,BETWEE]
+	COM SINCE,[SINCE]
+	COM BEFORE,[BEFORE]
+	COM ON,[ON]
+	COM CTIME,[T,CTIME,TIME]
+	COM RDATE,[R,RDATE,REF]
+	COM TODAY,[TODAY]
+	COM NEWBIN,[NEW]
+	COM VERSIO,[V,VER,VERSIO]
+	COM LINK,[L,LINK,LINKS]
+	COM LINKTO,[TO]
+	COM DUMPED,[DUMP,DUMPED]
+	COM REAP,[REAP,PROTEC,SAFE]
+	COM AUTHOR,[AUTHOR,AUTH]
+	COM PACK,[PCK,PACK,DRIVE,DR]
+	COM ALLOC,[ALLOCA,ALLOC]
+	COM DELETE,[DELETE,DEL]
+	COM OPENED,[OPEN,OPENED,WRITE]
+	Com Brief,[B,Brief]	;>>
+; special switches that work oddly
+	COM TECO,[TECO]
+	COM WORDS,[W,WORD,WORDS]
+	COM FLOATS,[F,FLOAT,FLOATS]
+	COM TOTALS,[TOTALS,TOTAL,SUM,SUMMAR]
+	COM FLPRNT,[PRINT,PR]
+	COM NOFILE,[NOFILE,NOLIST,NOLF]
+	COM DSKDEV,[DSK,DISK,DEVICE]
+	COM ARCDEV,[ARC,ARCHIV]
+	COM ORFIND,[FIND,OR,ELSE]
+SWPTR:	-<<.-SWTABL>/2>,,SWTABL
+
+
+SWNOT:	CAIN	A,SWOR
+	MOVEI	A,SWNOR
+	CAIN	A,SWAND
+	MOVEI	A,SWNAND
+	MOVEM	A,SWTYPE
+	PUSHJ	P,GETSYL
+	CAIE	A,':
+	 JRST	READTY
+	MOVEI	A,SWNAND
+	MOVEM	A,SWDEV
+	PUSHJ	P,DEVICE
+	JRST	PARSE
+
+; push the details after pushing a test instruction
+; FP points to the test instructions, TP contains them
+; and the data areas they use.
+TPUSH:	PUSH	FP,TP
+	PUSH	TP,SWTYPE
+	POPJ	P,
+
+NOFILE:	SETOM	NOLIST'			; don't print listf lines
+	POPJ	P,
+
+WORDS:	SETOM	WRDFLG'			; print total words in LF lines
+	POPJ	P,
+
+FLOATS:	SETOM	FLTFLG'
+	POPJ	P,
+
+TOTALS:	SETOM	TOTFLG'			; total blocks, links, etc.
+	POPJ	P,
+
+FLPRNT:	SETOM	FLPRT'
+	POPJ	P,
+
+TECO:	SETOM	TECFLG'			; print file names as for teco
+	POPJ	P,
+
+; ===================================================================
+;			size switch
+; ===================================================================
+
+SIZEB:	PUSH	TP,[PUSHJ P,QSIZEB]
+
+TPRANG:	PUSHJ	P,TPUSH
+	PUSHJ	P,RRANGE
+	POPJ	P,
+
+QSIZEB:	PUSH	P,K
+	MOVE	A,C
+	PUSHJ	P,QLINK
+	SKIPA
+	 JRST	QSLOSE
+	PUSHJ	P,FILLEN
+QSEND:	MOVE	A,K
+	XCT	2(TP)
+	SKIPA
+	AOS	-1(P)
+QSLOSE:	POP	P,K
+	POPJ	P,
+
+SIZEW:	PUSH	TP,[PUSHJ P,QSIZEW]
+	JRST	TPRANG
+
+QSIZEW:	PUSH	P,K
+	MOVE	A,C
+	PUSHJ	P,QLINK
+	SKIPA
+	JRST	QSLOSE
+	PUSHJ	P,FILWRD
+	JRST	QSEND
+
+EXTRA:	PUSH	TP,[PUSHJ P,QEXTRA]
+	JRST	TPRANG
+
+QEXTRA:	PUSH	P,K
+	MOVE	A,C
+	PUSHJ	P,QLINK
+	SKIPA
+	JRST	QSLOSE
+	LDB	K,[301200,,UNRNDM(A)]
+	JUMPE	K,QSEND
+	SUBI	K,1024.
+	MOVMS	K
+	JRST	QSEND
+
+; ===================================================================
+;			random cdate switches
+; ===================================================================
+
+BETWEE:	PUSHJ	P,DFUNNY
+	PUSHJ	P,RB
+	POPJ	P,
+
+SINCE:	PUSHJ	P,DFUNNY
+	PUSHJ	P,RG
+	POPJ	P,
+
+BEFORE:	PUSHJ	P,DFUNNY
+	PUSHJ	P,RL
+	POPJ	P,
+
+ON:	PUSHJ	P,DFUNNY
+	PUSHJ	P,RE
+	POPJ	P,
+
+DFUNNY:	PUSH	TP,[PUSHJ P,QCDATE]
+	PUSHJ	P,TPUSH
+	MOVE	A,[PUSHJ P,GETDAT]
+	MOVEM	A,RANGER
+	POPJ	P,
+
+TODAY:	PUSH	TP,[PUSHJ P,QCDATE]
+	PUSHJ	P,TPUSH
+	PUSH	TP,[PUSHJ P,QE]
+	PUSH	TP,DATNOW
+	POPJ	P,
+
+; ===================================================================
+;			real cdate switch
+; ===================================================================
+
+CDATE:	PUSH	TP,[PUSHJ P,QCDATE]
+	PUSHJ	P,TPUSH
+	PUSHJ	P,DRANGE
+	POPJ	P,
+
+QCDATI:	SKIPA	A,UNDATE(C)	; here to compare date/time
+QCDATE:	HLLZ	A,UNDATE(C)	; here to compare only date
+	TRZ	A,1		; ignore 1/2 seconds
+	XCT	2(TP)
+	POPJ	P,
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+;			time switch
+; ===================================================================
+
+CTIME:	PUSH	TP,[PUSHJ P,QCTIME]
+	PUSHJ	P,TPUSH
+	PUSHJ	P,TRANGE
+	POPJ	P,
+
+QCTIME:	LDB	A,[UNTIM+UNDATE(C)]
+	XCT	2(TP)
+	POPJ	P,
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+;			reference date switch
+; ===================================================================
+
+RDATE:	PUSH	TP,[PUSHJ P,QRDATE]
+	PUSHJ	P,TPUSH
+	PUSHJ	P,DRANGE
+	POPJ	P,
+
+QRDATE:	HLLZ	A,UNREF(C)
+	XCT	2(TP)
+	POPJ	P,
+	AOS	(P)
+	POPJ	P,
+
+; ========================================================
+; 			read ranges
+; ========================================================
+
+TRANGE:	MOVE	A,[PUSHJ P,GETTIM]	; read times
+	JRST	.+3
+DRANGE:	SKIPA	A,[PUSHJ P,GETDAT]	; read dates
+RRANGE:	MOVE	A,[PUSHJ P,GETNUM]	; read numbers
+	MOVEM	A,RANGER
+
+	PUSH	P,COMPTR		; possibility of backing up
+	PUSHJ	P,GETSYL
+	MOVE	A,RNGPTR
+RRLOOP:	CAME	B,(A)
+	JRST	RRNEXT
+	POP	P,0			; real switch, advance
+	PUSHJ	P,@1(A)
+	POPJ	P,
+
+RRNEXT:	ADDI	A,1
+	AOBJN	A,RRLOOP
+
+	SETZM	SLASH
+	SETZM	AMPERS
+	POP	P,COMPTR		; not a recognized switch
+					; try re-reading it as an EQ switch
+; like EQ if just number
+	PUSHJ	P,RE
+	POPJ	P,
+
+; table of range indicators
+RNGTBL:	COM RG,[>,GT,GREATE,SINCE,AFTER]
+	COM RL,[<,LT,LESS,LESSER,BEFORE]
+	COM RE,[=,EQ,EQUAL,SAME,ON]
+	COM RB,[B,BTW,BETWEE]
+RNGPTR:	-<<.-RNGTBL>/2>,,RNGTBL
+
+; ===================================================================
+;			read various sorts of ranges
+; ===================================================================
+
+RANGER:	PUSHJ	P,GETNUM		; how to interpret numbers of range
+
+RG:	PUSH	TP,[PUSHJ P,QG]
+	JRST	RRNG
+
+RL:	PUSH	TP,[PUSHJ P,QL]
+	JRST	RRNG
+
+RE:	PUSH	TP,[PUSHJ P,QE]
+
+RRNG:	XCT	RANGER
+	JRST	SYNERR
+RRNG1:	PUSH	TP,B
+	POPJ	P,
+
+; read two parts of a "between" statement
+RB:	PUSH	TP,[PUSHJ P,QBTW]
+	XCT	RANGER
+	JRST	SYNERR
+	PUSH	TP,B
+	XCT	RANGER
+	 JRST	SYNERR
+	MOVE	RANGER
+; special default kludge for reading date:
+; if says /BTW 5/17 10:30 11:30 should do default...
+	CAME	[PUSHJ P,GETDAT]	; date?
+	 JRST	.+3
+	TLNN	B,-1			; day given?
+	 HLL	B,(TP)			; no, use default
+; order of compare is greatest first
+	CAMG	B,(TP)
+	 EXCH	B,(TP)
+	JRST	RRNG1			; jump to common range code
+
+; ===================================================================
+;			test various ranges
+; ===================================================================
+
+QG:	CAMLE	A,3(TP)
+	AOS	(P)
+	POPJ	P,
+
+QL:	CAMGE	A,3(TP)
+	AOS	(P)
+	POPJ	P,
+
+QE:	CAMN	A,3(TP)
+	AOS	(P)
+	POPJ	P,
+
+QBTW:	CAML	A,3(TP)
+	CAMLE	A,4(TP)
+	POPJ	P,
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+;			links switch
+; ===================================================================
+
+; search only for links
+LINK:	PUSH	TP,[PUSHJ P,QLINK]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+; link test routine
+QLINK:	PUSH	P,A
+	MOVE	A,(ALT)
+	MOVE	A,(A)UNRNDM
+	TLNE	A,UNLINK		; is it a link?
+	AOS	-1(P)
+	POP	P,A
+	POPJ	P,
+
+; ===================================================================
+;			link to switch
+; ===================================================================
+
+; search only for links to a given file
+LINKTO:	MOVEI	D,FONE
+	PUSHJ	P,SCNAME		; read the file name
+	PUSH	TP,[PUSHJ P,LSTAR]
+	PUSHJ	P,TPUSH
+	PUSH	TP,FONE+1
+	PUSH	TP,MONE
+	PUSH	TP,FONE+2
+	PUSH	TP,MONE+1
+	PUSH	TP,FONE+3
+	PUSH	TP,MONE+2
+	POPJ	P,
+
+; ===================================================================
+;			reap bit switch
+; ===================================================================
+
+REAP:	PUSH	TP,[PUSHJ P,QREAP]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+QREAP:	MOVE	A,UNRNDM(C)
+	TLNE	A,UNREAP
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+;			save state switch
+; ===================================================================
+
+ORFIND:	PUSH	TP,[SKIPA]		; always succeeds
+	PUSH	FP,TP
+	PUSH	TP,[SWSAVE]
+	POPJ	P,
+
+; here for saving current state
+SWSAVE:	MOVE	(ALT)
+	TLNE	%MATCH
+	TLO	%NATCH		; save state
+	TLZ	%MATCH+%FOUND
+	MOVEM	(ALT)
+	POPJ	P,			; to avoid %found hacking
+
+; ===================================================================
+;			dump bit switch
+; ===================================================================
+
+DUMPED:	PUSH	TP,[PUSHJ P,QDUMP]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+; skip if dumped
+QDUMP:	PUSH	P,A
+	PUSHJ	P,QLINK
+	SKIPA	A,(ALT)
+	JRST	QDUMPX
+	SKIPGE	UNRNDM(A)
+QDUMPX:	AOS	-1(P)
+	POP	P,A
+	POPJ	P,
+
+; ===================================================================
+;			open switch
+; ===================================================================
+
+OPENED:	PUSH	TP,[PUSHJ P,QOPEN]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+QOPEN:	PUSH	P,A
+	MOVE	A,(ALT)
+	MOVE	A,UNRNDM(A)
+	TLNE	A,UNWRIT
+	AOS	-1(P)
+	POP	P,A
+	POPJ	P,
+
+; ===================================================================
+;			deleted switch
+; ===================================================================
+
+DELETE:	PUSH	TP,[PUSHJ P,QDELET]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+; skip if delete on close or deleted from unmounted pack
+QDELET:	PUSH	P,A
+	MOVE	A,(ALT)
+	MOVE	A,UNRNDM(A)
+	TLNE	A,UNCDEL
+	AOS	-1(P)
+	POP	P,A
+	POPJ	P,
+
+; ===================================================================
+;			allocated dir?
+; ===================================================================
+
+ALLOC:	PUSH	TP,[PUSHJ P,QALLOC]
+	PUSHJ	P,TPUSH
+	POPJ	P,
+
+; file on allocated pack?
+QALLOC:	SKIPE	DIRBUF+UDALLO	; what a kludge!!!
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+;			pack number
+; ===================================================================
+
+PACK:	PUSHJ	P,GETNUM
+	JRST	SYNERR
+SPACK:	PUSH	TP,[PUSHJ P,QPACK]
+	PUSHJ	P,TPUSH
+	PUSH	TP,B
+	POPJ	P,
+
+QPACK:	PUSHJ	P,QLINK		; fie on links
+	SKIPA
+	POPJ	P,
+	PUSH	P,A
+	MOVE	A,(ALT)
+	LDB	A,[UNPKN+UNRNDM(A)]
+	CAMN	A,2(TP)
+	AOS	-1(P)
+	POP	P,A
+	POPJ	P,
+
+VERSIO:	PUSHJ	P,GETNUM
+	 JRST	SYNERR
+	PUSH	TP,[PUSHJ P,QVERSI]
+	PUSHJ	P,TPUSH
+	PUSH	TP,B
+	POPJ	P,
+
+QVERSI:	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	PUSH	P,F
+	MOVE	B,(C)
+	MOVE	A,1(C)
+	PUSHJ	P,NUMERI
+	 JRST	VRSXI1
+	MOVE	F,2(TP)		; VERSION COUNT
+	SOJE	F,QVRWIN	; JUMP IF ALREADY ZERO (IDIOT SAID 1)
+;now loop looking for newer ones with same first name
+	PUSH	P,ALT		; SAVE CURRENT PTR INTO DIR
+	PUSHJ	P,ATOP		; TOP IT
+	MOVE	D,ALT		; INTO D
+	MOVE	ALT,(P)		; RESTORE OLD PTR
+VRSBCK:	CAMN	D,ALT		; REACHED TOP OF DIR
+       	 JRST	VRSNXT
+	SUB	ALT,[1,,1]	; LOOK BACKWARDS FOR MATCHES
+	MOVE	E,(ALT)
+	CAME	B,(E)		; SAME NM1?
+	 JRST	VRSNXT		;  NOPE, TRY MOVING FORWARDS
+	MOVE	A,1(E)		; GET NM2
+	PUSHJ	P,NUMERI
+	 JRST	VRSBCK
+	SOJE	F,QVRWIN	; COUNT OF VERSIONS
+	JRST	VRSBCK
+
+VRSNXT:	MOVE	ALT,(P)
+VRSNX1:	AOBJP	ALT,VRSXIT
+	MOVE	E,(ALT)
+	CAME	B,(E)
+	 JRST	VRSXIT
+	MOVE	A,1(E)
+	PUSHJ	P,NUMERI
+	 JRST	VRSNX1
+	SOJE	F,QVRWIN
+	JRST	VRSNX1
+
+QVRWIN:	AOS	-7(P)
+VRSXIT:	POP	P,ALT
+VRSXI1:	POP	P,F
+	POP	P,E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	JRST	POPAJ
+
+NEWBIN:	PUSHJ	P,GETSYL
+	PUSH	TP,[PUSHJ P,QNEWBI]
+	PUSHJ	P,TPUSH
+	PUSH	TP,B
+	PUSH	TP,E
+	POPJ	P,
+
+QNEWBI:	PUSH	P,A
+	MOVE	(ALT)
+	MOVE	A,1(C)		; GET FNM2
+	AND	A,3(TP)		; MASK
+	MOVE	2(TP)		; MATCH NAME (E.G., NBIN)
+	AND	3(TP)		; MASK, AGAIN
+	CAME	A,		; MATCH?
+	 JRST	POPAJ		;  NOPE, FORGET IT
+	MOVE	A,UNDATE(C)	; GET DATE OF MATCH INTO A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	MOVE	B,(C)		; FIRST NAME INTO B
+
+;now loop looking for newer ones with same first name
+	PUSH	P,ALT		; SAVE CURRENT PTR INTO DIR
+	PUSHJ	P,ATOP		; TOP IT
+	MOVE	D,ALT		; INTO D
+	MOVE	ALT,(P)		; RESTORE OLD PTR
+NWBBCK:	CAMN	D,ALT		; SAME FILE CAN'T MATCH
+       	 JRST	NWBNXT
+	SUB	ALT,[1,,1]	; LOOK BACKWARDS FOR MATCHES
+	MOVE	E,(ALT)
+	CAME	B,(E)		; SAME NM1?
+	 JRST	NWBNXT		;  NOPE, TRY MOVING FORWARDS
+	MOVE	UNRNDM(E)
+	TLNE	UNLINK
+	 PUSHJ	P,NWBLNK		; do obscenity for links
+	MOVE	0,UNDATE(E)
+NWBBC1:	CAML	A,
+	 JRST	NWBBCK
+	PUSH	P,A
+	MOVE	A,1(E)
+	PUSHJ	P,NUMERI
+	 SKIPA
+	PUSHJ	P,NWBWIN
+	POP	P,A
+	JRST	NWBBCK
+
+NWBLNK:	.CALL	[SETZ
+		 SIXBIT /OPEN/
+		 [0]
+		 FONE
+		 (E)
+		 1(E)
+		 SETZ FONE+3]
+	 POPJ	P,
+	.CALL	[SETZ
+		 'RFDATE
+		 MOVEI 0
+		 SETZM 0]
+	 POPJ	P,
+	AOS	(P)
+	POPJ	P,
+
+NWBNXT:	MOVE	ALT,(P)
+NWBNX1:	AOBJP	ALT,NWBXIT
+	MOVE	E,(ALT)
+	CAME	B,(E)
+	 JRST	NWBXIT
+	MOVE	UNRNDM(E)
+	TLNE	UNLINK
+	 PUSHJ	P,NWBLNK		; do obscenity for links
+	MOVE	0,UNDATE(E)
+	CAML	A,
+	 JRST	NWBNX1
+	PUSH	P,A
+	MOVE	A,1(E)
+	PUSHJ	P,NUMERI
+	 SKIPA
+	PUSHJ	P,NWBWIN
+	POP	P,A
+	JRST	NWBNX1
+
+NWBXIT:	POP	P,ALT
+       	POP	P,E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+POPAJ:	POP	P,A
+	POPJ	P,
+
+NWBWIN:	PUSH	P,D
+	HRLZI	D,%MATCH
+	PUSHJ	P,@1(TP)
+	POP	P,D
+	POPJ	P,
+
+; skip return if fnm in A is numeric.  i.e., at least one trailing digit.
+NUMERI:	PUSH	P,B
+	SETZ	B,
+NUMER2:	LDB	[0600,,A]
+	JUMPE	NUMER1
+	CAIL	'0
+	 CAILE	'9
+	  JUMPE	B,NUMER3
+	 SETO	B,
+NUMER1:	LSH	A,-6
+	JUMPN	A,NUMER2
+	SKIPE	B
+	 AOS	-1(P)
+NUMER3:	POP	P,B
+	POPJ	P,
+
+
+; ===================================================================
+;			author switch
+; ===================================================================
+
+AUTHOR:	PUSHJ	P,GETSYL
+	PUSH	TP,[PUSHJ P,QAUTHO]
+	PUSHJ	P,TPUSH
+	CAMN	B,[SIXBIT /?/]
+	 MOVEI	B,777
+	PUSH	TP,B
+	SETOM	AUTFLG'
+	POPJ	P,
+
+QAUTHO:	PUSH	P,A
+	MOVE	A,(ALT)
+	LDB	A,[UNAUTH+UNREF(A)]
+	JUMPE	A,QNAUTH
+	CAIN	A,777		; random
+	 JRST	QRAUTH
+	LSH	A,1
+	ADDI	A,MFDBUF+2000
+	SUB	A,MDNUDS+MFDBUF
+	SUB	A,MDNUDS+MFDBUF
+	MOVE	A,(A)
+QRAUTH:	CAMN	A,2(TP)
+	 AOS	-1(P)
+QNAUTH:	POP	P,A
+	POPJ	P,
+
+; ======================================================================
+;		brief switch (simplicity itself - >>)
+; ======================================================================
+
+BriefP:	0	;0=No, be verbose
+BCount:	0	;Count of # u/j pairs we've done across
+
+Brief:	Setcmm BriefP		;Toggle brief value
+	Popj P,
+
+; ===================================================================
+; 		command line reading and parsing section
+; ===================================================================
+
+; read a file spec
+SCNAME:	SETZM	4(D)
+	SETZM	5(D)
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,E
+	MOVSI	C,-2
+	HRRI	C,1(D)
+SCNGET:	PUSHJ	P,GETSYL
+	JUMPE	B,SCNX
+	CAIN	A,':
+	 MOVEM	B,(D)
+	CAIE	A,';
+	 JRST	.+3
+	  MOVEM	B,3(D)
+	  MOVEM	E,6(D)
+	CAIE	A,'_
+	 JUMPG	A,SCNGET
+	MOVEM	B,(C)
+	MOVEM	E,3(C)
+	JUMPL	A,SCNX
+; terminator?
+	SKIPN	LEFTAR
+	 JRST	.+3
+	  CAIN	A,'_
+	  JRST	SCNX
+	CAIE	A,',
+	 AOBJN	C,SCNGET
+SCNX:	POP	P,E
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+; ====================================================================
+;		read a time
+; ====================================================================
+
+HRS:	0
+MIN:	0
+SEC:	0
+
+GETTIM:	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,COMPTR
+	SETZM	HRS
+	SETZM	MIN
+	SETZM	SEC
+	SETZB	C,B
+	TLO	C,400000		; nothing read yet
+	MOVE	D,[-4,,HRS]
+GETTLP:	PUSHJ	P,GETCCA
+	SUBI	A,40
+	JUMPLE	A,GETTIX
+	CAIL	A,'0
+	CAILE	A,'9
+	JRST	TOTNUM
+	SUBI	A,'0
+	TLZ	C,400000
+	IMULI	C,10.
+	ADD	C,A
+	JRST	GETTLP
+
+TOTNUM:	CAIE	A,':
+	JRST	GETTLS			; can't grok it
+	JUMPL	C,GETTLS
+	AOBJP	D,GETTLS
+	MOVEM	C,-1(D)
+	MOVSI	C,400000
+	JUMPE	B,TIMSEP
+	CAME	A,B
+	JRST	GETTLS
+TIMSEP:	MOVE	B,A		; here he gave a separator
+	JRST	GETTLP
+
+GETTIX:	JUMPL	C,GETTLS
+	AOBJP	D,GETTLS
+	MOVEM	C,-1(D)
+	MOVE	A,HRS
+	CAILE	A,24.
+	JRST	GETTLS
+	MOVE	B,A
+	MOVE	A,MIN
+	CAIL	A,60.
+	JRST	GETTLS
+	IMULI	B,60.
+	ADD	B,A
+	MOVE	A,SEC
+	CAIL	A,60.
+	JRST	GETTLS
+	IMULI	B,60.
+	ADD	B,A
+	LSH	B,1		; don't forget stupid 1/2 seconds
+	POP	P,0
+	AOSA	-2(P)
+GETTLS:	POP	P,COMPTR
+	SETZM	SLASH
+	SETZM	AMPERS
+	POP	P,D
+	POP	P,C
+	POPJ	P,
+
+; ==================================================================
+;		read a date
+; ==================================================================
+
+YY==HRS
+MM==MIN
+DD==SEC
+
+GETDAT:	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,COMPTR		; allow for failure
+
+	SETZB	C,B
+	TLO	C,400000		; nothing read yet
+	MOVE	D,[-4,,YY]		; aobjn to slots of date
+
+GETDLP:	PUSHJ	P,GETCCA		; read a character
+	SUBI	A,40			; convert to sixbit
+	JUMPLE	A,GETDAX		; if was control, jump
+	CAIL	A,'0
+	 CAILE	A,'9
+	  JRST	NOTNUM
+	SUBI	A,'0			; here its a number
+	TLZ	C,400000		; we have now read something
+	IMULI	C,10.
+	ADD	C,A			; build number and loop
+	JRST	GETDLP
+
+; here character is not a number
+NOTNUM:	CAIN	A,':
+	 JRST	GETDL1		; maybe it's a time?
+	CAIE	A,'.
+	CAIN	A,'/
+	 SKIPA
+	  JRST	GETTDY
+	JUMPL	C,GETDLS
+	AOBJP	D,GETDLS	; this would be fourth??
+	MOVEM	C,-1(D)
+	MOVSI	C,400000
+	JUMPE	B,DATSEP
+	CAME	A,B		; must be same as last sep.
+	 JRST	GETDLS
+DATSEP:	MOVE	B,A		; here he gave a separator
+	JRST	GETDLP
+
+GETDAX:	JUMPL	C,DATHRE	; space is only interesting one
+	AOBJP	D,GETDLS
+	MOVEM	C,-1(D)		; put it out, now fix up result
+
+DATHRE:	CAMG	D,[-1,,0]	; three given?
+	JRST	DATTWO
+	CAIN	B,'.		; if period, already ordered right
+	JRST	DATDEF
+	CAIE	B,'/
+	JRST	GETDLS
+	MOVE	A,YY		; change mmddyy to yymmdd
+	EXCH	A,MM
+	EXCH	A,DD
+	MOVEM	A,YY
+	JRST	DATDEF
+
+DATTWO:	CAMG	D,[-2,,0]
+	JRST	DATONE
+	MOVE	A,YY
+	CAILE	A,31.
+	JRST	DATDEF
+	MOVE	A,MM
+	CAIG	A,31.
+	JRST	TWOMD
+	EXCH	A,YY
+	MOVEM	A,MM
+	JRST	DATDEF
+TWOMD:	MOVEM	A,DD
+	MOVE	A,YY
+	MOVEM	A,MM
+	SETZM	YY
+	JRST	DATDEF
+
+DATONE:	MOVE	A,YY
+	CAILE	A,31.
+	CAIL	A,100.
+	SKIPA
+	JRST	DATDEF
+	IDIVI	A,100.
+	MOVEM	B,DD
+	IDIVI	A,100.
+	MOVEM	B,MM
+	MOVEM	A,YY
+
+DATDEF:	SETZ	D,
+	MOVE	C,DATNOW	; current date is default
+	SKIPN	B,YY
+	JRST	DEFMM
+	DPB	B,[UNYRB+C]
+	DPB	D,[UNMON+C]
+	DPB	D,[UNDAY+C]
+DEFMM:	SKIPN	B,MM
+	JRST	DEFDD
+	CAILE	B,12.
+	JRST	GETDLS
+	DPB	B,[UNMON+C]
+	DPB	D,[UNDAY+C]
+DEFDD:	SKIPN	B,DD
+	JRST	DEFEND
+	CAILE	B,31.
+	JRST	GETDLS
+	DPB	B,[UNDAY+C]
+DEFEND:	POP	P,0
+
+; here on assumption he gives a time too (C contains date read)
+GETDTQ:	PUSH	P,COMPTR	; fail point if want to restore comptr
+	PUSHJ	P,GETTIM
+	 JRST	GETDTL		; not a time, so lose
+GETDT1:	MOVE	D,(FP)
+	MOVE	[PUSHJ P,QCDATI]
+	MOVEM	(D)		; clobber the test instruction
+	POP	P,0		; is a time, so keep updated comptr
+	HRR	C,B		; combine
+
+GETDX1: MOVE	B,C		; recover date-time to B
+	AOS	-2(P)		; skip return
+	JRST	GETDAF
+GETDLS:	POP	P,COMPTR	; here if not a date
+	SETZM	SLASH
+	SETZM	AMPERS
+GETDAF:	POP	P,D		; restore acs and return
+	POP	P,C
+	POPJ	P,
+
+GETDL1:	POP	P,COMPTR
+	PUSH	P,COMPTR
+	PUSHJ	P,GETTIM	; here if it looks like its a time
+	 JRST	GETDLS
+	JRST	GETDT1		; reenter at normal processing for a time
+
+GETDTL:	POP	P,COMPTR	; not a time, so just return date
+	JRST	GETDX1		; still skip, date was good
+
+; here if might be "today"
+GETTDY:	POP	P,COMPTR
+	PUSHJ	P,GETSYL
+	CAME	B,[SIXBIT /TODAY/]
+	JRST	GETDAF
+	MOVE	C,DATNOW
+	JRST	GETDTQ		; now try to read a time
+
+; ==============================================================
+; read a number, skip if is, no skip if not
+; ==============================================================
+
+GETNUM:	SETZ	B,
+GETNL:	PUSHJ	P,GETCCA
+	JUMPLE	A,GETNMX
+	CAIE	A," 
+	JRST	.+3
+GETNMX:	AOS	(P)
+	POPJ	P,
+	CAIL	A,"0
+	CAILE	A,"9
+	POPJ	P,
+	SUBI	A,"0
+	IMULI	B,10.
+	ADD	B,A
+	JRST	GETNL
+
+; get a syllable from command buffer
+GETSYL:	PUSH	P,C
+	PUSH	P,[0]
+	MOVEI	B,(P)
+	PUSH	P,[-1]
+	MOVEI	C,(P)
+	HRLI	B,440600
+	HRLI	C,440600
+GETSLP:	PUSHJ	P,GETCCA
+	JUMPL	A,GETSX
+	SETO	E,
+	CAIE	A,^X		; ^X maps into DDT default nm1
+	 JRST	GETSL1
+	MOVE	B,PFILE+2
+GETSL3:	MOVEM	B,-1(P)		; set up word read
+	SETZ	A,
+	JRST	GETSX
+GETSL1:	CAIE	A,^Y		; ^Y maps into DDT default nm2
+	 JRST	GETSL2
+	MOVE	B,PFILE+3
+	JRST	GETSL3
+GETSL2:	CAIN	A,^Q		; ^Q quotes next character
+	 JRST	GETQOT
+	SUBI	A,40
+	JUMPL	A,GETSX		; other controls exit
+	JUMPE	A,GETSP		; space?
+; character > ascii 40 octal
+	SKIPE	LEFTAR
+	 JRST	GETUND
+	CAIN	A,'&
+	 JRST	GETAMP
+	CAIN	A,'/
+	 JRST	GETSLA
+GETUND:	SKIPN	LEFTAR
+	 JRST	GETSTA
+	CAIN	A,'_
+	 JRST	GETSX
+GETSTA:	CAIN	A,'*
+	 SETZ	E,
+	CAIE	A,',
+	 CAIN	A,'+
+	  JRST	GETSX
+	CAIE	A,':
+	 CAIN	A,';
+	  JRST	GETSX
+GETSPT:	CAIL	A,100
+	 SUBI	A,40
+	TLNN	B,770000
+	 JRST	GETSLP
+	IDPB	A,B
+	IDPB	E,C
+	JRST	GETSLP
+
+GETAMP:	SETZ	A,
+	SKIPE	AMPERS
+	MOVEI	A,'&
+	SKIPE	SLASH
+	MOVEI	A,'/
+	SETOM	AMPERS
+	SETZM	SLASH
+	JRST	GETFOO
+GETSLA:	SETZ	A,
+	SKIPE	AMPERS
+	MOVEI	A,'&
+	SKIPE	SLASH
+	MOVEI	A,'/
+	SETOM	SLASH		; next syl is slashed
+	SETZM	AMPERS
+
+GETFOO:	HLRZ	B		; win if & is first found
+	CAIE	440600
+	JRST	GETSX2
+	JUMPN	A,SYNERR
+	JRST	GETSLP
+
+GETQOT:	ILDB	A,COMPTR
+	SUBI	A,40
+	JUMPGE	A,GETSPT
+	JRST	GETSX
+GETSP:	TLNE	B,400000
+	JRST	GETSLP
+GETSX:	SKIPN	SLASH
+	JRST	GETSX1
+	MOVEI	A,'/
+	SETZM	SLASH
+	JRST	GETSX2
+GETSX1:	SKIPN	AMPERS
+	JRST	GETSX2
+	MOVEI	A,'&
+	SETZM	AMPERS
+GETSX2:	POP	P,E		; star word
+	POP	P,B		; character word
+	POP	P,C
+	AOS	SYLCNT
+	CAMN	B,STAR
+	CAME	E,[SIXBIT / _____/]
+	POPJ	P,
+	SETZ	E,
+	POPJ	P,
+
+SLASH:	0			; slash switch
+AMPERS:	0			; ampersand switch
+
+GETCCA:	ILDB	A,COMPTR
+	JUMPE	A,GETCCX
+	CAIN	A,^I
+	 MOVEI	A,40
+	CAIN	A,^M
+	 JRST	GETCCX
+	CAIN	A,"
+	 SETOM	NODEFL
+	POPJ	P,
+GETCCX:	SETOM	A
+	POPJ	P,
+
+; find out length of file
+; takes pointer to name area in A
+
+; length in words returned in K
+FILWRD:	PUSH	P,A
+	PUSHJ	P,FILLEN
+	JUMPE	K,FILWXT
+	LDB	A,[301200,,UNRNDM(A)]
+	SKIPE	A
+	SUBI	K,1
+	IMULI	K,1024.
+	ADD	K,A
+FILWXT:	POP	P,A
+	POPJ	P,
+
+; length in blocks returned in K
+FILLEN:	PUSH	P,A
+	PUSH	P,B
+	MOVE	K,@THEDIR
+	CAMN	K,[SIXBIT /ARC1!!/]
+	 JRST	[SETZ K, ? JRST POPBAJ]
+	LDB	A,[UNDSCP+UNRNDM(A)]
+	ANDI	A,17777
+	IDIVI	A,UFDBPW
+	ADDI	A,UDDESC
+	ADD	A,THEDIR
+	HLL	A,BYTPTR(B)
+	SETZI	K,
+AFLLN1:	ILDB	B,A
+	JUMPE	B,POPBAJ
+	CAILE	B,UDTKMX
+	 JRST	AFLLN2
+	ADD	K,B
+	JRST	AFLLN1
+
+AFLLN2:	CAIGE	B,UDWPH
+	AOJA	K,AFLLN1
+	CAIN	B,UDWPH
+	JRST	AFLLN1
+	IBP	A
+	IBP	A
+	AOJA	K,AFLLN1
+
+POPBAJ:	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; build the spec of the file pointed to by a link
+; skip returns if file is a link, with snm nm1 nm2 in first three
+; words of LNKBUF
+
+LNKFIL:	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	PUSH	P,F
+	PUSH	P,M
+	MOVE	M,A
+	MOVE	A,(M)UNRNDM
+	TLNN	A,UNLINK		; is it a link?
+	JRST	LNKNOT			; no, do normal cruft
+; here if file is a link
+; here to build name of file linked to
+	ANDI	A,17777
+	IDIVI	A,UFDBPW
+	ADDI	A,UDDESC
+	ADD	A,THEDIR
+	HLL	A,BYTPTR(B)
+	MOVE	F,BYTPTR
+	SETZB	B,C
+	SETZB	D,E
+QL1:	ILDB	0,A
+	JUMPE	0,QL3
+	CAIN	0,':
+	SOJL	E,QL4
+	CAIN	0,';
+	SOJL	E,QL2
+QL5:	IDPB	0,F
+	JRST	QL1
+QL2:	TLZ	F,770000
+	JRST	QL1
+QL4:	MOVEI	E,1
+	JRST	QL1
+QL3:	SOJGE	E,QL5
+	MOVEM	B,LNKBUF+2
+	MOVEM	C,LNKBUF
+	MOVEM	D,LNKBUF+1
+	AOS	-6(P)
+LNKNOT:	POP	P,M
+	POP	P,F
+	POP	P,E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+; ================================================================
+;		listf line file spec printer
+; ================================================================
+
+LFPRN1:	SETZM	HPOS
+	SKIPA
+LFPRNT:	JUMPE	DIR,[POPJ P,]
+	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	PUSH	P,F
+	PUSH	P,H
+	PUSH	P,K
+	PUSH	P,M
+	MOVE	M,A
+	PUSHJ	P,LNKFIL
+	 JRST	RSTLIN			; for non-links
+
+; file is a link
+	AOS	LINKS
+	SKIPE	NOLIST
+	 JRST	ENDLIN
+
+	Skipe BriefP		;>>
+	  Jrst [Pushj P,BPrint
+		Jrst Endlin]
+
+	OSIXS	[SIXBIT/  L   /]
+	OSIXS	UNFN1(M)
+	OASCI	" 
+	OSIXS	UNFN2(M)
+	OHPOS	22.
+; here to print file linked to
+	OSIX	LNKBUF+2
+	OASCI	";
+	OSIX	LNKBUF
+	OASCI	" 
+	OSIX	LNKBUF+1
+	OHPOS	43.		; up to 20 chars worth of link dest.
+	JRST	DATPRT		; skip over !$ bits, links don't need them
+
+; here to print normal file
+RSTLIN:	AOS	FILES
+	SKIPE	NOLIST
+	 JRST	SIZPRT
+
+	Skipe BriefP		;>>
+	  Jrst [Pushj P,BPrint
+		Jrst Endlin]
+
+; print del/open/etc. bit
+	LDB	B,[220600,,UNRNDM(M)]
+	TRNE	B,UNIGFL
+	 OASCI	"*
+	TRNE	B,40		; secret bit!
+	 OASCI	"?
+
+; print pack number
+	OHPOS	2.
+	LDB	B,[150500,,UNRNDM(M)]
+	ODEC	B
+
+; print file names
+	OHPOS	6.
+	OSIXS	UNFN1(M)
+	OASCI	" 
+	OSIXS	UNFN2(M)
+
+; print file blocks and extra words
+SIZPRT:	MOVE	A,M
+	PUSHJ	P,FILLEN		; takes pointer in A to name area
+	ADDM	K,BLOCKS
+	SKIPE	NOLIST
+	 JRST	ENDLIN
+
+	MOVE	A,@THEDIR
+	CAMN	A,[SIXBIT /ARC1!!/]
+	 JRST	[OASC [ASCIZ /  --     /]
+		 JRST BITPRT]
+	LDB	A,[301200,,UNRNDM(M)]
+	SKIPE	WRDFLG			; -1 ==> total words
+	 JRST	SIZWRD
+	SKIPE	A
+	 SUBI	K,1
+	OALIGN	4,K			; right align in 3 spaces
+	SKIPE	FLTFLG
+	 JRST	SIZFLT
+	JUMPE	A,[MOVE A,HPOS
+		   OHPOS 5(A)		; move right 5 spaces
+		   JRST BITPRT]
+	OSIGN	5,A			; right align (w. +) in 5 spaces
+	JRST	BITPRT
+
+SIZFLT:	JUMPN	A,SIZFL1
+	OASC	[ASCIZ /.0  /]
+	JRST	BITPRT
+SIZFL1:	IMULI	A,1000.
+	IDIVI	A,1024.
+	CAILE	B,512.
+	ADDI	A,1
+	CAIN	A,100.
+	SUBI	A,1
+ 	OASCI	".
+	ODEC	3,A
+	JRST	BITPRT
+
+; print size as total number of words in file
+SIZWRD:	SKIPE	A
+	SUBI	K,1
+	SKIPE	K
+	IMULI	K,1024.
+	ADD	K,A
+	OALIGN	7,K
+
+BITPRT:	OASCI	" 
+	MOVE	A,UNRNDM(M)
+	MOVEI	K," 
+	TLNE	A,UNREAP
+	 MOVEI	K,"$
+	OASCI	(K)
+	MOVSI	K,(ASCIZ/! /)
+	SKIPL	A,UNRNDM(M)
+	TLNE	A,UNLINK
+	MOVSI	K,(ASCIZ/  /)		; undumped bit
+	OASC	K
+
+; print date and time of creation, reference
+DATPRT:	MOVE	H,HPOS		; save current hpos
+	AOSN	(M)UNDATE
+	 JRST	[OASC	[ASCIZ /--/]
+		 JRST	REFPRT]
+	SOS	(M)UNDATE
+	LDB	K,[270400,,(M)UNDATE]
+	ODEC	K
+	OASCI	"/
+	LDB	K,[220500,,(M)UNDATE]
+	ODEC	K
+	OASCI	"/
+	LDB	K,[330700,,(M)UNDATE]
+	ODEC	K
+	OASCI	" 
+	HRRZ	B,(M)UNDATE
+	MOVEI	A,3
+	SETZI	D,
+	LSH	B,-1
+TILOP:	IDIVI	B,10.
+	ADDI	C,'0
+	LSHC	C,-6
+	IDIVI	B,6
+	ADDI	C,'0
+	LSHC	C,-6
+	SOJG	A,TILOP
+	MOVEI	B,2
+	MOVEI	A,":
+TILOP2:	SETZI	C,
+	LSHC	C,6
+	OASCI	40(C)
+	SETZI	C,
+	LSHC	C,6
+	OASCI	40(C)
+	SKIPE	B
+	OASCI	(A)
+	SOJGE	B,TILOP2
+
+; print reference date, if any
+REFPRT:	LDB	K,[222000,,UNREF(M)]
+	JUMPE	K,AUTPRT
+	OHPOS	18.(H)		; relative to start of date
+	OASCI	"(
+	LDB	K,[270400,,UNREF(M)]
+	ODEC	K
+	OASCI	"/
+	LDB	K,[220500,,UNREF(M)]
+	ODEC	K
+	OASCI	"/
+	LDB	K,[330700,,UNREF(M)]
+	ODEC	K
+	OASCI	")
+
+; print creator if not sname
+AUTPRT:	LDB	K,[UNAUTH+UNREF(M)]
+	JUMPE	K,ENDLIN
+	CAIN	K,777		; random
+	 JRST	[MOVE B,[SIXBIT /-??-/]
+		 JRST AUTOUT]
+	LSH	K,1
+	ADDI	K,MFDBUF+2000
+	SUB	K,MDNUDS+MFDBUF
+	SUB	K,MDNUDS+MFDBUF
+	MOVE	B,(K)
+AUTOUT:	OHPOS	28.(H)		; relative to start of date
+	MOVE	C,THEDIR
+	MOVE	C,2(C)		; directory name
+	HLRZ	A,PFILE
+	CAIE	A,'DSK
+	 MOVE	C,PFILE+1	; arc's don't have that slot
+	CAME	B,C
+	 OSIX	B
+
+; print crlf and return
+ENDLIN:	SKIPN	NOLIST
+	  Skipe BriefP
+	    Skipa
+	OASCR	[0]
+	SKIPE	FLPRT
+	 PUSHJ	P,FILPRT
+	POP	P,M
+	POP	P,K
+	POP	P,H
+	POP	P,F
+	POP	P,E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+FILPRT:	SETOM	INPRT'
+	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	MOVE	A,PFILE
+	MOVE	B,DISK
+	CAMN	B,[SIXBIT /DSK/]
+	 JRST	PROPEN
+	MOVE	A,PFILE
+	LSH	A,-14
+	IOR	A,B
+PROPEN:	.CALL	FILOPN
+	 JRST	OPFAIL
+PRLOOP:	MOVE	A,[-2000,,BUFFER]
+	.IOT	DSKBI,A
+	MOVEI	C,<5*2000>
+	JUMPGE	A,PROUT
+	.CLOSE	DSKBI,
+	HRRZ	D,A
+	SUBI	D,BUFFER
+	IMULI	D,5		; max in this buffer
+	MOVEI	B,-2(A)
+	CAIGE	B,BUFFER-1
+	 MOVEI	B,BUFFER	; beginning of buffer
+	MOVE	C,B
+	SUBI	C,BUFFER
+	IMULI	C,5
+	HRLI	B,440700
+PRCTRL:	ILDB	0,B
+	CAIE	0,^C
+	CAIN	0,^L
+	SKIPA
+	JUMPN	0,PRAOS
+	JRST	PROUT
+PRAOS:	CAME	C,D
+	 AOJA	C,PRCTRL
+
+PROUT:	MOVE	E,C
+	MOVE	B,[440700,,BUFFER]
+	.CALL	[SETZ
+		 SIXBIT /SIOT/
+		 MOVSI %TJDIS
+		 MOVEI TYOC
+		 B
+		 E
+		 SETZB LSTERR]
+	 JRST	PREXIT
+	JUMPG	A,PRLOOP
+	JRST	PREXIT
+
+PRTFLS:	.IOT	TYOC,[^M]	; here on ^S during typeout
+	.IOT	TYOC,[^J]
+	JRST	PREXIT
+
+OPFAIL:	OASC	[ASCIZ /File not found??/]
+
+PREXIT:	SETOM	MORLOK		; says dismiss more interrupts immediately
+	.CLOSE	DSKBI,		; ecology!
+	.IOT	TYOC,[^M]
+	.IOT	TYOC,[^J]
+	OASC	[ASCIZ /--Next File--/]
+	MOVEI	A,1
+	MOVEM	A,INPRT		; finished printing, but not quite...
+PRTFL1:	.RESET	TYIC,		; flush extraneous type-ahead
+	.IOT	TYIC,A
+	CAIE	A,40		; space and rubout continue
+	 CAIN	A,177
+	  SKIPA
+	   JRST	EXIT		; anything else flushes
+	SETZM	INPRT
+	SETZM	MORLOK		; allow mores
+	POP	P,E
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+FILOPN:	SETZ
+	SIXBIT /OPEN/
+	MOVSI 12
+	MOVEI DSKBI
+	A
+	UNFN1(M)
+	UNFN2(M)
+	SETZ FONE+3
+
+; table of sixbit byte pointers
+BYTPTR:	440600,,B
+	360600,,
+	300600,,
+	220600,,
+	140600,,
+	 60600,,
+
+; ================================================================
+;			file spec matching
+; ================================================================
+
+; star matching routine for normal files
+; C/ pointer to file block of possible match
+; TP/	xx
+;	xx
+;	nm1
+;	msk1
+;	nm2
+;	msk2
+
+COMCHK:	MOVE	A,(C)
+	CAMN	A,COMDEF+1
+	 AOS	(P)
+	POPJ	P,
+
+MSTAR:	MOVE	A,2(TP)
+	CAME	A,[SIXBIT />     /]
+	CAMN	A,[SIXBIT /<     /]
+	JRST	MATCH2		; > and < always match
+	AND	A,3(TP)
+	MOVE	0,(C)
+	AND	0,3(TP)
+	CAME	A,0
+	POPJ	P,
+	MOVE	A,(C)
+MATCH2:	MOVE	B,4(TP)
+	CAME	B,[SIXBIT />     /]
+	CAMN	B,[SIXBIT /<     /]
+	JRST	MSTARW
+	AND	B,5(TP)
+	MOVE	0,1(C)
+	AND	0,5(TP)
+	CAMN	B,0
+MSTARW:	AOS	(P)
+	POPJ	P,
+
+; routine to find files which are links to a given file
+; C/ pointer to possibility
+LSTAR:	PUSH	P,B
+	PUSH	P,C
+	MOVE	A,C
+	PUSHJ	P,LNKFIL
+	JRST	LSTARX
+	MOVEI	C,LNKBUF
+	MOVE	B,6(TP)
+	AND	B,7(TP)
+	MOVE	0,2(C)		; sname
+	AND	0,7(TP)
+	CAME	B,0
+	JRST	LSTARX
+	PUSHJ	P,MSTAR
+	JRST	LSTARX
+	AOS	-2(P)
+LSTARX:	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+; ================================================================
+;			mark matching files
+; ================================================================
+
+MARK:	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+; now get right pointer for current dir of travel
+	MOVE	ALT,DIR
+	PUSHJ	P,ATOP
+SEALU2:	MOVE	C,(ALT)
+	HRLZI	D,%MATCH
+	XCT	(TP)		; matcher routine
+	SETZ	D,		; failure return
+
+; here its a match
+	PUSH	P,ALT
+	PUSHJ	P,QLOOK		; returns dir ptr in A
+	PUSHJ	P,@1(TP)	; iorm OR andm (ALT)
+	POP	P,ALT
+
+	PUSHJ	P,ANEXT		; move to next file
+	JRST	SEALU2
+
+; skip return if ever found a match, return in ALT the topped dir
+	MOVE	ALT,DIR
+	PUSHJ	P,ATOP
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; top a directory vector
+ATOP:	PUSH	P,A
+	HRRZ	A,ALT
+	SUBI	A,DIRVCT
+	HRLS	A
+	SUB	ALT,A
+	POP	P,A
+	POPJ	P,
+
+ANEXT:	AOBJN	ALT,[POPJ P,]
+	SUB	ALT,[1,,1]
+	AOS	(P)
+	POPJ	P,
+
+; ================================================================
+;		directory searching code (from ITS)
+; ================================================================
+
+QFNG:	SKIPA	C,[SETZ]
+QLOOK:	MOVEI	C,0			; C/ name1 or name2?
+	PUSH	P,D
+	PUSH	P,H
+	PUSH	P,I
+	PUSH	P,J
+	PUSH	P,K
+	HRRZ	J,THEDIR		; file names in a,b
+	ADD	J,UDNAMP(J)
+; is name1 or name2 > or <?
+	CAMN	A,[SIXBIT />/]
+	 TLOA	J,400000
+	CAMN	A,[SIXBIT /</]
+	 JRST	QLOOKA			; 4.9 bit of j set if >
+	CAMN	B,[SIXBIT />/]
+	 TLOA	J,400000
+	CAMN	B,[SIXBIT /</]
+	 AOJA	C,QLOOK1		; C/ pointer to which name we are looking at
+; not > or <, just return it
+	JRST	QLKLOS			; no > or <
+
+; done!
+QLOOK2:	JUMPL	C,QFNG1
+	SUB	P,[2,,2]
+	MOVE	K,(P)
+	JUMPE	K,QLKLO1
+; "find" all that match otherwise
+	MOVE	ALT,(P)
+	PUSHJ	P,ATOP
+QLKFND:	MOVE	K,(ALT)
+	XCT	QLKI1(C)		; skip if has same name as match
+	JRST	.+3
+	HRLZI	0,%FOUND
+	IORM	0,(ALT)
+	PUSHJ	P,ANEXT
+	JRST	QLKFND
+QLKLO1:	POP	P,ALT			; winner!
+; return one we found
+QLKLOS:	POP	P,K
+	POP	P,J
+	POP	P,I
+	POP	P,H
+	POP	P,D
+	POPJ	P,
+
+QFNG1:	SKIPN	-2(P)
+	JRST	QFNG2			; NOT FOUND START W/ 1
+	MOVE	H,-1(P)
+	TLC	H,400000
+	MOVE	I,[600,,H]
+QFNG3:	LDB	D,I
+	CAIL	D,'0
+	CAILE	D,'9
+	JRST	QFNG4			; REACH END OF NUMERIC FIELD
+	ADDI	D,1
+	CAILE	D,'9
+	JRST	QFNG5
+	DPB	D,I
+QFNG5A:	TLNE	H,770000
+	JRST	QFNG3A
+	LSH	H,6
+	JRST	QFNG5A
+
+QFNG2:	MOVSI	H,(SIXBIT /1/)
+QFNG3A:	MOVEM	H,A(C)			; STORE INTO A OR B AS APPRO
+	SUB	P,[3,,3]
+	JRST	QLKLOS
+
+QFNG5:	MOVEI	D,'0
+	DPB	D,I
+	ADD	I,[60000,,]
+	JUMPL	I,QFNG5A
+	JRST	QFNG3
+
+QFNG4:	TLNN	H,770000		; SKIP ON ALREADY 6 CHAR NAME
+	LSH	H,6
+	MOVEI	D,'1
+	DPB	D,I
+	MOVEI	D,'0
+QFNG4B:	TLNN	I,770000
+	JRST	QFNG5A
+	IDPB	D,I
+	JRST	QFNG4B
+
+; actual search:
+;  C/ 0 = name1, 1 = name2
+;  J/ 4.9 = 1, > ; = 0, <
+
+; enter here if name1 is > <, C=0, 4.9 of J set if >
+QLOOKA:	CAME	B,[SIXBIT /</]		; can't both be > or <!
+	 CAMN	B,[SIXBIT />/]
+	  JRST	QLKLOS			; lose
+
+; enter here if name2 is > <, C=1, 4.9 bit of J set if >
+QLOOK1:	PUSHJ	P,ATOP
+	PUSH	P,[0]			; best index
+	PUSH	P,[SETZ]		; best "numeric" part
+	PUSH	P,[SETZ]		; best alpha part
+QLOOK4:	MOVE	K,(ALT)
+	;TLNE	K,%FOUND	; don't care if already seen
+	;JUMPGE	C,QLOOK3
+	XCT	QLKI1(C)
+	 JRST	QLOOK3
+	SKIPE	H,@QLKI1+1(C)
+QLOOK6:	TRNE	H,77			; right adj
+	 JRST	QLOOK5
+	LSH	H,-6
+	JRST	QLOOK6
+QLOOK5:	MOVEI	I,0
+QLOOK8:	LDB	D,[600,,H]
+	CAIL	D,'0
+	 CAILE	D,'9
+	  JRST	QLOOK7			; not a digit
+QLOK5B:	TRNE	I,77			; right adj low non num part
+	 JRST	QLOK5A
+	LSH	I,-6
+	JUMPN	I,QLOK5B
+QLOK5A:	TLC	H,400000		; avoid cam lossage
+	TLC	I,400000
+	SKIPN	-2(P)
+	 JRST	QLOK5D			; first match
+	JUMPGE	J,QLOK5E		; get least
+	CAMGE	H,-1(P)			; get greatest
+	 JRST	QLOOK3
+	CAME	H,-1(P)
+	 JRST	QLOK5D
+	CAMGE	I,(P)
+	 JRST	QLOOK3			; not as good
+QLOK5D:	MOVEM	ALT,-2(P)
+	MOVEM	H,-1(P)
+	MOVEM	I,(P)
+QLOOK3:	PUSHJ	P,ANEXT
+	JRST	QLOOK4			; loop
+; end of dir, -2(p) contains match
+	JRST	QLOOK2			; end of dir
+
+QLOK5E:	CAMLE	H,-1(P)
+	 JRST	QLOOK3
+	CAME	H,-1(P)
+	 JRST	QLOK5D
+	CAMLE	I,(P)
+	 JRST	QLOOK3
+	JRST	QLOK5D
+
+QLOOK7:	LSHC	H,-6			; low digit not numeric
+	JUMPN	H,QLOOK8		; no numeric digits at all ("bin", maybe?)
+	JUMPL	J,QLOK5B		; if looking for greatest, let this be least
+	MOVNI	H,1			; greatest if looking for least
+	JRST	QLOK5B
+
+; comparison insts.
+QLKI1:	CAME	B,UNFN2(K)
+	CAME	A,UNFN1(K)
+	UNFN2(K)
+
+; ================================================================
+;		read and parse and sort the m.f.d.
+; ================================================================
+
+RDMFD:	CAMN	A,LCLITS
+	MOVSI	A,(SIXBIT /DSK/)
+	MOVEM	A,DISK
+	.CALL	[SETZ
+		 SIXBIT /OPEN/
+		 [6,,IC]
+		 DISK			; device for all "DSK" opens
+		 [SIXBIT /M.F.D./]
+		 [SIXBIT /(FILE)/]
+		 SETZB ERROPN+2 ]
+	JRST	ITSDED
+; here read in however you can
+	MOVE	A,[-2000,,MFDBUF]
+	.IOT	IC,A
+	.CLOSE	IC,
+	AOS	(P)
+	POPJ	P,
+
+; put an error message into commnd buffer
+
+EXPLAI:	.OPEN	IC,ERROPN
+	POPJ	P,
+	PUSH	P,A
+	PUSH	P,B
+	MOVE	A,[440700,,COMMND]
+ERRLUP:	.IOT	IC,B
+	CAIGE	B,40
+	SETZ	B,
+	IDPB	B,A
+	JUMPE	B,ERREND
+	JRST	ERRLUP
+ERREND:	OASC	COMMND
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+ITSDED:	OASCR	[0]
+	OSIX	DISK
+	OASC	[ASCIZ /: == CAN'T READ MFD == /]
+	PUSHJ	P,EXPLAI
+	OASCR	[0]
+	POPJ	P,
+
+; :COMPAR comes here
+
+; read in new mfd
+COMRMF:	MOVSI	A,(SIXBIT /DSK/)
+	PUSHJ	P,GETMFD
+	 JRST	DEATH
+	SETZM	CMPLOS'
+	MOVE	A,[.BII,,MFDBI]
+	.CALL	CMPMFD
+	 JRST	[SETOM	CMPLOS
+		 JRST	COMWRT]
+	MOVE	A,[-2000,,BUFFER]
+	.IOT	MFDBI,A
+	.CLOSE	MFDBI,
+	JUMPL	A,DEATH
+
+; write out new mfd
+	SKIPN	COMMND
+	 JRST	CMPCMP
+COMWRT:	MOVE	A,[.BIO,,MFDBI]
+	.CALL	CMPMFD
+	 JRST	DEATH
+	MOVE	A,[-1,,MFDSAV]
+	.IOT	MFDBI,A
+	MOVE	A,[-1777,,MFDVCT]
+	.IOT	MFDBI,A
+	.CLOSE	MFDBI,
+	SKIPE	CMPLOS
+	 JRST	DEATH
+
+; now for actual compare -- this is brute force (mothers, shield your children)
+CMPCMP:	HRRI	A,BUFFER+1
+	HRRM	A,BUFFER
+	MOVE	D,BUFFER		; old ptr
+
+CMPNXT:	MOVE	C,MFDSAV		; new ptr
+
+NXTOLD:	MOVE	A,(D)
+NXTNEW:	CAME	A,(C)			; same?
+	 JRST	CMPDIF
+	SETZM	(C)
+	SETZM	(D)
+	AOBJN	D,NXTOLD
+	JRST	CMPDON
+
+CMPDIF:	AOBJN	C,NXTNEW
+	AOBJN	D,CMPNXT
+
+CMPDON:	SETZ	D,
+	MOVE	C,BUFFER
+CMPPLP:	SKIPN	A,(C)
+	 JRST	CMPPNX
+	SKIPN	D
+	 OASCR	[ASCIZ /
+Old directories that have disappeared:/]
+	SETO	D,
+	OASC	[ASCIZ /   /]
+	OSIX	A
+	OASCR	[0]
+CMPPNX:	AOBJN	C,CMPPLP
+
+	SETZ	D,
+	MOVE	C,MFDSAV
+CMPQLP:	SKIPN	A,(C)
+	 JRST	CMPQNX
+	SKIPN	D
+	 OASCR	[ASCIZ /
+New directories that have appeared:/]
+	SETO	D,
+	OASC	[ASCIZ /   /]
+	OSIX	A
+	OASCR	[0]
+CMPQNX:	AOBJN	C,CMPQLP
+	JRST	DEATH
+
+CMPMFD:	SETZ
+	SIXBIT /OPEN/
+	A
+	[SIXBIT /DSK/]
+	[SIXBIT /M.F.D./]
+	[SIXBIT /(SAVE)/]
+	[SIXBIT /SYS/]
+	SETZB LSTERR
+
+CMPONE:	SIXBIT /DSK   .FILE.(DIR) SYSTEM/
+	0 ? 0 ? 0
+CMPTWO:	SIXBIT /DSK   .FILE.(DIR) SYSTEM/
+	0 ? 0 ? 0
+
+; here to compare two directories
+COMPAR:	MOVEI	A,CMPONE
+	MOVE	C,[SKIPA]
+	PUSHJ	P,SEARCH
+	 JRST	CDLOS1
+	 JRST	CDLOS1
+
+; save directory and file vector
+	MOVE	A,[DIRBUF,,MFDBUF]
+	BLT	A,MFDBUF+1777
+	MOVE	A,[DIRVCT,,MFDVCT]
+	BLT	A,MFDVCT+200.
+; update file vector
+	HRRI	DIR,MFDVCT
+	MOVEM	DIR,DIRSAV'
+	JUMPGE	DIR,CMPAGN
+CMPMOV:	MOVE	A,(DIR)
+	SUBI	A,DIRBUF
+	ADDI	A,MFDBUF
+	MOVEM	A,(DIR)
+	AOBJN	DIR,CMPMOV
+
+CMPAGN:	MOVEI	A,CMPTWO
+	MOVE	C,[SKIPA]
+	PUSHJ	P,SEARCH
+	 JRST	CDLOS2
+	 JRST	CDLOS2
+
+; perform comparison
+	MOVE	ALT,DIRSAV	; ALT/ dir1, DIR/ dir2
+
+CMPLUP:	JUMPGE	ALT,CMPDIR
+	JUMPGE	DIR,CMPALT
+	MOVE	C,(ALT)
+	TLNN	C,%MATCH+%NATCH
+	 JRST	CMPANX
+	MOVE	D,(DIR)
+	TLNN	D,%MATCH+%NATCH
+	 JRST	CMPDNX
+
+	MOVE	A,UNFN1(C)
+	TLZ	A,400000
+	MOVE	B,UNFN1(D)
+	TLZ	B,400000
+
+	CAMN	A,B
+	 JRST	CMPSAM		; name1 is same
+	CAML	A,B		; name1:a is less
+	 JRST	CMPOLD
+; file is in "new" directory but not "old"
+CMPNEW:	OASC	[ASCIZ /N    /]
+CMPNE1:	MOVEI	A,MFDBUF
+	MOVEM	A,THEDIR
+       	MOVE	A,C
+	PUSHJ	P,LFPRN1
+CMPANX:	AOBJN	ALT,CMPLUP
+	JRST	CMPLUP
+
+CMPOLD:	OASC	[ASCIZ / O   /]
+	MOVEI	A,DIRBUF
+	MOVEM	A,THEDIR
+	MOVE	A,D
+	PUSHJ	P,LFPRN1
+CMPDNX:	AOBJN	DIR,CMPLUP
+	JRST	CMPLUP
+
+CMPALT:	JUMPGE	ALT,DEATH
+	MOVEI	A,MFDBUF
+	MOVEM	A,THEDIR
+	MOVE	A,(ALT)
+	TLNN	A,%MATCH+%NATCH
+	 JRST	CMPALX
+	OASC	[ASCIZ /N    /]
+	PUSHJ	P,LFPRN1
+CMPALX:	AOBJN	ALT,CMPALT+1
+	JRST	DEATH
+
+CMPDIR:	JUMPGE	DIR,DEATH
+	MOVEI	A,DIRBUF
+	MOVEM	A,THEDIR
+	MOVE	A,(DIR)
+	TLNN	A,%MATCH+%NATCH
+	 JRST	CMPDIX
+	OASC	[ASCIZ / O   /]
+	PUSHJ	P,LFPRN1
+CMPDIX:	AOBJN	DIR,CMPDIR+1
+	JRST	DEATH
+
+; name1 same, check name2
+CMPSAM:	MOVE	A,UNFN2(C)
+	TLZ	A,400000
+	MOVE	B,UNFN2(D)
+	TLZ	B,400000
+	CAMN	A,B
+	 JRST	CMPNAM
+	CAML	A,B
+	 JRST	CMPOLD
+	JRST	CMPNEW
+
+; here names are the same
+CMPNAM:	MOVE	A,UNDATE(C)
+	AND	A,[177777,,-1]	; two unused bits at left of word
+	MOVE	B,UNDATE(D)
+	AND	B,[177777,,-1]	; two unused bits at left of word
+	CAME	A,B
+	 JRST	CMPSIM
+	MOVE	A,UNREF(C)
+	ANDI	A,777		; ignore all but byte size (ref date, author)
+	MOVE	B,UNREF(D)
+	ANDI	B,777		; ignore all but byte size (ref date, author)
+	CAME	A,B
+	 JRST	CMPSIM
+	MOVE	A,UNRNDM(C)
+	AND	A,[177703,,0]	; ignore all but word count, link, reap bits
+	MOVE	B,UNRNDM(D)
+	AND	B,[177703,,0]	; ignore all but word count, link, reap bits
+	CAME	A,B
+	 JRST	CMPSIM
+; compare file linked to if link
+	TLNN	A,UNLINK	; are they links?
+	 JRST	CMPLNG
+	MOVEI	A,MFDBUF
+	MOVEM	A,THEDIR
+	MOVE	A,C
+	PUSHJ	P,LNKFIL
+	MOVE	E,LNKBUF
+	MOVE	F,LNKBUF+1
+	MOVE	G,LNKBUF+2
+
+	MOVEI	A,DIRBUF
+	MOVEM	A,THEDIR
+	MOVE	A,D
+	PUSHJ	P,LNKFIL
+	CAMN	E,LNKBUF
+	 CAME	F,LNKBUF+1
+	  JRST	CMPSIM
+	CAME	G,LNKBUF+2
+	 JRST	CMPSIM
+	JRST	CMPEQU
+
+; compare length
+CMPLNG:	MOVEI	A,MFDBUF
+	MOVEM	A,THEDIR
+	MOVE	A,C
+	PUSHJ	P,FILLEN
+	MOVE	B,K
+
+	MOVEI	A,DIRBUF
+	MOVEM	A,THEDIR
+	MOVE	A,D
+	PUSHJ	P,FILLEN
+	CAME	K,B
+	 JRST	CMPSIM
+
+; files are identical
+CMPEQU:	OASC	[ASCIZ /   = /]
+	AOBJN	DIR,.+1
+	JRST	CMPNE1
+
+; files have same name but are otherwise different
+CMPSIM:	OASC	[ASCIZ /  C  /]
+	AOBJN	DIR,.+1
+	JRST	CMPNE1
+
+; loss, couldn't read one of directories
+CDLOS1:	MOVEI	A,FONE
+	SKIPA
+CDLOS2:	MOVEI	A,FTWO
+	PUSHJ	P,FILBLK
+	OASC	[ASCIZ /, == OPEN FAILED == : /]
+	PUSHJ	P,EXPLAI
+	OASCR	[0]
+	JRST	DEATH
+
+FILBLK:	OSIX	(A)
+	OASCI	":
+	OSIX	3(A)
+	OASCI	";
+	OSIX	1(A)
+	OASCI	" 
+	OSIX	2(A)
+	POPJ	P,
+
+CDIR1:	SETZ
+	SIXBIT /OPEN/
+	[6,,DSKBI]
+	FONE
+	FONE+1
+	FONE+2
+	FONE+3
+	SETZB LSTERR
+
+CDIR2:	SETZ
+	SIXBIT /OPEN/
+	[6,,DSKBI]
+	FTWO
+	FTWO+1
+	FTWO+2
+	FTWO+3
+	SETZB LSTERR
+
+GETMFD:	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	SETZM	MFDSAV
+	SKIPN	AUTFLG			; -1 if search involves authors
+	 CAMN	A,[SIXBIT /DSK/]	; MFD on local site is cheap
+	  JRST	GETMF1
+
+; check if we need mfd -- any stars in names?
+GETMFQ:	MOVEI	B,MFDVCT
+	MOVE	C,DPSAVE
+	MOVNI	D,1
+MFDSTR:	CAME	D,1(C)
+	 JRST	GETMF1		; stars -- we need mfd, i guess
+	MOVE	(C)
+	MOVEM	(B)
+	AOBJN	B,.+1
+	ADDI	C,1
+	AOBJN	C,MFDSTR
+
+; don't need to read in MFD here
+	MOVEI	C,1(B)
+	SETZM	(C)
+	HRLI	C,1(C)
+	MOVSS	C
+	BLT	C,MFDVCT+499.
+	CAMN	A,LCLITS
+	MOVSI	A,(SIXBIT /DSK/)
+	MOVEM	A,DISK
+	JRST	MFDPNT
+
+; read in mfd
+GETMF1:	SETZM	MFDVCT
+	MOVE	B,[MFDVCT,,MFDVCT+1]
+	BLT	B,MFDVCT+499.
+	PUSHJ	P,RDMFD
+	 JRST	MFDXIT
+; set for loop through MFD
+	MOVE	A,MFDBUF+1
+	ADDI	A,MFDBUF
+	MOVEI	B,MFDVCT
+MFDLUP:	MOVE	C,DPSAVE
+	SKIPN	(A)
+	 JRST	MFDNXT
+	JUMPGE	C,MFDWIN
+MFDTST:	MOVE	0,(A)
+	AND	0,1(C)
+	CAMN	0,(C)
+	 JRST	MFDWIN
+	ADDI	C,1
+	AOBJN	C,MFDTST
+	JRST	MFDNXT
+
+MFDWIN:	MOVE	0,(A)
+	MOVEM	0,(B)
+	AOBJP	B,.+1
+MFDNXT:	ADDI	A,2
+	CAIGE	A,MFDBUF+1777
+	 JRST	MFDLUP
+
+MFDPNT:	HLRZS	B
+	MOVNS	B
+	HRLS	B
+	HRRI	B,MFDVCT
+	MOVE	A,B
+	MOVEM	A,MFDSAV
+
+; now sort stupid thing
+SRTLUP:	MOVE	C,(A)
+	MOVE	D,A
+SRTLU1:	CAMG	C,(D)
+	JRST	SRTNXT
+	EXCH	C,(D)
+	MOVEM	C,(A)
+SRTNXT:	AOBJN	D,SRTLU1
+	AOBJN	A,SRTLUP
+	MOVE	DP,MFDSAV
+	AOS	-4(P)
+MFDXIT:	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; ================================================================
+;		read and parse a u.f.d.
+; ================================================================
+
+; here to open and read a regular ufd
+;  A/ ,, .---> X/ dev
+;		/ nm1
+;		/ nm2
+;		/ snm
+;  C/ directory fixup instruction
+; skip return if directory was there
+; reads directory into DIRBUF
+
+GETDIR:	MOVE	B,3(A)
+	.SUSET	[.SSNAM,,B]	; make sname follow what we do
+	.CALL	[SETZ
+		 SIXBIT /OPEN/
+		 [16,,IC]		; don't snuff ref date
+		 (A)
+		 1(A)
+		 2(A)
+		 3(A)
+		 SETZB A]
+	 JRST	GETERR
+	SETZ	DIR,
+	MOVE	A,[-2000,,DIRBUF]
+	.IOT	IC,A
+	.CLOSE	IC,
+	XCT	C			; fix up arc dirs
+	 SKIPA				; if archive isn't, skip once
+	AOS	(P)			; normally skip twice
+	AOS	(P)
+	POPJ	P,
+
+; don't skip, means got real error
+GETERR:	POPJ	P,			; eventually win
+					; when remote ITS down?
+; archives have their 11 header words displaced by one word
+; and so they have to be fixed up before they can be treated
+; like regular directories
+ARCFIX:	MOVE	A,DIRBUF
+	CAMN	A,[SIXBIT /ARC1!!/]
+	 JRST	ARCOK			; newest style, thanx to RMS
+	CAME	A,[-1]
+	 CAMN	A,[SIXBIT /ARC!!!/]	; new style, thanx to MARC
+	SKIPA
+	 POPJ	P,
+	MOVE	A,[DIRBUF+1,,DIRBUF]
+	BLT	A,DIRBUF+9.
+ARCOK:	AOS	(P)
+	POPJ	P,
+
+; parse a directory
+; returns aobjn pointer in DIR and ALT to file blocks
+PRSDIR:	PUSH	P,A
+	PUSH	P,B
+	SETZM	DIRVCT
+	MOVE	B,[DIRVCT,,DIRVCT+1]
+	BLT	B,DIRVCT+199.
+	MOVE	ALT,[-200.,,DIRVCT]
+	MOVE	B,DIRBUF+UDNAMP		; offset of name area
+	ADDI	B,DIRBUF-LUNBLK		; start of dirbuf
+NXTNAM:	ADDI	B,LUNBLK
+	CAIL	B,DIRBUF+2000
+	 JRST	GETXIT
+	SKIPN	(B)
+	 JRST	NXTNAM
+	MOVEM	B,(ALT)
+	AOBJN	ALT,NXTNAM
+GETXIT:	HLRE	A,ALT
+	MOVNS	A
+	SUBI	A,200.
+	HRL	ALT,A
+	HRRI	ALT,DIRVCT
+	PUSHJ	P,ATOP
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; ================================================================
+;		syntax error in command line
+; ================================================================
+
+SYNERR:	OASC	[ASCIZ /Can't understand: /]
+	MOVE	B,[440700,,COMMND]
+SYNER1:	CAMN	B,COMPTR
+	JRST	SYNRST
+SYNER2:	ILDB	A,B
+	JUMPE	A,EXIT
+	PUSHJ	P,IOTA
+	JRST	SYNER1
+SYNRST:	OASCI	"|
+	JRST	SYNER2
+
+; ================================================================
+;		interrupt handler (tty only)
+; ================================================================
+
+ZZZ=.
+
+LOC 42
+	JSR	TSINT
+LOC ZZZ
+
+TSINT:	0
+	0
+	PUSH	P,A
+	PUSH	P,B
+	SKIPG	A,TSINT
+	 JRST	TSINTM
+	MOVEI	A,TYIC
+	.ITYIC	A,
+	 JRST	TSDIS
+	.RESET	TYIC,		; reset channel
+	CAIN	A,^G
+	 JRST	TSKILL			; if ^S or ^G typed, quit
+	CAIN	A,^S
+	 JRST	TSSTOP
+	SKIPA
+TSDISX:	MOVEM	A,TSINT+1
+TSDIS:	POP	P,B
+	POP	P,A
+	.DISMIS	TSINT+1
+
+TSSTOP:	SKIPN	INPRT
+	 MOVEI	A,SUMINT		; normal ^S causes end
+	SKIPGE	INPRT
+	 MOVEI	A,PRTFLS		; with printing, terminates one file
+	SKIPLE	INPRT
+	 MOVEI	A,PRTFL1
+	JRST	TSDISX
+
+; here we got a ^G, which always means kill
+TSKILL:	MOVEI	A,EXIT
+	JRST	TSDISX
+
+TSINTM:	SKIPE	MORLOK
+	 JRST	TSDIS		; dismiss more immediately if in --next file--
+	.RESET	TYIC,
+	TRNN	A,1_TYOC	; more only on output channel
+	 JRST	TSDIS		; spurious interrupt?
+	MOVE	A,[440700,,[ASCIZ /--More--/]]
+	MOVEI	B,8
+	PUSHJ	P,MESIOT
+	.CALL	[SETZ
+		 SIXBIT /IOT/
+		 MOVEI TYIC
+		 A
+		 MOVSI %TIPEK+%TIACT
+		 SETZB LSTERR]
+	 .VALUE
+	CAIN	A,^G	; ^G is always kill
+	 JRST	TSKILL
+
+	CAIE	A,^S	; ^S is also stop
+	 CAIN	A,177	; not rubout is continue
+	  JRST	TSMSTF	; rubout or ^S is stop and flush character
+	CAIE	A,40	; space is continue
+	 JRST	TSMSTP
+	.CALL	FLSCHR	; and flush character
+	 .VALUE
+	.IOT	TYOC,[^M]
+	.IOT	TYOC,[^J]
+	JRST	TSDIS
+
+FLSCHR:	SETZ	; flush the space
+	SIXBIT /IOT/
+	MOVEI TYIC
+	A
+	MOVSI %TIACT
+	SETZB LSTERR
+
+TSMSTF:	.CALL	FLSCHR	; here to stop and flush character
+	 .VALUE
+TSMSTP:	MOVE	A,[440700,,[ASCIZ /Flushed/]]	; here to stop w. o. flushing char
+	MOVEI	B,7
+	PUSHJ	P,MESIOT
+	JRST	TSSTOP
+
+MESIOT:	.CALL	MESCAL
+	 .VALUE
+	.CALL	[SETZ ? SIXBIT /FINISH/ ? SETZI TYOC]
+	 .VALUE
+	POPJ	P,
+
+MESCAL:	SETZ
+	SIXBIT /SIOT/
+	MOVEI TYOC
+	A
+	B
+	SETZB LSTERR
+
+; ======================================================================
+;		Brief typeout routine
+; ======================================================================
+
+BPrint:	Aos K,BCount	;This is the BCount'th U/J pair (>>)
+	Cail K,6
+	  Jrst [Movei K,1
+		Movem K,BCount
+		OAscr [0]
+		Jrst .+1]
+	Caie K,1
+	  OAsci ^I
+	OAsci " 	;<space>
+	OSix UNFN1(M)
+	OAsci ^I
+	OSix UNFN2(M)
+	Popj P,
+
+; ================================================================
+;		uuo handler (typeout uuos)
+; ================================================================
+
+ZZZ==.
+        LOC 40
+        0
+        JSR UUOH
+        LOC ZZZ
+UUOCT==0
+UUOTAB:	JRST ILUUO
+	IRPS X,,[DEC BPTR OCT CTLP ASCC SIX ASC ASCI ASCR SIXS HPOS ALIGN SIGN]
+	UUOCT==UUOCT+1
+	O!X=UUOCT_27.
+	JRST UO!X
+	TERMIN
+
+IFG UUOCT-37, PRINTC /---TOO MANY UUO'S---/
+
+UUOMAX==.-UUOTAB
+
+
+UUOD:	0		; contents of UUO eff addr.
+UUOE:	0		; UUO effad.
+
+UUOH:	0
+	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	MOVEI	@40			; get eff addr. of uuo
+	MOVEM	UUOE
+	MOVE	@0
+	MOVEM	UUOD			; contents of eff adr
+	MOVE	B,UUOE			; eff adr
+	LDB	A,[270400,,40]		; get uuo ac,
+	LDB	C,[330600,,40]		; op code
+	CAIL	C,UUOMAX
+	MOVEI	C,0			; grt=>illegal
+	JRST	@UUOTAB(C)		; go to proper rout
+
+UUORET:	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A			; restore ac's
+	JRST	2,@UUOH
+
+ILUUO:	.VALUE	[ASCIZ /:ILLEGAL UUO/]
+
+UOBPTR:	MOVEI	C,0
+	MOVE	B,UUOD
+	JRST	UOASC1
+
+UOASCR:	SKIPA	C,[^M]			; cr for end of type
+UOASC:	MOVEI	C,0			; no cr
+	HRLI	B,440700		; make ascii pointer
+UOASC1:	ILDB	A,B			; get char
+	JUMPE	A,.+3			; finish?
+	PUSHJ	P,IOTA
+	JRST	.-3			; and get another
+	SKIPE	A,C			; get saved cr?
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+UOASCC:	HRLI	B,440700		; make ascii pointer
+UOAS1C:	ILDB	A,B			; get char
+	CAIN	A,^C
+	JRST	UUORET
+	PUSHJ	P,IOTA
+	JRST	UOAS1C			; and get another
+
+UOCTLP:	MOVEI	A,^P
+	PUSHJ	P,IOTA1
+
+UOASCI:	MOVE	A,B			; prt ascii immediate
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+UOSIX:	MOVE	B,UUOD
+USXOOP:	JUMPE	B,UUORET
+	LDB	A,[360600,,B]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	LSH	B,6
+	JRST	USXOOP
+
+UOSIXS:	MOVE	A,[440600,,UUOD]
+USLOOP:	ILDB	C,A
+	ADDI	C,40
+	PUSHJ	P,IOTC
+	TLNE	A,770000
+	JRST	USLOOP
+	JRST	UUORET
+
+UOHPOS:	SUB B,HPOS
+	SKIPG B
+	MOVEI B,1	; always at least one space
+UOHPO1:	MOVEI A,40
+	PUSHJ P,IOTA
+	SOJG B,UOHPO1
+	JRST UUORET
+
+POWER:	0 ? 1 ? 10. ? 100. ? 1000. ? 10000. ? 100000. ? 1000000.
+
+UOSIGN:	MOVM D,UUOD
+	ANDI A,7
+	MOVE A,POWER-1(A)
+	MOVEI C,40
+UOSIG1:	CAMLE A,D
+	PUSHJ P,IOTC
+	IDIVI A,10.
+	CAIE A,1
+	 JRST UOSIG1
+	MOVEI A,"+
+	SKIPGE UUOD
+	MOVEI A,"-
+	SKIPN UUOD
+	MOVEI A," 
+	PUSHJ P,IOTA
+	SETZ A,
+	JRST UODEC
+
+UOALIG:	MOVE D,UUOD
+	ANDI A,7
+	MOVE A,POWER(A)
+	MOVEI C,40
+UOALI1:	CAMLE A,D
+	PUSHJ P,IOTC
+	IDIVI A,10.
+	CAIE A,1
+	 JRST UOALI1
+	SETZ A,
+
+UODEC:	SKIPA	C,[10.]			; get base for decimal
+UOOCT:	MOVEI	C,8.			; octal base
+	MOVE	B,UUOD			; get actual word to prt
+	JRST	.+3			; join code
+UODECI:	SKIPA	C,[10.]			; decimal
+UOOCTI:	MOVEI	C,8.
+	MOVEM	C,BASE'
+	SKIPN	A
+	HRREI	A,-1			; a=digit count
+	PUSHJ	P,UONUM			; print numbr
+	JRST	UUORET
+
+UONUM:	IDIV	B,BASE
+	HRLM	C,(P)			; save digit
+	SOJE	A,UONUM1		; done if 0
+	SKIPG	A			; + => more
+	SKIPE	B			; - => b=0 => done
+	PUSHJ	P,UONUM			; else more
+UONUM1:	HLRZ	C,(P)			; retreive digits
+	ADDI	C,"0			; make to ascii
+	CAILE	C,"9			; is it good dig
+	ADDI	C,"A-"9-1		; make hex digit
+	PUSHJ	P,IOTC
+	POPJ	P,			; ret
+
+IOTC:	PUSH	P,A
+	MOVE	A,C
+	PUSHJ	P,IOTA
+	POP	P,A
+	POPJ	P,
+
+HPOS:	0	; line pos
+
+IOTA:	CAIN	A,^P
+	JRST	[.IOT TYOC,["^]
+		 ADDI A,100
+		 JRST IOTA1]
+	CAIN	A,^J
+	POPJ	P,
+IOTA1:	.IOT	TYOC,A
+	CAIE	A,^M
+	 JRST	IOTTAB
+	.IOT TYOC,[^J]
+	SETZM	HPOS
+	POPJ	P,
+; update line pos
+IOTTAB:	CAIN	A,^I
+	 JRST	[MOVE A,HPOS
+		 ADDI A,10
+		 ANDI A,7770
+		 MOVEM A,HPOS
+		 POPJ P,]
+	AOS	HPOS
+	POPJ	P,
+
+GETRSR:	PUSH	P,B
+       	MOVE	B,[SQUOZE 0,NQS]
+	.EVAL	B,
+	 .VALUE [ASCIZ /:.EVAL OF NQS FAILED/]
+	MOVNS	B
+	HRLS	B
+	HRRI	B,TRESRV
+	MOVEM	B,QPTR
+	MOVE	A,[SQUOZE 0,QRESRV]
+	PUSHJ	P,GETQ
+	MOVE	B,QPTR
+	HRRI	B,TPKID
+	MOVE	A,[SQUOZE 0,QPKID]
+	PUSHJ	P,GETQ
+	POP	P,B
+	POPJ	P,
+
+GETQ:	.EVAL	A,
+	 .VALUE [ASCIZ /:.EVAL OF SYMBOL IN A FAILED/]
+	HRLS	A
+	HRR	A,B
+	.GETLOC	A,
+	ADD	A,[1,,1]
+	AOBJN	B,.-2
+	POPJ	P,
+
+	END	START
+

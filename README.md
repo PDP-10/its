@@ -89,6 +89,7 @@ from scratch.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:)
    - CHTN, CFTP, Chaosnet TELNET and FTP support
+   - FIND, search for files.
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
