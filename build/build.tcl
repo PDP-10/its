@@ -421,6 +421,9 @@ expect ":KILL"
 
 respond "*" ":link sys2;ts chtn,sysbin;supdup bin\r"
 
+respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
+expect ":KILL"
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape
