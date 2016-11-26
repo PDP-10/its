@@ -1,0 +1,787 @@
+
+.BEGIN RUBOUT		;Rubout processor routine for -*-MIDAS-*- programs.
+
+.AUXIL			;Don't mention all my symbols in crefs of programs that use me.
+
+	;PRINT VERSION NUMBER
+	.TYO6 .IFNM1
+	.TYO 40
+	.TYO6 .IFNM2
+	PRINTX/ INCLUDED IN THIS ASSEMBLY.
+/
+
+;The main entry points of the RUBOUT package are INIT and READ.
+;Each time you want to start reading one object, you should call INIT.
+;After that, you call READ one or more times until you have enough
+;input to act on.  When you wish to start reading a "new" object -- and not
+;allow the old one to be rubbed out any longer -- call INIT again.
+
+;There are also subsidiary entry points called character service routines.
+;These handle the display updating for one input character.  The
+;rubout-processing significance of all characters is determined by
+;a routine which you supply, called DISPATCH, which examines the
+;character and goes to the appropriate service routines.
+;We supply a default definition of DISPATCH for you to use as
+;all or part of your dispatch routine, and also as a guide to what
+;dispatch routines should do.
+
+
+;Calling Conventions:
+
+;All subroutines herein are called by PUSHJ P,.  They normally do NOT skip-return.
+;Character service routines skip, with a return code in A,
+;to tell READ to return with that code.
+
+;Arguments are passed in ACs A,B,C and D.  D must be C+1.
+;Subroutines may alter A-D as documented with each routine.
+
+
+;These switches may be set by the caller to request optional features.
+;They may be defined local to the block RUBOUT.
+
+IFNDEF $$MULTI,$$MULTI==0	;Be efficient for CRs, BSs and TABs in the text.
+				;$$MULTI==1 makes the code larger but makes
+				;rubbing out these characters do less display.
+IFNDEF $$FCI,$$FCI==1		;Handle full char set input
+				;(distinguish Alpha from C-B).
+				;$$FCI==1 works for ASCII input streams too.
+IFNDEF $$PROMPT,$$PROMPT==0	;1 => call PROMPT to type a prompt string when needed.
+IFNDEF $$HELP,$$HELP==0		;1 => call HELP when the user types Top-H.
+IFNDEF $$CTLBRK,$$CTLBRK==0	;1 => the default dispatch routine
+				;makes all random control characters break.
+IFNDEF $$CTLECH,$$CTLECH==1	;1 => control chars that perform editing functions
+				  ;also echo, and must be erased.  Doesn't include Rubout.
+IFNDEF $$BRKINS,$$BRKINS==1	;1 => break characters insert themselves first,
+				;in the default dispatch routine.
+IFNDEF $$FFCLR,$$FFCLR==1	;1 => ^L echoes as clear screen.
+				;0 => it echoes as uparrow-L, and we re-use the same lines.
+
+;These exits must be defined by the user.  They may be defined local
+;to the block RUBOUT:
+
+;INCHR		reads a character, returning it in A.
+;OUTCHR		outputs the character in A.  --MORE-- should, for
+;		most applications, be inhibited
+;		by having %TJMOR set in the channel used for output,
+;		if it is a terminal.  If you want to do --MORE--,
+;		you should make sure that when the --MORE-- is proceeded
+;		its line is re-used so that the screen is as if
+;		the --MORE-- had never been.
+;DISPLAY	outputs the character in A in display mode (%TJDIS).
+;		It can be any stream that knows the meaning of ^P.
+;		If outputting to a terminal, set %TJMOR.
+;PROMPT		types a prompt-string.  Called at appropriate times.
+;		Needed only if $$PROMPT==1.  Not called when READ is
+;		entered;  if you want that, do it yourself.
+;HELP		types a help-string when the user typed Top-H.
+;		Needed only if $$HELP==1.  On displays,
+;		HELP may wish to wait for input to be available
+;		and then jump to REDISP without reading it.
+;DISPATCH	takes a character in A, and jumps off to the service
+;		routine for it, which may be one of those provided
+;		by RUBOUT (such as RUBOUT, INSERT, BREAK, etc.).
+;		A sample dispatch routine is called RB$DSP.
+;		You can use it, if it is right, by doing
+;		RUBOUT"DISPATCH==RUBOUT"RB$DSP
+;		after the .INSRT SYSENG;RUBOUT, or your dispatch
+;		can jump off to it, after handling a few cases specially.
+
+;Service routines provided in this file include
+;INSERT, BREAK, BRKCR, BRKINS, INSCR, QUOTE, QUIT, CANCEL, RUBOUT,
+;IGNORE, REDISP, CLRLIN, CTLU.
+
+
+;Each call to the rubout processor must give the address of an argument
+;block, called the rubout processor block, in B.
+;This block enables you to carry on several transactions with
+;RUBOUT at the same time (or one inside another).  If you wish,
+;you can make your DISPATCH, OUTCHR, etc. entries jump through
+;extra words at the end of the rubout processor block (words which
+;normally are not used), and thus have different routines for
+;each transaction.
+
+;These are the words in the rubout processor argument block
+;that are used by this package:
+
+RB.==777777		;Bit typeout mode prefix.
+RB.POS==0		;Vpos,,Hpos of 1st character in buffer.
+RB.WID==1		;Width of line on terminal.
+RB.TYP==2		;TTY characteristics.
+			;positive => printing terminal.
+  RB%FIL==2		; bit 3.2 => not even that, just reading from a file.
+			;0 => glass teletype (character erase only, no move up).
+			;negative => full display.
+  RB%CID==1		; bit 3.1 => can insert/delete as well.
+  RB%SAI==2		; BIT 3.2 => SAIL mode on, ctl chars echo as one pos.
+RB.BEG==3		;B.P. to ILDB start of buffer.
+RB.END==4		;B.P. to ILDB 1st character after end buffer.
+			;Actually, you should leave space for two characters
+			;to be stored past RB.END.
+RB.PTR==5		;B.P. for storing into buffer.
+RB.PRS==6		;B.P. to last character parsed at next level up.
+RB.STAT==7		;Word of flags indicating temporary state of editing
+
+RB.LEN==10		;Number of words in the rubout block
+
+;The caller should set up RB.BEG and RB.END, then call INIT which will
+;initialize RB.TYP, RB.WID, and RB.POS and RB.PTR.
+
+;The use of RB.PRS:
+;Complicated break-conditions do not need to be expressed in the DISPATCH routine.
+;If you use $$BRKINS==1 (Insert break characters in the buffer), then
+;if the higher level parser decides it needs more characters it can just call
+;READ again to get more.  It could then re-parse the whole input string.
+;To save time, it can put in RB.PRS the pointer to the last character that
+;it actually parsed.  On return from READ, if RB.PRS is unchanged, all
+;characters up to that point were not changed (ie, not rubbed out)
+;and the parser can continue from where it left off.
+;Otherwise, RB.PRS will be zero, to indicate that the parser must
+;rescan the entire string as returned by READ.
+;If you like, you can keep the parser's fetch-pointer in RB.PRS,
+;calling READ when it reaches RB.PTR, and noticing when it is zeroed.
+
+DEFINE SYSCAL NAME,ARGS
+	.CALL [SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+;Get a character's graphic type.  Takes character in A, returns type in A.
+
+;Type codes are:
+ ;0 - 1-POSITION CHARACTER.
+ ;1 - ORDINARY CTL CHAR - USUALLY 2-POSITION, BUT 1-POSITION IN SAIL MODE.
+ ;2 - BACKSPACE.
+ ;3 - CR
+ ;4 - LF
+ ;5 - TAB.
+ ;6 - SPECIAL CTL CHARACTER - 2-POSITION EVEN IN SAIL MODE.
+ ;7 - ^G
+
+CHRTYP:
+IFN $$FCI,[
+	PUSH P,C		;If storing 9-bit bytes in the buffer,
+	LDB C,[300600,,RB.PTR(B)]
+	CAIN C,7
+	 JRST CHRTY1
+	CAIGE A,177		;assume that anything
+	 JRST [	SETZ A,		;below 177 is either an ASCII graphic or a SAIL graphic.
+		JRST POPCJ]
+CHRTY1:	PUSHJ P,CHRASC		;Other things were echoed by converting them to ASCII.
+	POP P,C
+];IFN $$FCI
+	CAIN A,177
+	 JRST [	MOVEI A,6	;Assume rubout is a 2-position character,
+		POPJ P,]	;even though we shouldn't be echoing them.
+	PUSH P,C
+	PUSH P,D
+	MOVE C,A
+	IDIVI C,6
+	CAIL A,40
+	 TDZA A,A
+	  LDB A,RRCHBP(D)
+	JRST POPDCJ
+
+;TABLES USED BY CHRTYP THE ENTRY FOR EACH
+;CHARACTER IS AN INDEX INTO RRFORT OR RRBACT.
+
+RRCHBP:	REPEAT 6,<360600-<6*.RPCNT>_12.>,,RRCHTB(C)
+
+RRCHTB:	.BYTE 6
+	6		;^@
+	1		;^A
+	1		;^B
+	1		;^C
+	1		;^D
+	1		;^E
+	1		;^F
+	7		;^G
+	2		;^H
+	5		;^I
+	4		;^J
+	1		;^K
+	1		;^L
+	3		;^M
+	1		;^N
+	1		;^O
+	1		;^P
+	1		;^Q
+	1		;^R
+	1		;^S
+	1		;^T
+	1		;^U
+	1		;^V
+	1		;^W
+	1		;^X
+	1		;^Y
+	1		;^Z
+	0		;ALTMODE, 1 POSITION.
+	1		;^^
+	1		;[ ;^]
+	1		;^\
+	1		;^_
+	.BYTE
+
+;INIT empties the buffer and also tells RUBOUT about
+;the characteristics of the output stream used
+;for echoing of output during rubout processing.
+;If it is a terminal, the capabilities of it are also remembered for use
+;in chosing display strategies.  If it is not a terminal, or if -1 is
+;passed as the channel number, we assume that no echoing of input or rubbed
+;out characters is desired.
+
+;INIT takes the output channel in A and the rubout processing block address in B.
+;It sets RB.TYP, RB.WID and RB.POS.  It also initializes the buffer to be empty.
+
+INIT:	PUSHJ P,INITB
+
+;Learn about a new output source, without marking the buffer empty.
+INITO:	PUSH P,C
+	PUSH P,D
+	SYSCAL CNSGET,[A ? MOVEM D ? MOVEM RB.WID(B)	;Read tty width into RB.WID.
+		 REPEAT 3,[ ? MOVEM D]]	;Read TTYOPT of TTY into D.
+	 JRST INIT1		;Jump if not really a TTY.
+	SETZ C,			;First assume it's a glass TTY.
+	TLNN D,%TOMVU
+	 TLNE D,%TOOVR		;If it isn't one, try a printing TTY.
+	  MOVSI C,200000	;RB.TYP should be positive.
+	TLNE D,%TOERS
+	 MOVSI C,600000		;For erasable display, it should be negative.
+	TLNE D,%TOCID
+	 TLO C,RB%CID		;If we can insert/delete chars, remember that.
+	MOVEM C,RB.TYP(B)	
+	SYSCAL RCPOS,[A ? MOVEM RB.POS(B)]
+	 .LOSE %LSFIL
+POPDCJ:	POP P,D
+POPCJ:	POP P,C
+CPOPJ:	POPJ P,
+
+INIT1:	MOVSI C,200000+RB%FIL
+	MOVEM C,RB.TYP(B)
+	JRST POPDCJ
+
+;Set up to do some rubout processing.  Takes the Rubout processing block addr in B
+;and marks the buffer empty.
+INITB:	PUSH P,C
+	MOVE C,RB.BEG(B)
+	MOVEM C,RB.PTR(B)
+	JRST POPCJ
+
+IFN $$FCI,[
+;Normalize a 9-bit character so we can do comparisons on it.
+CHRNRM:	;ANDCMI A,%TXSFT+%TXSFL
+	TRNE A,%TXCTL+%TXMTA		;Convert lower case controls/metas to upper case,
+	 TRNN A,100
+	  JRST CHRNR1
+	TRC A,177
+	TRCN A,177			;but don't turn Control-Rubout into Control-_.
+	 TRZ A,40
+CHRNR1:	TRNE A,%TXTOP+%TXCTL+140	;ASCII control chars must be turned into %TXCTL+char.
+	 POPJ P,
+	CAIE A,33			;except for altmode.
+	 ADDI A,%TXCTL+100
+	POPJ P,
+
+;Convert a 9-bit character in A to ASCII, if necessary for insertion in the buffer
+;(that is, if the buffer is 7-bit).
+CHRASI:	PUSH P,C
+	LDB C,[300600,,RB.PTR(B)]
+	CAIE C,7
+	 JRST POPCJ
+	POP P,C
+;Convert a 9-bit character in A to ASCII.
+CHRASC:	ANDI A,%TXCTL+%TXASC
+	TRZN A,%TXCTL
+	 POPJ P,
+	CAIN A,177
+	 POPJ P,
+	CAIE A,40
+	 CAIL A,140
+	  SUBI A,40
+	ANDCMI A,100
+	POPJ P,
+];IFN $$FCI
+
+SUBTTL Main rubout processing routine
+
+;The main function of the rubout package is READ.
+;It takes the pointer to a rubout processor argument block in B.
+;It reads characters and processes them until either a break character
+;is read, the buffer becomes full, or an attempt is made to rub out
+;past the beginning of the buffer.
+;On return, A contains -1 if the buffer is full;  -2, in case of
+;over-rubout;  otherwise, it contains the break character that caused
+;the exit.  No other accumulator is clobbered.
+
+READ:	PUSH P,C
+	PUSH P,D
+RBLOOP:	PUSHJ P,INCHR		;Read next character into A.
+	SKIPLE RB.TYP(B)	;After a CR coming form a file, flush the LF.
+	 CAIE A,^M
+	  JRST RBLOO2
+	PUSHJ P,INCHR
+	MOVEI A,^M
+RBLOO2:
+IFN $$HELP,[
+	CAIN A,%TXTOP+"H	;If user supplied a HELP routine, call it for Top-H.
+	 JRST [	PUSHJ P,HELP	;Must check for Top-H before the CHRNRM, which makes it H.
+		JRST RBLOOP]
+];IFN $$HELP
+IFN $$FCI,PUSHJ P,CHRNRM
+	PUSHJ P,DISPATCH	;Let user decide what to do with the character.
+	 JRST RBLOO1
+	JRST POPDCJ		;His routine skips => it wants to exit.
+				;It should have put the return code in A.
+
+RBLOO1:	MOVE C,RB.PTR(B)	;User didn't ask to return,
+	CAME C,RB.END(B)	;but return anyway if the buffer has become full.
+	 JRST RBLOOP
+	MOVNI A,1
+	JRST POPDCJ
+
+IFE $$FCI,[
+;Here is the default RB.DSP character dispatch routine which we provide.
+RB$DSP:	CAIN A,177
+	 JRST RUBOUT
+	CAIN A,^U
+	 JRST CTLU
+	CAIN A,^D
+	 JRST CANCEL
+	CAIN A,^G
+	 JRST QUIT
+	CAIN A,^M
+IFN $$BRKINS, JRST BRKCR
+IFE $$BRKINS, JRST BREAK
+	CAIE A,^_
+	 CAIN A,^C
+IFN $$BRKINS, JRST BRKINS
+IFE $$BRKINS, JRST BREAK
+	CAIN A,^Q
+	 JRST QUOTE
+	CAIN A,^L
+	 JRST REDISP
+IFN $$CTLBRK,[
+	CAIGE A,40
+IFN $$BRKINS, JRST BRKINS
+IFE $$BRKINS, JRST BREAK
+]
+	JRST INSECH
+];IFE $$FCI
+
+IFN $$FCI,[
+;Default dispatch for 9-bit characters.
+RB$DSP:	CAIN A,177
+	 JRST RUBOUT
+	CAIN A,%TXCTL+"U
+	 JRST CTLU
+	CAIN A,%TXCTL+"D
+	 JRST CANCEL
+	CAIN A,%TXCTL+"G
+	 JRST QUIT
+	CAIN A,%TXCTL+"M
+IFN $$BRKINS, JRST BRKCR
+IFE $$BRKINS, JRST BREAK
+	CAIE A,%TXCTL+"_
+	 CAIN A,%TXCTL+"C
+IFN $$BRKINS, JRST BRKINS
+IFE $$BRKINS, JRST BREAK
+	CAIN A,%TXCTL+"Q
+	 JRST QUOTE
+	CAIN A,%TXCTL+"L
+	 JRST REDISP
+IFN $$CTLBRK,[
+	TRNE A,%TXCTL+%TXMTA
+IFN $$BRKINS, JRST BRKINS
+IFE $$BRKINS, JRST BREAK
+]
+	JRST INSECH
+];IFN $$FCI
+
+SUBTTL Various action routines for input characters.
+
+;Dispatch here for a character that quotes the next one (eg, ^Q).
+;The quoting character goes in the buffer so that it can quote
+;the next character at the next level of parsing.
+QUOTE:
+IFE $$CTLECH,PUSHJ P,OUTECH
+IFN $$FCI,PUSHJ P,CHRASI
+	IDPB A,RB.PTR(B)	;Store the ^Q.
+	PUSHJ P,INCHR		;Read the quoted character.
+
+;Insert a character, echoing it if it was a non-echoed control-character.
+INSECH:   CAIE A,177
+IFN $$CTLECH,CAIA
+.ELSE [
+IFN $$FCI, TRNE A,%TXCTL
+.ELSE	   CAIGE A,40
+]
+	    PUSHJ P,OUTECH
+	  JRST INSERT
+
+;Insert char followed by a LF.  For CR, when it isn't a break.
+INSCR:	MOVEI A,^M
+	IDPB A,RB.PTR(B)
+	MOVEI A,^J
+	MOVE C,RB.END(B)	;Note that the buffer may become full
+	CAMN C,RB.PTR(B)	;after just the CR.
+	 JRST [	MOVEI B,1
+		AOS (P)
+		POPJ P,]
+
+;Dispatch here for an ordinary character, that should just be inserted,
+;and has already been echoed.
+INSERT:
+IFN $$FCI,PUSHJ P,CHRASI	;If char is 9-bit and buffer is 7-bit, convert.
+	IDPB A,RB.PTR(B)
+	POPJ P,
+
+;Insert char and a LF, then break.
+BRKCR:	PUSH P,A
+	MOVEI A,^M
+	IDPB A,RB.PTR(B)
+	MOVEI A,^J
+	IDPB A,RB.PTR(B)
+	POP P,A
+	JRST BREAK
+
+;Dispatch here for a break character.  We store it and a null,
+;then signal READ to return the break character.
+;If the character is a control char which didn't echo, we echo it.
+BRKINS:	PUSH P,A
+	PUSHJ P,INSECH		;Insert, maybe echoing or converting 9-bit to 7-bit.
+	POP P,A
+
+;Dispatch here for a break character that should not be stored
+;in the buffer.
+BREAK:	SETZ C,			;Store a 0 to make it ASCIZ,
+	MOVE D,RB.PTR(B)	;but don't make RB.PTR point after it.
+	IDPB C,D
+	AOS (P)
+	POPJ P,
+
+;Here to "quit".  Acts like too many rubouts, flushing any amount of input.
+QUIT:	MOVE C,RB.BEG(B)	;Mark the buffer empty.
+	MOVEM C,RB.PTR(B)
+	SETZM RB.PRS(B)		;Tell user his old parsing work is no use.
+	MOVNI A,2		;Make READ return -2.
+	AOS (P)
+	POPJ P,
+
+;Empty the entire buffer.  The same as exactly enough rubouts
+;but types out differently.
+CANCEL:	SETZM RB.PRS(B)		;Tell user his old parsing is no longer any use.
+	SKIPGE D,RB.TYP(B)	;On a display, clear the display window first,
+	 JRST CANCE1		;while we can still tell how long it is.
+	MOVE C,RB.BEG(B)	;Empty the buffer.
+	MOVEM C,RB.PTR(B)
+	TLNE D,RB%FIL
+	 POPJ P,		;If reading from file, don't type anything.
+	MOVEI A,40		;Printing terminal, type "XXX?" and CRLF.
+	PUSHJ P,OUTCHR
+	MOVEI A,"X
+	PUSHJ P,OUTCHR
+	PUSHJ P,OUTCHR
+	PUSHJ P,OUTCHR
+	MOVEI A,"?
+	PUSHJ P,OUTCHR
+	JRST WCLEAR		;CRLF, and prompt if appropriate.
+
+CANCE1:	PUSHJ P,WCLEAR		;Clear out the display window.
+	MOVE C,RB.BEG(B)	;Empty the buffer.
+	MOVEM C,RB.PTR(B)
+	POPJ P,
+
+CTLU:	
+IFN $$CTLECH,PUSHJ P,IGNORE	; If the ^U echoed, must erase it too.
+;Delete one line backwards.  Deletes at least one character.
+CLRLIN:	PUSHJ P,RUBOUT		; DELETE AT LEAST ONE CHAR, STOPPING ONLY AT LINE BEG.
+	 CAIA
+	  JRST POPJ1		; Beginning of buffer => propagate the skip.
+	MOVE C,RB.PTR(B)
+	CAMN C,RB.BEG(B)	; Else stop rubbing if now at start of line.
+	 POPJ P,
+	LDB A,C
+	CAIE A,^J
+	 JRST CLRLIN
+	POPJ P,
+
+;Dispatch here to ignore a character.  On a display, erase it if it echoed.
+IGNORE:
+IFE $$CTLECH,[
+IFE $$FCI,CAIGE A,40
+IFN $$FCI,TRNE A,%TXCTL
+	   POPJ P,
+]
+	SKIPL RB.TYP(B)
+	 POPJ P,
+	JRST RUBOU1
+
+SUBTTL Various display operations
+
+;Here to retype the entire contents of the buffer.
+REDISP:
+IFN $$FFCLR,IFN $$PROMPT, PUSHJ P,PROMPT ;If ^L clears the screen, just re-prompt.
+IFE $$FFCLR,PUSHJ P,WCLEAR		;Else, erase all the lines that are in use
+					;and put cursor after the previous prompt.
+	MOVE C,RB.BEG(B)
+REDIS1:	CAMN C,RB.PTR(B)
+	 POPJ P,
+	ILDB A,C
+	PUSHJ P,OUTECH
+	JRST REDIS1
+
+;Clear the display window.  On printing terminal, just CRLF and prompt.
+WCLEAR:	SKIPL RB.TYP(B)
+	 JRST [	PUSHJ P,CRLF
+		IFN $$PROMPT, PUSHJ P,PROMPT
+		POPJ P,]
+;Here for clearing buffer on a display.
+IFN $$MULTI,[
+	PUSHJ P,RESYNCH		;Compute vpos,,hpos of end of buffer in D.
+	PUSH P,D
+	PUSHJ P,CRSHOME		;Move cursor to beginning of rubout processor area.
+	MOVEI A,"L
+	PUSHJ P,DISP2		;Clear rest of that line.
+	HLRZS (P)
+	POP P,D			;Then CRLF down thru the lines that were occupied.
+	HLRZ C,RB.POS(B)
+	CAMN C,D
+	 POPJ P,
+WCLEA1:	CAMN C,D
+	 JRST CRSHOM		;Then move cursor to beginning of area again.
+	MOVEI A,"D
+	PUSHJ P,DISP2		;Move down one line
+	MOVEI A,"L
+	PUSHJ P,DISP2		;and clear the one we get to.
+	AOJA C,WCLEA1
+];IFN $$MULTI
+.ELSE [
+	PUSHJ P,CRSHOME		;Move cursor to beginning of rubout processor area.
+	MOVEI A,"L
+	JRST DISP2		;Clear rest of that line.
+];IFN $$MULTI
+
+;On a display only, move the cursor to the beginning of the window area.
+CRSHOM:	MOVEI A,"V
+	PUSHJ P,DISP2
+	HLRZ A,RB.POS(B)
+	ADDI A,10
+	PUSHJ P,DISPLAY
+	MOVEI A,"H
+	PUSHJ P,DISP2
+	HRRZ A,RB.POS(B)
+	ADDI A,10
+	PUSHJ P,DISPLAY
+	POPJ P,
+
+;Output a ^P followed by the character in A, using DISPLAY supplied by user.
+DISP2:
+	PUSH P,A
+	MOVEI A,^P
+	PUSHJ P,DISPLAY
+	POP P,A
+	PUSHJ P,DISPLAY
+	POPJ P,
+
+;Output the character in A as it should be echoed, preserving A.
+OUTECH:	PUSH P,A
+	PUSHJ P,OUTEC1
+	POP P,A
+	POPJ P,
+
+OUTEC1:	CAIGE A,177
+	 JRST OUTPUT
+IFN $$FCI,PUSHJ P,CHRASC
+	CAIN A,177
+	 JRST OUTRUB
+	CAIN A,^M
+	 JRST CRLF
+	JRST OUTPUT
+
+OUTRUB:	MOVEI A,"^
+	PUSHJ P,OUTPUT
+	MOVEI A,"?
+	JRST OUTPUT
+
+;Type a CRLF via the output 1 character instruction.
+CRLF:	MOVEI A,^M
+	PUSHJ P,OUTCHR
+	MOVEI A,^J
+	PUSHJ P,OUTCHR
+	POPJ P,
+
+SUBTTL The operation of rubbing out one character
+
+;This is the character action routine for Rubout, which we assume
+;was not echoed.
+RUBOUT:	PUSHJ P,DBPPTR		;Back up RB.PTR one byte.
+	 JRST QUIT		;It was at beginning => return -2 ("overrrubout") from READ.
+	MOVE A,C
+	ILDB A,A		;What character are we rubbing out?
+	LDB D,C
+	CAIN A,^J		;If rubbing out a ^J which follows a ^M,
+	 CAIE D,^M
+	  JRST RUBOU3
+	CAMN C,RB.BEG(B)
+	 JRST RUBOU3
+	SKIPG RB.TYP(B)		;Rub out the ^M too.
+	 JRST RUBOU4		;On display, just call rubout again after this call is done.
+	PUSHJ P,DBPPTR		;On printing TTY, type a CRLF and flush both characters.
+	JRST CRLF
+
+RUBOU4:	PUSH P,[RUBOUT]
+RUBOU3:	SKIPLE RB.TYP(B)	;Printing terminal?
+OUTPUT:	 JRST OUTCHR		;on printing terminal, just echo the character.
+
+;Here to rub the character in A out on a display screen.
+RUBOU1:	PUSHJ P,CHRTYP
+	XCT RUBTAB(A)
+RUBOU2:	MOVEI A,"X
+	JRST DISP2
+
+RUBTAB:	JFCL		;Normal character;  fall through to RUBOU2 and send ^PX.
+	JRST RUBCTL	;Control char may be one position or two.
+	JRST RUBBS	;Backspace rubs out by moving forward.
+	JRST RUBCR	;CR rubs out requiring redisplay.
+	JRST RUBLF	;LF is simple, but maybe also rub preceding CR
+	JRST RUBHT	;Tab is hard to rub out.
+	PUSHJ P,RUBOU2	;Rubout and ^@ take two positions always.
+	JRST OUTPUT	;^G takes no positions;  echo it to rub it out.
+
+RUBCTL:	MOVSI D,RB%SAI	;Control chars are one pos or two according to sail mode.
+	TDNN D,RB.TYP(B)
+	 PUSHJ P,RUBOU2
+	JRST RUBOU2
+
+RUBBS:	RUBCR:	RUBHT:
+IFN $$MULTI,[
+	PUSHJ P,RESYNCH	;Compute current vpos,,hpos in D.
+	MOVEI A,"H
+	PUSHJ P,DISP2	;Move cursor to that position.
+	MOVEI A,10(D)
+	PUSHJ P,DISPLAY
+	POPJ P,
+]
+.ELSE 	JRST REDISP
+
+RUBLF:	MOVEI A,"U	;Rubbing out LF:  move up one line.
+	JRST DISP2
+
+;Decrement RB.PTR by one byte, updating RB.PRS as necessary.
+;Skips unless RB.PTR was pointing at the beginning of the buffer,
+;in which case it was not changed.  RB.PTR is left in C, either way.
+DBPPTR:	MOVE C,RB.PTR(B)
+	CAMN C,RB.BEG(B)
+	 POPJ P,
+	CAMN C,RB.PRS(B)
+	 SETZM RB.PRS(B)
+	PUSHJ P,DBPC
+	MOVEM C,RB.PTR(B)
+POPJ1:	AOS (P)
+	POPJ P,
+
+;Decrement the byte pointer in C.  If $$FCI, we handle 7-bit and 9-bit byte pointers.
+;Otherwise, we handle only 7-bit byte pointers.
+DBPC:
+IFN $$FCI,[
+	LDB D,[300600,,C]
+	CAIE D,7
+	 JRST DBP9
+]
+	ADD C,[070000,,]
+	SKIPGE C
+	 SUB C,[430000,,1]	;Decrement byte pointer.
+	POPJ P,
+
+IFN $$FCI,[
+DBP9:	ADD C,[110000,,]
+	SKIPGE C
+	 SUB C,[440000,,1]
+	POPJ P,
+]
+
+IFN $$MULTI,[
+
+;Compute current Vpos,,hpos at RB.PTR and return it in D,
+;by assuming that RB.POS is valid for beginning of buffer
+;and scanning through the buffer, seeing what the characters do to the cursor.
+;Clobbers A and C.
+RESYNCH:
+	HRRZI C,1(P)		;C points to 3-word block on stack.
+	MOVE D,RB.BEG(B)	;(C) holds b.p. to scan with.
+	PUSH P,D
+	HRRZ D,RB.POS(B)	;1(C) holds HPOS.
+	PUSH P,D
+	HLRZ D,RB.POS(B)	;2(C) holds VPOS.
+	PUSH P,D
+RBCRS1:	MOVE D,(C)
+	CAMN D,RB.PTR(B)	;Scan till reach end of occupied region.
+	 JRST RBCRS2
+	PUSHJ P,RBFORW
+	JRST RBCRS1
+
+RBCRS2:	HRRZ D,1(C)		;D gets the new Vpos,,Hpos.
+	HRL D,2(C)		;Flush the block of temporary variables.
+	SUB P,[3,,3]
+	POPJ P,
+
+;Cursor position calculating routines.
+
+;Move pointer in (C) one character forward, adjusting VPOS in 2(C)
+;and HPOS in 1(C) for the character moved over.
+RBFORW:	ILDB A,(C)
+	PUSHJ P,CHRTYP		;Get the character's "type code".
+	XCT RRFORT(A)		;DISPATCH ON TYPE OF CHAR.
+RRFOR1:	 AOS A,1(C)
+RRFOR3:	CAMGE A,RB.WID(B)	;HAVE WE MOVED PAST RIGHT MARGIN?
+	 POPJ P,
+	CAMN A,RB.WID(B)	;CHECK FOR JUST REACHING THE RIGHT MARGIN.
+	 JRST RRCNTN
+RRCNT1:	SUB A,RB.WID(B)
+	MOVEM A,1(C)
+RRFORV:	AOS 2(C)
+	POPJ P,
+
+RRCNTN:	MOVE D,(C)
+	ILDB D,D
+	CAIN D,^M
+	 POPJ P,
+	JRST RRCNT1
+
+RRFORT:	AOSA A,1(C)	;ORDINARY CHAR, MOVE FWD 1 POS.
+	JRST RRFORC	;NON-FORMATTING CONTROLS.
+	JRST RRFORH	;MOVE FWD OVER ^H - CHECK ^HPRINT FLAG.
+	JRST RRFWCR	;^M, SPECIAL.
+	JRST RRFORL	;^J, DOWN 1 LINE.
+	JRST RRFOTB	;^I
+	JRST RRFOR2	;2-POS CTL CHRS NOT AFFECTED BY FS SAIL (Rubout and ^@)
+	POPJ P,		;^G takes up no space.
+
+RRFOTB:	MOVE D,1(C)
+	MOVEI A,10(D)
+	ANDCMI A,7		;A HAS NEXT TAB STOP'S POSITION.
+	CAMLE A,RB.WID(B)	;BUT IF THAT'S OFF THE SCREEN, TAB STOP IS RIGHT MARGIN,
+	 CAMN D,RB.WID(B)	;UNLESS WE'RE ALREADY AT THE MARGIN, IN WHICH CASE
+	  CAIA			;WE CAN TAB 8 SPACES INTO NEXT LINE VIA CONTINUATION.
+	   MOVE A,RB.WID(B)
+	MOVEM A,1(C)
+	JRST RRFOR3
+
+RRFORL:	AOS 2(C)
+	POPJ P,
+
+RRFWCR:	SETZM 1(C)
+	POPJ P,
+
+RRFORH:	SKIPN 1(C)
+	 JRST RRFOR2
+	SOS 1(C)
+	POPJ P,
+
+;NON-FORMATTING CONTROLS, CHECK FS SAIL FLAG.
+RRFORC:	MOVE D,RB.TYP(B)
+	TLNN D,RB%SAI		;SAIL mode => it is a one-position character.
+RRFOR2:	 AOS 1(C)		;Else treat as 2-pos ctl char.
+	JRST RRFOR1
+
+] ;IFN $$MULTI
+
+.END RUBOUT
