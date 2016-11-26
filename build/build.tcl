@@ -394,6 +394,16 @@ respond "*" ":link sys;ts f,sys;ts name\r"
 respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
 
+respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
+expect ":KILL"
+
+respond "*" ":link device;jobdev db,device;atsign mldev\r"
+
+respond "*" ":midas device;atsign mlslv_sysen2;mlslv\r"
+expect ":KILL"
+
+respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape
