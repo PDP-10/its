@@ -14,3 +14,4 @@
 - TCTYP: [manual](_info_/tctyp.order)
 - DSKDUMP: [commands](sysdoc/dskdmp.order)
 - FIND: [manual](init/find.13)
+- DIRDEV: [manual](_init_/dir.order)
