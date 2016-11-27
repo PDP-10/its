@@ -74,6 +74,7 @@ from scratch.
    - TCTYP and CRTSTY, terminal handling.
    - PEEK, system monitoring.
    - ARCDEV, transparent file system access to archive files.
+   - DIRDEV, list directories, sorted or subsetted.
    - ATSIGN TARAKA, starts dragons.
    - Dragons: DMPCPY, MODEMS, NETIME, PFTHMG.
    - MTBOOT, make bootable tapes.
