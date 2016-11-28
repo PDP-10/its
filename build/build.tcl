@@ -453,10 +453,8 @@ type "purify\033g"
 respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
 
 respond "*" ":kill\r"
-respond "*" ":job comsat\r"
-respond "*" ":load .mail.;comsat launch\r"
-respond "*" "debug/-1\r"
-type "mfinit\033g"
+
+initialize_comsat
 
 respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
 
