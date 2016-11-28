@@ -36,4 +36,13 @@ proc quit_emulator {} {
     respond "sim>" "q\r"
 }
 
+proc initialize_comsat {} {
+    # commented out because you cannot run COMSAT initialization without network
+    # support
+    #respond "*" ":job comsat\r"
+    #respond "*" ":load .mail.;comsat launch\r"
+    #respond "*" "debug/-1\r"
+    #type "mfinit\033g"
+}
+
 source build/build.tcl

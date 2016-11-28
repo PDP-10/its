@@ -43,4 +43,11 @@ proc quit_emulator {} {
     respond "Confirm" "y\r"
 }
 
+proc initialize_comsat {} {
+    respond "*" ":job comsat\r"
+    respond "*" ":load .mail.;comsat launch\r"
+    respond "*" "debug/-1\r"
+    type "mfinit\033g"
+}
+
 source ../build.tcl
