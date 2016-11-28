@@ -1,0 +1,4801 @@
+;;; -*- Mode:MIDAS -*- 
+
+.SYMTAB 8001.,8001.
+
+TITLE QMAIL
+	; User interface to COMSAT
+	; Written/maintained by KLH @ MIT-AI
+.MLLIT==1
+
+;If QMAIL is assembled with the PWORD switch on, the Editor
+;escape command and the Write file command are disabled, and
+;the pure binary will get dumped in SYS;TS PWMAIL.
+
+IF1 [
+printx /PWORD version (Y or N)? /
+.ttymac foo
+	irpnc 0,1,1,bar,,foo
+		ifse bar,Y,[$$PWORD==1]
+		ifse bar,y,[$$PWORD==1]
+		ifse bar,N,[$$PWORD==0]
+		ifse bar,n,[$$PWORD==0]
+	termin
+termin
+]
+
+F=0	; Flags
+A=1	; A-E utility registers, saved over procedure calls
+B=A+1	;	whenever not taking or returning args.
+C=B+1
+D=C+1
+E=D+1	;5
+TC=6	;index to command currently being processed
+OC=7	; Current Output Channel index, used by OUT package.
+R=10	;index to a recipient
+I=11	;used by interrupt handler
+
+SP=12	;string PDL stack
+U1=13	; OUT and UUO Handler regs
+U2=14	;  "
+U3=15	;  "
+U4=16	;  "
+P=17	;standard PDL reg
+
+	;I-O channel assignments
+	TYIC==1		; TTY input
+	TYOC==2		; Normal TTY output
+	TYOSC==3	; TTY output channel for possible slashified output.
+	DTYOC==4	; TTY display output channel, for cursor control codes.
+	DKIC==5		; usual DSK input
+	DKOC==6		; usual DSK output
+	ERRCHN==7	; channel for ERR device (used by $$OERR)
+	USRI==10	; inferior I/O chans
+	USRO==11
+
+	; "Soft" UUO channels
+	MSGC==15	; UUO chan for depositing message text
+	TMPC==16	; Temporary chan for random things.
+	DMC==17		;kludge channel to write MUDDLE strings
+
+; Right half flags, generally local
+
+%dcrlf==400000	;used in disk-input translate to help chop lf off cr-lf.
+%AZGOT==200000	; in GETRS, "got something" and stored it.
+%AZERR==100000	;      "    error of some sort in input string.
+%IMPV== 40000	;indicates to int handler that a MPV is from reading inferior.
+%RNAM== 20000	; in GETOBJ, found name string
+%RNLIT==10000	;   "  found "name" string, ie a literal
+%RHST== 4000	;   "  found @host string
+%RFILE==2000	;   "  found (file-spec) string
+%TMP==  1000	;temporary flag for various things
+%BUGMG==400	;when set, means we're sending bug or featur type message.
+%ONCE== 200	;used as once-thru flag by IPNUM.
+%OLNTY==100	; in OLNTYP, to distinguish between typing anew and redisplaying for rubout
+%BUGNM==40	;when set, means name of program hasn't been gobbled yet(for bug/featur)
+;==20
+%DSALL==10	; Set when MSGGET upon entry should show all attribs thus far
+%MSG==4		;set when at least one *-style recipient exists.
+%MSGJ==2	;when set, means program is a qmsg or msg.
+%RQUOT==1	;msggt1; indicates ^Q-quote to be rubbed out
+
+%RALLT==%RNAM+%RNLIT+%RHST+%RFILE	;all possible getobj objects
+
+; Left half flags, generally global
+
+%NOTYO==400000	; When set, TTY output is suppressed.
+%JCL==  200000	; JCL was specified by superior.
+%NOECH==100000	; Set to read next TTY character without echoing.
+%JCLM== 40000	; Found JCL message text.
+%UNSIL==20000	; Un-silence TTY output as soon as feasible.
+%GOCGT==10000	; get another command instead of message text.
+%NOSND==4000	; When set, MSGSND will refuse to send message.
+%SLSHC==2000	;Next char needs slash conversion of UC->lc, as in teco
+%NEWMD==1000	; "New mode" is default.  This is set when JNAME=NMAIL
+;==400
+%PGMRN==200	;tells int handler that inferior ints should be expected
+%HADCM==100	;zero until first command given, 1 thereafter.
+%PREVL==40	;tells last-line-finder whether to find previous line if current nil.
+%QUOTE==20	;ttyin; next char should be quoted.
+%MQUOT==10	;when set, comsat should quote msg text and not form header.
+%TYPAH==4	; Indicates type-ahead exists on startup.  Used only to suppress "Msg:".
+%HADRB==2	; Zero until first rubout seen, 1 thereafter.
+;=1
+
+	; Random bit definitions
+%TIDIS==4000	; bit in .OPEN to recognize ^P display codes on output.
+
+	; Various byte-pointer fields
+	$ERRCD==220600	;error code from .status word
+	$OPCOD==331100	;op-code of instruction
+	$ACFLD==270400	;ac field of instr.
+	$XFLD== 220400	;index field of instr.
+
+
+
+.INSRT KSC;MACROS >
+.INSRT KSC;IVORY >
+	$$OTIM==1	; Include time-output rtns
+	$$OERR==1	; Include sys-err output
+	$$OHST==1	; Include hostname output
+	UAREAS==1	;assemble area hackery uuos.
+	USTRGS==1	;assemble string hackery
+;; No longer necessary!
+;;	OC==:U2		; Must define this register (U2 only one OK to reuse)
+.INSRT KSC;OUT >
+.INSRT KSC;NUUOS >
+.INSRT SYSENG;DATIME >
+.INSRT KSC;NFNPAR >
+
+	$$HST3==1	; Let's all use HOSTS3 now!
+	$$ARPA==1	; For arpa net
+	$$CHAOS==1
+	$$HOSTNM==1	; hostname lookup rtns
+	$$SYMLOOK==1
+	$$OWNHST==1	; include ONWHST rtn.
+	T=:U3		; smashable acs for NETWRK (must not be U2!)
+	TT=:U4
+.INSRT SYSENG;NETWRK >
+
+HN$DM==:<NETWRK"NW%ARP>+<6>+<1_16.>	; MIT-DM site # in new canonical fmt
+HN$ML==:<NETWRK"NW%ARP>+<6>+<3_16.>	; MIT-ML site # in ditto
+
+	; Various minor macros
+DEFINE CURSOR CHAR
+	CALL [PUSH P,[CHAR] ? JRST CUROUT]
+TERMIN
+CUROUT:	EXCH A,(P)
+	OUT(DTYOC,C(^P),C((A)))
+	PJRST POPAJ
+
+DEFINE TYPE STRING
+	UTYPE [ASCNT [STRING]]
+TERMIN
+DEFINE TYPECR STRING
+	UTYPE [ASCNT [STRING
+]]
+TERMIN
+UUODFE UTYPE:,UTYPX
+UTYPX:	OUT(TYOC,TC(@U40))
+	UUOXRT
+
+BVAR
+PAT:
+PATCH:	BLOCK 200
+
+PDLLEN==200		;big pdl!
+PDL:	-PDLLEN,,PDL
+	BLOCK PDLLEN
+EVAR
+
+PPCBAJ:	POP P,C
+POPBAJ:	POP P,B
+POPAJ:	POP P,A
+APOPJ:	POPJ P,
+POPAJ1:	POP P,A
+POPJ1:	AOS (P)
+	POPJ P,
+POPCJ1:	AOS -1(P)
+POPCJ:	POP P,C
+	POPJ P,
+popcbj:	pop p,c
+POPBJ:	pop p,b
+CPOPJ:	popj p,
+
+BVAR
+JUNK:	0	;random useless writes
+OWNHST:	0	;# of our own site (filled in at init by NETWRK's OWNHST rtn)
+OWNNAM:	0	;holds addr of asciz string which is name of own site
+DEBUG:	0	; -1 for debugging.  Effects currently very minor.
+AUTPSY:		; UUO rtns want this.
+DEATH:	0
+	JRST DEATH0
+EVAR
+
+DEATH0:	SKIPE DEBUG
+	 .VALUE
+	.VALUE [ASCIZ : Error! Loading syms...
+'VERSIO/
+SDEATH/
+: Please report via :BUG MAIL or contact system wizard.
+]
+	JRST .-1
+
+PRGNAM:	.FNAM1		; For debug purposes.
+VERSIO:	.FNAM2
+SUBTTL Interrupt handler
+
+TMPLOC 42,{JSR TSINT}		; Vector to handle ints.
+
+LVAR	TSINT:	0 ? 0 ? JRST TSINT0	; jump to pure.
+
+TSINT0:	SKIPL I,TSINT		;skip if 2nd wd int, get int wd in i
+	 JRST TS1WD		;1st wd int.
+	TLNE F,%PGMRN
+	 JRST [	TDNN I,INFBIT
+		 JRST .+1
+		JRST TSINT5]	;inferior job interrupt!
+	MOVEI I,TYIC
+	.ITYIC I,
+	 .DISMIS TSINT+1	;no char?
+	TLNE F,%QUOTE		;quote this char?
+	 .DISMIS TSINT+1	;ignore int. if so.
+	trne i,%txmta+%txtop	;must check TV bits.  META or TOP set?
+	 .dismis tsint+1	;yes, so quote it.
+	trz i,%txsft+%txsfl	;no, must cvt TV bits.  flush shift and shift lock
+	trze i,%txctl		;flush cntrl, and
+	 trz i,140		;cntrl-ify if necessary.
+
+TINTI:	CAIN I,^S
+	 JRST TYINT1		;halt output
+	CAIN I,^G
+	 JRST TYINT2		;halt everything
+	.DISMIS TSINT+1		;nothing special, return.
+
+	; ^S - silence output.
+TYINT1:	.RESET TYOC,		;flush buffer
+	.RESET TYIC,		;might as well flush ^S and following stuff.
+	HRRZ I,TSINT+1		; Find addr interrupted from
+;**** KLUDGE! Ought not refer to UUO package address...
+	CAIN I,OUT"UOS.I2	; If same as UUO SIOT addr,
+	 JRST [	CAIE U2,TYOC	; and on a TTY output channel,
+		 CAIN U2,DTYOC
+		  CAIA		; then skip to hack PC.
+		   JRST .+1
+		AOS TSINT+1	; Bump past .CALL
+		AOS TSINT+1	; and past failure return.
+		JRST .+1]
+	TLNE F,%NOTYO		;quiet flag already set?
+	 .DISMIS TSINT+1	;don't reset if so.
+	TLO F,%NOTYO+%UNSIL	;set flags to silence, and un-silence later.
+	PUSHAE P,[U40,U1,U2,U3,U4]	;may have int'd out of UUO handler...
+IFE $$UCAL,PUSH P,UUORPC
+IFN U2-OC,PUSH P,OC
+	OUT(TYOC,OPEN(UC$XCT,[JFCL]))	;make TTY output do nothing.
+	OUT(DTYOC,OPEN(UC$XCT,[JFCL]))
+IFN U2-OC,POP P,OC
+IFE $$UCAL,POP P,UUORPC
+	POPAE P,[U4,U3,U2,U1,U40]	;restore UUO vars.
+	.DISMIS TSINT+1		;return.
+
+	; ^G - halt activities immediately and get command.
+TYINT2:	.RESET TYOC,
+	.RESET TYIC,
+	.IOT TYOC,[^G]		;ding bell.
+	MOVE P,PDL
+	MOVE SP,SPDLPT		;reset both PDL's
+	PUSHJ P,INPFLS		;flush input stream stack and restore TTY I/O.
+	.DISMIS [COMGET]	;go get a command.
+
+	; Inferior interrupt (TECO)
+TSINT5:	.SUSET [.SIDF2,,INFBIT]
+	.DISMIS [PGMR60]
+
+TS1WD:	TRNN I,%PIMPV		;MPV interrupt?
+	 .VALUE
+	TRNN F,%IMPV		;is it expected from inferior reading?
+	 .VALUE
+	.DISMIS MPVRET
+
+LVAR	MPVRET:	0	;holds loc to return to if MPV hit while reading inferior.
+
+SUBTTL Initialization
+
+IFE $$PWORD,[
+PURIFY:	MOVE A,[<PURPGB-PURPGE>,,PURPGB]
+	SYSCAL CORBLK,[CIMM %CBNDR ? CIMM %JSELF ? A ? CIMM %JSELF]
+	 .LOSE
+	.VALUE [ASCIZ /:PDUMP SYSBIN;QMAIL BIN/]
+]
+
+IFN $$PWORD,[
+PURIFY:	MOVE A,[<PURPGB-PURPGE>,,PURPGB]
+	SYSCAL CORBLK,[CIMM %CBNDR ? CIMM %JSELF ? A ? CIMM %JSELF]
+	 .LOSE
+	.VALUE [ASCIZ /:PDUMP SYS;TS PWMAIL/]
+]
+
+
+START:	MOVE P,PDL			; Init PDL ptr
+	MOVE SP,SPDLPT			; String PDL
+	SETZM INPDP			; Input source PDL
+	SETZ F,				;clear all flags
+	SETZM N2DARY			;indicate not known to be secondary
+	.SUSET [.ROPTION,,A]		;get option bits
+	SETZM DDTFLG'
+	TLNE A,OPTDDT			;is superior DDT?
+	 SETOM DDTFLG			;yes, set flag.
+	TLO A,OPTLOK			;enable locks hackery
+	.SUSET [.SOPTION,,A]		;losing read/write since no ".sioption"
+	SETO A,
+	PUSHJ P,SETINP			;set input stream from TTY.
+	MOVE A,[-3,,[
+		.SMSK2,,[1_TYIC]	;enable ints for tty input channel
+		.SDF2,,[1_TYIC]		;but defer them for moment
+		.SPICLR,,[-1]]]		;and enable all ints.
+	.SUSET A			;do it
+
+	.OPEN TYIC,[%TIFUL+.UAI,,'TTY]	; Now open our TTY! (with bucky bits)
+	 .VALUE
+	.OPEN TYOC,[.UIO,,'TTY]		; open here for output also.
+	 .value
+	.CALL TTGET		; And immediately get TYST bits,
+	 .VALUE
+	MOVE A,DTYST1		; clobbering to desired values (MP echo etc)
+	MOVE B,DTYST2
+	TLO C,%TSCLE		; and make ^L's non-special in echoing.
+	.CALL TTSET		; ZAP!  Switch from PI to MP echo here!
+	 .VALUE
+	SYSCAL LISTEN,[CIMM TYIC ? CRET A]	; Was there any typeahead?
+	 .VALUE
+	CAIE A,0		; Check...
+	 TLO F,%TYPAH		; Uh-oh, type-ahead exists.  Set flag for no "Msg:".
+
+	; Now open other output chans
+	.OPEN DTYOC,[%TIDIS+.UIO,,'TTY]	;for possible display-mode output (esp ^P A)
+	 .VALUE
+	.OPEN TYOSC,[.UIO,,'TTY]	;for possibly-slashified output
+	 .VALUE
+	.CALL TTINFO		; Now get more detailed terminal info.
+	 .VALUE
+	MOVE A,HORSIZ
+	MOVEM A,TTYWID
+	SETZM TTYDIS'		; Clear all word-type flags for TTY.
+	SETZM TTYERS'
+	SETZM TTYHDX'
+	SETZM TTYSAI'
+	MOVE A,TTYOPT		;get bit flags
+	TLNE A,%TOHDX		;tty is half duplex?
+	 JRST [	SETOM TTYHDX	; Set flag if HDX.
+		.CALL TTGET
+		 .VALUE
+		TDZ A,[606060,,606060]	;clear all echo bits if so.
+		TDZ B,[606060,,606060]
+		.CALL TTSET		; Now reset to non-echo.
+		 .VALUE
+		JRST GO3]
+	TLNE A,%TOMVU		;tty can move cursor up? (i.e. display?)
+	 SETOM TTYDIS		;tty is display, set switch
+	TLNN A,%TOERS		;tty can erase selectively?
+	 TLNN A,%TOOVR		; If not, still win if can't overprint.
+	  SETOM TTYERS		;(that crock is for sake of castrated displays,
+				;  ie glass tty's)
+	TLNE A,%TOSA1		; Set up for sail char set?
+	 SETOM TTYSAI		;yup
+
+GO3:	OUT(TYOC,OPEN(UC$IOT))	; set up UUO chan for normal TTY output
+	OUT(DTYOC,OPEN(UC$IOT))	; and another for display-mode TTY output.
+	OUT(TYOSC,OPEN(UC$TRN,[TYOC]))	;set up TYOSC chan as translating into TYOC.
+
+	
+	MOVE A,[-4,,[
+		.RUNAME,,LUNAME'	;get uname
+		.RXUNAME,,XUNAME'	;and xuname
+		.RSNAME,,LSNAME'	;and sname
+		.RXJNAME,,JNAME']]	;names, names, names!
+	.SUSET A
+	MOVE A,LUNAME
+	CAMN A,XUNAME			;if UNAME = XUNAME,
+	 SETZM XUNAME			;zero xuname.
+	MOVE A,JNAME
+	TRZ F,%BUGMG+%BUGNM+%MSG+%MSGJ
+
+	; Now determine if we are manifestation of
+	;bug or featur or msg... (or qbug, qfeatu, qmsg)
+	; if MSG, then set %MSGJ flag -- later on in initialization, flag will
+	; force *<local site> into rcpt table, and any addition or deletion of
+	;rcpts in main program will check to see if flag needs changing.
+
+	CAME A,[SIXBIT /QFEATU/]
+	 CAMN A,[SIXBIT /FEATUR/]
+	  TRO F,%BUGMG\%BUGNM
+	CAME A,[SIXBIT /BUG/]
+	 CAMN A,[SIXBIT /QBUG/]
+	  TRO F,%BUGMG\%BUGNM
+	CAME A,[SIXBIT /QMSG/]
+	 CAMN A,[SIXBIT /MSG/]
+	  TRO F,%MSGJ
+;	CAME A,[SIXBIT /NBUG/]
+;	 CAMN A,[SIXBIT /NMAIL/]
+;	  TLO F,%NEWMD		; Set if default sending mode is "new".
+	CAMN A,[SIXBIT /S/]
+	 JRST .+3		; hack same as for QSEND.
+	CAME A,[SIXBIT /QSEND/]
+	 CAMN A,[SIXBIT /SEND/]
+	  JRST [SETOM SORMSW	; If a QSEND, set switches to send,
+		SETZM SENDSW	; and mail if fail.
+		JRST .+1]
+
+	MOVE A,LSNAME
+	MOVEM A,TECDIR		;initialize various filename blocks with SNAME
+	MOVEM A,RFDIR
+	MOVEM A,MFDIR
+
+	MOVEI A,HSTPAG
+	PUSHJ P,NETINI		;Get host name table in high core 
+
+	MOVE A,[NETWRK"NW%ARP]	;using arpanet as default, 
+	PUSHJ P,NETWRK"OWNHST	;get our host #
+	 JRST [	MOVE A,[NETWRK"NW%CHS]
+		PUSHJ P,NETWRK"OWNHST
+		 .VALUE
+		JRST .+1 ]
+	MOVEM A,OWNHST		;store
+	setzm dmsw'
+IFN 0,[				;DM runs a normal COMSAT now.
+	CAMN A,[HN$DM]		;are we on DM machine?
+	 setom dmsw		;yes, set switch!
+]
+	PUSHJ P,GHNAME		;get ptr to asciz string
+	MOVEM A,OWNNAM
+
+	UARINIT ARPAGS		;initialize area hackery
+	STRINIT			;and strings
+
+	UAROPN [%ARTCH+%ARTZM,,MSGAR ? [2000]]
+	OUT(MSGC,OPEN(UC$UAR,MSGAR))	;and msg channel
+
+	SETZM MSGFN1
+	PUSHJ P,RTINIT		;initialize RCP tables
+	SETZM RCPNUM		; # of rcpts
+	SETZM MDSNUM		; # of MSG distribution sites
+	TRNE F,%MSGJ		; MSG program?
+	 JRST [	PUSHJ P,ASTRSK		;get  "*<local site>" into RCPNAM
+		MOVE R,RCPNUM		;insert rcpt name into tables
+		MOVEI A,RCPNAM
+		PUSHJ P,SRCPN
+		MOVE A,OWNHST
+		MOVEM A,@TRCPH		;and site
+		MOVSI A,R%MSG
+		MOVEM A,@TRCPF		;and flags
+		AOS RCPNUM		;certify inserted.
+		AOS MDSNUM
+		TRO F,%MSG		;indicate * rcpt exists.
+		JRST .+1]
+
+	TLZ F,%JCL+%JCLM	;clear jcl-related flags
+	AOSE JCLATE		;ate jcl already?
+	 JRST NOJCL		;yes(this can happen on restart)
+	.SUSET [.ROPTION,,A]	;jcl waiting for us?
+	TLNN A,OPTCMD
+	 JRST NOJCL		;no.
+
+	setz b,
+jclglp:	addi b,50.		;# wds to add
+	uaropn [%ARTZM+%ARTCH,,JCLAR	;open area with at least that many wds
+			B]
+	move c,JCLAR+$ARLOC	;get beg addr
+	hrli c,5		;compose .break arg (5 tells ddt to give jcl)
+	MOVE D,JCLAR+$ARTOP	;get end+1 addr
+	setom -1(d)		;make last wd non-z so don't exceed bounds of area
+	.break 12,c		;get jcl into area
+	skipe -2(d)		;was jcl written up to last wd?
+	 jrst [	uarcls jclar
+		jrst jclglp]	;yes, close area and try again with more allocation.
+	MOVE A,$ARLOC+JCLAR	;get beg addr, as arg to
+	PUSHJ P,LASCIZ		;find how long the JCL is.
+	JUMPLE A,NOJCL		; If nothing there, well,...
+	MOVE C,A		; save length for later.
+	PTSKIP A,$ARWPT+JCLAR	;and set write ptr to true end-of-string.
+	MOVE B,$ARLEN+JCLAR
+	IMULI B,5		;get total # chars in area
+	SUB B,A			;find # remaining after JCL.
+	MOVNM B,$ARCHL+JCLAR	;and set countdown, all done now...
+
+	; Check to see if "?" was first thing typed in JCL.
+	MOVE B,$ARRPT+JCLAR	; Borrow read ptr
+JCLGL5:	ILDB A,B
+	CAIN A,"?
+	 JRST GOHLP		; Aha, go provide help.
+	CAIE A,40
+	 CAIN A,^I
+	  CAIA
+	   JRST JCLGL6		; Nope, parse JCL normally.
+	SOJG C,JCLGL5
+	JRST NOJCL
+
+JCLGL6:	MOVEI A,JCLAR		;Get ARPT for area of JCL input,
+	PUSHJ P,SETINP		;and set input stream to that.
+	MOVEI A,%TIJCL		;with one slight modification.
+	CALL SETTIX	
+	TLO F,%JCL		; Now, can indicate JCL given & available!
+
+	MOVEI TC,%CTT		; Now set up to execute "To:" command,
+	JRST COMXCT		; and go get recipients first thing.
+
+NOJCL:	SKIPE TTYDIS
+	 PUSHJ P,ZAP			;Clear screen if display.
+	MOVEI TC,%CTT
+NOJCL8:	.SUSET [.SADF2,,[1_TYIC]]	;ready to go, undefer any input interrupts.
+	JRST COMXCT
+
+	; Jump here when initial inspection of JCL reveals "?" as first
+	; non-blank char in string.
+GOHLP:	SKIPE TTYDIS
+	 PUSHJ P,ZAP
+
+	MOVE A,HTMAIL
+	TRNE F,%BUGMG
+	 MOVE A,HTBUG
+	TRNE F,%MSGJ
+	 MOVE A,HTMSG	; Help for :MSG
+
+	FWRITE TYOC,[TC,A,TC,HTGNRL]
+	MOVEI TC,%CTH
+	JRST NOJCL8
+
+HTMAIL:	ASCNT [
+For bulk documentation about the MAIL program, read the file
+INFO;MAIL > either as a text file or with the INFO program.
+]
+HTGNRL:	ASCNT [ The most important thing to remember about the MAIL
+program is that <escape> (or <altmode>) is a "command escape".
+For example, typing <esc> and "H" invokes the "Help" command; to save
+trouble let's go there directly...
+]
+
+HTBUG:	ASCNT [
+:BUG and :FEATURE are variants of the MAIL program.
+The correct syntax is:
+	:BUG <program-name>,<program-name>,...
+	<message> ^C
+You should probably type <escape>Q<CR> to quit out, and try again;
+or you can stay in, and ask for more info below.
+]
+
+HTMSG:	ASCNT [
+:MSG is a variant of the MAIL program.
+The correct syntax is:
+	:MSG <topic> <message> ^C
+But you are strongly advised to use the regular MAIL program, sending the
+message to "*" (for local system), or "*ITS" (for all ITS systems).
+]
+
+
+LVAR	JCLATE:	-1	;-1 if haven't eaten jcl, 0 if have. never reset.
+SUBTTL Command dispatch
+
+COMGET:	TLO F,%HADCM		;indicate at least one command requested since startup.
+	SETZM HLPSW'		;Set toggle for going to COMGT5 every 2 blunders.
+COMGT1:	SKIPL A,TYILCH		;If next input char is to be something already read,
+	 JRST [	CAIN A,33	;then check to see if it's the altmode that invoked us!
+		 SETOM TYILCH	;If so, zap it since already in COMGET and don't need...
+		JRST .+1]	;continue.
+	PUSHJ P,TTYLOC
+	MOVE A,HORPOS		;get current horiz position
+	CAILE A,1		;don't start new line if <esc> is only char on line.
+	 OUTCAL(TYOC,EOL)
+	OUT(TYOC,RABR)
+	TLO F,%NOECH		;suppress MP echo for single char.
+	PUSHJ P,TTYINU		;get uppercase char, unquoted.
+	CAIN A,33		;esc?
+	 JRST COMGT1		;humor him.
+	MOVSI B,-NCMDS		;aobjn thru command table
+	CAME A,CMTCHR(B)	;compare
+	 AOBJN B,.-1
+	JUMPGE B,COMGT7		; Didn't find?
+	MOVEI TC,(B)		; Found, set that up as current command!
+	
+	; Execute command indexed by TC.  JRST'd to.
+COMXCT:	MOVE B,CMTRTN(TC)	;get instr to xct
+	TLNN B,777740		;if no instruction, is just an address,
+	 IOR B,[PUSHJ P,]	;so must put default instr in.
+	TLZ F,%GOCGT
+	XCT B			; Do command.
+	TLZE F,%GOCGT		; Does rtn want another command done?
+	 JRST COMGET		; Loop back if so, else
+	JRST MSGGET		; Settle down to collect msg text.
+
+
+	; Didn't find command.  Complain maybe.
+COMGT7:	SETCMB B,HLPSW		;didn't find - flip switch
+	.RESET TYIC,		;and reset input buffer
+	SKIPN TTYHDX
+	 OUTCAL(TYOC,C((A)))	;echo if necessary
+	TYPE [?]		;and ding bell.
+	SKIPE B
+	 TYPE [ Type ? for help.]
+	JRST COMGT1		;and try again.
+
+
+;   Command definition macro.  The dummies stand for the following:
+; L	- ASCII char value invoking this command.
+; FLAG	- Symbol (if any) for index value of this command.
+; ROUT	- Instruction to execute for command.  If address-only,
+;		then a PUSHJ P, is done to that address.
+; PROMPT- Prompt string (if any) to use when command requests a line of input.
+; DESC	- Brief one-line desc (if any) of command, for HELP * printout.
+; HELP	- Multi-line help text for HELP <this cmd> printout.
+
+DEFINE CMD L,FLAG,ROUT,PROMPT,DESC,HELP
+IF1 [IFSN [FLAG][] FLAG==NCMDS
+	ASCNT [PROMPT]
+	ASCNT [DESC]
+	ASCNT [HELP]
+LOC .-2
+]
+IF2 [	ROUT
+%%S==.
+LOC CMTCHR+NCMDS ? L
+LOC CMTPRM+NCMDS ? ASCNT [PROMPT]
+LOC CMTDSC+NCMDS ? ASCNT [DESC]
+LOC CMTHLP+NCMDS ? ASCNT [HELP]
+LOC %%S
+]
+NCMDS==NCMDS+1
+TERMIN
+
+	; Commands should be defined in the order best suited to
+	; sequentially listing their DESC strings.
+CMTRTN:	NCMDS==0
+
+CMD "?,%CTQUE,COMQUE
+CMD "H,%CTH,COMH,,[Help <char>, describes given command.]
+CMD "T,%CTT,COMT,[To: ][To <recipients>, adds them to mailing list.][
+	Any number of recipients may be specified, separated by
+commas and terminated by a <CR>.  Each recipient must be in
+the format <Name> or <Name>@<Site>.
+ @ can be replaced by " at ".
+<Site> - Can be (1) Enough of a host (nick)name to render it unique,
+	(2) An octal #, or (3) a decimal # followed by a period.
+	If no <site> is specified, the local host is assumed.
+<Name> - Can be (1) Any string without blanks, commas, etc.
+	(2) A string enclosed within quotes, e.g. "<name>"
+	(3) A filename enclosed within square brackets.]
+
+CMD "C,%CTC,COMT,[CC: ][CC <recipients>, just like "TO"][
+	The message will be sent to the given recipients, but
+they will be listed in the header as "CC: <rcpt>" instead of
+"TO: <rcpt>".  Request help for "T" to see recipient format.]
+
+CMD "U,%CTU,COMT,[Un-to: ][Un-to <recipients>, removes from mailing list. * works.][
+	The specified recipients will be removed from the
+list of rcpts thus far.  Request help for "T" to see recipient
+format; there are 3 special cases for "Un-to":  *, <name>@*,
+and *@<site>.  In each case "*" is a wild-card default, so
+that for example "*" alone flushes all current recipients.]
+
+CMD "S,%CTS,COMS,[Subject: ][Subject.  Specify a subject line (null line deletes)][]
+
+CMD "F,%CTF,COMF,[From: ][From <your real login name>.  Unnecessary unless UNAME wrong.][
+	This should be used only when what you are logged in as
+is misleading, and you want to ensure the recipients (and the mailer)
+know who is really sending the message.  The given string will be
+inserted as "FROM: <name>" and the mailer will report to that name
+any problems encountered.]
+	
+IFE $$PWORD,[
+CMD "N,%CTN,COMN,[Name for rcpt list: ][Name for recipient list, header shows this and not real list.][
+	If a non-null string is given, the header of the message
+sent will show "TO: <name-for-list>" rather than listing each recipient
+individually, which is useful for large lists.  Any CC's will still
+be shown as usual, however.]
+]
+
+CMD "L,%CTL,COML,,[List the mailing list][
+	Mainly useful for printing only the current list of recipients,
+rather than the entire message as ^L would do.]
+
+IFE $$PWORD,[
+CMD "W,%CTW,COMW,[Write text to file: ][Write message text to <file>][
+	The message text will be written out exactly as it is.]
+]
+
+CMD "A,%CTA,COMA,[Append file: ][Append <file> to message text.][
+	The given file will be copied verbatim onto the end of current
+message text.]
+
+CMD "I,%CTI,COMI,[Insert file: ][Insert <file> (exactly like Append)][
+	This is merely a somewhat misleading synonym for the "A"
+or "Append" command.]
+
+CMD "Y,%CTY,COMY,[Yank in file: ][Yank <file> in, replacing message text.][
+	Flushes current message text, and reads in specified file to replace
+it.  Same as "Zap" then "Append".]
+
+CMD "G,%CTG,COMG,[Get execution file: ][Get from <file> data as if typed from console.][
+	Reads specified file as if it were TTY input; commands can
+be given preceded by an <altmode>.]
+
+IFE $$PWORD,[
+CMD "P,%CTP,COMP,[Put execution file: ][Put to <file> a GET-able description of message.][
+	Tries to write out all message information to specified file,
+so that the current state of the world can be restored simply by starting
+a new MAIL and "Get"ing the file.]
+]
+
+CMD "Z,%CTZ,COMZ,,[Zaps message buffer.][
+	Flushes all current message text.]
+
+IFE $$PWORD,[
+CMD "E,%CTE,COME,,[Edit escape to EMACS. ^X^C returns to MAIL pgm.][
+	An inferior EMACS is created, and the current message text
+loaded into it for editing.  One may normally exit from EMACS, and have the
+current buffer loaded back as the new message text, by typing ^X ^C,
+or by executing FSEXIT or typing ^C in non-^R-mode.  ^K as a bare-TECO
+command will be completely ignored!!  ^Z will safely interrupt MAIL.]
+]
+
+CMD "M,%CTM,COMM,,[Mode switching (mail, send, notification, etc)][
+	With this command one can specify the "mailing mode",
+whether to "mail" or "send"; a "send" corresponds to :SEND and
+prints a message on the recipient's TTY but does not leave mail.
+If SEND is selected, there is the further option of mailing as
+well, or mailing only if the SEND fails, or never mailing.
+If MAIL is selected, one can specify whether the recipient should
+be notified (by a small SEND) or not.  The default mode is to mail,
+with notification.]
+
+CMD "V,%CTV,COMV,,[Variant force, specify type of header to use.][
+	This allows one to specify the header of the message,
+by saying whether to use ITS, Network, or RFC733 style in the header
+composition, or to use no header at all - i.e. to "quote" the
+message text.  In the latter case one has the option of
+inserting a rudimentary header (of either style) into the
+message-text buffer, for editing purposes.]
+
+CMD "/,%CTSLS,COMSLS,,[Slash switch complement (ON = case conversion like TECO)][
+	When switch is ON, characters preceded by a slash will be
+forced to uppercase, and all others forced to lowercase.  This allows
+losing uppercase-only TTY's like the KSR-33 to send nicer messages,
+and to specify recipients for sites such as Multics which distinguish
+between upper/lower case in user names.]
+
+CMD "R,%CTR,COMR,,[Receipt mode select - All, Queued, or Failed.][
+	The mailer normally only notifies you (a "receipt") of
+recipients for which the message failed or was queued; this is the
+"queued" mode.  Selecting "All" will notify you of successful messages
+as well (useful for ensuring that something was actually sent, or that
+the mailer is alive), and "Failed" will only return receipts for those
+which failed (handy when being plagued by "queued" receipts).]
+
+CMD "X,%CTX,COMX,[Xpires in (# days): ][(* msgs only) Xpiration date in days.][
+	The message will be flushed from .MSGS. (i.e. removed
+from the system bulletin board) after the given # of days.  If none
+is specified, 7 (one week) is used as default.]
+
+CMD "1,%CT1,COMMF1,[First filename for this *-MSG: ][(* msgs only) 1st filename for .MSGS.;][
+	This must always be specified so as to furnish a first filename
+under which to store the current *-MSG on the .MSGS. directory; this
+is usually a topic name.  The second filename
+will default to ">" as is usually convenient.  If one really
+wants to specify both the FN1 and the FN2, the "2" command should
+be used also to furnish a FN2.]
+
+CMD "2,%CT2,COMMF2,[Second filename for this MSG: ][(* msgs only) 2nd filename for .MSGS.;][
+	If you don't know what this is about, don't use it.]
+
+CMD "Q,%CTQ,COMQ,,[Quit][
+	Die, exit, commit suicide, :KILL, etc. etc.
+Does NOT mail anything - kills job immediately.]
+
+IFE $$PWORD,[
+CMD ^T,%CT.T,COM.T,[TECO job to read (UNAME JNAME):][][
+	Not intended to be a user command.  The given filename is
+treated as being the U/JNAME of a TECO job, and an attempt is
+made to read its current buffer in "GET" mode.  The TECO
+must have been halted via a ^C or FSEXIT, not a ^K or ^Z.
+If you don't understand this, leave it alone and it won't bother you.]
+]
+
+CMD ^X,%CT.X,COM.X,,,[
+	This is purely a hack which kills the MAIL job (like $Quit)
+when followed by a period, thus resembling DDT's $^X. command.]
+
+IFE $$PWORD,[
+CMD ^A,%CT.A,COMATR,[Attribute:][][
+	This is an experimental command, which allows the
+specification of an arbitrary "attribute" in the request
+file given to the mailer.  This is another one of the
+things to avoid unless you already know what it does.]
+]
+
+	; The following are also "commands" of a sort but
+	; have deliberately been left undocumented, since
+	; the user should not really be aware of them.
+CMD ^C,%CT.C,COMSND	; Sends, just like ^C in text.
+CMD ^E,%CT.E,COMXS	; Experimental-send, for debugging.
+CMD ^N,%CT.N,COMNXS	; "New" send, for new-version COMSAT.
+CMD ^L,%CT.L,COM.L	; ^L - clear and redisplay.
+CMD ^M,%CTCR,APOPJ	; CR - go back
+CMD 177,%CTRUB,APOPJ	; Rubout - also go back
+
+CMTCHR:	BLOCK NCMDS	;table for <invoke char>
+CMTPRM:	BLOCK NCMDS	;table for ptrs to ASCNT prompt strings
+CMTHLP:	BLOCK NCMDS	;table for ptrs to ASCNT help strings
+CMTDSC:	BLOCK NCMDS	; Table for ASCNT desc strings
+
+COMFLS:	TYPE []	; Return pt to echo command-flush
+COMFL1:	TYPE [ XXX]	;   "  when already echoed.
+COMFLR:	TLO F,%GOCGT	;   "  when no typeout needed.
+	POPJ P,
+
+CONSTANTS	; To help avoid literal table gronkage.
+
+SUBTTL Help stuffs.
+
+COMQUE:	TYPE [? ">" indicates you are in command mode, entered by typing
+<altmode> or <esc>.  MAIL commands are all single characters; to list
+them, give the 'H' (for HELP) command, and type "?" at it.
+]
+	JRST COMFLR
+
+
+COMH:	TYPE [Help for (command or ?):]
+	PUSHJ P,TTYINU
+	CAIN A,"?		; Did loser do it?
+	 JRST COMH50		; Yep, spew out the blurb.
+	CAIN A,^D
+	 PJRST COMFL1		; Hmm, flush.
+	CAIE A,177		; If rubout,
+	 CAIN A,33		; or escape,
+	  PJRST COMFLR		; then return immediately to command loop.
+	CAIN A,^M		; If CR, then ignore helping,
+	 POPJ P,		; return sanely, & go collect message.
+
+	; Hmm, looks like real command.  Try intelligent description.
+	MOVSI B,-NCMDS
+	CAME A,CMTCHR(B)	; Try to find its index
+	 AOBJN B,.-1
+	JUMPGE B,[TYPECR [ No such command, try again.]
+		JRST COMH]
+	MOVEI A,(B)		; Aha, found it.
+	PUSHJ P,CMDHLP		; Print out its help.
+	PJRST COMFLR		; Return to command loop.
+
+COMH50:	PUSHJ P,KLEAR
+	TYPE [
+   Welcome to the wonderful world of MAIL.
+	^S stops typeout.  ^C sends message and quits.
+	^D flushes current command, ^G is last-resort interrupt.
+	^L redisplays, ^R retypes the current line, ^U deletes it.
+	DEL (rubout) deletes char, ^W deletes word.
+Command mode is entered with <ALTMODE> or <ESC>; a <CR> or <RETURN>
+exits.  The command list:
+]
+	MOVSI C,-NCMDS
+COMH52:	HLRZ B,CMTDSC(C)	; See if any chars in desc string for command...
+	JUMPE B,COMH53
+	FWRITE TYOC,[[ ],TI,@CMTCHR(C),[ ],TC,CMTDSC(C),[
+]]
+COMH53:	AOBJN C,COMH52
+	TYPE [More in the file INFO;MAIL >
+]
+	PJRST COMFLR		; Return to command loop.
+
+
+; CMDHLP - Given command index in A, prints out available help about
+;	that command.
+CMDHLP:	PUSH P,B
+	HLRZ B,CMTDSC(A)	; Get # chars for desc string in LH.
+	JUMPE B,[TYPE [ Sorry, no help here yet.]
+		JRST CMDHL9]
+	FWRITE TYOC,[[ Help for "],TI,@CMTCHR(A),[" -
+],TC,CMTDSC(A),TC,CMTHLP(A)]
+CMDHL9:	OUT(TYOC,EOL)
+	TLNN F,%HADCM		; Has any command been given yet?
+	 TYPECR [(Note: <ALT> or <ESC> is command escape)]
+	POP P,B
+	POPJ P,
+
+SUBTTL Set variety of header
+
+STRNAM HEDTYP	; Holds string defining header type
+
+COMV:	TYPE [Variety of header, (I)ts/(N)etwork/(R)FC733/(Q)uoted:]
+COMV1:	TLO F,%NOECH
+	SETZ B,
+	PUSHJ P,TTYINU		;get uppercase unquoted char w/o echo
+	CAIN A,^D
+	 JRST COMFLS		;Beat hasty exit.
+	cain a,"Q
+	 jrst comv30		;go hack quoted header!
+	CAIE A,177
+	 CAIN A,^M
+	   SETOB A,B		;Wants default....indicate thusly and hack "char".
+	CAIN A,"I
+	 MOVEI B,1
+	CAIN A,"T
+	 MOVEI B,2
+	CAIN A,"N
+	 MOVEI B,3
+	CAIN A,"R
+	 MOVEI B,4
+	MOVE C,(B)+1+[
+		[ASCIZ /Default/]	;index of -1
+		[ASCIZ /?/]		; 0 - None of above, ding and try again.
+		[ASCIZ /ITS/]
+		[ASCIZ /Tenex/]
+		[ASCIZ /Network/]
+		[ASCIZ /RFC733/]]
+	OUT(TYOC,TZ((C)))
+	JUMPE B,COMV1		;Try-again jump.
+	BCONC			;else some char was found, store it and
+	MOVE C,(B)+1+[
+		[ASCIZ //]	; null string for default
+		[ 0 ]		; This should never be ref'd
+		[ASCIZ /ITS/]
+		[ASCIZ /NET/]
+		[ASCIZ /NET/]
+		[ASCIZ /RFC733/]]
+	OUT(STRC,TZ((C)))
+	ECONC HEDTYP		; Store string.
+	POPJ P,			;return.
+
+
+COMV30:	type [Quote msg buffer.
+Form header of (I)TS, (N)etwork, (CR)nothing:]
+COMV20:	SETZ B,
+	TLO F,%NOECH
+	PUSHJ P,TTYINU		;GET CHAR
+	CAIN A,^D
+	 JRST COMFLS		; Flush command.
+	cain a,177		;rubout?
+	 jrst comv1
+	cain a,"I
+	 MOVEI B,1
+	cain a,"T
+	 MOVEI B,2
+	CAIN A,"N
+	 MOVEI B,3
+	CAIN A,^M
+	 MOVEI B,4
+	JUMPLE B,[TYPE [?]
+		jrst comv20]		;none of these, beep and recycle
+
+	;use existing msg or whatever he forms.
+	MAKSTR HEDTYP,[[NULL]]	; Set header force string.
+	MOVE C,(B)[ 0
+		[ASCIZ /ITS header formed/]
+		[asciz /Tenex header formed/]
+		[asciz /Network header formed/]
+		[asciz /Quoting msg buffer as is./]]
+	OUT(TYOC,TZ((C)),EOL)
+	CAIN B,4
+	 JRST COMV90
+	uaropn [%ARTZM+%ARTCH,,TMPAR		;open new area
+		[0]]
+	OUT(MSGC,OPEN(UC$UAR,TMPAR))	;and reopen msgc chan into it
+	SKIPN A,XUNAME
+	 MOVE A,LUNAME
+	JRST @.(B)
+	COMV50
+	COMV60
+	COMV60
+
+	; ITS header.
+COMV50:	FWRITE MSGC,[6F,A,[@],TZ,@OWNNAM,[ ],WAI,,]
+	hrrz b,subjec
+	caile b,		;if have a subj line,
+	 jrst [	fwrite msgc,[[ Re: ],ts,subjec]	;write it.
+		jrst .+1]
+	OUT(MSGC,EOL)
+	pushj p,toput
+COMV55:	fwrite msgc,[ta,msgar]	;add on old msg.
+	uarcls msgar		;now close old area
+	MOVE A,[TMPAR,,MSGAR]
+	BLT A,MSGAR+$ARSIZ-1	;make new area the msg area.
+	SETZM $AROPN+TMPAR	;say old ARBLK is closed.
+	OUT(MSGC,OPEN(UC$UAR,MSGAR))	;reopen MSGC chan into new MSGAR.
+COMV90:	tlo f,%mquot
+	POPJ P,
+
+	;form Network header
+comv60:	fwrite msgc,[[Date: ],wbi,,[
+From: ],6f,A,[ at ],tz,@ownnam,[
+]]
+	pushj p,toput
+	hrrz b,subjec
+	caile b,0
+	 jrst [fwrite msgc,[[Subject: ],ts,subjec,[
+]]
+		jrst .+1]
+	OUT(MSGC,EOL)
+	JRST COMV55
+
+TOPUT:	PUSHAE P,[A,TTYWID]
+	MOVEI A,72.
+	MOVEM A,TTYWID		;use standard TTY width.
+	HRRZ A,RLSNAM
+	JUMPN A,[FWRITE MSGC,[[To: ],TS,RLSNAM,[
+]]
+		JRST TOPU5]
+	PUSHJ P,TPUT
+	OUT(MSGC,TS(TOLINS))
+TOPU5:	PUSHJ P,CPUT
+	OUT(MSGC,TS(TOLINS))
+	POPAE P,[TTYWID,A]
+	POPJ P,
+
+STRNAM TOLINS
+	;routine to form "to:" lines from what is currently in rcpt tables.
+	; Leaves string output in TOLINS.
+
+TPUT:	PUSH P,D
+	SETZ D,
+	JRST TOPUT0
+CPUT:	PUSH P,D
+	MOVEI D,1
+TOPUT0:	PUSHAE P,[A,B,C,E,R]
+TOPUT1:	MOVE R,RCPNUM
+	JUMPE R,[SETZM TOLINS ? JRST TOPUT9]
+	BCONC
+	IMUL R,[-1,,0]
+	SETZ E,			;zero cnt of chars on line
+	caia
+TOPUT2:	 aobjp R,toput8		;get index to rcpt
+	MOVE A,@TRCPF		;get flags
+	TLNE A,R%CC		;is rcpt a CC?
+	 JRST @(D)[TOPUT2	;yes, ignore if want 0 = "to"s.
+		TOPUT3]		;yes, got one.
+	JRST @(D)[TOPUT3	; a TO. reverse jumpings.
+		TOPUT2]
+toput3:	move c,@trcph		;get site
+	move a,c
+	pushj p,ghname		;addr of name of dest site into a
+	push p,a
+	pushj p,lasciz		;find length
+	HLRZ B,@TRCPN		;get <# chars> in rcpt name
+	addi a,4(b)		;find # chrs hostname+#chars rcptname plus " at "
+	pop p,b			;get addr of asciz for site name
+	MOVE C,@TRCPN
+	ADD C,TRSTTB		;and abs ascnt ptr to rcpt name
+
+	ADDI a,6		;for the ", " and " at "
+	ADDI E,(a)		;add total for item into total for line
+	CAILE E,(a)		;skip if nothing was on line(regardless of size)
+	 CAML E,TTYWID		;don't skip if already something and total now too big
+	  JRST [CAILE E,(a)	;skip again if nothing was on line
+		 OUTCAL(STRC,EOL)
+		CAIN D,
+		 OUTCAL(STRC,("To: "))
+		CAIE D,
+		 OUTCAL(STRC,("cc: "))
+		MOVEI E,2(a)	;4 chars of "to: " less two chars of ", "
+		JRST TOPUT4]	;if starting line, output name regardles of length
+	FWRITE STRC,[[, ]]
+TOPUT4:	FWRITE STRC,[TC,C,[ at ],TZ,(B)]
+	JRST TOPUT2		;get another item
+
+	;items all gone.
+TOPUT8:	CAILE E,0		;if anything was on line,
+	 OUTCAL(STRC,EOL)	;crlf it.
+	ECONC TOLINS
+TOPUT9:	POPAE P,[R,E,C,B,A,D]
+	POPJ P,
+
+
+; Addr in A to asciz string, returns in A the # chars in string.
+; String must obviously start on word boundary.
+; Faster than LBPASZ (8 instrs/loop and no ILDB'ing).
+LASCIZ:	PUSHAE P,[B,C]
+	MOVE C,A
+	TDCA A,A		;clear A and skip
+LASCZ1:	 ADDI A,5
+	MOVE B,(C)
+	TLNN B,774000		;test 1st char
+	 JRST LASCZ7		;null, done.
+	TLNN B,3760		;test 2nd char
+	 AOJA A,LASCZ7		;null, add 1 and done.
+	TDNN B,[17,,700000]
+	 JRST LASCZ6		;go add 2, done.
+	TRNN B,77400
+	 AOJA A,LASCZ6		;add 3
+	TRNE B,376
+	 AOJA C,LASCZ1		;Not ended yet; increment address and add 5 at top.
+	ADDI A,4		;ended, add 4.
+	JRST LASCZ7
+LASCZ6:	ADDI A,2
+LASCZ7:	POP P,C
+	POP P,B
+	POPJ P,
+
+; Like LASCIZ, but works for any byte ptr in A.
+LBPASZ:	PUSHAE P,[B,C]
+	SETZ B,
+	ILDB C,A
+	CAIE C,0
+	 AOJA B,.-2
+	MOVE A,B
+	POPAE P,[C,B]
+	POPJ P,
+SUBTTL Set mailing mode
+COMM:	TYPE [Mode: (M)ail, (S)end, <CR>default: ]
+COMM1:	PUSHJ P,TTYINU
+	CAIN A,177		;rubout?
+	 POPJ P,		;ignore command if so
+	CAIN A,^M		;default?
+	 JRST [	SETZM SENDSW
+		SETZM MAILSW
+		SETZM SORMSW
+		TYPECR [Mail and normal notify]
+		POPJ P,]
+	CAIN A,"M
+	 JRST COMM20
+	CAIN A,"S
+	 JRST COMM10
+	CAIN A,^D
+	 JRST COMFL1
+	TYPE [?]		;Bad char
+	JRST COMM1
+
+	;Send.
+COMM10:	SETZM SENDSW		;send, mail if failed.
+	SETOM SORMSW
+	TYPE [end.
+Mail too?  (Y)es, (N)o, <cr>only if can't SEND:]
+COMM15:	PUSHJ P,TTYINU
+	CAIN A,^D
+	 JRST COMFL1
+	CAIN A,^M
+	 JRST [	TYPECR [Send, and mail if can't.]
+		POPJ P,]
+	OUT(TYOC,EOL)
+	CAIN A,"N
+	 JRST [	SETCMM SENDSW
+		TYPECR [Send, and never mail.]
+		POPJ P,]
+	CAIN A,"Y
+	 JRST [	MOVEI A,1
+		MOVEM A,SENDSW
+		TYPECR [Send, and mail too.]
+		POPJ P,]
+	OUT(TYOC,C(^G),C("?))
+	JRST COMM15
+
+	; Mail
+COMM20:	SETZM SENDSW
+	SETZM MAILSW
+	SETZM SORMSW
+	TYPE [ail.
+Notify recipient? (Y)es, (N)o, <CR>default: ]
+	PUSHJ P,TTYINU
+	CAIN A,^D
+	 JRST COMFL1
+	CAIE A,^M
+	 OUTCAL(TYOC,EOL)
+	CAIN A,"Y
+	 JRST [	MOVEI A,1
+		MOVEM A,MAILSW
+		TYPECR [Mail, and notify if possible.]
+		POPJ P,]
+	CAIN A,"N
+	 JRST [	SETOM MAILSW
+		TYPECR [Mail, and don't notify.]
+		POPJ P,]
+	TYPECR [Default - notify if rcpt wants.]
+	POPJ P,
+
+BVAR
+SENDSW:	0	; -1 send, don't mail. 0 send, mail if fail. 1 send + mail.
+MAILSW:	0	; -1 mail, never notify. 0 mail normally. 1 mail + try hard to notify.
+SORMSW:	0	; 0 mailing, -1 sending.
+EVAR
+SUBTTL Random small commands
+
+	; ^L during command invoke.
+COM.L:	SKIPE TTYDIS	; no-op if not display.
+	 PUSHJ P,MOSDIS	; Display "most" of data.
+	JRST COMFLR	; Return to command loop.
+
+	; / - complement slashification for upper/lower case.
+COMSLS:	TLZ F,%SLSHC
+	SETCMB A,SLSHFY
+	type [/ Case conversion ]
+	SKIPN SLSHFY
+	 OUTCAL(TYOC,("OFF"))
+	SKIPE SLSHFY
+	 OUTCAL(TYOC,("ON"))
+	OUT(TYOC,EOL)
+	SKIPN SLSHFY	;re-open slash-output chan in right mode.
+	 OUTCAL(TYOSC,OPEN(UC$TRN,[TYOC]))	; Normal mode == TYOC
+	SKIPE SLSHFY
+	 OUTCAL(TYOSC,OPEN(UC$XCT,[CALL SLSTYO]))	; Slashify mode!
+	POPJ P,
+
+LVAR	SLSHFY:	0	;when set, hack slashification.
+
+	; XCT routine for slashification UUO channel.
+SLSTYO:	TLNE F,%NOTYO		;ok to output?
+	 POPJ P,		;nope, nop.
+	CAIN U1,177		;rubout?
+	 JRST [	.IOT TYOC,["^]
+		.IOT TYOC,["?]
+		POPJ P,]
+	CAIL U1,"A
+	 CAILE U1,"Z
+	  CAIA
+	   .IOT TYOC,["/]
+	.IOT TYOC,U1		;finally output!
+	POPJ P,
+
+
+	; ^E - Experimental Send of message, using xper version of COMSAT.
+COMXS:	TYPE [Experimental-send.]
+	SKIPE DEBUG		; If debugging, we know what we're doing,
+	 JRST COMXS7		; So don't pester debugger.
+	TYPE [ WARNING - this is a debugging command only!
+Are you SURE?]
+	PUSHJ P,TTYINU		; Get reply
+	CAIE A,"Y		; Proceed only if "Y"
+	 JRST [	TYPECR [ Flushed.]
+		POPJ P,]
+	TYPECR [ Very well...]
+COMXS7:	SETOM SNDVRS		; Set sending version to -1
+	JRST MSGSND		; And go send message.
+
+	; ^N - Like ^X but sends to "New" operational mailer
+	; and requires no confirmation.
+COMNXS:	TYPE [^New-send!]
+	SETZM SNDVRS
+	AOS SNDVRS		; Set sending variation to 1
+	JRST MSGSND
+
+	; ^C - Like ^C during text collection, sends message.
+COMSND:	TYPE [^Cend!]
+	SETZM SNDVRS		; Always use vanilla type.
+	JRST MSGSND		;go send msg
+
+	; "From:" spec
+COMF:	MOVEI A,FRMNAM		;address of string to store line in.
+	JRST LINSTO
+
+	; "Subject:" spec
+COMS:	MOVEI A,SUBJEC
+	JRST LINSTO
+
+	; "Attribute:" experimental spec.
+COMATR:	MOVEI A,ATTRIB		; Addr of string to store into.
+	PJRST LINSTO
+STRNAM ATTRIB		; String holding arbitrary attribute text.
+
+	; "Name for recipient list:"
+COMN:	MOVEI A,RLSNAM		;drop thru to get line.
+
+LINSTO:	PUSHJ P,GETLIN		;get line for whatever wants it.
+	 PJRST COMFLR		; Command was flushed.
+	HRLI A,LINPUT		;form BLT, <source>,,<dest>
+	MOVE B,A
+	BLT A,1(B)		;xfer 2 wds of string descriptor.
+	POPJ P,
+
+	; 1st MSG filename
+COMMF1:	TDCA B,B		;clear B and skip
+COMMF2:	 MOVEI B,1
+	PUSHJ P,GETLIN
+	 PJRST COMFLR		; Flushed??
+	MOVEI A,LINPUT
+	PUSHJ P,STRIM		;make sure it's trimmed.
+	PUSHJ P,CVTS6F		;convert string to a 6bit word
+	CAIN A,0		;if nothing there, use default.
+	 MOVE A,MFNDEF(B)
+	MOVEM A,MSGFN1(B)
+	POPJ P,
+
+MFNDEF:	SIXBIT /MSG/	; default FN1, FN2 for *-style msg.
+MFNDF2:	SIXBIT />/
+BVAR
+MSGFN1:	0		; FN1 for *-style message.
+MSGFN2:	0		; FN2 for ditto
+EXPTIM:	0		; Expiration time for *MSG, in days (default 7)
+EVAR
+	; Xpiration date for MSGs, in days.
+COMX:	PUSHJ P,GETLIN		;get # of days to expire in
+	 POPJ P,
+	MOVEI A,LINPUT
+	PUSHJ P,IPNUM		;try to parse as decimal number.
+	 SETZ A,
+	JUMPLE A,[MOVEI A,7
+		MOVEM A,EXPTIM
+		TYPE [Default: ]
+		PUSHJ P,EXPDIS
+		POPJ P,]
+	CAILE A,365.
+	 MOVEI A,365.		;nothing longer than 1 year.
+	MOVEM A,EXPTIM		;store
+	POPJ P,
+
+	;convert string (ptr in A) to 6bit word in A
+CVTS6F:	PUSHAE P,[B,C,D,E]
+	HRRZ D,(A)		;get cnt
+	CAILE D,6
+	 MOVEI D,6		;limit to 6
+	MOVE E,1(A)		;and bp
+	SETZ A,
+	MOVE C,[440600,,A]
+	JRST CVTS63
+CVTS62:	ILDB B,E
+	CAIL B,"a
+	 CAILE B,"z
+	  SKIPA
+	   SUBI B,40
+	SUBI B,40
+	IDPB B,C
+CVTS63:	SOJGE D,CVTS62
+	POPAE P,[E,D,C,B]
+	POPJ P,
+
+	;takes ptr in A to string, clobbers so that leading/trailing blanks flushed.
+STRIM:	PUSHAE P,[B,C,D,E]
+	HRRZ D,(A)
+	JUMPE D,STRIM9
+	MOVE E,1(A)		;get cnt and bp for string.
+STRIM1:	MOVE C,E		;save so don't have to D7BPT it.
+	ILDB B,E
+	CAIN B,40
+	 JRST [	SOJG D,STRIM1
+		JRST STRIM8]	;all blanks.
+	MOVEM C,1(A)		;store trimmed start ptr (perhaps same as original)
+	PTSKIP D,C		;increment ptr by # chars remaining
+STRIM2:	LDB B,C
+	CAIN B,40
+	 JRST [	D7BPT C
+		SOJG D,STRIM2
+		JRST STRIM8]	;all blanks and first loop missed??
+STRIM8:	HRRM D,(A)		;store new cnt back.
+STRIM9:	POPAE P,[E,D,C,B]
+	POPJ P,
+
+
+	; Receipt switch complement
+LVAR RGSTRD:	0		; Holds address of string specifying type of 
+				; "registration" if any.
+COMRHT:	ASCNT [
+A - You will be notified when message is sent (includes Q,F).
+Q -  " only if message queued (Default, includes F).
+F -  " only if message fails.
+]
+COMR:	TYPE [Receipt mode - (A)ll, (Q)ueued, (F)ailed:]
+COMR10:	TLO F,%NOECH
+	PUSHJ P,TTYINU		; Get answer
+	CAIN A,"?
+	 JRST [	FWRITE TYOC,[[?],TC,COMRHT]
+		JRST COMR]
+	CAIN A,^M
+	 JRST [	FWRITE TYOC,[[Default - ]]
+		MOVEI A,"Q
+		JRST .+1]
+	CAIN A,"A
+	 JRST [	FWRITE TYOC,[[All]]
+		MOVEI B,[ASCSTR [A]]
+		JRST COMR70]
+	CAIN A,"Q
+	 JRST [	FWRITE TYOC,[[Queue]]
+		SETZ B,		; This is default, so...
+		JRST COMR70]
+	CAIN A,"F
+	 JRST [	FWRITE TYOC,[[Failed]]
+		MOVEI B,[ASCSTR [F]]
+		JRST COMR70]
+	FWRITE TYOC,[[?]]
+	JRST COMR10
+
+COMR70:	MOVEM B,RGSTRD		; Store resulting ptr to string.
+	OUT(TYOC,EOL)
+	POPJ P,
+
+
+	; QUIT - Die!
+COMQ:	PUSHJ P,INPFLS		; Make sure everything flushed, so
+	TYPE [Quit.  Are you sure?]	; User sees this msg.
+	TLO F,%NOECH		; Don't echo this char
+	PUSHJ P,TTYINU
+	CAIE A,"Y
+	 CAIN A,^M		; Here, a CR is ok for confirm too.
+	  JRST COMQ5
+	TYPE [ No]
+	POPJ P,
+
+COMQ5:	TYPE [ Yes]
+COMQ9:	.BREAK 16,140000	; Type ":KILL" on return to DDT, don't reset TTY input.
+
+	; For handling $^X. killing.
+COM.X:	TYPE [^X]
+	PUSHJ P,TTYINU
+	CAIN A,".
+	 JRST COMQ9		; If proper sequence, kill w/o further ado.
+	PUSHJ P,INPFLS
+	TYPE [??]
+	POPJ P,
+
+	; Zap message-text buffer
+COMZ:	TYPECR [Zap!]		; Drop thru and return.
+
+ZAPMSG:	UARCLS MSGAR
+	UAROPN [%ARTZM+%ARTCH,,MSGAR ? [2000]]
+	OUT(MSGC,OPEN(UC$UAR,MSGAR))
+	POPJ P,
+
+	; L - List recipients. Like ^L on displays.
+COML:	SKIPE TTYDIS		;don't bother to complete command
+	 TYPECR [List]		;unless non-display.
+	PJRST RCPDIS		; Display and return.
+SUBTTL Read/write messge text files
+
+	; Yank file, Append file, and Insert file.
+COMY:	TDCA D,D		;clear D and skip.  D is yank indicator.
+COMA:
+COMI:	 SETO D,		; this flag purely to avoid yank-style input.
+COMI01:	MOVEI A,DKIOPN
+	MOVE B,[MFDEV,,DKIDEV]
+	PUSHJ P,FILSET
+	 POPJ P,
+	CAIN D,0		;skip unless yanking.
+	 PUSHJ P,ZAPMSG		;zap buffer if yanking.
+	MOVEI A,DKIDEV
+	PUSHJ P,FILADD
+	fwrite tyoc,[[(],N9,NCHAPP,[ Chars read.)]]
+	POPJ P,
+
+	; Write text file
+comw:	out(msgc,PTV(a))		;get # chars written so far
+	jumpg a,comw10		;yup, something there.
+	TYPECR [Write to file:]
+	PUSHJ P,ERRBEG
+	TYPECR [No message text, Write-File command ignored!]
+	PJRST ERREND
+
+comw10:	MOVEI A,WRTOPN		; set up addr of .CALL blk
+	MOVE B,[WRTDEF,,WRTDEV]
+	.SUSET [.RSNAME,,WRTDEF+1]	; set default dir to current SNAME
+	PUSHJ P,FILSET			; read in a file spec and open.
+	 POPJ P,		; doesn't really want anything.
+	OUT(DKOC,OPEN(UC$IOT))
+	FWRITE DKOC,[TA,MSGAR]	;writing text file.
+	.close dkoc,
+	POPJ P,
+
+	; P - Put out execution file so a GET will restore world.
+
+COMP:	MOVEI A,WRTOPN		; set up addr of .CALL blk
+	MOVE B,[WRTDEF,,WRTDEV]
+	.SUSET [.RSNAME,,WRTDEF+1]	; set default dir to current SNAME
+	PUSHJ P,FILSET			; read in a file spec and open.
+	 POPJ P,		; doesn't really want anything.
+	OUT(DKOC,OPEN(UC$IOT))
+
+	fwrite dkoc,[[F]]
+	hrrz b,frmnam		;FROM spec exists?
+	JUMPLE B,[SKIPN A,XUNAME
+		MOVE A,LUNAME
+		OUT(DKOC,6F(A))
+		jrst comw55]
+	FWRITE DKOC,[TS,FRMNAM]
+comw55:	OUT(DKOC,EOL)
+	SKIPN A,MSGFN1
+	 JRST COMW56
+	FWRITE DKOC,[[1],6F,A]
+	OUT(DKOC,EOL)
+COMW56:	SKIPN A,EXPTIM
+	 JRST COMW57
+	FWRITE DKOC,[[X],N9,A]
+	OUT(DKOC,EOL)
+COMW57:	HRRZ B,SUBJEC
+	JUMPLE B,COMW60		;jump if subj text nil
+	fwrite dkoc,[[S],TS,SUBJEC,[
+]]
+
+comw60:	FWRITE DKOC,[[],TS,HEDTYP,[
+]]			; Write out string specifying header type.
+
+comw65:	move R,rcpnum
+	soj R,
+comw70:	skipn C,@TRCPF		;get flags
+	 jrst comw75		;null
+	tlne c,r%cc
+	 outcal(dkoc,(/C"/))
+	tlnn c,r%cc
+	 outcal(dkoc,(/T"/))
+	MOVE A,@TRCPN
+	ADD A,TRSTTB		;get abs ascnt ptr to name
+	fwrite dkoc,[TC,A,["@]]
+	MOVE A,@TRCPH		;get site
+	camn a,[-1]
+	 move a,ownhst
+	fwrite dkoc,[HST,A,[
+]]					;output site
+comw75:	sojge R,comw70
+
+	FWRITE DKOC,[TA,MSGAR]		;finally write out msg text
+	.close dkoc,			;note that lossage possible with inclusion of
+	POPJ P,				;chars like alt, ^d, ^c in text.
+
+
+wrtopn:	setz ? sixbit /open/ ? [.UAO,,dkoc] ? wrtdev
+	wrtfn1 ? wrtfn2 ? setz wrtdir
+BVAR
+WRTDEV:	0
+WRTDIR:	0
+wrtfn1:	0
+wrtfn2:	0
+
+wrtdef:	SIXBIT /DSK/ ? 0
+	sixbit /msgtxt/ ? sixbit />/
+EVAR
+
+DKIOPN:	SETZ ? SIXBIT /OPEN/ ? [.BII,,DKIC]	; standard input open
+	DKIDEV ? DKIFN1 ? DKIFN2 ? SETZ DKIDIR
+
+BVAR
+MFDEV:	'DSK,,0
+MFDIR:	0
+MFFN1:	0
+MFFN2:	SIXBIT />/
+
+DKIDEV:	0
+DKIDIR:	0
+DKIFN1:	0
+DKIFN2:	0
+EVAR
+
+	; "GET" - exec file readin.
+comg:	MOVEI A,DKIOPN
+	MOVE B,[MFDEV,,DKIDEV]
+	PUSHJ P,FILSET
+	 POPJ P,
+
+	PUSHJ P,TXFIN		; slurp up text file open on channel. returns area in A
+	PJRST SETINP		;use area # as argument to set input stream from.
+
+
+	; ^T command, takes filename and assumes it is USR:UNM JNM of a
+	; TECO from which to gobble buffer.
+COM.T:	MOVEI A,USROPN
+	MOVE B,[USRDEF,,USRDEV]
+	PUSHJ P,FILSET		;get filespec
+	 POPJ P,
+	;aha, opened the filespec (inferior)!
+	SETZ A,			; Say to create area...
+	PUSHJ P,TECIN		;gobble the TECO's buffer into an area.
+	 JRST COM.T5
+	PUSHJ P,SETINP		;set input stream to read from this.
+COM.T5:	HLRZ A,USRDEV
+	CAIN A,'USR		;now must close channel... check before .UCLOSE'ing
+	 .UCLOSE USRI,		;since this will bomb if there is no inferior!
+	.CLOSE USRI,
+	POPJ P,
+
+USROPN:	SETZ ? SIXBIT /OPEN/ ? [.BII,,USRI] ? USRDEV
+	USRFN1 ? USRFN2 ? SETZ USRDIR
+
+BVAR
+USRDEF:	SIXBIT /USR/
+	0
+	0
+	SIXBIT /TECO/
+USRDEV:	0
+USRDIR:	0
+USRFN1:	0
+USRFN2:	0
+EVAR
+
+COME:	
+
+
+
+	TYPE [Edit Escape!
+]
+	.SUSET [.RHSNAM,,TPDIRS]	; Try HSNAME;TS * first.
+	.SUSET [.RXUNAM,,A]		; get for hsname;xuname MAILT
+	SYSCAL OPEN,[[.BII,,DKIC] ? TECPGM ? A ? TPFN2S ? TPDIRS]
+	 CAIA
+	  JRST COME07
+	MOVSI A,-NTPDIR		; and try several dirs
+COME04:	MOVSI C,-NTPFN2		; also try several FN2's.
+COME05:	MOVE B,TPFN2S(C)
+	MOVEM B,TECPGM+3	; Store as FN2 for "TS <editor>"
+	MOVE B,TPDIRS(A)
+	MOVEM B,TECPGM+1
+	SYSCAL OPEN,[[.BII,,DKIC] ? TECPGM ? TECPGM+2 ? TECPGM+3 ? TECPGM+1]
+	 JRST [	AOBJN C,COME05
+		AOBJN A,COME04
+		PUSHJ P,ERRFLS
+		MOVEI A,TECPGM
+		PUSHJ P,FILERR	; Complain if can't open any.
+		PJRST COMFLR]
+
+COME07:	out(msgc,PTV(c))		;get # chars in msg-chnl area
+	JUMPLE C,COME20		;if nothing in message text, don't bother with file.
+	.SUSET [.RSNAME,,TECDIR]
+	.CALL OXFOPN		;try first thing.
+	 CAIA
+	  JRST COME10
+	MOVE A,[SIXBIT /COMMON/]
+	MOVEM A,TECDIR
+	.SUSET [.RUNAME,,TECFN1]
+	.CALL OXFOPN
+	 JRST [	PUSHJ P,ERRFLS
+		MOVEI A,TECDEV
+		PUSHJ P,FILERR
+		PJRST COMFLR]
+
+COME10:	OUT(DKOC,OPEN(UC$IOT),TA(MSGAR))	;write out text
+	.CLOSE DKOC,
+
+	OUT(TMPC,OPEN(UC$BPT,[440700,,TECJCL]))
+	FWRITE TMPC,[6F,TECDIR,[;],6F,TECFN1,[ ],6F,TECFN2,[
+]]
+	OUT(TMPC,PTV(B))
+	HRLZ B,B
+	HRRI B,TECJCL		;make ascnt ptr to JCL for teco.
+	CAIA
+COME20:	 SETZ B,		;come here to just run w/o JCL.
+	MOVE A,[SIXBIT /MAILT/]	; Use this as XJNAME.
+	PUSHJ P,PGMRUN
+	 JRST COME80
+
+	MOVEI A,TMPAR
+	PUSHJ P,TECIN		;slurp up buffer from TECO into area in A
+	 JRST COME80		;failed... perhaps MPV.
+	UARCLS MSGAR		;flush old message text,
+	MOVE B,A		;save ARPT
+	HRLZS A
+	HRRI A,MSGAR
+	BLT A,MSGAR+$ARSIZ-1	;make new area the message area,
+	SETZM $AROPN(B)
+	OUT(MSGC,OPEN(UC$UAR,MSGAR))	;and point MSGC channel at it.
+	PUSHJ P,PGMKIL		;now kill the inferior.
+	TDCA A,A	;here, all won.
+COME80:	 SETO A,	;here, something lost. Don't zap screen.
+	SYSCAL DELETE,[TECDEV ? TECFN1 ? TECFN2 ? TECDIR]
+	 JFCL
+	JUMPN A,APOPJ
+	SKIPE TTYDIS
+	 TRO F,%DSALL		; Set flag to display everything upon entering MSGGET.
+	POPJ P,
+
+BVAR
+TECPGM:	SIXBIT /DSK/
+	0		; Filled in from TPDIRS.
+	SIXBIT /TS/
+	0		; Filled in from TPFN2S.
+
+TPDIRS:	0		; Filled by HSNAME.
+	SIXBIT /SYS/
+	SIXBIT /SYS1/
+	SIXBIT /SYS2/
+	SIXBIT /SYS/	; So error message reports this dir.
+	NTPDIR==.-TPDIRS
+EVAR
+
+TPFN2S:	SIXBIT /MAILT/	; Names to try for "TS <name>"
+	SIXBIT /EDIT/
+	SIXBIT /EMACS/
+	SIXBIT /TECO/
+	NTPFN2==.-TPFN2S
+
+BVAR
+TECJCL:	BLOCK 10.*3
+
+TECDEV:	SIXBIT /DSK/
+TECDIR:	0
+TECFN1:	SIXBIT /_MAIL_/
+TECFN2:	SIXBIT /_EDIT_/
+EVAR
+
+OXFOPN:	SETZ ? SIXBIT /OPEN/ ? [.UAO,,DKOC] ? TECDEV
+	TECFN1 ? TECFN2 ? SETZ TECDIR
+
+	; PGMRUN - run an inferior. B has address of ASCIZ string for JCL,
+	; A points to FILBLK of pgm to run for entry pt PGMRNF,
+	; else DKIC must already be open for input and A should hold
+	; desired XJNAME.
+	;  Skips if terminates normally,
+	; doesn't skip if abnormal termination.  In either case caling
+	; routine must call PGMKIL to flush it.
+
+PGMRNF:	PUSHAE P,[A,B,C,D,E]	;
+	SETZM PGMJOB'		;not yet created inferior
+	.CALL TXFOPN
+	 JRST [	PUSHJ P,ERRFLS
+		PUSHJ P,FILERR	;couldn't open file?
+		JRST PGMR80]
+	MOVE D,2(A)		; For XJNAME, get FN1 of file using
+	CAMN D,[SIXBIT /TS/]	;and use that unless it's TS.
+	 MOVE D,3(A)		;in which case use FN2 instead.
+	JRST PGMR01
+
+PGMRUN:	PUSHAE P,[A,B,C,D,E]
+	SETZM PGMJOB'
+	MOVE D,A		; Use given XJNAME.
+PGMR01:	MOVEM B,PGMJCP'
+
+	; now try to create inferior...
+
+	MOVE B,D		; Save desired XJNAME in B.
+PGMR10:	SYSCAL OPEN,[[UBPFJ+.BII,,USRI] ? ['USR,,0] ? [0] ? D ? CERR C]
+	 JRST [	CAIE C,4	;if didn't exist, OK to open for real.
+		 JRST PGMR80	;foo? lost with strange error?
+		JRST PGMR30]
+	.UCLOSE USRI,		;hmph, it already exists. flush it.
+	AOS D			;"AOS" the jname in D (for now, really do AOS!)
+	JRST PGMR10		;try again
+
+PGMR30:	SYSCAL OPEN,[[.BIO,,USRO] ? ['USR,,0] ? [0] ? D ? CERR C]
+	 JRST [	CAIN C,12	;was specified job somehow created meanwhile?
+	 	 JRST PGMR10
+		CAIN C,6	;no slots available?
+		 JRST PGMR10
+		.VALUE]		;none of these, fail.
+	SETOM PGMJOB		;indicate inferior created.
+	SYSCAL OPEN,[[.BII,,USRI] ? ['USR,,0] ? [0] ? D ? CERR C]
+	 .VALUE
+	.USET USRI,[.SXJNAME,,B]	; Set XJNAME to desired value.
+
+	;load the program from file
+	SYSCAL LOAD,[CIMM USRI ? CIMM DKIC]
+	 JRST [	PUSHJ P,ERRFLS
+		TYPE [Can't load pgm file - ]
+		PUSHJ P,ERRDOC
+		OUT(TYOC,EOL)
+		JRST PGMR80]
+	HRROI A,PGMSTA'
+	.IOT DKIC,A			;get starting address
+	.CLOSE DKIC,			;no further need for dsk chan
+	.USET USRI,[.SUPC,,PGMSTA] 	;set inferior's starting address
+	.USET USRI,[.RINTB,,INFBIT] 	;find interrupt bit for this inferior
+	SETZM PGMJCL'			; Assume no JCL availalbe until proven otherwise
+	SKIPN PGMJCP			; Skip if JCL string given.
+	 JRST PGMR37			; Nope, nothing there.
+	HLRZ A,PGMJCP			; get char cnt
+	IDIVI A,5			;get # wds
+	CAIE B,0
+	 AOJ A,
+	CAIN A,
+	 JRST PGMR37			;if nothing in message text, no JCL.
+	MOVEM A,PGMTXL'
+	MOVEM B,PGMTXR'			;save # full wds and # remaining chars in last.
+	SETOM PGMJCL'			;indicate JCL available
+	.USET USRI,[.SOPTION,,[OPTCMD,,]]	;tell it JCL is available
+PGMR37:	TLO F,%PGMRN			;tell int. handler to handle the ints, and
+	.SUSET [.SIMSK2,,INFBIT] 	;enable ints from inferior
+
+	.ATTY USRI,		;give it the TTY.
+	 .VALUE			;hmm, sould be able to!
+PGMR40:	.USET USRI,[.SUSTP,,[0]] ;start it!
+	.SUSET [.SADF2,,INFBIT]	;clear defer bit
+	JFCL
+	.HANG
+	JRST PGMR75		;if somehow get here, exit...
+
+	;dismiss to here upon inferior interrupt!
+PGMR60:	.USET USRI,[.RPIRQC,,C]
+	TRNE C,%PIC.Z		;inferior executed ctl-Z?
+	 JRST [	.USET USRI,[.SAPIRQ,,[%PIC.Z]] ;clear it
+		.DTTY
+		 JFCL
+		.SUSET [.SIPIRQ,,[%PIC.Z]]	;set for self!
+		.ATTY USRI,
+		 JFCL
+		JRST PGMR40]	;when continued, continue TECO.
+	TRNN C,%PIBRK		;inferior executed a .BREAK?
+	 JRST [	TRNN C,%PIVAL	; a .VALUE?
+		 JRST PGMR75	;something else, kill.
+		.USET USRI,[.RUPC,,C]
+		SUBI C,1
+		.ACCESS USRI,C
+		HRROI D,A
+		.IOT USRI,D
+		CAMN A,[.VALUE]
+		 JRST PGMR75	;a .VALUE 0.
+		.USET USRI,[.SAPIRQC,,[%PIVAL]]
+		JRST PGMR40]	;ignore it... (gulp)
+	.USET USRI,[.SAPIRQC,,[%PIBRK]] ;turn off the interrupt for inferior
+	.USET USRI,[.RUPC,,C]	;decipher .BREAK. find PC
+	SUBI C,1		;back up to instr executed
+	.ACCESS USRI,C		;set to that
+	HRROI D,A
+	.IOT USRI,D		;read instr. into A
+	LDB B,[$ACFLD,,A]
+	CAIE B,12		;request-info type .BREAK?
+	 JRST [	CAIN B,16	;type asking for death?
+		 JRST PGMR85	;yes, return with skip... successful termination!
+		JRST PGMR75]	;nope, die noisily.
+	.ACCESS USRI,A		;point to address field of .break
+	HRROI D,A
+	.IOT USRI,D		;get the command word
+	LDB B,[221100,,A]	;see what type
+	CAIE B,5		;JCL related?
+	 JRST [	CAIE B,11		;nope, ugh
+		 CAIN B,12	; XUNAME or XJNAME?
+		  CAIA
+		   JRST PGMR40	;nope. but ignore it.
+		JUMPL A,[.ACCESS USRI,A
+			HRROI D,A
+			.IOT USRI,D
+			CAIN B,11
+			 .USET USRI,[.SXUNAME,,A]
+			CAIN B,12
+			 .USET USRI,[.SXJNAME,,A]
+			JRST PGMR40]
+		.ACCESS USRO,A
+		CAIN B,11
+		 .USET USRI,[.RXUNAME,,A]
+		CAIN B,12
+		 .USET USRI,[.RXJNAME,,A]
+		HRROI D,A
+		.IOT USRO,D
+		JRST PGMR40]
+	JUMPL A,[SETZM PGMJCL	;if type=write, indicate JCL no longer avail.
+		.USET USRI,[.ROPTION,,A]
+		TLZ A,OPTCMD
+		.USET USRI,[.SOPTION,,A]
+		JRST PGMR40]
+	SKIPN PGMJCL		;if JCL not avail, ignore request to read.
+	 JRST PGMR40
+
+	;now write JCL into place specified by RH of A.
+	MOVE B,PGMTXL
+	MOVNI B,-1(B)		; -<text length-1> (whole wds)
+	HRLZ B,B
+	HRR B,PGMJCP
+	.ACCESS USRI,A
+	.ACCESS USRO,A
+	JUMPGE B,PGMR66		;if there was only 1 wd to write, can skip loop
+PGMR64:	HRROI D,C
+	.IOT USRI,D		;read to ensure zero
+	JUMPN C,PGMR40
+	MOVE C,(B)		;if zero, get string word
+	HRROI A,C
+	.IOT USRO,A		;and write into inf.
+	AOBJN B,PGMR64
+	;write out last wd of JCL.
+PGMR66:	HRROI D,C
+	.IOT USRI,D
+	JUMPN C,PGMR40
+	MOVE A,PGMTXR		;get # of chars which remained in last wd
+	MOVE C,(B)
+	TDZ C,REMMSK(A)		;mask them off
+	HRROI A,C
+	.IOT USRO,A		;and write last wd.
+	;that's all-- no need to write terminating zero wd since wd is already
+	;zero if such writing is possible!
+	JRST PGMR40
+	
+	;come here to kill job for some reason.
+PGMR75:	.DTTY
+	 JFCL
+	PUSHJ P,PGMKIL
+	JRST PGMR80
+
+	;Bad condition of some sort during startup.  try to complain by
+	;sending message.  ASCNT ptr in A to text.
+PGMR80:	.DTTY
+	 JFCL
+	.CLOSE DKIC,
+	SKIPE PGMJOB		;skip if never opened job.
+	 .UCLOSE USRI,		;else flush it.
+	JRST PGMR90
+	
+PGMR85:	.DTTY
+	 JFCL
+	AOS -5(P)
+PGMR90:	TLZ F,%PGMRN
+	POPAE P,[E,D,C,B,A]
+	POPJ P,
+	
+	;here, kill job quietly.
+PGMKIL:	.UCLOSE USRI,		;die.
+	.SUSET [.SAIFPIR,,INFBIT]
+	SETZM PGMJOB
+	POPJ P,
+
+LVAR INFBIT:	0		;holds interrupt bit for inferior
+
+REMMSK:	0
+	3777,,-1 ; 1 char in wd, mask out last 4
+	17,,-1	; 2, zap last 3
+	77777	; last 2
+	377	; last 1
+
+	;default file blk for pgm running
+PGFDEF:	SIXBIT /DSK/
+	SIXBIT /SYS/
+	SIXBIT /TS/
+	SIXBIT /FOO/
+BVAR
+PGFDEV:	0
+PGFDIR:	0
+PGFFN1:	0
+PGFFN2:	0
+EVAR
+
+OPNPGM:	SETZ ? SIXBIT /OPEN/ ? [.BII,,DKIC] ? PGFDEV
+	PGFFN1 ? PGFFN2 ? SETZ PGFDIR
+
+UBPFJ==10	;fail with 4 if no such job exists anywhere.
+OPNJB0:	SETZ ? SIXBIT /OPEN/ ? [UBPFJ+.BII,,USRI] ? ['USR,,0]
+	[0] ? A ? SETZ CERR C
+
+	; TECIN - given USRI inferior channel to a TECO, crunches the buffer
+	; block pointed to by AC 2 and reads contents into area specified
+	; by an ARPT in A.  Returns ARPT in A also (creates new if A was
+	; zero to begin with)
+
+TECIN:	PUSHAE P,[B,C]
+	MOVE C,A		; Save ARPT in C.
+	MOVEI A,TECIN9
+	MOVEM A,MPVRET		;set loc to return to if MPV happens.
+	TRO F,%IMPV		;set inferior MPV flag
+	.ACCESS USRI,[2]	;reference AC 2
+	HRROI A,B
+	.IOT USRI,A		;get addr of buffer block into C
+	.ACCESS USRI,B
+	MOVE A,[-7,,T%BEG]	;set up ptr to gobble 7 wds
+	.IOT USRI,A		;get buffer block
+	TRZ F,%IMPV		;clear flag.  rest is up to INFSGT.
+
+	UAROPN C,[%ARTZM+%ARTCH,,(C) ? [200]]	;create area of token size.
+	MOVE A,T%XTRC
+	MOVE B,T%GPT		;set up for absolute conversion.
+	CAMG B,T%BEGV		;adjust for gap,
+	 ADDM A,T%BEGV		;if necessary.
+	CAMG B,T%ZV
+	 ADDM A,T%ZV		;now have absolute virtual buffer boundaries.
+
+	MOVE A,T%BEGV		;get start of buffer
+	MOVE B,T%ZV		;and end.
+	CAMGE A,T%GPT		;see if gap exists in middle.  GPT greater than beg?
+	 CAMG B,T%GPT		;and less than end?
+	  JRST TECIN5		;no, buffer is integral!
+	MOVE B,T%GPT		;yes, gap is in middle of buffer. get end of first blk.
+	PUSHJ P,INFSGT		;get it.
+	 JRST TECIN9
+	MOVE A,T%GPT
+	ADD A,T%XTRC		;get end of gap as start of 2nd block.
+	MOVE B,T%ZV		;and get end of 2nd block.
+
+TECIN5:	PUSHJ P,INFSGT		;get final block.
+	 JRST TECIN9
+	MOVE A,C		;return ARPT to area.
+	AOS -2(P)
+TECIN8:	POPAE P,[C,B]
+	POPJ P,
+
+TECIN9:	PUSHJ P,ERRFLS
+	TYPECR [Hit MPV while trying to read TECO buffer!]
+	JRST TECIN8
+
+BVAR
+	; 7 word TECO buffer block.  All but T%XTRC are character addresses.
+	; BEGV, PT, ZV and Z are relative and need XTRC added if .GE. GPT.
+T%BEG:	0	; start of buffer
+T%BEGV:	0	; lower buffer bound
+T%PT:	0	; pointer
+T%GPT:	0	; start of gap
+T%ZV:	0	; upper buffer bound
+T%Z:	0	; top of buffer
+T%XTRC:	0	; # of chars in gap
+EVAR
+
+INFSGT:	PUSHAE P,[A,B,C,D,E]
+	SUB B,A			;get cnt of chars
+	JUMPLE B,INFSG7
+	EXCH A,B
+	MOVEI D,INFSG9
+	MOVEM D,MPVRET
+	OUT(TMPC,OPEN(UC$UAR,(C)))	;open temp chan into specified area.
+	MOVE D,A		;move char cnt elsewhere
+	IDIVI B,5		;find # wds and remainder
+	MOVEM B,IFSLOC
+	MOVEM C,IFSREM		;save
+	HRL B,IFSBPS(C)		;make bp
+	HRRZ C,B		;store RH for ref.
+	HRRI B,E
+INFSG2:	.ACCESS USRI,C		;get at wd.
+	HRROI A,E
+	TRO F,%IMPV
+	.IOT USRI,A		;get wd into E
+	TRZ F,%IMPV
+INFSG3:	ILDB A,B		;get char
+	OUT(TMPC,C((A)))
+	SOJLE D,INFSG7		;stop when done
+	TLNE B,760000		;P = 01 means next char is in next wd.
+	 JRST INFSG3
+	HRLI B,440700
+	AOJA C,INFSG2
+INFSG7:	AOS -5(P)
+INFSG9:	POPAE P,[E,D,C,B,A]
+	POPJ P,	
+
+BVAR
+IFSLOC:	0
+IFSREM:	0
+EVAR
+IFSBPS:	440700		; 0 chars in wd.
+	350700
+	260700
+	170700		; 3 chars
+	100700		; 4
+
+SUBTTL File primitives
+
+	; Given addr in A of .CALL block, default file specs in B,
+	; and command type in TC, reads a line as file spec and opens it.
+	; Skips when finally successful, doesn't skip if aborted with null spec.
+FILSET:	PUSHAE P,[C,D]
+	MOVE C,A
+	SETO D,
+FILST1:	PUSHJ P,GETLIN		; get a file spec
+	 JRST FILST9		; flushed, nothing there.
+	HRRZ A,LINPUT
+	JUMPE A,FILST9		; no-skip return if null spec.
+	MOVEI A,LINPUT
+	PUSHJ P,FILPAR		; B already has default filespecs.
+	.CALL (C)		; now try to open with given .CALL block.
+	 CAIA
+	  JRST FILST8		; won, skip on return.
+	;failed.  Must re-try.
+	AOSN D			; Set flag, and if first time
+	 PUSHJ P,ERRBEG		; then enter error mode.
+	HRRZ A,B		; Get address of file block as arg to
+	PUSHJ P,FILERR		; type out failing filespec and error message.
+	JRST FILST1		; go try again.
+
+FILST8:	AOS -2(P)		; skip on return...
+FILST9:	CAIL D,			; Skip if not in error mode.
+	 PUSHJ P,ERREND		; Else terminate it.
+	POPAE P,[D,C]
+	POPJ P,
+
+
+;given addr of 4-wd file block in a, types out fn and err-msg for
+;last failed call.
+FILERR:	PUSHJ P,FILTYP
+	TYPE [ - ]
+	PUSHJ P,ERRDOC
+	OUT(TYOC,EOL)
+	POPJ P,
+
+
+ERRDOC:	OUT(TYOC,ERR)		;get report for last failure.
+	RET
+
+;types out fname in 4-wd blk pointed to by a.
+FILTYP:	FWRITE TYOC,[6F,(A),[:],6F,1(A),[;],6f,2(a),[ ],6f,3(a)]
+	POPJ P,
+
+
+FILADD:	PUSHAE P,[A,B]
+	PUSHJ P,TXFIN
+	out(msgc,PTV(b))	;save current # chars
+	FWRITE MSGC,[TA,(A)]	; write into msg area
+	UARCLS (A)		;now close temp area
+	out(msgc,PTV(a))	;get new cnt
+	sub a,b			;find how much added
+	MOVEM A,NCHAPP		;and save # chars appended
+	POPAE P,[B,A]		;win return
+	POPJ P,
+LVAR NCHAPP:	0		;holds # chars appended by last FILADD call
+
+; gets text file into area, returns area # in a.
+TXFGET:	PUSHJ P,FILGET	;try to get file (ptr in a to filblk)
+	 POPJ P,	;couldn't get??
+	AOSA (P)	;got it! skip on return (and skip right now)
+TXFIN:	 PUSHJ P,FILIN
+	UARTYP [%ARTCH,,(A)]	;got it. convert to text area.
+	POPJ P,
+
+FILGET:	.CALL TXFOPN	;open specified file (ptr in a to fil blk)
+	 popj p,	;failed
+	AOS (P)		; aha, won. go slurp up.
+			; drops thru...
+
+	; returns ARPT in A.
+FILIN:	SETZ A,
+	PUSH P,B
+	MOVE B,[DKIC,,FGTDEV]
+	.RCHST B,		;get channel status for possible later ref.
+	SYSCAL FILLEN,[CIMM DKIC ? CRET B ? CERR OPNERR]
+	 JRST [	MOVE B,OPNERR	; Failed?  Should only happen if
+		CAIE B,34	; error = wrong type dev.
+		 .value
+		MOVEI B,400	; If no length available, use 1/4 page
+		JRST .+1]
+	ADDI B,1		;add 1 so .IOT ptr won't count out completely
+	UAROPN A,[%ARTZM,,(A) ? B]
+	MOVN B,B		;neg
+	HRLZ B,B		;for .iot ptr
+	HRR B,$ARLOC(A)		;get addr to store it...starting addr of area
+FILGT5:	.IOT DKIC,B		;grab
+	HRRZM B,$ARWPT(A)	;set write ptr for area.
+	JUMPGE B,[MOVEI B,400	; If counted completely out,
+		UAREXP B,(A)	; expand and get more.
+		HRRZ B,$ARWPT(A)
+		HRLI B,-400
+		JRST FILGT5]
+	.CLOSE DKIC,
+	POP P,B
+	POPJ P,
+
+LVAR OPNERR:	0
+LVAR FGTDEV:	BLOCK 10	; for .RCHST channel status
+
+TXFOPN:	SETZ ? SIXBIT /OPEN/ ? [.BII,,DKIC]
+	(a)		;dev
+	2(A)		;fn1
+	3(a)		;fn2
+	SETZ 1(a)	;sname
+
+
+; a - addr of string
+; b - [default file block],,[result file block]
+
+FILPAR:	PUSHAE P,[A,B,C,D,E]
+	HRRZ E,B	;get result addr
+	BLT B,3(E)	;zap default values into result block
+	PUSHJ P,FNPARD	;parse string as filename
+	CAIE A,
+	 MOVEM A,(E)	;device
+	CAIE B,
+	 MOVEM B,1(E)	;dir
+	CAIE C,
+	 MOVEM C,2(E)	;fn1
+	CAIE D,
+	 MOVEM D,3(E)	;fn2
+	POPAE P,[E,D,C,B,A]
+	POPJ P,
+SUBTTL Line input for commands
+
+BVAR
+RINDSK:	0		; -1 if input from dsk and must ignore crlf's, etc.
+RINEOF:	0		; -1 when nothing left to read.	
+RINLCH:	-1		; holds char to re-read if any.
+EVAR
+
+RINIT:	SETZM RINEOF
+	SETOM RINLCH
+	SETZM RINDSK
+	POPJ P,
+
+RIN:	SKIPGE RINEOF		; return w/o skip if nothing left to read
+	 POPJ P,
+	SKIPL A,RINLCH		;if should re-read last char (or whatever),
+	 JRST [	SETOM RINLCH
+		JRST RIN2]	;use it.
+	HRRZ A,LINRED		;get char cnt for string
+	SOJL A,RIN3		;EOF if no more
+	HRRM A,LINRED		;OK, store new cnt back
+	ILDB A,LINRED+1		;and get char from string.
+RIN2:	SKIPE RINDSK
+	 JRST [	CAIE A,^L	;DSK input? check for random things.
+		 CAIN A,^M	;substitute "," for ^L and CR
+		  MOVEI A,",
+		CAIE A,0
+		 CAIN A,^J	;ignore null and ^J completely.
+		  JRST RIN
+		JRST .+1]
+	AOS (P)
+	CAIE A,^I
+	 CAIN A,40
+	  POPJ P,
+	AOSA (P)
+RIN3:	 SETOM RINEOF
+	POPJ P,
+
+
+STRNAM LINRED		;string for holding line input while munching on it.
+STRNAM LINPUT		;string to hold input for tty line getter
+LVAR LTRMCH:	0	;on return, holds char terminating line (-1 if aborted)
+
+GETLIN:	PUSHAE P,[A,B,C]
+GETLN0:	OUT(TYOC,TC(CMTPRM(TC)))	;output prompt blurb
+	BCONC			;start a string
+GETLN1:	PUSHJ P,TTYIN
+	TLNE F,%SLSHC
+	 JRST GETLN1		;if slashifying, ignore slash and get its arg.
+GETLN4:	MOVE B,A
+	ANDI B,177		;get 7-bit form (unquoted)
+	CAIN A,177		;rubout?
+	 JRST [	MOVE C,UCNCST+1		;get ptr to start of string thus far
+		PTRDIF C,USTRAR+$ARWPT	;and compare with write ptr for it
+		JUMPE C,GETLN1		;and jump if nothing was written
+		LDB A,USTRAR+$ARWPT	;else get last char
+		D7BPT A,USTRAR+$ARWPT	;and decrement write ptr
+		PUSHJ P,RUBN		;rub it out on terminal.
+		JRST GETLN1]
+	CAIN B,177		;quoted rubout?
+	 OUTCAL(TYOC,C(177))	;must echo it because normally echo is off.
+
+	TRNE A,%TXQTE		;^q-quote?
+	 JRST [	SKIPN TTYERS		;if display, hack rubout of ^q
+		 JRST [D7BPT USTRAR+$ARWPT ? JRST .+1]	;else just pop ^q off.
+		PUSH P,A		; save flagged char
+		MOVE A,B
+		PUSHJ P,RUBN		;rub it out (was echoed)
+		LDB A,USTRAR+$ARWPT	;get the ^Q
+		D7BPT USTRAR+$ARWPT	;and decrement ptr
+		PUSHJ P,RUBN		;and rub that out
+		POP P,A			;now restore char
+		OUT(TYOC,C((B)))	;and echo it again
+		JRST .+1]		;and continue.
+
+	CAIN A,"?		; Wants help?
+	 JRST [	MOVE C,UCNCST+1	; Get ptr to start of string thus far.
+		PTRDIF C,USTRAR+$ARWPT	; Compare with current write ptr
+		JUMPN C,.+1		; And continue if this ? isn't 1st char.
+		MOVEI A,(TC)
+		PUSHJ P,CMDHLP		; Aha. type help for command.
+		JRST GETLN0]
+	CAIN A,^D		;flush this command (line)?
+	 JRST [	TYPE [ XXX]
+		SETZM LINPUT	;make string null.
+		SETOM LTRMCH	;and EOL char nil.
+		TLO F,%GOCGT	;indicate should ask for another command,
+		JRST GETLN9]	;and return without skipping.
+	CAIN A,^H		;Backspace: user is mistaken.
+	 JRST [	CURSOR "A
+		TYPE [Use Rubout, not Backspace, to erase a character.]
+		OUT(TYOC,EOL)
+		JRST GTLN21]
+	CAIN A,^L
+	 JRST GETLN2		;go clear screen...
+	CAIN A,^R		;retype line?
+	 JRST GTLN21
+	CAIN A,^W		; Rubout word?
+	 JRST GTLRWD
+	CAIN A,^U		;erase line?
+	 JRST [	OUT(TYOC,EOL)	;start over if so.
+		JRST GETLN0]
+	CAIN A,33
+	 JRST [	TLO F,%GOCGT	;if ALT terminated, set flag to enter command loop.
+		JRST GETLN6]	;hack non-CR terminator
+	CAIE A,^_
+	 CAIN A,^C		;ditto
+	  JRST GETLN6
+
+	CAIN B,^M		;cr?  return if so
+	 JRST GETLN5
+	CAIN B,^J		;lf? ditto
+	 JRST GETLN5
+
+	OUT(STRC,C((A)))	;store char in string
+	JRST GETLN1		;go get more chars
+
+;Retypr all input so far.
+GETLN2:	ECONC LINPUT
+	SKIPE TTYDIS		;if printing, only retype current line.
+	 PUSHJ P,MOSDIS		;clear and display everything but msg text.
+	SKIPN TTYDIS
+	 OUTCAL(TYOC,EOL)
+	OUT(TYOC,TC(CMTPRM(TC)))	; Re-type prompt
+	OUT(TYOSC,TS(LINPUT))		; Re-type input
+	BCONC LINPUT
+	JRST GETLN1
+
+;Retype current line only.
+GTLN21:	PUSHJ P,GTLNDS
+	JRST GETLN1
+
+GETLN5:	SKIPA A,[^M]		; here for CR or LF.
+GETLN6:	 MOVEM A,TYILCH		; save terminating char to force later readin.
+GETLN7:	MOVEM A,LTRMCH		; always save for inspection if desired.
+	ECONC LINPUT		; Terminate string.
+	MOVE A,[LINPUT,,LINRED]
+	BLT A,LINRED+1		; transfer string descriptor.
+
+GETLN8:	AOS -3(P)
+GETLN9:	POPAE P,[C,B,A]
+	POPJ P,
+
+	; Rubout Word
+GTLRWD:	SKIPE TTYERS		; If display,
+	 PUSHJ P,RUBN1		; Rubout the "^W"
+	MOVE C,UCNCST+1		; Kludge - ptr to stat of string thus far
+	PTRDIF C,USTRAR+$ARWPT	; Find # chars in string
+	JUMPE C,GETLN1
+	MOVE A,C
+	MOVE B,USTRAR+$ARWPT	; Set up for call
+	PUSHJ P,RUBWCT		; Find how many chars to erase
+	JUMPE B,GETLN1
+GTLRW3:	LDB A,USTRAR+$ARWPT	; Loop - get last char
+	D7BPT USTRAR+$ARWPT	; Bump ptr down
+	SKIPE TTYERS		; If display,
+	 PUSHJ P,RUBN1		; rub char out.
+	SOJG B,GTLRW3
+	SKIPN TTYERS		; Now, if printing,
+	 OUTCAL(TYOC,C("_))	; Echo a "_".
+	JRST GETLN1		; Back to collection loop...
+
+
+	; (Re-)Display line thus far
+GTLNDS:	ECONC LINPUT		;Save string thus far (so can't clobber and can typeout)
+	SKIPN TTYERS		; If can't erase line,
+	 OUTCAL(TYOC,EOL)	; Settle for CRLF.
+	SKIPE TTYERS		; If CAN, then
+	 JRST [	CURSOR "H	; proceed to do so gleefully!
+		OUT(DTYOC,C(8.))	; Position cursor at left margin
+		CURSOR "L	; And clear line!
+		JRST .+1]
+	OUT(TYOC,TC(CMTPRM(TC)))	; Output prompt
+	OUT(TYOSC,TS(LINPUT))		; and output string
+	BCONC LINPUT		;start collecting again with current string.
+	POPJ P,
+
+constants
+SUBTTL Parse single object off recipient spec line
+
+STRNAM RNAM
+STRNAM RHST
+STRNAM JCLM	;JCL message stored here if any
+
+	;only used by dkic open if %rfile set
+BVAR
+RFDEV:	'DSK,,0	;device
+RFDIR:	0	;directory
+RFFN1:	0	;fn1
+RFFN2:	SIXBIT />/	;fn2
+EVAR
+
+; getobj  -  Uses RIN as input source and skips if
+;it successfully finds an object in input stream.  no skip
+;means input terminated before an object was found.
+;General syntax is:
+;   <..><name-text>[<..><@ or %><..><host-text>]<..><terminator>
+;where <..> is any number (including 0) of spaces or tabs, and
+;    <terminator> is end of input, comma, or (if input is a
+;	jcl line), <at least one space><text>
+
+;types of objects are:
+; 1) name	returns rlen,rnpt; sets %rnam
+; 2) host	returns rhlen,rhpt;sets %rhst
+; 3) name&host	returns all of above
+; 4) file	returns rlen,rnpt; sets %rfile
+; 5) other	nothing yet
+
+GETOBJ:	PUSH P,A	;don't mung a until get to %badbl test!
+	PUSH P,B
+	TLNE F,%HADCM	; If we've seen an explicit command,
+	 TRZ F,%BUGNM	; make sure bugname crock turned off.
+	TRZ F,%RALLT	;clear all flags that might be set later
+	SETZM RNAM
+	SETZM RHST	;zap strings
+	BCONC		;begin a string
+
+	;flush blanks to get 1st text char of obj.
+GTOBJ1:	PUSHJ P,RIN	;get char
+	 JRST GTOLOS	;none left? lose, no skip
+	 JRST GTOBJ1	;flush blank/tab
+
+	;ah! test first char for special meaning
+GTOBJ2:	CAIN A,"(	;start of structured recipient list?
+	 JRST GTOLST	;yup
+	CAIN A,""	;start of literal string?
+	 JRST GTOSTR
+	CAIE A,"[	;start of recipient-filename string?
+	 CAIN A,"{
+	  JRST GTOFIL
+		
+	;no special meaning, enter loop to collect text
+GTOBJ3:	
+;	CAIE A,"%
+	 CAIN A,"@		;start of a host spec?
+	  JRST [TRNN F,%BUGNM	;off to collect host text.
+		 JRST GTOBH	;(if not collecting bug pgm name)
+		JRST .+1]
+	CAIN A,",		;comma?
+	 JRST [	ECONC RNAM	;hurray, end of name text and object!
+		JRST GTOWIN]
+	TRO F,%RNAM	;oh well. make sure name flag set.
+	OUT(STRC,C((A)))	;store char
+	PUSHJ P,RIN	;get another
+	 JRST [	ECONC RNAM
+		JRST GTOWIN]	;end of input!
+	 JRST GTOBJ6	;hmm, blank/tab. must check further
+	JRST GTOBJ3	;normal char, go stuff in or stop
+
+	;blank/tab terminated name spec.; illegal unless
+	;next non-blank is terminator or start of a host spec.
+GTOBJ6:	ECONC RNAM	;save string
+GTOBJ7:	PUSHJ P,RIN	;get another char.
+	 JRST GTOWIN	;ah, terminates...legal win.
+	 JRST GTOBJ7	;another blank, flush
+
+	;non-blank char found, test to see if it makes things legal
+	CAIN A,",	;comma?
+	 JRST GTOWIN	;yep, terminated, win.
+	TRNE F,%BUGNM	;also check
+	 JRST GTOBAD	;so that space halts a pgm-name.
+	TRNE F,%RALLT#<%RNAM+%RNLIT>	;about to test @/%; skip if a name spec.
+	 JRST GTOBAD	;no - illegal to add host spec to anything but name spec.
+	TRNE F,%RHST	;also stop if
+	 JRST GTOBAD	;already gobbled a host spec.
+;	CAIE A,"%
+	 CAIN A,"@	;ah, name spec; is legal to add host spec.
+	  JRST GTOBH	;and one exists!
+	CAIE A,"A	; Not % or @, but check for "at".
+	 CAIN A,"a
+	  CAIA		; Aha, starts with "A".  Worth checking farther.
+	   JRST GTOBAD	; Nope, give up on him.
+	PUSHAE P,[A,RINEOF,LINRED,LINRED+1]	; Save input state
+	PUSHJ P,RIN
+	 JRST GTOBJ9	; Ugh if EOF
+	 JRST GTOBJ9	; Also ugh if space
+	CAIE A,"T
+	 CAIN A,"t	; AT?
+	  CAIA		; Yes, go check for space...
+	   JRST GTOBJ9	; Nice try.
+	PUSHJ P,RIN
+	 JRST GTOBJ9
+	 CAIA			; If space, found " at "! Skip.
+	  JRST GTOBJ9		; Nope, restore.
+	; Found " at " after name, do some checking...
+	SKIPN TIXTAB+%TIJCL	; Try to see if hacking JCL...
+	 JRST GTOBJ8		; no, safe to assume "@".
+	SKIPN RINDSK		; REALLY from JCL?
+	 TLNE F,%HADCM		; and no command given yet?
+	  JRST GTOBJ8		; No to one of above, not JCL - safe.
+	; " at " seen in JCL, must make sure not part of msg.
+	PUSHJ P,ERRBEG
+	ECONC RNAM
+	FWRITE TYOC,[[Ambiguity; does "],TS,RNAM,[ AT ..."
+mean "],TS,RNAM,[@..."?]]
+	TLO F,%NOECH		; Suppress echo for next char
+	PUSHJ P,TTYINU		; Get answer
+	BCONC RNAM		; Before branching off, restore stuff.
+	CAIE A,^M
+	 CAIN A,"Y
+	  JRST [TYPECR [Yes]	; Yes, process as "@".
+		PUSHJ P,ERROK
+		JRST GTOBJ8]
+	TYPECR [No - "AT" taken as msg text.]
+	PUSHJ P,ERROK
+	JRST GTOBJ9
+
+GTOBJ8:	SUB P,[4,,4]	; Hurray, found " at "!  Forget about restoring state
+	JRST GTOBH	; And go hack hostname.
+GTOBJ9:	POPAE P,[LINRED+1,LINRED,RINEOF,A]
+
+	; Drop thru to GTOBAD.  User has blundered syntactically,
+	; unless this is jcl input, in which case we've found start of msg.
+GTOBAD:	SKIPE TIXTAB+%TIJCL	;if input is from JCL,
+	 JRST [	SKIPN RINDSK	; REALLY from JCL...
+		TLNE F,%HADCM	;and no command has been given yet, skip!
+		 JRST .+1	;else can't be JCL message.
+		MOVEM A,RINLCH	;store char so it's first read by next RIN.
+		JRST GTOBM]	;it's the message! go copy rest and win.
+	OUT(STRC,("/ "))	; Hmm, assume loser wants space in name!
+	JRST GTOBJ3		; Use previously read char to continue...
+
+GTOWIN:	TRNE F,%BUGNM		;skip hack unless bug/feature crock on
+	 JRST [	TRZ F,%RALLT	;if so, make it a name, period.
+		TRO F,%RNAM
+		JRST .+1]	;this is so stuff like "@"->"bug-@" wins.
+	AOS -2(P)
+GTOLOS:	POPAE P,[B,A]	;Losing return pt.
+	POPJ P,
+
+
+	;here when jcl input and message found.
+GTOBM:	TLO F,%JCLM	;set flag
+	BCONC
+	CAIA
+GTOBM1:	 OUTCAL(STRC,C((A)))
+	PUSHJ P,RIN
+	 JRST [	ECONC JCLM
+		JRST GTOWIN]
+	JRST GTOBM1	;loop all the way to end.
+	JRST GTOBM1	;(rin returns to 3 places)
+
+
+	;here when start of host spec is detected (ie, one of @ or %)
+GTOBH:	TRO F,%RHST	;set flag to indicate existence of host spec
+	MOVEM A,RHCHR'	;save for possible typeout
+	ECONC RNAM	;save name string
+	BCONC		;and begin host string.
+GTOBH1:	PUSHJ P,RIN	;get char--must flush blanks.
+	 JRST GTOBH4	;terminated, win though nothing in spec. (getrs will catch)
+	 JRST GTOBH1	;blank/tab, flush.
+
+	;start collecting
+GTOBH2:	CAIN A,",	;terminate successfully on comma
+	 JRST GTOBH4
+	OUT(STRC,C((A)))
+	PUSHJ P,RIN
+	 JRST GTOBH4	;terminated, won.
+	 JRST [	ECONC RHST	;found blank/tab, go do standard checking.
+		JRST GTOBJ7]
+	JRST GTOBH2	;normal char,check + store
+GTOBH4:	ECONC RHST	;save host string
+	JRST GTOWIN
+
+	;here when start of name spec is [ or {.
+	;means everything up to matching right-bkt is taken
+	;like literal,
+	;but includes brckets which mean recipient-filename.
+
+GTOFIL:	TRO F,%RNLIT+%RNAM
+	OUT(STRC,C((A)))	;save the left bracket
+	CAIN A,"[
+	 MOVEI B,"]	;gobble up to right bracket.
+	CAIN A,"{
+	 MOVEI B,"}	; Search for right style bracket.
+	PUSHJ P,GTOLIT
+	 JRST GTOFL7	;unterminated, lose.
+	OUT(STRC,C((B)))
+	JRST GTOBJ6	;save string & look for comma.
+
+GTOFL7:	ECONC RNAM
+	PUSHJ P,ERRBEG
+	TYPE [Recipient file spec doesn't terminate =>]
+	OUT(TYOC,TS(RNAM))
+	PUSHJ P,ERREND
+	JRST GTOLOS
+
+	;here when start of name spec is quote mark (")--
+	;means everything up to next quote is a literal string.
+
+GTOSTR:	TRO F,%RNLIT+%RNAM	;set appropriate flags
+	MOVEI B,""		;gobble up to next quotemark
+	PUSHJ P,GTOLIT
+	 JRST GTOST7		;unterminated.
+	JRST GTOBJ6		;aha, ended. store & check comma etc
+
+GTOST7:	ECONC RNAM
+	PUSHJ P,ERRBEG
+	TYPE [Literal doesn't terminate=>]
+	OUT(TYOC,C(""),TS(RNAM))	;type a quotemark
+					;and follow with string thus far.
+	PUSHJ P,ERREND
+	JRST GTOLOS
+
+
+	; Here when rcpt is a structured list. (begins with "(" )
+	; Routine here is VERY simple and will not even begin to
+	; handle the hairier cases.
+GTOLST:	TRO F,%RNLIT+%RNAM
+	MOVEI B,1		; Begin nesting count.
+GTOL1:	OUT(STRC,C((A)))
+	PUSHJ P,RIN
+	 JRST GTOL7		; Lost, no more chars
+	 JFCL
+	CAIN A,"(
+	 AOJA B,GTOL1		; One more level
+	CAIE A,")
+	 JRST GTOL1
+	SOJG B,GTOL1		; One less level, fall thru when 0
+	OUT(STRC,C((A)))
+	JRST GTOBJ6		; Win!
+
+GTOL7:	ECONC RNAM
+	PUSHJ P,ERRBEG
+	TYPE [Rcpt List spec doesn't terminate=>]
+	OUT(TYOC,TS(RNAM))
+	PUSHJ P,ERREND
+	JRST GTOLOS
+
+	;subroutine to gobble chars until terminating char found.
+	;skips unless hit EOF before finding char.
+GTOLIT:	PUSHJ P,RIN
+	 POPJ P,		;input terminated, non-skip return.
+	 JFCL
+	CAIN A,(B)		;matches specified terminator?
+	 JRST POPJ1		;yes, win.
+	OUT(STRC,C((A)))	;not yet, store.
+	JRST GTOLIT
+
+
+
+	;type out everything in analyzing buffer, as part of err msg.
+OBTYPE:	PUSH P,A
+	PUSH P,B
+	TRNE F,%RNLIT	;is name spec a literal?
+	 OUTCAL(TYOC,C(""))
+	TRNE F,%RFILE	;is name spec a file?
+	 OUTCAL(TYOC,LPAR)
+	OUT(TYOC,TS(RNAM))
+	TRNE F,%RNLIT	;add appropriate close if any
+	 OUTCAL(TYOC,C(""))
+	TRNE F,%RFILE
+	 OUTCAL(TYOC,RPAR)
+	TRNE F,%RHST	;now do host spec if any
+	 JRST [	OUT(TYOC,C(@RHCHR),TS(RHST))
+		JRST .+1]
+	POP P,B
+	POP P,A
+	POPJ P,
+
+OBTYCR:	PUSHJ P,OBTYPE
+	OUT(TYOC,EOL)
+	POPJ P,
+SUBTTL Recipient handling commands, recipient parser
+
+	; "To:" spec  (Variants like CC and Un-to also come here)
+COMT:	PUSHJ P,GETLIN
+	 POPJ P,
+	TRZ F,%AZGOT+%AZERR	;clear flags getrs returns
+	PUSHJ P,RINIT		;set up RIN routine.
+	PUSHJ P,GETRS		;munch the line.
+	TRNE F,%AZERR		;error happened? If so,
+	 JRST COMT		;try again under aegis of same command.
+	POPJ P,			; No error, return.
+
+
+; GETRS - takes input from RIN and hacks recipient specifications.
+;Function affected by command in question (as indicated by TC)
+
+LVAR RHSTIC:	0	;"sticky" host spec..given to names w/no host spec
+
+GETRS:	TRZ F,%AZGOT+%AZERR	;zero flags
+	SETOM RHSTIC		;reset sticky host
+	PUSHAE P,[A,B,C,D,E]
+	SETZM JCLM		;clear JCL message string
+
+GETRS0:	SKIPE JCLM		;jcl message from last pass?
+	 JRST GTRM		;yes, go mung it and return.
+GTRMR:	PUSHJ P,GETOBJ		;get an object.
+	 JRST GETRSF		;all gone, all done.
+
+	;vector out to appropriate routine
+	TRNN F,%RALLT		;anything there?
+	 JRST GETRS0		;nothing!
+	MOVE A,[RNAM,,RCPNAM]
+	BLT A,RCPNAM+1		;copy string descriptor.
+	TRNE F,%RHST
+	 JRST [	MOVE A,[RHST,,RHSTR]
+		BLT A,RHSTR+1	;ditto for host spec
+		MOVE A,RHCHR
+		MOVEM C,GTHCHR'
+		JRST .+1]
+	TRNE F,%RFILE
+	 JRST GTRF	;go process file spec
+	TRNE F,%RNAM
+	 JRST GTRN	;process name (may have host spec)
+	TRNE F,%RHST
+	 JRST GTRH	;go process sticky host spec(no name)
+	JSR AUTPSY
+
+GETRSF:	POPAE P,[E,D,C,B,A]
+	POPJ P,
+
+	;process jcl message line.
+GTRM:	HRRZ D,JCLM		;get cnt of string
+	JUMPLE D,GETRSF		;return if nothing there.
+	TRNN F,%MSGJ		;hacking qmsg or msg?
+	 JRST [	OUT(MSGC,TS(JCLM))	;no, insert into msg area.
+		MOVE A,LTRMCH	;get line terminating char
+		CAIN A,^M	;if it was CR, then
+		 OUTCAL(MSGC,EOL)	;add a CRLF, else leave as is.
+		JRST GETRSF]
+	MOVE A,[JCLM,,SUBJEC]	;MSG-style.  Copy into SUBJEC string.
+	BLT A,SUBJEC+1
+	JRST GETRSF
+
+GTRN:	HRRZ A,RCPNAM		;get length of name string
+	 JUMPE A,GETRS0		;ignore null specs.
+	MOVE R,RCPNUM		;get index to free table slot
+	CAML R,TRSIZE		;compare w/max # slots
+	 PUSHJ P,RTEXP		;if index too high, expand tables to win.
+	MOVEI A,-1
+	MOVEM A,@TRCPF		;clear flag but make word non-zero
+	SETZM @TRCPN		;might as well clear this too.
+	SETOM @TRCPH		;..
+	CAIN TC,%CTU		;deleting?
+	 JRST GTRN1		;skip all the munging fuss
+	CAIN TC,%CTC		;cc adding?
+	 JRST [	MOVSI A,R%CC
+		IORM A,@TRCPF	;set flag for CC
+		JRST .+1]
+
+	TRZE F,%BUGNM		;hacking :bug or :featur name?
+	 JRST [	MAKSTR RCPNAM,[[BUG-],TS,RCPNAM]
+		JRST GTRN1]
+	TRNE F,%MSGJ		;hacking msgs? If so, see if JCL rcpt is really FN1.
+	 JRST [	SKIPN TIXTAB+%TIJCL	;if gobbling JCL,
+		 JRST .+1
+		SKIPE MSGFN1		;see if already have FN1 for MSG
+		 JRST .+1		;don't mung if we do
+		TRNE F,%RHST		;nor if name has a host spec.
+		 JRST [	MOVE A,[SIXBIT /MSG/]
+			MOVEM A,MSGFN1
+			JRST GTRN1]
+		MOVEI A,RCPNAM
+		PUSHJ P,CVTS6F		;else convert name and store as FN1.
+		MOVEM A,MSGFN1
+		JRST GETRS0]
+
+	TRNE F,%RHST		;if host was specified, end of special checks.
+	 JRST GTRN1
+	MOVE B,RCPNAM+1		;else check for "*" thingies... get bp
+	ILDB A,B		;get 1st char
+	CAIE A,"*		;is it...?
+	 JRST [			;nope
+		IRPC CH,,BBOARD
+		 TRZ A,40
+		 CAIE A,"CH
+		  JRST GTRN1	;not BBOARD either
+		 ILDB A,B		 
+		TERMIN
+		JRST .+1 ]
+	;here, have MSG distribution name.
+	SETOM RHSTIC		;no stickiness for MSG distrib names!
+	MOVSI A,R%MSG
+	IORM A,@TRCPF		;set flag for MSG destination.
+	HRRZ A,RCPNAM		;get char cnt
+	CAIN A,1		; one char?
+	 PUSHJ P,ASTRSK		;go put "*<local site>" in RCPNAM
+
+	; nice normal name....
+GTRN1:	MOVEI A,RCPNAM
+	PUSHJ P,SRCPN		;stuff rcpt name string into table slot idx'd by R
+
+	;now see about site to send to.
+	TRNE F,%RHST		;was host specified?
+	 JRST GTRH		;yes, go figure it out.
+	SKIPGE A,RHSTIC		;none specified, hence use sticky host.
+	 MOVE A,OWNHST		;furnish own host if rhstic=-1
+	JRST GTRH2		;sneak into gtrh.
+
+	; put "*<local site>" in RCPNAM
+ASTRSK:	.CALL [SETZ ? 'SSTATU
+		REPEAT 5, 2000,,JUNK
+		SETZM MACHNM]	;get local 6bit name (AI,ML...)
+	 JSR AUTPSY
+	MAKSTR RCPNAM,[[*],6F,MACHNM]
+	POPJ P,
+
+LVAR MACHNM:	0		;for ASTRSK, holds 6bit machine name.
+
+GTRH:	HRRZ C,RHSTR		;get # chars in host spec
+	CAIG C,
+	 JRST [	PUSHJ P,ERRBEG
+		TYPE [Null host spec: ]
+		SETOM RHSTIC	;reset sticky host whenever error happens
+		PUSHJ P,OBTYCR	;type out what there is of object
+		PUSHJ P,ERREND
+		JRST GETRS0]	;go get another object
+
+	CAIN TC,%CTU		;if deleting,
+	 JRST [	HRRZ B,RHSTR	;then check for "@*".
+		CAIE B,1	;length = 1?
+		 JRST .+1
+		MOVE B,RHSTR+1	;get bp
+		ILDB B,B
+		CAIE B,"*
+		 JRST .+1
+		SETO A,		;is *, indicate thusly and skip hostname search.
+		JRST GTRH2]
+	MOVEI A,RHSTR
+	PUSHJ P,IPNUM8		;convert string if possible (base 8 unless periodified)
+	 CAIA			;couldn't, try interpreting as name string
+	  JRST [PUSHJ P,GHFLAG			;see if exists in table
+		 JRST [SETO A, ? JRST GTRH9]	;nope
+		JRST GTRH15]			;ah, it's there.
+	MOVEI A,RHSTR		;addr to host string is arg for
+	PUSHJ P,HANLYZ		;magic host name grinder!
+	 JRST GTRH9		;error, couldn't find!
+GTRH15:	TLNN B,NETWRK"STFSRV	;skip if status is server
+	 JRST GTRH10		;hmmm, not a server. ask if sure.
+GTRH17:	TRNN F,%RNAM+%RNLIT	;skip if name specified
+	 JRST [	MOVEM A,RHSTIC
+		JRST GETRS0]	;ah, sticky spec. do it and that's all.
+	SETOM RHSTIC		;anything else resets the sticky host.
+
+GTRH2:	MOVEM A,@TRCPH		;store host # (gtrn enters here if %rhst=0)
+	CAIN TC,%CTU		;deleting?
+	 JRST GTRH3		;yes. go delete.
+	PUSHJ P,GTRXM		;no.  find a match for this new rcp.
+	 SKIPA			;no match?
+	  JUMPGE A,[		;found exact match.
+		PUSH P,R
+		MOVE B,@TRCPF	; Get new flags
+		MOVE R,A
+		HLLM B,@TRCPF	; Store in existing instance of rcpt,
+		POP P,R		; which serves to set CC-ness right...
+		JRST GETRS0]
+	AOS RCPNUM		;to 1st now-free loc, and officially enter rcp with aos!
+	MOVE A,@TRCPF		;want to see if just stored a *MSG
+	TLNE A,R%MSG
+	 JRST [	AOS MDSNUM	;for MSG distribution site name.
+		TRO F,%MSG
+		JRST .+1]
+	TRO F,%AZGOT
+	JRST GETRS0		;loop back for more.
+
+
+GTRH9:	PUSHJ P,ERRBEG
+	CAMN A,[-1]
+	 JRST [	TYPE [No such site known: "]
+		FWRITE TYOC,[TS,RHSTR,["
+]]
+		PUSHJ P,ERREND
+		JRST GETRS0]
+	CAMN A,[-2]
+	 JRST [	TYPE [I don't know how to mail to the non-Arpanet site: "]
+		FWRITE TYOC,[TS,RHSTR,["
+]]
+		PUSHJ P,ERREND
+		JRST GETRS0]
+	HLRZ B,A		; Addr of 1st NAMES entry
+	MOVEI C,(A)		; addr of last
+	SUBI C,(B)		; Find # of ambiguous names
+	CAIG C,1		; If only 2 names, (THIS DEPENDS ON ENTRYLENGTH = 1!)
+	 SKIPA C,[ASCNT [,]]	; then separator is simple comma.
+	  MOVE C,[ASCNT [,...,]]	; else imply lots. (could use #??)
+	MOVE B,NETWRK"NMRNAM(B)	; Get addr in file of ASCIZ name string
+	ADD B,NETWRK"HSTADR	; Make abs
+	MOVE A,NETWRK"NMRNAM(A)	; addr in file of last entry's name string
+	ADD A,NETWRK"HSTADR	; abs
+	FWRITE TYOC,[[Ambiguous site spec. "],TS,RHSTR,["=>{],TZ,(B),TC,C,TZ,(A),[}
+]]
+	PUSHJ P,ERREND
+	JRST GETRS0
+
+;here, site exists but is not a server.
+GTRH10:	CAIN TC,%CTU	;are we deleting instead of adding?
+	 JRST GTRH17	;yes, no need for warning.
+	PUSHJ P,ERRBEG
+	FWRITE TYOC,[[Warning! This is not a server site: ],TS,RCPNAM,[ @ ],HST,A,[
+Are you SURE you want to send there? ]]
+	MOVE B,A		;save site #
+	PUSHJ P,TTYINU
+	CAIE A,"Y
+	 JRST [	TYPECR [ Flushing.]
+		PUSHJ P,ERREND
+		JRST GETRS0]
+	TYPECR [ Very well...]
+	PUSHJ P,ERROK		; Not really an error...
+	MOVE A,B		;restore flags,,site #
+	JRST GTRH17		;continue
+
+	;here, delete specified rcp or rcpts.
+GTRH3:	PUSHJ P,GTRXM	;zap first one
+	 CAIA
+	  JRST GTRH30
+	PUSHJ P,ERRBEG
+	JUMPE A,[TYPE [Entry doesn't exist: ]
+		JRST GTRH29]
+	TYPE [Entry ambiguous: ]
+GTRH29:	PUSHJ P,RCTYPE
+	OUT(TYOC,EOL)
+	PUSHJ P,ERREND
+	JRST GETRS0
+
+GTRH30:	TYPE [Deleted: ]
+GTRH31:	MOVE R,A
+	PUSHJ P,RCTYPE	;type out deceased	
+	move c,@TRCPF
+	TLNE C,R%MSG
+	 SOS MDSNUM
+	SETZM @TRCPF	;flush the matched slot
+	SETZM @TRCPN
+	SETZM @TRCPH
+	PUSHJ P,GTRXM	;get another
+	 JRST GTRH32	;when no match, don't scream; we got one already
+	CAIL R,0	; If previous match was exact,
+	 JUMPL A,GTRH32	; then partial matches don't count.
+	OUT(TYOC,C(",))	;separate
+	JRST GTRH31	;when another match, go zap it.
+
+	;gc the tables.
+GTRH32:	TRZ F,%MSG
+	SKIPLE MDSNUM
+	 TRO F,%MSG		;update %MSG flag as necessary
+	OUT(TYOC,EOL)		;terminate info
+	MOVN R,RCPNUM
+	HRLZ R,R		;R=index to test (aobjn)
+	PUSH P,E
+	SETZ E,			;e=index to store at
+GTRH4:	SKIPN B,@TRCPF		;get flags and ignore if nothing there
+	 JRST GTRH6
+	MOVE A,@TRCPN		;something there. get rel ascnt ptr also
+	PUSH P,@TRCPH		;and get host
+	EXCH R,E		;use new index
+	MOVEM A,@TRCPN		;store in new place
+	MOVEM B,@TRCPF
+	POP P,@TRCPH
+	EXCH R,E		;restore aobjn'ing index.
+	ADDI E,1		;bump up new index
+GTRH6:	AOBJN R,GTRH4		;loop thru all slots
+	MOVEM E,RCPNUM		;when done, E is new count of entries
+	POP P,E
+	JRST GETRS0	;ah! now, back for another object!
+
+;  gtrxm  - takes rcpnum as index of object to match up.  skips if
+;finds match, leaves index in A; doesn't skip if fails. returns:
+;  no skip(fail):
+;	A=> 0   means no match at all
+;	A=> #   means ambiguous, this # is one possibility.
+;  skip (win):
+;	A=> #   means won exactly
+;	A=> -1,,#  means match is partial, ie existing entry is longer,
+;		but no ambiguities.
+; Note that (sigh) # can be 0.
+
+.SCALAR RPMSAV
+
+GTRXM:	PUSHAE P,[B,C,R]
+	SETZM RPMSAV		; Zap saved partial-match index
+	SKIPN R,RCPNUM		;get index of template entry
+	 JRST GTRXM7		;nothing to match?
+	MOVE B,@TRCPN
+	ADD B,TRSTTB		;abs ascnt ptr
+	hrli b,440700
+	MOVEM B,RMATPT'		;save entry (byte ptr)
+	MOVE A,@TRCPN
+	HLREM A,RMATCT'		;save its char cnt
+	MOVE A,@TRCPH		;and get host # for later storage
+	CAIN TC,%CTU		;if deleting, must check "*" hack.
+	 JRST [	HLRZ C,@TRCPN
+		CAIE C,1	;ah, first check length
+		 JRST .+1	;nope
+		ILDB C,B	;one-char. get it...
+		CAIE C,"*	;well, is it?
+		 JRST .+1	;nope
+		SETOM RMATCT
+		TRNN F,%RHST	;yes, was a host specified?
+		 SETO A,	;if not, make host '*' also.
+		JRST .+1]
+	MOVEM A,RMATH'		;store its host #
+	MOVN R,R
+	HRLZ R,R		;form aobjn thru whole table
+
+GTRXM1:	SKIPN A,@TRCPF		;anything in this slot?
+	 JRST GTRXM3		;no, nothing.
+	MOVE A,@TRCPH		;ah. get its host #
+	SKIPL RMATH		;skip if we match to any #
+	 CAMN A,RMATH		;test. don't skip if matches.
+	  SKIPA			;if here, match! try char count.
+	   JRST GTRXM3		;if here, hosts don't match. try another slot
+
+	SKIPGE RMATCT		;do we care about count?
+	 JRST [	MOVEI A,(R)	;no, we match to any name. go and win.
+		JRST GTRXM8]
+
+	;now try to match name strings; b=template ptr, c=tmplt cnt,
+	;d=suspect ptr, e=suspect cnt.
+
+	PUSH P,R
+	PUSH P,E
+	MOVE B,RMATPT		;get template ptr
+	MOVE C,RMATCT		;template count
+	HLRZ E,@TRCPN		;suspect count
+	MOVE D,@TRCPN		;suspect ptr
+	ADD D,TRSTTB
+	hrli d,440700
+	PUSHJ P,NHMLTX		;see if host is a multics, i.e. case distinction imp't.
+	 CAIA			;no, match with uppercase force.
+	  JRST [PUSHJ P,SMATCL		;blah, yes.. match exactly.
+		 JRST .+2
+		JRST .+3]
+	PUSHJ P,SMATCH		;pow! test them. skips if perfect match.
+	 SKIPA			;failed, a: 0=no match, 1=d counted out, -1=b counted out.
+	  JRST [POPAE P,[E,R]
+		MOVEI A,(R)
+		JRST GTRXM8]	;go win.
+	POPAE P,[E,R]		;fail. restore and try one last hunch.
+	JUMPGE A,GTRXM3		;if no match or d counted out, lose. but if
+			;b counted out, we can partially win if nothing else matches at all.
+	SKIPE RPMSAV	; Already a partial match?
+	 JRST [	HRRZM R,RPMSAV	; Yes, indicate ambiguous.
+		JRST GTRXM3]	; and continue search.
+	HRROM R,RPMSAV	; No, store index indicating unique so far.
+
+GTRXM3:	AOBJN R,GTRXM1	;whole thing loops here.
+
+GTRXM7:	SKIPGE A,RPMSAV	; See if any partial matches were found.
+GTRXM8:	 AOS -3(P)
+	POPAE P,[R,C,B]
+	POPJ P,
+
+
+;smatch -  takes b= byte ptr, c= cnt for b,
+; d= byte ptr, e= cnt for d, and returns matching result in a:
+;skips if perfect match
+;doesn't skip if not perfect match, 
+;  a= 0  no match at all
+;  a= 1  d counted out
+;  a=-1  b counted out
+
+SMATCL:	SETZM SMUPSW'		;set switch for no uppercase force
+	CAIA
+SMATCH:	SETOM SMUPSW		;set switch to use uppercase force
+	PUSHAE P,[B,C,D,E]
+SMACH1:	SOJL C,[JUMPE E,SMACHW	;won if both count out at same time
+		SETO A,		;b counted out.
+		JRST SMACHL]
+	SOJL E,[MOVEI A,1	;d counted out.
+		JRST SMACHL]
+	ILDB A,B	;get chr from b
+	MOVEM A,SMTSAV'	;put in comparison store(not enuf accs)
+	ILDB A,D	;get chr from d
+	CAMN A,SMTSAV	;compare
+	 JRST SMACH1	;match, keep looping.
+	SKIPN SMUPSW		;skip if forcing to uppercase
+	 JRST SMACH3		;else lose completely
+	CAIL A,"a
+	 CAILE A,"z
+	  CAIA
+	   SUBI A,40		;force to upper
+	EXCH A,SMTSAV
+	CAIL A,"a
+	 CAILE A,"z
+	  CAIA
+	   SUBI A,40
+	CAMN A,SMTSAV
+	 JRST SMACH1		;aha, they match now!
+
+SMACH3:	TDCA A,A		;lose. zero A and skip
+SMACHW:	 AOS -4(P)		;won
+SMACHL:	POPAE P,[E,D,C,B]	;lost.
+	POPJ P,
+
+DKICH:	SETZ ? SIXBIT /OPEN/ ? [0,,DKIC] ? DKIDEV	;char input
+	DKIFN1 ? DKIFN2 ? SETZ DKIDIR
+
+STRNAM TMPGFS	;temp string to hold file spec
+
+GTRF:	MOVE A,[RNAM,,TMPGFS]
+	BLT A,TMPGFS+1		;copy descriptor
+	MOVEI A,TMPGFS
+	MOVE B,[RFDEV,,DKIDEV]
+	PUSHJ P,FILPAR		;parse filename
+	SOSGE IOPCNT		;see if iopdl slot still open.
+	 JRST [	PUSHJ P,ERRFLS
+		TYPECR [File distribution lists nested too deep!]
+		JRST GETRS0]
+	.IOPUSH DKIC,		;push current dkic channel
+	MOVEI A,DKIDEV		;point to filblk for call etc.
+	.CALL TXFOPN		;open again for new file (char mode)
+	 JRST [	PUSHJ P,ERRFLS
+		PUSHJ P,FILERR	;open failed. find why and report.
+		TRO F,%AZERR
+		JRST GETRS0]
+	PUSHJ P,TXFIN		;pull in the text
+
+	PUSHAE P,[RINEOF,RINLCH,RINDSK,RHSTIC]
+	SETOM RINLCH
+	SETZM RINEOF
+	SETOM RINDSK		;indicate CRLF's should be flushed.
+	SETOM RHSTIC
+	PUSHAE SP,[LINRED,LINRED+1]
+	MAKSTR LINRED,[TA,(A)]	;make string out of input text!
+	UARCLS (A)
+
+	MOVE A,F	;get flags
+	ANDI A,%AZGOT+%AZERR
+	PUSH P,A	;these flags are to be iored in afterwards
+	MOVE A,F	;get flags again
+	ANDI A,%RALLT	;these flags are to be jammed in afterwards
+	PUSH P,A
+
+	PUSHJ P,GETRS	;recurse! (or recurve?)
+
+	.IOPOP DKIC,
+	AOS IOPCNT	;indicate one more slot free
+	POP P,A		;get jam-in flag values.
+	ANDCMI F,%RALLT	;clobber existing bits
+	IOR F,A		;push bit values in.
+	POP P,A		;get ior-in flag values
+	IOR F,A		;or them in.
+
+	POPAE SP,[LINRED+1,LINRED]
+	POPAE P,[RHSTIC,RINDSK,RINLCH,RINEOF]
+	JRST GETRS0
+
+LVAR IOPCNT:	7	; IO channel PDL count.
+SUBTTL Main text collection loop
+
+MSGGET:	TRNE F,%MSG		;hacking *-msg?
+	 TLZ F,%JCLM		;if so, prevent "Msg:" suppress.
+	TLNN F,%JCLM		;are we handling JCL message or was one inserted?
+	 JRST MSGT10		; Nope, skip over special case cruft.
+	TLNE F,%HADCM		; yes, was command given in the JCL?
+	 JRST [	TLZ F,%JCLM	; Command was given, clear flag.
+		JRST MSGT10]
+	SKIPE TIXTAB+%TIJCL	;no command within JCL, but text existed, so SKIP header
+	 SKIPN T.DCNT		;and clear flag unless still have JCL to read.
+	  TLZ F,%JCLM
+	JRST MSGGT1		; and bypass "Msg:" etc. prompt.
+
+	; Do a "Msg:" or "Continue msg:" prompt.
+MSGT10:	SKIPN T.DCNT		; See if current input source has dried up...
+	 SKIPL TYILCH		; i.e. if counted out and no remaining char...
+	  CAIA
+	   PUSHJ P,POPINP	; then pop input now to make sure header will come out.
+	TRNN F,%MSG		;in MSG?
+	 JRST MSGT15		; Nope, skip random info.
+
+	; Ensure *-MSG's required info exists.
+	SKIPN TIXTAB+%TITTY
+	 JRST MSGT15		;skip if not using TTY.
+	TLZ F,%JCLM		;prevent "Msg:" suppress.
+	SETO TC,
+	SKIPN EXPTIM		; Have expiration date?
+	 MOVEI TC,%CTX		; If not, set up to get it.
+	HRRZ B,SUBJEC		; Have subject?
+	CAIG B,0
+	 MOVEI TC,%CTS
+	SKIPN MSGFN1		; Have FN1 for .MSGS. file?
+	 MOVEI TC,%CT1
+	JUMPGE TC,COMXCT	; If anything missing, go get it.
+
+MSGT15:	TLZE F,%TYPAH		; Was there typeahead?  (Flag cleared here)
+	 JRST [	OUT(TYOC,PTV(A))	; Yes, have we output anything since pgm started?
+		JUMPE A,MSGT30	; Jump directly into loop if haven't.
+		JRST .+1]	; Else we have, and cursor has been moved.  Do usual.
+	OUT(MSGC,PTV(A))	; Find # chars in buffer thus far.
+	TRZE F,%DSALL		; Flag set requesting complete display?
+	 JRST [	PUSHJ P,ALLDIS	; If so, do it and go directly to text collect.
+		JRST MSGT20]
+	JUMPLE A,[PUSHJ P,MSGDIS ; If nothing in buffer, just say "Msg:"
+		JRST MSGT20]
+	PUSHJ P,MSGHED		;yes, say 'continue' & retype last line
+MSGT20:	JUMPG A,MSGGT1		; Now if something was in buffer, go into collect loop
+MSGT21:	TRZ F,%RQUOT		; Else enter check for first char.
+	PUSHJ P,TTYIN		; Get it...
+	CAIE A,"?		; If not a simple "?",
+	 JRST MSGT31		; then nothing special, enter main loop.
+	TYPE [ Enter message text, terminated by a ^C to send
+the message.  The following special characters exist:
+^L to retype entire message.
+^R to retype current line,
+^U to delete it.
+RUBOUT to delete last char.
+^W to delete last word.
+<ALT> for command escape.  <ALT>? gives more help.
+Msg:
+]
+	JRST MSGT21		; Back into first-char loop...
+
+MSGT30:
+MSGGT1:	TRZ F,%RQUOT		;clear special ^q-rubout flag
+	PUSHJ P,TTYIN
+MSGT31:	TLNE F,%SLSHC
+	 JRST .-2		;if slashifying, ignore and go get cvtd char
+	MOVE B,A		;in case of tv chars
+	ANDI B,177		;b will have '7-bit' unquoted char.
+	CAIN B,177		;see if quoted rubout
+	 JRST [	TRNE A,%TXQTE+%TXTOP	;if quoted by whatever means
+		 OUTCAL(TYOC,C(177))	;then echo it.
+		JRST .+1]
+	TRNE A,%TXQTE		;^q-quoted?
+	 JRST [	TRO F,%RQUOT	;indicate special rubouting
+		EXCH A,B
+		SKIPE TTYERS
+		 PUSHJ P,RUBN1	;do display rubout of quoted char
+		EXCH A,B
+		PUSHJ P,RUBM	;flush the ^q from buffer (and rub out if can)
+		SKIPE TTYERS
+		 OUTCAL(TYOC,C((B)))	;echo quoted char again
+		JRST .+1]		
+	CAIN A,^L
+	 JRST [PUSHJ P,ALLDIS ? JRST MSGGT1]
+
+MSGGT2:	CAIE A,^C	;can quote this!
+	 CAIN A,^_	;ditto
+	  JRST [SETZ A,		; Send, normally.
+		TLNE F,%NEWMD	; In "use-new-mailer" mode?
+		 MOVEI A,1	; Yes, use New mode!
+		MOVEM A,SNDVRS	; Set mode
+		JRST MSGSND]	; and go send message.
+		
+	CAIN A,177	;rubout?
+	 JRST [	PUSHJ P,RUBM
+		JRST MSGGT1]
+	CAIN A,^W		; Rubout word?
+	 JRST MSGT60
+	CAIN A,177+%TXMTA	; Meta-rubout?
+	 JRST MSGT62		; Yes, also rubout word.
+	CAIN A,^H
+	 JRST [	CURSOR "A
+		TYPE [Use Rubout, not Backspace, to erase a character.]
+		OUT(TYOC,EOL)
+		PUSHJ P,FNDOLN	;If line is empty, that's all.
+		JUMPE B,MSGGT1
+		PUSHJ P,PLNTYR	;Otherwise, retype it.
+		JRST MSGGT1]
+	CAIN A,^R		;retype line?
+	 JRST [	PUSHJ P,PLNTYR
+		JRST MSGGT1]
+	CAIN A,^U		;delete line?
+	 JRST MSGGT4
+
+	CAIN A,^D	;abort text collection?
+	 JRST [	TYPE [ XXX]
+		JRST COMGET]
+	CAIN A,33	;esc? (can quote this)
+	 JRST COMGET	;go get command.
+	CAIN A,^J	;Turn unquoted LF into CR.
+	 JRST [	CURSOR "H
+		OUT(DTYOC,C(8.))
+		MOVEI A,^M
+		MOVEI B,^M
+		JRST .+1]
+	out(msgc,C((a)))	;finally deposit in text area
+	CAIE B,^M
+	 JRST MSGGT1
+	out(msgc,C(^J))		;add LF if CR seen.
+	JRST MSGGT1
+
+MSGGT4:	PUSHJ P,FNDPLN		;find start of this line or previous
+		;following 3 lines are ill-advised munging of the ARBLK,
+		;but kludge is certainly fast.
+	MOVEM A,MSGAR+$ARWPT	;store returned ptr as write ptr... line is zapped.
+	MOVNS B			;negate count of chars backed up over.
+	ADDM B,$ARCHL+MSGAR	;and update cnt of chars left in area!!
+	SKIPN TTYERS
+	 JRST [	TYPECR [_]	;if hardcopy, simply echo "_".
+		JRST MSGGT1]
+	CURSOR "H
+	OUT(DTYOC,C(8.))	;position cursor at beg of line
+MSGGT5:	CURSOR "L		;and erase line
+	SOJL C,MSGGT1
+	CURSOR "U		;and move up for each LF being erased.
+	JRST MSGGT5
+
+	; Rubout word.
+MSGT60:	SKIPN TTYERS	; Display?
+	 JRST MSGT62	; No, skip rubout of ^W.
+	PUSHJ P,RUBN1	; Rub out the "^W" or whatever.
+	SKIPE TTYSAI	; crock - If sail echo,
+	 PUSHJ P,RUBN1	; rubout once more since RUBN1 thought it was 1 position.
+MSGT62:	PUSHJ P,RUBWRD	; Now rubout word.
+	JRST MSGGT1
+
+SUBTTL Write message file for satellite
+
+LVAR SNDVRS:	0	; Holds sending version.
+		; 0 normal, 1 "New operational" mailer, -1 Experimental.
+
+MSGSND:	SKIPG RCPNUM		;make sure someone to send to
+	 JRST [	PUSHJ P,ERRFLS
+		TYPECR [No recipients!]
+		SETZM SNDVRS	; Clear version.
+		MOVEI TC,%CTT
+		JRST COMXCT]	;go get someone
+	TRNN F,%MSG		; If hacking *-MSG, ensure necessary info there.
+	 JRST MSND10
+	SETO TC,
+	SKIPN EXPTIM		; Have expiration date?
+	 MOVEI TC,%CTX		; If not, set up to get it.
+	HRRZ B,SUBJEC		; Have subject?
+	CAIG B,0
+	 MOVEI TC,%CTS
+	SKIPN MSGFN1		; Have FN1 for .MSGS. file?
+	 MOVEI TC,%CT1
+	JUMPGE TC,COMXCT	; If anything missing, go get it.
+
+MSND10:	hrrz a,frmnam
+	caig a,				;specified his (sender's) name?
+	 JRST [	MOVE A,LUNAME		;no, check to see if logged-in or not
+		TLC A,-1
+		TLNE A,-1		;if lh= -1 then not logged in, skip
+		 JRST .+1
+		PUSHJ P,ERRFLS
+		TYPECR [What is your real login name?]
+		SETZM SNDVRS
+		MOVEI TC,%CTF
+		JRST COMXCT]		;go ask for sender's name
+
+	; Very last test... ^C being suppressed?
+	TLNE F,%NOSND
+	 JRST [	PUSHJ P,INPFLS
+		CURSOR "A
+		TYPECR [Note: Encountered send-message command (^C), but ignoring
+due to previous errors.]
+		JRST MSGGET]		; Back to collection loop.
+
+	.suset [.samsk2,,[1_tyic]]	;disable typein ints (no more possible)
+	UAROPN [%ARTZM+%ARTCH,,TMPAR ? [100]]	;open an area
+	OUT(DKOC,OPEN(UC$UAR,TMPAR))	;open uuo channel into area
+	skipe dmsw
+	 jrst dmsnd		;if on DM, go to special rtn.
+
+	FWRITE DKOC,[[FROM-JOB:],6F,JNAME,[
+SENT-BY:],6F,LUNAME,[
+]]
+
+	;decide what type header to ask for, if any
+	;(comsat default is tenex unless msg is within its systems)
+	SETZ A,
+;Next 2 lines commented out 8/2/79 by Moon.  Comsat will generate the correct header
+;for ITS *MSG-SINK rcpts.  This serves only to send the wrong header to random
+;network BBoard rcpts.
+;	TRNE F,%MSG		; If *-msg,
+;	 MOVEI A,[ASCSTR [ITS]]	; Always try to use ITS header.
+	SKIPGE SORMSW		; Check for QSEND'ing...
+	 SKIPE SENDSW		; Skip if correct switches.
+	  CAIA			; Nope, not QSEND'ing (?)
+	   MOVEI A,[ASCSTR [ITS]]	; Force to ITS if so.
+	HRRZ B,HEDTYP		; All bets off if explicitly forced.
+	CAIE B,0
+	 MOVEI A,HEDTYP		; If explicitly forced...
+	JUMPE A,MSGSN6		; Skip forcing if nothing to force.
+	FWRITE DKOC,[[HEADER-FORCE:],TS,(A),[
+]]
+
+MSGSN6:	SKIPN A,RGSTRD		; If special type receipts wanted...
+	 JRST MGSN61
+	FWRITE DKOC,[[REGISTERED:],TS,(A),[
+]]
+MGSN61:	hrrz a,frmnam		;and claimed name if any given
+	JUMPN A,[fwrite dkoc,[[CLAIMED-FROM:],TS,FRMNAM,[
+]]
+		JRST MGSN62]
+	SKIPE XUNAME		;if no "from", hack xuname if exists.
+	 JRST [FWRITE DKOC,[[CLAIMED-FROM:],6F,XUNAME,[
+]]
+		JRST MGSN62]
+
+mgsn62:	TRNN F,%MSG
+	 JRST MSGO1
+			;if %MSG set... comsat will default these if unspecified.
+	FWRITE DKOC,[[EXPIRES:],OCT,EXPTIM,[
+MSG-FN1:],6F,MSGFN1,[
+]]
+	SKIPN MSGFN2
+	 JRST MSGO1
+	FWRITE DKOC,[[MSG-FN2:],6F,MSGFN2,[
+]]
+
+MSGO1:	HRRZ B,SUBJEC		;subject line?
+	JUMPE B,MSGO2		;no, go ahead to rcpts
+
+	;subject out
+	FWRITE DKOC,[[SUBJECT:],TS,SUBJEC,[
+]]
+
+	;recipients out
+MSGO2:	hrrz b,rlsnam
+	JUMPN B,[fwrite dkoc,[[RCPT-LIST-NAME:],TS,RLSNAM,[
+]]
+		JRST .+1]
+	MOVN R,RCPNUM
+	HRLZS R
+MSGSN3:	SKIPN C,@TRCPF		;get and check entry
+	 JRST MSGSN4		;null, nothing in this slot
+	FWRITE DKOC,[[TO:]]
+	MOVE A,@TRCPH		;get host #
+	CAMN A,[-1]
+	 MOVE A,OWNHST		;if -1, local host.
+	FWRITE DKOC,[OCT,A]
+
+	MOVE A,@TRCPN
+	ADD A,TRSTTB		;get abs ascnt ptr
+	tlne c,r%cc		;set option if cc.
+	 OUTCAL(DKOC,C("C))
+	SKIPN SORMSW
+	 JRST MGSN35
+	SKIPGE SENDSW
+	 OUTCAL(DKOC,C("-))
+	SKIPLE SENDSW
+	 OUTCAL(DKOC,C("+))
+	OUT(DKOC,C("S))
+	JRST MGSN37
+MGSN35:	SKIPGE MAILSW
+	 OUTCAL(DKOC,C("-))
+	SKIPLE SENDSW
+	 OUTCAL(DKOC,C("+))
+	OUT(DKOC,C("M))
+
+MGSN37:	OUT(DKOC,C(""),TC(A),EOL)
+MSGSN4:	AOBJN R,MSGSN3
+
+
+	; Arbitrary attrib if any.
+MSGSN7:	HRRZ A,ATTRIB		; Attrib string specified?
+	JUMPN A,[FWRITE DKOC,[[ATTRIBUTE:],TS,ATTRIB,[
+]]
+		JRST .+1]
+
+	; Now output text.
+	out(msgc,PTV(b))
+	FWRITE DKOC,[[TEXT;],oct,b,[
+],TA,MSGAR,[
+]]		; Add null line to avoid possible EOF padding hassles.
+
+	MOVE A,SNDVRS
+	MOVE A,1(A)+[SIXBIT /XMAIL/	; -1 exper
+		SIXBIT /MAIL/
+		SIXBIT /NMAIL/]		; 1 New.
+	MOVEM A,DKOFN1		; Set that as FN1 to use.
+	MOVEI A,DKODEV
+
+MSND90:	SYSCAL OPEN,[[.UAO,,DKOC] ? (A)		; Write out to temp FNM
+		[SIXBIT /_MAIL_/]
+		[SIXBIT /OUTPUT/] ? 1(A)]
+	 JRST MSND95		; Error?!
+	OUT(DKOC,OPEN(UC$IOT),TA(TMPAR))
+	SYSCAL RENMWO,[CIMM DKOC ? 2(A) ? 3(A)]
+	 JRST MSND95		; Error?!
+	.CLOSE DKOC,
+
+	; Now see if mailer demon should be started.
+	SYSCAL SSTATU,[CRET A ? CRET B]		;get sysdbg switch.
+	 JSR DEATH
+	JUMPN B,DONE		;if debugging, don't try to activate mailer!
+	SKIPN DMSW
+	 PUSHJ P,SATELC		;check satellite and start if necessary
+	SKIPE DMSW
+	 PUSHJ P,DMDEMC		; Kick COMSYS if on DM.
+DONE:	.BREAK 16,124000	;die quietly without :inpush
+
+
+MSND95:	PUSHJ P,ERRFLS
+	PUSHJ P,ERRDOC
+	TYPE [
+Error while trying to write message for COMSAT!
+Try ^C again or use alt-P command to save message for later...]
+	JRST MSGGET
+
+
+BVAR
+DKODEV:	SIXBIT /DSK/
+DKODIR:	SIXBIT /.MAIL./
+DKOFN1:	0		; Either MAIL or XMAIL or NMAIL.
+DKOFN2:	SIXBIT />/
+EVAR
+SUBTTL Special DM message-file writer
+
+DMSND:	OUT(DMC,OPEN(UC$XCT,[PUSHJ P,DMOUT]))	; Open MUDDLE-string output chan.
+	SETZM DMRTSW
+	PUSHJ P,DMRSN			; Output people to go in "TO" field.
+	setom dmrtsw
+	MOVNS dmrtsw
+	PUSHJ P,DMRSN			; Output names to actually send to.
+	SETOM DMRTSW
+	PUSHJ P,DMRSN			; Output names to go in CC field.
+
+DMSND2:	FWRITE DKOC,[["FROM" "]]
+	hrrz a,frmnam
+	caile a,
+	 JRST [	FWRITE DMC,[TS,FRMNAM]
+		JRST DMSND4]
+	SKIPN A,XUNAME
+	 .SUSET [.RUNAME,,A]
+	FWRITE DMC,[6F,A]
+DMSND4:	FWRITE DKOC,[["
+]]
+	HRRZ A,SUBJEC
+	CAILE A,
+	 JRST [	FWRITE DKOC,[["SUBJECT" "]]
+		FWRITE DMC,[TS,SUBJEC]
+		FWRITE DKOC,[["
+]]
+		JRST .+1]
+	FWRITE DKOC,[["TEXT" "]]
+	FWRITE DMC,[TA,MSGAR]
+	FWRITE DKOC,[["]]
+	SKIPN SORMSW
+	 JRST DMSND5
+	FWRITE DKOC,[[
+"QSEND" ]]
+	SKIPGE SENDSW
+	 FWRITE DKOC,[[-1]]
+	SKIPN SENDSW
+	 FWRITE DKOC,[[0]]
+	SKIPLE SENDSW
+	 FWRITE DKOC,[[1]]
+DMSND5:	FWRITE DKOC,[[
+"SCHEDULE" ("SENDING")
+]]
+	MOVEI A,DMODEV
+	JRST MSND90		; Go send to indicated filblk.
+
+DMODEV:	SIXBIT /DSK/
+	SIXBIT /COMSYS/
+	SIXBIT /M/
+	SIXBIT />/
+
+LVAR DMRTSW:	0	;0 ALL, 1 TO, -1 CC
+LVAR DMSNUM:	0	; #-1 rcpts each pass
+
+DMRSN:	SETOM DMSNUM
+	MOVN R,RCPNUM
+	HRLZS R
+DMRSN1:	SKIPN C,@TRCPF		;get flags
+	 JRST DMRSN4
+	SKIPN DMRTSW
+	 JRST DMRSN3
+	SKIPL DMRTSW
+	 JRST [	TLNE C,R%CC
+		 JRST DMRSN4	; 1 AND CC, IGNORE
+		JRST DMRSN3]
+	TLNN C,R%CC
+	 JRST DMRSN4		;-1 AND TO, IGNORE
+
+	; Filtered out valid rcpt, output it.
+DMRSN3:	MOVE C,DMRTSW
+	AOSG DMSNUM		; If first time, must output initial stuff
+	 JRST [	MOVE A,(C)1+[ASCNT ["CARBON-COPY-TO" (]
+			ASCNT ["TO" (]
+			ASCNT ["ACTION-TO" (] ]
+		OUT(DKOC,TC(A))
+		JRST .+1]
+	OUT(DKOC,SP,C(""))
+	MOVE A,@TRCPN
+	ADD A,TRSTTB		;get abs ascnt ptr
+	OUT(DMC,TC(A))
+	OUT(DKOC,C("@))
+	MOVE B,@TRCPH		;get host #
+	CAMN B,[-1]
+	 MOVE B,OWNHST
+	PUSH P,D
+	PUSHJ P,NETWRK"HSTSRC
+	 JRST [	POP P,D ? JRST DMRSN4]		;I guess
+	POP P,D
+	OUT(DMC,TZ((A)))
+	OUT(DKOC,C(""))
+DMRSN4:	AOBJN R,DMRSN1
+	SKIPL DMSNUM
+	 FWRITE DKOC,[[)
+]]
+	POPJ P,
+
+
+DMOUT:	PUSH P,OC
+	MOVEI OC,DKOC		; Change to real channel.
+	CAIE U1,""		; catch quote mark
+	 CAIN U1,"\		; or MUDDLE quoting char
+	  JRST [PUSH P,U1
+		STDOUT("\)	; and quote either
+		POP P,U1
+		JRST .+1]
+	STDOUT			; before outputting.
+	POP P,OC
+	POPJ P,
+
+DMDEMC:	SYSCAL DEMSIG,['COMSYS]
+	 JFCL
+	POPJ P,
+
+SUBTTL Input source routines (TTY and other)
+
+%TIJCL==0
+%TITTY==1
+%TIDSK==2
+.SCALAR TIX		; Input source index (one of %TI*)
+LVAR TIXTAB: 0 ? 0 ? 0	; Input source check table; one in use is -1, others 0.
+
+SETTIX:	MOVEM A,TIX
+	SETZM TIXTAB+%TIJCL
+	SETZM TIXTAB+%TITTY
+	SETZM TIXTAB+%TIDSK
+	SETOM TIXTAB(A)
+	RET
+
+LVAR TYILCH:	-1		;holds single char to return, if any.
+
+TTYIN:	SKIPL A,TYILCH		;skip unless char exists to "re-read".
+	 JRST [	SETOM TYILCH
+		POPJ P,]
+	MOVE A,TIX		; Get current input source index
+	JRST @.+1(A)		;dispatch according to TIX.
+	INDSK			;routine for JCL same as INDSK, but TIX provides flag.
+	TTYIN0
+	INDSK
+
+
+	; Input bit setup (including tv-kbd bits)
+%TXMPE==400000	;when set means mp echoing was desired but not done
+%TXPIE==200000	;ditto for pi echoing
+%TXQTE==10000	;personal quote bit for ^q-quoting.
+	;rest of bits are TK-TV kbd bits.
+%TXTOP==4000	;top
+%TXSFL==2000	;shift lock (!?)
+%TXSFT==1000	;shift (somewhat useless since ascii letters are shifted anyway)
+%TXMTA==400	;meta
+%TXCTL==200	;cntrl (ascii letter must be munged to get real 7-bit cntrl)
+
+TTYIN0:	TLNE F,%UNSIL			;if flag set requesting un-silence,
+	 JRST [	TLZ F,%NOTYO+%UNSIL		;make it so.
+		OUT(TYOC,OPEN(UC$IOT))
+		OUT(DTYOC,OPEN(UC$IOT))
+		JRST .+1]
+	TLZ F,%NOSND		; Direct TTY input clears suppress-^C flag.
+	TLZE F,%NOECH			;if suppressing MP echo this once,
+	 JRST [	SYSCAL IOT,[CTLI %TIECH	;read in thusly. Will lose for PI echo.
+			CIMM TYIC ? CRET A]
+		 JSR AUTPSY
+		TRZ A,%TXMPE+%TXPIE	;clear any echo bits
+		JRST TTYIN1]
+	.IOT TYIC,A
+
+TTYIN1:	TRZ A,%TXSFT+%TXSFL		;flush shift and shift lock
+	TRNE A,%TXTOP			;top?
+	 JRST [	TLZ F,%QUOTE
+		TRZ A,%TXMTA+%TXCTL	;zap meta & cntrl
+		POPJ P,]		;and return "top" code
+	TRZE A,%TXCTL			;cntrl?
+	 JRST [	SETCA A,			;complement A
+		TRNE A,177		;if all these bits 0, char was rubout, leave alone
+		 IORI A,140		;clobber bits to cntrl it.
+		SETCA A,			;complement back.
+		JRST .+1]
+	TRNE A,%TXMTA			;meta set?
+	 JRST [TLZ F,%QUOTE ? POPJ P,]	;return meta bit flavoring if it's there.
+
+TTYIN7:	TLZE F,%QUOTE			;zero quote flag and skip if was already clear
+	 JRST [	TRO A,%TXMTA+%TXQTE	;quote this char (extra flag is ^q quote)
+		POPJ P,]
+	SKIPE SLSHFY
+	 JRST [	TLZE F,%SLSHC		;slash conversion?
+		 JRST [	CAIL A,141
+			 CAILE A,172
+			  CAIA
+			SUBI A,40	;convert lower to upper
+			POPJ P,]
+		CAIL A,101
+		 CAILE A,132
+		  CAIA
+		ADDI A,40		;convert lower to upper unless slashed.
+		CAIN A,"/
+		 TLO F,%SLSHC
+		JRST .+1]
+	CAIN A,^Q			;no quote.  is this the quoting char?
+	 TLO F,%QUOTE			;set flag if so, and
+	POPJ P,				;return
+
+
+	; Routine for inputting from an area.
+INDSK:	TLZ F,%NOECH		; Always clear no-echo flag
+	SOSGE T.DCNT
+	 jrst INDSK7		;out of dsk chars.
+	ildb a,@t.dbpa		;get a char (via $ARRPT)
+	cain a,^J
+	 jrst [	trzn f,%dcrlf	;if flag was set, skip and clear.
+		 jrst TTYIN7	;genuine lf. process like normal char.
+		jrst INDSK]	;flag set, must flush. get another char
+	cain a,^M
+	 troa f,%dcrlf
+	  trz f,%dcrlf		;for cr, set flag. for everything else, clear.
+	JRST TTYIN7
+
+INDSK7:	UARCLS @T.DARP		;free up area used...
+	PUSHJ P,POPINP		;pop up input stream.
+	JRST TTYIN		;get a char acc'ding to new input.
+
+BVAR
+t.darp:	0		;holds ARPT to area having input text.
+T.DBPA:	0		;holds addr of Read ptr of area.  Indirected thru.
+t.dcnt:	-1		;# of chars in area
+EVAR
+
+	; Sets input stream to source selected by A.  This is
+	; either an area # to read from, or if -1 the TTY.
+	; Actually functions as a PUSH of input.
+	; Reading from an area sets %NOTYO to suppress all TTY output.
+SETINP:	PUSH P,B
+	SETZM T.OFLG		; Set to whatever
+	TLNE F,%NOTYO		; %NOTYO's value may be.
+	 SETOM T.OFLG
+	SKIPN B,INPDP		;get current input PDL ptr
+	 JRST [	PUSHJ P,INPFLS
+		MOVE B,INPDP
+		JRST .+1]
+	PUSHAE B,[T.OFLG,TYILCH,T.DARP,T.DCNT,T.DBPA,TIX]
+	MOVEM B,INPDP		;store ptr back...
+	SETOM TYILCH		;clear return-this-char
+	JUMPL A,[PUSHJ P,SETTYI	;if new source is TTY, use special routine.
+		JRST POPBJ]	;and return.
+	movem a,t.darp		;Else area. Store # of area text is in
+	move b,$ARrpt(a)	;get read ptr to text
+	ptrdif b,$ARwpt(a)	;get difference with write ptr (# chars) in b
+	movem b,t.dcnt		;save char cnt
+	movei a,$ARrpt(a)	;get addr of read ptr
+	movem a,t.dbpa		;and save for indirecting thru.
+	MOVEI A,%TIDSK
+	CALL SETTIX
+	TLO F,%NOTYO		;suppress TTY output.
+	SETOM T.OFLG		; setting this not really needed here.
+	OUT(TYOC,OPEN(UC$XCT,[JFCL]))	;make TTY output do nothing.
+	OUT(DTYOC,OPEN(UC$XCT,[JFCL]))
+	POP P,B
+	POPJ P,
+
+	; This routine POP's input stream back.
+POPINP:	PUSH P,A
+	SKIPE A,INPDP		;if nothing to pop,
+	 CAMG A,INPDPS		; or at stack bottom,
+	  PJRST INPFL1		; reinitialize.  Note A on PDL!
+	POPAE A,[TIX,T.DBPA,T.DCNT,T.DARP,TYILCH,T.OFLG]
+	MOVEM A,INPDP
+	MOVE A,TIX
+	CALL SETTIX
+	SKIPN T.OFLG		; Make sure t.oflg and %notyo agree,
+	 JRST [	TLZN F,%NOTYO	; and reset TYOC as necessary.
+		 JRST POPIN2
+		OUT(TYOC,OPEN(UC$IOT))
+		OUT(DTYOC,OPEN(UC$IOT))
+		JRST POPIN2]
+	TLOE F,%NOTYO
+	 JRST POPIN2
+	OUT(TYOC,OPEN(UC$XCT,[JFCL]))	;make TTY output do nothing.
+	OUT(DTYOC,OPEN(UC$XCT,[JFCL]))
+POPIN2:	SKIPE TIXTAB+%TITTY
+	 .SUSET [.SADF2,,[1_TYIC]]	; One more thing... allow ints for TTY
+	POP P,A
+	POPJ P,
+
+; INPFLS - Flushes input source stack and resets to TTY I/O
+
+INPFLS:	PUSH P,A
+INPFL1:	MOVE A,INPDPS
+	MOVEM A,INPDP
+	POP P,A
+	PJRST SETTYI
+
+	; Little rtn to set up various things for TTY input.
+SETTYI:	PUSH P,A
+	MOVEI A,%TITTY		;set proper input stream index
+	CALL SETTIX
+	POP P,A
+	TLZ F,%NOTYO+%NOECH		;and allow output, & clear no-echo flag.
+	SETZM T.OFLG
+	OUT(TYOC,OPEN(UC$IOT))
+	OUT(DTYOC,OPEN(UC$IOT))
+	SETOM T.DCNT		;and zap count for any checks.
+	SETOM TYILCH		; And clear any re-reading
+	.SUSET [.SADF2,,[1_TYIC]]	;and allow any pending ints.
+	POPJ P,
+
+LVAR T.OFLG:	0	; Set to %NOTYO for push/pop use
+
+
+INPDLN==7*6		;enough room on input PDL to hold 7 levels.
+BVAR
+INPDP:	0		;holds current input PDL ptr.
+INPDPS:	-INPDLN,,INPDL-1
+INPDL:	BLOCK INPDLN
+EVAR
+SUBTTL Error auxiliary routines
+
+; ERRFLS - Does a INPFLS to flush input source stack completely;
+;	for use when no point in continuing to gobble input.
+
+ERRFLS:	SETZM N2DARY
+	SKIPN TIXTAB+%TITTY
+	 SETOM N2DARY
+	PUSHJ P,INPFLS	; Flush input stack, reset to TTY I/O
+	.RESET TYIC,	; and clear anything in input buffer.
+ERRFL2:	CURSOR "A	; Get newline
+	SKIPE N2DARY
+	 TYPE [MAIL error - ]
+	SKIPN N2DARY
+	 TYPE [Error; ]
+	POPJ P,
+
+; ERRBEG - Pushes input stack and enables TTY I/O for duration of
+;	error reporting, until a ERREND call is made.  If ERREND
+;	is not called, INPFLS should be.  After ERREND, input
+;	will continue as before.
+
+ERRBEG:	PUSH P,A
+	SETZM N2DARY
+	SKIPN TIXTAB+%TITTY
+	 SETOM N2DARY
+	SETO A,		; Set to TTY
+	PUSHJ P,SETINP	; Push on
+	POP P,A
+	TLO F,%NOSND	; Suppress ^C unless direct TTY input happens.
+	PJRST ERRFL2	; Type start of err message.
+
+; ERREND - Restores world after ERRBEG and random reporting done.
+; ERROK  - Similar but clears %NOSND rather than setting, to allow
+;		later ^C to send message.  Implies wasn't really error.
+
+ERROK:	TLZA F,%NOSND	; Wasn't really error, or was corrected.
+ERREND:	 TLO F,%NOSND	; Make SURE this flag set (some err rtns do
+			; direct TTY input which clears it)
+	PJRST POPINP	; Simply pop input stack back...
+
+SUBTTL TTY-relevant routines
+KLEAR:	SKIPE TTYDIS
+	 PJRST ZAP	;clear screen if display
+	OUT(TYOC,EOL)	;else just kerchunk.
+	POPJ P,
+
+ZAP:	CURSOR "C
+	POPJ P,
+
+;returns input char from tty in a.  set up as a
+;routine mainly to handle tv codes, but also to
+;allow translation of tty input to disk file.
+
+	;returns upper-case 7-bit char.
+TTYINU:	PUSHJ P,TTYIN
+	ANDI A,177
+	CAIL A,"a
+	 CAILE A,"z
+	  POPJ P,
+	SUBI A,40
+	POPJ P,
+
+
+	; Routine to get current cursor position and set HORPOS, VERPOS accordingly.
+TTYLOC:	PUSH P,A
+	SYSCAL RCPOS,[CIMM TYOC ? CRET A]
+	 JSR AUTPSY
+	HRRZM A,HORPOS		;Set hor, ver positions to what should be.
+	HLRZM A,VERPOS
+	POP P,A
+	POPJ P,
+
+
+DTYST1:	424242,,424242	;"normal" - for all groups here, echo at mp level,
+			;ascii output, activate, don't interrupt.
+DTYST2:	434242,,420242	;^g,^s = normal except these INTERRUPT!
+			;lf, tab = normal
+			;<esc> = normal
+			;cr = normal
+			;rubout = normal but NO ECHO
+			;space,bs = normal
+
+TTGET:	SETZ ? 'TTYGET ? 1000,,TYIC ? 2000,,A ? 2000,,B ? SETZM C
+TTSET:	SETZ ? 'TTYSET ? 1000,,TYIC ? A ? B ? SETZ C
+
+LVAR TTYWID:	0	; TTY width used by TOPUT.  Inited to HORSIZ.
+TTINFO:	SETZ ? 'CNSGET ? 1000,,TYIC
+	2000,,VERSIZ'
+	2000,,HORSIZ'
+	2000,,TCTYP'
+	2000,,TTYCOM'
+	2000,,TTYOPT'
+	SETZM TTYTYP'
+SUBTTL Rubout handling
+
+; RUBM - rub out last char in MSGAR, removing it from buffer and erasing
+;	it from screen (or retyping if not display).
+;	Erasing the LF in a CRLF erases the CR too.
+
+RUBM:	PUSH P,A
+	out(msgc,PTV(a))		;anything to rubout?
+	JUMPLE A,POPAJ
+	CAIA
+RUBM0:	PUSH P,A
+	TLON F,%HADRB	; Indicate rubout seen, skip if already set.
+	 JRST [	SKIPE TTYERS	; First rubout!
+		 PUSHJ P,PLNTYR	; If possible, retype line for prettiness.
+		JRST .+1]
+	LDB A,MSGAR+$ARWPT	;get char being rubbed out
+	D7BPT MSGAR+$ARWPT	;decrement pointer
+	SOS $ARCHL+MSGAR	;add to cnt of chars room.
+	SKIPN TTYERS		;OK to try erasing?
+	 JRST [	TRNE F,%RQUOT	; no, on printing term.  If ^Q-quote,
+		 JRST POPAJ	; do nothing.
+		CAIE A,^J	; was it LF?
+		 JRST [	OUT(TYOC,C((A)))	; No, just echo
+			JRST POPAJ]	; and return.
+		PUSHJ P,RUBMCR	; Hmm, see if there's a CR to rubout too.
+		 OUTCAL(TYOC,C(^M))	; Yes, output CRLF for kerchunk.
+		OUT(TYOC,C(^J))		; Else just LF.
+		JRST POPAJ]
+
+	; Hmmm, display...reposition cursor.(ahhhhhggggg!!!)
+	CAIN A,^J		;erased char a lf? move up if so
+	 JRST [	CURSOR "U
+		PUSHJ P,RUBMCR	; See if last char now CR...
+		 JRST RUBM2	; If so, "erase" it too.
+		JRST POPAJ]
+	CAIE A,^M		;a cr? (if so must retype previous line)
+	 CAIN A,^H		;or backspace? (ditto)
+	 JRST RUBM2
+	CAIN A,^I		;tab?
+	 JRST RUBM2
+	PUSHJ P,RUBN1		;reasonable char.  go rub out.
+	POP P,A
+	POPJ P,
+RUBM2:	PUSHJ P,OLNTYR		;retype previous line.
+	JRST POPAJ
+
+	; Auxiliary for RUBM, skips if last char in buffer is not CR.
+	; else removes from buffer and doesn't skip.
+RUBMCR:	OUT(MSGC,PTV(A))	; make sure more to rubout...
+	JUMPLE A,POPJ1	; before tasting it.
+	LDB A,$ARWPT+MSGAR	; See if char before the LF
+	CAIE A,^M		; is a CR?
+	 JRST POPJ1
+	D7BPT $ARWPT+MSGAR	; Yup, take it out.
+	SOS $ARCHL+MSGAR
+	POPJ P,		; Non-skip to hack cursor.
+
+
+
+	; Rubout routine for GETLIN.
+RUBN:	TLON F,%HADRB		; If first rubout,
+	 SKIPN TTYERS		; and display,
+	  CAIA
+	   PJRST GTLNDS		; Then re-display whole command line & return.
+	SKIPN TTYERS		;OK to try erasing?
+	 JRST [	OUT(TYOSC,C((A)))	;if merely hardcopy, then echo back.
+		POPJ P,]
+RUBN1:	PUSHJ P,TTYLOC
+	PUSHJ P,RUBX		;move backward and kill char.
+	SKIPE SLSHFY
+	 JRST [	CAIL A,101
+		 CAILE A,132	;uppercase?
+		  JRST .+1	;no
+		PJRST RUBX]	;if uppercase, erase slash
+	CAIN A,177
+	 JRST RUBN2
+	CAIL A,40	;skip if cntrl
+	 POPJ P,
+	CAIN A,33	;esc is single-pos
+	 POPJ P,
+	SKIPE TTYSAI	;skip if not one-char cntrls
+	 POPJ P,
+RUBN2:	PJRST RUBX	;back and kill the ^
+
+	; A smart form of ^P X.
+RUBX:	CURSOR "B	;first move back.
+	SOSL HORPOS
+	 JRST [	CURSOR "K
+		POPJ P,]	;if not past edge, things are easy.
+	PUSH P,HORSIZ
+	POP P,HORPOS
+	SOS HORSIZ
+;	CURSOR "B	; must move back again to avoid stupid "!".
+;	CURSOR "U	;must move up to allow for auto-crlf.
+	SOSL VERPOS
+	 JRST RUBX5
+	PUSH P,VERSIZ
+	POP P,VERPOS
+	SOS VERPOS
+RUBX5:	CURSOR "L	;kill rest of line (both char and "!").
+	POPJ P,
+
+
+;retype current line in msg area
+
+PLNTYP:	TROA F,%OLNTY
+PLNTYR:	 TRZ F,%OLNTY
+	TLO F,%PREVL
+	JRST LNTY
+OLNTYP:	TROA F,%OLNTY
+OLNTYR:	 TRZ F,%OLNTY		;means hack lf reposition since rubbing out.
+	TLZ F,%PREVL
+LNTY:	PUSHAE P,[A,B,C]
+	SKIPN TTYERS		;skip if OK to try clearing line
+	 JRST [	CURSOR "A	;No. position on new line if necessary.
+		JRST OLNTY2]	;and skip display hacking.
+	CURSOR "H
+	OUT(DTYOC,C(8.))		;set cursor to left margin
+	CURSOR "L		;clear line
+OLNTY2:	out(msgc,PTV(b))
+	JUMPLE B,PPCBAJ		;make sure something to type out
+	PUSHJ P,FNDLN		;returns ptr to beg. of line cursor should be on
+	JUMPE B,PPCBAJ
+	TRNE F,%OLNTY
+	 JRST OLNTY1		;skip LF reposition if typing anew.
+	JUMPE C,OLNTY1		;returns in c the # lf's seen, jump if none.
+	skipn ttyers
+	 jrst olnty1		;also skip reposition if can't do it.
+OLNTY3:	CURSOR "U		;move up
+	CURSOR "L		;and clear line
+	SOJG C,OLNTY3		;for each lf seen.
+OLNTY1:	ILDB C,A
+	OUT(TYOSC,C((C)))
+	SOJG B,OLNTY1
+	JRST PPCBAJ
+
+
+;searches backward for a cr, and positions ptr
+;such that an ildb gets 1st char of the line after the cr. ie,
+;tries to ignore lf's.  won't go past beg of area.
+;returns ptr in a,  returns in b the # of chars in line. (ie
+;# chars it moved backwards over, not # chars to next cr)
+;in c leaves # lf's passed over (not counting crlf that ends search)
+
+FNDPLN:	TLOA F,%PREVL
+FNDOLN:	 TLZ F,%PREVL
+FNDLN:	push p,d
+	PUSH P,E
+	MOVE A,MSGAR+$ARWPT
+	SETZB B,C		;zero cnt
+	out(msgc,PTV(E))
+	CAIG E,
+	 JRST POPEDJ
+FNDOL1:	LDB E,A			;get char
+	CAIN E,^M		;cr?
+	 JRST [	TLNE F,%PREVL	;yep! is switch set?
+		 CAILE B,1	;and char cnt 1 (lf) or less?
+		  JRST FNDOL2	;nope, mission ended.
+		JRST .+1]	;switch set and current line is nil, find previous.
+
+	CAIN E,^J		;lf?
+	 AOJ C,			;incr cnt of bypassed lf's
+	AOJ B,			;no, bypass it. incrment count of bypassed chars.
+	D7BPT A			;decrement ptr in a
+	HRRZ E,A		;test addr.
+	CAMGE E,MSGAR+$ARLOC	;ok if addr is same or greater
+	 JRST [	MOVE A,MSGAR+$ARLOC
+		hrli a,440700
+		JRST FNDOL2]	;hmmm, nope, must reset.
+	JRST FNDOL1
+
+FNDOL2:	MOVE E,A	;ah, terminated. is char following terminator a lf?
+	ILDB E,E	;get it
+	CAIE E,^J
+	 JRST POPEDJ	;nope, things are all set.
+	IBP A		;yes, a lf. readjust pointer
+	SOJ B,		;and bump count down
+	SOJ C,		;for both
+POPEDJ:	pop p,E
+	POP P,D
+	POPJ P,
+
+
+; Rubout Word routines
+
+; RUBWRD - for calling by MSGGET when necessary to rub out a
+;	word.  Does it the obvious painful way... but works.
+
+RUBWRD:	PUSHAE P,[A,B]
+	OUT(MSGC,PTV(A))
+	JUMPLE A,POPBAJ
+	MOVE B,MSGAR+$ARWPT
+	PUSHJ P,RUBWCT		; Get # chars to flush
+	JUMPLE B,POPBAJ
+	SKIPN TTYERS
+	 JRST RUBWD5		; Jump if not display.
+	PUSHJ P,RUBM0		; Erase one char
+	SOJG B,.-1		; And so forth
+	JRST POPBAJ
+
+RUBWD5:	OUT(TYOC,C("_))		; If not display, simply echo "_"
+	MOVNS B			; Negate cnt
+	PTSKIP B,MSGAR+$ARWPT	; Adjust write ptr
+	ADDM B,MSGAR+$ARCHL	; and # chars free (neg)
+	JRST POPBAJ
+
+
+; RUBWCT - Given BP in B to end of string, length in A, returns
+; in B the # chars to delete for performing rubout-word function.
+; kludged to actually return # times to call RUBM0, if display.
+; This "fixes" problem of CRLF being single char to RUBM.
+
+RUBWCT:	JUMPLE A,APOPJ
+	PUSHAE P,[C,D]
+	MOVN D,A
+	HRLZS D			; Set up AOBJN
+	SETZ C,			; Clear flag
+RUBWC2:	LDB A,B			; Get last char
+RUBCW3:	PUSHJ P,RUBWCL		; Skip if NOT word-class char
+	 SKIPA C,[-1]		; Found word-class char, set flag...
+	  JUMPN C,RUBWC6	; If not wordclass and flag set, stop!
+RUBWC5:	D7BPT B			; Else continue searching back.
+	CAIN A,^J		; If last char LF,
+	 AOBJN D,[LDB A,B	; do special check for CRLF
+		CAIE A,^M
+		 JRST RUBCW3	; Not a CRLF, continue normally.
+		SKIPE TTYERS	; Ah, a CRLF.  Display?
+		 HRRI D,-1(D)	; yes, account for display rubout hack.
+		JRST RUBWC5]
+	AOBJN D,RUBWC2		; Get another, unless all gone.
+RUBWC6:	HRRE B,D		; Isolate count of chars to flush.
+	POPAE P,[D,C]
+	POPJ P,
+
+	; Check for char being in "word-class" - letter or digit.
+RUBWCL:	CAIL A,"0
+	 CAILE A,"9
+	  CAIA
+	   POPJ P,	; In, return.
+	CAIL A,"A
+	 CAILE A,"Z
+	  CAIA
+	   POPJ P,
+	CAIL A,"a
+	 CAILE A,"z
+	  AOS (P)	; Not in word-class, skip on return.
+	POPJ P,
+
+
+SUBTTL Access to Recipient tables
+
+	; Initialize rcpt tables
+RTINIT:	MOVEI U1,10.		;start out with 10. rcpts
+	PUSHJ P,CORGET
+	HRRM U2,TRCPN		;store addr for indirecting thru
+	MOVEM U1,TRSIZE		;save size
+	MOVEI U1,10.
+	PUSHJ P,CORGET		;another one.
+	HRRM U2,TRCPF		;ditto
+	CAMGE U1,TRSIZE		;must use whichever size is smallest
+	 MOVEM U1,TRSIZE	;so neither bound is exceeded
+	MOVEI U1,10.
+	PUSHJ P,CORGET		;another one.
+	HRRM U2,TRCPH		;ditto
+	CAMGE U1,TRSIZE		;must use whichever size is smallest
+	 MOVEM U1,TRSIZE	;so neither bound is exceeded
+	MOVEI U1,100.		;assume 10 chars/rcpt
+	PUSHJ P,CORGET
+	MOVEM U2,TRSTTB		;store start
+	MOVEM U1,TRSTRL		;and length
+	SETZM TRSTPT		;and zero rel write ptr
+	POPJ P,
+
+	; Ensures that index R points to valid slots, i.e. call when
+	; c(R) .GE. c(TRSIZE) -  expands the RCPN, RCPF, and RCPH blocks to win for
+	;at least that value of R.
+RTEXP:	MOVEI U1,30.(R)		;get more (plus some, to minimize calls)
+	SUB U1,TRSIZE
+	CAIG U1,
+	 POPJ P,		;foo, called when R was really OK.
+	PUSH P,U1		;save for next call
+	HRRZ U2,TRCPN
+	PUSHJ P,COREXP		;expand block
+	HRRM U2,TRCPN
+	MOVEM U1,TRSIZE		;store new (?) addr and size
+	MOVE U1,(P)		;get increment again
+	HRRZ U2,TRCPH
+	PUSHJ P,COREXP
+	HRRM U2,TRCPH
+	CAMGE U1,TRSIZE
+	 MOVEM U1,TRSIZE	;as for RTINIT
+	POP P,U1		;get increment again
+	HRRZ U2,TRCPF
+	PUSHJ P,COREXP
+	HRRM U2,TRCPF
+	CAMGE U1,TRSIZE
+	 MOVEM U1,TRSIZE	;as for RTINIT
+	POPJ P,
+
+
+	;sets indexed rcpt name to string pointed to by A
+SRCPN:	PUSH P,B
+	PUSH P,C
+	HRRZ B,(A)		;get cnt of string
+	ADDI B,4
+	IDIVI B,5		;find # wds needed
+	ADD B,TRSTPT		;add to write ptr
+	MOVE C,B		;save
+	SUB B,TRSTRL		;will string fit?
+	JUMPL B,SRCPN3		;if fits,don't need to expand
+	MOVEI U1,40(B)		;else get that many wds plus a few more.
+	MOVE U2,TRSTTB
+	PUSHJ P,COREXP		;get more core.
+	MOVEM U2,TRSTTB
+	MOVEM U1,TRSTRL		;save new (?) address and length
+	
+SRCPN3:	MOVE B,TRSTPT		;get current write ptr
+	HRL B,(A)		;and cnt of string
+	MOVEM B,@TRCPN		;store rel ascnt ptr
+	HRLI B,440700
+	ADD B,TRSTTB		;make abs bp
+	OUT(TMPC,OPEN(UC$BPT,B),TS((A)))	;output string into block
+	MOVEM C,TRSTPT		;store updated write ptr
+	POP P,C
+	POP P,B
+	POPJ P,
+
+
+BVAR
+TRSIZE:	0		;# wds in each of RCPF, RCPH, and RCPNMS.
+TRCPF:	(R)		;RH points to beg of RCPF data block.
+			;each entry in RCPHF is <flags>,,<garbage>
+TRCPH:	(R)		;RH points to beg of RCPH data block.
+			;each entry in RCPH is a host number.
+TRCPN:	(R)		;RH points to beg of RCPNMS data block.
+			;each entry is <# chars>,,<relative address into RSTRTB>
+			;where string begins
+TRSTTB:	0	;address of RSTRTB block
+TRSTRL:	0	;# wds in it
+TRSTPT:	0	;relative write ptr into block
+EVAR
+SUBTTL Redisplay routines
+
+	; Type out rcpt specified by R
+RCTYPE:	PUSH P,A
+	PUSH P,B
+	HLRZ A,@TRCPN		;get char count
+	CAIN A,-1		;check for "any" spec
+	 JRST [	OUT(TYOC,C("*))
+		JRST RCTYP2]	;type * and skip
+	MOVE A,@TRCPN
+	ADD A,TRSTTB		;get abs ascnt ptr
+	OUT(TYOSC,TC(A))
+RCTYP2:	MOVE A,@TRCPF
+	TLNE A,R%MSG
+	 JRST POPBAJ		;ignore " at <site>" if rcpt is a MSG destination.
+	TYPE [ at ]
+	MOVE A,@TRCPH		;get site #
+	CAMN A,[-1]		;check for "any" spec
+	 JRST [	OUT(TYOC,C("*))
+		JRST POPBAJ]
+	FWRITE TYOC,[HST,A]	;type out name of host.
+	POP P,B
+	POP P,A
+	POPJ P,
+
+ALLDIS:	PUSHJ P,MOSDIS
+	PJRST MSGDIS
+
+MOSDIS:	PUSHJ P,KLEAR
+	pushj p,frmdis
+	PUSHJ P,RCPDIS
+	TRNE F,%MSG
+	 PUSHJ P,FN1DIS
+	PUSHJ P,SBJDIS
+	TRNE F,%MSG
+	 PUSHJ P,EXPDIS
+	POPJ P,
+
+EXPDIS:	FWRITE TYOC,[[Expires in ],N9,EXPTIM,[ days
+]]
+	POPJ P,
+	
+
+FN1DIS:	TYPE [.MSGS.;]
+	SKIPN MSGFN1
+	 TYPE [ - ]
+	SKIPE MSGFN1
+	 OUTCAL(TYOC,6F(MSGFN1))
+	OUT(TYOC,SP)
+	SKIPE MSGFN2
+	 OUTCAL(TYOC,6F(MSGFN2))
+	SKIPN MSGFN2
+	 OUTCAL(TYOC,6F(MFNDF2))	;default MSG FN2 if none specified.
+	OUT(TYOC,EOL)
+	POPJ P,
+
+frmdis:	PUSH P,A
+	hrrz a,frmnam
+	caig a,		;from spec?
+	 JRST POPAJ
+	TYPE [From: ]
+	movei a,frmnam
+	PJRST MSGDS1
+
+SBJDIS:	PUSH P,A
+	HRRZ A,SUBJEC
+	CAIG A,			;subject line?
+	 JRST POPAJ		;no
+	TYPE [Subj: ]
+	movei a,subjec
+MSGDS1:	FWRITE TYOSC,[TS,(A),[
+]]
+	POP P,A
+	POPJ P,
+
+RCPDIS:	PUSH P,A
+	HRRZ A,RLSNAM
+	JUMPG A,[TYPE [	TO: ]
+		OUT(TYOSC,TS(RLSNAM))
+		OUT(TYOC,EOL)
+		JRST .+1]
+	PUSHJ P,TPUT
+	OUT(TYOC,TS(TOLINS))
+	HRRZ A,TOLINS		;if there wasn't anything to type out,
+	CAIN A,0
+	 TYPECR [To: (nil)]	;then indicate no rcpts.
+	PUSHJ P,CPUT
+	OUT(TYOC,TS(TOLINS))
+	POP P,A
+	POPJ P,
+
+
+MSGHED:	CURSOR "A		;start on new line.
+	TYPE [Continue msg:
+]
+	PUSHJ P,OLNTYP		;retype current line
+	POPJ P,
+
+MSGDIS:	CURSOR "A		;start on new line if not on edge
+	TYPE [Msg:
+]
+	FWRITE TYOSC,[TA,MSGAR]
+	POPJ P,
+SUBTTL Host name muncher
+
+;Map the host table file SYSBIN;HOSTS1 > into core.
+;A should contain the page number to start it at.  Gets advanced to next free.
+
+NETINI:	PUSH P,B
+	MOVEI B,DKIC
+	PUSHJ P,NETWRK"HSTMAP
+	 JSR AUTPSY
+	POP P,B
+	POPJ P,
+
+;Given host number in A, return flags in B.  no skip if doesn't exist.
+
+GHFLAG:	PUSH P,A	; mustn't clobber number itself!
+	PUSH P,D
+	MOVE B,A
+	PUSHJ P,NETWRK"HSTSRC
+	 JRST GHFLG1
+	MOVE B,NETWRK"STLFLG(D)	; Get flags
+	AOS -2(P)
+GHFLG1:	POP P,D
+	POP P,A
+	POPJ P,
+
+;Given host number in A, return pointer to asciz name in A, 0 if doesn't exist.
+
+GHNAME:	PUSHAE P,[B,D]
+	MOVE B,A
+	PUSHJ P,NETWRK"HSTSRC
+	 TDZA A,A
+	  HRRZS A	
+	POPAE P,[D,B]
+	POPJ P,
+
+
+; "NHMLTX" - routine skips if host in A is a Multics.
+
+NHMLTX:	PUSHAE P,[A,B,D]	;save ACs clobbered by HSTSRC
+	MOVE B,A
+	PUSHJ P,NETWRK"HSTSRC	;find out about this host
+	 JRST NHMLT9		;unknown host presumed not to be a Multics
+	HLRZ D,NETWRK"STLSYS(D)	;pointer to system name
+	ADD D,NETWRK"HSTADR	;relocate
+	MOVE A,[ASCII/MULTI/]
+	MOVE B,[ASCII/CS/]
+	CAMN A,(D)
+	 CAME B,1(D)
+	  CAIA
+	   AOS -3(P)		;It's a Multics; skip return
+NHMLT9:	POPAE P,[D,B,A]
+	POPJ P,
+
+;server-oriented host-name search.
+; [This routine is slightly different from the one in Comsat]
+;if skips:
+;	a/ # of site found
+;	b/ flags
+;if doesn't skip:
+;	a= -1		;host not found, whether server or anything else.
+;	a= -2		;found but not on accessible network
+;	a= ptr,,ptr	;ambiguous server sites, 2 ptrs returned as examples.
+;			;These are abs addresses of Name table entries.
+; Takes in A the address of string to look up.
+
+HANLYZ:	PUSHAE P,[C,D,E]
+;I think there is still a KA10 running ITS in Sweden, so we can't use ADJBP
+;	HRRZ C,(A)		; length of name
+;	ADJBP C,1(A)		; byte pointer to last char of name
+	HRRZ D,(A)		; length of name
+	SKIPA C,1(A)		; byte pointer to first char of name
+	IBP C			; increment to last char of name
+	SOJGE D,.-1
+	ILDB D,C		; temporarily terminate the asciz string
+	PUSH P,D
+	MOVEI D,0
+	DPB D,C
+	PUSH P,C
+	MOVE A,1(A)		; byte pointer to name
+	PUSHJ P,NETWRK"HSTLOOK	; hunt for it
+	 JRST HANLY2		; ambiguous or failed, check.
+	PUSHJ P,GHFLAG
+	 JSR AUTPSY
+	AOS -5(P)
+HANLY9:	POP P,C			; put back the first char after name
+	POP P,D
+	DPB D,C
+	POPAE P,[E,D,C]
+	POPJ P,
+
+HANLY2:	JUMPE B,[SETO A,	; Not found at all.
+		JRST HANLY9]
+	TLNE B,-1
+	 SKIPA A,B		; Ambiguous, return first,,last
+	  MOVNI A,2		; Inaccessible, return -2
+	JRST HANLY9
+
+ifn 0,[	;This is a bunch of bullshit.  NETWRK works.
+; [This routine differs from COMSAT's NETRTS one in that if a single host
+; is found and returned, its flags are also returned in B.  The string
+; argument is also given differently.]
+;server-oriented host-name search.
+;algorithm: look for match of 1st, 2nd, etc. chars; if
+;both count out exactly, found it.  if table name counts out,
+;keep looking.  if other name counts out, consider it a
+;match, look for other matches, and win if no more. if
+;more, lose (ambiguous)
+;if skips:
+;	a/ # of site found
+;if doesn't skip:
+;	a= -1		;host not found, whether server or anything else.
+;	a= -2		;found but not on accessible network
+;	a= ptr,,ptr	;ambiguous server sites, 2 ptrs returned as examples.
+;			;These are abs addresses of NAME table entries.
+;if name matches both a server and non-server site, it is held non-ambiguous and
+;the server site selected.  if the only matches are multiple non-server sites,
+;the first one found is returned with a skip. (ugh).
+
+; Can't use NETWRK routine here because they lazily depend on word-justified
+; uppercasified zeroed-out ASCIZ comparison.  Sigh...
+
+; Arg in A - addr of string variable.
+;	also a successful return provides site flags in B.
+
+HANLYZ:	PUSHAE P,[C,D,E]
+	HRRZ B,(A)
+	MOVEM B,NPTSVC'	;save cnt
+	MOVE B,1(A)
+	MOVEM B,NPTSAV'	;save ptr to name
+
+	SETZM HFSAV1'	;clear the regs used to store
+	SETZM HFSAV2'	;matches in.
+	SETZM HNSSAV'	;(this one is non-server slot)
+	SKIPN D,NETWRK"HSTADR
+	 JSR AUTPSY
+	ADD D,NETWRK"NAMPTR(D)	;address NAMES table.  Assumes one word entries!!
+	MOVN E,0(D)		;get number of entries
+	HRLZS E			;make aobjn pointer
+	HRRI E,2(D)
+HANLZ1:	HRRZ D,NETWRK"NMRNAM(E)	;points to ASCIZ name
+	ADD D,NETWRK"HSTADR
+	HRLI D,440700
+	MOVE C,NPTSAV
+	MOVE A,NPTSVC	; get cnt
+	MOVEM A,NPTCNT'
+HANL11:	ILDB B,D
+	SOSGE NPTCNT		;decr. char cnt
+	 TDCA A,A		;clear a and skip if none left.
+	  ILDB A,C
+	JUMPE B,[JUMPN A,HANLZ4		;site string pau. if our string longer, no match
+		MOVEI A,(E)		; both counted out, perfect match, use this index.
+		JRST HANLZ7 ]		;and go win
+	JUMPE A,HANLZ2		;partial match if our string counts out first
+	CAMN A,B
+	 JRST HANL11
+	CAIL A,"a	;if chars don't match, try converting
+	 CAILE A,"z	;input string to uppercase.
+	  JRST HANLZ4	;twas uppercase already
+	SUBI A,40
+	CAMN A,B
+	 JRST HANL11
+HANLZ4:	AOBJN E,HANLZ1
+
+	;all searching done, no perfect matches, see if partial matches.
+	SKIPE HFSAV2		;was an ambiguous server host found?
+	 JRST [	HRLZ A,HFSAV1	;ambiguous; two or more found. get ptr to first in lh
+		HRR A,HFSAV2	;and ptr to second in rh.
+		JRST HANLZ9]	;loss return.
+	SKIPE A,HFSAV1		;was unambiguous server host found?
+	 JRST HANLZ7		;yes, only one partial match, win
+	SKIPN A,HNSSAV		;was a non-server site found? (load with value)
+	 JRST HANLZ8		; Nope, go to loss return.
+
+HANLZ7:	HLRZ E,(A)		; get adr of SITE ent
+	ADD E,NETWRK"HSTADR
+	HRRZ B,NETWRK"STRADR(E)	; Get file addr of ADDRESS table entry...
+
+	; Now decide which of the possible addresses to use.
+	; priority is ARPAnet, CHAOSnet, LCSnet, random net.
+	PUSH P,E
+	SETOB A,C
+HANLC2:	ADD B,NETWRK"HSTADR	; Make abs ptr
+	MOVE D,NETWRK"ADDADR(B)	; Get net address of this entry
+	NETWRK"GETNET D		; Get net number it's on
+	MOVEI E,3
+	CAME D,(E)[NETWRK"NW%LCS	; Priority in reverse order
+		NETWRK"NW%CHS
+		NETWRK"NW%ARP]-1
+	 SOJG E,.-1
+	CAIL C,(E)
+	 JRST HANLC3
+	MOVE A,NETWRK"ADDADR(B)	; Aha, save address
+	MOVEI C,(E)		; and its priority
+HANLC3:	HRRZ B,NETWRK"ADRCDR(B)	; Check out more net addrs if any
+	JUMPN B,HANLC2		; Yep, check next one.
+	POP P,E
+	JRST HANL78		; Done, use highest addr found, in A.
+
+IFN 0,[	CALL HANLCA		; Check for ARPAnet address.
+	 JRST HANL78		; Win!
+	MOVE D,OWNHST		; No arpanet, can we check chaosnet?
+	CAMN D,[HN$DM]		; If non-DM, yes!  (I know this is absurd)
+	 JRST HANL72
+	HRRZ B,NETWRK"STRADR(E)	; Try again,
+	CALL HANLCC		; for chaosnet.
+	 JRST HANL78		; Win!
+] ;ifn 0
+
+HANL72:	MOVNI A,2
+	JRST HANLZ9		; Nope, not right place after all, lose.
+
+ifn 0,[
+	; Check out A-net addr
+HANLCA:	SKIPA D,[NETWRK"NW%ARP]
+HANLCC:	 MOVE D,[NETWRK"NW%CHS]
+HANLC2:	ADD B,NETWRK"HSTADR
+	MOVE A,NETWRK"ADDADR(B)	; Get net address of this entry
+	NETWRK"GETNET C,A	; Get net number...
+	CAMN C,D		; Right net?
+	 RET			; Yes, win.
+	HRRZ B,NETWRK"ADRCDR(B)	; Wrong net, see if exists on another one.
+	JUMPN B,HANLC2		; Yep, check that.
+	AOS (P)		; Foo, lost.  (loss return!)
+	RET
+] ;ifn 0
+
+HANL78:	MOVE B,NETWRK"STLFLG(E)		; Also return flags for winner.
+	AOSA -3(P)		;come here for winnng return
+HANLZ8:	 SETO A,
+HANLZ9:	POPAE P,[E,D,C]
+	POPJ P,			;failure return
+
+	; here when partial match found
+HANLZ2:	SKIPN HFSAV1		;skip if already have one partial match
+	 JRST [	HRRZM E,HFSAV1	; Save table index to first partial match
+		HLRZ A,(E)	; Get file addr of SITE entry
+		ADD A,NETWRK"HSTADR
+		MOVE A,NETWRK"STLFLG(A)	;get flags
+		TLNE A,NETWRK"STFSRV	;skip if not server
+		 JRST HANLZ4		;continue, to check for ambiguities	
+		HRRZM E,HNSSAV		;non-server, store entry # here.
+		SETZM HFSAV1		;rectify wrong assumption
+		JRST HANLZ4]		;and continue
+	;not first partial match, save if server, ignore if not.
+	HLRZ A,(E)	; Get file addr of SITE entry
+	ADD A,NETWRK"HSTADR
+	MOVE A,NETWRK"STLFLG(A)	;get flags
+	TLNN A,NETWRK"STFSRV	;skip if server
+	 JRST HANLZ4	;ignore if non-server
+	MOVEI B,(E)
+	CAMN B,HFSAV1	;test against entry of previously matched name
+	 JRST HANLZ4	;ignore this finding if already found same host.
+	CAMN B,HFSAV2	;if not =, not same as first found. check second.
+	 JRST HANLZ4	;ignore if this host already listed
+	MOVEM B,HFSAV2'	;different from both already found, "second-found" host.
+	JRST HANLZ4	;continue looking. (may find exact match)
+];ifn 0
+
+;  "ipnum" - takes addr to string in A,
+;tries to parse as a number (oct or dec). returns value in a,
+;doesn't skip if bad parse.
+
+IPNUM8:	TRZA F,%ONCE	;don't force to decimal.
+IPNUM:	 TRO F,%ONCE	;do!
+	PUSH P,B
+	HRRZ B,(A)	;get cnt
+	MOVE A,1(A)	;and bp
+	MOVEM A,NUMPNT'	;save ptr to string
+IPNUM0:	JUMPE B,POPBJ
+	ILDB A,NUMPNT	;loop to flush leading blanks
+	CAIE A,40
+	 CAIN A,^I
+	  SOJA B,IPNUM0
+
+	TRO F,%TMP		;set flag to negate result
+	CAIE A,"-
+	 JRST [	TRZ F,%TMP	;unless not negative #
+		D7BPT NUMPNT	;in which case must decr. bp
+		JRST .+1]
+	PUSHAE P,[C,D]
+	SETZB C,D
+IPNUM2:	SOJL B,IPNUM6		;decrement cnt; if count out here, it's octal.
+	ILDB A,NUMPNT		;get ascii digit
+	CAIL A,"0		;check to be sure it's a digit
+	 CAILE A,"9
+	  JRST IPNUM3		;foo! non-numeric char.
+	LSH C,3			; octal*8
+	IMULI D,10.		; decimal*10
+	ADDI C,-"0(A)
+	ADDI D,-"0(A)
+	JRST IPNUM2
+
+IPNUM3:	CAIE A,".		;is non-numeric char a decimal pt?
+	 JRST IPNUM5		;no, go flush blanks/tabs
+	MOVE C,D		;ah yes, use decimal accumulator.
+	;now flush blanks/tabs
+IPNUM4:	SOJL B,IPNUM6
+	ILDB A,NUMPNT
+IPNUM5:	CAIE A,40
+	 CAIN A,^I
+	  JRST IPNUM4
+	JRST IPNUM7	;foo, lose again. can't do fractions.
+
+IPNUM6:	TRNE F,%ONCE
+	 SKIPA A,D	;use decimal if flag set.
+	  MOVE A,C
+	AOS -3(P)
+	TRNE F,%TMP
+	 MOVN A,A
+IPNUM7:	POPAE P,[D,C,B]
+	POPJ P,
+
+SUBTTL Locks and satellite startup
+; ensure that comsat is alive, start it if not.
+
+SATELC:	PUSHJ P,SATEXS		;check for satellite and skip if exists.
+	 CAIA
+	  POPJ P,		;yep it's there, nothing to do.
+	PUSH P,A
+
+	;here, must start up comsat.
+	MOVE A,SNDVRS
+	XCT 1(A)+[TYPE [ Experimental COMSAT]
+		TYPE [ Communications satellite]
+		TYPE [ New COMSAT]]
+	TYPECR [ apparently dead.]
+	SKIPL SNDVRS		; If experimental-sending,
+	 SKIPE DEBUG		; or debugging, then ask:
+	  JRST [TYPE [Attempt re-launch?]
+		PUSHJ P,TTYINU
+		CAIE A,"Y
+		 JRST POPAJ		; If doesn't want re-launch, just return.
+		TYPE [ ]		; Aha, go ahead & launch.
+		JRST .+1]
+	TYPE [Re-launching, hang on...]
+
+	; Blast off...
+	.OPEN USRO,[.UIO,,'USR ? 0 ? SIXBIT /RESTRT/]
+	 JRST [	TYPE [ Can't get launch pad!]
+		JRST SATEL8]
+	MOVE A,SNDVRS
+	MOVE A,(A)SATFTB+1	; Get proper FN2 to load.
+
+	SYSCAL OPEN,[[.UII,,DKIC] ? SATDEV ? SATFN1 ? A ? SATDIR]
+	 JRST [	TYPE [ Can't get booster for COMSAT!]
+		JRST SATEL8]
+	SYSCAL LOAD,[CIMM USRO ? CIMM DKIC]
+	 JRST [	TYPE [ Fizzled on pad!]
+		JRST SATEL8]
+	.IOT DKIC,A
+	.USET USRO,[.SUPC,,A]		;set initial pc from start addr in file.
+	SYSCAL DISOWN,[CTLI 7 ? CIMM USRO]	;start after disowning, top-level.
+	 JRST [	TYPE [ Can't release satellite!]
+		JRST SATEL8]
+
+	TYPECR [ now in orbit!]
+SATEL9:	POP P,A
+	POPJ P,		;have started it, done.
+
+SATEL8:	TYPECR [
+Fear not, your mail will eventually be transmitted.]
+	JRST SATEL9
+
+BVAR
+SATDEV:	SIXBIT /DSK/
+SATDIR:	SIXBIT /.MAIL./
+SATFN1:	SIXBIT /COMSAT/
+SATFN2:	0
+EVAR
+
+SATFTB:	SIXBIT /XPER/
+	SIXBIT /LAUNCH/
+	SIXBIT /NEW/
+
+SATEXS:	PUSH P,A
+	MOVE A,SNDVRS		; Get index to proper FN1 to map.
+	SYSCAL OPEN,[[.UII,,DKIC] ? SATDEV ;try to get dsk chan to lock-sw file
+		(A)LCKFTB+1 ? LCKFN2 ? SATDIR]
+	 JRST POPAJ		;failed, assume not there because no comsat.
+	SYSCAL CORBLK,[CIMM %CBNDW+%CBPUB	; Get public write-access page.
+			CIMM -1		;put into self
+			CIMM LCKPAG	;at highest page
+			CIMM DKIC]	; Mapping from dsk file.
+	 JSR DEATH		;ugh?????
+	PUSHJ P,LKINIT		;initialize switches
+	SKIPL LOCK1		;see if unique switch is locked; skip if not
+	AOS -1(P)		;locked, comsat alive!
+	POP P,A
+	POPJ P,
+
+LCKFN2:	SIXBIT /UNIQUE/		; FN2 of locked-switch file.
+
+LCKFTB:	SIXBIT /XLOCK/		; Table of possible FN1's.
+	SIXBIT / LOCK/
+	SIXBIT /NLOCK/
+
+LCKPAG==377
+LSWLOC=LCKPAG*2000	;loc where switch page starts
+LSWREQ=LSWLOC		;init request flag
+LSWDON=LSWLOC+1		;init done flag
+LOCK1=LSWLOC+<1*2>	;switch 1 (2 wd block)
+LOCK2=LSWLOC+<2*2>	;switch 2  "  "  "
+NLCKSW==2
+
+TMPLOC 43,{	0	;43 ptr to locked switch list
+	-LCCBLK,,CCBLK	;44 aobjn ptr to critical routine table for locks
+}
+
+; critical code table pointed to by word 44 !
+CCBLK:	LKINI2,,LKINI3		;for crashing in lkinit
+	MOVEM A,LSWREQ
+	LKGRB1,,LKGRB2		;for crashing in lkgrab
+	SETOM @A
+	LKFRE1,,LKFRE1+1	;for crashing in lkfree
+	SETOM @A
+LCCBLK==.-CCBLK
+
+;;; initialize lock switches in page
+;;; (taken from locks documentation)
+
+LKINIT:	PUSHAE P,[A,B]
+	MOVEI B,15.		;in case of unknown time, sleep 15 times
+	.CALL [SETZ ? 'RQDATE ? 2000,,A ? SETZM A]
+	JSR DEATH
+	JUMPL A,[SOSGE B
+		JSR DEATH
+		MOVEI A,30.*60.	;sleep for 1 min. each try
+		.SLEEP A,
+		JRST .-2]	;repeat call to get time sys started
+	MOVE B,A
+LKINI1:	EXCH A,LSWREQ		;claim right of initializing (nop if already claimed)
+LKINI2:	CAMN A,LSWREQ		;did we get it?
+	JRST LKINI5		;no, check 2nd word to see if other guy fulfilled duty
+
+	;got access, we must initialize! lkini2 to lkini3-1 is critical code
+
+	SETOM LOCK1		;clear the lock(s)
+	SETOM LOCK2
+LKINI3:	MOVEM B,LSWDON		;indicate init done
+LKINI9:	POPAE P,[B,A]
+	POPJ P,
+
+LKINI5:	CAMN B,LSWDON		;didn't get init rights, see if other finished it.
+	JRST LKINI9		;yes, nothing left to do.
+	MOVEI A,30.		;no, he's still at it...hang around, he might die.
+	.SLEEP A,
+	MOVE A,B
+	JRST LKINI1		;try to claim again.
+
+;;; lkgrab - takes a as addr of switch to swipe at; skips if
+;;; successfully grabbed switch for very own, doesn't skip if
+;;; it was locked.  tries only once!!!
+
+LKGRAB:	AOSE (A)		;try to get it
+	POPJ P,			;lost
+
+LKGRB1:	PUSH P,B		;got it! now put it on
+	MOVE B,43		;locked switch list
+	HRLI B,(SETOM)
+	MOVEM B,1(A)
+	MOVEM A,43
+LKGRB2:	POP P,B			; lkgrb1 to lkgrb2-1 is critical code
+	AOS (P)			;skip, we got it
+	POPJ P,
+
+;;; lkfree - takes a as addr of switch to free.
+;;; (assumes that same switch is first item on locked switch list)
+
+LKFREE:	PUSH P,B
+	HRRZ B,1(A)
+	MOVEM B,43	;remove from lsw list
+LKFRE1:	SETOM (A)	;and unlock (lkfre1 is critical instr.)
+	POP P,B
+	POPJ P,
+
+SUBTTL Storage wrapup
+
+BVAR	; Most all of this stuff is impure.
+
+N2DARY:	0	; -1 when known to be secondary routine (invoked by RMAIL or like)
+
+HORPOS:	0	;horizontal cursor position.
+VERPOS:	0	;vertical
+
+MSGAR:	BLOCK $ARSIZ	; MSG area.
+JCLAR:	BLOCK $ARSIZ	; JCL text area
+TMPAR:	BLOCK $ARSIZ	; Temporary area.
+
+RCPNUM:	0		; # of recipients stored in rcplst
+CCNUM:	0		; # of these rcpts which are CC's
+MDSNUM:	0		; # of these rcpts which are MSG distribution sites
+r%cc==1			;lh flag for rcplst, indicates cc
+R%MSG==2		;lh flag indicating rcpt is a MSG psuedo-rcpt.
+
+STRNAM FRMNAM	;string holding explicit "From" name if any
+STRNAM SUBJEC	;string holding subject text
+STRNAM RLSNAM	;string holding single name for all of rcpt list.
+STRNAM RCPNAM	;string holding rcpt name in GETRS
+STRNAM RHSTR	;string holding host spec in GETRS
+
+SPDLEN==10*2	;size of string PDL
+SPDLPT:	-SPDLEN,,SPDL-1
+
+	;string variable table.
+STRNGS:	SBLOCK
+SPDL:	BLOCK SPDLEN
+	NSTRS==<.-STRNGS>/2
+
+EVAR
+
+ARPAGS:	-NARPGS,,MSGPAG	; Define area for core allocator to hack.
+
+CONSTANTS	;always have these two in front of following!!
+VARCHK		; finalize purification.
+
+MSGPAG==<.+1777>/2000	;find # of page to start msg buffer at.
+LOC MSGPAG*2000		;start it there.
+
+HSTPAG==100		; Save pgs for host table stuff
+
+NARPGS==HSTPAG-MSGPAG	; and thus delimit boundaries for core allocator.
+
+END START

@@ -436,6 +436,48 @@ expect ":KILL"
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
 
+respond "*" ":midas .mail.;comsat_sysnet;comsat\r"
+expect ":KILL"
+
+respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"
+expect ":KILL"
+
+respond "*" "comsat\033j"
+respond "*" "\033l.mail.;comsat bin\r"
+respond "*" "bughst/<<192.\033_24.>+<168.\033_16.>+<1.\033_8.>+100.>\r"
+type "domgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
+type "tcpgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
+type "debug/0\r"
+type "xvers/0\r"
+type "purify\033g"
+respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
+
+respond "*" ":kill\r"
+respond "*" ":job comsat\r"
+respond "*" ":load .mail.;comsat launch\r"
+respond "*" "debug/-1\r"
+type "mfinit\033g"
+
+respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
+
+respond "*" ":midas sys1;ts rmail_emacs1;rmaill\r"
+expect ":KILL"
+
+respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
+respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
+
+respond "*" ":midas sysbin;qmail_ksc;qmail\r"
+respond "PWORD version (Y or N)? " "Y\r"
+expect ":KILL"
+
+respond "*" ":link sys;ts mail,sysbin;qmail bin\r"
+respond "*" ":link sys;ts qmail,sysbin;qmail bin\r"
+respond "*" ":link sys;ts qsend,sysbin;qmail bin\r"
+respond "*" ":link sys1;ts bug,sysbin;qmail bin\r"
+respond "*" ":link sys;ts m,sys;ts mail\r"
+respond "*" ":link sys2;ts featur,sys;ts qmail\r"
+respond "*" ":link .info.;mail info,.info.;qmail info\r"
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape

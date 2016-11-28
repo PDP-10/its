@@ -1,0 +1,489 @@
+;;; -*- Mode: MIDAS; Fonts: MEDFNT -*-
+
+NTSVER==.IFNM2
+
+comment|
+	NETSND - Send current msg (L) to all recipients for the host in N,
+		 using XRCP whenever possible.  Assumes already "connected".
+
+|
+
+; LIMRQS controls the # times a rcpt is allowed to temporarily fail.
+; These are usually due to asshole hosts that blow out on control
+; characters or long lines in the message text.  Generally due to
+; directory full on the local host, so try for a long time.
+
+LIMRQS:	CAIG A,30.  	; LIMRQS for remote hosts.
+	CAIG A,200.	; LIMRQS for local host.  (200 = about 3 days)
+
+
+NSMFLN:	2000.	; If message more chars than this, use MLFL
+
+BVAR		; NETSND variables
+NSCTQ:	0	; On return, # of RCP's (must queue)
+NSCTF:	0	; On return, # of RCPF's (failed, with A$RRMG's)
+NSCTS:	0	; On return, # of RSNT's (sent, successful)
+
+NSSNT1:	0	; -1 if "1st part done" for R or T mode.
+NSRHDR:	0	; SPT to current header being used, 0 if none.
+NSRLST:	0	; LP to list of VLN's indicating RCPTs done each pass.
+NSRRST:	0	; LP to RCP to restart loop at with new header.
+EVAR
+
+SUBTTL	NETSND
+
+; NETSND - (assumes ICP already performed!)
+;	Sends message to all recipients for a specific host, taking
+;	advantage of XRCP whenever possible.
+;	L - Current LSE holding message.
+;	N - Site # being hacked.
+; Returns with the following variables set:
+;	NSCTS - # of rcpts sent to (A$RCP changed to A$RSNT)
+;	NSCTF - # of rcpts failed (A$RCP changed to A$RCPF and failure
+;			message attached in A$RRMG.)
+;	NSCTQ - # of rcpts failed temporarily (unchanged). This will
+;		not include all rcpts if a non-skip return is made.
+; Returns .+1 if host died or inactive, implying an abort.
+; Returns .+2 if host still connected as far as NETSND knows.
+
+NETSND:	PUSHAE P,[A,B,C,D,E,L]
+				; Initialize NETSND vars.
+	SETZM NSCTQ		; Clear # of RCP's left after pass (to queue).
+	SETZM NSCTF		; Clear # of RCPF's
+	SETZM NSCTS		; Clear # of RSNT's
+	SETZM NSSNT1		; No "1st part done".
+	SETZM NSRHDR		; No current header.
+	SETZM NSRLST		; No list of RCP's done this pass.
+	SETZM NSRRST		; No restart-RCP
+	SETZM XRSQS		; Clear XRSQ scheme-to-use
+	MOVE A,$LLLST(L)	; First see if want to as for XRSQ or not.
+	CALL NSRFND		; Find a rcpt starting from LP in A.
+	 JRST [	CSTAT (,("... no rcpts for host!"))
+		JRST NTSN95]	;   No rcpts for this host?
+	MOVE B,A		; Save 1st rcpt found
+	JUMPE N,NTSN05		; Needn't look for next if sending locally.
+	HRRZ A,LISTAR(A)	; Get CDR
+	CALL NSRFND		; and find next rcpt for this host.
+	 JRST NTSN05		;   No more? Just one rcpt, so don't hack XRSQ.
+	;; More than one rcpt for host, so it's worthwhile to hack XRSQ.
+	SKIPN XRSQQ		; Already tried asking for pref?
+	 JRST [	PUSH P,B
+		CALL NTXRSQ	;   Nope, so go ask.
+		 NOP		;     Net failure, but quit farther on.
+		POP P,B
+		JRST .+1]
+	MOVE A,XRSQRS		; Get scheme that's been negotiated,
+	MOVEM A,XRSQS		; and select that for hacking.
+	;; OK, we've got a scheme and there's someone to send to.
+	;; Do any low-level per-transaction initialization that is needed.
+NTSN05:	JUMPE N,NTSN06		; Not needed if really sending locally.
+	TLNE F,%QULOS		; Nor if flushing this message
+	 JRST NTSN06
+	;; Now setup for entry into loop, so that "next" rcpt is
+	;; first one.  Still have LP in B to 1st rcpt...
+NTSN06:	MOVEI E,(B)		; Set up E and skip over CDR-get,
+	JRST NTSN12		; for a little efficiency.
+
+	;; Main loop of NETSND.
+NTSN10:	HRRZ E,LISTAR(E)	; Get CDR of rcpt just done,
+NTSN11:	MOVEI A,(E)		; and search from that point
+	CALL NSRFND		; to get a rcpt for this host.
+	 JRST NTSN50		;   No more this pass?  Cleanup time...
+	MOVEI E,(A)		; Save LP to the A$RCP.
+NTSN12:	MOVE A,LISTAR(E)+1	; Get LP to rcpt's list.
+	TLNE F,%QULOS		; If we are flushing this message
+	 JRST [ MAKELN B,[0 ? %LTSTR,,[LITSTR [Host appears to be permanently down or not accepting mail.]]]
+		JRST NTSN28 ]
+;.ERR Move %QULOS feature elsewhere someday
+	CALL SETMSM		; Set mail/send modes.  Hope no SEND'ing!
+	JUMPE N,[MOVE A,E	;   If sending LOCALLY, then use
+		CALL SNDMSG	;   this routine, and on return
+		JUMPE A,NTSN22	;   dispatch to right thing for win
+		JRST NTSN25]	;   or lose.
+	SKIPE XRSQS
+	 JRST NTSN30		; Go do either T or R mode.
+
+	;; Default scheme, no XRCP hacking.
+NTSN20:	CALL NTMINI		; Initialize, mostly for SMTP.
+	 JRST NTSN25		;   Ugh!  Abort this msg...
+	MOVEI B,(C)		; Restore B
+	MOVE A,LISTAR(E)+1	; LP to rcpt list.
+	CALL NTSBEG		; Give command & name to remote host.
+	 JRST NTSN25		;   Error of some kind, go investigate.
+	MOVE A,LISTAR(E)+1	; LP to rcpt list.
+	CALL NTSMID		; Send header & text of message
+	 JRST NTSN25		;   Error of some kind, go investigate.
+	CALL NTMEND		; Now terminate it and verify...
+	 JRST NTSN25		;   Foo.
+NTSN22:	AOS NSCTS		; Win, bump count of sents.
+	SKIPA B,[A$RSNT]	; Default mode success,
+NTSN24:	 MOVEI B,A$RCPF
+	DPB B,[$LAFLD,,LISTAR(E)] ; say sent to this rcpt!
+	TLO F,%MSGMD
+	JRST NTSN10		; Return to loop to get another.
+
+NTSN25:	CAIE A,MR$PEH
+	 CAIN A,MR$TEH		; Error for host?
+	  JRST NTSN85		; If so, abort.
+	CAIE A,MR$TER		; Temp err for rcpt?
+	 JRST NTSN27
+NTSN26:	FINDA A,[A$RFCT,,[LISTAR(E)+1]]	; See if rcpt has a failure count.
+	 JRST [	MAKELN A,[A$RFCT,,[LISTAR(E)+1]	; No, make one.
+			%LTVAL,,0]
+		HRRM A,LISTAR(E)+1
+		JRST .+1]
+	AOS A,LISTAR(A)+1
+	TLO F,%MSGMD		; Message LSE munged.
+	SKIPN N			; Local host?  
+	 SKIPA B,LIMRQS+1	; Find ins for max temp failure count check.
+	  MOVE B,LIMRQS
+	XCT B			; # temp errors greater than limit allowed?
+	 JRST [	AOS NSCTQ	;   Nope, just queue.  Bump cnt of # queued
+		JRST NTSN10]	;   and go back to main loop.
+	CSTAT (,("...Giving up."))
+	MAKELN B,[0
+		%LTSAO,,[[OUTCAL(,("I gave up on sending this after "),D(A),(| "temporary" errors.|))]] ]
+	JRST NTSN28	; Permanent error...
+
+NTSN27:	CAIE A,MR$PER		; If this was not a permanent error
+	 JSR AUTPSY		;   strange type error!
+NTSN28:	JUMPE B,NTSN29		; Error-msg SLN may already be composed.
+	MOVEI A,A$RRMG		; Else set up for it.
+	DPB A,[$LAFLD,,LISTAR(B)]
+	MOVE A,LISTAR(E)+1
+	HRRM A,LISTAR(B)
+	MOVEM B,LISTAR(E)+1	; Cons onto rcpt's list.
+NTSN29:	AOS NSCTF		; Bump count of failures.
+	JRST NTSN24		; Go mark rcpt failed.
+
+	;; Here either T or R mode.  Determine whether rcpt can be
+	;; "merged" with previous rcpt.
+NTSN30:	SKIPE SORMSW		; Check mail/send switch...
+	 JRST [	SKIPN NSSNT1	; Ugh!!  Is this 1st rcpt this pass?
+		 JRST NTSN20	; Yes, can just use regular default scheme!
+		SKIPN NSRRST	; Foo, already committed, do it another pass.
+		 MOVEM E,NSRRST	; Start with this one if none yet targetted.
+		JRST NTSN10]
+	MOVE A,LISTAR(E)+1
+	CALL GNTHDR		; Get net header for rcpt
+	MOVE A,LISTAR(A)+1	; Get SPT for the header.
+	CAME A,NSRHDR		; Same as current header?
+	 JRST [	SKIPN NSRHDR	; No.  Is there actually any current header?
+		 JRST .+1	; No current header, so set to this one.
+		SKIPN NSRRST	; Sigh, headers don't match, can't send.
+		 MOVEM E,NSRRST	; Set "rcpt to restart from" for next pass.
+		JRST NTSN10]	; Back to get another rcpt...
+	MOVEM A,NSRHDR	; Win, set val of current header (see .+1 ref above)
+
+	;; Okay, have verified that entire msg for this rcpt is
+	;; identical with that of previous (if any), and can use XRCP.
+	SKIPG XRSQS		; Skip if T mode...
+	 JRST NTSN40		;   R mode, handle differently.
+	SKIPE NSSNT1		; T mode.  Already sent text?
+	 JRST NTSN35		;  Yes, go send rcpt name.
+	CALL NTMINI		; No, initialize as needed
+	 JRST NTSN25		;   Ugh, abort!
+	SETZ A,
+	CALL NTSBEG		; Begin msg with null rcpt.
+	 JRST NTSN25		;  Assume any err means abort.
+	SETZ A,
+	CALL NTSMID		; Send header and text of message!
+	 JRST NTSN25		;  Assume any error means host died.
+	CALL NTMEND
+	 JRST NTSN25
+	SETOM NSSNT1		; Won, indicate text sent.
+;; Here's where the rcpt name is actually sent...
+NTSN35:	MOVE A,LISTAR(E)+1
+	CALL NTSXRC		; Send XRCP <name>.
+	 JRST NTSN25		; Error, handle just as for default case.
+	JRST NTSN22		; Win, also handle just as for default.
+
+	;; Rcpts-first mode!
+NTSN40:	SKIPN NSSNT1		; 1st part stuff done yet?
+	 JRST [	CALL NTMINI	;   Nope, initialize.
+		 JRST NTSN25	;     Ugh, error means abort.
+		JRST .+1]
+	MOVE A,LISTAR(E)+1
+	CALL NTSXRC		; Send XRCP <name>.
+	 JRST NTSN25		;   Ugh, handle error.
+	SETOM NSSNT1		; Indicate a rcpt was specified,
+	MAKELN A,[0,,[NSRLST]	; and cons up a VLN to remember this rcpt
+		%LTVAL,,[E]]	; by means of its LP.
+	MOVEM A,NSRLST		; Gets consed onto front.
+	JRST NTSN22		; Then set A$RCP to A$RSNT and go get another!
+
+	;; Control comes here when main loop runs out of rcpts.
+	;; This doesn't necessarily mean that all rcpts for this host
+	;; are gone; rather, it only means that one pass of XRCP's
+	;; has finished.
+NTSN50:	SKIPL XRSQS		; If R mode, lots of cleanup to do.
+	 JRST NTSN60		;   Nope, skip it.
+
+	SKIPN NSSNT1		; Were any XRCP's successfully spec'd?
+	 JRST NTSN60		;   Nope, needn't send text.
+	SETZ A,
+	CALL NTSBEG		; Initiate message with null rcpt.
+	 JRST NTSN55		;   Arrrrgh!!!
+	SETZ A,
+	CALL NTSMID		; Must send it!  Output header, body, etc.
+	 JRST NTSN55
+	CALL NTMEND		; Terminate message text.
+	 CAIA			;   Oh shit.  Go handle in detail.
+	  JRST NTSN60		; Success!! Go tidy up.
+
+NTSN55:	CAIE A,MR$PEH		; Host type error?
+	 CAIN A,MR$TEH
+	  JRST NTSN85		; Yeah, go abort stuff.
+	CAIN A,MR$TER		; Temp err for "rcpt"?
+	 JRST NTSN85		; Yeah, also assume abort. (easy way out)
+	CAIE A,MR$PER		; PERM err?????  Shouldn't, but...
+	 JSR AUTPSY		; (unknown result code)
+
+				; Perm fail: set all RCP's on NSRLST to RCPF's.
+	SKIPN A,NSRLST
+	 JRST NTSN60		; None to flush??  Oh well.
+	MOVE C,B		; Put error message SLP in C as arg.
+	MOVEI B,A$RRMG
+	DPB B,[$LAFLD,,LISTAR(C)]	; Set up with proper attrib.
+	MOVEI B,[MOVE A,LISTAR(A)+1
+		LDB C,[$LAFLD,,LISTAR(A)]
+		CAIE C,A$RSNT
+		 PJRST POPJ1
+		MOVEI C,A$RCPF
+		DPB C,[$LAFLD,,LISTAR(A)]
+		SOS NSCTS
+		LNCOPY B,[0 ? B]	; Get a SLN for err msg.
+		MOVE C,LISTAR(A)+1	; Cons onto
+		HRRM C,LISTAR(B)	; start of
+		MOVEM B,LISTAR(A)+1	; rcpt's list.
+		TLO F,%MSGMD
+		PJRST POPJ1]
+	CALL MAPC
+	 JSR AUTPSY
+
+NTSN60:	SKIPE NSRLST
+	 LNDEL NSRLST		; Delete everything in the temporary list...
+	SKIPN E,NSRRST		; Any need to restart a pass?
+	 JRST NTSN95		;  Take win return.
+	SETZM NSRHDR		; New pass needed, LP to 1st is now in E.
+	SETZM NSSNT1		; Clear necessary stuff.
+	SETZM NSRRST		; e.g. the restart indicator!
+	JRST NTSN11		; Re-enter loop at right place.
+
+				; Handle abort caused by host failure.
+NTSN80:
+IFN 0,[
+	;; I tried putting Chaos SENDs in the "init" phase one day...
+	SKIPN SORMSW		; Sends require some cleanup.
+	 JRST NTSN85
+	SKIPE XRSQS		; Treat XRCPd sends like mail. 
+	 JRST NTSN85	
+	;; Here to abort a failing send.
+	MOVE C,B		; Put error message SLP in C as arg.
+	MOVEI B,A$RRMG		; Set up with proper attrib.
+	DPB B,[$LAFLD,,LISTAR(C)] 
+	MOVE A,LISTAR(A)+1	; LP to rcpt list.
+	MOVEI C,A$RCPF		; Say we are a failure.
+	DPB C,[$LAFLD,,LISTAR(A)]
+	LNCOPY B,[0 ? B]	; Get a SLN for err msg.
+	MOVE C,LISTAR(A)+1	; Cons onto
+	HRRM C,LISTAR(B)	; start of rcpt's list.
+	MOVEM B,LISTAR(A)+1
+	AOS NSCTF		; Count a failure.
+	TLO F,%MSGMD
+	POPAE P,[L,E,D,C,B,A]
+	JRST POPJ1
+];IFN 0
+
+NTSN85:	SKIPGE XRSQS		; Only R mode requires any backing up,
+	 SKIPN NSRLST		; and only when a "sent" list exists.
+	  JRST NTSN99		; Others just take non-skip return.
+
+	;; Change all A$RSNT's on temp list to A$RCP's again.
+	;; Don't bother trying to hack rcpt failure counts now.  Maybe someday
+	;; the failure stuff will be modularized enough to make it plausible.
+	MOVE A,NSRLST
+	MOVEI B,[MOVE A,LISTAR(A)+1
+		LDB B,[$LAFLD,,LISTAR(A)]
+		CAIE B,A$RSNT
+		 PJRST POPJ1
+		SOS NSCTS	; Bump down cnt of # sent.
+		MOVEI B,A$RCP
+		DPB B,[$LAFLD,,LISTAR(A)]
+		PJRST POPJ1]
+	CALL MAPC
+	 JSR AUTPSY
+	JRST NTSN99		; Abort, so take non-skip return.
+
+NTSN95:	AOSA -6(P)
+NTSN99:	 AOS NSCTQ		; Failure return always wants queueing.
+	POPAE P,[L,E,D,C,B,A]
+	RET
+
+SUBTTL	NSRFND, NSRNAM, GNTHDR
+
+; NSRFND - Find a valid recipient.
+;	A - LP to start searching from.
+;	N - host # that rcpt must be for.
+; Returns .+1 if none found.
+; Returns .+2
+;	A - LP to A$RCP that fits this host.
+
+NSRFND:	PUSH P,B
+NSRFN0:	FINDA A,[A$RCP,,[A]]	; Hunt for an active rcpt
+	 PJRST POPBJ
+	FINDA B,[A$RPSN,,[LISTAR(A)+1]]	; Is rcpt a pseudo?
+	 CAIA
+	  JRST NSRFN5		; Yeah, get next.
+	FINDA B,[A$RHST,,[LISTAR(A)+1]]	; Get host...
+	 TDZA B,B
+	  MOVE B,LISTAR(B)+1	; Get host #
+	CAMN B,OWNHS2
+	 SETZ B,
+	CAMN B,OWNHST		; Canonicalize self.
+	 SETZ B,
+	CAMN B,N		; Right host?
+	 PJRST POPBJ1		;  Yep, win return.
+NSRFN5:	HRRZ A,LISTAR(A)	; Sigh, try another.
+	JUMPN A,NSRFN0
+	PJRST POPBJ
+
+; NSRNAM - Get name for rcpt.
+;	A - LP to rcpt list.
+; Returns
+;	A - SLP to string to use in FTP command.
+;		If sign bit set, SLN should be deleted after using.
+				;
+NSRNAM:	PUSH P,A		; Save LP to rcpt list
+	FINDA A,[A$RTYP,,[A]]	; See if any explicit type spec.
+	 JRST NSRNM1		; Nope, can just use name.
+	SLNEA A,[ASCNT [NAME]]	; Type NAME?
+	 JRST [	POP P,A		; Sigh, something hairy.  Invoke full routine.
+		MAKELN A,[0 ? %LTSAO,,[[CALL NSRNMO]]]
+		RET]
+NSRNM1:	POP P,A
+	FINDA A,[A$RNAM,,[A]]	; Regular name, get it.  No further checking.
+	 JSR AUTPSY
+	RET
+
+; NSRNMO - Outputs structured recipient name on standard output.
+;	A/ LP to rcpt list
+; Clobbers nothing.
+
+NSRNMO:	PUSH P,B
+	FINDA B,[A$RTYP,,[A]]	; See if any explicit type spec.
+	 JRST NSRNM2		;  Nope, can just use name.
+	SLNEA B,[ASCNT [NAME]]	; Type NAME?
+	 JRST NSRNM3		;  Sigh, something hairy.
+NSRNM2:	FINDA B,[A$RNAM,,[A]]	; Regular name, get it.
+	 JSR AUTPSY
+	OUT(,SL(B))
+	JRST NSRNM9
+
+NSRNM3:	SLNEA B,[ASCNT [*MSG]]		; Type *MSG?
+	 CAIA				; No, thank goodness.
+	  JRST [PUSHJ P,BBDDFS		; Get filename for *MSG.
+		OUT(,LBRK,6Q(LMFDIR),(";"),6Q(LMFFN1),(" "),6Q(LMFFN2),RBRK)
+		JRST NSRNM9]
+	PUSH P,C		; Basic default is to use structured syntax.
+	FINDA C,[A$RNAM,,[A]]
+	 JSR AUTPSY
+	OUT(,LPAR,SL(B),(" "),SL(C),RPAR)
+	POP P,C
+NSRNM9:	POP P,B
+	RET
+
+
+; GNTHDR - Get SLP to net header to use for rcpt.
+;	A - LP to rcpt's list
+; Returns
+;	A - SLP to header to use.
+
+GNTHDR:	FINDA A,[A$RHDR,,[A]]		; First try rcpt header...
+	 CAIA
+	  RET			; Win!
+	MOVE A,N			; No rcpt header, is rcpt at ITS site?
+	CALL NHITS			; See if ITS
+	 FINDA A,[A$KHDR,,[$LLLST(L)]]	; No, is there a kludge header?
+	  CAIA				; ITS, or no kludge header...
+	   RET			; Not ITS, and kludge header exists, use it.
+	FINDA A,[A$MHDR,,[$LLLST(L)]]	;Use the default header
+	 JSR AUTPSY
+	RET
+
+SUBTTL	NTSBEG, NTSXRC,NTSMID
+
+; NTSBEG - Setup to begin message transmission.
+;	A - LP to a rcpt list
+;		If zero, assumes no rcpt, just sets up for msg text.
+;		This is used by XRCP scheme hacking.
+; Returns .+1 if failure (err code in A, string in B)
+; Returns .+2 if success.
+
+NTSBEG:	STAT (,TAB)	; New line, tab out.
+	PUSH P,C
+	SETZ B,		; Remember if we are Mailing.
+	FINDA C,[A$MTXT,,[$LLLST(L)]]
+	 JSR AUTPSY
+	HLRZ C,LISTAR(C)+1
+	CAML C,NSMFLN
+	 SETO B,	; For long message, use MLFL.
+	SKIPE SORMSW	; If we are Sending instead of Mailing
+	 MOVEI B,1	;   Remember so.
+	;; If just initiating text, skip name hackery.
+	JUMPE A,[ CSTAT (,("TEXT-"),RABR)
+		  JRST NTSBG4]
+	CALL NSRNAM		; Now get a SLP to name we'll give to host.
+	MOVE C,A		; Save it.
+	MOVE A,LISTAR(A)+1	; Make an
+	ADD A,$LSLOC(L)		; ASCNT ptr out of it.
+	CSTAT (,("TO-"),RABR,TC(A))
+NTSBG4:	CALL NTMBEG		; Invoke!!
+	 CAIA
+	  AOS -1(P)		; Won, skip on return.
+	CAIGE C,
+	 LNDEL C,		; Flush temp SLN if need to.
+	POP P,C
+	RET
+
+; NTSXRC - Specify a recipient via XRCP.
+;	A - LP to rcpt's list
+; Skips if won, message results in A, B.
+
+NTSXRC:	PUSH P,C
+	CALL NSRNAM		; Now get a SLP to name we'll give to host.
+	MOVE C,A		; Save it.
+	MOVE A,LISTAR(A)+1	; Make an
+	ADD A,$LSLOC(L)		; ASCNT ptr out of it.
+	STAT (,("	XTO-"),RABR,TC(A))	; New line, tab out, special to...
+	CALL NTXRCP		; Invoke XRCP...
+	 CAIA
+	  AOS -1(P)		; Won, skip on return.
+	CAIGE C,
+	 LNDEL C,		; Flush temp SLN if need to.
+	POP P,C
+	RET
+
+
+; NTSMID - Send middle stuff (actual text).
+;	A - LP to rcpt's list.  If zero, uses NSRHDR for header.
+; Returns .+1 if failure (net error type)
+; Returns .+2 if won.
+
+NTSMID:	JUMPE A,[SKIPN A,NSRHDR
+		 JSR AUTPSY
+		JRST NTSMD3]
+	PUSHJ P,GNTHDR		; Get SLP to header in A
+	MOVE A,LISTAR(A)+1
+NTSMD3:	ADD A,$LSLOC(L)
+	PUSHJ P,NTMSND			; Send out over net!
+	 RET				; error....
+	FINDA A,[A$MTXT,,[$LLLST(L)]]	; Now send text.
+	 JSR AUTPSY
+	MOVE A,LISTAR(A)+1
+	ADD A,$LSLOC(L)
+	PUSHJ P,NTMSND
+	 RET				; error....
+	SETZB A,B
+	AOS (P)
+	RET

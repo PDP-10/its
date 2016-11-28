@@ -1,0 +1,456 @@
+ ;;; -*- Mode:MIDAS -*- 
+.AUXIL
+
+SUBTTL	RESOLV - Interface to DOMAIN: device
+
+;;; Initially, this will be very simple and provide minimal
+;;; capabilities; as the device and the user software become
+;;; more sophisticted, this will change.   Eventually this
+;;; library will subsume all of the NETWRK routines except
+;;; those which are actually involved in hacking network
+;;; connections and channels.
+;;;
+;;; This file contains all the network library code needed by COMSAT!
+
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX / included in this assembly.
+/
+
+;;; Device OPEN mode bits (not defined in ITS yet):
+
+%DR==1,,525252
+%DROUT==1	;1.1  Output
+%DRBLK==2	;1.2  Block
+%DRIMG==4	;1.3  Image
+%DRNRF==:10	;1.4  Don't update the database
+%DRLNG==:20	;1.5  Access long-form data
+%DRSII==:40	;1.6  Super-image (packet level)
+%DRWOV==:100	;1.7  Force net search and database update
+%DRAUT==:200	;1.8  Authoritative data required
+%DRANY==:400	;1.9  Illicit data allowed
+%DRWIZ==:40000	;2.6  Maintenance
+%DROJB==:100000	;2.7  Magical OJB device protocol
+%DRXXX==:200\400\1000\2000\4000\10000\20000
+
+;;; Default to not using RENMWO hack on DQ: device.
+IFNDEF $$DQRN, $$DQRN==0
+
+;;; Default to allowing all networks we know about
+IFNDEF $$DQCH, $$DQCH==1
+IFNDEF $$DQIN, $$DQIN==1
+
+.BEGIN RESOLV
+
+IFN $$DQRN,{
+	IFNDEF DQCH,.FATAL DQCH must be defined if $$DQRN turned on
+} .ELSE {
+	IFNDEF DQCH, DQCH==:16	;Channel for accessing domain resolver
+}
+
+IFE $$DQCH,{
+PRINTX "Chaosnet code excluded.
+"}
+IFE $$DQIN,{
+PRINTX "Internet code excluded.
+"}
+
+SUBTTL	Macros and Variables
+
+DEFINE PUSHER AC,LIST
+IRP LOC,,[LIST]
+PUSH AC,LOC
+TERMIN
+TERMIN
+
+DEFINE POPPER AC,LIST
+IRP LOC,,[LIST]
+POP AC,LOC
+TERMIN
+TERMIN
+
+DEFINE ZAP LOC,LEN
+SETZM LOC
+MOVE T,[LOC,,LOC+1]
+BLT T,LOC+LEN-1
+TERMIN
+
+DEFINE SYSCAL NAME,ARGS
+.CALL [SETZ ? SIXBIT 'NAME' ? ARGS((SETZ))]
+TERMIN
+
+.VECTOR NAMBUF(NAMBLN==50.)		; J. Random Buffer
+
+IFNDEF NOP,NOP=<JFCL>
+
+
+SUBTTL	Definitions
+
+NE%UNT==:<1_32.>	; Escape bit indicating non-Internet address
+NW$BYT==:301400		; Byte pointer to network number (approx!)	
+NE%STR==:<1_33.>	; Escape bit indicating string-type address
+
+				; Useful HOSTS3 full word network # values
+NW%CHS==:<NE%UNT+<7_24.>>	; CHAOSNET
+NW%ARP==:<10._24.>		; ARPANET
+NW%LCS==:<18._24.>		; MIT-LCS (18.0.0.0)
+NW%AI==:<20015,,>		; MIT-AI-NET (128.52.0.0)
+
+
+SUBTTL	Routines from NETWRK
+
+;;; GETNET macro to find host address.
+
+DEFINE GETNET AC,(ADDR)
+IFNB [ADDR] MOVE AC,ADDR
+	TLNN AC,(17_32.)	; Check for non-Internet type addrs
+	 TLNN AC,(1_31.)	;  Internet address, see if class A net
+	  TDZA AC,[77,,-1]	;   Unternet or class A, zap low 3 octets
+	TLNN AC,(1_30.)		; Class B or C, see which.
+	 TRZA AC,177777		;  Class B network, zap low 2 octets
+	  TRZ AC,377		;   Class C net, only zap 1 low octet
+TERMIN
+
+
+;;; OWNHST - Return own Internet host address in A.
+;;;   A/ network number
+;;; Non-skip means we are not on that network.
+
+OWNHST:	SETZ B,
+IFN $$DQIN, TLNN A,(NE%UNT) ? DMOVE A,[0 ? SQUOZE 0,IMPUS3]
+IFN $$DQCH, CAMN A,[NW%CHS] ? MOVE B,[SQUOZE 0,MYCHAD]
+	SKIPE B
+	 .EVAL B,
+	  POPJ P,
+	IOR A,B
+	AOS (P)
+	POPJ P,
+
+;;; CVH3NA - Standardize host address (STDHST)
+;;;   A/ host addr in any format
+;;; Returns in A: HOSTS3/Internet-style host address number.
+;;; (Clobbers T.  Does not skip.)
+
+STDHST::
+CVH3NA:	PUSH P,B
+	LDB B,[301400,,A]	; Get high 12 bits of net address
+	CAIGE B,70		; If less than lowest HOSTS2 value,
+	 JUMPN B,CVH3N3		; it's already HOSTS3 format!  (unless zero)
+	CAIL B,1000		; If any of high 3 bits were set,
+	 JRST CVH3N3		;  it must be a HOSTS3 strange-fmt addr.
+	JUMPN B,CVH3N2		; If not zero, then must assume HOSTS2 fmt.
+	;; Old-format 8-bit Arpanet host number, or HOSTS2 with zero net.
+	CAILE A,377
+	 JRST CVH3N6	; If greater than 8 bits, assume HOSTS2, zero net.
+	LSHC A,-6	; Put 10 bits spacing between host/imp #s.
+	LSH B,-<2+8.>
+	LSHC A,<2+8.+6>
+	TLO A,(12_24.)	; and add ARPA network number.
+	JRST CVH3N3
+	;; HOSTS2 format number
+CVH3N2:	TRZE B,7	; Zap low 3 bits to ensure correct comparison
+	 JRST CVH3N5	; If any were set, can't be Chaosnet.
+	CAIN B,7_3		; Chaos net?
+	 JRST [	ANDI A,177777		; Yes, kill all but bottom 16 bits
+		TLO A,(NW%CHS)	; Add Chaos net #
+		JRST CVH3N3]
+CVH3N5:	CAIN B,12_3		; Arpa net?
+CVH3N6:	 JRST [	LSHC A,-9.
+		ANDI A,177777
+		ROT B,9.
+		DPB B,[201000,,A]
+		TLO A,(12_24.)
+		JRST CVH3N3]
+	CAIN B,22_3		; LCS net?
+	 JRST [	LSHC A,-8.
+		LSH A,-2
+		ANDI A,377
+		LSHC A,-8.
+		TLO A,(22_24.)
+		JRST CVH3N3]
+	;; No match, assume it's already HOSTS3.
+CVH3N3:	POP P,B
+	POPJ P,
+
+
+
+
+SUBTTL	HSTADR - Host name to netaddress 
+
+;;; HSTADR - Resolve host name into address.
+;;;   A/ Bp to (asciz) host name.
+;;;
+;;; HSTADN - Resolve host name into address on specific network.
+;;;   A/ Bp to (asciz) host name.
+;;;   B/ Network number (as returned by GETNET).
+;;;
+;;; Both return:
+;;; +1:	Error,
+;;;   A/ -1
+;;; +2: Success,
+;;;   A/ HOSTS3 format address.
+;;;
+;;; Maybe should be expanded to return all possible addresses?
+
+ADDRS::
+IFN $$DQCH, CH.A: 440700,,[ASCIZ "DQ:HOSTS3;CH;A;"]
+IFN $$DQIN, IN.A: 440700,,[ASCIZ "DQ:HOSTS3;IN;A;"]
+NADDRS==.-ADDRS
+
+HSTADN:	PUSHER P,[A,B,C,D]		;Must match HSTADR!!
+IFE $$DQRN,{				;Preserve channel unless hairy version
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	SETZ D,				;Cons up appropriate AOBJN pointer
+IFN $$DQIN, TLNN B,(NE%UNT) ? HRROI D,<IN.A-ADDRS>
+IFN $$DQCH, CAMN B,[NW%CHS] ? HRROI D,<CH.A-ADDRS>
+	JUMPE D,HSTA99			;Punt if bad net type
+	JRST HSTAD1			;Join HSTADR code.
+
+HSTADR:	PUSHER P,[A,B,C,D]
+IFE $$DQRN,{				;Preserve channel unless hairy version
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	MOVSI D,-NADDRS			;AOBJN ptr to query commands.
+HSTAD1:	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
+	MOVE A,[440700,,NAMBUF]		;Cons filename
+	MOVE B,ADDRS(D)			;Pick up a command.
+	PUSHJ P,STRCPY			;Stuff it.
+	MOVE B,-3(P)			;Recover QNAME.
+	PUSHJ P,STRCPY		   	;Stuff it.
+	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
+	PUSHJ P,DOOPEN			;Invoke the resolver
+	 JRST [	AOBJN D,HSTAD1		;Lost, try next class
+		SETOM -3(P) ? JRST HSTA99 ]	;Did all classes, punt
+	SETOM -3(P)			;Paranoia (DQDEV IOT lossage)
+	.IOT DQCH,-3(P)			;Get the address
+	SKIPL -3(P)			;Did we really get anything???
+	 AOS -4(P)			;Won, skip return
+HSTA99:
+IFE $$DQRN,{
+	.CLOSE DQCH,			;Tidy up
+	SYSCAL IOPOP,[%CLIMM,,DQCH]
+	 NOP
+}
+	POPPER P,[D,C,B,A]		;Fix acs
+	POPJ P,
+
+
+SUBTTL	HSTSRC - Netaddress into host name.
+
+;;; HSTSRC - Resolve host address into name.
+;;;   A/ Bp to receive host name
+;;;   B/ Net address
+;;;
+;;; Skip returns if the host was found, depositing the name down A.
+;;; Non-skip means unknown netaddress.
+
+HSTSRC:	PUSHER P,[A,B,C,D]		;Save acs (don't change this)
+IFE $$DQRN,{
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
+	MOVE A,[440700,,NAMBUF]		;Cons up query string
+	GETNET C,B
+	SETO D,				;Don't know net/class yet
+IFN $$DQIN, TLNN C,(NE%UNT) ? MOVEI D,0	;IP = 0
+IFN $$DQCH, CAMN C,[NW%CHS] ? MOVEI D,1	;CH = 1
+	JUMPL D,HSTS99			;Lose if unknown
+	MOVE B,[440700,,[ASCIZ "DQ:HOSTS3;IN;PTR;"]
+		440700,,[ASCIZ "DQ:HOSTS3;CH;PTR;"]](D)
+	PUSHJ P,STRCPY			;Appropriate initial string
+	MOVE B,-2(P)			;Recover host address
+	PUSHJ P,@[ INAPRT ? CHAPRT ](D)	;Write it as appropriate
+	MOVE B,[440700,,[ASCIZ ".IN-ADDR.ARPA"]
+		440700,,[ASCIZ ".CH-ADDR.MIT.EDU"]](D)
+	PUSHJ P,STRCPY			;Appropriate trailing string
+	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
+	PUSHJ P,DOOPEN			;SOPEN or RENMWO as needed
+	 JRST HSTS99			; Host not found - lose!
+	MOVE A,-3(P)			;Recover dest Bp.
+	SETZ B,				;Paranoia, clear string
+	IDPB B,A
+	MOVE A,-3(P)			;BP again
+	.IOT DQCH,B			;Get byte count or IOC error
+	SYSCAL SIOT,[%CLIMM,,DQCH ? A ? B ? %CLERR,,T]	;Snarf string
+	 JRST HSTS99			;Punt
+	SETZ B,				;Ascizify result
+	IDPB B,A
+	MOVE A,-3(P)			;Once more into the breach...
+	ILDB B,A			;Get first byte of result
+	SKIPE B				;Empty?
+	 AOS -4(P)			;Won, skip return
+HSTS99:
+IFE $$DQRN,{
+	.CLOSE DQCH,			;Tidy up
+	SYSCAL IOPOP,[%CLIMM,,DQCH]
+	 NOP
+}
+	POPPER P,[D,C,B,A]		;Restore acs
+	POPJ P,
+
+;;; Given in B a network address, print it on Bp in A.
+
+;;; Chaosnet is easy - just output octal.
+CHAPRT:	MOVE T,B
+	ANDI T,177777			;Mask out gubbish bits
+	PUSHJ P,OCTDPB
+	POPJ P,
+
+
+;;; Internet is randomness with dots (ala 44.0.3.10)
+INAPRT: PUSH P,C
+	MOVEI C,".
+	LDB T,[001000,,B]		;Reverse byte significance.
+	PUSHJ P,DECDPB
+	IDPB C,A
+	LDB T,[101000,,B]
+	PUSHJ P,DECDPB
+	IDPB C,A
+	LDB T,[201000,,B]
+	PUSHJ P,DECDPB
+	IDPB C,A
+	LDB T,[301000,,B]
+	PUSHJ P,DECDPB
+	POP P,C
+	POPJ P,
+
+
+
+SUBTTL	HSTINF - Get machine and opsys type, based on host name
+
+;;; HSTINF - Resolve name into HINFO data.
+;;;   Args:
+;;;   A/ Bp to host name
+;;;   B/ Bp to receive results
+;;;
+;;;   Returns:
+;;;   A/ Bp to machine type (asciz)
+;;;   B/ Bp to opsys type (asciz)
+;;;
+;;; Result both go in same string, returned pointers are just frills.
+;;; Skip returns with HINFO data.
+;;; Non-skip means lost for some reason.
+
+HINFS::					;Possible HINFO queries to do
+CH.INF:	440700,,[ASCIZ "DQ:HOSTS3;CH;HINFO;"]
+IN.INF:	440700,,[ASCIZ "DQ:HOSTS3;IN;HINFO;"]
+NHINFS==.-HINFS				;(Try for Chaos first)
+
+HSTINF:	PUSHER P,[A,B,C,D]		;(Order is important)
+IFE $$DQRN,{
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	MOVSI D,-NHINFS			;Query commands
+HSTIN1:	ZAP NAMBUF,NAMBLN		;Zero out buffer
+	MOVE A,[440700,,NAMBUF]
+	MOVE B,HINFS(D)			;Snarf a query leader
+	PUSHJ P,STRCPY			;Copy it in
+	MOVE B,-3(P)			;QName
+	PUSHJ P,STRCPY
+	MOVE A,[440700,,NAMBUF]		;Pathname
+	PUSHJ P,DOOPEN			;Get a DQ: server
+	 JRST [ AOBJN D,HSTIN1 ? JRST HSTI99 ]
+	MOVE A,-2(P)			;Get destination
+	.IOT DQCH,B			;Get byte count
+	SYSCAL SIOT,[%CLIMM,,DQCH ? A ? B ? %CLERR,,T]	;Snarf first string
+	 JRST HSTI99			;Punt
+	SETZ B,				;Ascizify
+	IDPB B,A
+	MOVEM A,-3(P)			;Save pointer to second string
+	.IOT DQCH,B			;Second byte count
+	SYSCAL SIOT,[%CLIMM,,DQCH ? A ? B ? %CLERR,,T]	;Snarf second string
+	 JRST HSTI99			;Punt
+	SETZ B,				;Ascizify
+	IDPB B,A
+	AOS -4(P)			;Won, skip return
+HSTI99:
+IFE $$DQRN,{
+	.CLOSE DQCH,			;Tidy up
+	SYSCAL IOPOP,[%CLIMM,,DQCH]	;Fix up channel
+	 NOP
+}
+	POPPER P,[D,C,A,B]		;Fix up acs (order matters)
+	POPJ P,
+
+
+SUBTTL	DOOPEN - Do the actual invokation of DQ: device
+
+;;; Opening a DQ: device is expensive.  So for them as got lots
+;;; of courage and no sense, we provide a method for doing multiple
+;;; queries using a single DQ: server.  When DQDEV gets a RENMWO
+;;; it flushes any data it had pending and jumps back to the SOPEN
+;;; handler.  In order for this to work, DQCH has to be preserved
+;;; across calls to this library (which is why it must be defined
+;;; by the user in this case).  Callers can release the DQ handler
+;;; simply by doing a .CLOSE on DQCH when convienient.
+;;;
+;;; Well, the above scheme has this bug, in that you keep consing
+;;; and killing DQDEVs until you get a sucessful query.  So now
+;;; we do a .OPEN to get a good jobdev, then hand it RENMWOs.
+;;;
+;;; Call with:
+;;;  A/ Bp to asciz query string
+;;; Returns:
+;;;  +1: lost, error code in T
+;;;  +2: won, answer now (theoreticly) available by reading from DQCH
+
+DOOPEN:	PUSH P,C			;Don't smash needlessly
+	.STATUS DQCH,C			;Check channel state
+	TRNN C,-1			;Ignore useless bits
+	 .OPEN DQCH,[ (<SIXBIT 'DQ'>+.UII) ? SETZ ? SETZ]
+	  JFCL				;Open new server if needed
+	SYSCAL RENMWO,[%CLIMM,,DQCH ? A ? %CLERR,,T]
+	 SKIPA				;Look up the data,
+
+IFN $$DQRN,{				;Winning multi query version?
+	  AOS -1(P)			;Yeah, skip return iff won
+} .ELSE {				;Losing cretinous version?
+	  AOSA -1(P)			;Yeah, skip return iff won,
+	   .CLOSE DQCH,			;And braindamage if lost
+}					;(Yes, I'm calling myself braindead)
+
+	POP P,C				;Fix up acs
+	POPJ P,				;Bye now
+
+
+SUBTTL	Misc.
+
+;;; Copy B down A, smashing both.  Null handled like Twenex SOUT%.
+STRCPY:	ILDB TT,B
+	JUMPE TT,STRCP1
+	IDPB TT,A
+	JRST STRCPY
+STRCP1:	MOVE B,A			;Ascizify but leave pointer
+	IDPB TT,B			;set up for overwriting
+	POPJ P,
+
+;;; Write number in T down A
+OCTDPB:	SETZ TT,
+	IDIVI T,8.
+	PUSH P,TT			;Push remainder.
+	SKIPE T
+	 PUSHJ P,OCTDPB
+	POP P,TT			;Take out in opposite order.
+	ADDI TT,"0			;Make ASCII.
+	IDPB TT,A
+	POPJ P,
+
+
+;;; Write number in T down A
+DECDPB:	SETZ TT,
+	IDIVI T,10.
+	PUSH P,TT			;Push remainder.
+	SKIPE T
+	 PUSHJ P,DECDPB
+	POP P,TT			;Take out in opposite order.
+	ADDI TT,"0			;Make ASCII.
+	IDPB TT,A
+	POPJ P,
+
+.END RESOLV

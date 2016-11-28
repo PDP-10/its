@@ -1,0 +1,699 @@
+;;; -*-Midas-*-
+
+title DQXDEV -- Fake DQDEV so COMSAT won't keep barfing its cookies
+
+;;; If you think this looks a lot like LPDEV, you're right.
+
+;;; Accumulators
+
+a==:1
+b==:2
+c==:3
+d==:4
+e==:5
+t==:6
+tt==:7
+
+x==:10				; used in RENMWO code as CH/IN index
+y==:11				; used in SIOT code to handle PCLSRing
+				; what the hell, make these ACs too
+rrptr==:15			; Pointer to buffered answer
+rrecnt==:16			; Byte count of buffered answer
+
+p=:17
+
+;;; Channels
+
+tty==:1				; for debugging
+boj==:2				; for talking to the user
+dsk==:3				; for reading HOSTS3
+
+;;; Flags
+
+%f==:0,,525252			; Flags in RH(0)
+%fdbug==:000100			; Being debugged as an OJB server under DDT
+%fval==: 000200			; BOJ interrupts clear this "valid" bit
+%frwo==: 000400			; User last seen in a RENMWO
+%fiot==: 001000			; User last seen in an IOT
+%fsiot==:002000			; User last seen in a SIOT
+%fclos==:004000			; User last seen in a CLOSE
+
+;;; Instructions and macros
+
+.insrt system;t20mac >
+
+call=:	pushj p,
+ret=:	popj p,
+pause=:	.break 16,100000
+tyo=:	.iot tty,
+nop=:	jfcl
+
+retskp=:jrst .
+rskp:	aos (p)
+r:	ret
+
+quit=:	call .
+$quit:	trne %fdbug
+	 pause
+	.logout 1,
+
+define syscall name,args
+	.call [setz ? sixbit /name/ ? args(400000)]
+termin
+
+define report &text&
+	call [	trnn %fdbug
+		 ret
+		call $report
+		.length text
+		ascii text]
+termin
+
+$repor:	exch t,(p)
+	push p,tt
+	move tt,0(t)
+	movei t,1(t)
+	hrli t,440700
+	tyo [^P]
+	tyo ["A]
+	syscall siot,[movei tty ? t ? tt]
+	 .lose %lssys
+	tyo [^P]
+	tyo ["A]
+	pop p,tt
+	pop p,t
+	ret
+
+define barf code
+	jrst [movsi tt,code ? jrst $barf]
+termin
+
+$barf:	.call joberr
+	 quit
+	quit
+
+$$arpa==1
+$$chaos==1
+$$hostnm==1
+$$symlook==1
+.insrt syseng;netwrk
+
+.vector pdl(lpdl==:50.)
+
+go:	setz			; clear flags
+	move p,[-lpdl,,pdl-1]
+	.suset [.roption,,a]
+	tlnn a,%opddt
+	 jrst noddt
+	tro %fdbug
+	tlo a,%opojb
+	.open tty,[.uao\%tjdis,,'tty ? setz ? setz]
+	 .lose %lssys
+	.value [asciz ""]
+noddt:	tlo a,%opint\%opopc
+	move tt,[-3,,[	.soption,,a
+			.smsk2,,[1_boj]
+			.sdf2,,[1_boj]
+			]]
+	.suset tt
+	report "Ready..."
+	.open boj,[.uio,,'boj ? setz ? setz]
+	 quit
+	move tt,[-loargs,,oargs]
+	.call jobcal
+	 quit
+	tlne t,%jgcls		; Why does this happen?
+	 quit
+	hrrzs t
+	caie t,%joopn		; better be an open call
+	 barf %enrdv		; it wasn't, device not ready
+	hrrz t,omode
+	caie t,.uii		; only mode we support
+	 barf %ensmd
+	setzm hstdat		; No table mapped in yet so no table date
+	setzm chkdat		; Never checked it either
+	.call jobrt0		; tell user we're open
+	 quit
+
+	tro %fval		; Haven't taken any interrupts yet...
+	report "opened, enabling PI"
+	.suset [.sdf2,,[0]]	; Enable BOJ interrupts
+				; fall into noose
+
+noose:	trne %fval		; Do we understand the situation?
+	 .hang			; Yes:  Twiddle thumbs
+	report "MP wakeup"
+	tro %fval		; Set valid flag
+	trne %fclos		; Trying to close?
+	 quit			; Yup, do it
+	trne %frwo		; New query to process?
+	 jrst query		; Yup, go do it
+	trne %fiot\%fsiot	; User wants to read something?
+	 jrst output		; Yup, send it off
+	trne %fval		; Still valid and didn't dispatch?
+	 report "MP wakeup for no apparent reason"
+	jrst noose		; Go try again in any case
+
+;; jrst here at MP level when user wants to read from us
+output:	report "client output request"
+	move a,iotcnt		; how many bytes user wants
+	caml a,rrecnt		; more than we have?
+	 move a,rrecnt		; yeah, just give what's available
+	move b,a		; remember how much we are offering
+	move c,iotcnt		; save count (timing screw)
+	movei y,1		; pclsr protection (also see bojint handler)
+	trnn %fval		; still valid?
+	 jrst noose		; no, punt
+	ifn. a			; if we have something to give
+	  xct [nop ? .call siot](y)	; do it
+	   xct [nop ? .lose %lssys](y)	; handle errors
+	  sub a,b		; count off what we gave to user
+	  addm a,rrecnt
+	endif.
+	camn b,c		; gave a different amount than user wanted?
+	ifskp.			; yup, have to unblock user
+	  trne %fval		; don't bother if doesn't care
+	   .call jobrt0		; unblock
+	    nop			; oh well, we tried
+	endif.
+	jrst noose		; dismiss again
+
+;; .CALL SIOT
+siot:	setz ? sixbit 'siot' ? movei boj ? rrptr ? setz a
+
+
+
+.scalar	rrecs(lrrecs==400)	; biiig buffer
+.scalar qname(64./5)
+.scalar qtype(2),qclass
+
+;; jrst here at MP level to read RENMWO filenames, HOSTS3, and setup answer
+query:	report "processing new request"
+	call mapin		; map in HOSTS3 if needed
+	trnn %fval		; might take a while, see if should abort
+	 jrst noose		; yup
+	report "snarfing long filename"
+	call snarf		; get long filename from user
+	 jrst noose		; snarf lost somehow
+	trnn %fval
+	 jrst noose
+	report "processing query"
+	call parse		; parse funny long filename and lookup in table
+	 jrst noose		; lost (already JOBERRed), punt
+	trnn %fval		; make sure still valid
+	 jrst noose
+	report "JOBRETing from RENMWO"
+	.call jobrt0		; still valid, try to return it to user
+	 nop			; oh well
+	jrst noose		; done in any case
+
+badarg:	movsi tt,%ebdrg		; meaningless argument
+	.call joberr
+	ret
+
+pagmsk==:0,,776000		; mask for page field of address
+
+.scalar path(100)
+
+snarf:	setzm path		; paranoia
+	skipn xptr		; string pointer in user space
+	 jrst badarg		; sorry, no sixbit domain names!
+	ldb a,[.bp pagmsk,xptr]	; client's page address
+	movei b,clntpg		; our page address
+	.uset boj,[.ruindex,,c]	; client's job index
+	tlo c,400000		; make into job spec
+	syscal corblk,[movei %cbndr ? movei %jself ? b ? c ? a]
+	 ret			; give up if can't get at least first page
+	aos a ? aos b		; try second page in case -long- pathname
+	syscal corblk,[movei %cbndr ? movei %jself ? b ? c ? a]
+	 nop			; not that important
+	move a,[440700,,path]	; cons up pathname
+	move b,xptr		; get client context pointer
+	movei c,clntpg		; page where we mapped it
+	dpb c,[.bp pagmsk,b]	; bash in our page number
+	hlre c,xptr		; get lh of pointer
+	skipn c			; lazy bp?
+	 hrli b,440700		; yup, fix it up
+	jumpge c,.+3		; check for aobjn type pointer
+	caml c,[-63.]		; ( -1 .ge. x .ge. -63 )
+	 jrst badarg		; is aobjn pointer, tough noogies
+				; got good bp, copy string
+	ildb c,b		; get a byte
+	idpb c,a		; dump a byte
+	jumpn c,.-2		; keep going till null
+	move a,[-2,,clntpg]	; unmap client page(s)
+	syscal corblk,[movei ? movei %jself ? a]
+	 nop			; not that important (I hope!)
+	retskp
+
+.scalar hstdat			; date of last table gobbled
+.scalar	chkdat			; date of last check
+minchk==2*60.*5			; five minutes (in half sec units)
+
+mapin:	syscal rqdate,[movem a ? movem b]
+	 .lose
+	move c,a		; current time, hang onto it
+	sub a,chkdat		; how long since last check
+	jumpl b,.+3		; clock not set, better check
+	caige a,minchk		; long enough wait?
+	 ret			; nah, we just did that
+	movem c,chkdat		; remember time of this check
+	syscal open,[movsi .bii ? movei dsk ? [sixbit 'dsk']	; <
+		[sixbit 'HOSTS3'] ? [sixbit '>'] ? [sixbit 'SYSBIN']]
+	 .lose %lsfil		; Look up creation date of host table
+	syscal rfdate,[movei dsk ? movem a]	; Get creation time.
+	 .lose %lssys
+	came a,hstdat		; Compare with time of last file gobbled
+	ifskp.			; is same?
+	  .close dsk,		; yeah, close channel and exit
+	  ret
+	endif.
+	movem a,hstdat		; Note new version to map in.
+	report "reading new HOSTS3"
+	movei a,hstpag
+	movei b,dsk
+	call netwrk"hstmap	; Map in host table and close channel.
+	 .lose
+	ret			; done
+
+
+;;; PARSE - Parse the ASCIZ pathname from PATH.
+;;; Skips if pathname appears to be properly formed.
+;;; If non-skip, gives JOBERR with appropriate code.
+
+;;; mask for uppercasing single word of ascii
+ucmask:	.byte 7 ? 40 ? 40 ? 40 ? 40 ? 40 ? .byte
+
+parse:	move a,[440700,,path]
+	setz b,
+	move c,[-1,,":]
+	call parnxt		; skip over device name.
+	 jrst parluz
+	setz b,			; skip over query opcode (!!)
+	move c,[-1,,";]
+	call parnxt		; find query opcode.
+	 jrst parluz
+	move b,[440700,,qclass]
+	move c,[-1,,";]
+	setzm qclass
+	call parnxt		; find class token.
+	 jrst parluz
+	move b,[440700,,qtype]
+	setzm qtype
+	call parnxt		; find type token.
+	 jrst parluz
+	move b,[440700,,qname]
+	setzb c,qname
+	call parnxt		; find qname
+	 .lose			; never happens
+	move a,ucmask		; uppercasify
+	andcab a,qclass		; all valid names are short...
+	came a,[ascii "IN"]	; check two classes we know
+	camn a,[ascii "CH"]
+	ifskp.			; neither of them, punt
+	  movsi tt,%ensdr	; bad class
+	  .call joberr		; give error to user
+	   nop			; ignore lossage
+	  ret			; failing return
+	endif.
+	setzm rrecs		; clear out answer buffer
+	move tt,[rrecs,,rrecs+1]
+	blt tt,rrecs+lrrecs-1
+	setzm rrecnt		; no characters yet
+	move tt,[444400,,rrecs]	; bp for output routine
+	movem tt,rrptr
+	move a,ucmask		; uppercasify
+	andcab a,qtype		; all valid types also short
+	camn a,[ascii "A"]	; dispatch on valid qtypes
+	 jrst qt.a
+	camn a,[ascii "PTR"]
+	 jrst qt.ptr
+	camn a,[ascii "HINFO"]
+	 jrst qt.hin
+	movsi tt,%ensdr		; bad qtype
+	.call joberr		; give error to user
+	 nop			; ignore lossage
+	ret			; failing return
+
+parluz:	movsi tt,%ebdfn		; Here if pathname seems to
+	.call joberr		; be malformed (illegal file name).
+	 nop			; give error to user
+	ret			; and return failure
+
+;;; PARNXT gets the next token from A into B.
+;;; RH C is break char, LH C is -1 to ignore spaces.
+
+parnxt:	do.
+	  ildb t,a		; get char.
+	  cain t,(c)		; if delimiter return win
+	   exit.
+	  jumpe t,r		; if null, return lose
+	  cain t,40		; if space and we're suppose to skip spaces
+	   jumpl c,top.		; then do so
+	  skipe b		; if b nonzero bp
+	   idpb t,b		; copy chars
+	  loop.			; next
+	enddo.
+	setz t,			; ascizify
+	skipe b
+	 idpb t,b
+	retskp
+
+;; here for PTR rr fake
+qt.ptr:	move a,qclass		; which type of foo-ADDR are we lookinf for?
+	came a,[ascii "CH"]	; Chaosnet?
+	 tdza x,x		; no  (IN: x=0)
+	  movei x,1		; yes (CH: x=1)
+	move t,[440700,,qname]	; find length of name
+	call strlen
+	move a,t		; save that
+	move b,[440700,,[asciz ".IN-ADDR.ARPA"]	; trailer string
+		440700,,[asciz ".CH-ADDR.MIT.EDU"]](x)
+	move t,b		; get its length
+	call strlen
+	sub a,t			; get difference
+	ifg. a			; better be something left!
+	  adjbp a,[440700,,qname]	; point at where trailer should be
+	  call strcmp		; strings match?
+	anskp.			; yup
+	  setz t,		; tie off string
+	  idpb t,a
+	  call @[nin.in ? nin.ch](x)	;call appropriate number parser
+	anskp.			; if that wins we have host number in B
+	else.			; address spec bogus somehow
+	  movsi tt,%ebdfn	; bad filename
+	  trne %fval		; don't bother jobreting if not valid
+	  .call joberr		; still valid, punt the luser
+	   nop			; oh well
+	  ret			; return failure
+	endif.
+	call netwrk"hstsrc	; look up the host
+	ifskp.			; did that win?
+	  hrli a,440700		; yup, make bp
+	  move tt,[-lrrecs,,rrecs]
+	  call outstr		; dump string to output buffer
+	  retskp		; return win
+	else.			; hstsrc failed
+	  movsi tt,%ensfl	; name error
+	  trne %fval		; if still valid
+	   .call joberr		; try to punt the user
+	    nop			; oh well
+	  ret			; return lose
+	endif.			; bye bye
+
+rrovfl:	.lose			; here if we overflow rrecs
+
+;; routine to dump string in A down AOBJN pointer in TT
+outstr:	saveac [a,b,t]		; dont' trash acs we use
+	move t,a		; find out length
+	call strlen
+	movem t,(tt)		; store length
+	addm t,rrecnt		; here too
+	aos rrecnt		; (count the length word in user buffer)
+	aobjp tt,rrovfl
+	do.			; copy all bytes
+	  ildb b,a
+	  movem b,(tt)
+	  aobjp tt,rrovfl	; crap out if overflow buffer
+	  sojg t,top.
+	enddo.			; if we make it here we won
+	ret
+
+;; here for name to address lookups
+qt.a:	move a,[440700,,qname]
+	call netwrk"hstlook	; find the name
+	ifskp.			; found it
+	  move b,a		; get SITE entry
+	  call netwrk"hstsrc
+	anskp.			; never happens, we hope
+	  move e,netwrk"stradr(d)	; get ADDRESS table entry
+	  move a,qclass		; figure out what kind of address we want
+	  came a,[ascii "CH"]	; chaos?
+	   skipa a,[tlne b,(netwrk"ne%unt)]	; no, want Unternet bit OFF
+	    move a,[tlnn b,(netwrk"ne%unt)]	; yes, want Unternet bit ON
+	  move tt,[-lrrecs,,rrecs]
+	  do.			; loop over all addresses
+	    move b,hsttab+netwrk"addadr(e)
+	    xct a		; is this address a winner?
+	    ifskp.		; yup
+	      movem b,(tt)	; store it for client
+	      aos rrecnt	; count it
+	      aobjp tt,endlp.	; exit loop if ran out of buffer
+	    endif.
+	    hrrz e,hsttab+netwrk"adrcdr(e)
+	    jumpn e,top.	; CDR to next address
+	  enddo.
+	  skipn rrecnt		; now, did we get anything?
+	anskp.			; damned well better have
+	  retskp		; yeah, we won
+	else.			; lost somewhere along the line
+	  movsi tt,%ensfl	; make it NAME ERROR 
+	  trne %fval		; (this isn't correct if just aren't any
+	   .call joberr		; addresses for this class and name, but
+	    nop			; nobody cares right now anyway...)
+	  ret
+	endif.
+
+;; here to look up HINFO data
+qt.hin:	move a,[440700,,qname]
+	call netwrk"hstlook
+	ifskp.
+	  move b,a
+	  call netwrk"hstsrc
+	anskp.			; machine and opsys info
+	  move e,netwrk"stlsys(d)
+	  move tt,[-lrrecs,,rrecs]
+	  ifxn. e,<0,,-1>
+	    move a,[440700,,hsttab]
+	    addi a,(e)		; dump machine type if exists
+	    call outstr
+	  else.			; no string present
+	    setzm (tt)		; fake zero length string
+	    aos rrecnt
+	    aobjp tt,rrovfl
+	  endif.
+	  movss e		; now handle opsys
+	  ifxn. e,<0,,-1>	; same drill
+	    move a,[440700,,hsttab]
+	    addi a,(e)
+	    call outstr
+	  else.
+	    setzm (tt)
+	    aos rrecnt
+	    aobjp tt,rrovfl
+	  endif.
+	  retskp		; if we made it here we won
+	else.
+	  movsi tt,%ensfl	; name error, i guess
+	  trne %fval
+	   .call joberr
+	    nop
+	  ret
+	endif.
+
+;; count length of an asciz string in T, return length in T
+strlen:	saveac [a,b]
+	move a,t
+	setz t,
+	do.
+	  ildb b,a
+	  skipe b
+	   aoja t,top.
+	enddo.
+	ret
+
+;; compare two strings, skip iff eq. smashes nothing
+strcmp:	saveac [a,b,c,d]
+	do.
+	  ildb c,a
+	  ildb d,b
+	  andi c,137
+	  andi d,137
+	  came c,d
+	   ret
+	  jumpn c,top.
+	enddo.
+	retskp
+
+;; parse a number from string in A. radix in C.  value returned in T.
+;; TT contains character that caused us to stop.
+nin:	setz t,
+	do.
+	  ildb tt,a
+	  cail tt,"0
+	   caile tt,"9
+	    ret
+	  imul t,c
+	  addi t,-"0(tt)
+	  loop.
+	enddo.
+
+;; address parsers. value returned in B. skips iff ok.
+
+;; read a chaosnet address number (just a single octal number)
+nin.ch:	move a,[440700,,qname]	; where the string is
+	movei c,8.		; octal
+	call nin		; read it
+	jumpn tt,r		; better have ended with null
+	jumple t,r		; and be a reasonable number
+	cail t,177777
+	 ret
+	hrli t,40700		; add Unternet constant
+	move b,t		; save result
+	retskp			; won
+
+;; read an internet address number in reverse format (yum!)
+nin.in:	move a,[440700,,qname]	; where the string lives
+	setz b,			; no address yet
+	movei c,10.		; decimal
+	irp foo,,[".,".,".,0]
+		call nin
+		jumpl t,r
+		caig t,377
+		caie tt,foo
+		 ret
+		dpb t,[<<.irpcnt_15.>+001000>,,b]
+	termin
+	retskp
+
+tsint:
+loc 42
+	-ltsint,,tsint
+loc tsint
+	intacs,,p
+	0 ? 1_boj ? %piioc ? 1_boj ? bojint
+ltsint==:.-tsint
+
+intacs==:400002+t_6		; 3 things plus T and TT
+
+;;; .CALL DISMIS:  Dismiss an interrupt
+dismis:	setz
+	sixbit /dismis/
+	movsi intacs
+	setz p
+
+
+;;; Handle interrupt on the BOJ channel
+bojint:	report "BOJ interrupt"
+	trz %fiot\%fsiot\%frwo\%fval
+	setz y,			; (see OUTPUT routine)
+	move tt,[-largs,,args]
+	.call jobcal
+	 jrst disint
+	tlne t,%jgcls		; .close ?
+	 seto t,		; yeah, fake the offset
+	call @caltbl(t)		; dispatch to handler
+disint:	.call dismis		; back to MP level
+	 .lose %lssys
+	jrst disint
+
+		close		; .close (fake offset -1)
+caltbl:	offset -.
+%joopn::	caldie		; .open (?)
+%joiot::	iot		; .iot 
+%jolnk::	caldie		; mlink (?)
+%jorst::	calwtd		; .reset 
+%jorch::	caldie		; .rchst 
+%joacc::	calwtd		; .access
+%jornm::	caldie		; .fdele (delete or rename) (?)
+%jorwo::	renmwo		; .fdele (renmwo) 
+%jocal::	caldie		; .call 
+	offset 0
+
+caldie: .lose
+
+close:	report "CLOSE"
+	tro %fclos		; set a flag
+	ret			; and dismis
+
+iot:	report "IOT"
+	tlnn t,%jgsio
+	 troa %fiot
+	 tro %fsiot
+	ret
+
+renmwo:	report "RENMWO"
+	tro %frwo
+	ret
+
+calwtd:	report "%EBDDV"
+	movsi tt,%ebddv
+	.call joberr
+	 nop
+	ret
+
+;;; .CALL JOBCAL:  Get system call and arguments
+;;; TT (arg): aobjn to args area
+;;; T (val): opcode
+jobcal:	setz
+	sixbit /jobcal/
+	movei boj
+	move tt
+	setzm t
+
+;;; .CALL JOBRET:  Return values from system call
+;;; TT (arg): aobjn to values
+jobret:	setz
+	sixbit /jobret/
+	movei boj
+	movei 1
+	setz tt
+
+;;; .CALL JOBRT0:  Return no values from system call
+jobrt0:	setz
+	sixbit /jobret/
+	movei boj
+	setzi 1
+
+;;; .CALL JOBERR:  Return error from system call
+;;; TT (arg): <error code>,,0
+joberr:	setz
+	sixbit /jobret/
+	movei boj
+	setz tt
+
+;;; .CALL JOBIOC:  Cause IOC error
+;;; T (arg): error code
+jobioc:	setz
+	sixbit /jobioc/
+	movei boj
+	setz t
+
+constants
+variables
+
+oargs::	;; Arguments provided to initial OPEN, MLINK, DELETE or RENAME
+oxfn1:	0			; OX... Second set of filenames
+ofn1:	0			; O... First set of filenames
+ofn2:	0
+odir:	0
+odev:	0
+oxfn2::
+omode:	0			; 18 bit open mode in right half
+oxdir:	0
+optr:	0			; String arguments if given.
+oxptr:	0
+loargs==:.-oargs
+
+args::	;; Arguments provided to subsequent calls
+iotcnt::			; IOT byte count
+calnam:	0			; .CALL sixbit name
+calbts:	0			; .CALL control bits
+callen:	0			; .CALL argument count
+arg1:	0			; .CALL arg 1
+arg2:	0			; .CALL arg 2
+arg3:	0			; .CALL arg 3
+arg4:	0			; .CALL arg 4
+arg5:	0			; .CALL arg 5
+xptr::				; RENMWO string argument
+arg6:	0			; .CALL arg 6
+largs==:.-args
+
+ffpage==:<.+1777>_-12		; First free page
+
+clntpg==:ffpage			; where to map user pages
+
+hstpag==:ffpage+2
+hsttab=:hstpag_12		; where to map host table
+
+end go
