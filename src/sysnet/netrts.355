@@ -1,0 +1,2225 @@
+;;;                         -*- Midas -*-
+
+NRTVER==.IFNM2
+
+IFNDEF $$FTP,$$FTP==0	; Do not assemble FTP routines anymore.
+IFNDEF $$TCP,$$TCP==1	; Normally assemble TCP routines.
+IFNDEF $$DQ,$$DQ==0	; Normally use host table, not DQ device.
+IFNDEF $$450,$$450==0	; Disable special casing of SMTP reply code 450
+comment|   
+         This file contains the network hacking code of COMSAT.
+
+Routines called by COMSAT:
+
+	HANLYZ - Convert host names to host numbers.
+	NETIM  - Queries a network time server.
+	NETPTH - For the host in N, find a proper network address/protocol.
+	NETICP - Makes network connection.
+	NTDISC - Disconnects.
+
+NETSND calls these routines:
+
+	NTXRSQ - Find XRCP scheme that the host prefers.
+	NHMLTX and NHITS see if a host is a Multics or an ITS.
+
+Generic protocol routines called by NETSND to dispatch 
+to protocol-specific handlers:
+
+	NTMBEG - Readies server for message txt to a rcpt.
+	NTXRCP - Specifies rcpt to host.
+	NTMSND - Sends the message text.
+	NTMEND - Wraps up message and leaves connection ready for next command.
+
+Non-skip indicates either:
+	1] An IOC error (connections broken),
+	2] An interaction failure which is probably temporary (go away)
+	3] An interaction failure which is probably permanent (no such user)
+ Generally the following values are returned on error:
+	A/ MR$xxx error code, one of:
+		MR$PEH - Permanent Error for Host (this msg will never win)
+		MR$TEH - Temporary Error for Host (host died or conns wedged)
+		MR$PER - Permanent Error for Rcpt (this rcpt will never win)
+		MR$TER - Temporary Error for Rcpt (some glitch for this rcpt)
+	B/ if non-zero, SLP to an error string
+
+
+ |
+
+BVAR
+	; Global XRCP-hacking vars
+XRSQQ:	0	; -1 if have tried asking host its preference.
+XRSQPS:	0	; Preferred scheme of host. 0 none, -1 R, +1 T.
+XRSQRS:	0	; Scheme actually in effect over net channels.
+XRSQS:	0	; Scheme selected by sending rtns. (NETSND only)
+
+NSMSAR:	BLOCK $ARSIZ ; Area for storage of SMTP transaction script
+		     ; Always contains results of last SMTP connection.
+IFN $$DQ,{	     ; If doing domain code
+DQBUF:	BLOCK 63     ; Random buffer for string hacking (ugh)
+		     ; Size determined by need to hold 255. char hostnames,
+		     ; per RFC 883.
+DQLUZ:	0	     ; Fence to detect horrible lossage in NHOPSY.
+}		     ; End of domain specific storage.
+EVAR
+
+
+SUBTTL	Protocol Definitions
+
+BVAR
+NDHOST:	0	; Host # we're supposedly talking to. 
+		; Should be same  as ac N, or an error has happened.
+NTSITE:	0	; Host # NETPTH thinks we should connect to - becomes NTHOST.
+NTHOST:	0	; Host # really connected to, usually same as NDHOST.
+NTTYPE:	0	; Current net transport/protocol available.
+NTRTSW:	0	; -1 if relaying mail; tack "@host" onto rcpt names.
+
+;;; Variables for forcing certain kludgey routing.
+
+KLGFRM:	-1	; Network address from
+KLGTO:	-1	; Network address to
+KLGNET:	-1	; Don't use this network
+KLGGAT:	-1	; Instead, use this host as gateway
+TCPGAT:	0	; If nonzero, gateway all non-chaos mail through here.
+
+;;; For a Chaosnet-only host, set only TCPGAT to Chaos addr of the relay host.
+;;; If the host thinks it is on the ARPAnet, but isn't really, also set OWNHS2.
+;;; You should not generally have to set the other kludge switches.
+
+;;; PROTCL macro defines the routines appropriate for each protocol.
+
+PR$NAM==:0		;Name of protocol
+PR$ICP==:1		;Connection routine
+PR$MIN==:2		;Transaction initializer
+PR$BEG==:3		;Message command sender
+PR$RCP==:4		;Message rcpt sender
+PR$SND==:5		;Message text sender
+PR$END==:6		;Message ender
+PR$CHK==:7		;Error classifier
+NETPR:	BLOCK 4*8.
+EVAR
+
+%%%PR$==NETPR
+DEFINE	PRODEF SYM,NUM,&NAME&,ICPRTN,MINRTN,BEGRTN,RCPRTN,SNDRTN,ENDRTN,CHKRTN
+   SYM==:NUM
+IF1,{ PRINTX \Including protocol NAME
+\ }
+   %%%TLC==.
+   LOC %%%PR$
+	[ASCIZ NAME]
+	ICPRTN ? MINRTN ? BEGRTN ? RCPRTN ? SNDRTN ? ENDRTN ? CHKRTN
+   %%%PR$==%%%PR$+8.
+   LOC %%%TLC
+TERMIN
+
+NT$LCL==-1	; Local mail "protocol" (don't change).
+
+PRODEF	NT$ISM,0,"TCP-SMTP",NSMICP,NSMINI,NSMBEG,NSMRCP,NSMDAT,NSMDON,NTERSM
+PRODEF	NT$CHM,1,"CHAOS-MAIL",NKMICP,NKMINI,NKMBEG,NKXRCP,NKSND,NKEND,NTERSM
+PRODEF	NT$CHS,2,"CHAOS-SEND",POPJ1,POPJ1,NKSEND,POPJ1,NKSND,NKEND,NTERSM
+PRODEF  NT$CSM,3,"CHAOS-SMTP",NKSICP,NSMINI,NSMBEG,NSMRCP,NSMDAT,NSMDON,NTERSM
+IFN $$FTP,[
+PRODEF NT$FTP,4,"NCP-FTP",NNFICP,POPJ1,NNFBEG,POPJ1,NNFRCP,NNFSND,NNFEND,NTERFT
+];$$FTP
+
+DEFINE PROTCL AC,PR
+	MOVE AC,NTTYPE
+	IMULI AC,8.
+	MOVE AC,NETPR+PR(AC)
+TERMIN
+
+
+SUBTTL	Network Service Paths
+
+; NETPTH - Find path to network service.
+; Takes desired host in N.  SORMSW must be set up.
+; Skips if re-connection needed; non-skip means already connected properly. 
+; Sets up NTTYPE, NTSITE, and NTRTSW.
+; (Host # zero in N means ourselves.)
+
+NETPTH:	PUSHAE P,[A,B,N]
+	SETZM NTRTSW		; Reset routing flag.
+	JUMPE N,[ SETOM NTTYPE ? JRST NETP99 ]
+	RESOLV"GETNET A,N	; Find which network the dest site is on.
+	CAMN A,[RESOLV"NW%CHS]	; Is host on the Chaosnet?
+	 JRST NETP10		;  Yes, good - we always have Chaosnet.
+	SKIPE B,TCPGAT		; Internet relay required?
+	 JRST [	MOVE N,B	;  Yes, will really connect thru relay.
+		JRST NETP60 ]
+NETP10:	CAME N,NTHOST		; Are we already connected?
+	 JRST NETP20		;   No.
+	SKIPN SORMSW		; If we are mailing (not sending)
+	 JRST [	MOVE N,NTHOST	;  Current connection is usable.
+		JRST NETP99 ]
+	CAME A,[RESOLV"NW%CHS]	; Sending over Chaosnet?
+	 JRST [	MOVE N,NTHOST	;  No, so protocols are fairly compatible.
+		JRST NETP99 ]		
+	;; New connection required.
+NETP20:	CAMN N,KLGFRM		; If specially patched for this host
+	 JRST [	MOVE N,KLGTO	;  use specific relay address.
+		JRST NETP60 ]
+	CAME A,[RESOLV"NW%CHS]	; Chaosnet is the fastest connection,
+	 CAME A,KLGNET
+	  JRST NETP80
+	MOVE N,KLGTO		; Use specific relay address.
+NETP60:	SETOM NTRTSW		; Say we are relaying.
+	JRST NETP90
+	;; No monkey business, just find preferred host address.
+NETP80:	MOVE A,[RESOLV"NW%CHS]	; Chaosnet is fastest way to go.
+	CALL NETALK		; Find address for host on Chaosnet.
+	 CAIA
+	  MOVE N,B		; N gets best host address.
+NETP90:	MOVEI B,NT$ISM		; Default transport type is IP-TCP/SMTP.
+	RESOLV"GETNET A,N	; Find network.
+	CAMN A,[RESOLV"NW%CHS]	; If site IS on the Chaosnet
+	 MOVEI B,NT$CSM		;  Use CHAOS/SMTP instead.
+NETP96:	MOVEM B,NTTYPE		; Set up NTTYPE.
+	AOS -3(P)		; Say that reconnection is needed.
+NETP99:	MOVEM N,NTSITE		; Store actual address to be used.
+	POPAE P,[N,B,A]
+	RET
+
+; NETALK - Network address lookup
+; Look up host address for host in N on network in A.
+; Skip if found with new address in B.
+
+NETALK:
+IFN $$DQ,{			; Domain version?  This is gonna hurt...
+	RESOLV"GETNET B,N	; Get network for this address
+	CAME A,B		; Already have right net?
+	 JRST NETAL0		; No, onwards
+	MOVE B,N		; Yes, just return this address
+	AOS (P)			; Winningly
+	RET
+NETAL0:
+IFN 0,{				; Questionable painkiller code
+	CAME A,[RESOLV"NW%CHS]	; Trying to get a Chaosnet address?
+	 RET			; Nope, forget it, waste of time.
+}				; End of questionable painkiller code
+	PUSH P,A		; Save network number
+	MOVE A,[440700,,DQBUF]	; Stuff hostname string here
+	MOVE B,N		; Host number
+	CALL RESOLV"HSTSRC	; Look it up
+	 JRST NETAL9		; Punt
+	MOVE A,[440700,,DQBUF]	; Probably already there, so what?
+	MOVE B,(P)		; A points at name, get network number
+	CALL RESOLV"HSTADN	; Look up net specific address
+	 JRST NETAL9		; Lost
+	MOVE B,A		; Won, address in B
+	AOS -1(P)		; Skip return
+NETAL9:	POP P,A
+	RET
+}				; End of domain version
+.ELSE {				; Non-domain version, still support this
+	PUSHAE P,[A,C,D,E]
+	MOVE B,N		; Get host #.
+	MOVE E,A		; Get network #.
+	CALL RESOLV"HSTSRC	; Look up in HOSTS3 database.
+	 JRST NETAL9
+	HRRZ C,(D)		; Get rel addr of ADDRESS entry list.
+	JUMPE C,NETAL9
+NETAL1:	ADD C,RESOLV"HSTADR	; Derelativize.
+	RESOLV"GETNET B,(C)	; Get network for this address entry.
+	CAMN B,E		; Is this the one?
+	 JRST [ MOVE B,(C)	;  Yes!
+		AOS -4(P)
+		JRST NETAL9 ]
+	HRRZ C,RESOLV"ADRCDR(C)	; CDR down ADDRESS list.
+	JUMPN C,NETAL1
+NETAL9:	POPAE P,[E,D,C,A]
+	RET
+}				; .ELSE $$DQ
+
+
+SUBTTL	Error handling routines
+
+
+BVAR  ; leave these as variable so we can patch COMSAT -- Gumby
+ICPTMO: 30.	; Timeout ICP after 30 sec. total
+FINTMO: 60.	; timeout for finish
+BYETMO:	30.	; timeoout for SMTP QUIT
+DEFTMO: 300.	; default timeout.
+EVAR
+
+; NETRAP - Network Error Trap.  Sets up stuff so that
+;	a timeout or IOC error will restore ACs and PDL and
+;	jump to a specified location.
+;	A - # seconds of timeout.
+; Returns .+2 after setting up.
+; RETURNS .+1 IF ERROR TRAP OCCURS!!!
+; BEWARE!!! THIS ROUTINE MUNGS THE PDL!!!  Call NERESET before
+;	attempting a non-error return!!  
+; Either error trap will call NTDISC before returning, so that
+; any possible server in a screwed-up state does not get reused.
+
+LVAR	NTRPLV:	0	; Holds ptr to trap frame on PDL.
+LVAR	NTRTMO:	0	; Value of timeout in 60th's of sec.
+NE$FLN==:<5+15>		; Frame length; 5 vars plus 15 ACs.
+
+NETRAP:	PUSH P,NTRPLV		; Save any previous frame ptr.
+	PUSH P,NTRTMO		; Save old timeout value
+	PUSH P,NTIOCV		; Save old IOC vector
+	PUSH P,RLTVEC		; and old REALT vector.
+	IMULI A,60.		; Find timeout in REALT units (60ths of secs)
+	MOVEM A,NTRTMO		; Set it.
+IFN A-1,.ERR NETRAP loses, code assumes A=1.
+	MOVEI A,1(P)
+	HRLI A,2
+	ADD P,[15,,15]		; Make room for ACs 2-16
+	BLT A,(P)		; Move ACs 2-16 onto PDL.
+	PUSH P,[SIXBIT /EFRAME/]	; Check word.
+	CLKOFF			; Avoid timing errors.
+	MOVEM P,NTRPLV		; Frame completed, now point to it!
+	MOVEI A,NTRRLT		; Set up RLT vector.
+	MOVEM A,RLTVEC
+	MOVEI A,NTRIOC		; Set up IOC vector.
+	MOVEM A,NTIOCV
+	CLKSET NTRTMO		; Set timeout going.
+	CLKON			; and enable timeout interrupt.
+	MOVE A,-NE$FLN(P)	; Get back return addr
+	JRST 1(A)		; Do skip return!
+
+LVAR NTIOCV:	0	; Net IOC error vector.  Holds addr of where to go
+			; when a network IOC error happens.  Set by NETRAP.
+
+	;; Come here for any net-channel IOC error.
+NTRIOC:	CALL NERZAP		; Restore world
+	CALL NTDIS1		; Thoroughly break connections
+	MOVSI A,NCE$IO		; Furnish code for "IOC error"
+	RET			; and dispatch to NETRAP return.
+
+
+NTRRLT:	CALL NERZAP		; Restore the world
+	CALL NTDIS1		; Thoroughly break connections
+	MOVSI A,NCE$TO		; Furnish code for "Timeout"
+	RET			; and dispatch to NETRAP return.
+
+
+; NERESET - Called in order to flush a trap frame from the PDL.
+;	Turns off clock and restores PDL to state as of NETRAP,
+;	but doesn't restore any ACs!!
+;	Contrives to return "normally".
+; NERZAP - similar, but DOES restore ACs, and leaves NETRAP
+;	return address on stack - a POPJ will dispatch to the
+;	location immediately after the NERTRAP call.
+; Both clobber A.
+
+NERESET:
+	CLKOFF			; Turn off clock before messing with PDL.
+	SKIPN A,NTRPLV
+	 JSR AUTPSY
+	MOVE A,(A)		; Get last wd on purported frame
+	CAME A,[SIXBIT /EFRAME/]	; Make sure a frame is there!
+	 JSR AUTPSY
+	POP P,A			; Yes, so get return addr
+	MOVE P,NTRPLV		; Restore PDL ptr to frame level
+	SUB P,[16,,16]		; Pop off check-word plus 15 saved ACs.
+	POPAE P,[RLTVEC,NTIOCV,NTRTMO,NTRPLV]	; Restore various stuff.
+	SUB P,[1,,1]		; Flush old NETRAP return addr.
+	JRST (A)		; Return to caller!
+
+NERZAP:	CLKOFF			; Turn off clock before messing with PDL.
+	SKIPN A,NTRPLV
+	 JSR AUTPSY
+	MOVE A,(A)		; Get last wd on purported frame
+	CAME A,[SIXBIT /EFRAME/]	; Make sure a frame is there!
+	 JSR AUTPSY
+	POP P,A			; Save return addr to caller.
+	MOVE P,NTRPLV		; Restore PDL ptr to frame level
+	MOVSI 16,-<<15-1>+1>(P)	; Set up for restoring 15 ACs (2-16)
+				; Note extra check wd at top of stack.
+	HRRI 16,2
+	BLT 16,16		; Move the words!
+	SUB P,[16,,16]		; Flush ACs and check-word from stack.
+	POPAE P,[RLTVEC,NTIOCV,NTRTMO,NTRPLV]	; Restore various stuff.
+	JRST (A)		; Return to caller.
+	; NOTE CAREFULLY that (P) now contains the return
+	; addr for the NETRAP invocation; a POPJ will dispatch!
+
+
+SUBTTL	Initial Connection Protocols
+
+;  NETICP -  Performs ICP to foreign host's server.
+;	N - Host # to connect to.
+; Sets up NETI and NETO channels.
+; Skips if success.
+;	NTHOST - set to host # connected to. (-1 if failure).
+
+NCETAB:	OFFSET -.
+ NCE$GR::	[ASCIZ /Bad Greeting/]
+ NCE$HR::	[ASCIZ /Bad init reply/]
+ NCE$TO::	[ASCIZ /Timeout/]
+ NCE$IO::	[ASCIZ /IOC error/]
+ NCE$SY::	[ASCIZ /Syscal err/]
+ NCE$CS::	[ASCIZ /Bad state/]
+ NCE$I2::	[ASCIZ /NCP 2 conn state/]
+ NCE$I3::	[ASCIZ /NCP 3 conn state/]
+ NCE$NO::	[ASCIZ /Refused/]
+	OFFSET 0
+
+NETICP:	PUSHAE P,[A,B]
+NETIC1:	MOVE U1,DEBUG
+	CAMN U1,[-2]
+	 JRST [	STAT (,("N="),O(N),(" NTHOST="),O(NTHOST),(" NTSITE="),O(NTSITE),(" NTTYPE="),O(NTTYPE))
+		JRST .+1 ]
+	SETOM NDHOST		; Zap "current host", about to perform new ICP.
+	SETZM XRSQQ		; Also zap whether host has been asked re XRCP.
+	SETZM NTCCON		; Zap Chaosnet reconnect flag
+	SETZM NTRBUF		; Zap #$%^&&^%$ reply buffer
+	MOVE A,NTSITE		; Find host we should really use.
+	MOVEM A,NTHOST		; Set it to be the current host.
+	STAT (,("  ICP-"),RABR,HST(N))
+	PROTCL A,PR$NAM
+	CSTAT (,SP,LPAR,TZ(@A),FRC)
+	SKIPE NTRTSW
+	 JRST [	CSTAT (,(" via "),HST(NTHOST))
+		JRST .+1 ]
+	MOVE A,ICPTMO		; Get # secs of timeout for ICP.
+	CALL NETRAP		; Set up error traps.
+	 JRST NETIC2		; If timeout or IOC trap sprung, handle error.
+	PROTCL A,PR$ICP
+	CALL (A)		; Call it.
+	 CAIA
+	 JRST [	CALL NERESET	;    Won -  flush err trap.
+		CSTAT (,RPAR)	;    
+		MOVEM N,NDHOST	;    Say connected to this host.
+		POP P,B		;    Skip return.
+		JRST POPAJ1 ]
+	MOVE B,A		; ICP Lost!
+	CALL NERESET		;  Reset the trap.
+	MOVE A,B		;  Recover the error code.
+NETIC2:	MOVEM A,NTERRC'		; Come here if error trap hit.
+	CSTAT (,("="),CALL(NTICPE),RPAR,FRC)
+	CALL NTDISC		; Disconnect if not already disconnected.
+
+	;; **** Hack: Try CHAOS if Internet is losing. *****
+	;; **** Also: Use MAIL if CHAOS/SMTP loses.    *****
+	;; 	[I'm not sure what the first part does anymore,
+	;;	 given that we prefer CHAOS addresses already].
+	MOVE A,NTTYPE		; Examine current protocol type.
+	CAIN A,NT$CSM		; CHAOS/SMTP?
+	 JRST [	MOVEI A,NT$CHM	; Yeah, switch to CHAOS/MAIL
+		SKIPE SORMSW	; or CHAOS/SEND
+	 	 MOVEI A,NT$CHS	; as appropriate.
+		MOVEM A,NTTYPE
+		JRST NETIC1 ]	; Start over....
+	CAIN A,NT$CHS		; If was CHAOS-SEND
+	 JRST NETIC9		;   There is no alternate path.
+	CAIN A,NT$ISM		; Did we already try the Chaosnet?
+	 JRST [ MOVE A,[RESOLV"NW%CHS]
+		CALL NETALK	; Try Chaosnet address.
+		 JRST POPBAJ
+		MOVE N,B
+		MOVEM N,NTSITE
+		MOVEM N,NTHOST
+		MOVEI A,NT$CHM
+		MOVEM A,NTTYPE
+		JRST NETIC1 ]
+NETIC9:	JRST POPBAJ		; Already tried everything and lost.
+
+; NTICPE - Output error message for ICP error value in A.
+; Clobbers A, B.
+
+NTICPE:	HLRZ B,A
+	OUT(,TZ$(NCETAB(B)))
+	CAIE B,NCE$GR		; If problem is bad reply, show it.
+	 CAIN B,NCE$HR
+	  JRST [OUT(,(|="|),CALL(NTRSHO),(|"|))
+		RET]
+	HRRES A
+	SKIPE A
+	 OUTCAL(,(","))
+	JUMPL A,[MOVMS A
+		OUT(,D(A))
+		RET]
+	CAIE A,
+	 OUTCAL(,ERR(A))
+	RET
+
+
+;;; Disconnecting
+
+; NTDISC - closes telnet connections to remote server
+; NKDISC is entry for CHAOS, which has to pretend that conns are still open.
+;   (I wonder if it is a bug if this these rtns are called 
+;    with NETO closed, which has caused IOC errs.)
+
+NTDISC:	MOVE U1,NTHOST		; Check net host connected to.
+	SKIPE U1		; If local
+	 CAMN U1,[-1]		;  or not connected
+	  JRST NTDIS1		;   just zap conn state and close channels.
+	MOVE U1,NTTYPE		; Check protocol/transport.
+	CAIE U1,NT$ISM		; If this is SMTP
+	 CAIN U1,NT$CSM		; on any medium
+	  CALL NSMBYE		; be polite and say we are going away.
+	   NOP
+NTDIS1:	SETOM NDHOST		; Say no longer connected to anything!
+	SETOM NTHOST
+	SETZM XRSQQ		; And no state here, either.
+	SETZM NTCCON
+NKDISC:	.CLOSE NETD,		; Close all channels, make clean sweep.
+	.CLOSE NETI,
+	XCTIOC [OUTCAL(NETO,CLS)]
+	 NOP			; Close this way to flush any buffer.
+	.CLOSE NETO,		; Above doesn't always close the ITS channel
+	RET
+
+
+
+; NTRDED - Here when unexpected disconnection is detected.
+; Returns temporary host error.
+
+NTRDED:	CSTAT (,("...net conns gone."))
+	MOVEI A,MR$TEH
+	SETZ B,
+	RET
+
+
+
+SUBTTL	XRSQ Hacking routines
+
+; NTXRSQ - Find which scheme (T or R) host prefers using.
+; Returns after setting XRSQ variables.
+; Skips if net conns still open.
+
+NTXRSQ:	CAME N,NDHOST
+	 JRST NTRDED
+IFN $$FTP,[
+	MOVE U1,NTTYPE		; Find protocol/transport type in use.
+	CAIN U1,NT$FTP		; If it is FTP
+	 JRST NTXSR1		;   must negotiate scheme.
+];$$FTP
+	;; The CHAOS SEND protocol does not do XRCP.
+	MOVE U1,NTTYPE
+	CAIN U1,NT$CHS
+	 JRST [	SETZM XRSQPS	; No XRCP.
+		SETZM XRSQRS	; None in effect.
+		SETZM XRSQS	; None selected.
+		SETOM XRSQQ	; Say have asked host.
+		RET ]
+
+	;; The SMTP and all CHAOS MAIL protocols always use scheme "R".
+	SETOM XRSQPS		; Say R scheme preferred
+	SETOM XRSQRS		; and is in effect.
+	SETOM XRSQQ		; and have asked host.
+	SETZM XRSQS		; Clear just in case.
+	RET			; All done.
+
+IFN $$FTP,[
+	;; NCP/FTP requires noegotiation.
+
+NTXSR1:	PUSHAE P,[A,B]
+	MOVE A,DEFTMO		; Allow 30 sec for XRSQ procedure.
+	CALL NETRAP
+	 JRST NTXRS9		; If error...
+	SETZM XRSQQ		; Zap all vars.  Say haven't asked.
+	SETZM XRSQS		; Say none selected.
+	SETZM XRSQPS		; Say none preferred.
+	SETZM XRSQRS		; Say none in actual use.
+
+	FWRITE NETO,[[XRSQ ?
+]]				; Ask question of host.
+	.NETS NETO,
+	MOVEI A,215.		; Look for this reply...
+	CALL NTRNXX		; Look for reply.
+	 JRST NTXRS8		; Lost.
+	;; Win, host hacks XRSQ!  See which scheme to use.
+	MOVE A,NTRCNT		; Get # chars in reply buffer
+	CAIGE A,5		; Need at least this many.
+	 JRST NTXRS8		; Sigh...
+	LDB A,[010700,,NTRBUF]	; Gross crock.  Get 5th char...
+	SETZ B,
+	CAIE A,"T
+	 CAIN A,"t		; Text-first scheme?
+	  MOVEI B,1		; Yep, use this.
+	CAIE A,"R
+	 CAIN A,"r		; Rcpts-first scheme?
+	  SETO B,		; Yep, use -1.
+	MOVEM B,XRSQPS		; Say which scheme host prefers.
+	JUMPE B,NTXRS8		; Just return now if none preferred.
+	TRZ A,40		; Make sure letter is uppercase...
+	FWRITE NETO,[[XRSQ ],TI,(A),[
+]]
+	.NETS NETO,		; Try to select that scheme!
+	MOVEI A,200.		; Look for this reply exactly.
+	CALL NTRNXX
+	 JRST NTXRS8		; Couldn't get??  Oh well.
+	MOVE A,XRSQPS		; Hurray, got it!
+	MOVEM A,XRSQRS		; Mark that as scheme now in effect!!
+				; Drop thru to return.
+
+NTXRS8:	SETOM XRSQQ		; Have asked, don't do again this host.
+	CALL NERESET
+	AOS -2(P)
+NTXRS9:	PJRST POPBAJ
+];$$FTP
+
+
+; NTXRCP - Send an XRCP recipient specification.
+;	A - ASCNT ptr to rcpt name
+; Returns .+1 if error (A and B as per usual)
+; .+2 if win.
+
+NTXRCP:	CAME N,NDHOST		; Ensure still connected.
+	 JRST NTRDED
+	MOVE B,A
+	MOVE A,DEFTMO
+	SKIPLE XRSQRS		; But if current scheme is Text-first,
+	 LSH A,2		;   be more generous.
+	CALL NETRAP
+	 JRST [	HLRZ B,A
+		CSTAT (,(" ..."),TZ$(NCETAB(B)))	; Timeout or IOC
+		JRST NTXRC9 ]
+	PROTCL A,PR$RCP
+	CALL (A)		; Do it.
+	 JRST NTXRC5		;  Ananlyze error code. 
+	CALL NERESET		; Win - flush network error trap.
+	SETZB A,B
+	JRST POPJ1
+
+;;; Here to analyze error resulting from recipient spec.
+
+NTXRC5:	MOVE B,A		; Here to analyze rcpt error.
+	CALL NERESET		; Flush error trap.
+IFN $$450, CAIE B,450.
+	 CAIL B,500.
+	  SKIPA A,[MR$PER]	; Permanent error
+	   MOVEI A,MR$TER	; Else assume temp err. (4xx)
+	CAIA
+NTXRC9:	 MOVEI A,MR$TEH		; Maybe change this later?
+	SETZ B,
+	CAIN A,MR$PER
+	 JRST [	CALL RPLYER	; For permanent error, return message
+		CSTAT (,(" ...PERM ERR="),LBRC,CALL(NTRSHO),RBRC)
+		RET]
+	CAIE A,MR$TER
+	 RET
+	CSTAT (,(" ...TEMP ERR="),LBRC,CALL(NTRSHO),RBRC)
+	RET
+
+
+SUBTTL	NTMINI - Dispatch to message transaction initialization
+
+; NTMINI - A should have LP to rcpt list
+
+NTMINI:	MOVE A,DEFTMO
+	CALL NETRAP		; Set up timeout.
+	 JRST [	HLRZ B,A	; If we lose, print error msg.
+		CSTAT (,("..."),TZ$(NCETAB(B)))
+		JRST NTMIN9 ]
+	PROTCL U1,PR$MIN
+	CALL (U1)
+	 CAIA
+	  JRST [ CALL NERESET	;  Flush errset.
+		 SETZB A,B
+		 JRST POPJ1 ]
+	MOVE B,A		; Get reply from protocol initialization.
+	CALL NERESET		; Flush trap frame, etc.
+	CSTAT (,(|...init lost, R="|),CALL(NTRSHO),(|"|))
+IFN $$450, CAIE B,450.
+	 CAIL B,500.
+	  JRST NTMIN8		; Lossage...
+	SKIPA B,[MR$TER]	; Assume temp err. (4xx)
+NTMIN8:	 MOVEI B,MR$PER
+	SKIPA A,B
+NTMIN9:	 MOVEI A,MR$TEH
+	SETZ B,
+	CAIN A,MR$PER
+	 CALL RPLYER		; For permanent error, return message
+	RET
+
+SUBTTL	NTMBEG - Dispatch to message setup routine
+
+; NTMBEG -
+;	A - ASCNT ptr to name string
+;	B - Command type (0 for MAIL, -1 for FTP/MLFL, 1 for Send)
+;	    This arg is only really used by the FTP routines.
+;
+;	Haggles with remote server and returns when NETO channel
+;	(or NETD as case may be) is ready to send message text over.
+;	doesn't skip if error occurs.
+;
+; Returns .+1 if error:
+;		A - error code (see MR$ values)
+;		B - SLP to error message, or zero
+;	.+2 if success - NTMSND can now be used to send msg text.
+
+NTMBEG:	CAME N,NDHOST		; Ensure still connected.
+	 JRST NTRDED
+	PUSHAE P,[C]
+	MOVE C,A		; Save ASCNT to rcpt name.
+	MOVE A,DEFTMO		; Get timeout arg
+	CALL NETRAP		; Set up error traps
+	 JRST [	HLRZ B,A	; Get problem index.
+		CSTAT (,(" ...NTMBEG "),TZ$(NCETAB(B)))
+		JRST NTMBG9 ]
+	MOVE A,C		; Put back ASCNT to rcpt name
+	PROTCL C,PR$BEG
+	CALL (C)		; Do it
+	 JRST [	MOVEM A,NTERRC	;  If error, remember code.
+		CALL NERESET	;  Flush trap frame.
+		MOVE A,NTERRC
+		JUMPGE A,NTMBGT	;  Error, check it out.
+		MOVNS A		;  Negative error is always soft/temporary
+		STAT (,("NTMBEG NET ERR="),D(A))
+		JRST NTMBG9 ]
+	;; Rcpt accepted, all set.
+	CALL NERESET	; Turn off error trapping.
+	SETZB A,B
+	PJRST POPCJ1	; Win return skips.
+
+	;; Wrong error code, see if temporary or not. 
+NTMBGT:	CALL NTECHK		; Classify error
+	 JRST [ STAT (,("NTMBEG TEMP ERR="),LBRC,CALL(NTRSHO),RBRC)
+		JRST NTMBG9 ]	;  Go claim temporary error.
+	 JRST [ STAT (,("NTMBEG PERM ERR="),LBRC,CALL(NTRSHO),RBRC)
+		MOVEI A,MR$PER	;  Claim permanent error for rcpt.
+		CALL RPLYER	;  Set up error message
+		PJRST POPCJ ]
+	;; The error is not in our table, so we don't know which it is.
+	;; Assume it is temporary and blame it on the recipient's mailbox.
+	STAT (,("NTMBEG RCPT ERR="),LBRC,CALL(NTRSHO),RBRC)
+	MOVEI A,MR$TER		; Temp Err for Rcpt
+	SETZ B,
+	PJRST POPCJ
+
+NTMBG9:	MOVEI A,MR$TEH		; Note: IOC/timeouts also claim host temp err.
+	SETZ B,
+	PJRST POPCJ
+
+	;; Here to  compose error receipt.
+RPLYER:	MAKELN B,[0	; Net message failed, compose error string.
+		%LTSAO,,[[OUTCAL(,("Recipient name apparently rejected.
+	Last reply was: "),LBRC,CALL(NTRSHO),RBRC)]] ]
+	RET
+
+SUBTTL	Network Error Classification
+
+; NTECHK - classify network error in A (smash B)
+; Returns:
+;	.+1 - temporary
+;	.+2 - permanent
+;	.+3 - not known which
+
+NTECHK:	JUMPL A,APOPJ		; Negative means net error, always temporary.
+	PROTCL U1,PR$CHK
+	CALRET (U1)
+
+; Table of reply codes that imply permanent error (sigh).
+NTCTAB:	-1	; None at moment.
+       ;454.	; NBS-10, WPAFB-AFWAL (these suckers use 454 for no such user!)
+NTCTBL==<.-NTCTAB>
+
+;;; Here to process SMTP reply codes.
+NTERSM:
+IFN $$450,{			; Looks like plant food to me...
+	SKIPE SORMSW		; If this was an interactive send
+	 JRST [ CAIN A,450.	; Check for "User not online".
+		 JRST POPJ1	;  which is a permanent error.
+		JRST .+1 ]	; (That should work for SOML/SAML also.)
+}
+	CAIL A,500.		; All 5xx are permanent
+	 JRST POPJ1
+	CAIL A,400.		; and all 4xx are temporary
+	 RET
+	AOS (P)			; If neither 4xx or 5xx, say dunno.
+	JRST POPJ1
+
+;;; Here to process FTP reply codes.
+NTERFT:
+IFN $$450, CAIE B,450.		; No, FTP. Is it a 450?
+	 CAIL B,500.		; Or a 5xx?
+	  JRST POPJ1		; Yes, lose.
+	MOVSI B,-NTCTBL
+	CAMN A,NTCTAB(B)
+	 JRST POPJ1		; Found one, so assume permanent.
+	AOBJN B,.-2
+	AOS (P)
+	JRST POPJ1
+
+
+
+SUBTTL	NTMSND - Dispatch to Text sending routines
+
+; NTMSND - Takes ascnt ptr to message text in A and sends over net.
+;	Uses neto or NETD channel as necessary.
+;	Skips on success.  Returns standard error code in A, msg in B
+
+NTMSND:	CAME N,NDHOST
+	 JRST NTRDED
+	MOVE B,A		; Save arg
+	SETOM NTERRC		; Reset err val
+	MOVE A,DEFTMO		; Alert lifeguard to check every once in a while
+	CALL NETRAP
+	 JRST [	SKIPL NTERRC	; If special IOC error (MLFL)
+		 JRST NTMSN9	; then already complained.
+		HLRZ B,A
+		CSTAT (,(" ...NTMSND "),TZ$(NCETAB(B)))
+		MOVEI A,MR$TEH
+		SETZ B,
+		RET ]
+	MOVE A,[SETZ NXFRLT]	; Use special RLT vector
+	MOVEM A,RLTVEC		; So we can check progress at interrupt level.
+	PROTCL A,PR$SND
+	CALL (A)
+	 JRST NTMSN8		; Error, reset frame and go lose.
+	CALL NERESET		; Win!
+	SETZB A,B
+	PJRST POPJ1
+
+	; Non-IOC/timeout SMTP data transfer error (only FINISH fail possible)
+	; All current error returns are known to provide valid MR$ codes in
+	; some manner.
+NTMSN8:	MOVE B,A
+	CALL NERESET		; IOC type error, flush err frame
+	SKIPA A,B
+NTMSN9:	 MOVE A,NTERRC		; Entry pt for special IOC error
+	SETZ B,
+	RET
+
+
+LVAR NXFRST:	0		; Holds state of transfer
+
+	; Timeout interrupt for data xfer to net site.
+	; See if still active, or .IOT hung.
+	; This code runs at interrupt level!
+NXFRLT:	CAMN U3,NXFRST		; Check SIOT BP with last value
+	 DISMISS [NXFRL5]	; Lose, no activity since last test!
+	MOVEM U3,NXFRST		; Tis different, xfer is active! Save value
+	DISMISS			; for next compare, and dismiss.
+
+	; Dispatch here from above handler if timeout on no activity.
+NXFRL5:	CLKOFF
+	STAT (,("Note: Net xfer lossage, no activity for 2 mins!"))
+	JRST NTRRLT	; Jump to regular RLT handler from here on.
+
+SUBTTL	NTMEND - Dispatch to message wrapup
+
+;  NTMEND - called when message transmission is finished, terminates
+;	message and gets back to normal ftp communication.  may break
+;	data connection if exists, but doesn't close telnet connections.
+; Non-skip return implies error, usually temporary.
+;	A - Error code (see MR$ values)
+;	B - 0 or error message
+
+NTMEND:	CAME N,NDHOST
+	 JRST NTRDED
+	MOVE A,FINTMO		; Timeout arg
+	CALL NETRAP		; Setup to trap IOC and timeout.
+	 JRST [	HLRZ B,A
+		STAT (,("INCOMPLETE, "),TZ$(NCETAB(B)))
+		JRST NTMEN9 ]
+	PROTCL A,PR$END
+	CALL (A)		; Invoke routine
+	 JRST [	MOVEM A,NTERRC	; Failure, must examine reply code.
+		CALL NERESET
+		MOVE A,NTERRC		
+		JRST NTMEN3]	; Failure, go examine reply code
+	CALL NERESET		; Winnage.
+NTMEN6:	SETZB A,B
+	PJRST POPJ1
+
+;Wrong or no reply code after sending message 
+;If we get no reply, it's a temporary recipient error
+;If we get a (wrong) reply between 200 and 299, complain but accept it
+;If we get a 460 reply, it's a Chaosnet temporary error
+;Don't trust 4xx replies on the Arpanet to be temporary
+;If we get some other reply, take as permanent error since something is really fucked
+NTMEN3:	JUMPLE A,[
+		MOVNS A
+		STAT (,("INCOMPLETE, NET ERR="),D(A))
+		JRST NTMEN9]
+	STAT (,("NTMEND ERR="),D(A),(","),LBRC,CALL(NTRSHO),RBRC)
+	CAIL A,200.
+	 CAILE A,299.
+	  CAIA
+	   JRST [CSTAT (,(" - but accepted."))
+		JRST NTMEN6]
+	CAIGE A,500.	; Permanent error?
+	 JRST NTMEN9	; No, temporary (4xx or less).
+
+	MOVEI A,MR$PER
+	MAKELN B,[0	; Net message failed, compose error string.
+		%LTSAO,,[[OUTCAL(,("Funny reply from foreign host after sending message.
+	Last reply was: "),LBRC,CALL(NTRSHO),RBRC)]] ]
+	RET
+
+NTMEN9:	MOVEI A,MR$TER
+	SKIPG NTHOST		; Make sure net conns still alive
+	 MOVEI A,MR$TEH		; Else a temp err for host.
+	SETZ B,
+	RET
+
+
+SUBTTL	Net input stuff (Read a reply)
+
+BVAR
+NTRCMX==:250.		; Max # chars in buffer
+NTRBUF:	BLOCK <NTRCMX+4>/5
+	0		; Ensure fence if too-long reply truncated
+NTRBOV:	0		; -1 when buffer full (reply truncated).
+NTRPT:	0		; BP into NTRBUF
+NTRCNT:	0		; Cnt of chars in NTRBUF
+REPLYC:	0		; Holds # of last code received
+NTRPKT:	0		; -1 if datagram transaction stored reply here
+EVAR
+
+; NTRLGT - Get a FTP reply line.
+; Skips unless ran out of input (net error).
+; Over-long replies are simply truncated, without error.
+
+NTRLGT:	SKIPE NTRPKT		; Datagram transaction?
+	 JRST NTRLG8		;  Yes, reply already in buffer.
+	SKIPA A,NTRCNT
+NTRLG0:	 AOS A,NTRCNT
+	CAIL A,NTRCMX		; Make sure we still have room.
+	 JRST NTRLG3		; Nope, go to barfage section.
+NTRLG1:	CALL NTCHRI		; Get char
+	 RET			; Whoops, net error!
+	CAIN A,^M		; Maybe end of reply line?
+	 JRST NTRLG7		; Go check.
+	IDPB A,NTRPT		; Deposit char in buffer.
+	JRST NTRLG0		; Test for overflow and continue.
+
+NTRLG3:	SKIPE NTRBOV		; First-time overflow?
+	 JRST NTRLG4		; Nope, just output to stats.
+	SETOM NTRBOV		; First time, announce error.
+	STAT (,("Foo: NTRBUF Overflow: "),LBRC,CALL(NTRSHO),RBRC)
+NTRLG4:	CALL NTCHRI
+	 RET			; Blug, net error.
+	CAIE A,^M		; Possible EOL?
+	 JRST [	CSTAT (,C((A)))	;  Just report to stats.
+		JRST NTRLG4]
+NTRLG7:	CALL NTCHRI		; Try next char
+	 RET			;  Sigh, lost.
+	CAIN A,^J		; LF follows?
+NTRLG8:	 AOS (P)		;  Won!  Skip on return.
+	SETZM NTRPKT		; Datagram reply has been "used".
+	RET
+
+
+; NTRPCD - Gobble a reply line and parse reply code.
+;	Given NTRPT, NTRCNT, NTRBOV.
+; Returns .+1 if net error
+; Returns .+2 otherwise:
+;	A - reply code (-1 if couldn't parse line)
+;	B - BP to rest of line after code, or 0 if no more (!).
+
+NTRPCD:	PUSHAE P,[C,D]
+	SKIPG A,NTRCNT		; See how many chars we've got.
+	 JRST NTRPC2		; Nothing, can skip CRLF addition.
+	CAIL A,NTRCMX-5		; Need room for at least 5 more.
+	 JRST [	SUBI A,6	; If no room, make some!
+		MOVEM A,NTRCNT
+		MOVNI A,6
+		PTSKIP A,NTRPT
+		JRST .+1]
+	;; Some stuff is already in buffer, so append a CRLF first.
+	MOVEI B,^M ? IDPB B,NTRPT ? AOS NTRCNT
+	MOVEI B,^J ? IDPB B,NTRPT ? AOS NTRCNT
+
+NTRPC2:	MOVE B,NTRPT		; Save current ptr into buffer
+	MOVE C,NTRCNT		; and current cnt.
+	CALL NTRLGT		; Gobble a new line.
+	 JRST NTRPC9		; Net lossage.
+	MOVE D,NTRCNT		; OK, now get new count
+	SUBI D,(C)		; to see how many chars we read.
+	CAIGE D,3		; Must be at least 3...
+	 JRST NTRPC8		; Fooey, say parsing error.
+
+	HRLI D,-3		; 3 digits
+	SETZ A,			; Value goes here
+NTRPC5:	ILDB C,B
+	CAIL C,"0		; Is it a digit?
+	 CAILE C,"9
+	  JRST NTRPC8		; Nope, say parsing error.
+	IMULI A,10.		; Yes, power up A
+	ADDI A,-"0(C)		; and add in value of digit.
+	AOBJN D,NTRPC5		; Get next
+	CAIG D,6.		; Skip if more chars on line.
+	 SETZ B,		; No more, zap B to indicate this.
+	CAIA
+NTRPC8:	 SETO A,		; Say parsing error.
+	AOS -2(P)		; Skip on return
+NTRPC9:	POPAE P,[D,C]
+	RET
+				 
+
+;  "NTRPLY"-- inputs one server reply into a
+;	buffer for inspection.  Returns code in A and REPLYC.
+
+NTRPLY:	PUSH P,B
+	SETOM REPLYC
+
+NTRPL1:	MOVE A,[440700,,NTRBUF]
+	MOVEM A,NTRPT		; Initialize ptr
+	SETZM NTRCNT		; Zero char cnt
+	SETZM NTRBOV		; and overflow flag.
+
+NTRPL2:	CALL NTRPCD		; Get line and code.
+	 JRST POPBJ		; Net error.
+	JUMPL A,[CSTAT (,LBRK,("NTRPLY: Bad reply syntax="),LBRC,CALL(NTRSHO),RBRC,RBRK)
+		 JRST NTRPL1 ]
+	MOVEM A,REPLYC		; Save returned code
+	JUMPE B,NTRPL3		; If nothing more, no continuation.
+	ILDB A,B		; Get char after code
+	CAIN A,"-		; Continuation mark?
+	 JRST NTRPL2		; Yes, bletch, get another line.
+
+	; I suppose there should be some code around here that checks
+	; to be sure that multi-line replies all have the same reply
+	; code, but it hardly seems to matter.  If you care, change
+	; the preceeding two lines to JRST NTRPL3 if not continuation,
+	; and put the silly check/report here.
+
+NTRPL3:	MOVE A,REPLYC
+	CAILE A,599.		; Highest poss. code
+	 JRST [	MOVN A,A	; Make neg. if too large
+		MOVEM A,REPLYC	; (fuck you and your 951's, BBN!!)
+		JRST .+1]
+	SKIPE NTRBOV		; Was reply truncated?
+	 JRST [	CSTAT (,RBRC)	; Yes, terminate stats report.
+		JRST .+1]
+	POP P,B			; All done!
+	AOS (P)
+	RET
+
+
+; NTSOCK - assumes reply in ftrbuf is a 255 sock nnnn and proceeds
+;	to convert decimal argument into socket number in a.
+
+NTSOCK:	PUSHAE P,[B,C,D]
+	MOVE D,NTRCNT
+	SUBI D,9.		; Allow for the "255 SOCK " (9 chars)
+	JUMPLE D,NTSCK9		; Maybe reply not long enough?
+	MOVE B,[100700,,NTRBUF+1] ; BP to 10th char in buf.
+	SETZ A,			; Used for arg accumulation
+NTSCK1:	ILDB C,B		; Flush leading blanks.
+	CAIE C,40
+	 JRST NTSCK3
+	SOJG D,NTSCK1
+	JRST NTSCK9
+
+NTSCK2:	ILDB C,B		; Get char
+NTSCK3:	CAIL C,"0
+	 CAILE C,"9
+	  JRST NTSCK8		; Not a digit, stop parsing.
+	IMULI A,10.		; Power up #
+	ADDI A,-"0(C)		; Cvt and add digit
+	SOJG D,NTSCK2		; Continue til count out.
+NTSCK8:	AOS -3(P)
+NTSCK9:	POPAE P,[D,C,B]
+	RET
+
+
+; NTR2XX and NTR3XX - search for 2xx and 3xx codes respectively,
+;	flushing any 0xx or 1xx codes.  Returns code in A
+;	whether fails or succeeds.
+; Returns .+1 if code not in range or error.
+;	Returned "code" will be zero if failure due to error.
+; Returns .+2 if code in range
+
+NTR2XX:	CALL NTRPLY		; Get net reply
+	 JRST NTRPZ		; Net lossage.
+	CAIGE A,200.		; If an 0xx or 1xx code,
+	 JRST NTR2XX		; flush and get another.
+	CAIGE A,300.		; If outside 2xx range, fail.
+	 AOS (P)
+	RET
+
+NTRPZ:	SETZ A,			; Return zero "code".
+	RET
+
+NTR3XX:	CALL NTRPLY		; Get net reply
+	 JRST NTRPZ
+	CAIGE A,300.
+	 JRST NTR3XX
+	CAIGE A,400.
+	 AOS (P)
+	RET
+
+; NTRNXX - Given reply code in A to look for.  Skips if found,
+;	else no skip.
+;	Ignores all 0xx and 1xx messages; ditto 6-9xx.
+; Returns code in A whether succeed or fail.
+
+NTRNXX:	PUSH P,A
+NTRNX0:	CALL NTRPLY		; Get a reply.
+	 JRST [	POP P,A ? JRST NTRPZ]	; error, return zero.
+	CAMN A,(P)		; Is it what we want?
+	 JRST POPAJ1		; Yep, win.
+	CAIGE A,200.		; Is code one of 3xx, 4xx or 5xx?
+	 JRST NTRNX0		; Nope, get another reply.
+	SUB P,[1,,1]		; Ugh, failed.
+	RET
+
+; NTCHRI - returns one 7-bit ascii char in acc. A.
+;	If it sees any 8-bit telnet control chars, will flush them
+;	and wait for a 7-bit char.  Hence will not win with new
+;	protocol, if foreign site sends anything spontaneously!
+
+NTCHRI:	.IOT NETI,A
+	JUMPGE A,NTCHI2		; If get -1,,3 then assume input channel has closed,
+	SKIPN NTIOCV		; and simulate network IOC error
+	 JSR AUTPSY		; with check to prevent blind hyperspace jump.
+	JRST @NTIOCV
+NTCHI2:	CAIL A,200
+	 JRST NTCHRI		; Discard any 8-bit codes
+	AOS (P)
+	MOVE U1,NTTYPE
+	CAIE U1,NT$CSM
+	 CAIN U1,NT$ISM
+	  OUTCAL (NETD,C((A)))	; If SMTP, record char for transaction.
+	 RET
+
+; NTRSHO - Output current reply to std output
+
+NTRSHO:	OUT(,S(NTRCNT,[440700,,NTRBUF]))
+	RET
+
+
+
+
+SUBTTL Network Time
+
+NTMSOC:	45			; Standard Binary "Time-server" socket
+
+; NETIM - Hack to pluck 32-bit Network-time word from IP-TCP site
+;	specified by A.  Returns value in A and skips,
+;	doesn't skip if couldn't get.
+
+NETIM:	PUSHAE P,[B,C]
+	SYSCAL TCPOPN,[CIMM NETI ? CIMM NETO ? [-1] ? NTMSOC ? A ? CERR A]
+	 JRST NETIM9
+	MOVEI A,NETO
+	NETHANG 900.,A,%NSRFS,[%NSOPN,%NSRFN]
+	 JRST NETIM9
+	SETZ A,
+	MOVE B,[401000,,A]	; Read in 32 bit word here.
+	MOVEI C,4.		; 8-bit bytes at a time.
+	SYSCAL SIOT,[MOVEI NETI ? B ? C]
+	 .LOSE %LSFIL
+	AOS -2(P)
+NETIM9:	.CLOSE NETD,
+	POPAE P,[C,B]
+	RET
+
+
+SUBTTL Host Database routines (Name/Address lookup, etc.)
+
+IFE $$DQ,{
+
+; HANLYZ - Server-oriented host-name search.
+;   A/ # chars
+;   B/ Bp to name
+;
+; Skip returns in A: host address
+; If non-skip, A: -1      ==> host not found, whether server or anything else.
+;	         ptr,,ptr ==> ambiguous server sites, 2 absolute ptrs to
+;			      NAME table entroes are turned as examples.
+
+HANLYZ:	PUSHAE P,[B,C,D,E]
+	MOVEM B,NPTSAV'		;Save ptr to name
+	MOVEM A,NPTSVC'		; and save cnt.
+HANL20:	SETZM HFSAV1'		;Clear the regs used to store
+	SETZM HFSAV2'		;matches in.
+	SETZM HNSSAV'		;(This one is non-server slot).
+	SKIPN D,RESOLV"HSTADR
+	 JSR AUTPSY
+	ADD D,RESOLV"NAMPTR(D)	;Address NAMES table of 1wd entries.
+	MOVN E,0(D)		;Get number of entries.
+	HRLZS E			;Make aobjn pointer.
+	HRRI E,2(D)
+HANLZ1:	HRRZ D,RESOLV"NMRNAM(E)	;Points to ASCIZ name.
+	ADD D,RESOLV"HSTADR
+	HRLI D,440700
+	MOVE C,NPTSAV
+	MOVE A,NPTSVC		;Get cnt.
+	MOVEM A,NPTCNT'
+HANL11:	ILDB B,D
+	SOSGE NPTCNT		;Decr char cnt.
+	 TDCA A,A		;Clear A and skip if none left.
+	  ILDB A,C
+	JUMPE B,[JUMPN A,HANLZ4	;If our string longer, no match.
+		MOVEI A,(E)	;Both counted out, perfect match!
+		JRST HANLZ7 ]	;use this entry and go win.
+	JUMPE A,HANLZ2		;Partial match if our string counts out first.
+	CAMN A,B
+	 JRST HANL11
+	CAIL A,"a		;If chars don't match, try converting
+	 CAILE A,"z		;input string to uppercase.
+	  JRST HANLZ4		;Twas uppercase already.
+	SUBI A,40
+	CAMN A,B
+	 JRST HANL11
+HANLZ4:	AOBJN E,HANLZ1
+	;; All searching done, no perfect matches, see if partial matches.
+	SKIPE HFSAV2		;Was an ambiguous server host found?
+	 JRST [	HRLZ A,HFSAV1	;Ambiguous; two or more found. 
+		HRR A,HFSAV2	;First in LH, second in RH.
+		JRST HANLZ9]	;Loss return.
+	SKIPE A,HFSAV1		;Was unambiguous server host found?
+	 JRST HANLZ7		; Yes, only one partial match, win
+	SKIPN A,HNSSAV		;Was a non-server site found? (load with value)
+	 JRST HANLZ8		; Nope, go to loss return.
+HANLZ7:	HLRZ E,(A)		;Get adr of SITE entry.
+	ADD E,RESOLV"HSTADR
+	HRRZ B,RESOLV"STRADR(E)	;Get file addr of ADDRESS table entry.
+	;; Now decide which of the possible addresses to use.
+	;; priority is CHAOSnet, ARPAnet, random net.
+	SETOB A,C
+HANLC2:	ADD B,RESOLV"HSTADR	;Make abs ptr
+	MOVE D,RESOLV"ADDADR(B)	;Get net address of this entry
+	CAME D,OWNHST
+	 CAMN D,OWNHS2		;If this is our own host address
+	  JRST [ MOVE A,OWNHST	; OWNHST is best possible address!
+		 JRST HANL78 ]
+	RESOLV"GETNET D		;Else get net number it's on.
+	MOVEI E,4		;Search for favorite networks.
+	CAME D,(E)[ RESOLV"NW%ARP	;Priority in reverse order.
+		    RESOLV"NW%LCS
+		    RESOLV"NW%AI
+		    RESOLV"NW%CHS]-1	;Chaos preferred over Internet.
+	 SOJG E,.-1
+	CAIL C,(E)
+	 JRST HANLC3
+	MOVE A,RESOLV"ADDADR(B)	;Aha, save address
+	MOVEI C,(E)		;and its priority
+HANLC3:	HRRZ B,RESOLV"ADRCDR(B)	;Check out more net addrs if any
+	JUMPN B,HANLC2		;Yep, check next one.
+	JUMPG C,HANL78		;If found a known winner, jump!
+	TLNN A,(RESOLV"NE%UNT)	;Else examine more closely...
+	 JRST HANL78		; Is Internet addr, shd be OK.
+	JRST HANL72		;Ugh, non-Internet (and not CHAOS), so lose.
+
+HANL72:	MOVNI A,2
+	JRST HANLZ9		;Nope, not right place after all, lose.
+
+HANL78:	AOSA -4(P)		;Come here for winning return
+HANLZ8:	 SETO A,
+HANLZ9:	POPAE P,[E,D,C,B]
+	RET			;Failure return
+
+	;; Here when partial match found
+HANLZ2:	SKIPN HFSAV1		;Skip if already have one partial match.
+	 JRST [	HRRZM E,HFSAV1	;Save table index to first partial match
+		HLRZ A,(E)	;Get file addr of SITE entry
+		ADD A,RESOLV"HSTADR
+		MOVE A,RESOLV"STLFLG(A)	;Get flags
+		TLNE A,RESOLV"STFSRV	;Skip if not server
+		 JRST HANLZ4	;Continue, to check for ambiguities	
+		HRRZM E,HNSSAV	;Non-server, store entry # here.
+		SETZM HFSAV1	;Rectify wrong assumption
+		JRST HANLZ4]	;and continue.
+	;; Not first partial match, save if server, ignore if not.
+	HLRZ A,(E)		;Get file addr of SITE entry
+	ADD A,RESOLV"HSTADR
+	MOVE A,RESOLV"STLFLG(A)	;Get flags
+	TLNN A,RESOLV"STFSRV	;Skip if server
+	 JRST HANLZ4		;Ignore if non-server
+	MOVEI B,(E)
+	CAMN B,HFSAV1		;Test against entry of previously matched name
+	 JRST HANLZ4		;Ignore if already found same host.
+	CAMN B,HFSAV2		;Same as first found?
+	 JRST HANLZ4		; No, ignore if this host already listed.
+	MOVEM B,HFSAV2'		;Different from both - "second-found" host.
+	JRST HANLZ4		;Continue looking (may find exact match).
+
+};IFE $$DQ
+
+IFN $$DQ,{
+
+; HANLYZ - Host Lookup
+;   A/ # chars
+;   B/ Bp to name
+;
+; Skip returns in A: host address
+; If non-skip, A: -1 ==> host not found
+;		  maybe someday other codes
+;
+; Uses the RESOLV library to query the DQ device for host address information.
+; Asks for an address in the CH class; if none, asks for class IN.
+
+HANLYZ:	PUSHAE P,[B,C,D]
+	MOVE C,[440700,,DQBUF]	; Copy string (have to ASCIZify)
+	ILDB D,B
+	IDPB D,C		; Copy all bytes
+	SOJG A,.-2
+	IDPB A,C		; Null at end
+	MOVE A,[440700,,DQBUF]	; Point at ASCIZified string
+	CALL RESOLV"HSTADR	; Resolve string to HOSTS3 type address
+	 SKIPA A,[-1]		; Lost, foo
+	  AOS -3(P)		; Won, skip return
+HANL99:	POPAE P,[D,C,B]
+	RET
+
+};$$DQ
+
+SUBTTL NCP/FTP Routines - NNFICP
+
+IFN $$FTP,[
+
+NETDEV:	SIXBIT /NET/
+ICPSOC:	3		; Standard FTP server socket
+BVAR
+NRLSOC:	0		; Local Receive socket (U+2)
+NSLSOC:	0		; Local Send (U+3)
+NDLSOC:	0		; Local Data output skt (always output so always U+5)
+NRFSOC:	0		; Foreign Receive skt (S)
+NSFSOC:	0		; Foreign Send (S+1)
+NDFSOC:	0		; Foreign Data skt (always input, so defaults to S+2)
+EVAR
+
+
+
+; NNFICP - Make initial connection to server FTP
+;	Called by NETICP.
+
+NNFICP:	SYSCAL OPEN,[[40050+.UII,,NETD] ? NETDEV ? CIMM -1 ? ICPSOC ? NTHOST
+		CERR A]
+	 JRST [HRLI A,NCE$SY ? RET]
+	MOVEI A,NETD			; Arg to NETHANG
+	NETHANG 900.,A,%NSRFS,[%NSOPN,%NSCLI,%NSINP]	; Wait til conn. opened or timeout
+	 JRST [MOVNS A ? HRLI A,NCE$CS ? RET]
+	SYSCAL RCHST,[CIMM NETD ? CRET JUNK ? CRET A]
+	 JSR AUTPSY		; Get generated local socket #
+	ADDI A,2		; Get # for local receive
+	MOVEM A,NRLSOC
+	ADDI A,1		; Get # for local transmit
+	MOVEM A,NSLSOC
+	ADDI A,2		; Get U+5 as local output data socket for MLFL
+	MOVEM A,NDLSOC
+	MOVEI A,NETD
+	NETHANG 900.,A,%NSOPN,[%NSCLI,%NSINP]	; Wait til input avail
+	 JRST [	MOVNS A
+		HRLI A,NCE$CS ? RET]
+	.IOT NETD,A		; Get foreign receive socket
+	MOVEM A,NRFSOC
+	ADDI A,1		; Get # for foreign transmit
+	MOVEM A,NSFSOC
+	; Open Net output and input channels
+	SYSCAL OPEN,[[.UAO,,NETO] ? NETDEV ? NSLSOC ? NRFSOC ? NTHOST ? CERR A]
+	 JRST [HRLI A,NCE$SY ? RET]
+	SYSCAL OPEN,[[40+.UAI,,NETI] ? NETDEV ? NRLSOC ? NSFSOC ? NTHOST ? CERR A]
+	 JRST [HRLI A,NCE$SY ? RET]
+	; Wait til completely open
+	MOVEI A,NETO
+	NETHANG 900.,A,%NSRFS,[%NSOPN]
+	 JRST [MOVNS A ? HRLI A,NCE$CS ? RET]
+	MOVEI A,NETI
+	NETHANG 900.,A,%NSRFS,[%NSOPN,%NSCLI,%NSINP]
+	 JRST [MOVNS A ? HRLI A,NCE$CS ? RET]
+	.CLOSE NETD,
+	CLKOFF			; ICP completed, start another frame
+	CLKSET [60.*60.]	; for initial FTP negotiation
+	CLKON
+	OUT(NETO,OPEN(UC$IOT))	; Open net output for UUO handling.
+	MOVEI A,300.
+	CALL NTRNXX		; Get the 300 initial reply
+	 JRST [	HRLI A,NCE$GR	; Error or code not 300.
+		RET]
+	; Check for being faked-out by a loop-back plug
+	FWRITE NETO,[[XLBT ],HND,NTHOST,[
+]]
+	.NETS NETO,
+	CALL NTR2XX
+	 JUMPLE A,[	HRLI A,NCE$HR	; Fail if net error or weird code.
+			RET]
+	CAIN A,529.	; If this specific error # is returned,
+	 JRST [	HRLI A,NCE$HR		; loop-back plug must be present.
+		RET]
+	;; Now log in if this is a Multics
+	;; It doesn't really log in, it just bludgeons its way past the answering
+	;; service into more maintainable code.
+	MOVE A,NTHOST
+	CALL NHMLTX		; Host = multics?
+	 JRST POPJ1		; No, thank goodness.
+	CALL NTMLTX		; Ick, do special hack (acct and passw)
+	 JRST [HRLI A,NCE$HR ? RET]	; Lost, consider it temporary soft err
+	JRST POPJ1
+
+
+; NTDLIS - Start listening on data connection
+
+NTDLIS:	SYSCAL OPEN,[[60+.UAO,,NETD]	; Open for listen
+		NETDEV ? NDLSOC ? NDFSOC ? NTHOST]
+	 CAIA
+	  AOS (P)
+	RET
+
+; NTDCON - Complete data connection given foreign socket # in A
+
+NTDCON:	PUSHAE P,[A,B]
+	MOVEM A,NDFSOC		; Store forn socket
+	MOVEI B,NETD
+	NETHANG 900.,B,%NSLSN,[%NSRFC]	; Hang til RFC received
+	 JRST POPBAJ		; Never came or something
+	.NETAC NETD,		; Accept it
+	 JRST POPBAJ
+	MOVEI B,NETD
+	NETHANG 900.,B,%NSRFC,[%NSOPN]	; Wait til fully open
+	 JRST POPBAJ
+	SYSCAL RCHST,[CIMM NETD ? CRET JUNK ? CRET JUNK ? CRET B]
+	 JSR AUTPSY		; Find foreign socket #
+	CAMN A,B		; Socket same as 255 specified?
+	 JRST POPBA1		; Yes, take winning return.
+	.CLOSE NETD,		; No, lose. arg was bad, or someone else connected to us.
+	STAT (,(" ="),RABR,(" Foo! Data connection mismatched!"))
+	JRST POPBAJ
+
+
+];$$FTP
+
+
+SUBTTL NCP/FTP routines - NNFRCP, NNFBEG, NNFSND, NNFEND
+
+IFN $$FTP,[
+
+LVAR NT%FIL:	0	; 0 = sending msg over telnet conns,
+			; -1 = over data conn (MLFL)
+
+; NNFRCP - NCP/FTP routine to submit rcpt string to host
+;	B/ ASCNT to rcpt name
+
+NNFRCP:	OUT(NETO,("XRCP "),TC(B))
+	SKIPE NTRTSW		; Doing routing thru gateway?
+	 OUTCAL(NETO,("@"),HST(NDHOST))	; Yes, specify real dest.
+NTXRC3:	OUT(NETO,EOL)
+	.NETS NETO,
+	CALL NTR2XX	; Any 2xx reply is okay.
+	 RET		; Sigh... must puzzle out.
+	JRST POPJ1
+
+
+; NNFBEG - NCP/FTP message setup routine, called by NTMBEG.
+;	A/ ASCNT of rcpt name
+;	B/ cmd to use
+
+; Now find what command to use for sending mail. B neg means MLFL.
+; B zero means MAIL.  B pos means figure out Sending command.
+
+NNFBEG:	MOVE C,A
+	JUMPL B,[SETOM NT%FIL	; Indicate MLFL
+		MOVE B,[ASCNT [MLFL]]
+		CSTAT (,(" (MLFL)"))
+		JRST NNFBG2]
+NNFBG0:	SETZM NT%FIL		; Indicate non-mlfl
+	SKIPG B
+	 JRST [ MOVE B,[ASCNT [MAIL]]	; Zero gets default of "mail"
+		JRST NNFBG2 ]
+	SKIPLE SENDSW		; Positive means puzzle out Sending.
+	 MOVE B,[ASCNT [XMAS]]
+	SKIPGE SENDSW
+	 MOVE B,[ASCNT [XSEN]]
+	SKIPN SENDSW
+	 MOVE B,[ASCNT [XSEM]]
+	; Send out appropriate command.
+NNFBG2:	OUT(NETO,TC(B))		; Out with the command...
+	JUMPE C,NNFBG3
+	OUT(NETO,(" "),TC(C))
+	SKIPE NTRTSW		; Doing routing thru gateway?
+	 OUTCAL(NETO,("@"),HST(NDHOST))	; Yes, specify real dest.
+NNFBG3:	OUT(NETO,EOL)
+	.NETS NETO,
+	SKIPGE NT%FIL	; Now look for reply as per type
+	 JRST NNFBG4	; Look for MLFL reply
+
+	CALL NTR3XX	; Look for 3xx, ignore 0xx, 1xx, 2xx.
+	 RET		; If error, return to check it out.
+	CAIN A,350.	; Is code right one right off?
+	 JRST POPJ1	; Yep, win instantly.
+	RET		; No, should check further.
+	
+	; Hack MLFL reply and data conn setup.
+NNFBG4:	CALL NTDLIS	; Open data conn in listen mode NOW, to avoid
+	 JRST [	MOVEI A,-24.	; synch problems with some cretinous systems.
+		RET ]		; Return temp error.
+	MOVEI A,255.	; Look for SOCK reply...
+	CALL NTRNXX	; and ignore 0xx, 1xx etc.
+	 JRST [ CAIE A,504.	; Code not 2xx, maybe fail hard.
+		 RET		; or maybe soft
+		MOVEI B,0	; Cretinous TOPS-10
+		CSTAT (,(" (Rejected, trying MAIL)"))
+		JRST NNFBG0 ]
+	CALL NTSOCK	; Convert 255's arg into socket # in A
+	 JRST [	MOVEI A,-25.	; Blah, bad argument, soft error.
+		RET ]
+	CALL NTDCON	; Complete data connection to socket # in A.
+	 JRST NNFBG5	; Couldn't, do something
+	MOVEI A,250.	; Now wait for 250 go-ahead...
+	CALL NTRNXX	; ignoring 0xx etc.
+	 RET		; Funny reply, check for fail hard (CMU sends its
+			; user name reject here instead of in first reply)
+	OUT(NETD,OPEN(UC$IOT))	; All won, set up UUO chan for output!
+	JRST POPJ1
+
+	; Here if MLFL data connection not established
+	; Normally a temporary error, but see if there is an
+	; accompanying FTP reply
+NNFBG5:	CALL MLFLRP		;Get reply if any
+	 SETO A,		;None, net error.
+	RET			;Decide whether permanent or temporary
+
+MLFLRP:	.CALL [SETZ ? 'WHYINT ? MOVEI NETI ? MOVEM A ? MOVEM A ? SETZM A]
+	 MOVEI A,0
+	JUMPE A,APOPJ		;No input available
+	CALL NTRPLY		;Input available, read it
+	 RET			;Net error
+	CAIL A,400.
+	 JRST POPJ1		;Valid error code
+	STAT (,(" ="),RABR,(" Funny FTP reply after MLFL data connection failure:"))
+	STAT (,(" ="),RABR,(" "),LBRC,CALL(NTRSHO),RBRC)
+	JRST MLFLRP		;Look for more reply
+
+
+NNFSND:	SKIPE NT%FIL		; Skip unless MLFL'ing
+	 JRST NNFSN2
+	FWRITE NETO,[TC,B]
+	.NETS NETO,
+	JRST POPJ1
+
+	;MLFL - TOPS-10's give us a hard time by opening the data connection,
+	;then immediately closing it and sending an FTP reply code saying the
+	;recipient was illegal.  So if we get an IOC error, check for that.
+NNFSN2:	MOVEI A,NTMSF1
+	MOVEM A,NTIOCV
+	FWRITE NETD,[TC,B]
+	.NETS NETD,
+	JRST POPJ1
+
+NTMSF1:	MOVEI A,NTRIOC		;If another IOC error occurs, trap out
+	MOVEM A,NTIOCV
+	CSTAT (,(" IOC error in NNFSND"))
+	CALL MLFLRP		;Look for reply code
+	 JRST NTRIOC		;None, treat normally
+	STAT (,("MLFL reply="),LBRC,CALL(NTRSHO),RBRC)
+	CALL NTECHK		;Classify error
+	 JRST [	MOVEI A,MR$TER
+		JRST NTMSF2 ]
+	 MOVEI A,MR$PER
+	MOVEI A,MR$PER
+NTMSF2:	MOVEM A,NTERRC
+	JRST NTRIOC		; Take normal exit
+
+
+; NNFEND - NCP/FTP message transmission termination check.
+; Returns
+;	.+1 if failed, reply code in A (negative if net error)
+;	.+2 if message sent successfully.
+
+NNFEND:	SKIPE NT%FIL		; Now terminate message according to type.
+	 JRST [	.CLOSE NETD,	; for MLFL just close data connection to end.
+		JRST NNFEN2]
+	OUT(NETO,("
+.
+"))
+	.NETS NETO,
+
+NNFEN2:	CALL NTR2XX		; Look for 256 or 252 or something like that
+	 RET			; Failed
+	SKIPE NT%FIL		; Check out type carefully
+	 JRST [	CAIE A,252.	; If MLFL, look for 252. or 256.
+		 CAIN A,256.	; aren't standards wonderful?
+		  JRST POPJ1	; Win.
+		JRST .+1]	; Hmm, accept but state suspicions.
+	CAIN A,256.		; 256. is "correct" reply for mail.
+	 JRST POPJ1		; Win
+	RET
+
+];$$FTP
+
+SUBTTL TCP/SMTP routines - NSMICP, NSMINI
+
+NSMSOC:	31	; Port number to use for TCP SMTP connections.
+
+; NSMICP - Establish TCP connections with SMTP server
+;	NTHOST/ host addr to connect to
+; Returns .+1 if failed, with A/ error #.
+; Returns .+2 if wins.
+
+NSMICP:	SYSCAL TCPOPN,[	CIMM NETI ? CIMM NETO
+			[-1] ? NSMSOC ? NTHOST
+			CERR A]
+	 JRST [	HRLI A,NCE$SY	; If fail, return syscal error # in RH(A)
+		RET]
+	;; Wait until TCP connection open.
+	;; Note that timeout of the NETBLK is unlikely since specified time 
+	;; is larger than default global timeout ICPTMO.
+	;; [ Actually, this comment was false on 5/15/88 since ICPTMO had
+	;; been adjusted upwards far enough that the NETBLK sometimes timed
+	;; out.  This resulted in a confusing message in the STATS file
+	;; complaining that %NSRFS was a "bad state"!  I have just set the
+	;; timeout here to 5 minutes.  Lets hope that ICPTMO never gets
+	;; -that- large!  -Alan ]
+	MOVEI A,NETO
+	NETHANG 5*60.*30.,A,%NSRFS,[%NSOPN,%NSRFN]
+	 JRST [	MOVNS A		; Negate final bad state
+		HRLI A,NCE$CS	; Bad State
+		TRNN A,-1	; If state is closed (zero),
+		 HRLI A,NCE$NO	; assume site is refusing.
+		RET ]
+
+NXSICP:				; Entry point from Chaos/SMTP code
+
+	;; Open SMTP transaction script area on channel NETD
+	UAROPN [%ARTCH+%ARTZM,,NSMSAR ? [100]]
+	OUT(NETD,OPEN(UC$UAR,NSMSAR))
+	CALL NTR2XX		; Get initial greeting
+	 JRST [	MOVNS A
+		JUMPE A,NSMICL
+		HRLI A,NCE$GR	; Bad greeting?
+		RET ]
+	OUT(NETO,OPEN(UC$BUF,,,[8.]))	; Set up buffered 8-bit chan
+	OUT(NETO,("HELO "),TZ(OWNNAM),EOL,FRC)
+	.NETS NETO,
+	OUT(NETD,("HELO "),TZ(OWNNAM),EOL)	; Record SMTP transaction
+	CALL NTR2XX		; Just flush the response...
+	 CAIA
+	  JRST POPJ1
+	MOVNS A
+	SKIPE A
+	 JRST [	HRLI A,NCE$HR
+		RET ]
+NSMICL:	HRLI A,NCE$IO		;Here if unexplained net I/O lossage.
+	RET			;Do not skip if error.
+
+
+; I think there is a bug which makes a Bad Greeting (code 0) error
+; be returned before NTRPLY has been called. This looks like this:
+; 
+; o A conn is made and an NCE$GR happens and is correctly processed.
+; o A subsequent conn attempy to another host fails completely and
+;    the NTRBUF/NTRCNT string is still full.
+; o An NCE$GR error is processed, using the old string.
+;
+;
+;  -- CSTACY 6:26pm  Saturday, 12 October 1985
+
+
+; NSMINI - Set up for a SMTP Mail or Send.
+;	Non-skip return if fails, with bad reply code in A.
+
+NSMINI:	CALL NSMDOP	; Get delivery option
+	OUT(NETO,TC(A),(" FROM:"),LABR,CALL(NSMRTP),RABR,EOL,FRC)
+	.NETS NETO,
+	; Record the SMTP transaction.
+	OUT(NETD,TC(A),(" FROM:"),LABR,CALL(NSMRTP),RABR,EOL)
+	CALL NTR2XX	; Get reply code.
+	 CAIA
+	  JRST POPJ1	; Success!
+	CAIGE A,500.	; Bad syntax or something?
+	 RET		; No, assume temp err.
+	CSTAT (,(|...error for |),LABR,CALL(NSMRTP),RABR,(|="|),CALL(NTRSHO),(|", trying <>.|),FRC)
+	OUT(NETO,("RSET"),EOL,FRC)
+	.NETS NETO,		; Some sites apparently want to reset
+	CALL NTR2XX		; Should always win.
+	 NOP			;  Eh?
+	CALL NSMDOP		; Get delivery option again
+	OUT(NETO,TC(A),(" FROM:<>"),EOL,FRC)	; This path is always valid.
+	.NETS NETO,
+	OUT(NETD,TC(A),(" FROM:<>"),EOL)	; Record SMTP transaction
+	CALL NTR2XX
+	 RET
+	JRST POPJ1
+
+
+; NSMDOP - figure out SMTP delivery option
+
+NSMDOP:	MOVE A,[ASCNT [MAIL]]	; Assume Mailing.
+	SKIPN SORMSW		; Hmmm, really sending?
+	 RET			;  Nope, bye.
+	SKIPLE SENDSW		; Yup, figure out what kind.
+	 MOVE A,[ASCNT [SAML]]	; 1 => Send And MaiL.
+	SKIPE SENDSW
+	 MOVE A,[ASCNT [SEND]]	;-1 => SEND only.
+	SKIPN SENDSW
+	 MOVE A,[ASCNT [SOML]]	; 0 => Send Or MaiL.
+	RET			; Done
+
+
+; NSMRTP - output return-path on standard output (doesnt have angle
+;		brackets or anything)
+;	Assumes current LSE is that of message being sent!!!!
+
+NSMRTP:	PUSHAE P,[A,B]
+	FINDA A,[A$SMRP,,[$LLLST(L)]]	; Maintainer for this mail?
+	 CAIA			   	;  If so, output verbatim.
+	  JRST [ MOVE B,LISTAR(A)+1	;  Check length first.
+		 TLNN B,-1		;  If null string,
+		  JRST POPBAJ		;   don't print anything.
+		 OUT(,TLS(A))		;  (Don't add ourselves either!)
+		 JRST POPBAJ ]
+	FINDA A,[A$SRTP,,[$LLLST(L)]]	; Return-path exists?
+	 JRST NSMR20
+	; Moby KLUDGE to see if return-path already has routing in it.
+	; Goddam SMTP protocol!
+NSMR10:	MOVE B,LISTAR(A)+1		; Get SPT to return path.
+	TLNN B,-1			; See if it's null.
+	 JRST POPBAJ			; Yeah, don't print anything.
+	OUT(,("@"),TZ(OWNNAM))		; Aha, add ourselves.
+	ADD B,$LSLOC(L)			; Make ASCNT ptr to return-path.
+	HRLI B,440700
+	ILDB B,B			; Get 1st char of string.
+	CAIN B,"@
+	 SKIPA B,[",]			; If already routing, delim is comma
+	  MOVEI B,":			;  Else gotta be colon (barf barf).
+	OUT(,C((B)),TLS(A))
+	JRST POPBAJ
+NSMR20:	FINDA A,[A$CSN,,[$LLLST(L)]]	; Claimed-from exists?
+	 CAIA
+	  JRST NSMR30
+	FINDA A,[A$SNM,,[$LLLST(L)]]	; Nope, plain sender-name?
+	 JRST POPBAJ			; Ugh, couldn't find!
+NSMR30:	FINDA B,[A$SNH,,[$LLLST(L)]]	;Sender at foreign host?
+	 JRST [ OUT(,TLS(A),("@"),TZ(OWNNAM))	; No.
+		JRST POPBAJ ]
+	MOVE B,LISTAR(B)+1		; Get host # it's from
+	OUT(,("@"),TZ(OWNNAM),(":"),TLS(A),("@"),HST(B)) ; Yes, cons path
+	JRST POPBAJ
+
+
+
+; NSMRCP - Pass on a recipient name
+;	B/ ASCNT to name
+;
+; The argument to an SMTP "RCPT TO" command can be either 
+; a forward-path (which will end in a mailbox) or simply a mailbox.
+; In the simpler case, our ASCNT rcpt name will be missing the @HOST
+; part, so we need to put that back in.  You might think it would be
+; reasonable to leave it off, but some hosts (such as XEROX) don't
+; default it to the local host; they complain.
+
+NSMRCP:	PUSHAE P,[A,B,C,D]
+	MOVE A,B		   ; Copy recipient name ptr.
+	OUT(NETO,("RCPT TO:"),LABR,TC(A))
+	HLRZ C,A		   ; Get rcpt string length
+	HRLI B,440700		   ; Look at rcpt string.
+NSMRC1:	SOJL C,NSMRC2
+	ILDB D,B		   ; If not a source routing forward-path
+	CAIE D,"@		   ; it needs to be a mailbox.
+	 JRST NSMRC1
+NSMRC2:	SKIPGE C
+	 OUTCAL(NETO,("@"),HST(N)) ;   Output as <Foo@BAR>.
+	OUT(NETO,RABR,EOL,FRC)	   ; Finish off.
+	.NETS NETO,		   ; Force out.
+	;; Now record the SMTP transaction.
+	OUT(NETD,("RCPT TO:"),LABR,TC(A))
+	SKIPGE C
+	 OUTCAL(NETD,("@"),HST(N))
+	OUT(NETD,RABR,EOL)
+	POPAE P,[D,C,B,A]
+	CALL NTR2XX
+	 RET
+	JRST POPJ1
+
+
+; NSMBEG - Initiate message transfer for SMTP.
+;	A/ ASCNT ptr to rcpt string to use.  If nonzero,
+;		set up for this (single) recipient.
+; Clobbers B
+; Returns .+1 for error, A/ FTP-type reply code.  -1 means temp net error.
+; Returns .+2 if success
+;
+; Note that NSMINI has already called by NETSND to do the HELO command.
+
+NSMBEG:	JUMPE A,NSMBG5
+	MOVE B,A
+	CALL NSMRCP		; Arg in B
+	 RET
+NSMBG5:	OUT(NETO,("DATA"),EOL,FRC)
+	.NETS NETO,
+	OUT(NETD,("DATA"),EOL)	; Record SMTP transaction
+	CALL NTR3XX
+	 RET
+	CAIE A,354.
+	 RET
+	JRST POPJ1
+
+; NSMDAT - Send SMTP message text.
+;	Mainly must worry about transparency convention.
+;	B/ ASCNT ptr to message text.
+; Clobbers B
+
+NSMDAT:	PUSH P,C
+	HLRZ C,B		; Get # chars in text
+	JUMPE C,NSMDT8
+	HRLI B,440700
+	PUSHAE P,[B,C]
+NSMDT2:	ILDB A,B
+NSMDT3:	CAIN A,".		; Line starts with period?
+	 JRST NSMDT5
+	CAIA
+NSMDT4:	 ILDB A,B
+	CAIN A,^M		; This is end of a line?
+	 JRST [	SOJLE C,NSMDT5
+		ILDB A,B	; Get next char
+		CAIE A,^J
+		 JRST NSMDT3	; Not LF, but assume EOL seen anyway.
+		SOJG C,NSMDT2	; CR-LF, so check next char (start of line)
+		JRST NSMDT5]	; EOF, send off what we've got.
+	SOJG C,NSMDT4
+
+	; Text up to this point is OK, send it off.
+NSMDT5:	D7BPT B			; Back up the BP to period
+	EXCH B,-1(P)		; Save it and restore old BP
+	EXCH C,(P)		; Save current cnt, restore old
+	SUB C,(P)		; Find # chars we went over
+	OUT(NETO,S(C,B))	; Output text thus far!
+	CAIN A,".		; Did we stop cuz of a period?
+	 OUTCAL(NETO,("."))	; Yeah, must insert extra one.
+	MOVE B,-1(P)
+	MOVE C,(P)
+	SOJG C,[IBP B ? JRST NSMDT4]
+
+	POPAE P,[C,B]
+NSMDT8:	POP P,C
+	OUT(NETO,FRC)		; Ensure buffer forced out
+	SYSCAL FINISH,[MOVEI NETO]	; Wait for transmission ACK
+	 JRST [	STAT (,("FINISH call failed - "),ERR)
+		MOVEI A,MR$TEH	; Temp err for host.
+		RET]
+	JRST POPJ1
+
+; NSMDON - Terminate SMTP message transaction, see if it won or not.
+; Returns .+1 if error, A/ reply code
+; Returns .+2 if won
+
+NSMDON:	OUT(NETO,EOL,("."),EOL,FRC)	; Force out terminating line
+	.NETS NETO,
+	OUT(NETD,EOL,("."),EOL)	; Record SMTP transaction
+	CALL NTR2XX		; Expect a 2xx reply
+	 RET			; Shit.
+	JRST POPJ1
+
+
+; NSMBYE - Called before disconnecting from an SMTP server.
+; Sends a QUIT command and skip returns.
+
+LVAR BYEBYE:	0		; Flag to prevent NSMBYE recursion.
+
+NSMBYE:	PUSHAE P,[A]
+	SKIPGE NDHOST		; Also, if no host to say bye to
+	 JRST NSMBY9		;  punt.
+	MOVE A,BYETMO		; Whatever the timeout is.
+	CALL NETRAP		; Setup to trap IOC and timeout.
+	 JRST [	CSTAT (,("...NSMBYE timed out"))
+		JRST NSMBY9 ]
+	OUT(NETO,("QUIT "),EOL,FRC)
+	.NETS NETO,
+	OUT(NETD,("QUIT "),EOL)	; Record transaction
+	CALL NTR2XX		; "221 See Ya - Closing transmission channel."
+	 NOP			;    Who cares?
+;	STAT (,(|  Said SMTP goodbye, server replied "|),CALL(NTRSHO),(|"|))
+	CALL NERESET		; Flush error context off stack.
+NSMBY9:	POPAE P,[A]
+	JRST POPJ1
+
+
+SUBTTL CHAOSnet ICP - NKMICP, NKSICP, NKXICP
+
+.INSRT SYSTEM;CHSDEF		; For chaosnet defs
+
+LVAR	CHAPKT:	BLOCK %CPMXW	; Chaosnet packet goes here
+
+; NKMICP - Connect to Chaosnet host for MAIL.
+;	NTHOST - Host #
+; Returns .+1 if failed,
+;	A - error #
+; Skips if won.
+
+NKMICP:	MOVE A,[.BYTE 8 ? "M ? "A ? "I ? "L]
+	MOVEM A,CHAPKT+%CPKDT	; Contact name of MAIL
+	CALL NKXICP		; Try sending the RFC
+	 RET			; Lost, pass back to caller
+	OUT(NETO,OPEN(UC$BUF,,,[8.]))	; Set up buffered 8-bit channel.
+	OUT(NETD,OPEN(UC$XCT,[CALL NKBOUT]))
+	AOS (P)			; Won!
+	RET			; Done.
+
+; NKSICP - Connect to Chaosnet host for SMTP.
+; Same args.  Jumps off into the guts of the TCP/SMTP open routine.
+; At the moment this causes it to return the same as NKMICP.
+
+NKSICP:	MOVE A,[.BYTE 8 ? "S ? "M ? "T ? "P]
+	MOVEM A,CHAPKT+%CPKDT	; Contact name of SMTP
+	CALL NKXICP		; Try sending the RFC
+	 RET			; Lost, pass back to caller
+	JRST NXSICP		; Won, jump into common SMTP ICP code.
+
+; NKXICP - common worker routine.
+
+NKXICP:	SYSCAL CHAOSO,[CIMM NETI ? CIMM NETO ? CIMM 5 ? CERR A]
+	 JRST [	HRLI A,NCE$SY ? RET]
+	MOVE A,[.BYTE 8 ? %CORFC ? 0 ? 0 ? 4]	; 4 is byte count
+	MOVEM A,CHAPKT
+	SETZM CHAPKT+%CPKD	; Clear out destination
+	MOVE A,NTHOST		; Host might not be in N (internet forwarding)
+	DPB A,[CHAPKT+$CPKDA]	; Stick in host number.
+	SYSCAL PKTIOT,[CIMM NETO ? CIMM CHAPKT ? CERR A]	; Send out the RFC
+	 JRST [	HRLI A,NCE$SY ? RET]
+	MOVEI A,NETO
+	.SEE NSMICP ; for the explanation of why this timeout is so large.
+	NETHANG 5*60.*30.,A,%CSRFS,[%CSOPN]	; Wait for it to become open.
+	 JRST [	MOVSI A,NCE$CS ? RET]
+	AOS (P)				; Won, open!
+	RET
+
+SUBTTL CHAOSnet routines - NKBEG, NKXRCP, NKSND, NKEND
+
+LVAR NTCCON:	0 	; -1 if connection is already used
+
+; NKMINI - Initializes for a Chaosnet mail connection.
+;	Necessary in order to do "invisible" reconnect if any
+;	messages have already been sent during this "connect", since
+;	the CHA/MAIL protocol closes the real connection after each message.
+
+NKMINI:	AOSE NTCCON	; If reconnect is necessary
+	 JRST POPJ1	; Nope, connection has had no messages yet.
+	MOVE A,ICPTMO
+	CALL NETRAP
+	 JRST NKINI8	; IOC error or timeout.
+	CALL NKDISC
+	MOVE A,NTHOST
+	CALL NKMICP
+	 JRST NKINI7	; Net error of some kind
+	CALL NERESET
+	JRST POPJ1	; Won, return winningly.
+
+NKINI7:	MOVE B,A
+	CALL NERESET
+	MOVE A,B
+NKINI8:	CSTAT (,(" ...Re-ICP "),CALL(NTICPE),FRC)
+	CALL NTDISC
+	RET
+
+; NKMBEG - Initiates mail-text transfer on Chaosnet connection.
+;	A - ASCNT ptr to rcpt string to use.  If non-zero, must
+;		set up for this rcpt...
+; Returns .+2 if success
+; Returns .+1 for either temp or perm errors,
+;	A - FTP-type reply code.  If -1, some type of net error.
+
+NKMBEG:	JUMPE A,NKBEG3
+	MOVE B,A
+	CALL NKXRCP	; Send rcpt name if any
+	 RET		; Ugh, failed.  Return error code of NKXRCP.
+NKBEG3:	OUT(NETD,EOL)	; Okay, send a null line to initiate.
+	AOS (P)		; Needn't wait for any reply.
+	RET
+
+NKXRCP:	TLNN B,-1		; Ensure non-null
+	 JRST [	STAT (,("NULL RCPT!  Forcing failure."))
+		MOVEI A,599.	; Permanent failure code.
+		SETZ B,		; No error string available.
+		RET]
+	OUT(NETD,TC(B))		; Output rcpt string
+	SKIPE NTRTSW		; If routing thru gateway,
+	 OUTCAL(NETD,("@"),HST(NDHOST))	; Specify real destination.
+	OUT(NETD,EOL)
+	CALRET NKREPX
+
+
+; NKSEND - Tries to open a Chaosnet SEND connection.
+;	A - rcpt list
+;  	    Should be non-zero, must set up for this rcpt.
+;	N - host we should connect to.
+;
+; Chaosnet SENDs are weird because the recipient is specified as part
+; of the connection process, rather than after a connection is open.
+; This does not quite fit in the usual transaction model of things.
+; We implement the SEND protocol by pretending that ICPs always
+; win, and then we really do all the work during the "begin" phase.
+; If you have a better idea of how to do this, let me know.
+
+NKSEND:	PUSHAE P,[C,D,E]
+	JUMPE A,[ MOVEI A,560.
+		  SETZ B,
+		  JRST NKSE80 ]
+	MOVE E,A		; Stash away ASCNT ptr.
+	SYSCAL CHAOSO,[CIMM NETI ? CIMM NETO ? CIMM 5 ? CERR A]
+	 JRST [	SETO A,
+		SETZ B,
+		JRST NKSE90 ]
+	;; Form packet.
+	MOVEI TT,%CORFC		; Opcode is Request for Connection.
+	DPB TT,[$CPKOP+CHAPKT]
+	SETZM CHAPKT+%CPKD	; Clear out destination
+	DPB N,[CHAPKT+$CPKDA]	; Stick in host number.
+	;; Stuff the contact name and recipent name down the packet.
+	MOVE B,[440800,,CHAPKT+%CPKDT]	; Bp to packet.
+	MOVE A,[ASCII /SEND /]	; Contact name of SEND.
+	MOVE C,[440700,,A]
+	MOVEI D,5.
+	CALL RFCSTF		; Stuff it down.
+	HRLZI C,440700
+	HRR C,E			; Make Bp to ASCII rcpt string.
+	HLRZ D,E		; D gets number of bytes in it.
+	CALL RFCSTF		; Stuff it down.
+	ADDI D,5.		; Include contact name in count.
+	DPB D,[$CPKNB+CHAPKT]	; Remember how many bytes in packet.
+	;; Send out the RFC
+	SYSCAL PKTIOT,[CIMM NETO ? CIMM CHAPKT ? CERR A]
+		 JRST [	SETO A,
+			JRST NKSE90 ]
+	MOVEI A,NETO		; Now wait for full connection.
+	NETHANG 15.*60.,A,%CSRFS,[%CSOPN]
+	 CAIA
+	 JRST [	MOVEM N,NDHOST	;  Say connected to this host.
+		MOVEI A,250.	;  If got this far, rcpt accepted.
+		OUT(NETO,OPEN(UC$BUF,,,[8.]))
+		OUT(NETD,OPEN(UC$XCT,[CALL NKBOUT]))
+		MOVEM N,NDHOST	;  Say connected to this host!
+		AOS -3(P)	; Skip return if conn attempted.
+		JRST NKSE90 ]
+NKSE70:	SETZ B,
+	CALL NKBSRP		; Lost, get reply string and code.
+	 MOVEI A,560.		;  Else assume random permanent error.
+NKSE80:	CSTAT (,SP,("Conn="),D(A),SP)
+NKSE90:	POPAE P,[E,D,C]
+	RET
+
+
+SUBTTL CHAOSnet Reply parsing
+
+NKREPX:	CALL NKOFRC	; Force previous output.
+NKREP2:	CALL NKIREP	; Get reply.
+	 RET
+	CAIGE A,400.	; If less than 4xx,
+	 AOS (P)	; consider it a win.
+	RET
+
+NKIREP:	MOVE U1,NTTYPE		; Check protocol.
+	CAIN U1,NT$CHS		; If SENDing
+	 JRST [	MOVEI A,260.	;  since we got this far
+		MOVEM A,REPLYC	;  things must have worked.
+		CSTAT (,SP,LPAR,("SENT OK"),RPAR)
+		JRST NKIRP8 ]
+	MOVE A,[440700,,NTRBUF]	; Bp to reply buffer.
+	MOVEM A,NTRPT
+	SETZM NTRCNT
+	.IOT NETI,A		; Get 1st char...
+	CAMN A,[-1,,3]		; EOF?
+	 JRST [	SETO A, ? RET]
+	PUSH P,B
+	SETZ B,
+	CAIN A,"-		; Negative response?
+	 MOVEI B,560.
+	CAIN A,"%		; Temporary error?
+	 MOVEI B,460.
+	CAIN A,"+		; Positive response?
+	 MOVEI B,260.
+	JUMPE B,[SETO A,	; None of them, assume network error.
+		PJRST POPBJ]
+	MOVEM B,REPLYC		; Got reply char, save result.
+	
+NKIRP3:	AOS B,NTRCNT
+	CAIL B,NTRCMX
+	 JRST [	SOS NTRCNT
+		JRST NKIRP4]
+	IDPB A,NTRPT		; Deposit char in buffer.
+NKIRP4:	.IOT NETI,A		; Get another
+	CAMN A,[-1,,3]
+	 JRST [	SETO A, ? PJRST POPBJ]
+	CAIE A,215		; Chaosnet <NL>?
+	 JRST NKIRP3		; Nope, loop to store.
+	POP P,B
+	MOVE A,REPLYC
+NKIRP8:	AOS (P)
+	RET
+
+; NKBSRP - Process RFC failure (net reply from refusal datagram)
+; A/ connection state
+; Returns +1 if net lossage
+;         +2 if CLOSED,
+;                  error string in the net reply buffer
+;                  error code in A
+
+NKBSRP:	PUSHAE P,[B,C]
+	SETZM NTRCNT
+	SETZM NTRBUF		; Clear buffer.
+	MOVE T,[NTRBUF,,NTRBUF+1]
+	BLT T,NTRBOV
+	MOVE T,[440700,,NTRBUF]
+	MOVEM T,NTRPT		; Set up reply pointer.
+	CAIE A,%CSCLS		; If not received CLS packet
+	 JRST NKBSR9		;  lossage.
+	SYSCAL PKTIOT,[	CIMM NETI ? CIMM CHAPKT ? CERR A]
+	 JRST NKBSR9
+	LDB T,[$CPKOP CHAPKT]	; Get packet type.
+	CAIE T,%COCLS		; Should be CLS.
+	 JRST NKBSR9		;  Read wrong packet??
+	LDB A,[$CPKNB CHAPKT]	; Count of chars in packet.
+	MOVE B,[440800,,%CPKDT+CHAPKT]	; Bp to packet data.
+	MOVE C,[440700,,NTRBUF]	; Bp to reply string.
+	SETZM NTRCNT		; Length of reply string.
+NKBSR1:	SOJL A,NKBSR7		; Gobble it all down.
+	ILDB T,B		; Get a char.
+	ANDI T,177		; ASCIIfy.
+	IDPB T,C		; Store.
+	AOS NTRCNT		; Keep count.
+	CAME T,^M		; ^M might end reply.
+	 CAIA
+	CAIE T,^J		; ^J might end reply.
+	 JUMPN T,NKBSR1		; End of buffer ends reply.
+NKBSR7:	SETOM NTRPKT		; Say reply string set up.
+	LDB C,NTRPT		; Check first character.
+IFN $$450, MOVEI A,450.		; Assume permanent error.
+.ELSE	   MOVEI A,550.		; Assume permanent error.
+	CAIN C,"%		; If temporary error
+	 MOVEI A,460.		;  Say so.
+NKBSR8:	AOS -2(P)		;Winskip.
+NKBSR9:	POPAE P,[C,B]
+	RET
+
+
+SUBTTL	CHAOSnet subroutines
+
+NKSND:	OUT(NETD,TC(B))
+	CALL NKOFRC
+	JRST POPJ1
+
+NKEND:	CALL NKOFRC
+	MOVE A,[.BYTE 8 ? %COEOF ? 0 ? 0 ? 0]	; Send an EOF
+	MOVEM A,CHAPKT
+	SYSCAL PKTIOT,[CIMM NETO ? CIMM CHAPKT ? CERR A]
+	 JRST [	MOVNS A ? RET]
+	SYSCAL FINISH,[CIMM NETO]
+	 JFCL		;Wait for EOF acknowledged or connection closed
+	SETOM NTCCON	;Server will close connection after replying
+	CALRET NKREP2
+
+
+; NKBOUT - Chaosnet output
+
+NKBOUT:	CAIL U1,10	; Idiotic translations
+	 CAILE U1,15
+	  CAIA
+	   XCT -10(U1)+[TRO U1,200	; Backspace
+			TRO U1,200	; Tab
+			RET		; Linefeed
+			JFCL		; Vert tab
+			TRO U1,200	; Formfeed
+			TRO U1,200	; Car ret
+			]
+	PUSH P,OC
+	MOVEI OC,NETO
+	STDOUT		; Output translated char on NETO channel.
+	POP P,OC
+	RET
+
+NKOFRC:	OUT(NETO,FRC)	; Force output,
+	.NETS NETO,	; and ask ITS to do same.
+	RET
+
+
+
+; RFCSTF - Given an ASCII Bp in C and a count in D, stuff 8bit down B.
+; Does not smash D.  Always returns.
+
+RFCSTF:	MOVEI TT,0	; TT counts bytes in packet.
+RFCST1:	ILDB T,C	; Get char of rcpt name.
+	CAML TT,D	; When all the bytes are stuffed
+	 JRST RFCST9	;   all done.
+	IDPB T,B	; Stuff a byte.
+	CAIGE TT,%CPMXC-1 ; Make sure we are not overstuffed!
+	 AOJA TT,RFCST1	; Get another byte.
+RFCST9:	RET
+
+
+SUBTTL	Miscellaneous routines
+
+IFE $$DQ,{			; Non domain version
+
+; "NHMLTX" - routine skips if host in A is a Multics.
+NHMLTX:	PUSHAE P,[A,B,D]	;save ACs clobbered by HSTSRC
+	MOVE B,A
+	CALL RESOLV"HSTSRC		;find out about this host
+	 JRST NHMLT9		;unknown host presumed not to be a Multics
+	HLRZ D,RESOLV"STLSYS(D)	;get pointer to system name
+	ADD D,RESOLV"HSTADR	;relocate
+	MOVE A,[ASCII/MULTI/]
+	MOVE B,[ASCII/CS/]
+	CAMN A,(D)
+	 CAME B,1(D)
+	  CAIA
+	   AOS -3(P)		;It's a Multics; skip return
+NHMLT9:	POPAE P,[D,B,A]
+	RET
+
+; "NHITS" - routine skips if host in A is an ITS
+NHITS:	PUSHAE P,[A,B,D]	;save ACs clobbered by HSTSRC
+	MOVE B,A
+	CALL RESOLV"HSTSRC	;find out about this host
+	 JRST NHITS9		;unknown host presumed not to be an ITS
+	HLRZ D,RESOLV"STLSYS(D)	;pointer to system name
+	ADD D,RESOLV"HSTADR	;relocate
+	MOVE A,[ASCII/ITS/]
+	CAMN A,(D)
+	 AOS -3(P)		;It's ITS; skip return
+NHITS9:	POPAE P,[D,B,A]
+	RET
+
+}				; Non-domain version
+.ELSE {				; Domain version
+
+; "NHMLTX" - routine skips if host in A is a Multics.
+NHMLTX:	PUSHAE P,[A,B,C,D]	; Save acs
+	DMOVE C,[ASCII "MULTICS"]	; What we are looking for
+	JRST NHOPSY		; Join common code
+
+; "NHITS" - routine skips if host in A is an ITS.
+NHITS:	PUSHAE P,[A,B,C,D]	; Save acs
+	DMOVE C,[ASCII "ITS" ? 0]	; What we are looking for
+;	JRST NHOPSY		; Join common code
+
+
+; Common code for above routines.  Beware pushing and popping,
+; and beware of changes to QNAME consing in RESOLV"HSTINF.
+NHOPSY:	PUSHAE P,[C,D]		; Save argument for a little while
+	MOVE B,A		; B gets host number
+	MOVE A,[440700,,DQBUF]	; A gets buffer pointer
+	CALL RESOLV"HSTSRC	; Look up host name
+	 JRST NHOPS8		; Lost
+	MOVE A,[440700,,DQBUF]	; Use same buffer for input and output
+	MOVE B,[440700,,DQBUF]	; (at no time do my fingers leave my hand)
+	SETZM DQLUZ		; Paranoia (this -isn't- a 255. max hostname)
+	CALL RESOLV"HSTINF	; Look up the host's opsys
+	 JRST NHOPS8		; Lost
+	SKIPE DQLUZ		; Have we just randomly trashed memory?
+	 JSR AUTPSY		; Oh shit.
+	MOVEI C,10.		; Ten chars max
+	SETO D,			; Haven't found null yet
+NHOPS0:	SKIPE D			; Copy second string (opsys), word aligned
+	 ILDB D,B		; and null terminated.  Pointers returned
+	IDPB D,A		; by HSTINF happen to do the right thing.
+	SOJG C,NHOPS0		; Have interesting part of string
+	POPAE P,[D,C]		; Get back argument
+	CAMN C,DQBUF		; Got a match?
+	 CAME D,DQBUF+1
+	  JRST NHOPS9		; Nope
+	AOS -4(P)		; Yup, skip return (cruft city, should be
+	JRST NHOPS9		; a co-routine to handle this stuff)
+NHOPS8:	ADJSP P,-2		; If the stack is intact after this it's
+NHOPS9:	POPAE P,[D,C,B,A]	; a bloody miracle.
+	RET
+
+}				; .ELSE $$DQ
+
+	;special hack to get into multics
+NTMLTX:	PUSH P,A
+	FWRITE NETO,[[USER NETML
+]]
+	.NETS NETO,
+	MOVEI A,330.
+	CALL NTR3XX		; First reply should be passwd request.
+	 JRST POPAJ
+	FWRITE NETO,[[PASS NETML
+]]
+	.NETS NETO,
+	MOVEI A,230.		; Look for "FTP server ready"
+	CALL NTRNXX
+	 CAIA			; Lost...
+	  AOS -1(P)
+	POP P,A
+	RET
+
+CONSTANTS	;so as not to clutter up outside stuff if we can help it.

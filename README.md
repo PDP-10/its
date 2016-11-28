@@ -94,6 +94,10 @@ from scratch.
    - TTLOC, Advertises physical location of logged in users
    - SRCCOM, Compares/merges source files, compares binary files
    - DDTDOC, interactive DDT documentation.
+   - COMSAT, Mail server
+   - MAIL, Mail sending client
+   - RMAIL, Mail reading client
+   - DQ Device, for doing hostname resolutions. Used by COMSAT.
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
@@ -110,9 +114,8 @@ Currently, basic TCP network support is in the build, in addition to
 both a TELNET/SUPDUP server, and both TELNET and SUPDUP clients.
 Additionally, both an FTP server and client are included. Chaosnet TELNET 
 and FTP (CHTN and CFTP), but this requires support and configuration
-in the emulator to actually use.
-
-Other network services will appear in subsequent releases.
+in the emulator to actually use. SMTP mail inbound and outbound is included,
+as well as local mail delivery.
 
 The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP 
 address (192.168.0.45) configured for the ITS system. The IP address 

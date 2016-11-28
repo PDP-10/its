@@ -1,0 +1,1312 @@
+;;;-*-MIDAS-*-
+
+SUBTTL HAIRY LIST HANDLING UUO'S - description
+IFN 0,[
+New List-area storage format:
+
+One list entity, or LSE, requires 3 separate UUO areas, termed
+the HDR, LA, and SA, for storage respectively of Header information,
+List structures, and Strings.  The SA is simply an amorphous buffer
+for string storage, and the HDR contains various addressing and
+management information.  (See "Contents of HDR".)
+	List structures are composed of linked List Nodes, or
+LN's.  $LNSIZ is an assembly parameter defining the # words per LN,
+currently 2; this is constant for ALL LN's, which can be of 3 types:
+value, list, and string.
+_______________________________________________
+|Res |Data|Res | Attrib |                     |
+|srvd|type|srvd|  type  |        CDR ---------|------> next LN (cdr=0 if last)
+|  0 |  7 |  0 |   777  |      777777         |
+|_____________________________________________|
+|                                             |
+|		Data Word		      |
+|_____________________________________________|
+
+	The "Data type" field indicates which of these 3 types the LN is,
+and affects only the interpretation of the LN's data word.  It can
+be considered syntactic information about the structure of the data,
+as opposed to the Attrib-type field which is a "name" for it
+and is purely semantic.  The 3 types are defined below, one to a flag bit:
+]	
+	; LN type flags & field definitions
+%LTVAL==10000	; data is a Value
+%LTLST==20000	; data is a List-Pointer
+%LTSTR==40000	; data is a String-Pointer
+%LTMSK==70000	; mask for Data-type field.
+%LAMSK==777	; mask for Attrib-type field.
+		; BP LH for Attribute field.
+$LAFLD==(.BP <%LAMSK,,0>,)
+$LTFLD==(.BP <%LTMSK,,0>,)
+$LNSIZ==2	; LN's are 2 words.
+
+IFN 0,[
+	A "Value" type LN (VLN) simply treats the data word as 36 bits of data.
+For a List-Pointer LN (LLN), the data word is a List Pointer or LP
+which points to another list of LN's.  For a String-Pointer LN (SLN), the
+data word is an string pointer (SPT) in ASCNT format, relative to the SA.
+That is, the LH contains a char count, and the RH is the relative address
+of the string in the SA area.  This has the restriction that such strings
+must begin on a word boundary.
+	LP's are, of course, relative to the beginning of the LA; this
+allows fast shifting and loading, at some expense in addressing time.
+The first LN in the LA (i.e. at LP address 0) is always zeroed,
+to prevent LP's of 0 from doing anything.  Initialized and deleted
+LN's are kept on a Freelist, which will link all unused LN's as long
+as no trees are accidentally left dangling.
+]
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ included in this assembly.
+/
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;						  ;;;;;;;;;
+;;;;;;;;             CONTENTS OF HDR:			  ;;;;;;;;;
+;;;;;;;; HDR Area Definitions and initial Address-table   ;;;;;;;;;
+
+UHDRDF:
+	OFFSET -.	; So symbolic addresses are defined relative to beginning
+			; of HDR, starting at 0.
+$LHBEG::REPEAT 20,[%%IDX==.RPCNT
+		REPEAT $LNSIZ, (%%IDX)+.RPCNT
+		]	; First of all comes addressing table for LA access.
+			; (See explanation, "LA Addressing")
+$LHLTB==.-$LHBEG	; This is resultant length of above table.
+$LHARP:: 0		; Stores addr of ARBLK (ie ARPT) for this (HDR) area.
+
+$LLFRE:: 0		; <Rel ptr to first free LA loc>
+$LLLST:: 0		; Main List pointer.  <LP to whatever>
+$LLFRL:: 0		; Freelist pointer.   <LP to freelist>
+$LLFRC:: 0		; Freelist count.     <# free LN's>
+$LSFRE:: 0		; <Rel ptr to first free SA loc> = <# words used>
+$LSGC::  0		; <# of wds SA uses which are garbage>
+	0 ? 0 ? 0 ? 0 ? 0  ; Spare words for easier expansion.
+
+$LLAR::  BLOCK $ARSIZ	; LA ARBLK, with various auxiliary defs
+ $LLLOC==$LLAR+$ARLOC	;	abs location of LA
+ $LLWPT==$LLAR+$ARWPT	;	abs write ptr
+ $LLRPT==$LLAR+$ARRPT	;	abs read ptr
+ $LLLEN==$LLAR+$ARLEN	;	area length
+ $LLCHL==$LLAR+$ARCHL	;	# chs left to write in (if type %ARTCH)
+ $LLTOP==$LLAR+$ARTOP	;	area lastaddr+1 (loc+len)
+
+$LSAR::	BLOCK $ARSIZ	; SA ARBLK, exactly as for LA.
+ $LSLOC==$LSAR+$ARLOC	;	abs location of SA
+ $LSWPT==$LSAR+$ARWPT	;	etc.
+ $LSRPT==$LSAR+$ARRPT
+ $LSLEN==$LSAR+$ARLEN
+ $LSCHL==$LSAR+$ARCHL
+ $LSTOP==$LSAR+$ARTOP
+
+	0 ? 0 ? 0 ? 0	; More spare words.
+
+		; Any other assembled HDR defs must come before $LHEND!
+
+$LHEND::	; Highest used.  Can expand HDR area dynamically above this.
+$LHSIZ::	; Minimum size required for HDR area.
+
+	OFFSET 0	;Back to normal LOC
+
+IFN 0,[
+		LA Addressing:
+
+	The REPEAT's at $LHBEG represent an addressing table for use with the
+LISTAR macro.  To "directly" address a location in the LA, AC L must be
+loaded with the address of the HDR, i.e. the $ARLOC entry for that area.  One
+can then reference anything in the HDR with constructs like
+ADD A,$LSLOC(L).  However, to address a list structure, one must have
+the LP in a register (say C) and use MOVE A,LISTAR(C).  The idea
+is to treat LISTAR as equivalent to the absolute address of the LA.
+What it actually expands to is @(L)+<$LNSIZ*C>.  Thus, it indirectly
+addresses location $LNSIZ*C of the table, which contains (C)LADDR.
+The use of $LNSIZ*20 entries allows references such as LISTAR(C)+1,
+etc. to win, as long as the additional increment is less than $LNSIZ.
+(unfortunately due to macro difficulties one can't say the more
+usual LISTAR+1(C). )
+]
+; Special macro to simulate start addr of current LA.
+;note that one must say LISTAR(X)+1 instead of LISTAR+1(X),
+;and an index reg must always be present!  Better than
+;nothing though.
+
+DEFINE LISTAR ?IDX
+@$LNSIZ*IDX(L)TERMIN
+
+
+IFN 0,[
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;						;;;;;;;;
+;;;;;;;;	Disk Storage of LSE's			;;;;;;;;
+
+A list entity is stored on disk in a "List Block" of the following
+format.  Any number of such List Blocks can be kept in a single file,
+since all information is relative to the LB or its internal
+HDR, LA, etc blocks.  Since disk storage implies that formats
+must be adhered to in order to read previously written data, a
+version numbering scheme is included so that new versions can
+be introduced without destroying the ability to read data written
+in old formats.  The point at which conversion takes place is
+in LSEIN, where the disk data is actually read; user routines
+should never have to know what the version number actually is.
+
+---------------------------------
+0:	<# words in total blk>
+1:	<SIXBIT major identifier>
+2:	<flags?>,,<version #>
+3:	<HDR blk loc relative to start of LB>
+4:	<# wds in HDR blck>
+5:	<# wds in LA block>
+6:	<# wds in SA block>
+
+<Optional extra information>
+
+rel loc of HDR block:
+	<HDR block>
+	<LA block>		; Immediately follows HDR
+	<SA block>		;      "         "    LA
+
+<Optional extra information>
+--------------------------------
+
+	The contents of the HDR, LA, and SA blocks are exactly as
+they exist in core, and they can be written out directly.  However,
+on readin some HDR-block parameters are of necessity reinitialized,
+such as the LA addressing table and the ARBLKs for the LA and SA.
+Those which are invariant and meaningful are:
+	$LLFRE - rel addr of first free LA word
+	$LSFRE - rel addr of first free SA word
+	$LLFRL - Freelist pointer
+	$LLFRC - Freelist count
+	$LLLST - Main list pointer
+	$LSGC  - # of garbage words in SA
+
+	The <optional extra information> can be anything which belongs
+in the block somehow, and is meant to allow for easy addition of
+new features, but it must all fit within the block bounds as specified by
+word 0.
+] ;end of IFN 0
+
+	
+SUBTTL LNCOPY - LN Copier.
+
+; LNCOPY AC,[[addr of LSE] ? SETZ [lp]]
+;	General-purpose LN copier.  The given LSE address (HDR loc)
+;	specifies the "X-LSE" which the LP points into, and the list
+;	pointed to is completely (CDR and all) copied into the L-LSE, with
+;	pointer left in AC.  (Note: If the specified LSE's are in fact one
+;	and the same, "pure" strings are used for fast copying.)
+;
+; LNCOPY AC,[[addr of LSE] ? [lp]]	
+;	Without the SETZ, acts just like above, but copies only the
+;	 single LN pointed to, ignoring its CDR.
+
+UUODEF LNCOPY:,ULCOPY
+ULCOPY:	MOVE U3,U40		;get addr of 2-wd block
+	SKIPE U4,(U3)		;get addr to LSE-address
+	 SKIPN U4,@U4		;if addr and LSE-address both non-zero, get it.
+	  MOVE U4,L		;else use L.
+	EXCH U4,L		; Reference X-LSE
+	HRRZ U1,@1(U3)		; to get LP.
+	CAML U1,$LLLEN(L)	; Check range
+	 JSR AUTPSY
+	JUMPE U1,ULCOP1		; Empty list
+IFSVU2,	PUSH P,U2
+	MOVE U2,LISTAR(U1)	; And get first wd of LN.
+	SKIPL 1(U3)		; Now if sign bit (SETZ) was set, that's it.
+	 HLLZS U2		; else must flush CDR, for single-LN copy.
+	MOVE U3,LISTAR(U1)+1	; 2nd wd of LN.
+	EXCH U4,L		; restore LSE pointers
+	PUSHJ P,LNPOP		; Get a free LN to copy into.
+	PUSH P,U1		; and save LP, because ULCPY doesn't!
+	PUSHJ P,ULCPY2		; copy it.  Special entry needed to allow single-LN hack.
+	LDB U2,UACFLD
+	POP P,(U2)		; restore LP to list directly into result AC.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+ULCOP1:	LDB U1,UACFLD
+	SETZM (U1)
+	UUOXRT
+
+; ULCPY - List Copier.  Given LP in U1, copies and leaves new LP in U1. Thinks it is
+;	supposed to copy from X-LSE to L-LSE, specified by U4 and L
+;	respectively.    If c(L) = c(U4) then string LN's are copied directly
+;	with no re-writing of the string.  Clobbers everything but U4.
+
+ULCPY:	MOVE U2,U1
+	PUSHJ P,LNPOP	; U1 = new LP, U2 = source X-LP
+	PUSH P,U1
+	PUSHJ P,ULCPY1
+	POP P,U1	; restore LP to new list.
+	POPJ P,
+
+	; Workhorse for ULCPY.  This routine takes LP in U1 to destination
+	; LN, LP in U2 to source LN for copying.  Is able to iterate on
+	; CDR to copy list because it need not worry about saving U1, which
+	; is up to the caller!
+ULCPY1:	PUSH P,U1
+	MOVE U1,U2		; get X-LP out of U2.
+	EXCH U4,L		;To read from X-LSE, put right thing in L.
+	MOVE U2,LISTAR(U1)	;Get first wd of LN in X-LSE
+	MOVE U3,LISTAR(U1)+1	;and second.
+	EXCH U4,L		;now restore LSE pointers.
+	POP P,U1		; restore new LP.
+ULCPY2:	TLNE U2,%LTLST		;list? (note - entry pt for LNCOPY UUO.)
+	 JRST [	PUSHAE P,[U1,U2]
+		HRRZ U1,U3
+		TRNE U1,-1	; Skip if LP = 0
+		 PUSHJ P,ULCPY	;recurse, copy list.
+		MOVE U3,U1	;get returned LP
+		POPAE P,[U2,U1]
+		JRST ULCPY6]	;and go store it as value.
+	TLNE U2,%LTSTR
+	 JRST ULCPY8		;if string, go to special rtn.
+
+	;consider it a value.
+ULCPY6:	MOVEM U3,LISTAR(U1)+1	;store value
+	HLLZM U2,LISTAR(U1)	;store LH only (don't have CDR yet)
+	TRNN U2,-1		; If CDR non-existent,
+	 POPJ P,		; then all done!
+
+	; Iterate on CDR.
+	MOVE U3,U1		; Save new-LP temporarily
+	PUSHJ P,LNPOP		; get LP to be its CDR
+	HRRM U1,LISTAR(U3)	; and store CDR in the LN!
+	JRST ULCPY1		; U1 = new LP, U2 = source LP, go copy.
+
+
+	;copy string.  auxiliary part of ULCPY. U2 and U3 have wds 1 & 2
+	;of LN to be copied.  U1 has LP to free LN to copy into.  Copies
+	;string only if LSE's different, and puts new SPT in U3 as value.
+	;Mustn't clobber U1, U2, or U4!
+ULCPY8:	CAMN L,U4
+	 JRST ULCPY6		;if LSE's same, just use same SPT.
+	PUSHAE P,[U2]		;else must actually re-write string... ugh.
+	MOVE U2,U3		;get original SPT in better place
+	HLRZ U3,U2		;get char count.
+	ADDI U3,4
+	PUSH P,U4
+	IDIVI U3,5		;find # words necessary for string.
+	POP P,U4
+	ADD U3,$LSFRE(L)	;get what will be new $LSFRE ptr.
+	CAML U3,$LSLEN(L)	;compare new count with length of area, and
+	 JRST [	PUSHAE P,[U1,U3]
+		SUB U3,$LSLEN(L)	;gobble more room if need be.  Find how much
+		MOVEM U3,ARUNIT		;and set up
+		MOVEI U1,$LSAR(L)	; GIVE IT THE ARPT
+		PUSHJ P,UABUMP		;and get the room.
+		POPAE P,[U3,U1]
+		JRST .+1]
+	ADD U3,$LSLOC(L)	;get absolute end+1 for BLT.
+	ADD U2,$LSLOC(U4)	;get abs source address for original SPT.
+	PUSH P,U4
+	HRRZ U4,$LSFRE(L)
+	ADD U4,$LSLOC(L)	;get abs destination address in RH.
+	HRL U4,U2		;and stuff abs source addr in LH.
+	BLT U4,-1(U3)		;xfer the words!
+	POP P,U4
+	SUB U3,$LSLOC(L)	;make end relative again
+	EXCH U3,$LSFRE(L)	;and store as new first-free ptr (swap with old)
+	HLL U3,U2		;stuff char count in to form new SPT.
+	POPAE P,[U2]
+	JRST ULCPY6		;done with string copy!
+
+SUBTTL List String Comparision UUO's - SLNE, SLNEA, USLNE, USLNEA
+
+; SLNE AC,[slp]		AC must also hold a SLP (LP to a string LN).
+;	The two strings are compared, and the UUO skips if they're equal.
+;	Fails to skip if strings are different, of different lengths, or
+;	if a LN is not string type.
+; USLNE AC,[slp]	same, but forces both to upper case during compare.
+; SLNEA AC,[ASCNT [string]]
+; USLNEA AC,[ASCNT [string]]	See below.
+
+
+UUODEF SLNE:,UQSTRE
+UUODEF USLNE:,UQUSTR
+
+LVAR UQSTRF:	0	; Flag set when comparing with uppercase force.
+LVAR UQSTRC:	0	; cnt to loop on
+
+UQSTRE:	SETZM UQSTRF		;clear flag (no uppercase force)
+	SKIPA
+UQUSTR:	 SETOM UQSTRF		;set flag for uppercase forcing
+	LDB U1,UACFLD
+	MOVE U1,(U1)		;get acc = ptr
+IFSVU2,	PUSH P,U2
+	MOVE U2,@U40		;get addr = ptr
+	MOVE U3,LISTAR(U1)
+	MOVE U4,LISTAR(U2)
+	TLNN U3,%LTSTR		;be sure type is string
+	 JRST UQSTR9		;lose
+	TLNN U4,%LTSTR
+	 JRST UQSTR9		;ditto
+	MOVE U3,LISTAR(U1)+1	;get string vals (# cnt,,addr)
+	MOVE U4,LISTAR(U2)+1
+	ADD U3,$LSLOC(L)	;make abs.
+	ADD U4,$LSLOC(L)
+UQSTR4:	HLRZ U1,U3
+	HLRZ U2,U4		;try comparing cnts first
+	CAME U1,U2
+	 JRST UQSTR9		;can't be eq if different lengths!
+	MOVEM U1,UQSTRC		;store cnt to loop on
+	HRLI U3,440700
+	HRLI U4,440700
+UQSTR5:	SOSGE UQSTRC
+	 JRST UQSTR7		;through, we've won!
+	ILDB U1,U3
+	ILDB U2,U4
+	CAIN U1,(U2)		;skip if fail
+	 JRST UQSTR5
+	SKIPN UQSTRF		;failed, but skip to try uppercase if flag set
+	 JRST UQSTR9
+	XORI U1,(U2)		; Get XOR of the chars...
+	CAIE U1,40		; Same char but different case?
+	 JRST UQSTR9		; Definitely not same char.
+	CAIL U2,"A		; Aha, win if one char is A-Z or a-z.
+	 CAILE U2,"z		; First test for A-z.
+	  JRST UQSTR9		; Outside range, so no case folding.
+	CAIG U2,"Z		; Within A-z, is it inside A-Z?
+	 JRST UQSTR5		; Yes, win!
+	CAIL U2,"a		; Hmm, within a-z?
+	 JRST UQSTR5		; Yes, win!
+				; Bah, between Z-a!  Fall thru to fail.
+UQSTR9:
+IFSVU2,	POP P,U2
+	UUOXRT			;return w/o skipping
+
+UQSTR7:
+IFSVU2,	POP P,U2
+	AOS UUORPC
+	UUOXRT		; won, skip
+
+
+; SLNEA AC,[ASCNT [string]]	AC must contain a SLP, as for (U)SLNE;
+;	however, comparision is done with the specified string.  The advantage
+;	is that a template string need not be stored in a list-area.
+; USLNEA AC,[ASCNT [string]]	Same, but uppercase compare.
+
+UUODEF SLNEA:,ULSTR
+UUODEF USLNEA:,ULUSTR
+
+ULSTR:	SETZM UQSTRF
+	CAIA
+ULUSTR:	 SETOM UQSTRF		;uppercase compare
+	LDB U1,UACFLD
+	MOVE U1,(U1)		;get ptr
+IFSVU2,	PUSH P,U2
+	MOVE U2,LISTAR(U1)
+	TLNN U2,%LTSTR		; String type?
+	 JRST UQSTR9		; No, fail.
+	MOVE U3,LISTAR(U1)+1	;get stringval
+	ADD U3,$LSLOC(L)	;make abs
+	MOVE U4,@U40		;get literal stringval(already abs)
+	JRST UQSTR4		;jump into normal routine.
+
+SUBTTL Wonderful Super LN-Creation UUO -  MAKELN !!
+
+; MAKELN AC,[ <attrib type>,,[[list-ptr]]	Make a LN according to args,
+;		<LN type spec>,,[[LN-value]]]	and leave LP to it in AC.
+;
+;	The nesting of brackets may be confusing, but is less so in practice;
+;	using the RH to point at a full @(X)E address field allows arguments to
+;	be indexed and indirected to, and thus list-area addresses can be given.
+; <attrib type> - an arbitrary value to be put into the ATTRIB field of the LN.
+; list-ptr -  will be inserted in RH of the LN, i.e. what list-ptr points to
+;		becomes the CDR of that LN.
+; <LN type> - tells the routine what type of LN it is (value, list, string) and
+;		how to gobble the given LN-value.  The defined types are:
+;	%LTVAL - type VAL, stores LN-val as the value of LN (2nd word).
+;	%LTLST - type LIST, stores LN-val as a ptr to a list.
+;	%LTSTR - type STRING, takes LN-val as being ASCNT /string/ and stores.
+;	%LTBPT - type STRING, takes LN-val as <# chars>,,[b.p. to string]
+;	%LTSAR - type STRING, takes LN-val as an ARPT and forms a LN string
+;			value from the text in that area.
+;	%LTSAO - type STRING, makes string of everything accumulated on
+;			regular output UUO's since a SAOBEG.  If a
+;			non-zero value is furnished, it is interpreted
+;			as an instruction to XCT, and the resulting
+;			output is used for the string; no SAOBEG is needed.
+;			Output must be on the "standard output"; the OUT
+;			package must be used.
+
+%LTBPT==1	; This flag is for MAKELN only. (see above)
+%LTSAR==2	;  Ditto.
+%LTSAO==4	;  Ditto.
+
+; The right thing is done when various fields are left zero, e.g. saying
+; MAKELN A,[A$RHST,,0	is legal and produces a VAL-type LN with attribute of
+;	%LTVAL,,0]	A$RHST.  Its CDR is 0 and its value is 0, because
+;			neither arg is accessible.
+
+UUODEF MAKELN,UMAKEL
+
+UMAKEL:	MOVE U4,U40
+IFSVU2,	PUSH P,U2
+	MOVE U3,(U4)		; Get lh,,[loc-of-cdr-ptr]
+	MOVE U4,1(U4)		; Get type,,[loc-of-val]
+	TRNE U3,-1		; Keep cdr nil if already is
+	 HRR U3,@(U3)		; else get cdr ptr.
+	TRNN U4,-1		;ditto for loc-of-val
+	 SKIPA U2,[0]		;substitute 0 if no address.
+	  MOVE U2,@(U4)		;else get val.
+	TLNN U4,%LTSTR+%LTBPT+%LTSAR+%LTSAO	;skip if type is string
+	 JRST USTOQ7		;isn't string. store value/list
+
+	TLZ U3,%LTMSK		;clear all type bits
+	TLO U3,%LTSTR		;force type to string
+	EXCH U3,U4		;save 1st wd in u4
+	TLNE U3,%LTSAO		;type store accumulated SA output?
+	 JRST USTOQ3
+	TLNE U3,%LTBPT		;is type=byte ptr to string?
+	 JRST [	MOVE U3,(U2)
+		JRST USTOQ5]	;yes, get the byte ptr
+	TLNE U3,%LTSAR		;type = string area?
+	 JRST [	MOVE U3,$ARLOC(U2)	;U2 has ARPT.  Get abs location of area
+		HRLI U3,440700
+		PUSH P,U1
+		MOVE U1,$ARWPT(U2)	; Get write ptr,
+		SUBI U1,(U3)		; Make it relative to beg,
+		MULI U1,5		; and do bp hack
+		ADD U2,UADBP7(U1)	; to get char count in U2.
+		POP P,U1
+		JRST USTOQ6]
+	HRRZ U3,U2		;no, just form a 440700,,addr
+	HRLI U3,440700
+USTOQ5:	HLRZ U2,U2		;count in rh
+USTOQ6:	MOVEM U3,OUT"UBMPSP	;kludgery necessary to ensure ptr correct
+	PUSHJ P,LNPOP		;even if LNPOP bumps areas. get ptr in U1 to free LN.
+	HRLZ U3,U2		;form SPT beforehand... get count
+	HRR U3,$LSFRE(L)	;and rel addr.
+	PUSH P,U3		;and save SPT.
+	MOVE U3,OUT"UBMPSP	;restore source BP.
+	PUSHJ P,USSTRG		;do it
+	POP P,LISTAR(U1)+1	;Done, now store SPT computed previously,
+	MOVEM U4,LISTAR(U1)	;and finally 1st wd of LN.
+	JRST USTOQ9		;last thing to do: return LP in AC.
+
+USTOQ7:	HLLZ U4,U4		;get type,,0
+	IOR U3,U4		;put type flag into 1st LN lh
+	PUSHJ P,LNPOP		;if not, get one.
+	MOVEM U3,LISTAR(U1)	;store 1st LN wd
+	MOVEM U2,LISTAR(U1)+1	;store 2nd
+USTOQ9:	LDB U2,UACFLD		;get # acc (again)
+	MOVEM U1,(U2)		;return ptr in it.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+	; Make SLN of stuff between $LSFRE addr and $LSWPT write pointer.
+	; (i.e. it's already been output there)
+	; U4 contains word to store in 1st wd of LN, otherwise everything
+	; clobberable.
+USTOQ3:
+IFN $$OUT,[
+	JUMPE U2,USTOQ4		; If no value given, assume closing-up.
+
+	; Special hack!  Value given for %LTSAO is instruction to XCT.
+	; It should output on the standard output channel...
+	; Could reference SAOCH if necessary, but should be avoided.
+IFE $$UCAL,PUSH P,UUORPC
+	PUSHAE P,[U40,OC,U4,U2]		; Note U2 last!! Don't need U1,U3.
+	OUT(,CH(SAOCH),OPEN(UC$SAO))	; Open SAOCH, make std output.
+	XCT (P)				; Execute the frob! Might be UUO.
+	POPAE P,[U2,U4,OC,U40]
+IFE $$UCAL,POP P,UUORPC
+			; Then drop through to finalize!
+USTOQ4:
+]
+	MOVE U1,$LSWPT(L)	; Get write ptr
+	SUB U1,$LSLOC(L)	; Make rel to start of SA
+	MOVE U3,$LSFRE(L)	; Get rel addr of start of free stuff,
+	SUBI U1,(U3)		; and BP rel to this.
+	MULI U1,5		; Now do BP hack
+	ADD U2,UADBP7(U1)	; to get # chars used.
+	HRL U2,U3		; Now use it to make reversed SPT
+	PUSHJ P,LNPOP		; Get a free LN,
+	MOVEM U4,LISTAR(U1)	; and store 1st and
+	MOVSM U2,LISTAR(U1)+1	; 2nd words in it. (Note halves swapped!)
+
+	MOVEI U2,4(U2)		; Now get # chars + 4
+	IDIVI U2,5		; Find # wds used,
+	ADDB U2,$LSFRE(L)	; and bump addr of first free loc.
+	SUB U2,$LSLEN(L)	; Make sure we didn't overrun anything -
+	CAILE U2,0		; (note this gives neg of # wds free)
+	 JSR AUTPSY		; First free greater than length means illegal loc writ!
+	IMULI U2,5
+	MOVEM U2,$LSCHL(L)	;store new -cnt of chars left.
+	JRST USTOQ9		;done
+	
+
+	; USSTRG - auxiliary rtn for MAKELN.  given
+	;LN ptr in U1, chr cnt in U2, byte ptr in U3, does the actual
+	;write of string into SA.  Clobbers U2, U3.
+
+USSTRG:	JUMPE U2,APOPJ
+	PUSHAE P,[U1,U4]
+	MOVEM U3,OUT"UBMPSP	;store BP in convenient place for auto-adjust.
+	MOVE U4,U2		;and store cnt in AC out of way.
+	ADDI U2,4
+	IDIVI U2,5		;find # words string will need.
+	PUSH P,U2		;save
+	ADD U2,$LSFRE(L)	;add current relative write addr.
+	SUB U2,$LSLEN(L)	;check bounds by subtracting area length.
+	JUMPGE U2,[MOVEM U2,ARUNIT	;oops! need more core!  Indicate this much.
+		MOVEI U1,$LSAR(L)	;and give ARPT to string area.
+		PUSHJ P,UABUMP		;get um.
+		JRST .+1]
+	MOVE U3,OUT"UBMPSP	;restore (possibly bumped) BP.
+	MOVE U2,$LSFRE(L)
+	ADD U2,$LSLOC(L)	;get abs ptr to start.
+	HRLI U2,440700		;make BP.
+	ILDB U1,U3		;get char
+	IDPB U1,U2		;dep.
+	SOJG U4,.-2		;fast.
+
+	POP P,U2		;get back # wds newly occupied.
+	ADDM U2,$LSFRE(L)	;and cnt of wds used.
+	POPAE P,[U4,U1]		;return
+	POPJ P,
+
+
+; SAOBEG CH,	- Initializes for standard UUO output into SA area,
+;	given channel # output will occur on.  The %LTSAO type
+;	bit in MAKELN will form a string LN of accumulated output.
+;	Sets OC to CH as current channel.
+
+UUODFA SAOBEG,USABG
+USABG:	MOVE U1,$LSFRE(L)
+	ADD U1,$LSLOC(L)	;get abs start addr
+	HRLI U1,440700		;form BP
+	MOVEM U1,$LSWPT(L)	;and set up new write ptr for area.
+	HRRZS U1
+	SUB U1,$LSTOP(L)	;get -<# wds left>
+	IMULI U1,5
+	MOVEM U1,$LSCHL(L)	;store as $ARCHL for SA.
+;;	LDB U2,UACFLD		;now ready to open indicated channel.  Get it.
+;;	MOVE U1,[OUTOPN [$UCUAR,,$LSAR(L)]]	;get instr with right args.
+;;	DPB U2,[$ACFLD,,U1]
+;;IFE $$UCAL,PUSH P,UUORPC	; Save return addr, since using UUO within UUO!
+;;	XCT U1			; Do the OUTOPN!
+;;IFE $$UCAL,POP P,UUORPC
+	LDB U1,UACFLD	; Get channel #
+	OUT(,CH((U1)),OPEN(UC$UAR,$LSAR(L)))	; Open channel into area
+	UUOXRT		; Return
+
+SUBTTL List Searching UUO's - FINDA and FINDAL
+
+; FINDA AC,[<attrib type>,,[[list-ptr]]]
+;		Searches list pointed to by list-ptr for a LN containing the
+;	given attribute type, and if one is found immediately skips with ptr
+;	to it in AC.  Else doesn't skip and AC is meaningless.
+; FINDA AC,[%HSIGN <attrib type>,,[[list-ptr]]
+;		[<ASCNT string ptr>]]
+;		As a special case, this form will search for the attribute type
+;	which has a string-value matching (exactly) the given string.  LN's
+;	which have the right attrib type but wrong data type (non-string)
+;	will obviously not match.
+
+UUODEF FINDA:,UFINDA
+
+UFINDA:	SKIPGE U3,@U40		; Get c(e)= $attr,,[loc]
+	 JRST UFNDA3		; If sign bit set, hack special string-search.
+	HRRZ U1,@(U3)		; Get c(loc)=ptr to first node
+	CAML U1,$LLLEN(L)	; Check validity
+	 JSR AUTPSY
+	HLRZ U3,U3		; Put attrib in rh
+	JUMPE U1,UUORTL		; Now enter loop, unless first pointer zero!
+IFSVU2,	PUSH P,U2
+UFNDA0:	LDB U2,[$LAFLD,,LISTAR(U1)]	; Get attrib of LN pointed to
+	CAIN U2,(U3)		; Equal to one we want?
+	 JRST UFNDA9		; Yes, jump out.
+UFNDA1:	HRRZ U1,LISTAR(U1)	; No, get CDR and continue,
+	JUMPN U1,UFNDA0		; as long as list still exists.
+IFSVU2,	POP P,U2
+	UUOXRT		; Sigh, never found.
+
+
+	; Sign bit is set, search for attrib with matching string.
+UFNDA3:	HRRZ U1,@(U3)		; Get c(Loc) = LP to first node
+	JUMPE U1,UUORTL		; Stop right here if first pointer zero...
+	HLRZS U3		; Get attrib type into RH
+	TRZ U3,%HSIGN		; Ensuring that the sign bit is cleared!
+	MOVE U4,U40
+IFSVU2,	PUSH P,U2
+	PUSH P,@1(U4)		; Get ASCNT ptr to string, onto stack.
+UFNDA4:	LDB U2,[$LAFLD,,LISTAR(U1)]	;get attrib of LN pointed to
+	CAIN U2,(U3)		; equal to one we want?
+	 JRST UFNDA6		; Yes, jump out.
+UFNDA5:	HRRZ U1,LISTAR(U1)	; No, get CDR and continue,
+	JUMPN U1,UFNDA4		; as long as list still exists.
+	SUB P,[1,,1]
+IFSVU2,	POP P,U2
+	UUOXRT		; Sigh, never found.
+	
+	; Found right attrib, now see if string matches...
+UFNDA6:	MOVE U2,LISTAR(U1)	; Get word for testing...
+	TLNN U2,%LTSTR		; Skip if string,
+	 JRST UFNDA5		; else obviously not a match.
+	HLRZ U2,LISTAR(U1)+1	; Get cnt of SPT for attrib name.
+	HLRZ U4,(P)		; and cnt for string being sought.
+	CAME U2,U4		; String lengths equal?
+	 JRST UFNDA5		; Nope, keep looking.
+
+	MOVE U2,LISTAR(U1)+1	; Aha, counts equal, test contents.  Get whole SPT
+	ADD U2,$LSLOC(L)	; Make absolute
+	MOVE U4,(P)		; Get whole ascnt ptr for test string.
+	PUSH P,U3
+UFNDA7:	JUMPL U4,UFNDA8		; See if any left to test.
+	TLNN U4,-1		; Check both neg. and 0
+	 JRST UFNDA8		; and jump if all done...
+	MOVE U3,(U2)		; get a word to test
+	CAME U3,(U4)		; Match against template string.
+	 JRST [	POP P,U3	; No match.
+		JRST UFNDA5]
+	ADD U4,[-5,,1]		; Else bump down char cnt and increment index.
+	AOJA U2,UFNDA7		; and get another word.
+
+	; Aha, found right attrib with matching string!
+UFNDA8:	SUB P,[2,,2]		; Flush both saved U3 and ASCNT template.
+
+	; Found attrib.
+UFNDA9:	LDB U2,UACFLD		; Get result acc
+	MOVEM U1,(U2)		; Store ptr.
+IFSVU2,	POP P,U2
+	AOS UUORPC		; Skip on return
+	UUOXRT
+	
+	
+DEFINE FNDSTR AC,PTRLOC,ATTRIB,STRING
+FINDA AC,[%HSIGN+ATTRIB,,[PTRLOC]
+	LITSTR [STRING]]
+TERMIN
+
+IFN 0,[
+; FINDAL AC,[<attrib type>,,[[list-ptr]]]
+;	Like FINDA above, but searches through the entire tree pointed to.
+
+UUODEF FINDAL,UFNDAL
+
+UFNDAL:	MOVE U4,@U40		;get c(e)= $attr,,[loc]
+	HRRZ U1,@(U4)		;get c(loc)=ptr to first node
+	HLRZ U4,U4		;put attrib in rh
+
+	;ptr in u1, attrib searched for in u4.
+	SETZM UFNRT'		;clear loc where result stored
+	PUSHJ P,UFND		;get um recursively.
+	SKIPG U1,UFNRT		;get result into u1 if found
+	 UUOXRT		;no. blah.
+	LDB U2,UACFLD		;aha! must store
+	MOVEM U1,(U2)		;in uuo acc
+	AOS UUORPC		;and skip
+	UUOXRT
+
+UFND:	TRNN U1,-1		;skip unless rh=0
+	 POPJ P,
+	MOVE U3,LISTAR(U1)
+	LDB U2,[$LAFLD,,U3]	;get attrib of LN pointed to
+	CAIN U2,(U4)		;equal to one we want?
+	 JRST [	HRRZM U1,UFNRT
+		POPJ P,]	;if so, store tr and return
+	TLNN U3,%LTLST		;still hope if list
+	 JRST [	HRRZ U1,U3
+		JRST UFND]	;nope
+	PUSH P,U3
+	HRRZ U1,LISTAR(U1)+1	;get ptr to list
+	PUSHJ P,UFND
+	POP P,U3
+	SKIPLE UFNRT		;skip unless found something
+	 POPJ P,		;if found, return
+	HRRZ U1,U3		;nope, try cdr.
+	JRST UFND
+]
+	
+SUBTTL Randomness - LNAPP, OUTLS, NREVERSE
+
+; LNAPP [[list-lp A] ? [list-lp-B]]
+;	Appends the list B points to onto the end of the list A points to.
+;	Simply stuffs list-lp-B in as the CDR of the last item in list A.
+
+UUODFE LNAPP:,UAPND
+
+UAPND:	MOVE U4,U40		; Get addr of 2-wd arg block
+	HRRZ U3,@(U4)		; Get LP to base list (appended to)
+	HRRZ U1,@1(U4)		; Get LP to list being appended.
+	CAMGE U1,$LLLEN(L)	; Check both
+	 CAML U3,$LLLEN(L)
+	  JSR AUTPSY
+	JUMPE U3,[HRRM U1,@(U4)	; If nil base list, store LP B in place
+		UUOXRT]		; LP A would occupy.
+UAPND1:	MOVEI U4,(U3)		; Loop to find end of list A.
+	HRRZ U3,LISTAR(U4)
+	JUMPN U3,UAPND1
+	HRRM U1,LISTAR(U4)	; Found end, smash CDR to point at list B.
+	UUOXRT
+
+; NREVERSE LP,		Reverses the LNs in the list by bashing the CDR
+;		   pointers, and returns the LP to the thus reversed
+;		   list in AC.  Analogous to the LISP function, of course.
+
+UUODFA NREVERSE:,UNREV
+UNREV:
+IFSVU2,	LDB U1,UACFLD ? SKIPN U1,(U1)	; Get our argument, an LP.
+.ELSE	LDB U2,UACFLD ? SKIPN U1,(U2)
+	 UUOXRT			; If nothing there, just ignore.
+	HRRZ U3,LISTAR(U1)	; Initialize the loop
+	HLLZS LISTAR(U1)	; Special case: zero out this CDR.
+UNREV1:	HRRZ U4,LISTAR(U3)	; Loop, in which U1 is an LP to a
+	HRRM U1,LISTAR(U3)	;   LN in the list, and U3 an LP
+	MOVE U1,U3		;   to the immediately next node.
+	SKIPE U3,U4		; If that was zero, all done.
+	 JRST UNREV1
+IFSVU2,	LDB U3,UACFLD ? MOVEM U1,(U3)
+.ELSE	MOVEM U1,(U2)		; Store back result in the AC.
+	UUOXRT
+
+SUBTTL Free-list Manipulation Primitives -  LNPOP and friends.
+
+	; LNPOP - called when want a free LN from list area.
+	;Returns ptr in U1 to a free LN.
+
+LNPOP:	SKIPG U1,$LLFRL(L)	; Get LP to a free LN.
+	 JRST LNPOP2		;  none there?  Must get new freelist.
+	SOSGE $LLFRC(L)		; Got one, bump count down...
+	 JSR AUTPSY		;  and fulfill its sole purpose in life.
+	MOVE U1,LISTAR(U1)	; Won.  Get CDR to next free LN
+	EXCH U1,$LLFRL(L)	; and make it new freelist ptr.
+	RET			; Return previous ptr to free LN.
+
+	; Freelist ptr is nil, must create more free LN's.
+LNPOP2:	SKIPE $LLFRC(L)		; Consistency check...
+	 JSR AUTPSY		; count should have zeroed out!!
+
+	MOVE U1,$LLFRE(L)	; Get # wds actually used in LA area.
+	SUB U1,$LLLEN(L)	; Subtract total length, to get -# wds avail.
+	ADDI U1,100*$LNSIZ	; Gobble at least 100 new ones at a time.
+	CAIG U1,0		; If need to get more core, skip.
+	 JRST LNPOP3		; Else needn't expand, just use extra room.
+	MOVEM U1,ARUNIT
+	MOVEI U1,$LLAR(L)	; Set up ARPT for UABUMP.
+	PUSHJ P,UABUMP		; Expand LA.
+LNPOP3:	SETZM $LLFRL(L)		; Make SURE current freelist is nil.
+	PUSHJ P,LNINIT		; Now munch extra core onto freelist!
+	SKIPN $LLFRL(L)		; Make sure something now on freelist.
+	 JSR AUTPSY		; Ugh??
+	CALRET LNPOP		; Now go back and get a LN.
+
+
+; LNINIT - looks at "extra" core between $LLFRE and actual end of LA area,
+; and makes freelist LN's out of it.  Updates $LLFRE, $LLFRL, and $LLFRC.
+
+LNINIT:	PUSHAE P,[U1,U2,U3]
+	MOVE U1,$LLLEN(L)	; Get total # wds in area,
+	MOVE U3,$LLFRE(L)	; and rel addr of 1st free wd in area.
+	SUB U1,U3		; Find # wds extra by subtracting # used.
+	IDIVI U1,$LNSIZ		; Get # LN's possible within this space.
+	JUMPE U1,LNINI9		; If can't snarf any, quit immediately.
+	ADDM U1,$LLFRC(L)	; Can make some!  Update count now.
+
+	MOVNS U1
+	HRLZS U1		; Make AOBJN of
+	HRRI U1,(U3)		; -<# LN's to make>,,<LP to first>
+LNINI1:	MOVEI U2,$LNSIZ(U1)	; Get ptr to next LN
+	MOVEM U2,LISTAR(U1)	; Insert ptr in current LN
+	ADDI U1,$LNSIZ-1	; Bump ptr
+	AOBJN U1,LNINI1
+
+	HRRZM U1,$LLFRE(L)	; First unused LP => first unused addr.
+	SUBI U1,$LNSIZ		; Point to last LN
+	MOVE U2,$LLFRL(L)	; Get current freelist ptr
+	HRRZM U2,LISTAR(U1)	; Store its ptr in last LN of new list.
+	MOVEM U3,$LLFRL(L)	; And set freelist ptr to 1st new LN.
+LNINI9:	POPAE P,[U3,U2,U1]
+	POPJ P,
+
+SUBTTL More Freelist manipulators - LNDEL UUO, LNFREE
+
+;  LNDEL AC,[<lp>]	
+;	There are 3 cases depending on presence or absence of AC and E.  
+;	When either is present, their contents must be LP's; the general
+;	semantics are that AC indicates a single LN for the flushing
+;	operation, whereas c(E) indicates a list.
+;
+; (0) LNDEL		- Error.
+; (1) LNDEL AC,		- The indicated LN only is flushed (not its CDR).
+; (2) LNDEL    [<lp>]	- As above, but CDR is flushed also, hence
+;			  this is "list-flush".
+; (3) LNDEL AC,[<lp>]	- Only LN indicated by AC is flushed from list 
+;			  indicated by c(E).  It is a fatal error if
+;			  the LN is not in fact found on the list!
+;
+;	Whenever E is specified, the LP to resulting list is stored back in
+;	c(E).  Since for case 3 the LP pointing to deleted LN is changed to 
+;	point to the next LN, c(E) will be modified if c(E)=c(AC).  
+;	Case 2 will clear c(E).
+
+
+UUODEF LNDEL:,ULNDEL
+ULNDEL:	MOVE U3,U40		; Get instruction
+IFSVU2,	PUSH P,U2
+	LDB U2,[$ACFLD,,U3]	; Get AC #
+	JUMPE U2,[TRNN U3,-1	; If no AC, make sure E exists.
+		 JSR AUTPSY	; It doesn't??
+		HRRZ U1,(U3)	; It does, get LP to start of list,
+		HLLZS (U3)	; zap RH of c(E) before actually flushing, and
+		PUSHJ P,LNFREE	; Flush it,
+IFSVU2,		POP P,U2
+		UUOXRT]		; and return.
+	HRRZ U1,(U2)		; Get c(AC)
+	TRNN U3,-1		; Is E = 0?
+	 JRST ULNDL8		; If so, go flush only this LN.
+	MOVE U2,(U3)		; No, get c(E) = LP to first node of list LN is on.
+	CAIN U1,(U2)		; Special first test... LPs same?
+	 JRST [	MOVE U2,LISTAR(U2)	; Yes! replace c(E) by CDR of doomed LN.
+		HRRM U2,(U3)		; Like so.
+		JRST ULNDL8]		; And go flush doomed LN.
+ULNDL4:	MOVE U3,U2		; Search list.  Save LP to previous LN.
+	MOVE U2,LISTAR(U3)	; Get LP to next LN.
+	TRNN U2,-1		; If it's 0,
+	 JSR AUTPSY		; then the LN wasn't on the list!! Lose.
+	CAIE U1,(U2)		; This it?
+	 JRST ULNDL4		; No, continue search.
+
+	MOVE U2,LISTAR(U2)	; Aha, found it! Get CDR of doomed LN,
+	HRRM U2,LISTAR(U3)	; and put it in previous LN.
+ULNDL8:	HLLZS LISTAR(U1)	; Now kill LN's CDR to isolate it.
+	PUSHJ P,LNFREE		; And delete it.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+
+;  LNFREE - hairy routine to track down everything pointed to by
+;	a LN and flush it into freelist.
+;	Takes ptr in U1 to first node; LH must be zero!
+;	Clobbers U1, U2, U3.
+
+LNFREE:	JUMPE U1,[POPJ P,]	; Do nothing if LP = 0.
+LNFRE1:	CAML U1,$LLLEN(L)	; Safety check to make sure LP within bounds.
+	 JSR AUTPSY
+	MOVE U2,LISTAR(U1)	; Get 1st wd of LN (CDR in RH)
+	TLNN U2,%LTLST		; Is data a list?
+	 JRST LNFRE5		; No, continue
+
+	; Flush list
+	PUSH P,U1
+	HRRZ U1,LISTAR(U1)+1	; Put list ptr in as arg
+	PUSHJ P,LNFREE		; to a recursion!
+	POP P,U1
+	JRST LNFRE8		; Now go flush node like a value.
+
+LNFRE5:	TLNN U2,%LTSTR		; Data a string?
+	 JRST LNFRE8		; No, must be Value.
+
+	; String...bleah
+	HLRZ U2,LISTAR(U1)+1	; Get char cnt
+	ADDI U2,4
+	IDIVI U2,5		; Get # wds being flushed.
+	ADDM U2,$LSGC(L)	; Add to # wds garbage in string area.
+
+	; Value. flush current LN and go after its CDR
+LNFRE8:	MOVE U2,$LLFRL(L)	; Get freelist ptr
+	EXCH U2,LISTAR(U1)	; Cons LN on freelist by making CDR = old list
+	HRRZM U1,$LLFRL(L)	; and pointing freelist at freed LN.
+	AOS $LLFRC(L)		; Increment cnt of # free for checking.
+	SETZM LISTAR(U1)+1	; Zap data wd just for neatness.
+	TRNN U2,-1		; Now see if anything in old CDR...
+	 POPJ P,		; Nope, can return!
+	MOVEI U1,(U2)		; Else must put into U1
+	JRST LNFRE1		; and go flush it.
+
+SUBTTL LSEGC - LSE garbage collection (compactor)
+
+; There are several possible screws one can hit while trying to
+; GC a LSE.  At the moment, this code assumes that there is
+; only one well-ordered list in the LSE, which $LLLST points to,
+; and that there are no "pure strings".
+; "Well-ordered" means no circular lists and only one pointer
+; to any single LN.
+; One feature is that the entire HDR is copied except for those
+; parameters which are address dependent.  This preserves any
+; idiosyncratic HDR info.
+
+;	L - Specifies LSE to compact.
+; On return, L will address new LSE.  The ARBLK which LSE is based in
+; will likewise be updated.
+
+LSGEC:	PUSHAE P,[A,B,C]
+	SKIPE C,$LHARP(L)	; Get ARPT pointing at this LSE.
+	 SKIPN $AROPN(C)	; Who knows?  Just in case.
+	  JSR AUTPSY
+	MOVEI A,LGCAR
+	CALL LSEOPN		; Create a minimal LSE.
+
+	; Now copy extra HDR words over...
+	MOVE B,$ARLEN(C)	; Find length of source HDR
+	SUBI B,$LHSIZ		; Find how many extra wds
+	CAIGE B,
+	 JSR AUTPSY		; Must not be less!
+	JUMPG B,[UAREXP B,LGCAR	; Expand by additional # of wds.
+		HRLZ A,$ARLOC(C)
+		HRR A,$ARLOC+LGCAR	; Get <source HDR>,,<dest HDR>
+		ADD A,[$LHSIZ,,$LHSIZ]
+		ADDI B,(A)	; Get last addr+1
+		BLT A,-1(B)	; Move the extra stuff.
+		JRST .+1]
+
+	; Now simply copy the whole thing...
+	MOVE B,L		; Save LSE pointer
+	MOVE L,$ARLOC+LGCAR	; and make new LSE current.
+	LNCOPY B,[B ? SETZ $LLLST(L)]	; Copy whole list!
+	MOVEM B,$LLLST(L)	; Store LP as pointer to whole list in new LSE.
+	
+	; Now move new LSE HDR ARBLK stuff into old ARBLK.
+	UARPUSH LGCAR		; Push LSE on stack
+	UARPOP (C)		; Pop back to final location, closing old LSE!
+
+	POPAE P,[C,B,A]
+	RET
+
+LVAR LGCAR: BLOCK $ARSIZ
+
+SUBTTL LSEOPN, LSEIN, LSEOUT - Initialization and I/O rtns for LSE's.
+
+; LSEOPX - Create a fresh LSE
+;	A - ARPT to use for HDR area.  MOVE L,$ARLOC(A) will make LSE current.
+;	B - address of a 3-wd block, specifying initial sizes for LSE.
+;		B -> [size for HDR] ? [size for LA] ? [size for SA]
+;		Addrs can be any ACs except A or B.
+; LSEOPN - As above, but B is defaulted to minimums.
+
+.SCALAR LSESZS(3)	; Temps for area sizes
+LSESZD:	$LHSIZ ? 100 ? 100	; Default sizes.
+
+LSEOPN:	PUSH P,B
+	SETZ B,
+	CALL LSEOPX
+	PJRST POPBJ
+
+LSEOPX:	PUSHAE P,[L,A]		; ARPT is (P)
+	CAIN B,
+	 MOVEI B,[0 ? 0 ? 0]	; Use defaults.
+	PUSH P,B
+	MOVSI A,-3
+LSEOP3:	SKIPE B,(B)		; Get addr of HDR size
+	 MOVE B,@B		; Get size for HDR
+	CAMGE B,LSESZD(A)
+	 MOVE B,LSESZD(A)	; Force above minimal value.
+	MOVEM B,LSESZS(A)
+	AOS B,(P)
+	AOBJN A,LSEOP3
+	POP P,B
+	MOVE A,(P)
+
+	UAROPN [%ARTLH,,(A)	; Open HDR area, using ARPT in A.
+		LSESZS+0]	;   Flag indicates HDR.
+	MOVE L,$ARLOC(A)	; Set up address.
+	HRRZM A,$LHARP(L)	; Now store HDR's ARPT in HDR itself!
+	MOVE A,L
+	HRLI A,UHDRDF		; Set up BLT ptr from initial HDR block
+	BLT A,(L)$LHEND-1	; to created one, and zap things up!
+
+	; Initialize LA.
+	UAROPN [%ARTLA,,$LLAR(L)	; ARPT is in HDR... flag says LA-type,
+		LSESZS+1]	; causing initialization of LA address table.
+
+	; OK, can now access LA!
+	MOVSI A,-$LNSIZ
+	SETZM LISTAR(A)		; Set first LN to 0.
+	AOBJN A,.-1
+	MOVEI A,$LNSIZ
+	MOVEM A,$LLFRE(L)	; Indicate first LN is "used".
+	PUSHJ P,LNINIT		; Init freelist starting right after zero'd LN.
+
+	; Now initialize SA.
+	UAROPN [%ARTZM+%ARTCH,,$LSAR(L)	; Open SA, ARBLK is in HDR too.
+		LSESZS+2]
+
+	POPAE P,[A,L]
+	POPJ P,			; All done!
+
+
+	; Disk-Block (DB) index definitions
+BVAR
+ULSDBH:	OFFSET -.		; Buffer for reading in disk-block header.
+DB$LEN::0	; DB length
+DB$ID::	0	; DB identifier (SIXBIT)
+DB$VER::0	; DB flags,,version
+DB$HLC::0	; Loc of HDR relative to start of DB (DB$LEN)
+DB$HDR::0	; # wds in HDR block
+DB$LA::	0	; # wds in LA block
+DB$SA::	0	; # wds in SA block
+DB$SIZ::	; Size of a disk-block header.
+	OFFSET 0
+EVAR
+
+ULSEID:	SIXBIT /LSEID0/		; LSE ID word contents.
+DB$V1==:1			; Version 1 symbol.
+
+; LSEIN	- Routine taking ARPT in A, .ACCESS pointer in B on opened
+;	DKIC channel.  Reads in a LSE from specified point in
+;	file, using given ARBLK for the HDR area.  If B negative,
+;	reads from current point on DKIC.
+; Skips unless IOC error or bad format.
+
+LSEIN:	PUSHAE P,[A,B,C,D,L]
+	JUMPL B,[SYSCAL RFPNTR,[CIMM DKIC ? CRET B]	; if B neg, find current ptr.
+		 JSR AUTPSY
+		JRST LSEIN0]
+	.ACCESS DKIC,B		; If B specified, set ACCESS ptr to it.
+LSEIN0:	MOVEM B,ULSIPT		; Save initial .ACCESS ptr.
+	MOVE C,[-DB$SIZ,,ULSDBH]
+	XCTIOC [.IOT DKIC,C]	; Get disk header of DB into ULSDBH.
+	 JRST LSEIN9		; Jump if lost
+	MOVE D,ULSEID
+	CAMN D,ULSDBH+DB$ID	; Does DB have right identifier?
+	 JRST LSEI20		; Yes, go handle normal case.
+	JRST LSEIN9		; No ID word, must be garbaged
+IFN 0,[	; No ID word.  For now, assume old-style format.
+	MOVE D,ULSDBH+1		; Get <# wds in HDR>,,<rel addr of HDR>
+	PUSH P,ULSDBH+2		; Get <# wds in LA>
+	PUSH P,ULSDBH+3		; Get <# wds in SA>
+	HRRZM D,ULSDBH+DB$HLC	; Store stuff in right places.
+	HLRZM D,ULSDBH+DB$HDR
+	POP P,ULSDBH+DB$SA
+	POP P,ULSDBH+DB$LA
+	SETZM ULSDBH+DB$VER	; Zero out version # and flags.
+	JRST LSEI22		; Skip over version # check.
+]; end IFN 0
+
+	; Do normal-style new format readin.
+LSEI20:	HRRZ D,ULSDBH+DB$VER	; Get version #
+	CAIE D,DB$V1		; V1 is only thing we hack now.
+	 JRST LSEIN9		; Lost badly.
+LSEI22:	ADD B,ULSDBH+DB$HLC	; Find absolute disk addr of HDR block.
+	.ACCESS DKIC,B		; Point there.
+	MOVE C,ULSDBH+DB$HDR	; Get size of HDR block.
+	UAROPN [%ARTLH,,(A) ? C] ; Open HDR area with that size.
+	IMUL C,[-1,,0]		; Now set up block mode pointer...
+	HRR C,$ARLOC(A)		; Addr to snarf into.
+	XCTIOC [.IOT DKIC,C]	; Get HDR
+	 JRST LSEIN9		; Jump if lost.
+	MOVE L,$ARLOC(A)	; Get beg addr again, to set up L index
+	SKIPE ULSDBH+DB$VER	; Hacking old-format?
+	 JRST LSEI30		; No, can continue normally.
+
+	; Must convert old-fmt HDR to new.  Just push everything that
+	; needs preserving, and pop back to right places.  Note that
+	; push/pop lists are reversed relative to each other.
+	HLRZ C,53(L)		; Get cnt from old $LLFRL = <#>,,<LP>
+	HRRZ D,53(L)		; Get LP
+	PUSHAE P,[C,D,52(L),54(L),66(L),67(L)]	; Save old stuffs.
+	MOVEI D,$LHEND-70	; Find # wds must expand by.
+	UAREXP D,(A)		; Expand the HDR area; may bump.
+	MOVE L,$ARLOC(A)	; Make sure L points to right place.
+	MOVE D,$ARTOP(A)	; Find addr of last wd + 1
+	HRROI C,-<1+$LHEND-70>(D)	; Set up a "PDL ptr" to last data wd.
+	SUBI D,$LHEND(L)	; Get # wds to move.
+	POP C,<$LHEND-70>(C)	; Move to end of HDR area,
+	SOJG D,.-1		; until all non-assembled stuff gone.
+	POPAE P,[$LSGC(L),$LSFRE(L),$LLLST(L),$LLFRE(L),$LLFRL(L),$LLFRC(L)]
+
+LSEI30:	MOVEM A,$LHARP(L)	; and store ARPT within HDR.
+	SETZM $LLAR(L)+$AROPN	; Clear "OPEN" flags for LA and SA ARBLKs,
+	SETZM $LSAR(L)+$AROPN	; to avoid attempt by UAROPN to "close" them!
+	UAROPN [%ARTLA,,$LLAR(L) ; Open LA area (Note size).
+		ULSDBH+DB$LA]	; This inits all LA addressing info too.
+	MOVN C,ULSDBH+DB$LA
+	HRLZS C
+	HRR C,$LLLOC(L)		; Set up block mode ptr -<cnt>,,<loc>
+	XCTIOC [.IOT DKIC,C]	; (LA immediately follows HDR)
+	 JRST LSEIN9		; Jump if lost.
+	UAROPN [%ARTZM+%ARTCH,,$LSAR(L)	; Open SA area, as for LA.
+		ULSDBH+DB$SA]
+	MOVN C,ULSDBH+DB$SA
+	HRLZS C
+	HRR C,$LSLOC(L)		; And read in as for LA.
+	XCTIOC [.IOT DKIC,C]	; (SA immediately follows LA)
+	 JRST LSEIN9		; Jump if lost.
+
+
+
+	; Readin all done.  Point .ACCESS ptr to immediately after DB.
+LSEI85:	MOVE B,ULSIPT		; Get back original dsk addr
+	ADD B,ULSDBH		; Add in tot # wds in block.
+	.ACCESS DKIC,B		; Set to right after it.
+	
+	AOS -5(P)		; Won, skip return.
+LSEIN9:	POPAE P,[L,D,C,B,A]
+	POPJ P,
+
+LVAR ULSIPT:	0	; Initial .ACCESS ptr for LSEIN
+LVAR ULSOPT:	0	; Initial .ACCESS ptr for LSEOUT
+
+
+; LSEOUT - Routine similar to LSEIN, A has ARPT to a LSE HDR,
+;	B has either an .ACCESS pointer or -1, meaning use current.
+;	Writes out LSE block on DKOC channel.
+; Returns in A the original .ACCESS pntr, in B # words written.
+
+LSEOUT:	PUSHAE P,[C,L]
+	MOVE L,$ARLOC(A)	; Set up L
+	JUMPL B,[SYSCAL RFPNTR,[CIMM DKOC ? CRET B]
+		 JSR AUTPSY
+		JRST .+2]
+	.ACCESS DKOC,B
+	MOVEM B,ULSOPT		; Save .ACCESS ptr
+	MOVEI C,DB$SIZ
+	MOVEM C,ULSDBH+DB$LEN	; Initialize cumulative total of # wds in blk.
+	MOVE C,$ARLEN(A)	; Find length of HDR area
+	MOVEM C,ULSDBH+DB$HDR	; Store, and
+	ADDM C,ULSDBH+DB$LEN	; add to cumulative sum.
+	MOVE C,$LLLEN(L)	; Find length of LA area
+	MOVEM C,ULSDBH+DB$LA	; ditto ditto
+	ADDM C,ULSDBH+DB$LEN
+	MOVE C,$LSLEN(L)	; Find length of SA
+	MOVEM C,ULSDBH+DB$SA
+	ADDM C,ULSDBH+DB$LEN	; Now finish cumulative total of # wds in blk!
+
+	MOVEI C,DB$SIZ		; Start HDR immediately after the DB header.
+	MOVEM C,ULSDBH+DB$HLC
+	MOVE C,ULSEID		; Set up ID word 
+	MOVEM C,ULSDBH+DB$ID
+	MOVEI C,DB$V1		; and version #
+	MOVEM C,ULSDBH+DB$VER
+
+	MOVE C,[-DB$SIZ,,ULSDBH]
+	.IOT DKOC,C		; Out goes the header!
+
+	; Now output HDR, LA, SA areas.
+	IRP LENX,,[DB$HDR,DB$LA,DB$SA]LOC,,[L,$LLLOC(L),$LSLOC(L)]
+	MOVN C,ULSDBH+LENX	; Get -length of area
+	HRLZS C			; Put in LH for ptr
+	HRR C,LOC		; Point to start of area
+	.IOT DKOC,C		; Out it goes!
+	TERMIN
+
+	MOVE A,ULSOPT		; Return original .ACCESS ptr
+	MOVE B,ULSDBH+DB$LEN	; And # wds written out.
+	POPAE P,[L,C]
+	POPJ P,
+subttl LSE debugging aids
+
+; Debugging aids for list stuff...
+
+DEBEG:	JSR DEBSAV
+	.VALUE [ASCIZ /: Ready /]
+DEBEND:	JSR DEBRST
+	.VALUE [ASCIZ /: Reset /]
+
+LVAR	DEBSAV:	0 ? JRST DEBSV0	; jump to pure
+LVAR	DEBCHP:	0	;-1 if channel already opened by user.
+
+DEBSV0:	PUSHAE P,[U40]
+IFE $$UCAL,PUSH P,UUORPC
+	MOVEM 17,DEBACS+17
+	MOVEI 17,DEBACS
+	BLT 17,DEBACS+16	; Save ACs
+	MOVE 17,DEBACS+17
+	SKIPN DEBCHP
+	 JRST [	.OPEN DBC,[.UAO,,'TTY]
+		 .VALUE
+		OUT(DBC,OPEN(UC$IOT))
+		JRST .+1 ]
+	JRST @DEBSAV
+
+LVAR 	DEBRST:	0 ? JRST DEBRS0	; jump to pure
+
+DEBRS0:	SKIPN DEBCHP
+	 .CLOSE DBC,
+	MOVSI 17,DEBACS
+	BLT 17,17
+IFE $$UCAL,POP P,UUORPC
+	POPAE P,[U40]
+	JRST @DEBRST
+
+BVAR
+DEBACS:	BLOCK 20
+DEBAR:	BLOCK $ARSIZ	; Area block, in case debug rtns want to use an area.
+EVAR
+
+	; DEBPRF - Print out a file (LSE-block).
+	; Argument, in DEBFIL, is the address of file block
+LVAR DEBFIL:	0		; Must have addr of FN1/FN2
+DEBPRF:	JSR DEBSAV
+	SKIPN A,DEBFIL
+	 JRST DEBPLX	; If nothing, simply return.
+	.IOPUSH DKIC,
+	SYSCAL OPEN,[[.BII,,DKIC] ? (A) ? 1(A) ? 2(A) ? 3(A)]
+	 JRST [	OUT(DBC,("Couldn't open "),6F((A)),SP,6F(1(A)))
+		JRST DEBPFX]
+	MOVEI A,DEBAR
+	SETZ B,
+	PUSHJ P,LSEIN		; Read in.
+	 .VALUE
+	MOVE L,$ARLOC+DEBAR
+	MOVE A,$LLLST(L)
+	PUSHJ P,DEBPL		; Print out main list.
+	UARCLS DEBAR
+DEBPFX:	.IOPOP DKIC,
+	JSR DEBRST
+	POPJ P,
+
+; DEBLSE - Print out a LSE.  Uses current LSE as indicated by L.
+;	Outputs on DBC.  DEBPRL same, but uses LP in DEBLP instead
+;	of $LLLST(L).
+
+DEBLSE:	SETOM DEBLP
+DEBPRL:	JSR DEBSAV
+	SETZM DEBLEV
+	SKIPGE A,DEBLP
+	 MOVE A,$LLLST(L)
+	PUSHJ P,DEBPL
+DEBPLX:	JSR DEBRST	; $G here if DEBPRL loses during printout.
+	POPJ P,
+
+LVAR DEBLP:	0	; LP to list to print. If negative, uses $LLLST(L).
+LVAR DEBLEV:	0	; Level of recursion (indent)
+
+DEBPL:	OUT(,CH(DBC),O(A),TAB)
+	MOVE B,DEBLEV
+	SOJGE B,[OUT(,("   "))
+		JRST .]
+	MOVE C,LISTAR(A)		; Get 1st wd
+	OUT(,HV(C),SP)
+	TLNE C,%LTLST
+	 OUTCAL(,("List "))
+	TLNE C,%LTVAL
+	 OUTCAL(,("Val "))
+	TLNE C,%LTSTR
+	 OUTCAL(,("Str "))
+	LDB B,[$LAFLD,,LISTAR(A)]	; Get attrib #
+	OUT(,O(B),SP,TC(ATTRTB(B)),EOL,TAB)
+	MOVE B,DEBLEV
+	SOJGE B,[OUT(,("   "))
+		JRST .]
+	TLNE C,%LTSTR
+	 JRST [	OUT(,HV(LISTAR(A)+1),(|  "|),TLS(A),C(""))
+		JRST DEBPL5]
+	TLNE C,%LTVAL
+	 JRST [	OUT(,O(LISTAR(A)+1))
+		JRST DEBPL5]
+	OUT(,HV(LISTAR(A)+1))
+
+DEBPL5:	OUT(,EOL)
+	TLNN C,%LTLST
+	 JRST DEBPL6		;not a list...
+	PUSH P,A
+	AOS DEBLEV
+	HRRZ A,LISTAR(A)+1
+	PUSHJ P,DEBPL		; Print out its list.
+	SOS DEBLEV
+	POP P,A
+
+DEBPL6:	MOVE C,LISTAR(A)
+	TRNN C,-1
+	 POPJ P,
+	OUT(,EOL)		; Do the CDR
+	HRRZ A,C
+	JRST DEBPL
+
+	
