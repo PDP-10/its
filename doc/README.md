@@ -13,6 +13,6 @@
 - CRTSTY: [manual](info/crtsty.39)
 - TCTYP: [manual](_info_/tctyp.order)
 - DSKDUMP: [commands](sysdoc/dskdmp.order)
-- FIND: [manual](init/find.13)
-- DIRDEV: [manual](_init_/dir.order)
+- FIND: [manual](info/find.13)
+- DIRDEV: [manual](_info_/dir.order)
 - DSKUSE: [manual](info/dskuse.10)
