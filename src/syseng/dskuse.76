@@ -1,0 +1,2044 @@
+;			-*-MIDAS-*-
+TITLE DSKUSE -- DSK INFO -- PDL 2/19/76
+
+;9/6/79 Modified for new TUT format (ITS 1154)
+
+; note to the perplexed:  The value of the symbol
+; MAXUSR (currently 512.) controls how many users DSKUSE can handle.
+; since this is the maximum number of directories ITS can have in the
+; current implementation, this should be enough.
+
+.MLLIT=1
+
+; ====================================================================
+; accumulator definitions
+; ====================================================================
+
+A=1
+B=2
+C=3
+D=4
+E=5
+F=6
+G=7
+H=10
+I=11
+J=12
+K=13
+L=14
+M=15
+N=16
+ARGP=16
+P=17
+
+TYIC==1		; channels
+TYOC==2
+CH==3
+MCH==4
+TCMD==5		; command output channel
+
+		; disk system variables
+
+.INSRT SYSTEM;FSDEFS >
+
+%USRBLK==8	; size of single user info block
+
+%USER==0	; offsets of data
+%FILES==1
+%LINKS==2
+%BLCKS==3
+%QUOTA==4
+%ALLOC==5
+%PACKN==6
+%BLKAV==7
+
+; command macro
+
+DEFINE	COM DIS,NMS
+IRP NM,,[NMS]
+	SIXBIT \!NM!\
+	PUSHJ P,DIS
+TERMIN
+TERMIN
+
+; fix and float macros
+
+DEFINE FLOAT AX,AY
+	TLC AX,232000+1000*AY
+	FADR AX,AX
+TERMIN
+
+DEFINE FIX AX,AY
+	MULI AX,400
+	TSC AX,AX
+	ASH AX+1,AY-243(AX)
+	TERMIN
+
+; ====================================================================
+; :dskuse ?
+; ====================================================================
+
+CINFO:	ASCIZ \
+DSKUSE is usually driven by a command from its JCL line, as follows:
+
+:DSKUSE user	statistics on the user directory given, or the MSNAME
+		directory if no argument.
+:DSKUSE > user	print message if MSNAME user (or user given explicitly)
+		is over quota, else nothing.
+
+:DSKUSE @ file	statistics on all users output to TPL:, or to file
+		if given.
+:DSKUSE & file	output two tables, sorted on user and blocks, to TPL:
+		or to file if given.
+
+:DSKUSE #	general statistics on disk system (takes time).
+:DSKUSE $	same as previous, only less detailed (faster, too).
+
+:DSKUSE % user  print % of directory space used by user.
+
+:DSKUSE *	statistics on all users, in tabular form.
+		this command is special in that it leaves you in DSKUSE.
+		you may type the number or name of a column to sort by
+		that column and then reprint the table (0 or USER, 1 or
+		FILES, etc.).  in this mode the @ command, with a file
+		name optionally following it, causes subsequent sorts
+		to go to the file.  the commands #, %, and > are not
+		available.  The dual sort (& or BOTH) is, however.
+
+For more details see .INFO.;DSKUSE INFO.\
+
+INFO:	OASCR	CINFO
+	JRST	KILL
+
+; ====================================================================
+; DSKUSE
+; ====================================================================
+
+START:	MOVE	P,[-100,,PDL]		; set up pdl
+
+; here to open ttys
+	.OPEN	TYIC,[SIXBIT /   TTYFOOBARBLECH /]
+	.VALUE	[ASCIZ /:CANT OPEN TTY/]
+	.OPEN	TYOC,[SIXBIT /  !TTYXXXXXXYYYYYY/]
+	.VALUE	[ASCIZ !:CANT OPEN TTY!]
+	.OPEN	TCMD,[SIXBIT /  1TTYXXXXXXYYYYYY/]
+	.VALUE	[ASCIZ !:CANT OPEN TTY!]
+
+; set up TTY interrupt
+	.CALL	[SETZ
+		'TTYGET
+		1000,,TYIC
+		2000,,A
+		402000,,B]
+	.VALUE	[ASCIZ /:CANT GET CONSOLE TYPE/]
+; make only ^G and ^S interrupt
+	MOVE	0,[SIXBIT / !!!!!/]
+	ANDCAM	0,A
+	MOVE	0,[SIXBIT / !!!!!/]
+	ANDCAM	0,B
+	.CALL	[SETZ
+		'TTYSET
+		1000,,TYIC
+		A
+		400000,,B]
+	.VALUE	[ASCIZ /:CANT SET CONSOLE TYPE/]
+; enable interrupt
+	MOVEI	A,1		; tty int
+	SETZ	B,
+	.SETM2	A,
+
+; get msname of user
+	.SUSET	[.RSNAM,,RSYSNM]
+	MOVE	RSYSNM
+	MOVEM	USRNAM
+; get command from superior
+	.SUSET	[.ROPTIO,,A]
+	TLNN	A,40000			; OPTCMD
+	 JRST	HUSER
+	.BREAK	12,[5,,COMMND]
+	SKIPN	COMMND
+	JRST	HUSER			; no argument
+
+; got arg, so parse it
+	MOVE	[440700,,COMMND]
+	MOVEM	COMPTR
+	PUSHJ	P,GETSYL		; get command, if any
+	JUMPE	B,HUSER
+
+; dispatch
+	MOVE	A,SWPTR
+JCLOOP:	CAMN	B,(A)
+	JRST	@1(A)
+	AOS	A
+	AOBJN	A,JCLOOP
+	MOVEM	B,USRNAM
+	JRST	OUSER			; assume funny user
+
+; ====================================================================
+; jcl line command table
+; ====================================================================
+
+SWTABL:	COM	AUSER,[&]		; two column, user and blocks sorted
+	COM	AUSER1,[@]		; one column, user, to tpl
+	COM	AUSER2,[*]		; one column, no tpl
+	COM	DSKDAT,[$]		; quick statistics
+	COM	QUSER,[#]		; detailed statistics
+	COM	UFULL,[%]		; percent of dir used
+	COM	UFULLB,[%%]		; dir bloated?
+	COM	UOVER,[>]		; quota check
+	COM	INFO,[?]		; info
+SWPTR:	-<<.-SWTABL>/2>,,SWTABL
+
+; ====================================================================
+; :DSKUSE %
+; ====================================================================
+
+UFULLB:	SETOM	UFULLF'
+UFULL:	PUSHJ	P,GETSYL
+	SKIPE	B
+	MOVEM	B,USRNAM
+	.SUSET	[.SSNAM,,USRNAM]
+; read ufd in
+	.OPEN	CH,UDIR
+	JRST	NOUFD
+	MOVE	A,[-2000,,FDIR]
+	.IOT	CH,A
+	.CLOSE	CH,
+	PUSHJ P,UFULL0
+	JRST	KILL
+
+UFULL0:	MOVE	D,UDESCP+FDIR
+	MOVEI	C,UDDESC+FDIR	; ; D/ desc count
+	HRLI	C,440600	; "BYTE PTR"
+	SETZ	B,		; "COUNT"
+NEXTA:	SETZ	A,
+NEXTB:	SOJL	D,FEND
+	ILDB	C
+	JUMPE	NBYTE		; "ZERO BYTE?"
+	SETOM	A		; "NON-ZERO BYTE"
+	JRST	NEXTB		; "LOOP"
+NBYTE:	JUMPN	A,NEXTA		; "ZERO, WAS LAST ZERO?"
+	SETZM	A
+	AOJA	B,NEXTB		; "AOS NULL COUNT"
+FEND:	MOVE	C,UDESCP+FDIR
+	SUB	C,B
+	IDIVI	C,6		; "NUMBER OF WORDS"
+
+	ADDI	C,2000
+	SUB	C,UDNAMP+FDIR
+	FLOAT	C
+
+	MOVEI	B,2000-UDDESC
+	FLOAT	B
+	FDVR	B,[100.0]
+	FDVR	C,B
+
+	SKIPN	UFULLF
+	 JRST	UFULLP
+	CAMGE	C,[97.0]
+	 POPJ	P,
+UFULLP:	OASC	[ASCIZ /Directory /]
+	OSIX	USRNAM
+	OASC	[ASCIZ / is /]
+	JUMPE	C,UEMPTY
+	OFLOAT	C
+	OASCR	[ASCIZ /% full./]
+	POPJ P,
+
+UEMPTY:	OASCR	[ASCIZ /empty./]
+	POPJ P,
+
+; ====================================================================
+; :DSKUSE >
+; ====================================================================
+
+UOVER:	PUSHJ	P,GETSYL
+	SKIPE	B
+	MOVEM	B,USRNAM
+	.SUSET	[.SSNAM,,USRNAM]
+	PUSHJ	P,USRDSK
+	JRST	KILL
+	MOVE	B,UBLCKS
+	CAMG	B,UQUOTA
+	JRST	KILL
+	SUBM	B,UQUOTA
+	OASCR	[0]
+	OSIX	USRNAM
+	OASC	[ASCIZ / OVER QUOTA BY /]
+	ODEC	UQUOTA
+	OASCR	[ASCIZ / BLOCKS/]
+	JRST	KILL
+
+; ====================================================================
+; :DSKUSE #
+; ====================================================================
+
+QUSER:	PUSHJ	P,DSKAV
+	PUSHJ	P,GATHER
+	PUSHJ	P,DATOUT
+	OASCR	[0]
+	PUSHJ	P,QSKOUT
+	JRST	KILL
+
+; ====================================================================
+; :DSKUSE %
+; ====================================================================
+
+; here for general data
+DSKDAT:	PUSHJ	P,DSKAV			; get system data
+	PUSHJ	P,DATOUT		; print system data
+	JRST	KILL			; exit
+
+; ====================================================================
+; :DSKUSE
+; ====================================================================
+
+; here for just doing this user
+HUSER:	.SUSET	[.RSNAM,,USRNAM]
+	JRST	EUSER
+
+; ====================================================================
+; :DSKUSE <user>
+; ====================================================================
+
+; here for specified user
+OUSER:	SKIPE	USRNAM
+	.SUSET	[.SSNAM,,USRNAM]
+
+; common area for single user dskuse
+EUSER:	OASCR	[0]
+	PUSHJ	P,DSKAV			; get data on system as whole
+	PUSHJ	P,USRDSK		; get data on single user
+	 JRST	NOUFD
+
+; print data for single user
+	PUSHJ P,UFULL0
+	;OASC	[ASCIZ /User		/]
+	;OSIX	USRNAM
+	;OASCR	[0]
+	OASC	[ASCIZ /Files		/]
+	ODECR	UFILES
+	OASC	[ASCIZ /Links		/]
+	ODECR	ULINKS
+	OASC	[ASCIZ /Blocks		/]
+	ODEC	UBLCKS
+	SKIPN	UPACKN
+	 JRST	EUQOTA
+	OASCR	[0]
+	OASC	[ASCIZ/Allocated to pack /]
+	ODEC	UPACKN
+	;Attempt to extract pack name out of the system
+	MOVE	A,UPACKN
+	MOVE	B,NQS
+	SUBI	B,1
+	CAME	A,QPKID(B)
+	 SOJGE	B,.-1
+	JUMPL	B,EUQOTA
+	SKIPE	A,TRESRV(B)
+	 CAMN	A,[-1]
+	  JRST	EUQOTA
+	OASC	[ASCIZ/ (/]
+	OSIX	A
+	OASC	[ASCIZ/:)/]
+EUQOTA:	SKIPG	A,UQUOTA
+	 JRST	EUSBLK
+	CAMGE	A,UBLCKS
+	 OASCI	"*
+EUSBLK:	OASCR	[0]
+	SKIPG	UALLOC
+	 JRST	EUSERQ
+	OASC	[ASCIZ \Allocation	\]
+	ODECR	UALLOC
+EUSERQ:	MOVE	A,UALLOC
+	CAMN	A,UQUOTA
+	 JRST	EUSYST
+	OASC	[ASCIZ \Quota		\]
+	ODECR	UQUOTA
+
+; print data for system as a whole
+EUSYST:	OASC	[ASCIZ \Free Blocks	\]
+	SKIPG	FREEBL
+	JRST	EUSYS1
+; here if there are allocations
+	OASCR	[0]
+	OASC	[ASCIZ \ Unallocated	\]
+	ODECR	FRUNAL
+	OASC	[ASCIZ \ Allocated	\]
+	ODEC	FREEBL
+EUSYS2:	OASC	[ASCIZ \ of \]
+	ODECR	ALLBL
+	OASC	[ASCIZ \Average User	\]
+	ODECR	AVER
+	JRST	KILL			; exit
+; here if there are no allocations
+EUSYS1:	ODEC	FRUNAL
+	JRST	EUSYS2
+
+; ====================================================================
+; :DSKUSE &
+; ====================================================================
+
+AUSER:	SETOM	BOTH			; set & flag
+
+; ====================================================================
+; :DSKUSE @
+; ====================================================================
+
+; here to output table to disk
+AUSER1:	PUSHJ	P,SCNAME
+	PUSHJ	P,DSKOUT		; open disk channel
+	SETOM	JCLFLG
+
+; ====================================================================
+; :DSKUSE *
+; ====================================================================
+
+; here to output table to tty after finishing
+
+AUSER2:	SETZB G,H
+	SETZ I,
+	OASCR	[0]
+
+; get data on date, time, and system name
+
+; what system are we on?
+	.CALL	RDSYST
+	JFCL
+; time
+	.RTIME	A,
+	MOVEM	A,TIME
+; date
+	.RDATE	A,
+	ROT	A,12.
+	MOVEM	A,DATE
+
+; optional sort number 0 => 5
+	PUSHJ	P,GETSYL
+	LDB	A,[360600,,B]
+	SUBI	A,20
+	CAIL	A,0
+	CAILE	A,5			; 6 columns
+	SETZ	A,
+	SKIPE	A
+	MOVEM	A,SORTX			; sort on what entry in vector?
+	HRRM	A,SORTX
+
+; enter loop here to get users and status them one after another
+; out of mfd
+
+	PUSHJ	P,DSKAV
+	PUSHJ	P,GETMFD
+	PUSHJ	P,GATHER		; here to frob all ufd's
+
+	HRRI	N,USERS			; save aobjn to users
+	MOVEM	N,CPTR
+
+; calculate blocks/file
+	MOVE	A,TBL
+	MOVE	B,TFL
+	FLOAT	A,
+	FLOAT	B,
+	FDVR	A,B
+	MOVEM	A,TAV
+	JRST	ENDST1
+
+; call block for .call /sstatu/
+
+RDSYST:	SETZ
+	SIXBIT /SSTATU/
+	2000,,0
+	2000,,0
+	2000,,0
+	2000,,0
+	2000,,0
+	SETZM SYSNAM
+; * print *
+
+ENDST1:	SKIPL	BOTH
+	JRST	ONESRT
+
+; * here for & dskuse (0 & 3 sort at once) *
+
+; do 3 sort (blocks)
+	MOVEI	A,3
+	MOVE	M,CPTR
+	PUSHJ	P,VSORT
+; move results into second data vector
+	MOVE	M,CPTR
+	HRRI	M,FDIR
+	MOVEM	M,CPTR1
+	MOVE	A,[USERS,,FDIR]
+	BLT	A,FDIR+MAXUSR-1
+
+; do 0 sort
+	MOVSI	A,-1
+	MOVE	M,CPTR
+	PUSHJ	P,VSORT
+	JRST	PRTSRT		; print results
+
+; * do single sort *
+
+ONESRT:	MOVE	A,SORTX		; sort key
+	MOVE	M,CPTR		; cptr
+	PUSHJ	P,VSORT		; do it
+; here to print sort
+PRTSRT:	OASCI	^L			; form feed
+	OASCR	[0]
+
+; herald message
+	OSIX	SYSNAM
+	OASC	[ASCIZ \ DISK USAGE by \]
+	OSIX	RSYSNM
+	OASC	[ASCIZ \ at \]
+	OTIME	TIME
+	OASC	[ASCIZ \ on \]
+	ODATE	DATE
+	OASCR	[0]
+	OASCR	[0]
+
+; general system data
+	PUSHJ	P,DATOUT
+	OASCR	[0]
+	SKIPN	BOTH
+	JRST	COLHDR
+	PUSHJ	P,QSKOUT
+	OASCR	[0]
+
+; column header(s)
+COLHDR:	OASCR	[0]
+	PUSHJ	P,TYPHDR
+	SKIPN	BOTH
+	JRST	ONEHDR
+
+; here to type extra header for & mode
+	OASC	[ASCIZ \		\]
+	PUSHJ	P,TYPHDR
+	OASCR	[0]
+
+; underline appropriate column headers
+	OASC	[ASCIZ \----							\]
+	SKIPG	TQUO
+	JRST	COLHD1
+	OASCI	^I
+COLHD1:	SKIPG	TALLO
+	JRST	COLHD2
+	OASCI	^I
+COLHD2:	OASCR	[ASCIZ \			------\]
+	JRST	TYPSTT		; start normal typeout
+
+; here to underline normal header
+ONEHDR:	OASCR	[0]
+	HRRZ	B,SORTX
+	XCT	PTABS(B)	; appropriate tabs
+	OASCR	[0]
+
+; here to start typing user stats
+TYPSTT:	OASCR	[0]
+	MOVE	D,CPTR
+	MOVE	G,CPTR1
+; loop
+TYPNXT:	MOVE	A,(D)
+	PUSHJ	P,TYPOUT
+	SKIPN	BOTH
+	JRST	TYPEND
+	OASC	[ASCIZ \		\]
+	MOVE	A,(G)
+	PUSHJ	P,TYPOUT
+TYPEND:	OASCR	[0]
+	ADD	G,[1,,1]
+	AOBJN	D,TYPNXT
+
+; done, type totals
+	OASCR	[0]
+	PUSHJ	P,TYPTOT
+	SKIPN	BOTH
+	JRST	TYPGET
+
+; type extra total, for second list in & dskuse
+	OASC	[ASCIZ \		\]
+	PUSHJ	P,TYPTOT
+
+; form feed if in & mode
+	SKIPE	BOTH
+	OASCI	^L
+
+; prepare to get a command
+TYPGET:	SETZM	BOTH
+
+; here to get a command typed from tty, after we have performed
+; the single command that could be given when dskuse was invoked.
+TYPCOM:	SKIPE	JCLFLG'
+	JRST	KILL
+	.IOT	TCMD,["*]
+	MOVE	N,M
+	PUSHJ	P,READ
+	PUSHJ	P,GETSYL
+
+	MOVE	A,TYPPTR
+TYPLUP:	CAMN	B,(A)
+	JRST	@1(A)
+	AOS	A
+	AOBJN	A,TYPLUP
+BADCOM:	.IOT	TCMD,["?]
+	.IOT	TCMD,["?]
+	.IOT	TCMD,[^M]
+	.IOT	TCMD,[^J]
+	JRST	TYPCOM
+
+TYPTAB:	COM	KILL,[Q,QUIT,KILL]
+	COM	DSKOPN,[@]
+	COM	DSKOP1,[&]
+	COM	SRTUSR,[0,U,USER]
+	COM	SRTFIL,[1,F,FILE,FILES]
+	COM	SRTLNK,[2,L,LINK,LINKS]
+	COM	SRTBLK,[3,B,BLK,BLOCK,BLOCKS]
+	COM	SRTQUO,[4,Q,QUO,QUOTA,QUOTAS]
+	COM	SRTALL,[5,A,ALL,ALLOC,ALLOCA]
+	COM	SRTPCK,[6,P,PACK]
+	COM	SRTAVG,[7,R,RATIO,B/F,BF,AVG]
+TYPPTR:	-<<.-TYPTAB>/2>,,TYPTAB
+
+; ====================================================================
+; sort commands
+; ====================================================================
+
+SRTUSR:	MOVEI	A,0
+	JRST	SORTIT
+SRTFIL:	MOVEI	A,1
+	JRST	SORTIT
+SRTLNK:	MOVEI	A,2
+	JRST	SORTIT
+SRTBLK:	MOVEI	A,3
+	JRST	SORTIT
+SRTQUO:	MOVEI	A,4
+	JRST	SORTIT
+SRTALL:	MOVEI	A,5
+	JRST	SORTIT
+SRTPCK:	MOVEI	A,6
+	JRST	SORTIT
+SRTAVG:	MOVEI	A,7
+
+; if name column, sort "backwards"
+SORTIT:	SKIPN	A
+	HRLI	A,-1		; sort "frontwards"
+	MOVEM	A,SORTX		; set up sort key
+	JRST	ENDST1
+
+; output a double sort
+DSKOP1:	SETOM	BOTH
+	JRST	ENDST1
+
+; ====================================================================
+; output rest of sorts to disk
+; ====================================================================
+
+DSKOPN:	PUSHJ	P,SCNAME		; cons up output file spec
+	PUSHJ	P,DSKOUT		; open it
+	JRST	TYPCOM			; loop
+
+; here to reopen "TTY" channel to "DSK"
+DSKOUT:	.SUSET	[.SSNAM,,RSYSNM]
+	MOVEI	'!
+	HRLM	OUTPUT
+	.OPEN	TYOC,OUTPUT
+	.VALUE	[ASCIZ !:CANT OPEN OUTPUT FILE!]
+	POPJ	P,
+
+; here to exit by killing job and not typing anything
+EXIT:	.VALUE	[ASCIZ /:KILL
+
+/]
+
+KILL:	.BREAK	16,140000
+
+
+HEADER:	ASCIZ \USER	Files	Links	Blocks\
+HEADE1: ASCIZ \	Quota\
+HEADE2:	ASCIZ \	Alloc\
+HEADE3:	ASCIZ \	Pack\
+HEADE4:	ASCIZ \	B/F\
+
+TYPHDR:	OASC	HEADER
+	SKIPE	TQUO
+	OASC	HEADE1
+	SKIPE	TALLO
+	OASC	HEADE2
+	OASC	HEADE3
+	OASC	HEADE4
+	POPJ	P,
+
+PTABS:	OASC [ASCIZ /----/]
+	OASC [ASCIZ /	-----/]
+	OASC [ASCIZ /		-----/]
+	OASC [ASCIZ /			------/]
+	OASC [ASCIZ /				-----/]
+	OASC [ASCIZ /					-----/]
+	OASC [ASCIZ /						----/]
+	OASC [ASCIZ /							---/]
+
+; * type total line *
+
+TYPTOT:	OASC	[ASCIZ \Total	\]
+	OJUST	3,TFL
+	OASCI	^I
+	OJUST	3,TLK
+	OASCI	^I
+	OJUST	4,TBL
+	OASCI	^I
+	SKIPG	TQUO
+	JRST	TYPTO1
+	OJUST	4,TQUO
+	OASCI	^I
+TYPTO1:	SKIPG	TALLO
+	JRST	TYPTO2
+	OJUST	4,TALLO
+	OASCI	^I
+	OASCI	^I
+TYPTO2:	OFLOAT	TAV
+	POPJ	P,
+
+; * output general data *
+
+DATOUT:	OASC	[ASCIZ \Total number of users is \]
+	ODEC	TUS
+	SKIPG	TQUO
+	JRST	DATUAL
+	OASC	[ASCIZ \, \]
+	ODEC	TUQUOT
+	OASC	[ASCIZ \ with quotas\]
+
+DATUAL:	SKIPG	TALLO
+	JRST	DATUSR
+	OASC	[ASCIZ \, \]
+	ODEC	TUALLO
+	OASC	[ASCIZ \ with allocations\]
+DATUSR:	OASCR	[0]
+
+	SKIPG	TQUO
+	JRST	DATAVG
+	OASC	[ASCIZ \Over quota:  \]
+	ODEC	TPIGS
+	OASC	[ASCIZ \ users, \]
+	ODEC	TFAT
+	OASC	[ASCIZ \ blocks, average excess \]
+	ODEC	TBACON
+	OASC	[ASCIZ \ blocks each\]
+	OASCR	[0]
+
+DATAVG:	OASC	[ASCIZ \Average blocks per user \]
+	ODEC	AVER
+
+	SKIPG	TQUO
+	JRST	DATALO
+	OASC	[ASCIZ \, per quota'ed user \]
+	ODEC	TAQUOT
+
+DATALO:	SKIPG	TALLO
+	JRST	DATFRE
+	OASC	[ASCIZ \, per allocated user \]
+	ODEC	TAALLO
+
+DATFRE:	OASCR	[0]
+	OASC	[ASCIZ \Free disk blocks:  \]
+	ODEC	FRUNAL
+	SKIPG	TALLO
+	JRST	DATOUX
+	OASC	[ASCIZ \ unallocated, \]
+	ODEC	FREEBL
+	OASC	[ASCIZ \ allocated\]
+DATOUX:	OASCR	[0]
+	OASC	[ASCIZ \Disk system contains \]
+	ODEC	NQS
+	OASC	[ASCIZ \ disks\]
+	MOVE	A,NQS
+	CAMN	A,NQSONL
+	JRST	DATOUY
+	OASC	[ASCIZ \ (\]
+	ODEC	NQSONL
+	OASC	[ASCIZ \ on-line)\]
+DATOUY:	OASC	[ASCIZ \, \]
+	ODEC	ALLBL
+	OASCR	[ASCIZ \ blocks\]
+	OASC	[ASCIZ \Free swapping blocks: \]
+	ODEC	FREESW
+	OASC	[ASCIZ \ out of \]
+	ODECR	SWAPAL
+
+	OASC	[ASCIZ \Unused UFD slots: \]
+	MOVE	A,NUDSL
+	SUB	A,TUS
+	SETZ	B,
+	BLT	B,
+	SKIPE	B		;If this is a KL10 or a KS10, it has a
+	 SUBI	A,2		; front-end file system in blocks 0,1
+	ODEC	A
+	OASC	[ASCIZ \ of \]
+	MOVE	A,NUDSL
+	SKIPE	B
+	 SUBI	A,2
+	ODECR	A
+
+	POPJ	P,
+
+; here to output tables of disk crufties
+QSKOUT:	OASC	[ASCIZ \Drive		\]
+	SETZ	K,
+QSKTOP:	CAML	K,NQS
+	JRST	QSKEND
+	OASC	[ASCIZ \DK\]
+	ODEC	K
+	OASC	[ASCIZ \:	\]
+	AOJA	K,QSKTOP
+QSKEND:	OASCR	[0]
+	OASCR	[0]
+	OASC	[ASCIZ \Pack #		\]
+	MOVEI	B,QPKID
+	PUSHJ	P,QTABL1
+	OASC	[ASCIZ \Disk size	\]
+	MOVEI	B,TLASTB
+	PUSHJ	P,QTABL1
+	OASCR	[0]
+
+	OASC	[ASCIZ \Available	\]
+	MOVEI	B,TSIZES
+	PUSHJ	P,QTABL1
+
+; only print alloc if there is some
+	SKIPG	TALLO
+	JRST	QFREEP
+	OASC	[ASCIZ \Allocated	\]
+	MOVEI	B,PACK
+	PUSHJ	P,QTABL1
+
+QFREEP:	OASC	[ASCIZ \Free space	\]
+	MOVEI	B,QSFT
+	PUSHJ	P,QTABL1
+	OASCR	[0]
+
+	OASC	[ASCIZ \Swap area	\]
+	MOVEI	B,TSWAPA
+	HLL	B,QPTR
+	MOVE	D,QPTR
+	HRRI	D,QACT
+QSWAPT:	SKIPE	(D)
+	 JRST	QSWAP1
+	MOVE	C,(B)
+	SUB	C,NUDSL
+	SKIPGE	C
+	 MOVEI	C,0
+	OJUST	5,C
+QSWAP2:	OASCI	^I
+	AOBJN	D,.+1
+	AOBJN	B,QSWAPT
+	OASCR	[0]
+	OASC	[ASCIZ \Free swap area	\]
+	MOVEI	B,QSFTS
+	PUSHJ	P,QTABL1
+	POPJ	P,
+
+QSWAP1: OASC	[ASCIZ /    --/]
+	JRST	QSWAP2
+
+QTABL1:	PUSH	P,C
+	MOVE	C,QPTR
+	HRRI	C,QACT
+	HLL	B,QPTR
+QTABL3:	SKIPE	(C)
+	 JRST	QTABL2
+	OJUST	5,(B)
+QTABL4:	OASCI	^I
+	AOBJN	C,.+1
+	AOBJN	B,QTABL3
+	OASCR	[0]
+	POP	P,C
+	POPJ	P,
+QTABL2:	OASC	[ASCIZ \    --\]
+	JRST	QTABL4
+
+QTABLE:	HLL	B,QPTR
+	OJUST	5,(B)
+	OASCI	^I
+	AOBJN	B,QTABLE+1
+	OASCR	[0]
+	POPJ	P,
+
+
+; point at user vector -- up to MAXUSR users
+GATHER:	MOVEI	A,USERS
+	MOVEM	A,N
+	MOVEM	A,M			; ptr to vector
+; zero total of users
+	SETZM	TUS			; users
+	SETZM	TPIGS			; users over quota
+	SETZM	TFAT			; total excess
+	SETZM	TBACON			; average excess
+	PUSHJ	P,GETMFD
+
+GATHE1:	PUSHJ	P,MFDN			; get a user id into C
+	JRST	GATHEX
+	JUMPE	C,GATHE1		; loop if empty slot
+	MOVEM	C,USRNAM		; username
+	.SUSET	[.SSNAM,,C]		; set to it
+; individual user stats
+	PUSHJ	P,USRDSK
+	JRST	GATHE1
+	PUSHJ	P,USRVEC		; add to vector
+	AOS	TUS
+	JRST	GATHE1			; loop
+
+GATHEX:	MOVE	A,TFAT			; calculate avg blks for pigs
+	MOVE	B,TPIGS
+	PUSHJ	P,AVG
+	MOVEM	A,TBACON
+
+	MOVE	A,TBQUOT		; calculate avg blks for quota
+	MOVE	B,TUQUOT
+	PUSHJ	P,AVG
+	MOVEM	A,TAQUOT
+
+	MOVE	A,TBALLO		; calculate avg blks for alloc
+	MOVE	B,TUALLO
+	PUSHJ	P,AVG
+	MOVEM	A,TAALLO
+	POPJ	P,
+
+; average, given total and number of instances (as fixes), return a fix
+AVG:	PUSH	P,B
+	FLOAT	A
+	FLOAT	B
+	FDVR	A,B
+	FIX	A
+	MOVE	A,B
+	POP	P,B
+	POPJ	P,
+
+; * here to get average number of blocks per user on disk *
+
+;This comment is wrong!
+; makes a good guess at number of free blocks on disks by finding out
+; number of packs, and number of free blocks on each, subtracting that from
+; number of packs times 5000 blocks per pack minus 200 ufd blocks and 1 mfd, 1 tut
+; per pack.
+
+; Puts results out in ALLBL (total number of blocks)
+; and FREEBL (number of blocks free)
+
+DSKAV:	PUSHJ	P,QNUM			; how many packs
+	PUSHJ	P,QRES			; any reserved?
+	PUSHJ	P,DSKALL		; total disk blocks
+	PUSHJ	P,DSKFRE		; free disk blocks
+	PUSHJ	P,SWPFRE		; free swapping blocks
+	PUSHJ	P,DSKMFD		; get # of users, blocks/user
+	POPJ	P,
+
+; * number of packs in system *
+
+; nqs/		# of packs
+; qtuto/	-n,,qtuto
+; tutsiz/	# of blocks per tut
+
+QNUM:	PUSH	P,A
+	MOVE	A,[SQUOZE 0,NQS]
+	.EVAL	A,
+	.VALUE [ASCIZ /:.EVAL OF NQS FAILED/]
+	MOVEM	A,NQS
+	MOVNS	A
+	HRLS	A
+	HRRI	A,QTUTO
+	MOVEM	A,QPTR
+; get number blocks for a tut
+	MOVE	A,[SQUOZE 0,NTUTBL]
+	.EVAL	A,
+	.VALUE [ASCIZ /:.EVAL OF SYMBOL IN A FAILED/]
+	MOVEM	A,TUTSIZ
+	POP	P,A
+	POPJ	P,
+
+; any reserved packs in system??
+
+QRES:	PUSH	P,A
+	MOVE	A,[SQUOZE 0,QRSRVP]
+	SETOM	TUTRSR
+	.EVAL	A,
+	 SETZB	A,TUTRSR
+	MOVEM	A,QRSRVP
+	POP	P,A
+	POPJ	P,
+
+; * free blocks in system *
+
+; freebl/	free blocks in system
+
+DSKFRE:	PUSH	P,A
+	PUSH	P,B
+	MOVE	A,[QSFT,,[SQUOZE 0,QSFT]]
+	PUSHJ	P,GETQ
+	MOVEI	B,QSFT
+	PUSHJ	P,QTOTAL
+	MOVEM	A,FREEBL
+	MOVEI	B,0
+	HLL	B,QPTR
+	SETZ	A,
+DSKFR1:	SKIPE	TRESRV(B)
+	 JRST	DSKFR2	
+	SKIPL	QSFT(B)
+	 ADD	A,QSFT(B)
+DSKFR2:	AOBJN	B,DSKFR1
+	MOVEM	A,FRUNAL
+	MOVNS	A
+	ADDM	A,FREEBL
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; * free swapping blocks *
+
+; freesw/	free swapping blocks
+
+SWPFRE:	PUSH	P,A
+	PUSH	P,B
+	MOVE	A,[QSFTS,,[SQUOZE 0,QSFTS]]
+	PUSHJ	P,GETQ
+	MOVEI	B,QSFTS
+	PUSHJ	P,QTOTAL
+	MOVEM	A,FREESW
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; * getloc of (in ac A) symbol to symbol+nqs *
+
+; qtuto/	first pack
+; ...
+; qtuto+nqs-1/	last pack
+
+GETQ:	PUSH	P,B
+	MOVE	B,QPTR
+	HLR	B,A
+	MOVE	A,(A)
+	.EVAL	A,
+	.VALUE [ASCIZ /:.EVAL OF SYMBOL IN A FAILED/]
+	HRLS	A
+	HRR	A,B
+	.GETLOC	A,
+	ADD	A,[1,,1]
+	AOBJN	B,.-2
+	POP	P,B
+	POPJ	P,
+
+
+; A/ <table>,, symbol
+GETUT:	PUSH	P,B
+	PUSH	P,C
+	HRLZ	C,A		; C/ symbol,,0
+	HLRZ	A,A		; A/ table nqs long
+	MOVE	B,QPTR		; B/ -nqs,,qtuto
+
+SIZLUP:	HRL	A,(B)
+	ADD	A,C		; offset by QTUTO
+	.GETLOC	A,
+	AOS	A
+	AOBJN	B,SIZLUP
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+; * allocations *
+
+; swapal/	swapping allocation
+; allbl/	total of system blocks
+
+DSKALL:	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+
+; read in qtuto table
+	MOVE	A,[QTUTO,,[SQUOZE 0,QTUTO]]
+	PUSHJ	P,GETQ
+
+; find out which packs are active
+	MOVE	A,[QACT,,[SQUOZE 0,QACT]]
+	PUSHJ	P,GETQ
+
+; now total on-line disk packs
+	SETZ	A,
+	MOVEI	B,QACT
+	HLL	B,QPTR
+	SKIPN	(B)		; offline?
+	 AOS	A
+	AOBJN	B,.-2
+	MOVEM	A,NQSONL
+
+; find out pack numbers for each drive
+	MOVE	A,[QPKID,,[SQUOZE 0,QPKID]]
+	PUSHJ	P,GETQ
+
+; find out which packs are allocated
+	SKIPN	TUTRSR		; reservations in tut?
+	 JRST	OLDRSR
+
+	MOVE	A,[TRESRV,,QTRSRV]
+	SKIPE	QRSRVP		; any reserved packs in system?
+	 PUSHJ	P,GETUT
+	JRST	GSWAPA
+
+OLDRSR:	MOVE	A,[TRESRV,,[SQUOZE 0,QRESRV]]
+	PUSHJ	P,GETQ		; else in table
+
+; get size of packs
+GSWAPA:	MOVE	A,[TLASTB,,QLASTB]
+	PUSHJ	P,GETUT
+
+; get swapping allocations
+	MOVE	A,[TSWAPA,,QSWAPA]
+	PUSHJ	P,GETUT
+
+; start by getting number of ufds
+	MOVE	A,[SQUOZE 0,NUDSL]
+	.EVAL	A,
+	.VALUE [ASCIZ /:.EVAL OF NUDSL FAILED/]
+	MOVEM	A,NUDSL
+
+; get total swapping allocation, fixed up by removing blocks
+; allocated for UFDs
+	HLLZ	C,QPTR
+	MOVEI	B,0
+GSWAP1:	SKIPE	QACT(C)
+	 JRST	GSWAP2
+	MOVE	A,TSWAPA(C)
+	SUB	A,NUDSL
+	SKIPLE	A
+	 ADD	B,A
+GSWAP2:	AOBJN	C,GSWAP1
+	MOVEM	B,SWAPAL
+
+; calculate total blocks per pack
+	MOVE	B,QPTR
+	HRRI	B,TLASTB
+	MOVE	C,QPTR
+	HRRI	C,TSWAPA
+	MOVE	D,QPTR
+	HRRI	D,TSIZES
+
+DSKTOT:	MOVE	A,(B)
+; get greater of nudsl and swapa into 0
+	MOVE	0,NUDSL
+	CAMGE	0,(C)
+	MOVE	0,(C)
+	SUB	A,0
+; subtract mfd and tut if not already part of swapa
+	CAIGE	0,2500.
+	SUB	A,TUTSIZ		; flush tut blocks
+	MOVEM	A,(D)
+	AOBJN	B,.+1
+	AOBJN	C,.+1
+	AOBJN	D,DSKTOT
+
+; calculate total blocks by adding all packs
+	MOVEI	B,TSIZES
+	PUSHJ	P,QTOTAL
+	MOVEM	A,ALLBL
+
+; restore acs and return
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; total a table nqs long -- ignore inactive packs
+QTOTAL:	PUSH	P,C
+	MOVE	C,QPTR
+	HRRI	C,QACT
+	HLL	B,QPTR
+	SETZ	A,
+QTOTA1:	SKIPE	(C)
+	 JRST	QTOTA2
+	SKIPL	(B)
+	 ADD	A,(B)
+QTOTA2:	AOBJN	C,.+1
+	AOBJN	B,QTOTA1
+	POP	P,C
+	POPJ	P,
+
+; total users and average per user
+
+; aver/		average blocks per user
+; tus/		total users
+
+DSKMFD:	PUSH	P,A
+	PUSH	P,B
+
+	SKIPE	B,TUS
+	JRST	DSKMF1
+	PUSHJ	P,GETMFD
+	PUSHJ	P,MFDN
+	SKIPA
+	AOJA	B,.-2
+	MOVEM	B,TUS
+
+; now compute average blocks per user
+DSKMF1:	MOVE	A,ALLBL
+	SUB	A,FREEBL
+	IDIV	A,B
+	MOVEM	A,AVER
+	.CLOSE	MCH,
+
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+; * next username from mfd *
+
+; C/ username in sixbit
+MFDN:	AOS	MFDPTR
+	AOS	C,MFDPTR
+	CAILE	C,MFDPTR+1777
+	POPJ	P,
+	SKIPN	C,(C)
+	JRST	MFDN
+	AOS	(P)
+	POPJ	P,
+
+; * add info on a user to free block *
+
+; get 6 word block
+USRVEC:	MOVEI	A,%USRBLK
+	ADDB	A,FREEPT
+
+; put out data
+	MOVE	0,USRNAM	; username
+	MOVEM	0,%USER(A)
+	MOVE	0,UFILES	; # files
+	MOVEM	0,%FILES(A)
+	MOVE	0,ULINKS	; # links
+	MOVEM	0,%LINKS(A)
+	MOVE	0,UBLCKS	; # blocks
+	MOVEM	0,%BLCKS(A)
+	MOVE	0,UQUOTA	; quota
+	MOVEM	0,%QUOTA(A)
+	MOVE	0,UALLOC
+	MOVEM	0,%ALLOC(A)
+	MOVE	0,UPACKN
+	MOVEM	0,%PACKN(A)
+	MOVE	0,UBKFLS	; blocks/file
+	MOVEM	0,%BLKAV(A)
+
+; update cptr to pointers
+	MOVEM	A,(N)
+	SUB	N,[(1)]
+	ADDI	N,1
+	POPJ	P,
+
+; * typeout information on a given user *
+; a/ ptr to data block
+
+TYPOUT:	PUSH	P,A
+	PUSH	P,B
+	MOVE	B,A
+
+; type out data
+	OSIX	%USER(B)		; user-id
+	OASCI	^I
+	OJUST	3,%FILES(B)		; # file
+	OASCI	^I
+	OJUST	3,%LINKS(B)		; # links
+	OASCI	^I
+	OJUST	4,%BLCKS(B)		; # blocks
+; give him a * if over quota
+	SKIPE	TQUO
+	SKIPG	A,%QUOTA(B)		; has quota?
+	JRST	TYPBLK
+	CAMGE	A,%BLCKS(B)
+	OASCI	"*
+TYPBLK:	SKIPG	TQUO
+	JRST	TYPALC
+	SKIPG	TALLO
+	JRST	TYPOU1
+	OASCI	^I
+	SKIPG	%ALLOC(B)
+	JRST	TYPQUO
+; here if has alloc. (print quota only if different)
+TYPALL:	MOVE	A,%QUOTA(B)
+	CAMN	A,%ALLOC(B)
+	JRST	TYPAL1
+	OJUST	4,%QUOTA(B)
+TYPAL1:	OASCI	^I
+	OJUST	4,%ALLOC(B)
+	JRST	TYPOU1
+; here if only has quota
+TYPQUO:	OJUST	4,%QUOTA(B)
+	OASCI	^I
+
+; restore acs and return
+TYPOU1:	OASCI	^I
+	SKIPE	%PACKN(B)
+	OJUST	2,%PACKN(B)
+	OASCI	^I
+	OFLOAT	%BLKAV(B)		; blocks/file
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+TYPALC:	SKIPG	TALLO
+	JRST	TYPOU1
+	OASCI	^I
+	OJUST	4,%ALLOC(B)
+	JRST	TYPOU1
+
+; * read in mfd *
+
+GETMFD:	SKIPE	MFDBUF+MDNAMP
+	JRST	GETMFX
+	.OPEN	MCH,MFDDIR
+	.VALUE	[ASCIZ !:CANT OPEN M.F.D.!]
+	MOVE	A,[-2000,,MFDBUF]
+	.IOT	MCH,A
+	JUMPL	A,TINY
+	.CLOSE	MCH,
+GETMFX:	MOVE	A,MFDBUF+MDNAMP
+	ADDI	A,MFDBUF-2		; aos's first, cretin...
+	MOVEM	A,MFDPTR
+	POPJ	P,
+
+TINY:	.VALUE	[ASCIZ !:M.F.D. LESS THAN 2000 WORDS LONG?!]
+
+; * single user statistics gatherer *
+
+NOUFD:	OASCI	""
+	OSIX	USRNAM
+	OASCR	[ASCIZ \" is not the name of a directory.\]
+	JRST	KILL
+
+USRDSK:	PUSH	P,D
+	PUSH	P,E
+
+; read ufd in
+	.OPEN	CH,UDIR
+	JRST	USRLSR
+	MOVE	A,[-2000,,FDIR]
+	.IOT	CH,A
+	.CLOSE	CH,
+
+; initialize world
+	SETZB	C,D
+	SETZB	E,F
+	SETZM	UFILES
+	SETZM	ULINKS
+	SETZM	UBLCKS
+	SETZM	UBKFLS
+	SETZM	UQUOTA
+	SETZM	UALLOC
+	SETZM	UPACKN
+	SETZM	OLDC
+
+; quota and number of blocks
+	MOVE	B,FDIR+UDBLKS
+	HLREM	B,UQUOTA
+	SKIPGE	B
+	 SETZM	UQUOTA
+	HRREM	B,UBLCKS
+	SKIPG	A,UQUOTA
+	 JRST	L69
+	CAML	A,UBLCKS
+	 JRST	L69
+	MOVE	A,UBLCKS
+	SUB	A,UQUOTA
+	ADDM	A,TFAT
+	AOS	TPIGS
+
+; pack and allocation
+L69:	HRRE	B,FDIR+UDALLO
+	SKIPLE	B		; if negative or zero (UALLOC is 0 already)
+	 MOVEM	B,UALLOC
+
+	HLRZ	E,FDIR+UDALLO
+	JUMPE	E,L105
+	MOVEM	E,UPACKN
+	SKIPN	TUTRSR
+	 JRST	O69
+
+	MOVE	A,QPTR		; here for new style reservations
+	HLLZ	A,A		; done by pack number rather than drive
+DRLOOP:	SKIPL	QACT(A)		; drive off line?
+	CAME	E,QPKID(A)
+	 JRST	DRNEXT
+	ADDM	B,PACK(A)
+	JRST	L105
+DRNEXT:	AOBJN	A,DRLOOP
+	JRST	L105
+
+O69:	ADDM	B,PACK(E)	; for old style reservation hackery
+
+L105:	MOVE	B,UDNAMP+FDIR
+	ADDI	B,FDIR
+
+L1:	CAILE	B,FDIR+1773
+	JRST	UNUM
+	SKIPN	(B)
+	JRST	NEXTFL
+	MOVE	E,UNRNDM(B)
+	TLNE	E,UNIGFL
+	JRST	NEXTFL
+	TLNE	E,1
+	AOSA	ULINKS		; was a link
+	AOS	UFILES		; was a regular file
+
+; move to next file
+NEXTFL:	ADDI	B,LUNBLK
+	JRST	L1
+
+; finish calculations and exit	
+
+; calculate blocks/file
+UNUM:	MOVE	A,UBLCKS
+	FLOAT	A
+	MOVE	B,UFILES
+	FLOAT	B
+	FDVR	A,B
+	MOVEM	A,UBKFLS
+
+; add to totals
+	SKIPLE	E,UFILES
+	ADDM	E,TFL
+	SKIPLE	E,ULINKS
+	ADDM	E,TLK
+	SKIPLE	E,UBLCKS
+	ADDM	E,TBL
+	SKIPG	UALLOC
+	 JRST	UPDUSR
+	AOS	TUALLO		; here for allocated directory
+	ADDM	E,TBALLO
+	JRST	UPDUS1
+UPDUSR:	SKIPG	UQUOTA
+	 JRST	UPDUS1
+	AOS	TUQUOT		; here for quota'ed directory
+	ADDM	E,TBQUOT
+UPDUS1:	SKIPLE	E,UQUOTA
+	ADDM	E,TQUO
+	SKIPLE	E,UALLOC
+	ADDM	E,TALLO
+
+; go here if no files in dir
+ZEROES:	AOS	-2(P)
+USRLSR:	POP	P,E
+	POP	P,D
+	POPJ	P,
+
+; byte pointer table
+DESCBP:	440600
+	360600
+	300600
+	220600
+	140600
+	060600
+; * buffers *
+MAXUSR==512.
+
+USERS:	BLOCK MAXUSR	; this is largest number of users prog will handle
+
+FREEPT:	FREESP+1-%USRBLK
+FREESP:	BLOCK MAXUSR*%USRBLK	; free storage buffer
+
+PDL:	BLOCK 100
+FDIR:	BLOCK 2000
+BUF:	BLOCK 20.
+
+; variables
+SORTX:	-1,,0
+CPTR:	0
+CPTR1:	0
+OLDC:	0
+
+; * variables used for getting system info *
+
+TUTRSR:	0			; non-zero if new style reservation stuff
+TUTSIZ:	0			; number of blocks in tut (NTUTBL)
+
+NQS:	0			; number of packs
+NQSONL:	0			; number of packs online
+QPTR:	0			; -nqs,,qtuto
+QRSRVP:	0			; any reserved packs?
+NUDSL:	0			; number of ufds allowed
+
+QTUTO:	BLOCK 10		; location of tut for drives
+
+TLASTB:	BLOCK 10		; drive sizes (rp02 or rp03)
+TRESRV:	BLOCK 10		; reserved? (-1 if is)
+TSWAPA:	BLOCK 10		; swapping allocations
+
+QACT:	BLOCK 10		; disk active?
+QPKID:	BLOCK 10		; pack numbers
+TSIZES:	BLOCK 10		; calculated sizes (exclude ufds and mfd and tut)
+QSFT:	BLOCK 10		; free file space
+QSFTS:	BLOCK 10		; free swap space
+PACK:	BLOCK 10		; total allocated on each drive
+
+; * status variables *
+
+; single user totals
+USRNAM:	0		; user
+UFILES:	0		; # of files
+ULINKS:	0		; # of links
+UBLCKS:	0		; number of blocks in ufd
+UBKFLS:	0		; blocks/file average
+UQUOTA:	0		; quota
+UALLOC:	0		; allocation
+UPACKN:	0		; allocated pack number
+
+; system wide totals
+TUS:	0		; total # users
+TUALLO:	0		; total # allocated users
+TUQUOT:	0		; total # quota'ed users
+
+TPIGS:	0		; users over quota
+TFAT:	0		; total excess for TPIGS
+TBACON:	0		; average pigness of TPIGS
+
+TFL:	0		; total files
+TLK:	0		; total links
+
+TBL:	0		; total blocks
+TBALLO:	0		; total blocks in allocated directories
+TBQUOT:	0		; total blocks in quota'ed directories
+
+TAV:	0		; average b/f over system
+TAALLO:	0		; average b/u for allocated directories
+TAQUOT:	0		; average b/u for quota'ed directories
+
+TQUO:	0		; total of quotas
+TALLO:	0		; total of allocations
+
+; block for cretinous mfd
+MFDPTR:	0
+MFDBUF:	BLOCK 2000.
+
+; disk system stats
+FREESW:	0		; free swapping blocks
+SWAPAL:	0		; swapping allocation
+FREEBL:	0		; free disk blocks
+FRUNAL:	0		; free unallocated blocks
+ALLBL:	0		; total number of blocks
+AVER:	0		; average number of blocks per user directory
+
+DATE:	0		; date dskuse was run
+TIME:	0		; time dskuse was run
+
+; * I/O variables *
+
+BOTH:	0		; flag for double dskuse ("&")
+
+; files
+UDIR:	SIXBIT /  &DSK.FILE.(DIR) /
+MFDDIR:	SIXBIT /  &DSKM.F.D.(FILE)/
+
+OUTPUT:	SIXBIT /  !TPLDSKUSEOUTPUT/
+RSYSNM:	0		; sname of user
+SYSNAM:	0		; which system? dm, ai, or ml?
+
+; ================================================================
+;		read a command line
+; ================================================================
+
+COMMND:	BLOCK 20
+COMPTR:	0
+
+; set up buffer
+READ:	PUSH	P,A
+	PUSH	P,B
+	SETZM	COMMND
+	MOVE	[COMMND,,COMMND+1]
+	BLT	0,COMPTR-1
+; command reader
+RCMD:	MOVE	B,[440700,,COMMND]
+	MOVEM	B,COMPTR
+	MOVEI	C,0
+RCMD1:	.IOT	TYIC,A
+	CAIN	A,177
+	JRST	RUB
+	CAIN	A,^D
+	JRST	RREPEA
+	CAIN	A,^L
+	JRST	RCLEAR
+	CAIN	A,^J
+	JRST	RCMD1
+	CAIN	A,^Q
+	JRST	RQUOTE
+	CAIN	A,^M
+	JRST	RCMDX
+RCMDL:	IDPB	A,B
+	CAMGE	B,[350700,,COMMND+17]
+	AOJA	C,RCMD1
+
+RCFUL:	IDPB	A,B
+	MOVEI	A,15
+	IDPB	A,B
+
+RCMDX:	IDPB	A,B
+	MOVEI	A,0
+	IDPB	A,B
+	POP	P,B
+	POP	P,A
+	POPJ	P,
+
+RREPEA:	.IOT	TCMD,[^M]
+	.IOT	TCMD,[^J]
+	JRST	REPPER
+RCLEAR:	.IOT	TCMD,[^P]
+	.IOT	TCMD,["C]
+REPPER:	.IOT	TCMD,["*]
+	MOVEI	A,COMMND
+	HRLI	A,440700
+REP1:	ILDB	A
+	JUMPE	RCMD1
+	.IOT	TCMD,
+	JRST	REP1
+
+RQUOTE:	IDPB	A,B
+	CAML	B,[350700,,COMMND+17]
+	JRST	RCFUL
+	SETOM	QUTFLG
+	AOS	C
+	.IOT	TYIC,A
+	SETZM	QUTFLG'
+	JRST	RCMDL
+
+RUB:	PUSHJ	P,RUBBER
+	JRST	RCMD
+	JRST	RCMD1
+
+RUBBER:	SOJL	C,[POPJ P,]	; erasure rubout handler
+	MOVEI	A,0
+	DPB	A,B
+	.IOT	TCMD,[^P]
+	.IOT	TCMD,["X]
+	ADD	B,[070000,,]
+	TLNE	B,400000
+	ADD	B,[347777,,-1]
+	AOS	(P)
+	POPJ	P,
+
+; ===================================================================
+; 		command line reading and parsing section
+; ===================================================================
+
+; read a file spec
+SCNAME:	PUSH	P,D
+	MOVEI	D,OUTPUT
+	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	MOVSI	C,-2
+	HRRI	C,1(D)
+	JRST	SCNONE
+SCNGET:	HRRZ	A,(D)
+	CAIE	A,'TPL
+	JRST	SCNONE
+	MOVEI	A,'DSK
+	HRRM	A,(D)
+SCNONE:	PUSHJ	P,GETSYL
+	JUMPE	B,SCNX
+	CAIE	A,':
+	JRST	.+3
+	HLRZM	B,(D)
+	JRST	SCNGET
+	CAIE	A,';
+	JRST	SCNNMN
+	MOVEM	B,3(D)
+	JRST	SCNGET
+SCNNMN:	MOVEM	B,(C)
+	JUMPL	A,SCNX
+	CAIE	A,',
+	AOBJN	C,SCNGET
+SCNX:	POP	P,C
+	POP	P,B
+	POP	P,A
+	POP	P,D
+	POPJ	P,
+
+; get a syllable from command buffer
+GETSYL:	PUSH	P,C
+	PUSH	P,[0]
+	MOVEI	B,(P)
+	HRLI	B,440600
+GETSLP:	PUSHJ	P,GETCCA
+	JUMPL	A,GETSX
+	SETO	E,
+	CAIN	A,^Q
+	JRST	GETQOT
+	SUBI	A,40
+	JUMPL	A,GETSX
+	JUMPE	A,GETSP
+	CAIN	A,'_
+	JRST	GETSX
+	CAIE	A,':
+	CAIN	A,';
+	JRST	GETSX
+GETSPT:	CAIL	A,100
+	SUBI	A,40
+	TLNN	B,770000
+	JRST	GETSLP
+	IDPB	A,B
+	JRST	GETSLP
+
+GETQOT:	ILDB	A,COMPTR
+	SUBI	A,40
+	JUMPGE	A,GETSPT
+	JRST	GETSX
+GETSP:	TLNE	B,400000
+	JRST	GETSLP
+GETSX:	POP	P,B		; character word
+	POP	P,C
+	POPJ	P,
+
+GETCCA:	ILDB	A,COMPTR
+	JUMPE	A,GETCCX
+	CAIN	A,^I
+	MOVEI	A,40
+	CAIN	A,^M
+	JRST	GETCCX
+	CAIN	A,"
+	MOVEI	A,",
+	POPJ	P,
+GETCCX:	SETOM	A
+	POPJ	P,
+
+; ================================================================
+;		interrupt handler (tty only)
+; ================================================================
+
+ZZZ=.
+
+LOC 42
+	JSR	TSINT
+LOC ZZZ
+
+TSINT:	0
+	0
+	PUSH	P,A
+	MOVEI	A,TYIC
+	.ITYIC	A,
+	JRST	TSDIS
+	CAIE	A,^G
+	CAIN	A,^S
+	JRST	TSKILL			; if ^S or ^G typed, quit
+TSDIS:	POP	P,A
+	.DISMIS	TSINT+1
+
+TSKILL:	.IOT	TYIC,A
+	POP	P,A
+	.DISMIS	[BADCOM]
+
+; ================================================================
+;		uuo handler (typeout uuos)
+; ================================================================
+
+ZZZ==.
+        LOC 40
+        0
+        JSR UUOH
+        LOC ZZZ
+UUOCT==0
+UUOTAB:	JRST ILUUO
+	IRPS X,,[OSIX OASC OASCI OASCR ODEC ODECR OFLOAT OJUST ODATE OTIME]
+	UUOCT==UUOCT+1
+	X=UUOCT_33
+	JRST U!X
+	TERMIN
+
+UUOMAX==.-UUOTAB
+
+UUOD:	0		; contents of UUO eff addr.
+UUOE:	0		; UUO effad.
+
+UUOH:	0
+	PUSH	P,A
+	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	MOVEI	@40			; get eff addr. of uuo
+	MOVEM	UUOE
+	MOVE	@0
+	MOVEM	UUOD			; contents of eff adr
+	MOVE	B,UUOE			; eff adr
+	LDB	A,[270400,,40]		; get uuo ac,
+	LDB	C,[330600,,40]		; op code
+	CAIL	C,UUOMAX
+	MOVEI	C,0			; grt=>illegal
+	JRST	@UUOTAB(C)		; go to proper rout
+
+UUORET:	POP	P,D
+	POP	P,C
+	POP	P,B
+	POP	P,A			; restore ac's
+	JRST	2,@UUOH
+
+ILUUO:	.VALUE	[ASCIZ /:ILLEGAL UUO/]
+
+UOASCR:	SKIPA	C,[^M]			; cr for end of type
+UOASC:	MOVEI	C,0			; no cr
+	HRLI	B,440700		; make ascii pointer
+UOASC1:	ILDB	A,B			; get char
+	JUMPE	A,.+3			; finish?
+	PUSHJ	P,IOTA
+	JRST	.-3			; and get another
+	SKIPE	A,C			; get saved cr?
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+UOASCI:	MOVE	A,B			; prt ascii immediate
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+UOSIX:	MOVE	B,UUOD
+USXOOP:	JUMPE	B,UUORET
+	LDB	A,[360600,,B]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	LSH	B,6
+	JRST	USXOOP
+
+TENS:	0 ? 10. ? 100. ? 1000. ? 10000. ? 100000.
+
+UOJUST:	MOVE	B,UUOD
+TYOJ1:	CAML	B,TENS(A)
+	JRST	UOJUS1
+	.IOT	TYOC,[40]
+	SOJG	A,TYOJ1
+UOJUS1:	SETZB	A,D
+	MOVEI	C,10.
+	JRST	UOOCTI+1
+
+UODECR:	SKIPA	D,[^M]
+UODEC:	SETZ	D,
+	MOVEI	C,10.
+	JRST	.+3
+UOOCT:	SETZ	D,
+	MOVEI	C,8.			; octal base
+	MOVE	B,UUOD			; get actual word to prt
+	JRST	.+3			; join code
+UODECI:	SKIPA	C,[10.]			; decimal
+UOOCTI:	MOVEI	C,8.
+	MOVEM	C,BASE'
+	SKIPN	A
+	HRREI	A,-1			; a=digit count
+	PUSHJ	P,UONUM			; print numbr
+	SKIPE	A,D
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+UONUM:	IDIV	B,BASE
+	HRLM	C,(P)			; save digit
+	SOJE	A,UONUM1		; done if 0
+	SKIPG	A			; + => more
+	SKIPE	B			; - => b=0 => done
+	PUSHJ	P,UONUM			; else more
+UONUM1:	HLRZ	C,(P)			; retreive digits
+	ADDI	C,"0			; make to ascii
+	CAILE	C,"9			; is it good dig
+	ADDI	C,"A-"9-1		; make hex digit
+	PUSHJ	P,IOTC
+	POPJ	P,			; ret
+
+UOFLOA:	PUSH	P,E
+	PUSH	P,F
+	PUSH	P,G
+	PUSH	P,H
+	PUSH	P,I
+	MOVE	A,UUOD
+	MOVE	D,A
+	PUSHJ	P,NFLOT
+	POP	P,I
+	POP	P,H
+	POP	P,G
+	POP	P,F
+	POP	P,E
+	JRST	UUORET
+
+; at this point we enter code abstracted from DDT.
+NFLOT:	JUMPE	A,FP1A
+
+TFL1:	MOVEI	B,0
+	CAMGE	A,FT01
+	JRST	FP4
+	CAML	A,FT8
+	AOJA	B,FP4
+FP1A:
+FP3:	SETZB	C,TEM1		; CLEAR DIGIT CNTR, C TO RECEIVE FRACTION
+	MULI	A,400
+	ASHC	B,-243(A)
+	MOVE	A,B
+	PUSHJ	P,FP7
+	PUSH	P,A
+	MOVEI	A,".
+	PUSHJ	P,IOTA
+	POP	P,A
+	MOVNI	A,3
+	ADD	A,TEM1
+	MOVE	E,C
+FP3A:	MOVE	D,E
+	MULI	D,12
+	PUSHJ	P,FP7B
+	SKIPE	E
+	AOJL	A,FP3A
+	POPJ	P,		; ONE return from OFLT here
+
+FP4:	MOVNI	C,6
+	MOVEI	F,0
+FP4A:	ADDI	F,1(F)
+	XCT	FCP(B)
+	SOSA	F
+	FMPR	A,@FCP+1(B)
+	AOJN	C,FP4A
+	PUSH	P,EXPSGN(B)
+	PUSHJ	P,FP3
+	PUSH	P,A
+	MOVEI	A,"E
+	PUSHJ	P,IOTA
+	POP	P,A
+	POP	P,D
+	MOVE	A,D
+	PUSHJ	P,IOTA
+	MOVE	A,F
+
+FP7:	SKIPE	A	; AVOID AOSING TEM1, NOT SIGNIFICANT DIGIT
+	AOS	TEM1
+	IDIVI	A,12
+	HRLM	B,(P)
+	JUMPE	A,FP7A1
+	PUSHJ	P,FP7
+
+FP7A1:	HLRZ	D,(P)
+FP7B:	ADDI	D,"0
+	PUSH	P,A
+	MOVE	A,D
+	PUSHJ	P,IOTA
+	POP	P,A
+	POPJ	P,
+
+; constants
+	1.0^32.
+	1.0^16.
+FT8:	1.0^8
+	1.0^4
+	1.0^2
+	1.0^1
+FT:	1.0^0
+	1.0^-32.
+	1.0^-16.
+	1.0^-8
+	1.0^-4
+	1.0^-2
+FT01:	1.0^-1
+FT0=FT01+1
+
+TEM1:	0
+
+; instructions
+FCP:	CAMLE	A, FT0(C)
+	CAMGE	A, FT(C)
+	0, FT0(C)
+
+EXPSGN:	"-
+	"+
+
+; ====================================================================
+; uuo character output
+; ====================================================================
+
+IOTC:	PUSH	P,A
+	MOVE	A,C
+	PUSHJ	P,IOTA
+	POP	P,A
+	POPJ	P,
+
+IOTA:	CAIN	A,^P
+	JRST	IOTAP
+IOTA1:	CAIE	A,^J
+	.IOT	TYOC,A
+	CAIN	A,^M
+	.IOT	TYOC,[^J]
+	POPJ	P,
+IOTAP:	.IOT	TYOC,["^]
+	ADDI	A,100
+	JRST	IOTA1
+
+; type time
+UOTIME:	MOVEI	C,":
+	JRST	UOTUPL
+
+; type date
+UODATE:	MOVEI	C,"/
+UOTUPL:	LDB	A,[360600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	LDB	A,[300600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	PUSHJ	P,IOTC
+	LDB	A,[220600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	LDB	A,[140600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	PUSHJ	P,IOTC
+	LDB	A,[060600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	LDB	A,[000600,,UUOD]
+	ADDI	A,40
+	PUSHJ	P,IOTA
+	JRST	UUORET
+
+; ====================================================================
+; sorter
+; ====================================================================
+
+; simple interchange sort
+; A/ sort forward or backward (-1/0)
+VSORT:	PUSH	P,A
+	PUSH	P,G
+	PUSH	P,M
+	MOVE	F,[CAMG	G,(C)]
+	SKIPL	A
+	MOVE	F,[CAML	G,(C)]
+	HRRZS	A
+	MOVE	D,M
+	POP	D,(D)
+	AOS	D
+	MOVEM	D,E
+VSORT1:	SETZM	K
+	MOVE	D,E
+	AOBJP	D,.+1
+	SOS	D
+	MOVEM	D,E
+VSORT2:	AOBJP	D,VSORTX
+	MOVE	C,(D)
+	ADD	C,A
+	MOVE	B,-1(D)
+	ADD	B,A
+	MOVE	G,(B)
+	XCT	F
+	JRST	VSORT2
+	EXCH	G,(D)
+	EXCH	G,-1(D)
+	EXCH	G,(D)
+	JUMPL	K,VSORT2
+	SETOM	K
+	MOVEM	D,E
+	POP	E,(E)
+	POP	E,(E)
+	HRRZ	B,E
+	HRRZ	C,M
+	CAMGE	B,C
+	AOBJN	E,.+1
+	JRST	VSORT2
+VSORTX:	JUMPL	K,VSORT1
+	POP	P,M
+	POP	P,G
+	POP	P,A
+	POPJ	P,
+
+	END START

@@ -15,3 +15,4 @@
 - DSKDUMP: [commands](sysdoc/dskdmp.order)
 - FIND: [manual](init/find.13)
 - DIRDEV: [manual](_init_/dir.order)
+- DSKUSE: [manual](info/dskuse.10)

@@ -98,6 +98,7 @@ from scratch.
    - MAIL, Mail sending client
    - RMAIL, Mail reading client
    - DQ Device, for doing hostname resolutions. Used by COMSAT.
+   - DSKUSE, disk usage information.
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
