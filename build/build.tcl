@@ -280,6 +280,9 @@ expect ":KILL"
 respond "*" ":link sys;ts find,sysbin;find bin\r"
 type ":vk\r"
 
+respond "*" ":midas sys;ts dskuse_syseng;dskuse\r"
+expect ":KILL"
+
 respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
 expect ":KILL"
 
