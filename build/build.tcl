@@ -498,6 +498,11 @@ respond "*" ":link sys;ts lisp,sys:purqio >\r"
 respond "*" ":link sys;ts q,sys;purqio >\r"
 respond "*" ":link sys;atsign lisp,sys;purqio >\r"
 
+respond "*" ":link .info.;lisp step,.info.;step info\r"
+respond "*" ":link libdoc;struct doc,alan;struct doc\r"
+respond "*" ":link .info.;lisp struct,libdoc;struct doc\r"
+respond "*" ":link l;-read- -this-,lisp;-read- -this-\r"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"

@@ -1,0 +1,2641 @@
+-*-Text-*-
+
+This file describes the LISP compiler, COMPLR.
+
+It could use more work; many nodes are too long, many others refer
+only to the Multics implementation, and some are completely
+incomprehensible.
+
+This file put into INFO format by David Eppstein <KRONJ at MC>.
+
+File: LISPC,		Node: Top,		Up: (DIR)
+
+   LISP programs can be compiled into machine code.  This
+representation of a program is more compact than the interpreted
+list-structure representation, and it can be executed much more
+quickly.  However, a price must be paid for these benefits.  It is not
+as easy to intervene in the execution of compiled programs as it is
+with interpreted programs.  Thus most LISP programs should not be
+compiled until after they have been debugged.
+
+   In addition, not all LISP programs can be compiled.  There are
+certain things which can be done with the interpreter that cannot be
+effectively compiled.  These include indiscriminate use of the
+functions eval and apply, especially with pdl-pointer arguments;
+"nonlocal" use of the go and return functions; and functions which
+modify their own code.  Also, there are a number of functions which
+detect illegal arguments when they are called interpretively but not
+when a call to them is compiled; erroneous compiled programs can
+therefore damage the LISP environment and can cause strange errors to
+occur -- be forewarned.  However, most "normal" programs are
+compilable.
+
+* Menu:
+
+* Peculiarities::
+* Declare::
+* Running Functions::
+* Running the Compiler::
+* The Lisp Assembly Program: LAP
+* Internal Implementation Details: Details
+* Other Languages::
+
+Node: Peculiarities,		Up: Top,	Next: Declare
+
+   Some operations are compiled in such a way that they will behave
+somewhat differently from the way they did when they were interpreted.
+It is sometimes necessary to make a "declaration" in order to obtain
+the desired behavior.  This is explained on .
+
+* Menu:
+
+* Vars::
+* InLine Coding::
+* Function Calling::
+* Input::
+* Output::
+* Functions::
+
+Node: Vars,	Up: Peculiarities,	Next: InLine Coding
+
+   In the interpreter "variables" are implemented as atomic symbols
+which possess "shallow-bound" value cells.  The continual manipulation
+of value cells would decrease the efficiency of compiled code, so the
+compiler defines two types of variables: "special variables" and
+"local variables."  Special variables are identical to variables in
+the interpreter.
+
+   Local variables are more like the variables in commonly-used
+algebraic programming languages such as Algol or PL/I.  A local
+variable no longer has an associated atomic symbol; thus it can only
+be referred to from the text of the same function that bound it.  The
+compiler creates local variables for prog- variables, do-variables,
+and lambda-variables, unless directed otherwise.  The compiled code
+stores local variables in machine registers or in locations within a
+stack.
+
+   The principal difference between local variables and special
+variables is in the way a binding of a variable is compiled.  (A
+binding has to be compiled when a prog-, do-, or lambda-expression is
+compiled, and for the entry to a function which has lambda-variables
+to be bound to its arguments.) If the variable to be bound has been
+declared to be special, the binding is compiled as code to imitate the
+way the interpreter binds variables: the value of the atomic symbol is
+saved and a new value is stored into its value cell.  If the variable
+to be bound has not been declared special, the binding is compiled as
+the declaration of a new local variable.  Code is generated to store
+the value to which the variable is to be bound into the register or
+stack-location assigned to the new local variable.  This runs
+considerably faster than a special binding.
+
+   Although a special variable is associated with an atomic symbol
+which has the name of the variable, the name of a local variable
+appears only in the input file - in compiled code there is no
+connection between local variables and atomic symbols.  Because this
+is so, a local variable in one function may not be used as a "free
+variable" in another function since there is no way for the location
+of the variable to be communicated between the two functions.
+
+   When the usage of a variable in a program to be compiled does not
+conform to these rules, i.e. it is somewhere used as a "free
+variable," the variable must be declared special.  There are two
+common cases in which this occurs.  One is where a "global" variable
+is being used, i.e. a variable which is setq'ed by many functions but
+is never bound.  The other is where two functions cooperate, one
+binding a variable and then calling the other one which uses that
+variable as a free variable.
+
+   Certain variables built into the LISP system, such as IBASE and
+ERRSET, are automatically assumed by the compiler to be special unless
+declared otherwise.  This exception to the general rule is predicated
+on the assumption that the when the user sets, for example, the value
+of IBASE, he intends to affect the operation of the READ function.
+
+Node: InLine Coding, Up: Peculiarities, Next: Function Calling, Previous: Vars
+
+   Another difference between the compiler and the interpreter is
+"in-line coding," also called "open coding." When a form such as (and
+(foo x) (bar)) is evaluated by the interpreter, the built-in function
+and is called and it performs the desired operation.  But to compile
+this form as a call to the function and with list-structured arguments
+derived from (foo x) and (bar) would negate much of the advantage of
+compiling.  Instead the compiler recognizes and as part of the LISP
+language and compiles machine code to carry out the intent of (and
+(foo x) (bar)) without actually calling the and function.  This code
+might look like:
+
+                pick up value of variable x
+                call function foo
+                is the result nil?
+                if yes, the value of the and is nil
+                if no, call the function bar
+                the result of the and is what bar returned.
+
+This "in-line coding" is done for all special forms (cond, prog, and,
+errset, setq, etc.); thus compiled code will usually not call any of
+the built-in fsubrs.
+
+   Another difference between the compiler and the interpreter has to
+do with arithmetic operations.  Most computers on which MACLISP is
+implemented have special instructions for performing all the common
+arithmetic operations.  The MACLISP compiler contains a "number
+compiler" feature which allows the LISP arithmetic functions to be
+"in-line coded" using these instructions.
+
+   A problem arises here because of the generality of the MACLISP
+arithmetic functions, such as plus, which are equally at home with
+fixnums, flonums, and bignums.  Most present-day computers are not
+this versatile in their arithmetic instructions, which would preclude
+open-coding of plus.  There are several ways out of this problem.  One
+is to use the special purpose functions which only work with one kind
+of number.  For example, if you are using plus but actually you are
+only working with fixnums, use + instead.  The compiler can compile (+
+a b c) to use the machine's fixnum-addition instruction.  A second
+solution is to write (plus a b (foo c)) but tell the compiler that the
+values of the variables a and b, and the result of the function foo
+can never be anything but fixnums.  This is done by means of the
+"number declarations" which are described on .  A third way is to use
+the FIXSW and FLOSW declarations.  Note that when interpreted (plus a
+b (foo c)) can legitimately produce a bignum even though all three
+numbers added are fixnums, but the open-compiled code will not check
+for overflow and will simply lose high-order bits in such cases.  This
+is true no matter how you cause the expression to be open-coded.
+
+   Another problem that can arise in connection with the in-line
+coding of arithmetic operations is that the LISP representation of
+numbers and the machine representation of numbers may not be the same.
+Of course, this depends on the particular implementation.  If these
+two representations are different, the compiler would store variables
+which were local and declared to be numeric-only in the machine form
+rather than the LISP form.  This could result in compilation of poor
+code which frequently converts number representations and in various
+other problems.  Compilers which have this problem provide a (closed
+t) declaration which inhibits open coding of arithmetic operations.
+
+Node: Function Calling,	Up: Peculiarities, Next: Input,	Previous: InLine Coding
+
+   Another property of compiled code that should be understood is the
+way functions are called.  In the interpreter function calling
+consists of searching the property list of the called function for a
+functional property (if it is an atomic symbol) and then recursively
+evaluating the body of the function if it is an expr, or transferring
+control to the function if it is a subr.  In compiled code function
+calling is designed according to the belief that most of the functions
+called by compiled code will be machine executable, i.e. "subrs":
+other compiled functions, or built-in functions, and only infrequently
+will compiled code call an interpreted function.  Therefore a calling
+mechanism is used which provides for efficient transfer between
+machine-executable functions without constant searching of property
+lists.  This mechanism is called the "uuo link" mechanism for
+historical reasons.
+
+   When a compiled function is first loaded into the environment, it
+has a uuo link for each function it will call.  This uuo link contains
+information indicating that it is "unsnapped" and giving the name of
+the function to be called, which is an atomic symbol.  The first time
+a call is made through such a uuo link, the fact that it is
+"unsnapped" is recognized and a special linking routine is entered.
+This routine searches the property list of the function to be called,
+looking for a functional property (or an autoload property) in just
+the same way as the interpreter would.  If the function turns out to
+be an expr, or is undefined, the interpreter is used to apply the
+function and the result is given back to the compiled code.  The link
+is left "unsnapped" so that every time this function is called the
+interpreter will be invoked to interpret its definition.  If, however,
+the function being called is machine executable (a subr), the link is
+"snapped."  Exactly what this means is implementation dependent but
+the effect is that from then on whenever a call is made through this
+uuo link, control will be transferred directly to the called function
+using the subroutine-calling instruction of the machine, and neither
+the linking routine nor the interpreter will be called.
+
+   There is a flag which can be set so that links will not be snapped
+even if they go to a function which is machine executable.  This flag
+is the value of the atomic symbol nouuo.  (See .) There is also a
+function, (sstatus uuolinks), which unsnaps all the links in the
+environment.  These facilities are used in circumstances such as when
+a compiled function is redefined, or compiled code is being traced or
+otherwise debugged.
+
+   In the pdp-10 implementation a uuo link is implemented as an
+instruction which is executed when a call is to be made through the
+link.  An "unsnapped" link consists of a special instruction, "UUO",
+which causes the LISP linking routine in the interpreter to be called.
+The address field of the uuo points to the atomic symbol which names
+the function to be called.  The operation code and accumulator fields
+indicate the type of call and number of arguments.  When the link is
+snapped the UUO instruction is replaced with a "PUSHJ" instruction,
+which is the machine instruction for calling subroutines.
+
+   In the Multics implementation, a uuo link is implemented as a
+pointer.  To call through this link a "tspbp" instruction indirect
+through the pointer is used.  An unsnapped link points at the linking
+subroutine and various fields in the pointer, left unused by the
+machine, indicate the type of call, number of arguments, and the
+atomic symbol which names the function.  When the link is snapped the
+pointer is changed to point at the first instruction of the called
+function.
+
+   Before a function can be used it must be made known in the LISP
+environment.  Interpreted functions are made known simply by putting a
+functional property on the property list of the atomic symbol which
+names the function.  This is usually done using the built-in function
+defun.  Compiled functions must be made known by a more complex
+mechanism known as "loading," because of the complexity of the support
+mechanisms needed to make compiled functions execute efficiently.  In
+some dialects of LISP the compiler automatically makes the compiled
+functions known, but in MACLISP the compiler creates a file in the
+file system of the host operating system, and this file has to be
+loaded before the compiled function can be called.  In the pdp-10
+implementation this file is called a "fasl file."  In the Multics
+implementation it is called an "object segment."  Loading is described
+in detail on .
+
+Node: Input,   Up: Peculiarities,   Next: Output,   Previous: Function Calling
+
+   The input to the compiler consists of an ascii file containing a
+number of S-expressions.  The format of this file is such that it
+could be read into a LISP environment using a function such as load or
+uread, and then the functions defined in this file would be executed
+interpretively.
+
+   When a file is compiled, the compiler reads successive
+S-expressions from the file and processes them.  Each is classified as
+a function definition, a "declare-form", a "macro-form", or a "random
+form" according to what type of object it is and according to its car
+if it is a list.
+
+   A function definition is a form whose car is one of the atoms
+defun, defprop.  When the compiler encounters a function definition if
+it defines a macro the macro is defined for use at compile time.  If
+it defines an expr or a fexpr, the compiler translates the definition
+from LISP to machine code and outputs it into the "fasl file" or
+"object segment" which is the output from the compiler.  If it defines
+some other property, it is treated as a random form.
+
+   A macro form is any form whose car has previously been defined to
+be a macro.  When a macro form is read from the input file, the
+compiler will apply the macro and then process the result as if it had
+been read from the input file.  Thus if foo is a macro which expands
+(foo a b c) into (defun a ...), the resulting function definition will
+be compiled.
+
+   A declare-form is a form whose car is the atom declare.  It is
+ignored by the interpreter because there is an fsubr called declare in
+MACLISP which does nothing.
+
+   A progn form is any form which starts out as (progn 'compile...
+The compiler processes each of the remaining elements of the progn
+form as if it had been encountered at top level in the file.  Progn
+forms are useful for macros (and read macro characters) which are to
+expand into a function definition and a declare form.  For example,
+one might define a macro defloat such that (defloat f (a b) ...)
+expanded into I don't know pub well enough.  Note that the (progn
+'compile ...) will be processed correctly by the interpreter also.
+
+   Forms which are calls to the functions include or %include are
+simply evaluated when they are encountered.  This causes the contents
+of the specified file to be included in the compilation at that point,
+just as when interpreting such a form would cause the contents of the
+file to be loaded at that point.  See the description of %include,
+below.
+
+   A random form is anything read from the input file that is not one
+of the special types of forms described above.  It is simply copied
+into the output file of the compiler in such a way that when that file
+is loaded it will be evaluated.
+
+Node: Output,	Up: Peculiarities,	Next: Functions,	Previous: Input
+
+   The output of the compiler normally consists of error and warning
+messages on the terminal, and a file of machine code which can be
+loaded into a lisp environment with load or fasload.  In the pdp-10
+implementation it is also possible to get a "lap file." This is a file
+which contains machine code in symbolic form.
+
+   In the Multics implementation the compiler produces a standard
+object segment with a translator name of "lisp" and a symbol section
+which contains the information used by load to define functions, set
+up constants needed by the compiled code, set up "uuo links", etc.
+
+   When the object segment is "loaded", it is not copied into the lisp
+environment.  Instead a "linkage block" is set up in the environment
+and initialized according to directives in the segment's symbol
+section.  This block includes the reference name of the object segment
+and a pointer to it.  Thus compiled code is automatically shared
+between multiple users in the Multics implementation.  However, list
+structure constants used by the compiled code can never be shared.
+
+   In the pdp-10 implementation the output of the compiler is a "fasl
+file."  This file begins with a header identifying it as a fasl file
+and indicating what version of lisp it was produced for.  (This is
+used to detect incompatibilities.)  The rest of the file consists of a
+series of directives to load and relocate code words, set up
+list-structure constants, reference value cells of symbols, evaluate
+random S-expressions, etc.
+
+   fasload operates by reading through the file, storing code in
+lisp's binary program space, and generating the necessary LISP objects
+for constants used by the compiled code.  Normally none of this is
+shared between users, but see for information on how to make it pure
+and shared.
+
+   There is a function defined in the compiler, coutput, which can be
+used to put a random S-expression into the output file.  When the file
+is loaded, this S-expression will be evaluated.  This can be used to
+print the version number of the program, initialize its data base,
+etc.  It cannot be used to fool around with obarrays because of the
+way the loader handles atomic symbols.  For efficiency, it creates a
+table of all the atoms needed by the file being loaded, and creates
+and interns them all just once.  This makes loading much faster, but
+means that everything in a file has to go on the same obarray.
+
+   The coutput function usually does not have to be used, since the
+compiler coutputs any "random form" it reads from the input file.  It
+is provided for the benefit of certain classes of hairy macros.
+
+Node: Functions,	Up: Peculiarities,	Previous: Output
+
+Functions Connected with the Compiler:
+
+
+declare             FSUBR
+
+        In the interpreter, declare is like comment.  In the compiler,
+     the arguments are evaluated at compile time.  This is used to
+     make declarations, to gobble up input needed only in the
+     interpreter, or to print messages at compile time.
+
+           Examples:
+
+           (declare (special x y) (*fexpr f00))
+
+           (declare (read)) ;in compiler, gobble next S-expression.
+           (something-needed-only-in-the-interpreter)
+
+           (declare (princ '|Now compiling foobar|))
+
+
+%include            FSUBR
+
+        (%include name) is used to cause an "include file" to be
+     included in the input to the compiler.  It works in the
+     interpreter also, causing the specified file to be inpush'ed.
+     name may be a string or an atomic symbol.  The translator search
+     rules are used.
+
+        In the PDP-10 implementation, this function is called include
+     (no "%").  name may also be a namelist.
+
+
+           (defun include fexpr (x)
+                  (prog (file)
+                        (setq file (open (car x)))
+                        (eoffn file '+internal-include-eoffn)
+                        (inpush file)))
+
+           (defun +internal-include-eoffn (f v) nil)
+
+Node: Declare,  Up: Top,  Next: Running Functions,  Previous: Peculiarities
+
+   It is often necessary to supply information to the compiler beyond
+the definition of a function with defun, in order to compile the
+function, although the definition is all that the interpreter needs in
+order to interpret the function.  This information can be supplied
+through declarations.
+
+   A declare form is a list whose first element is the atom declare
+and whose remaining elements are forms called "declarations."  The
+compiler processes a declare form by evaluating each of the
+declarations, at compile time.  Usually the declarations call on one
+of the declaration functions which the compiler provides.  These are
+described below.  However, it is permissible for a declaration to be
+any evaluable form, and it is permissible for a declaration to read
+from the input file by using the read function.  This may be used to
+prevent the compiler from seeing certain portions of the input which
+are only needed when a program is run interpretively.  Prefixing a
+form in the input file with (declare (eval (read))) would cause it to
+be evaluated at compile time if the file was compiled, but evaluated
+at read-in time if the file was interpreted.  Arbitrarily complex
+compile-time processing may be achieved by the combination of
+declarations and macros.
+
+   A few declarations may be used locally.  If a declare form occurs
+as the first form of a lambda-, prog- or do- body, it is processed by
+the compiler before the compilation of the rest of the body, but is
+effective only during the compilation of that body.  The declarations
+which may be used locally are special, fixnum, flonum, and notype, and
+they may apply only to variables bound in that lambda, prog or do, or
+to global variables.
+
+      Example:
+
+      (defun factorial (n)
+             (declare (fixnum n))
+             (do ((m n (- m 1))
+                  (a 1 (* m a)))
+                 ((= m 0) a)
+                 (declare (fixnum m a))))
+
+   The remainder of this section describes the declaration functions
+provided by the compiler.  Note that if a declaration function
+described below is of the form (foo t), its effect can be reversed by
+using the form (foo nil).
+
+(special var1 var2 ... )
+     Declares var1, var2, etc. to be special variables.
+
+(unspecial var1 var2 ... )
+     Declares var1, var2, etc. to be local variables.
+
+(*expr fcn1 fcn2 ... )
+     Declares that fcn1, fcn2, etc.  are expr- or subr-type functions
+     that will be called.  This declaration is generally supplied by
+     default by the compiler, but in some peculiar circumstances it is
+     required to tell the compiler what is going on when the same
+     symbol is used as both a function and a variable.  It is good
+     practice to put *expr, *lexpr, and *fexpr declarations for all
+     the functions defined in a file near the beginning of that file.
+
+(*lexpr fcn1 fcn2 ... )
+     Declares fcn1, fcn2, etc. to be lexpr- or lsubr-type functions
+     that will be called.  This declaration is required for
+     non-builtin functions unless the functions are defined in the
+     file being compiled and are not referenced by any functions that
+     are defined before they are.
+
+(*fexpr fcn1 fcn2 ... )
+     Declares fcn1, fcn2, etc. to be fexpr- or fsubr-type functions
+     that will be called.  This declaration is required for
+     non-builtin functions unless the functions are defined in the
+     file being compiled and are not referenced by any functions that
+     are defined before they are.
+
+(**array arr1 arr2 ... )
+     Declares arr1, arr2, etc.  to be arrays that will be referred to.
+     This declaration is obsolete and is being phased out.  Use array*
+     instead.  See the note under *expr.
+
+(array* (type arr1 n1 arr2 n2 ... ) ... )
+     Is used to declare arrays arr1, arr2, etc.  type may be fixnum,
+     flonum, or notype; it indicates what type of objects will be
+     contained in the arrays.  n1, n2, etc.  are the number of
+     dimensions in arr1, arr2, etc.  respectively.  The extended form
+     (array* (type (arr1 dim1.1 dim1.2 ...  dim1.n) ...))  is
+     preferred if the dimensions are known at compile-time.  The
+     dimensions declared must be either fixnums, or nil or ?, which
+     indicate a dimension not known at compile time.  If dimensions
+     are declared, the compiler can generate faster code.
+
+     The array* declaration causes the compiler to generate in-line
+     code for accesses of and stores into the arrays declared.  This
+     code is somewhat faster than the usual subroutine-call array
+     accessing.  The compiler will also generate in-line code if the
+     arraycall function is used; in this case the array must be named
+     by an array-pointer value rather than by an atomic symbol.  Note
+     that arrays declared by array* are arrays of fixed name, not
+     variables whose values are array pointers.
+
+(fixnum var1 var2 ... )
+     Declares var1, var2, etc. to be variables whose values will
+     always be fixnums.
+
+(fixnum (fcn type1 type2 ... ) ... )
+     Declares fcn to be a function which always returns a fixnum
+     result.  Also the types of the arguments may be declared as
+     type1, type2, etc.  An argument type may be fixnum, meaning the
+     argument must be a fixnum; flonum, meaning the argument must be a
+     flonum; or notype, meaning the argument may be of any type.
+
+     The two types of fixnum declarations may be intermixed, for
+     example (fixnum x (foo fixnum) y).  Note, however, that
+     functions, unlike variables, may not be declared locally.
+
+(flonum var1 var2 ... (fcn type1 ... ) ... )
+     Is the same as the fixnum declaration except the variables or
+     function- results are declared to always be flonums.
+
+(notype var1 var2 ... (fcn type1 ... ) ... )
+     Is the same as the fixnum declaration except the variables or
+     function- results are declared not to be of any specific type.
+
+(fixsw t)
+     Causes the compiler to assume that all arithmetic is to be done
+     with fixnums exclusively, except that obviously functions such as
+     +$ and cos will still use flonums.
+
+(fixsw nil)
+     Turns off the above.
+
+(flosw t)
+     Causes the compiler to assume that all arithmetic is to be done
+     with flonums exclusively, except that obviously functions such as
+     + and rot will still use fixnums.
+
+(flosw nil)
+     Turns off the above.
+
+     fixsw and flosw are variables; hence, (setq fixsw t) is
+     equivalent as a declaration to (fixsw t).
+
+(setq special t)
+     Causes all variables to be special.  Note: (special t) does not
+     do the same thing!.
+[Annotation by REM, 1979 Sept 13 -- That is nonsense.  The correct declaration
+ is (setq specials t).  Note the plural form!  With two differences it should
+ be obvious that this declaration makes everything special whereas (special t)
+ merely makes T special.]
+
+(setq nfunvars t)
+     Causes the compiler to disallow functional variables.  All
+     symbols in function position in a form are assumed to have a
+     functional property at run time.  The case of a symbol whose
+     value is a functional form is disallowed.
+
+(macros t)
+     Causes macro definitions to be retained at run time.  Normally,
+     macro definitions in files being compiled are used for
+     compilation purposes only.  This declaration causes them to be
+     written into the output file as well, so that loading it will
+     define the macros at run time.
+
+(macros nil)
+     Causes macros to be used only at compile time.  This is the
+     default choice.
+
+(genprefix foo)
+     Causes auxiliary functions generated by the compiler (for
+     instance when function is used) to be named foon, where n is a
+     number incremented by 1 each time such a function is generated.
+     The genprefix declaration is used when several separately
+     compiled files are to be loaded together, in order to avoid name
+     clashes.  In the PDP-10 implementation, the genprefix is
+     initialized as a function of the directory and first name of the
+     main input file.  On ITS, generated names are thus of the form
+     "USER;FOO-43", while on TOPS-10 they are of the form
+     "[10,7]FOO-43".
+
+
+   The following declarations are useful only in the pdp-10
+implementation; however, the Multics implementation will accept them
+and ignore those which are irrelevant.
+
+(mapex t)
+     In the pdp-10 implementation, causes all map-type functions to be
+     open- coded as do loops.  (This is always done in the Multics
+     implementation.)  The resulting code is somewhat larger than
+     otherwise, but also somewhat faster.
+
+(mapex nil)
+     Causes map-type functions to actually be called.  This is the default.
+
+(messioc chars)
+     Causes an (ioc chars) to be done just before printing out each
+     error message.  In this way one may direct error messages to the
+     LAP file instead of to the terminal on the pdp-10.
+
+     The default messioc is vr which puts the messages in both places.
+
+(muzzled t)
+     Prevents the pdp-10 fast-arithmetic compiler from printing out a
+     message every time closed compilation of arithmetic is forced.
+
+(muzzled nil)
+     Causes the compiler to print a message when closed-compilation is
+     forced.  This is the default.
+
+(symbols t)
+     Causes the compiler to output LAP directives so that the LAP
+     assembler will attempt to pass assembly symbols to DDT for
+     debugging purposes.
+
+(symbols nil)
+     Does not generate debugging symbols.  This is the default.
+
+(closed t)
+     Causes arithmetic operations to be close-compiled, that is, the
+     function + will generate in-line code but the function plus will
+     not in any circumstances.  This declaration is necessary if you
+     apply plus to two fixnums and want a bignum result if the
+     operation overflows.
+
+(closed nil)
+     Causes the compiler to produce code that assumes overflow will
+     not occur, which may give incorrect results in the above case.
+     When the compiler can determine, by declaration or implication,
+     that all of the operands to an arithmetic function are fixnums
+     (or flonums), it will generate code to use the hardware fixnum
+     (or flonum) instructions.  This is the default state.
+
+
+   This declaration only exists in the Multics implementation.
+
+(defpl1 ...)
+     Defines an interfacing function which may be used to call
+     programs written in other languages, such as PL/I.  See for
+     details.
+
+Node: Running Functions, Up: Top, Next: Running the Compiler, Previous: Declare
+
+   After a file of functions has been compiled, those functions can be
+loaded into an environment and then used.  They can be loaded either
+by using the load or fasload functions described below, or by using
+the autoload feature described in section 12.4.4.
+
+
+The following function is at present available only in the Multics
+implementation.
+
+
+load                SUBR 1 arg
+
+        (load x), where x is a file specification acceptable by openi,
+     i.e. a namestring or a namelist, causes the specified file to be
+     loaded into the environment.  The file may be either a source
+     file or a compiled file (called a "fasl" file in the ITS
+     implementation and an object segment in the Multics
+     implementation.) load determines which type of file it is and
+     acts accordingly.  A source file is loaded by openi'ing and
+     inpush'ing it.  A read-eval loop is then executed until the end
+     of the file is reached.  An object file is loaded by reading it,
+     defining functions as directed by specifications inserted in the
+     file by the compiler.
+
+
+fasload             FSUBR
+
+        fasload takes the same arguments as uread.  It causes a file
+     of compiled functions, called a "fasl" file in some
+     implementations, to be loaded in.  Example:
+
+                    (fasload foo fasl dsk macsym)
+
+
+The following function only exists in the Multics implementation.
+
+
+defsubr             LSUBR 3 to 7 args
+
+        defsubr is the function used to define new machine code
+     functions.  It defines various types of functions, depending on
+     its arguments.  The way to define a subr written in PL/I is
+
+                (defsubr "segname" "entryname" nargs)
+
+     which defines segname$entryname as a subr expecting nargs
+     arguments.  The value returned is a pointer which can be
+     putprop'ed under the subr property or the fsubr property.  The
+     way to define an lsubr written in PL/I is
+
+        (defsubr "segname" "entryname" nargs2*1000+nargs1 -2)
+
+     which defines segname$entryname as an lsubr allowing from nargs1
+     to nargs2 arguments.  The 1000 is octal.  The value returned
+     should be putprop'ed under the lsubr property.
+
+           Examples:
+               (putprop 'mysubr (defsubr "myfuns" "mysubr" 1) 'subr)
+               (putprop 'myfsubr (defsubr "myfuns" "myfsubr" 0) 'fsubr)
+               (putprop 'mylsubr
+                   (defsubr "myfuns" "mylsubr" 2001 -2) 'lsubr)
+
+        A function defined in this way receives its arguments and
+     returns its value on the marked pdl, which may be accessed
+     through the external static pointer
+
+                     lisp_static_vars_$stack_ptr
+
+     See for details on how to access the arguments, and on the
+     internal format of LISP data.  lisp_static_vars_$nil and
+     lisp_static_vars_$t_atom are fixed bin(71) external static; they
+     contain nil and t.
+
+Node: Running the Compiler, Up: Top, Next: LAP, Previous: Running Functions
+
+* Menu:
+
+* The Multics Compiler::
+* The ITS Compiler::
+
+Node: The Multics Compiler,		Up: Running the Compiler
+
+   The compiler is invoked by the lisp_compiler command to Multics.
+This command can be abbreviated lcp.  The arguments to the command are
+the pathname of the input file and options.  The compiler appends
+".lisp" to the given pathname unless it is preceded by the -pathname
+or -pn option.  The output object segment is created in the working
+directory with a name which is the first component of the name of the
+input file.  For example, the command
+
+                           lcp dir>foo.bar
+
+reads the file "dir>foo.bar.lisp" and produces an object segment named
+"foo" in the working directory.
+
+   Usually no options need be supplied, since there are defaults.  The
+options available are:
+
+-pathname -pn -p
+     Causes the following argument to be taken as the exact pathname
+     of the input file, even if it begins with a minus sign.  ".lisp"
+     will not be appended.
+
+-eval
+     Causes the following argument to be evaluated by LISP.  For example,
+              lisp_compiler foo -eval "(special x y z)"
+
+-time -times -tm
+     As each function is compiled, its name and the time taken to
+     compile it will be typed out.
+
+-total_time -total -tt
+     At the end of the compilation, metering information will be typed
+     out.
+
+-nowarn -nw
+     Suppresses the typing of warning messages.  Error messages of a
+     severity greater than "warning" will still be typed.
+
+-macros -mc
+     Equivalent to the (macros t) declaration: Causes macro
+     definitions to be retained at run time.
+
+-all_special
+     Causes all variables to be made special.  Equivalent to the (setq
+     special t) declaration.
+
+-genprefix -gnp -gp
+     Takes the following argument as the prefix for names of auxiliary
+     functions automatically generated by the compiler.  Equivalent to
+     the genprefix declaration.
+
+-check -ck
+     Causes only the first pass of the compiler to be run.  The input
+     file is checked for errors but no code is generated and no object
+     segment is produced.
+
+-ioc
+     If the following argument is x, (ioc x) is evaluated.  The main
+     use for this "-ioc d" which turns on garbage-collection messages
+     during compilation.
+
+-list -ls
+     Causes a listing file to be created in the working directory,
+     containing a copy of the source file and a table of functions
+     defined and referenced.  If the object segment is named "name",
+     the listing file will be named "name.list".
+
+-long -lg
+     Causes the listing file to also contain an assembly language
+     listing, with commentary, of the generated code.
+
+-no_compile -ncp
+     Causes the compiler not to attempt to compile the file.  Instead
+     the input file is simply treated as being composed entirely of
+     random forms.  It is digested into a form which can be processed
+     quickly by the load function.
+
+Node: The ITS Compiler,		Up: Running the Compiler
+
+   The ITS compiler is presently in an anomalous state.  There are two
+versions, COMPLR and NCOMPLR.  NCOMPLR contains the fast-arithmetic
+facilities described here.  COMPLR is an older version which will soon
+go away.  At that time, NCOMPLR will be renamed to COMPLR.  This
+documentation uses the name COMPLR to refer to what is now NCOMPLR, so
+it is presently inaccurate but will become accurate in the future.
+
+   Invoke the compiler with the :COMPLR command.  The compiler will
+announce itself, print an underscore or backarrow, and accept a
+command line, which should be of the standard form
+
+               <output file> _ <input file> (switches)
+
+The file specifications should be standard ITS file names, e.g.
+DEV:DIRNAM;FNAME1 FNAME2.  If it is necessary to get a "funny"
+character such as _ into the file name, it may be quoted with a slash.
+
+   The compiler normally processes a file of LISP functions and
+produces a so- called "LAP file", containing S-expressions denoting
+pdp-10 machine-language instructions, suitable for use with LAP (the
+Lisp Assembly Program).  However, one may direct the compiler instead
+to produce a binary object file, called a "FASL FILE", suitable for
+use with the fasload function or the autoload feature.  A third option
+is to process a previously generated file of LAP code to produce a
+FASL file.  This is especially useful in the case where
+special-purpose functions have been hand-coded in LAP.
+
+   If one specifies only an input file name, say FOO BAR, then by
+default the name of a generated LAP file will be FOO LAP, and of a
+FASL file, FOO FASL.
+
+
+   COMPLR will accept a "Job Command Line" if desired; simply type
+
+                      :COMPLR <command line><cr>
+
+In this mode COMPLR will automatically proceed itself and run without
+the TTY, and kill itself when done.
+
+* Menu:
+
+* Exiting to LISP::
+* Switches::
+
+Node: Exiting to LISP,   Up: The ITS Compiler,   Next: Switches
+
+   It may be desirable to execute some LISP functions in the compiler
+before actually compiling a file.  Typing ctrl/G will cause the
+compiler to announce itself and then type an asterisk; you will then
+be at lisp's top level.  To make the compiler accept a command line,
+say (maklap) or type ctrl/^.  One useful function for debugging and
+snooping around is cl; (cl foo) will compile the function foo, which
+should be defined in the compiler's lisp environment, and print LAP
+code onto whatever device(s) are open for output.
+
+Node: Switches,   Up: The ITS Compiler,   Previous: Exiting to LISP
+
+   The various modes of operation of the compiler may be controlled by
+specifying various switches, which are single letters, inside
+parentheses at the end of the command line.  A switch may be turned
+off by preceding the switch letter with a minus sign.  Extraneous or
+invalid switches are ignored.  Initially all switches are off (the use
+of minus sign described above is provided in case the compiler is used
+for several files in succession).
+
+   The most commonly-used switch setting is "(FK)", which causes a
+FASL file to be produced.
+
+   Most of the switches correspond to values of atomic symbols within
+the compiler.  These are noted in parentheses.
+
+   The switches are:
+
+A     (assemble) The specified input file contains LAP code which is
+      to be made into a binary FASL file.
+
+D     Disown.  Causes the compiler to disown itself after it has started
+      running.  This is the safest way to disown a COMPLR, because the
+      compiler will know that it can't try to get any information from
+      DDT.
+
+F     (fasl) Accept a file of LISP functions, produce a LAP file,
+      and then assemble the LAP file into a FASL file.  This is
+      probably the most useful mode.  With the K switch the LAP file
+      is not actually produced at all; the lap code is sent directly
+      to faslap as the compiler generates it.
+
+K     (nolap) Kill LAP file.  Delete the LAP file after assembly.
+      Usually used in conjunction with the F switch.
+
+Mo(in)(macros) Equivalent to (declare (macros t)).  Causes macro
+      definitions to be defined at run time as well as at compile
+      time.
+
+N     (noargs) No args properties.  Equivalent to (declare (noargs t)).
+      Normally the compiler outputs information in the LAP code
+      as to how many arguments each function requires, so that args
+      properties may be created on the appropriate atomic symbols at
+      load time.  In some implementations these properties occupy a
+      significant amount of list space; thus it may be desirable to
+      eliminate these properties.
+
+S     (special) Equivalent to (declare (setq special t)).  Causes
+      all variables to be considered special.
+
+T     (ttynotes) Causes the compiler to print a note on the user's
+      terminal as each function is compiled or assembled.  This switch
+      is normally off so that a COMPLR may be proceeded and allowed to
+      run without the TTY.  In any case error messages will be printed
+      out on the terminal.
+
+Uo(in)(unfaslcomments) Useful only in conjunction with the F or
+      A switch.  Causes the assembler to output comment messages into
+      a file whose second file name is UNFASL.  (Actually, this file
+      is always created, and error comments will be directed into this
+      file also if messioc so specifies; but the file is immediately
+      deleted if it contains nothing significant.)  These comment
+      messages describe the size of each function assembled, and give
+      other random information also.
+
+V     (nfunvarsf1) Equivalent to (declare (nfunvars t)); disallows
+      functional variables.
+
+W     (muzzled) (i.e.  Whisper).  Equivalent to (declare (muzzled t)).
+      Prevents the fast-arithmetic compiler from printing out a
+      message when closed compilation of arithmetic is forced.
+
+X     (mapex) Equivalent to (declare (mapex t)).  Causes all
+      map-type functions to be open-coded as do loops.  The resulting
+      code is somewhat larger, but also somewhat faster.
+
+Z     (symbols) Equivalent to (declare (symbols t)).  Causes the
+      compiler to output a special directive in the LAP code so that
+      the LAP assembler will attempt to pass assembly symbols to DDT
+      for debugging purposes.  Primarily of use to machine language
+      hackers.
+
+Node: LAP,    Up: Top,    Next: Details,     Previous: Running the Compiler
+
+   MACLISP includes a facility by which machine-language programs can
+be defined as LISP functions.  This can be used to gain direct access
+to the hardware or the operating system, and may also be used by the
+compiler.
+
+   The Lisp Assembly Program translates S-expressions which resemble
+the native assembly language of the host machine into machine
+language, and sets things up so that machine language coding can be
+called by LISP programs in the same way that built-in "subrs" are
+called.
+
+* Menu:
+
+* LAP on the pdp-10::
+* LAP on Multics::
+* LAP Words::
+* LAP Instructions::
+* LAP Operands::
+* LAP Expressions::
+* Using LAP::
+
+Node: LAP on the pdp-10,	Up: LAP,	Next: LAP Words
+
+
+   ;;;tty hacking fcns ;;;uncertain about syscall 'scml effects
+
+   (declare (special tv-main tv-echo tv-size tv-ycor) (genprefix tty))
+
+   (defun tv-screen num
+      (do ((mode (or (= num 0) (arg 1)))
+	   (echoareasize (cond ((< num 2) 10)
+			       (t  (arg 2)))))
+       nil (setq tv-ycor (- 443. (* 12. echoareasize)))
+           (or (boundp 'tv-size)
+	       (setq tv-main (open '((tty)) '(tty out ascii))
+		     tv-echo (open '((tty)) '(tty out ascii echo))
+		     tv-size (car (status ttysize t))))
+           (cond ((equal mode 'splitscreen)
+		  (open t '(tty out ascii))
+		  (sstatus ttycons t tv-echo)
+		  (pagel t (- tv-size echoareasize))
+		  (endpagefn t 'tty-endpagefn)
+		  (syscall 0 'scml tv-echo echoareasize))
+		 ((equal mode 'smallscreen)
+		  (open t '(tty out echo ascii))
+		  (sstatus ttycons t t)
+		  (pagel t echoareasize)
+		  (syscall 0 'scml tv-echo echoareasize))
+		 (t
+		  (setq echoareasize 0)
+		  (open t '(tty out ascii))
+		  (sstatus ttycons t t)
+		  (pagel t tv-size)
+		  (syscall 0 'scml tv-echo 0))))
+      (cursorpos 'c tv-main)
+      (cursorpos 't t)
+      'done)
+
+   (declare (special **more** more-flush))
+
+   (setq **more** '##more## more-flush nil)
+
+   (defun tty-endpagefn (file)      ;Might lambda  bind outfiles, infile
+      (prog (^q ^r ^w infile outfiles  echofiles)
+	    (cond (**more**
+		   (princ **more**) ;^q, ^r, etc.
+		   ((lambda (ifile) ;the princ's should have file args
+			    ((lambda (ch)
+				     (and (or (= ch 32.)
+					      (= ch 127.))
+					  (tyi ifile))
+				     (cond ((and more-flush
+						 (not (= ch 32.)))
+					    (princ more-flush)
+					    (throw nil clever-more))
+					   (t
+					    (cursorpos nil 0 file)
+					    (cursorpos 'l file)
+					    (cursorpos 't file))))
+			     (tyipeek nil ifile)))
+		    (cond ((equal file t) t)                 
+			  (t (or (status ttycons file) t))) ))
+		  (more-flush (throw nil clever-more)))))
+
+   (macrodef catchmore (moremsg flushmsg . body)
+	     (catch ((lambda (**more** more-flush) . body)
+		     moremsg flushmsg)
+		    clever-more))
+
+Node: LAP on Multics,	Up: LAP,	Next: LAP Words
+
+
+   A LAP program begins with the form
+
+                         (lap fn type nargs)
+
+This defines the function fn, which is of type type (subr, lsubr, or
+fsubr.)  nargs is the number of arguments expected by the function.
+In the case of an lsubr, this is nine bits of the maximum number of
+arguments followed by nine bits of the minimum number of arguments.
+
+   Following this form is a series of "LAP words," terminated by nil.
+
+Node: LAP Words, Up: LAP, Next: LAP Instructions, Previous: LAP on the pdp-10
+
+   A LAP program consists of a sequence of LAP words, or statements.
+Usually a LAP word generates one word of object code, but some LAP
+words are pseudo-ops which generate no code, and some lap words
+generate many words of code.
+
+   The allowed formats for LAP words are as follows:
+
+A number.  This generates a word whose contents is that number.
+      Octal numbers which LISP would normally treat as bignums because
+      the high order bit is on but the number is not negative, such as
+      400000710120, are handled properly.  A flonum is also allowed,
+      and a word containing the machine representation of that flonum
+      will be generated.
+
+An atomic symbol.  As in prog, this defines a label or tag at
+      the current location.
+
+(entry fn type nargs).  This defines an additional entry point.
+      The arguments are the same as in the lap header line.
+
+(comment ...) is ignored.
+
+(eval form1 form2 ...) evaluates the forms (as lisp forms, not
+      lap expressions) but does not do anything with the results.
+
+(defsym sym1 val1 sym2 val2 ...).  This defines values for
+      symbols.  The values are evaluated as LISP forms, not as LAP
+      expressions.
+
+(equ sym1 val1 sym2 val2 ...).  This is similar to defsym except
+      that the values are evaluated as LAP expressions.  (See for the
+      details of LAP expressions.)
+
+(block n) generates n words of zeroes.  It is unclear how useful
+      this is, since the code generated by LAP goes into a read-only
+      object segment.
+
+(ascii some text) explodec's the text and generates a string of
+      the corresponding ascii characters.  This is not a LISP string,
+      just the characters themselves.  If the number of characters is
+      not a multiple of four, the last word is filled out with zeroes
+      (null characters).
+
+(bind symbol value) generates a binding word for use with the binding
+      operator.
+
+(get-linkage) loads the lb register with a pointer to the
+      Multics linkage section.  The external operand (refer to ) may
+      be used to refer to external data and procedures once the lb is
+      loaded.  lb is used instead of lp because LISP uses lp
+      internally.
+
+A list whose car is a LISP macro will be expanded.  This
+      provides LAP with the primitive makings of a macro facility.
+      The result of the macro should be a list of LAP words, or nil.
+
+Anything else will be assembled as an instruction.  The next
+      section describes the format of instructions.
+
+Node: LAP Instructions, Up: LAP, Next: LAP Operands, Previous: LAP Words
+
+   Instructions have essentially the same format as in the ALM
+assembler, with the following exceptions: Since LAP words are lists,
+instructions are enclosed in parentheses.  Comments must be introduced
+by semicolon.  Index-register tags must be in the form "x7" rather
+than just "7." This is because in LAP tag fields are general
+expressions and are not evaluated specially.  By default numbers are
+octal, but a trailing point indicates decimal (as in LISP.)
+Arithmetic expressions are written differently.  (See .) The rpt, rpd,
+and rpl instructions are not supported.  The format of literals is
+different from that used by ALM.  The ALM pseudo-ops, particularly
+vfd, are not present, but could be simulated using macros.  ALM's
+format for external references is not used.  The use of spaces and
+commas is freer than in ALM.  Vertical bar may be used freely since in
+the LAP reader it is a single character object.
+
+   The allowed formats for ordinary instructions are:
+
+              (opcode)
+              (opcode operand)
+              (opcode operand tag)
+              (opcode pointer|operand)
+              (opcode pointer|operand tag)
+
+   For instructions such as "epp" which need a register operand:
+
+              (opcode register operand)
+              (opcode register operand tag)
+              (opcode register pointer|operand)
+              (opcode register pointer|operand tag)
+
+Note that LAP treats comma and space identically, and use of commas in
+the above formats can make them more like ALM.  Also, ALM lacks an
+opcode for spri in the second format above, because the symbol spri is
+already used for a different instruction.  In LAP, use sprip.
+
+   EIS instructions and descriptors are written in the same format as
+with ALM, e.g.
+
+              (mlr (pr,rl),(pr,x6),fill(040))
+              (desc4ls bp|-1(3),46,3)
+
+The various fields are all general LAP expressions, except that the
+words pr, id, and rl are special-cased.
+
+   The tag field in an instruction may be any tag known to the
+machine.  It may also be the special value $.  The following are
+equivalent:
+
+              (tnz frob,$)
+              (tnz (- frob *),ic)
+        or in ALM,  tnz frob-*,ic
+
+   The pointer register names which appear in opcodes, in register
+fields in the second format of instructions, and in "pointer|" fields
+may be chosen from among
+
+              0, 1, 2, 3, 4, 5, 6, 7
+
+              ap, ab, bp, bb, lp, lb, sp, sb
+
+              ms, op, tp, cp, lp, rp, sp, sb, us
+
+us is a pseudo pointer register which points at the unmarked stack.
+It actually consists of a combination of ab and x7, and therefore
+cannot be used in EIS instructions.  See for the standard usage of the
+pointer registers.
+
+   The operand field in an instruction may take on a number of forms,
+which are described in the next section.
+
+Node: LAP Operands, Up: LAP, Next: LAP Expressions, Previous: LAP Instructions
+
+   A LAP instruction may have either an ordinary ALM-type operand, a
+literal, or a special lispish operand.  In general, the latter do not
+allow tags.
+
+   The allowed operand formats are:
+
+A number, a symbol, or any LAP expression.  This is an ordinary
+      ALM-type operand.  The symbol * represents the current location,
+      as in ALM.
+
+(% code) or (%% code).  These operands are literals.  The
+      contained code is assembled at the end of the program and the
+      instruction refers to that address.  If %% is used, the literal
+      is placed on a double-word boundary.  The code may be either a
+      single LAP word or several; since tags are disallowed in
+      literals, if the first item in a literal is an atomic symbol,
+      then the literal is taken to be a single word.  Otherwise it is
+      a list of words.  Note that inside a literal the value of * is
+      the location of the instruction that referenced the literal, not
+      the location of the literal.  Examples:
+
+           (ana (% 000777777777))
+
+           (eraq (%% -2 777777000000))
+
+           (eppbp (% ascii Now is the time))
+
+           (tnz (% (eax1 1,x1)
+                   (tze frob)
+                   (tra (+ * 1)) ))        ;return to loc after tnz
+
+(quote S-expression) refers to a LISP constant.
+
+(special var) refers to the value cell of a special variable (an
+      atomic symbol).
+
+(array name type ndims) refers to an array.  This is intended to
+      be used with the xec instruction for in-line accessing of
+      arrays.  See .
+
+(function name type nargs) refers to a LISP (or LAP) function.
+      It is intended to be used with the call (tspbp) instruction.  If
+      type is lsubr, an "eax5 -2*nargs" instruction should precede the
+      call.  [[[MORE]]]
+
+(function ap|n type nargs) refers to a computed function,
+      located in a cell in the stack.  [[[MORE]]]
+
+(external "seg$ent") refers to an external item.  No tag or
+      offset may be used.  Use the (get-linkage) pseudo-instruction to
+      make the external item addressable.
+
+Node: LAP Expressions,  Up: LAP,  Next: Using LAP,  Previous: LAP Operands
+
+   LAP expressions are used as operands of instructions, tag fields,
+EIS length fields, and in general wherever a numeric value is needed.
+The allowed formats are:
+
+A symbol.  Somewhere the symbol must be defined, by use of
+      defsym, equ, a tag, or the symbol may be one whose definition is
+      built into LAP.  [[[ THESE ARE LISTED SOMEWHERE OR OTHER ]]]
+
+* has the value of the current location.
+
+A number.  This has the value of the machine representation of that
+      number.
+
+(+ lap-expr1 lap-expr2 ...) is the sum of the values of the
+      lap-expressions.  The + may be omitted.  If the list is empty,
+      the value is zero.
+
+(- lap-expr1 lap-expr2 ...)  subtracts the values of the
+      expressions lap-expr2, ..., lap-exprn from the value of the
+      expression lap-expr1.  However,
+
+(- lap-expr) is the negative of the value of the expression lap-expr.
+
+(symb arg1 arg2 ...), where symb is a LISP macro, expands the
+      macro and uses the result as an operand.
+
+Node: Using LAP,	Up: LAP,	Previous: LAP Expressions
+
+   The LAP assembler may be used in either of two ways: as a
+translator which is invoked from Multics command level to assemble a
+file of LAP programs and produce an object segment which can be loaded
+into lisp; or as a lisp function which will read a lap program from
+the current input source and assemble it into the lisp environment.
+In the pdp-10 implementation these are called "faslap" and "lap"
+respectively, but in the Multics implementation they are the same
+thing.  If lisp tries to evaluate a form such as (lap foobar subr 2),
+then lap will be automatically loaded into the environment and it will
+read in and assemble until nil is encountered.  This mode should be
+used with caution since loading lap defines a lot of functions which
+might conflict with names already in use.
+
+   The more common way of using lap is as a Multics command:
+
+                          lap name -options-
+
+reads the file name.lap and produces an object segment called name in
+the working directory.  This segment may then be loaded into the lisp
+environment with the load function.  This is similar to the operation
+of the lisp_compiler command.  [[[ ??? WHAT ARE THE OPTIONS ??? ]]]
+
+   LAP reads forms from the source file and processes them as follows:
+
+(lap function type nargs) introduces a LAP program.  The
+      assembler reads and assembles until nil, then returns to this
+      scan.
+
+(declare ...) is the same as in the compiler.  It can be used to
+      cause things to happen at compile time.
+
+(%include name) causes an include file name.incl.lap to be read
+      in the same way as the main file.
+
+Macro definitions (with defun or defprop) are evaluated as they are seen.
+
+A form whose car is a macro is expanded and re-processed.
+
+   [[[[[[[[ ********** Need to discuss: operators available to lap.
+		       + other internal cruft.  How to use macros.
+
+Node: Details,	Up: Top,  Next: Other Languages,  Previous: LAP
+
+   This section describes the internal machine-level details of the
+various implementations.  An understanding of this material is not
+necessary in order to use lisp, but it is helpful in writing LAP code
+and in understanding the output of the compiler.
+
+* Menu:
+
+* The pdp-10 Implementation: pdp-10
+* The Multics Implementation: Multics
+* Conventions::
+* Routines used by the Compiler: Internal
+* User Routines::
+* Representation::
+* Environment, Stacks, Registers: Environ
+* Calling::
+* Operators::
+
+Node: pdp-10, Up: Details, Next: Conventions
+
+Node: Conventions, Up: Details, Next: Internal, Previous: pdp-10
+
+   This section briefly describes some of the internal conventions of
+pdp-10 lisp, and contains enough information for a person who knows
+pdp-10 machine language to understand the output of the compiler, and
+possibly to write simple lap functions for use with lisp.  However,
+the information within this section is subject to change.  Whenever
+any location within lisp is referred to symbolically in this section,
+that symbol is predefined to lap and may be used by any lap program
+even if DDT does not have lisp's symbols loaded.
+
+   The names of the accumulators and their uses are, briefly:
+
+   0 nil      atom header of the atomic symbol nil
+   1 A        first argument to a function; value of function
+   2 B        second argument
+   3 C        third argument
+   4 AR1      fourth argument
+   5 AR2A     fifth argument
+   6 T        negative of the number of args to an lsubr; temp
+   7 TT       super-temporary; value from numeric function
+  10 D        semi-temporary; arithmetic
+  11 R        semi-temporary; arithmetic
+  12 F        semi-temporary; arithmetic
+  13 FREEAC   unused, except saved/used/restored by gc
+  14 P        regular pushdown list (pdl) pointer
+  15 FLP      flonum pdl pointer
+  16 FXP      fixnum pdl pointer
+  17 SP       special (variable bindings) pdl pointer
+
+
+   In general, S-expressions should be manipulated in the five
+argument accumulators; the contents of these are protected by the
+garbage collector.  Random arithmetic should not be done in them; this
+might accidentally generate the address of something the garbage
+collector should not protect.  Arguments to subrs are passed through
+these five accumulators, and the value of a function is returned in
+accumulator A.  The single argument to an fsubr is likewise passed
+through accumulator A.
+
+   It is generally assumed that when an argument is passed or a value
+returned through these five accumulators that that the left half will
+be zero, while the right half will contain a pointer to an
+S-expression.  Much code depends on the left half being zero; in
+particular, tests for nil (which is the zero pointer) use JUMPE
+instructions, which require that the left half be zero so that the
+test of the right half will be valid.  In general, then, instructions
+like HRRZ and HLRZ should be used to fetch items into these
+accumulators.
+
+   S-expressions are represented in such a way that if a pointer to a
+dotted pair is in, say, accumulator A, then
+
+                             (HLRZ B 0 A)
+
+will get, as a pointer, the car of the S-expression and put it in
+accumulator B, and
+
+                             (HRRZ B 0 A)
+
+will get the cdr.  If the S-expression whose address is in A is a
+fixnum or flonum, then
+
+                            (MOVE TT 0 A)
+
+will get the machine representation of the number and put it in
+accumulator TT.
+
+   Accumulators T through F may be used as scratch registers, in
+general.  When an lsubr is called, however, the negative of the number
+of arguments is passed in accumulator T.  Many useful internal
+routines are called by JSP T,FOO, and the argument or value is
+commonly passed in TT.  Functions compiled by the fast- arithmetic
+compiler return their values in TT.  TT is also used in connection
+with array accessing.
+
+   FREEAC is presently unused by the lisp system, except for the
+garbage collector, which, however, saves and restores it.  This fact
+should not be taken as permanent; it is mentioned primarily because it
+can be useful for debugging purposes.  One day soon this accumulator
+will be renamed BAR and used as a base address register for
+relocatable binary programs.
+
+   The pdp-10 lisp system uses four pushdown lists, or stacks.  The
+regular and special pdls, whose pointers are in P and SP, are marked
+from by the garbage collector; thus an S-expression is "safe" from gc
+if pushed on either of these pdls.  (Only the right half of each pdl
+slot is marked from; the left half may contain garbage.)  The special
+pdl is used to hold variable bindings, and its contents are highly
+structured.  The user should not use SP except through the routines
+SPECBIND and UNBIND, described below.  P may be used for any purpose,
+provided that totally random things are not put into the right halves
+of pdl slots (the same restriction as for argument accumulators).  The
+fixnum and flonum pdls (pointers in FXP and FLP) are used primarily by
+compiled code produced by the fast-arithmetic compiler, and their
+contents are not affected by gc in any way.  If it is desired to save
+random quantities on a stack, the fixnum pdl should be used if
+possible.
+
+   The standard function calling convention in pdp-10 lisp requires
+that functions be effectively called via a (PUSHJ P function) and exit
+via (POPJ P).  The arguments to subrs and fsubrs are as described
+above.  Lsubrs take their arguments on the regular pdl (where they are
+safe from gc), and T has minus the number of arguments.  The return
+address is also on the pdl, under the arguments.  This usually
+requires code of this sort:
+
+                  (PUSH P (% 0 0 G0475))
+                  (PUSH P A)
+                  (PUSH P '(funny list))
+                  (MOVNI T 2)
+                  (JRST 0 FOO-LSUBR)
+          G0475   --- lsubr returns to here ---
+
+That is, the return address must be pushed ahead of time.  It is the
+responsibility of the called lsubr to remove its arguments from the
+pdl and return with a POPJ.
+
+   Interfacing between compiled code and the interpreter is
+accomplished via a large set of UUO instructions.  All of them work in
+the same fashion: the effective address must be the address of an
+S-expression which is the function to be invoked.  The arguments to
+this function are passed in the manner described above, and the
+accumulator field describes which argument passing convention has been
+used (hopefully the same as that required by the called function): 0-5
+means a call to a subr with that many arguments, 16 means a call to an
+lsubr, and 17 means a call to an fsubr.  Thus the function CONS might
+be called with the UUO (CALL 2 (FUNCTION CONS)).
+
+   There are several variants on this basic UUO type.  One variant is
+the JRST vs. PUSHJ mode; sometimes instead of writing a PUSHJ to a
+function one wants to write a JRST for efficiency.  To see why,
+consider that
+
+                  (PUSHJ P FOO)
+                  (POPJ P)
+
+is in effect equivalent to
+
+                  (JRST 0 FOO).
+
+This kind of UUO is also useful for calling lsubrs (see the example
+above).
+
+   A second variant is the "clobberable" vs.  the "unclobberable" UUO.
+If certain conditions are met, it is possible for the UUO handler to
+replace the invoking UUO by the equivalent PUSHJ or JRST, so that next
+time the same code is used it will call the desired function directly.
+In some cases, however, it is not desirable for the UUO to be so
+clobbered, for example if the function to be invoked is an argument in
+an accumulator, and is to be invoked via something like (CALL 1 0 A).
+A UUO may therefore specify that it may never be clobbered.
+
+   A third option is used by code compiled by the fast arithmetic
+compiler.  It is undesirable for a function which returns a number to
+do a "number cons" in order to return the number as an S-expression if
+the number will only be converted back to a machine number and used in
+more open-coded arithmetic.  (It is undesirable because number
+consing, like ordinary consing, eventually causes garbage collection,
+an expensive process.) Thus a UUO may specify that it wants only a
+machine number as a result; this is to be returned in accumulator TT,
+rather than a lisp number in A.
+
+   The mnemonics for all these UUOs are summarized here:
+
+                         clobberable         unclobberable
+                         PUSHJ     JRST      PUSHJ     JRST
+      standard result    CALL      JCALL     CALLF     JCALLF
+      numeric result     NCALL     NJCALL    NCALLF    NJCALF
+
+   Thus the example of an lsubr call above would actually be written:
+
+                  (PUSH P (% 0 0 G0475))
+                  (PUSH P A)
+                  (PUSH P '(FUNNY LIST))
+                  (MOVNI T 2)
+                  (JCALL 16 (FUNCTION FOO-LSUBR))
+          G0475
+
+   Functions produced by the fast arithmetic compiler follow a
+convention so that NCALLs will work properly: If a function is to be
+NCALL'ed, and returns a fixnum, the first instruction of the function
+should be (PUSH P (% 0 0 FIX1)); if it returns a flonum, the first
+instruction should be (PUSH P (% 0 0 FLOAT1)).  (For a description of
+the FIX1 and FLOAT1 routines, see below.) If the function is NCALL'ed,
+the function is entered at the second instruction, i.e.  after the
+PUSH.  The appropriate machine number is returned in accumulator TT,
+as expected by the caller.  If, on the other hand, the function is
+simply CALL'ed, then it is entered at the normal entry point, and the
+address of FIX1 or FLOAT1 goes on the stack.  When the function exits,
+it will transfer to FIX1 or FLOAT1, which will convert the machine
+number to a lisp number and then return to the original caller.
+
+   Some other UUO's besides the CALL UUO's are useful to compiled code
+and hand-coded lap.  The STRT (STRing Typeout) UUO is quite useful
+for printing out constant strings of characters.  The effective
+address of the STRT UUO must be the first of several words of sixbit
+characters.  Several characters in the string have special
+significance:
+
+^ Complement the 100 bit of the character before printing it.
+     (This occurs after 40 has been added to convert it to ascii.)
+     Thus ^M in the sixbit string causes a carriage return to be
+     printed.  Similarly, ^4 is a lower case t.
+
+!    Terminate typeout.
+
+#    Quote the next character.  This is used to get #, ^, and ! into a string.
+
+   Thus, for example, to print the message "YOU LOSE!" in lap code,
+preceded and followed by a carriage return, say
+
+                (STRT 0 (SIXBIT /^MYOU/ LOSE#/!/^M/!))
+
+(The slashes are necessary because lap will read this using the lisp
+reader!)
+
+   The LERR (Lisp ERRor) UUO takes a string like the ones STRT takes,
+and signals an uncorrectable error, with the string as the error
+message.  Because the error is uncorrectable, control never returns to
+after the LERR; it is like a JRST to the error handler.
+
+   The LER3 UUO is similar to LERR, but also takes an S-expression in
+accumulator A; this expression should be followed by the string which
+constitute the error message.
+
+   The ERINT UUO is used to signal correctable errors.  It too takes a
+string argument and an S-expression in A.  The accumulator field of
+the ERINT UUO indicates the type of error:
+
+            0     undef-fnctn
+            1     unbnd-vrbl
+            2     wrng-type-arg
+            3     unseen-go-tag
+            4     wrng-no-args
+            5     gc-lossage (ordinarily used only by gc)
+            6     fail-act
+            7     io-lossage
+
+   The S-expression becomes the argument to the error interrupt
+handler for the given type of error (in the case of types 0 to 3, the
+error handler automatically applies the function ncons to this object
+before passing it as the argument).  If the handler returns a
+corrected value (e.g. the user in a standard error break used the
+return function) then this new value is passed back in A and control
+returns to the instruction after the ERINT.
+
+   A typical piece of lap code to use this might be:
+
+          (LAP FOO SUBR)
+                  (PUSH P A)
+          TEST    (JSP T FXNV2)      ;get numeric value in d
+                  (TRNE D 3)         ;want a multiple of 4
+                  (JRST 0 LOSE)
+                  . . .
+                  (POPJ P)
+          LOSE    (EXCH A B)         ;get bad arg in a
+                  (ERINT 2 (% SIXBIT NOT A MULTIPLE OF 4))
+                  (EXCH A B)         ;switch back again
+                  (JRST 0 TEST)      ;go try again
+          NIL
+
+
+   UUO's never change the values in any accumulators except ERINT,
+which may return a new value in A, and the various CALL UUO's, which
+may clobber everything if they have to invoke eval to link to an
+interpreted function.  CALL UUO's save all accumulators when linking
+from one compiled or handcoded function to another.  This implies that
+the called function will get whatever was placed in accumulators T
+through F as well as A through AR2A.  It does not imply, however, that
+any accumulators will have been preserved by the time the called
+function has returned to the caller.
+
+Node: Internal, Up: Details, Next: User Routines, Previous: Conventions
+
+   Compiled code requires a certain set of support routines.  The
+names and addresses of these routines are predefined to lap.  It
+should not be assumed that a given routine saves any accumulators
+unless it is specifically described as doing so.  They are briefly
+described here:
+
+(JSP T SPECBIND)
+     This routine handles the binding of special variables.  The call
+     is followed by one or more specifications of the form (type where
+     (special atom)), where type is either 7_41 or 0.  The value of
+     the atomic symbol atom, which is in the word pointed to by the
+     effective address of the argument, is saved on the special pdl,
+     and a new value is placed in the value cell, as specified by type
+     and where.  If both type and where are zero, the new value is
+     nil.  If type is zero, then where is the number of an accumulator
+     containing the new value.  If type is 7_41, then the new value is
+     in the regular pdl slot addressed by subtracting where from the
+     current contents of accumulator P; where may be any number less
+     than 2000 octal.  (This is a case where not truncating the
+     accumulator field of a lap instruction to four bits is very
+     useful.)  Any number of specifications may follow the call to
+     SPECBIND; the end of the call is determined by the fact that a
+     valid pdp-10 instruction within lisp cannot be zero in the first
+     nine bits or ones in the first three.  All the values pushed in a
+     single call form a single bind block; this fact is used by the
+     UNBIND routine.  SPECBIND destroys the contents of accumulator R.
+
+
+(JSP T (SPECBIND -1))
+     This is an alternate entry to SPECBIND, which has the additional
+     effect of passing all new values through the routine PDLNMK (see
+     below) before placing them in the value cells.  It is used by
+     code compiled by the fast- arithmetic compiler.
+     [[[ HAS THIS VANISHED OR SOMETHING? ]]]
+
+(PUSHJ P UNBIND)
+     Pops one bind block off the special pdl, thus restoring the old
+     values of the atoms whose values were formerly saved.  Example:
+     the following lisp code and lap code are roughly equivalent:
+
+             ((LAMBDA (SPECVAR) (ZORCH)) 'BARF)
+
+                    (MOVEI B (QUOTE BARF))
+                    (JSP T SPECBIND)
+                    (0 B (SPECIAL SPECVAR))
+                    (CALL 0 (FUNCTION ZORCH))
+                    (PUSHJ P UNBIND)
+
+     UNBIND does not destroy any accumulators.
+
+
+(JSP T PDLNMK)
+     "Pdl number make".  This routine examines the S-expression in
+     accumulator A, and if it is a pdl number it replaces it with a
+     freshly number-consed copy.  Used by code produced by the
+     fast-arithmetic compiler.  Does not destroy any other
+     accumulators, even TT.
+
+(JRST 0 PDLNKJ)
+     Equivalent to
+
+                    (JSP T PDLNMK)
+                    (POPJ P)
+
+
+(JSP T FXCONS)
+     Takes a machine fixnum in accumulator TT and returns an
+     equivalent S- expression number in accumulator A.  The value in
+     TT is not preserved.  No other accumulators are disturbed.
+     Another name for FXCONS is FIX1A; they are entirely equivalent.
+     Note that lisp fixnums are represented in such a way that the
+     address in A will point to a word containing what was in TT.
+
+
+(JSP T FLCONS)
+     Similar to FXCONS, but takes a floating-point machine number in
+     TT, and returns a lisp flonum in A.
+
+(JSP T FXNV1)
+     Verifies that the S-expression in accumulator A is a fixnum; if
+     it is not, a correctable wrng-type-arg error is signaled.  If it
+     does contain a fixnum, or if the error break eventually returns a
+     fixnum, then it returns with the equivalent machine fixnum in
+     accumulator TT.  This routine is useful primarily for the error
+     checking; if it is already known that A contains a lisp fixnum,
+     the instruction (MOVE TT 0 A) serves just as well.  Such
+     knowledge, for example, can be derived from declarations by the
+     fast-arithmetic compiler.
+
+
+(JSP T FXNV2)
+(JSP T FXNV3)
+(JSP T FXNV4)
+     Similar to FXNV1, but take arguments and return machine fixnums in
+     different accumulators:
+
+       FXNV2     B   -> D
+       FXNV3     C   -> R
+       FXNV4     AR1 -> F
+
+     There is no FXNV5 - you must move an argument in AR2A into some
+     other accumulator first.
+
+
+(JSP T IFIX)
+     Takes a machine flonum in TT and converts it to a (truncated)
+     machine fixnum, returned in TT.  Destroys accumulator D.
+
+
+(JSP T IFLOAT)
+     Takes a machine fixnum in TT and converts it to a machine flonum,
+     returned in TT.  Does not destroy any other accumulators.
+
+(JRST 0 FIX1)
+(JRST 0 FIX2)
+(JRST 0 FLOAT1)
+(JRST 0 FLOAT2)
+     These are convenient exits to the following code internal to the lisp
+     system:
+
+       FIX2    (JSP T IFIX)
+       FIX1    (JSP T FXCONS)
+               (POPJ P)
+       FLOAT2  (JSP T IFLOAT)
+       FLOAT1  (JSP T FLCONS)
+               (POPJ P)
+
+
+(JSP T FLTSKP)
+     Verifies that the S-expression in A is a fixnum or flonum; if it
+     is not, a wrng- type-arg error is signaled.  If it is, then the
+     machine number is returned in accumulator TT; moreover, the
+     return skips if it is a flonum.  Example: here is a simplified
+     version of the sub1 function which does not accept bignums:
+
+       (LAP SUB1NOBIG SUBR)
+       (ARGS SUB1NOBIG (NIL . 1))
+               (JSP T FLTSKP)
+               (SOJA TT FIX1)
+               (FSBRI TT 0 1.0)
+               (JRST 0 FLOAT1)
+       NIL
+
+
+(JSP T (NPUSH -n))
+     This routine pushes n nil's onto the regular pdl; i.e.  it is
+     equivalent to writing (PUSH P (% 0 0 NIL)) n times.  n must be
+     between 1 and 20 octal.  Note the minus sign in the above: to
+     push 4 nil's one writes (JSP T (NPUSH -4)).  This routine is used
+     greatly by compiled code to create pdl slots for local variables.
+
+(JSP T (0PUSH -n))
+     Similar to NPUSH, but pushes zeros onto the fixnum pdl.  n must
+     be between 1 and 10 octal.  Used by code produced by the
+     fast-arithmetic compiler.
+
+(JSP T (0*0PUSH -n))
+     Similar to NPUSH, but pushes zeros onto the flonum pdl.  n must
+     be between 1 and 10 octal.  Used by code produced by the
+     fast-arithmetic compiler.
+
+(JSP D *LCALL)
+     This routine is called by user lsubrs produced by the lisp
+     compiler.  It accounts for the number of arguments, and saves
+     some information so that the arg and setarg functions can find
+     the arguments.  After the user lsubr has been executed it takes
+     care of popping the arguments off the pdl and returning to the
+     caller.
+
+
+(JSP D (*LCALL -1))
+     Used by user lsubrs declared to be of type fixnum.  It performs
+     the same setup as *LCALL, but also sets up a number-consing
+     return by doing (PUSH P (% 0 0 FIX1)).  *LCALL skip-returns; the
+     following instruction is always (JSP D *LCALL).
+
+(JSP D (*LCALL -2))
+     Is like F3(*LCALL -1), but is for flonum-type lsubrs.
+
+
+(PUSHJ P IOGBND)
+     Used by compiled code to perform the iog function.  Equivalent to the
+     code
+
+               (JSP T SPECBIND)
+               (0 0 (SPECIAL ^W))
+               (0 0 (SPECIAL ^Q))
+               (0 0 (SPECIAL ^R))
+               (0 0 (SPECIAL ^B))
+               (0 0 (SPECIAL ^N))
+
+
+(JSP T (*MAP -n))
+     Used by compiled code to call the various mapping functions in
+     the common case where there are two arguments.  The function
+     should be in B, and the list in A.  (This is backwards from the
+     standard order!) n determines which mapping function as follows:
+
+        1   maplist   3   map       5   mapcon
+        2   mapcar    4   mapc      6   mapcan
+
+
+(JSP T *SET)
+     Used for compiling calls to the function set.  Accumulator A
+     should have the value (second argument to set), while AR1 should
+     have the atomic symbol which is to get the value (first argument
+     to set).
+
+(JSP T *STORE)
+     Used for compiling calls to the function store.  (The conventions
+     for this routine are undergoing some change, and thus are not
+     described here.)
+
+(PUSHJ P *UDT)
+     Used by compiled code for handling undefined computed go tags in
+     compiled progs.  The tag is in accumulator A.  It handles the
+     case where the tag is really a fixnum; and if not, signals a
+     correctable error and possibly returns with a corrected tag in A.
+
+(JSP TT ERSETUP)
+     Used for compiling calls to the function ERRSET.  Accumulator A
+     has the second argument to ERRSET, and B has the address to go to
+     if an error occurs.  This routine pushes various things onto the
+     regular pdl.
+
+(JRST 0 ERUNDO)
+     If all the code compiled for the first argument to an errset runs
+     without error, it must go to ERUNDO to undo the errset, i.e. to
+     pop the things off the pdl which ERSETUP pushed.  Control is
+     returned to the address given in B when ERSETUP was called.
+
+(JSP T GOBRK)
+     Used by compiled code when a go is done within an errset (yech!).
+     It is similar to ERUNDO, but returns to the instruction following
+     the (JSP T GOBRK), rather than to the place specified to ERSETUP.
+
+(JSP TT (ERSETUP -1))
+     Used to compile calls to the function catch, which internally is
+     similar to errset.  Accumulator A contains the second argument to
+     catch (the catch tag), and B the return address which is used if
+     a throw is done.
+
+(JRST 0 (ERUNDO -1))
+     Just as ERUNDO undoes an errset, so ERUNDO-1 undoes a catch.
+
+(JSP T (GOBRK -1))
+     Similar to GOBRK, but breaks out of a catch rather than an
+     errset.  This is what a throw compiles into.
+
+ARGLOC
+     This is not a routine but a variable, which contains the address
+     of the pdl slot just below the arguments to the most recently
+     called lexpr or user lsubr, or zero if none has been called. Thus
+     the call (ARG 2) may be coded in lap roughly as:
+
+               (MOVE T ARGLOC)
+               (ADDI T 2)
+               (HRRZ A 0 T)
+
+     This is one of the variables set up by *LCALL.
+
+ARGNUM
+     This, like ARGLOC, is a variable.  It contains the number of
+     arguments to the most recent lexpr or user lsubr call, as a lisp
+     number.  (accessing ARGNUM indirectly will of course fetch the
+     machine number.)  Thus one might write a function:
+
+       (LAP ARGN-2 SUBR)
+       (ARGS ARGN-2 (NIL . 0))
+           (MOVE TT @ ARGNUM)     ;get number of args
+           (CAIGE TT 3)           ;need at least 3
+           (LERR 0 (% SIXBIT LESS THAN 3 ARGS))
+           (ADD TT ARGLOC)        ;fetch the last
+           (HRRZ A -2 TT)         ; arg but 2
+           (POPJ P)
+       NIL
+
+Node: User Routines, Up: Details, Next: Representation, Previous: Internal
+
+   There are some routines internal to pdp-10 lisp which are not used
+by code produced by the compiler, but which may be of use to those
+writing functions in lap.  Unless specified otherwise, the symbols for
+these routines are also predefined to lap.
+
+(PUSHJ P PRINTA)
+     This routine is the internal lisp print function.  It does not
+     actually perform any output, but merely supplies a stream of
+     characters.  It is called with the S-expression to be printed in
+     accumulator A, and the address of a routine in R.  The sign bit
+     of R controls the use of slashes: zero means produce characters
+     like prin1 and explode would, one means like princ and explodec.
+     PRINTA will generate characters and pass them one at a time to
+     the routine specified in R by placing the ascii code in
+     accumulator A and doing a (PUSHJ P 0 R).  (This violates the rule
+     about putting non-S- expressions in gc-protected accumulators,
+     but for numbers less than about 2000 octal this is guaranteed to
+     be a safe procedure anyway.)  The routine may do anything it
+     wants to with the character, but must avoid destroying the
+     contents of accumulators B, C, TT, and R, which are assumed by
+     PRINTA to be safe.  On the other hand, AR1 and AR2A are not
+     altered by PRINTA and may be used to communicate over successive
+     calls to the routine; e.g. they may hold byte pointers, etc.
+     (Again, a violation of the rule, but this is all right as long as
+     they point to "safe" places, like pdl slots or binary code.) When
+     PRINTA is done it will return to the instruction after the PUSHJ
+     to it.  The contents of accumulator A are not preserved.
+     Example: Here is a funny version of flatc which only counts
+     capital letters.
+
+            (LAP ALPHLATC SUBR)
+            (ARGS ALPHLATC (NIL . 1))
+                (PUSH P (% 0 0 FIX1))   ;it's NCALLable!
+                (PUSH FXP (% 0))        ;counter
+                (MOVEI AR2A 0 FXP)      ;remember where it is
+                (HRROI R COUNT)         ;princ style
+                (PUSHJ P PRINTA)
+                (POP FXP TT)            ;pop count
+                (POPJ P)
+        COUNT   (CAIGE A 101)           ;only count capital
+                (POPJ P)                ; letters
+                (CAIG A 132)
+                (AOS 0 0 AR2A)
+                (POPJ P)
+            NIL
+
+
+(PUSHJ P GETCOR)
+     This symbol is not known to lap; it is intended primarily for
+     systems programmers on ITS who need large blocks of core for
+     special I/O devices; however, it also exists in dec-10 lisp.  It
+     is called with the number of 1K blocks of core desired in TT.
+     Lisp allocates a single block of core that large and returns the
+     address of the first word of the block in TT.  It may destroy
+     several other accumulators in the process.  Lisp may or may not
+     actually cause the core to exist; it merely allocates address
+     space and promises not to use it for anything else.  The caller
+     should do the appropriate .CBLK calls on ITS to cause the core to
+     exist.  (On dec-10 lisp will cause the core to exist, for the
+     present.)
+
+
+INHIBIT
+     This is a variable which, if non-zero, specifies that (a) user
+     interrupts may not be processed, but must be delayed, and (b)
+     lisp may not relocate any arrays when garbage collecting (it may
+     if the array functions are called, however).  This is used
+     primarily by the lisp system; the nointerrupt function is usually
+     sufficient for users.  When INHIBIT is reset to zero the routine
+     INTREL should be called, to check for any delayed interrupts
+     which may be pending.  Note that INHIBIT does not prevent
+     uncorrectable errors and control G or control X quits.  Thus, it
+     is preferable to the nointerrupt function when it is desired to
+     inhibit user interrupts but not quits (such situations are rare
+     except in lap code).  The standard usage of this switch is:
+
+                    (PUSH FXP INHIBIT)
+                    (SETOM 0 INHIBIT)
+                    ... process with user interrupts inhibited ...
+                    (PUSHJ P INTREL)
+
+     Note that INTREL will do a (POP FXP INHIBIT).
+
+
+NOQUIT
+     This switch inhibits all interrupts and quits.  The left half is
+     for use by the garbage collector, and only the garbage collector!
+     The right half may be used by user programs by using (HLLOS 0
+     NOQUIT) to turn it on, and (HLLZS 0 NOQUIT) to turn it back off.
+     After turning it back off the routine CHECKI should be called to
+     check for any delayed interrupts or quits.  Thus the standard
+     usage is:
+
+                    (HLLOS 0 NOQUIT)
+                    ... process with NOQUIT non-zero ...
+                    (HLLZS 0 NOQUIT)
+                    (PUSHJ P CHECKI)
+
+     This is somewhat less useful than the user nointerrupt function,
+     but was implemented first.  Note that the routine INTREL
+     described above under INHIBIT is equivalent to
+
+                    (POP FXP INHIBIT)
+                    (JRST 0 CHECKI)
+
+     and thus if for some reason one wants to pop the old value of
+     INHIBIT oneself, CHECKI may be used instead of INTREL.  CHECKI
+     preserves all accumulators.
+
+
+(PUSHJ P UINITA)
+     This routine sets things up for opening a file, old I/O style.
+     It takes a file name list (name1 name2 dev user) in accumulator
+     A, and on ITS a mode in the right half of TT.  If the file name
+     list is short the default file names are applied as for the uread
+     function.  In the dec-10 implementation, the device name is
+     placed at location UTIN, and the ppn in USN (the latter tag is
+     not known to lap; beware!); the file names are returned in T and
+     TT.  In the ITS implementation, the mode, device, and file names
+     are placed in a three-word block suitable for .OPEN at location
+     UTIN, and the lisp's sname is set to the appropriate user name.
+     The contents of accumulator A are preserved.  UINITA also does
+     the equivalent of
+
+                    (PUSH FXP INHIBIT)
+                    (SETOM 0 INHIBIT)
+
+     thus locking out user interrupts, on the theory that some I/O
+     operation will take place which should not be interrupted.  It is
+     up to the caller subsequently to unlock interrupts, e.g. by doing
+     (JRST 0 INTREL).  Example: on ITS, these functions provide a
+     (relatively inefficient) method for binary input (I/O channel 17,
+     presently unused in pdp-10 lisp, is usurped; beware, for this
+     fact will change!):
+
+            (LAP BINOPEN FSUBR)
+                (MOVEI T 4)           ;image unit input
+                (PUSHJ P UINITA)      ;set up
+                (*OPEN 17 UTIN)       ;try to open it
+                (LER3 0 (% SIXBIT BIN FILE NOT FOUND))
+                (JRST 0 INTREL)           ;must unlock interrupts
+            (ENTRY BINGET SUBR)
+            (ARGS BINGET (NIL . 0))
+                (PUSH P (% 0 0 FIX1)) ;NCALLable!
+                (*IOT 17 TT)          ;input a binary word
+                (POPJ P)              ;return as a fixnum
+            (ENTRY BINCLOSE SUBR)
+            (ARGS BINCLOSE (NIL . 0))
+                (*CLOSE 17)           ;close the channel
+                (POPJ P)
+            NIL
+
+Node: Multics,		Up: Details,		Next: Conventions
+
+   [[[ OVERVIEW ]]]
+
+Node: Representation, Up: Details, Next: Environ, Previous: User Routines
+
+   Like most LISPs, Multics MACLISP represents LISP values as pointers
+to objects.  If two values are eq, the two pointers point to the same
+identical object.
+
+   A pointer is a two-word entity.  It consists of an "indirect to
+segment pair," which is the principal pointer or indirect-word form
+provided by the hardware, with some additional bits which specify the
+data-type of the object pointed to.  These bits are arranged so that
+all common type testing can be done in a single instruction.
+
+   Numerical values are represented somewhat differently.  Since the
+pointer is big enough to hold a machine fixnum or a machine flonum,
+these LISP data types are not represented as objects in their own
+right.  Instead, the machine number is stored directly in the pointer.
+A special code is also stored in the pointer which makes the hardware
+refuse to use it as a true pointer, i.e. any attempt to indirect
+through a number-pointer will cause a fault.
+
+   The arrangement of bits in an ordinary pointer is:
+
+      --------------------------------------
+      |   segment num  |ring|  type  | tag |
+      --------------------------------------
+      |    word num    |         0         |
+      --------------------------------------
+
+segment num and word num together make up the address of the object
+pointed to.  tag contains a magic value which informs the hardware
+that this is a pointer.  ring contains a ring-validation level which
+is of no concern to lisp.
+
+   The arrangement of bits in a number "pointer" is:
+
+      --------------------------------------
+      |          0          |  type  | tag |
+      --------------------------------------
+      |           machine number           |
+      --------------------------------------
+
+Here tag is set to a different magic value, which informs the hardware
+that this is not really a pointer.
+
+   The bits in the type field are:
+
+     Fixed     this pointer contains a fixnum.
+
+     Float     this pointer contains a flonum.
+
+     Atsym     this pointer points at an atomic symbol.
+
+     String    this pointer points at a string.
+
+     Subr      this pointer points at an entry point to a
+	       machine-executable function.
+
+     Bignum    this pointer points at a bignum.
+
+     System_Subr this pointer points at a subr built in to MACLISP.
+	       The Subr bit is also on.
+
+     Array     this pointer points at the header of a lisp array.
+	       The Subr bit is also on, because arrays are also
+	       functions.
+
+     File      this pointer points at a file-object.
+
+     We can see that if any bit is on, the value is atomic.  If no
+	       bits  are on, i.e. the type field is zero, this is a
+	       pointer to a cons.
+
+   Now that we know what pointers look like, it is necessary to
+discuss what the objects they point at look like.  [OR, Having
+discussed the representation of lisp values, now we will discuss the
+representation of lisp objects.  ]
+
+   A cons consists of two values (or pointers), first the car and then
+the cdr.
+
+   The representation of fixnums and flonums has been discussed above.
+
+   An atomic symbol consists of a structure which contains two
+pointers, the length of the symbol's pname, and the pname itself.
+This structure is thus variable in length, since there is no limit on
+the length of a pname.  The two pointers are the symbol's value cell
+and its property-list cell.  The value cell contains either all zero
+bits, if the symbol has no value, or the symbol's lisp value.  Since
+the value cell is the first item in an atomic symbol, the value of a
+symbol can be referenced very quickly, by indirection.  The
+property-list cell contains the list of indicators and properties that
+have been placed on the symbol.  This list is nil when the symbol is
+first created.  The atomic symbol nil is an exception, however.  Its
+property-list cell is always nil in order to ensure that taking the
+cdr of nil always returns nil.  The actual property list is kept
+elsewhere.
+
+   A string is represented as a word containing its length, in
+characters, followed by the characters themselves, in the machine's
+string format of four 9-bit characters per word.
+
+   A bignum is represented as a header word, with the sign in the left
+half and the size in the right half.  The sign is 18 0-bits for a
+positive number, or 18 1-bits for a negative number.  The size is the
+number of words (machine fixnums) required to represent the number.
+These words immediately follow the header word.  Each word contains 35
+significant bits.  The least significant word is first.
+
+   The representation of a subr is a header word followed by the first
+instruction of the subr.  Normally this instruction calls a small
+subroutine which saves the information about the caller that has to be
+saved [???] and then transfers to the subr proper.  This subroutine
+can be system-supplied or generated by the compiler.  In the case of
+some simple subrs, for instance eq, the subr-object transfers directly
+to the subr proper.
+
+   The header word contains in its left half a specification of the
+number of arguments required, and in its right half further
+information.  In the case of a compiled lisp subr, this is the
+relative address within the object segment of the machine code for the
+subr.  It is used by the linkage subroutine.  The right half is not
+used in a system subr.  In the case of a subr (fixed number of
+arguments), the left half is the number of arguments required.  In the
+case of an lsubr, it is the maximum number of arguments, in 9 bits,
+then the minimum number of arguments in the next 9 bits.
+
+   The representation of an array is a header block which is pointed
+at by the lisp value.  This header block describes the array and
+points in turn to the actual array of values or machine numbers.
+
+   The representation of a file is a large structure which contains
+all the information required to access the file.  This includes both
+information needed by lisp, such as the eoffn, and information needed
+to access the file in the outside world, such as a pointer to and
+pathname of a segment.
+
+Node: Environ,  Up: Details,  Next: Calling,  Previous: Representation
+
+   The lisp environment is contained in several segments of storage.
+First there are the object segments.  These are read-only segments
+containing, for the most part, executable machine code.  There is one
+object segment for the lisp system itself, another for the compiler,
+and another for library programs such as grind.  When a user's lisp
+functions are compiled, the compiler produces another object segment.
+
+   There are "lisp.lists" segments, which contain list structure and
+other lisp-object representations.  These segments are maintained by
+the garbage collector.
+
+   There are "lisp.static" [???] segments.  These contain data not
+managed by garbage collection, principally the representations of
+subrs (but not the machine code itself), the representations of arrays
+(but not the element of the arrays), and the representations of
+file-objects.
+
+   In addition there are two "lisp.stack" segments.  One is called the
+marked stack, or marked pdl, and the other the unmarked stack, or
+unmarked pdl.  The marked pdl is "marked" by the garbage collector,
+hence used to store lisp values temporarily.  The unmarked pdl is
+unknown to the garbage collector, hence used to store machine values
+such as miscellaneous numbers, subroutine return addresses, etc.  The
+two pdls are often pushed and popped in unison.  For instance, when a
+function is entered it saves its return address and its caller's
+linkage pointer (see below) on the unmarked pdl, and pushes some
+temporary working space onto the marked pdl.  Its arguments are also
+conveyed on the marked pdl; they are pushed on by the caller.
+
+   At the base of the segment containing the unmarked pdl is a fixed
+area known as the "stack header."  It is stored there only to make it
+very easy to address.  The stack header contains a variety of
+information which is frequently referenced both by the lisp system and
+by compiled lisp functions.  Its contents include:
+
+   Pointers to internal information stored elsewhere.
+
+   Data used to remember the last array reference for the sake of the
+store function.
+
+   The values t and nil.  (That is, pointers to the atomic symbols t
+and nil, with their Atsym type-bits turned on.)
+
+   The in_pl1_code flag, which says whether execution is currently in
+the lisp environment or the PL/I environment (see below).
+
+   Pointers to "operators," which are subroutines to perform
+operations very frequently required by compiled code.  These exist
+because they can have more efficient calling sequences than the full
+general lisp calling sequence.  Many operators perform operations
+which are performed by special forms in interpreted code.  (Other
+special forms are compiled directly into machine instructions.)  The
+table of pointers to operators is required so that compiled code
+doesn't have to be "linked" to the operators when it is load'ed.  This
+would be time- consuming and might prevent sharing of compiled object
+segments.  The operators are described in more detail below.
+
+   [Registers]
+
+Node: Calling,  Up: Details,  Next: Operators,  Previous: Environ
+
+   [ TO BE SUPPLIED ]
+
+Node: Operators,	Up: Details,		Previous: Calling
+
+   [ EXPAND FROM THIS LIST ]
+
+   bind unbind errset1 errset2 unerrset call catch1 catch2 uncatch
+iogbind unseen go tag throw1 throw2 signp return err cons ncons xcons
+begin_list append_list terminate_list compare link
+
+Node: Other Languages,		Up: Top,	Previous: Details
+
+Calling programs written in other languages.
+
+* Menu:
+
+* The defpl1 declaration: defpl1
+* Producing fasloadable files with the Midas Assembler: Midas
+
+Node: defpl1,	Up: Other Languages,	Next: Midas
+
+   The Multics lisp compiler provides a feature by which you can
+compile a lisp subr which represents, in the lisp environment, a
+subroutine in the outside world which has a PL/I-compatible calling
+sequence.  The Multics Fortran, PL/I, and Basic compilers use this
+calling sequence.  The BCPL compiler uses it for "main" routines.
+Most Multics system entries can be called from lisp through defpl1.
+
+   When the lisp subr is applied, the subroutine will be called with
+arguments derived from the arguments given to the lisp subr.  Results
+returned by the subroutine may be passed back to lisp either as the
+return value of the lisp subr, or by setq'ing an atomic symbol.
+
+   Because lisp and PL/I use different data types, a correspondence
+between the types must be set up:
+
+   Numbers.  `fixed binary' with a precision not more than 35.
+corresponds to the lisp fixnum.  `float binary' with a precision of
+not more than 27.  corresponds to the lisp flonum.  Nonzero scale
+factors, complex numbers, decimal or pictured numbers, and large
+precisions are not supported.
+
+   Bit strings.  A bit string of up to 36.  bits corresponds to a lisp
+fixnum.  The bits are stored left-justified in the fixnum; thus in the
+case of bit(1) the fixnum is zero for "0"b and negative for "1"b.
+Note that because of the left- justification many bit strings map into
+"illegal" fixnums which cannot be typed in as octal numbers.  Typing
+in the corresponding digits would produce a bignum.  The lsh function
+or the "_" number-modifier character can be useful for inputting these
+fixnums.  These bit strings work as either `aligned' or `unaligned.'
+Bit strings longer than 36. bits are not supported.
+
+   Character strings.  Lisp character strings and PL/I character
+strings correspond directly.  For input arguments, lisp will also
+automatically convert an atomic symbol to a character string by taking
+its pname, as usual.  Usually the PL/I argument will be declared
+`char(*).'
+
+   Varying Character Strings.  Varying character strings are somewhat
+special.  Lisp will take whatever string argument you supplied (the
+null string if it is a `return' argument) and create a varying string
+of the length you declared, initialized with the string you supplied.
+Thus usually its current length will be less than its maximum length.
+This varying string will be passed to the PL/I subroutine.  When the
+subroutine returns, whatever it leaves in the varying string will be
+made back into a lisp string and returned (if it is an `update' or
+`return' argument.)  This procedure is necessary because lisp strings
+may not vary in length.  Note that you must declare the length of the
+string to lisp; `char(*) varying' is illegal.  However, the PL/I
+subroutine may declare it `char(*) varying' since a descriptor is
+passed.
+
+   Pointers.  Both packed and unpacked pointers are supported.  These
+are both represented in lisp as fixnums in packed pointer format, that
+is 2 octal digits of bit offset, 4 octal digits of segment number, and
+6 octal digits of word offset.  The null pointer is 007777000001
+octal.  It is not possible to reference, within lisp, what a pointer
+points at.  Because of the packed pointer representation, ring numbers
+in pointers are not supported.  If you declare the PL/I subroutine to
+take unpacked pointers, which is the default, lisp will do the
+conversion between packed and unpacked representations.
+
+   Raw lisp objects.  A PL/I subroutine which knows about lisp may be
+passed (or return) raw lisp objects.  In PL/I these should be declared
+`fixed bin(71)' and then the based overlays declared in sundry lisp
+include files should be used.  See section 14.6.
+
+   Arrays.  Arrays of any number of dimensions may be passed.  The
+arrays can only contain numbers or raw lisp objects however.  Usually
+you would pass a lisp fixnum (or flonum) array and in PL/I declare it
+`dimension(*,*) fixed bin(35)' (or float bin(27).)  In the dimension
+attribute put as many stars as there are dimensions.  Proper matching
+of types and dimensions will be checked at run time.
+
+   There are certain pitfalls associated with arrays.  Arrays with
+more than 15 dimensions may tend to lose, due to the format of PL/I
+array argument descriptors.  Arrays as return or update arguments
+(defined below) are not supported.  However, the lisp array is passed
+by reference, so if the PL/I subroutine stores into elements of the
+array the appropriate thing will happen.  If you are calling a Fortran
+program, you need to be aware that Fortran reverses the order of the
+subscripts of multidimensional arrays.
+
+   Because lisp passes arguments by value, while PL/I passes arguments
+by reference, it is necessary to pay attention to whether an argument
+is input to the PL/I subroutine, output from (returned by) the PL/I
+subroutine, or both (updated by the PL/I subroutine.)  `Output from'
+includes both arguments that are stored into and values returned by a
+return statement.  If the PL/I subroutine has a `returns' attribute,
+this is considered to be an extra argument stuck on the end of the
+argument list.  Note that PL/I `returns(char(*))',
+`returns(dimension(*) fixed bin)', and similar constructs are not
+supported because they use a non-standard calling sequence.
+
+   Input arguments to the PL/I subroutine are derived from arguments
+to the lisp subr which represents it according to the data type
+transformations described above.
+
+   Return arguments from the PL/I subroutine are passed back to lisp
+according to the user's declaration; they may be ignored, setq'ed onto
+an atomic symbol, or passed back as the value of the lisp subr.  If
+more than one is passed back in the latter way, they are consed up
+into a list.  If there are none, nil is returned.
+
+   Update arguments are a combination of the two types described
+above.  They are derived from the arguments to the lisp subr, and they
+are also passed back like return arguments.
+
+   Now the detailed syntax of the `defpl1' feature will be described.
+It is invoked by using the defpl1 declaration in the lisp compiler, in
+a form generally as follows (note that nothing in this "form" is
+evaluated):
+
+     (declare (defpl1 lisp-name external-name arg-dcl-1
+                      arg-dcl-2 ... arg-dcl-n ))
+
+lisp-name is an atomic symbol, which will be defined as a subr when
+the output of the compilation is loaded.  This subr will take as many
+arguments as the PL/I subroutine has input and update arguments.
+
+   external-name is a string which is the name of the subroutine to be
+called, as it would be written in PL/I.  If it is "", the pname of
+lisp-name will be used so that you need not type the same thing twice.
+
+   arg-dcl-1 through arg-dcl-n are lists.  Each one gives the
+attributes of one of the arguments to the PL/I subroutine.  First you
+must give attributes describing whether it is an input, update, or
+return argument.  These are:
+
+     <no attribute given>an input argument
+
+     return              a return argument, passed back as the value
+			 of the subr.
+
+     return ignore       a return argument which is ignored.
+
+     return (setq var)   a return argument to which the atomic symbol
+			 var is setq'ed.  var should be declared special.
+
+     update              an update argument, passed back as the value of
+                         the subr.
+
+     update ignore       an update argument whose returned value is ignored.
+
+     update (setq var)   an update argument whose returned value var is
+			 setq'ed to.
+
+   Next you specify the data type attributes, in a form quite similar
+to the way you would in PL/I.  (But don't forget that the declaration
+of each argument is enclosed in its own pair of parentheses, instead
+of being separated from the others with commas.)  The following
+keywords are recognized for data type attributes:
+
+         fixed       float       binary      bin
+         bit         pointer     ptr         packed-ptr
+         packed-pointer          character   char aligned
+         unaligned   lisp        array       varying
+
+   Note that `packed-pointer' is used rather than `pointer unaligned,'
+and `array' is used rather than `dimension.'  `lisp' means a raw lisp
+object.  Precisions, array extents, and string lengths are specified
+as parenthesized numbers or asterisks, just as in PL/I.  Note that
+unless you declare otherwise to the compiler or put a decimal point,
+these numbers will be interpreted as octal.
+
+   Here is an example, although not of a very useful case:
+
+     (declare (defpl1 hcs_$initiate "" (char(*)) (char(*))
+               (char(*)) (fixed bin(1)) (fixed bin(2))
+               (return pointer) (return (setq code) fixed bin(35.))))
+
+   If this was compiled and loaded into lisp, you could type
+
+     (hcs_$initiate ">system_control_1" "whotab" "" 0 0)
+
+and lisp would reply with a number such as 356000000, and code would
+have been setq'ed to 0, presumably.  The "whotab" could then be
+accessed via an external array (see chapter 9.)
+
+   It is important to note that the defpl1 declaration is not known to
+the interpreter.  A defpl1-defined function may be called by
+interpreted lisp code, but the source of the defpl1 declaration must
+nevertheless be compiled and loaded into the lisp environment before
+it can be used.  For this reason, it is a good idea to keep defpl1's
+and defun's in separate files.  The defpl1's may be placed in an
+include file which is %include'd by the other file when it is
+compiled, and may also be compiled separately when the interpreter is
+to be used.
+
+Node: Midas,	Up: Other Languages,	Previous: defpl1
+
+   Midas can assemble FASL files that can be loaded by LISP in the
+same manner as compiler output.  This mode is entered by the .FASL
+pseudo-op, which must appear at the beginning of the file before any
+storage words.
+
+   After .FASL has been seen, the assembly becomes a two pass
+relocatable assembly.  However, certain restrictions and "changes of
+interpretation" apply.
+
+   Global symbols (declared as usual with " or .GLOBAL) are
+permissible.  However, since the output is to be loaded with fasload
+using DDT's symbol table instead of STINK, there are quite a few
+differences in detail.
+
+   For symbols defined within the current assembly, the only effect of
+being declared GLOBAL is that the GLOBAL information is passed on to
+fasload when the symbol table is written at the end of pass 2.  This
+in combination with the symbols switch in fasload determines whether
+the symbol gets loaded into DDT's symbol table.  If symbols is nil, no
+symbols will be loaded; if the value of symbols is the atomic symbol
+symbols, only globals will be loaded; and if symbols is t, all symbols
+(local and global) will be loaded.  Once the symbol is loaded (or
+not), the information as to its GLOBALness is lost and, of course,
+makes no further difference. The initial state when LISP is loaded is
+nil.
+
+   GLOBAL symbols not defined in the current assembly are also legal,
+but there are additional restrictions as to where in a storage word
+they may appear and what masking may be specified (as compared to a
+normal relocatable assembly).  Briefly, they may appear in a storage
+word as a full word, a right half, a left half, or an accumulator.
+They may be negated, but can not be operated on with any other
+operator.  Error printouts will be produced if they appear elsewhere.
+When the symbol is encountered by fasload, DDT's symbol table is
+consulted.  If it is not defined at that time, fasload will try to
+find a sym property on the atomic symbol with the same name.
+
+   Any sort of global parameter assignment or location assignment is
+forbidden.  .LOP, .LVAL1, .LVAL2, etc are not available.
+
+
+   The following pseudo-ops are available to facilitate the
+communication between MIDAS assembled programs and LISP (particularly
+with regard to list structure).
+
+.ENTRY function type args
+
+        Note that the arguments to this pseudo-op are separated by
+     spaces, not commas.
+
+        function is an atom and is taken as the name of a function
+     beginning at the current location.  type should be one of SUBR,
+     FSUBR, or LSUBR, and has the obvious interpretation.  args is a
+     numeric-valued field which is passed through to fasload and used
+     to construct the args property of the function.  If it is zero,
+     no args property is created.  Otherwise it is considered to be a
+     halfword divided into two 9-bit bytes, each of which is converted
+     as follows:
+
+              byte      result
+              0         nil
+              777       777
+        otherwise       n n-1
+
+     These two items are then cons'ed and form the args property.
+
+The following pseudo-ops may appear in constants.
+
+.ATOM atom
+
+        Followed by a LISP atom in "MIDAS" format (see below). May
+     only appear in right half (or entire word) of a storage word.
+     Assembles into a pointer to the atom.
+
+.SPECIAL atom
+
+        Similar to .ATOM but assembles into a pointer to the (special)
+     value cell of the specified atom.
+
+.FUNCT atom
+
+        Similar to .ATOM, but invokes special action by fasload in
+     case the pure switch is on.  Normally used in function calls.
+     Briefly, if fasload is going to purify the function it is
+     loading, it must "snap the links" first.  If .FUNCT is used, the
+     location will be examined by fasload and the link snapped if
+     possible before purification.
+
+           Typical usage:
+
+              CALL 2,.FUNCT EQUAL     ;calls equal as a function of 2 args
+                                      ; note: the CALL is not defined
+                                      ; or treated specially by MIDAS.
+                                      ; (but see .FASL DEFS below)
+
+.ARRAY atom
+
+        Similar to .ATOM, but assembles into a pointer to the array SAR.
+
+.SX S-expression
+
+        Similar to .ATOM, but handles a LISP S-expression. (See below).
+
+.SXEVA S-expression
+
+        Reads S-expression.  This S-expression is evaluated (for
+     effect presumably) at fasload time.  The resulting value is
+     thrown away.  Does not form part of storage word.
+
+.SXE S-expression
+
+        Similar to .SX but the S-expression is evaluated at fasload
+     time.  The resulting value is assembled into the storage word.
+
+
+   The MIDAS "LISP READER"
+
+   By a conspiracy between MIDAS and fasload, a version of the LISP
+reader is available.  However, due to historical reasons (mostly, i.e.
+the fasload format was originally intended only to deal with COMPLR
+type output), there are a number of "glitches" (see below for list).
+These will probably tend to go away in the fullness of time.
+
+a) numeric ATOM
+
+   The first character of a LISP atom is examined specially. If it is
+a # or &, the atom is declared to be numeric and either fixed (#) or
+floating (&).  Midas then proceeds to input a normal numeric field
+(terminated, note, by either space or comma).  This value is then
+"stored" in the appropriate "space" (fixnum space or flonum space).
+
+b) other ATOMs (also known as PNAME atoms or (LISP) SYMBOLS)
+
+   If the first character of the atom is not # or &, the atom is a
+"PNAME" atom.  / becomes a single character quote character as in
+LISP.  The atom may be indefinitely long.  The atom will be terminated
+by an unquoted space, carriage return, tab, (, ), or semicolon.
+Unquoted linefeeds are ignored and do not become part of the atom.
+The character that terminates the atom is "used up" unless it is a (
+or ).  Note that period is a legal constituent of a atom and does not
+terminate it or act specially.
+
+c) lists
+
+   Lists work normally, but note following caution relative to dot
+notation: .  does not terminate atoms.  Thus, to invoke dot notation,
+the dot must be left delimited by a space, tab, parenthesis, or other
+character that does terminate atoms.
+
+Glitches:
+
+       1) Restriction on pass dependent list structure -- In any list
+     reading operation, no new atoms not previously encountered may be
+     encountered for the first time on pass 2. However, this
+     restriction does not apply to atom- only reading operations
+     (.ATOM, .SPECI, .FUNCT etc).
+
+       2) Single quote for quoting does not exist (no other macro
+     characters exist either.)
+
+       3) Numbers must be flagged as above always.
+
+             MOVEI A,.ATOM 123       ;LOSES - gives pointer
+                                     ; to PNAME type atom
+                                     ; with PNAME 123. it is
+                                     ; not numeric.
+     use:
+             MOVEI A,.ATOM #123      ;wins
+
+       4) No provision exists to reference "GLOBALSYMS" in fasload.
+     This mostly means only that DDT must be present to load a MIDAS
+     assembled FASL file.  (Some simple COMPLR and LAP FASL files can
+     successfully be fasloaded by, for example, a disowned LISP
+     running without a DDT.)
+
+       5) LOC is illegal in a FASL assembly.  BLOCK of a
+     non-relocatable quantity is ok.
+
+       6) Currently, symbol loading is very slow.  Thus use (symbols
+     nil), (the initial state) unless symbols are necessary.
+
+       7) Midas does not know about any LISP symbols or UUOs
+     specially.  You should `.INSRT SYS:.FASL DEFS'.  This file
+     contains definitions of symbols for all LISP accumulators and
+     UUOs, .GLOBAL declarations for all GLOBALSYMS, and definitions
+     for some internal LISP macros such as LOCKI and UNLOCKI.  This
+     file is guaranteed to be up to date since the assembly of LISP
+     itself uses it.
+
+       8) .ATOM "should" be a special case of .SX . However, it is
+     handled separately because of the following "reasons": a) The
+     previously noted restriction on pass dependent LISTS.  b) Midas
+     can do constants optimization on atoms appearing in constants (on
+     both pass one and pass two) but not on LISTS. Therefore, each
+     list is guaranteed to take a separate word in the constants area
+     even if it is identical to some other list which also appears in
+     a constant.  c) Each list takes an additional entry in fasload's
+     "atom" table.  This is a temporary table that is flushed after
+     the fasloading is complete.  Of course, .SX still works for atoms
+     modulo the above noted restrictions and inefficencies.
+
