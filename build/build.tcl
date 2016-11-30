@@ -493,15 +493,36 @@ respond "*" ":load .temp.;*lisp bin\r"
 respond "*" "\033g"
 respond "*" "purify\033g"
 respond "*" ":pdump sys;purqio >\r"
+respond "*" ":kill\r"
 
 respond "*" ":link sys;ts lisp,sys:purqio >\r"
 respond "*" ":link sys;ts q,sys;purqio >\r"
 respond "*" ":link sys;atsign lisp,sys;purqio >\r"
+respond "*" ":link sys;ts l,sys;ts lisp\r"
 
 respond "*" ":link .info.;lisp step,.info.;step info\r"
 respond "*" ":link libdoc;struct doc,alan;struct doc\r"
 respond "*" ":link .info.;lisp struct,libdoc;struct doc\r"
 respond "*" ":link l;-read- -this-,lisp;-read- -this-\r"
+
+# lisp compiler
+respond "*" ":link comlap;complr fasl,comlap;cl.fas >\r"
+respond "*" ":link comlap;phas1 fasl,comlap;ph.fas >\r"
+respond "*" ":link comlap;comaux fasl,comlap;cx.fas >\r"
+respond "*" ":link comlap;faslap fasl,comlap;fl.fas >\r"
+respond "*" ":link comlap;maklap fasl,comlap;mk.fas >\r"
+respond "*" ":link comlap;initia fasl,comlap;in.fas >\r"
+respond "*" ":link comlap;srctrn fasl,comlap;st.fas >\r"
+respond "*" ":print lspdmp;..new. (udir)\r"
+type ":vk\r"
+respond "*" "lisp\013"
+respond "Alloc?" "n\r"
+respond "*" "(load \"comlap;ccload\")"
+respond ";BKPT CCLOAD:DUMPVERNO" "(setq ccload:dumpverno 2154)"
+respond "2154" "(return)"
+respond "*" ":kill\r"
+respond "*" ":link sys;ts complr,lspdmp;cl.dmp >\r"
+respond "*" ":link info;complr 1,info;lispc >\r"
 
 # ndskdmp tape
 
