@@ -524,6 +524,10 @@ respond "*" ":kill\r"
 respond "*" ":link sys;ts complr,lspdmp;cl.dmp >\r"
 respond "*" ":link info;complr 1,info;lispc >\r"
 
+# binprt
+respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
