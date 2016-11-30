@@ -1,0 +1,234 @@
+;;; -*- Mode: MIDAS -*-î
+î
+TITLE	LSRRTN - LSR1 database interface.î
+	;Originally by RLB, extended by CSTACY.î
+î
+SUBTTL	Basic definitionsî
+î
+.FASLî
+.INSRT sys:.fasl defsî
+.SXEVAL (SSTATUS FEATURE LSRRTN) î
+î
+;;; Get the system LSR1 database routines.î
+î
+lsrtns"$$ovly==1		;Map only a few pages and hack overlaying.î
+lsrtns"$$hsnm==1		;HSNAME lookup.î
+lsrtns"$$ulnm==0		;No last name searching.î
+lsrtns"$$ulnp==0		;No abbrev l.name lookups.î
+lsrtns"$$unam==0		;No name permutations.î
+î
+lsrtns"a==t			;LSRTNS requires some ACs.î
+lsrtns"b==ttî
+lsrtns"c==dî
+lsrtns"d==rî
+lsrtns"e==f î
+.INSRT dsk:syseng;lsrtnsî
+î
+;;; Random utility routines and macros.î
+î
+;;; Given a Byte pointer in D, return a list of chars in B.î
+î
+chlp0:	setz b,			;start with ()î
+chlp:	ildb tt,d		;get a charî
+	jumpe tt,chlpx		;zero terminatesî
+	jsp t,fxcons		;turn into fixnumî
+	call 2,.function CONS	;cons onto listî
+	move b,aî
+	jrst chlp		;go for another charî
+chlpx:	popj p,			;all done.î
+î
+î
+;;; Item numbers.î
+î
+.SXEVA (SETQ I$UNAM #0 )	;UNAMEî
+.SXEVA (SETQ I$NAME #1 )	;FULL NAMEî
+.SXEVA (SETQ I$NICK #2 )	;NICKNAMEî
+.SXEVA (SETQ I$LOCL #3 )	;LOCAL ITEMSî
+.SXEVA (SETQ I$MITA #4 )	;MIT ADDRESSî
+.SXEVA (SETQ I$MITT #5 )	;MIT TELEPHONE NUMBERî
+.SXEVA (SETQ I$HOMA #6 )	;HOME ADDRESSî
+.SXEVA (SETQ I$HOMT #7 )	;HOME TELEPHONE NUMBERî
+.SXEVA (SETQ I$SUPR #10 )	;SUPERVISOR(S)î
+.SXEVA (SETQ I$PROJ #11 )	;PROJECTî
+.SXEVA (SETQ I$DIR  #12 )	;FILE DIR NAMESî
+.SXEVA (SETQ I$AUTH #13 )	;AUTHORIZATIONî
+.SXEVA (SETQ I$GRP  #14 )	;GROUP AFFILIATIONî
+.SXEVA (SETQ I$REL  #15 )	;RELATION TO GROUPî
+.SXEVA (SETQ I$BRTH #16 )	;BIRTHDAYî
+.SXEVA (SETQ I$REM  #17 )	;REMARKSî
+.SXEVA (SETQ I$NETA #20 )	;NETWORK ADDRESSî
+.SXEVA (SETQ I$ALTR #21 )	;USER AND TIME OF LAST ALTERATIONî
+.SXEVA (SETQ I$MACH #22 )	;SUNAME@MACHINE PAIRSî
+î
+î
+SUBTTL	Mapping the database.î
+î
+;;; (LSRMAP <number of pages to use>)î
+;;; opens up and maps in the inquir database for looking up people.î
+;;; Returns a file object to be passed to other routines.î
+;;; Uses GETCOR to reserve address space.  Don't try this too many timesî
+;;; since the addr space isn't reused.î
+î
+.ENTRY LSRMAP SUBR 1+1î
+	jsp t,fxnv1			;get & save # pages to use, a->ttî
+	push fxp,ttî
+;; (OPEN '|INQUIR;LSR1 >| '(IN))î
+	movei a,.atom INQUIR/;LSR1/ >î
+	movei b,.sx (IN)î
+	call 2,.function OPENî
+	push p,aî
+;; extract I/O channel number from the file array, into TTî
+	movei tt,f.chanî
+	move tt,@ttsar(a)î
+	push fxp,ttî
+;; get pages via getcorî
+	move tt,-1(fxp)		;# pagesî
+	pushj p,getcor		;request addr space from Lispî
+	jumpe tt,corlos		;its addr is returned zero if none avblî
+	idivi tt,2000		;cvt to page numberî
+	movn d,-1(fxp)		;get number of pages requested to constructî
+	hrl tt,d		;aobjn to themî
+;; construct args for lsrmapî
+	move lsrtns"b,tt	;aobjn to free page rangeî
+	move lsrtns"a,(fxp)	;disk channel numberî
+;; Get the INQUIR data base mapped inî
+	pushj p,lsrtns"lsrmap	;try to map in the data baseî
+	 jrst lsrluz		;no skip if it lostî
+;; I guess we won, clean up and return the file object.î
+opnbye:	sub fxp,[2,,2]î
+	pop p,aî
+	popj p,î
+î
+;;; Return () instead of file obj.î
+corlos:î
+lsrluz:	move a,(p)		;get the file objî
+	call 1,.function CLOSE	;close itî
+	setzm (p)		;return ()î
+	jrst opnbyeî
+î
+î
+SUBTTL	Stepping through the database.î
+î
+;;; The screw with stepping through the database is thatî
+;;; LSRDTA and LSRNXT return a core address, not a file address.î
+;;;î
+;;; For example, you can not search by stepping through the database andî
+;;; storing the addresses of the found entries, because succesive LSRNXTsî
+;;; will not necessarily leave the entries mapped.  Instead, you mustî
+;;; process each entry as you find it, and then call LSRNXT.î
+î
+î
+;;; (LSRDTA <file-object>î
+;;;î
+;;; Returns the core address of the first data entry.î
+;;; This can be used to get an initial pointer for LSRNXT.î
+;;; Returns -1 if the LSR1 database does not appear to be mapped.î
+î
+.ENTRY LSRDTA SUBR 1+1î
+	push p,[fix1]		;Ncallable: (declare (fixnum (lsrnxt ...)))î
+				; so return machine number in TT.î
+	movei tt,f.chan		;Pick up disk channel number.î
+	move lsrtns"a,@ttsar(a)î
+	move lsrtns"b,lsrtns"datfpgî
+	imuli lsrtns"b,2000     ;File data page => addr first entryî
+	pushj p,lsrtns"lsrget	;Map it and get core addr.î
+	 movni lsrtns"b,1	; Say -1 for lossage.î
+	move tt,lsrtns"b	;Return value.î
+	popj p,î
+î
+;;; (LSRNXT <file-obj> <core address>)î
+;;;î
+;;; Given the core address of an entry, returns the core address of theî
+;;; next sequential entry in the LSR1 database.  Returns -1 iff thereî
+;;; are no more entries.î
+î
+.ENTRY LSRNXT SUBR 2+1î
+	push p,[fix1]		;Ncallable: (declare (fixnum (lsrnxt ...)))î
+				; so return machine number in TT.î
+	movei tt,f.chan		;Pick up disk channel number.î
+	move lsrtns"a,@ttsar(a)î
+	move lsrtns"b,(b)î
+	pushj p,lsrtns"lsrnxt	;Get entry into lsrtns"b.î
+	 movni lsrtns"b,1	; Say -1 for lossage.î
+	move tt,lsrtns"b	;Return value.î
+	popj p,î
+î
+î
+SUBTTL	Looking up a user.î
+î
+;;; (LSRUNM <file obj returned by LSRMAP> <uname>)î
+;;; Returns a magic number to be passed to LSRITM, etc., or -1 if uname unknown.î
+;;; Actually, the "magic number" is the entry's core address returnedî
+;;; by the lib subr.î
+î
+.ENTRY LSRUNM SUBR 2+1î
+	push p,cfix1		;NCALLable!î
+	movei tt,f.chan		;pick up disk channel numberî
+	move tt,@ttsar(a)î
+	push fxp,tt		;and save itî
+	move a,b		;(car (pnget <uname> 6))î
+	movei b,.atom #6.î
+	call 2,.function PNGETî
+	hlrz a,(a)î
+	move lsrtns"b,(a)	;set up uname in 6bit for lsrunmî
+	pop fxp,lsrtns"a	;the channelî
+	pushj p,lsrtns"lsrunm	;get entry addr in lsrtns"bî
+	  movni lsrtns"b,1	;-1 for lossî
+	move tt,lsrtns"b	;move to where Lisp wants it.î
+	popj p,î
+î
+î
+SUBTTL	Fetching an item.î
+î
+;;; (LSRITM <item number> <magic number>)î
+;;; returns the <item number> slot of the entry <magic number>î
+;;; returned by LSRUNM.î
+;;; This file sets the symbols I$UNAM etc to the correct values.î
+;;; Look after this function, and in :INFO LIB LSRTNS .î
+î
+.ENTRY LSRITM SUBR 2+1î
+	jsp t,fxnv1		;item number, a->ttî
+	jsp t,fxnv2		;address, b->dî
+	push fxp,d		;save so we don't have to worry about ac corresî
+	movem tt,lsrtns"aî
+	pop fxp,lsrtns"bî
+	pushj p,lsrtns"lsritm	;returns bp in lsrtns"aî
+	 skipa d,[440700,,[0]]	;unless there was no skip: use null string thenî
+	  move d,lsrtns"a	;d is input bpî
+	pushj p,chlp0î
+	move a,b		;reverse the list and atomifyî
+	call 1,.function NREVERSEî
+	jcall 1,.function IMPLODE	;Return the symbol!î
+î
+î
+SUBTTL	HSNAME hackery.î
+;;; Most often you want (STATUS HSNAME user) and not LSRHTL.î
+î
+;;; (LSRHTL <file object> <uname>)î
+;;; Returns a symbol which is the hsname of the argument uname.î
+;;; Returns NIL if unknown.î
+î
+.ENTRY LSRHTL SUBR 2+1î
+	push p,cfix1		;NCALLable!î
+	movei tt,f.chan		;pick up disk channel numberî
+	move tt,@ttsar(a)î
+	push fxp,tt		;and save itî
+	move a,b		;(car (pnget <uname> 6))î
+	movei b,.atom #6.î
+	call 2,.function PNGETî
+	hlrz a,(a)î
+	move lsrtns"a,(a)	;set up uname in 6bit for lsrunmî
+	pop fxp,lsrtns"b	;the channelî
+	movei c,lsrtns"hx$nrm	;use the normal table.î
+	setz lsrtns"c,		;use the local site.î
+	pushj p,lsrtns"lsrhtl	;get entry addr in lsrtns"bî
+	 jrst [	move d,[440700,,[0]] ;  use null string for pretend resultî
+		jrst lsrht1 ]î
+	move r,lsrtns"b		;get Bp to user's directory nameî
+	move d,[440600,,r]î
+lsrht1:	pushj p,chlp0		;CONS up list of letters symbol from Bp in Dî
+	move a,b		;reverse the list and atomifyî
+	call 1,.function NREVERSEî
+	jcall 1,.function IMPLODE	;Return the symbol!î
+î
+FASENDî

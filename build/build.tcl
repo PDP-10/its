@@ -481,9 +481,10 @@ respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
-respond "*" ":link l;grind fasl,lisp;gfile fasl\r"
-respond "*" ":link l;grinde fasl,lisp;gfn fasl\r"
+respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
+respond "*" ":link lisp;grinde fasl,lisp;gfn fasl\r"
 respond "*" ":link l;loop fasl,liblsp;loop fasl\r"
+respond "*" ":link lisp;loop fasl,liblsp;loop fasl\r"
 
 respond "*" ":midas .temp.;_l;*lisp\r"
 respond "end input with ^C" "\003"
@@ -527,6 +528,33 @@ respond "*" ":link info;complr 1,info;lispc >\r"
 # binprt
 respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
 expect ":KILL"
+
+# inquir
+respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
+respond "*" ":link sys;.fasl defs,lisp;.fasl defs\r"
+respond "*" ":midas inquir;_lsrrtn\r"
+expect ":KILL"
+respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;tty\r"
+respond "_" "inquir;reader\r"
+respond "_" "lisp;_nilcom;subloa\r"
+respond "_" "lisp;_lspsrc;umlmac\r"
+respond "_" "inquir;fake-s\r"
+respond "_" "rwk;debmac\r"
+respond "_" "liblsp;_libdoc;lispm\r"
+respond "_" "lisp;_nilcom;evonce\r"
+respond "_" "inquir;inquir\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;dbg rwk1\r"
+respond "_" "liblsp;_libdoc;comrd kmp1\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":lisp inquir;inquir (dump)\r"
+respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
+respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
 # ndskdmp tape
 

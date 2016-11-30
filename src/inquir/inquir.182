@@ -1,0 +1,1351 @@
+;;; -*- Mode: Lisp -*-
+
+;;;; New INQUIR - User interface to the LSR1 database of ITS users.
+;;;             - CStacy, November 1983.
+;;;
+;;;               Replaces awful MIDAS program of the same name.
+;;;               Includes lots of KMP packages and influence.
+;;;
+;;; (c) 1983, Massachusetts Institute of Technology. All rights reserved.
+;;;     Permission to copy all or part of this material is granted, provided
+;;;     that the copies are not made or distributed for resale, the MIT
+;;;     copyright notice and reference to the source file and the software
+;;;     distribution version appear, and that notice is given that copying
+;;;     is by permission of Massachusetts Institute of Technology.
+
+;Things to do:
+; o  WHOIS command  (FIRST-NAME-FIRST,FIRST-LINE-OF)
+; o  Add LGOTIM pkg
+; o  Finish implementing updates propogation feature
+; o  Inquire reap
+; o  Stats
+
+
+;;;; Basic Support and Setup.
+
+(herald inquir)				  ;INQUIR Version.
+					  ;There may also be INQFIX files.
+;(putprop 'inquir "Experimental" 'release-status)
+
+(setq base 10. ibase 10. *nopoint t)	  ;Reasonable numbers.
+
+(sstatus feature noldmsg)		  ;Quietly.
+
+;;; Macros.
+(eval-when (eval compile)
+  (if (not (get 'umlmac 'version))
+      (load '((lisp) umlmac fasl))))
+
+;;; Lisp Machine compatability.
+(eval-when (eval compile)
+  (load '((liblsp) lispm fasl)))
+
+;;; KMP's reader and fancy completing command reader.
+(load '((inquir) reader))
+(load '((liblsp) comrd))
+
+;;; KMP & CSTACY's  Fake Strings.
+(if (not (status feature fake-s))
+    (load '((inquir) fake-s fasl)))
+
+;;; TTY hackery.
+(eval-when (eval compile) (load '((liblsp) tty)))
+
+;;; LSR1 database access.
+(if (not (status feature lsrrtn))
+      (load '((inquir) lsrrtn fasl)))
+
+;;; HOSTS3 database access.
+(if (not (status feature netrtn))
+      (load '((inquir) netrtn fasl)))
+
+;;; LOGOUT TIMES database access.
+;(if (not (status feature netrtn))
+;      (load '((spacy) lgotim fasl)))
+
+;;; Declarations to keep COMPLR happy.
+
+(declare (*lexpr
+	   substring string-search string-append
+	   terminate-command abort-command bug
+	   abort-command-handler flush-command-handler
+	   pretty-more-handler flush-inquir
+	   change-item verify-item
+	   update-one-machine)
+	 (*expr 
+	   string-upcase string-downcase
+	   reader *completing-read *completing-read1
+	   char-upcase string string-equal
+	   lsritm lsrunm lsrmap lsrnxt lsrdta))
+;	   host-equal lookup-host
+;	   map-lgotim last-logout))
+
+
+;;;; Low-level Lisp extensions.
+
+;;; Macro to define accessor macros for preoperties.
+
+(defmacro define-property-cell (name)
+  `(defmacro ,name (x) `(get ,x ',',name)))
+
+;;; Lisp Machine Lisp has this general-purpose
+;;; MEMbership testing function.
+;;; (MEM #'EQ FOO BAR)  <==> (MEMQ FOO BAR)
+
+(defun mem (pred item list)
+    (do l list (cdr l) (null l)
+      (and (funcall pred item (car l))
+           (return l))))
+
+;;; A limited kind of READ-FROM-STRING.
+
+(defun list-from-string (s)
+  (readlist (explodec (string-append "(" s ")" ))))
+
+
+
+;;;; The Inquir items.
+
+;;; These are the item numbers defined in and used for LSRRTNs.
+
+(declare (special I$UNAM I$NAME I$NICK I$LOCL I$MITA I$MITT I$HOMA
+		  I$HOMT I$SUPR I$PROJ I$DIR I$AUTH I$GRP I$REL
+		  I$BRTH I$REM I$NETA I$ALTR I$MACH))
+
+
+;;; The names of each of the items is a command the user can type.
+;;; Asking for HELP on it will tell him the brief command description.
+;;;
+
+;;; We store the description of the item on plist of its symbolic name.
+;;; The aggregate "current INQUIR entry" we are hacking is
+;;; *INQUIR-ITEMS*, a list of the item symbols.
+
+(defvar *suname* nil
+  "The UNAME of the current INQUIR entry we are modifying.")
+
+(defvar *inquir-items* nil
+  "All the item symbols.")
+
+(define-property-cell inquir-value)
+(define-property-cell i$number)
+(define-property-cell inqupd-name)
+(define-property-cell doc)
+(define-property-cell windy-doc)
+(define-property-cell max-length)
+
+(defmacro def-item (item max-length i$number inqupd-name doc windy-doc)
+  `(progn 'compile
+	  (setf (inquir-value   ',item) nil)
+	  (setf (i$number       ',item) ,i$number)
+	  (setf (doc            ',item) ',doc)
+	  (setf (windy-doc      ',item) ',windy-doc)
+	  (setf (inqupd-name    ',item) ,inqupd-name)
+	  (setf (max-length     ',item) ,max-length)
+	  (when (not (member ',item *inquir-items*))
+	    (push ',item *inquir-items*))))
+
+
+
+(def-item USER-NAME  6. I$UNAM  "UNAME" "User name"
+  "~&What you intend to usually log in as.~
+   ~%If you don't have one picked out, use your initials.")
+
+(def-item AUTHORIZATION  16. I$AUTH "AUTHO"  "Authorization"
+  "~&Whether you are a good guy (wear a white hat).")
+
+(def-item NAME 40. I$NAME  "NAME" "Name"
+  "~&Full name.  Last name first, as in /"Luser, John Q./"~
+   ~%If you have a suffix, such as /"Jr./", put it at the end, after a second~
+   ~%comma: /"Luser, John Q., Jr./".  Please capitalize your name as you wish~
+   ~%the machine to.")
+
+(def-item NICK-NAME  30. I$NICK "NICK"  "Nickname"
+  "~&Nickname. What you like to be called.")
+
+(def-item MIT-ADDRESS  80. I$MITA "MITAD" "MIT address"
+  "~&MIT building # and room #, as in /"10-251/".~
+    ~%(Note: 545 Technology Sq. is building  # NE43.)~
+    ~%If you do not frequent MIT, use your address at work.")
+
+(def-item MIT-PHONE  30. I$MITT "MITTE" "MIT phone #"
+  "~&Your MIT phone number(s), as in /"3-1415/".")
+
+(def-item  HOME-ADDRESS  80. I$HOMA "HOMAD"  "Home address"
+  "~&Your home address.")
+
+(def-item HOME-PHONE  30. I$HOMT "HOMTE"  "Home phone #"
+  "~&Your home phone number.")
+
+(def-item NETWORK-ADDRESS  40. I$NETA "NETAD"  "Network address"
+  "~&This is where you specify your /"home address/" on the network;~
+   ~&where you receive your computer mail.~
+ ~&~%If you want to receive your computer mail on this system, just
+   ~&type a Return.  Otherwise, enter a network host name, or~
+   ~&username@hostname.  Your computer mail will be forwarded there.~
+ ~&~%Do not put a U.S. mail address here, since the network mailing~
+   ~&programs will not understand what you mean.
+~&~%Note :  o Do not give just as username with no hostname.~
+  ~&        o Do not specify a TAC as the hostname, since TACs are~
+  ~&          unable able to receive mail for you.~
+~&~%Just type a Return if you don't know what to do with this field.")
+
+(def-item  SUPERVISOR  30. I$SUPR "SUPER"  "Supervisor"
+  "~&Your supervisor//advisor's name(s).")
+
+(def-item  PROJECT  40. I$PROJ "PROJE"  "Project"
+  "~&The name of your project.~
+    ~%This will fill in /"I am hacking _____ for <Supervisor>/".")
+
+(def-item FILE-DIRECTORIES  40. I$DIR "FILDI"  "File directory name(s)"
+  "~&The name of your home directory.~
+    ~%Type the names of the directories you want as your HSNAME on the~
+    ~%various ITS machines.  You should not mention machines on which~
+    ~%you have a directory of your own.~
+  ~&~%A directory with no machine name applies to all machines that~
+    ~%such a directory exists on.~
+  ~&~%Example:  /"SIPB@MC,KBS/" specifies SIPB on the MC machine, and KBS~
+    ~%on all other machines with a KBS directory.~
+  ~&~%Note:   Do not specify USERSn or GUESTn directories here.~
+  ~&        These are chosen for you by the system, and are~
+  ~&        subject to change, and ARE NOT CONSTANT FROM ONE~
+  ~&        MACHINE TO ANOTHER.")
+
+
+(def-item  GROUP-AFFILIATION  1. I$GRP "GROUP" "Group"
+  "~&Group affiliation.  Enter one letter only.~
+   ~%Choose the one that fits best, from the following list:~
+   ~%A - Artificial Intelligence Lab person.~
+   ~%B - Educational Computing Group person.~
+   ~%C - Theory Group person.~
+   ~%L - Laboratory for Computer Science person.~
+   ~%P - Plasma Fusion Center person.~
+   ~%S - MIT guest - student//staff//faculty not in one of the other groups.~
+   ~%T - Guest (tourist).~
+   ~%V - NIL Group.+
+   ~%Z - Clinical Decision Making person.~
+   ~%+ - Official maintainter//Liaison on some MIT computer system.~
+   ~%$ - Official maintainter//Liaison on some ARPANET computer system.~
+   ~%@ - This is an alias for someone known under another name.~
+   ~%O - Other.  This designates a program, not a person.")
+
+(def-item RELATION-TO-GROUP 1. I$REL "RELAT" "Relation"
+  "~&Your Relation to your group.  Enter one letter only.~
+   ~%Choose the one that fits, best from the following list:~
+   ~%A - Administrative              F - Faculty~
+   ~%G - Graduate student            P - Publications//Editing~
+   ~%R - Research associate          S - DSR (sponsored research) staff~
+   ~%U - Undergraduate student ~
+   ~%X - Ex-user (former MIT staff//faculty)~
+   ~%                    N - None~%")
+
+(def-item BIRTHDAY  20. I$BRTH "BIRTH"  "Birthday"
+  "~&Birthday.  The format should be as in /"January 1/".~
+   ~%(ie, no year or European-style formats).")
+
+(def-item REMARKS  630. I$REM "REMAR"  "Remarks"
+  "~&Remarks.  Put anything in here you want to add.~
+   ~%It will be printed whenever someone looks you up.")
+
+;(def-item MACHINES-KNOWN-ON  80. I$MACH "MACHI"  "Machines known on"
+;  "~&This is not used at the present time.~
+;   ~&Your INQUIR entry is automatically known on all ITS machines.")
+;
+;(def-item LOCAL-FIELDS 30. I$LOCL "LOCAL"  "Local fields"
+;  "~&This is not used at the present time.  It goes with Machines Known On")
+
+(def-item ALTERATION-DATE  0. I$ALTR "ALTER"  "Last alteration"
+  "~&This says who last altered your INQUIR entry, and when they did so.~
+   ~&(This is filled in automatically for you.")
+
+
+
+;;;; Groups and Relations
+;;; (We don't use this yet; need it for INQREP stuff later.)
+
+;;; Associate the group letters with their documentation.
+
+(defvar *inquir-groups-alist*
+  (list
+    (cons #/A "Artificial Intelligence Lab person")
+    (cons #/B "Educational Computing Group person")
+    (cons #/C "Theory Group person")
+    (cons #/L "Laboratory for Computer Science person")
+    (cons #/P "Plasma Fusion Center person")
+    (cons #/S "MIT guest - student//staff//faculty not in one of the other groups")
+    (cons #/T "Guest (tourist)")
+    (cons #/V "NIL Group")
+    (cons #/X "Ex-user (former MIT staff//faculty")
+    (cons #/Z "Clinical Decision Making person")
+    (cons #/+ "Official Maintainter//Liaison on some MIT computer system")
+    (cons #/$ "Official Maintainter//Liaison on some ARPANET computer system")
+    (cons #/@ "This is an alias for someone known under another name")
+    (cons #/O "Other.  This designates a program, not a person")))
+
+;;; Associates the relation letters with their documentation.
+
+(defvar *inquir-relats-alist*
+  (list
+    (cons #/A "Administrative")
+    (cons #/F "Faculty")
+    (cons #/G "Graduate student")
+    (cons #/P "Publications//Editing")
+    (cons #/R "Research associate")
+    (cons #/S "DSR (sponsored research) staff")
+    (cons #/U "Undergraduate student ")
+    (cons #/N "None")))
+
+
+
+;;;; I/O Support functions.
+
+;;; Feep the bell.
+
+(defun beep ()
+  (tyo #^G)) ;Ding.
+
+;;; Function to strip away those nasty chars.
+
+(defun trim-bad-chars (char-list)
+  (delete '#.(ascii #\Null) char-list))
+
+;;; "A" or "An"? from KMP's ANIMAL technology.
+
+(defun a-or-an (symbol)
+  (let ((ch (char-upcase (getcharn symbol 1)))
+	(len (flatc symbol)))
+    (cond ((= len 1)
+	   (cond ((member ch '(#/A #/E #/F #/H #/I #/L #/M
+			       #/N #/O #/R #/S #/X))
+		  'an)
+		 (t 'a)))
+	  (t
+	   (cond ((member (char-upcase ch) '(#/A #/E #/I #/O #/U))
+		  'an)
+		 (t 'a))))))
+
+
+
+;;; When we pass reading functions around, there callers
+;;; sometimes need to know what the best break character
+;;; is, for documentation purposes.
+
+(defvar *terminator* #\return "The terminator we're looking for")
+
+(defmacro with-terminator (terminator &body forms)
+  `(let ((*terminator* ,terminator))
+     ,@forms))
+
+
+;;; REASONABLE-DISPLAY-TERMINAL? returns T if the TTY is something
+;;; I could stand with e.g. automatic LISTME turned on.
+
+(defun reasonable-display-terminal? (&optional (tty (status ttyofa)))
+    (let ((tty-flags (cdr (status filemode tty)))
+	  (tty-speed (status ospeed tty)))
+      (if (and (memq 'rubout tty-flags)
+	       (memq 'cursorpos tty-flags)
+	       (or (zerop tty-speed)
+		   (>= tty-speed 1200.))
+	       (> (car (status ttysize tty))
+		  (plus 2. (length *inquir-items*))))
+	  t
+	  NIL)))
+
+
+;;; DISPLAY-ITEM prints an item as for a LISTME display.
+
+(defvar *display-start-col* 25.)
+
+(defun display-item (stream item &optional (start-col *display-start-col*)
+		     (max-width #.(cdr (status ttysize))))
+  (format stream "~&~A:~VT" (doc item) start-col) ;Print item name.
+  (let* ((val (inquir-value item))
+	 (chars (if val (exploden val)))) ;Get value.
+    (do ((c chars (cdr c))
+	 (new-line-flag nil)
+	 (pos-avail max-width))
+	((null c))
+      (let ((c (car c)))
+	(cond (new-line-flag
+	       (cond ((= c #\LF)
+		      (tyo c stream)
+		      (format stream "~VT" start-col)
+		      (setq pos-avail max-width))
+		     (t
+		      (format stream "~VT" start-col)
+		      (setq pos-avail max-width)
+		      (tyo c stream))))
+	      (t
+	       (tyo c stream)
+	       (setq pos-avail (1- pos-avail))))
+	(setq new-line-flag (= c #\CR))
+	(when (zerop pos-avail)
+	  (terpri stream)
+	  (format stream "~VT" start-col)
+	  (setq pos-avail max-width))))))	  ;Restart count.
+  
+
+;;; Print the name and value of an item as INQUPD likes to see it.
+
+(defun print-inqupd-item (stream item)
+  (format stream "~&~A:~C" (inqupd-name item) #\tab)	  ;Item name.
+  (let* ((val (inquir-value item))
+	 (chars (if val (exploden val)))
+	 (new-line-flag nil))
+    (dolist (c chars)
+      (cond (new-line-flag
+	     (cond ((= c #\LF)
+		    (tyo c stream)
+		    (tyo #\tab stream))
+		   (t
+		    (tyo #\tab stream)
+		    (tyo c stream))))
+	    (t
+	     (tyo c stream)))
+      (setq new-line-flag (= c #\CR)))))
+
+
+
+;;;; Prettier MORE processing.
+
+;;; Stolen from TNP;FORT.
+;;; CATCH-**MORE**
+;;;  Catch a throw to flush output after a **MORE**.
+
+
+(defvar *can-flush-more* nil)
+(defvar *in-more-break* nil)
+
+(defmacro catch-**more** (&body body)
+  `(*catch '*can-flush-more*
+     (let ((*can-flush-more* t))
+       ,@body)))
+
+
+;;; DONT-CATCH-**MORE**
+(defmacro dont-catch-**more** (&body body)
+  `(let ((*can-flush-more* nil))
+     ,@body))
+
+(defun **more** (stream)
+  (nointerrupt nil)
+  (do-with-tty-off
+   (let ((*in-more-break* t))
+     (cond (*can-flush-more* (maybe-**more** stream (status ttycons stream)))
+	   (t (surely-**more** stream (status ttycons stream)))))))
+
+(defun maybe-**more** (outstream instream)
+  (let ((where (cursorpos outstream)))
+    (cursorpos 'l outstream)
+    (format outstream "--More?--")
+    (do ((c (tyi instream) (tyi instream))
+	 (flag t))
+	(nil)
+      (cond ((= c #\rubout)
+	     (cursorpos (car where) (cdr where) outstream)
+	     (cursorpos 'l outstream)					
+	     (format outstream "--Output flushed--~%")
+	     (*throw '*can-flush-more* t))
+	    ((= c #\space)
+	     (cursorpos (car where) (cdr where) outstream)
+	     (cursorpos 'l outstream)
+	     (format outstream "--Continuing--~%")		
+	     (return t))
+	    (flag
+	     (setq flag nil)
+	     (format outstream
+		     "(Type SPACE to continue or RUBOUT to flush output)"))))))
+
+(defun surely-**more** (outstream instream)
+  (let ((where (cursorpos outstream)))
+    (cursorpos 'l outstream)
+    (format outstream "--Pause--")
+    (do ((c (tyi instream) (tyi instream))
+	 (flag t))
+	(nil)
+      (cond ((= c #\space)
+	     (cursorpos (car where) (cdr where) outstream)
+	     (cursorpos 'l outstream)
+	     (format outstream "--Continuing--~%")		
+	     (return t))
+	    (flag
+	     (setq flag nil)
+	     (format outstream
+		     "(Type SPACE to continue)"))))))
+
+
+
+;;;; Hacking items
+
+;;; These variables control the mode of interaction:
+
+(defvar *brief-prompt*  "What next? ")
+(defvar *windy-prompt*  "What next? (Type ? for assistance): ")
+
+(defvar *prompt* *brief-prompt*
+  "The top-level command prompt.")
+
+
+(defvar *windy-mode* nil
+  "T for maximum verbosity")
+
+(defvar *display-mode* nil
+  "T to do automatic LISTME after each change.")
+
+(defvar *verify-mode* nil
+  "T to require verification on input")
+
+
+(defvar *modified* nil
+  "T if the current entry has been changed.")
+
+(defvar *inhibit-listme?* nil
+  "T to inhibit LISTME in CHANGE-ITEM.")
+
+;;; CHANGE-ITEM is called by commands which change items.
+;;; It provides a uniform kind of prompt, and hacks verification.
+;;; You pass it a function to read the item and the argumentsts for same.
+
+(defun change-item (item-name read-fn &rest read-args)
+  (lexpr-funcall #'change-item1 item-name read-fn read-fn read-args)
+  (if (and *display-mode*
+	   (not *inhibit-listme?*))
+      (listme)))
+
+
+(defun change-item1 (item-name read-fn verify-fn &rest read-args)
+  (let ((val (inquir-value item-name)))
+    (if val				;If something already filled in
+	(format t "~&~A~%~A" (doc item-name) val))	; print it out.
+    (terpri t)
+    (format t (if *windy-mode* (windy-doc item-name)
+		(doc item-name)))
+    (if *terminator*
+	(format t "~&End your input with a ~@:C.~%" *terminator*)
+      (format t "~&"))
+    (setf (inquir-value item-name) (lexpr-funcall read-fn read-args))
+    (setq *modified* t)
+    (if *verify-mode*			; Now make sure he really meant it.
+	(do ((newnewval
+	      (lexpr-funcall #'verify-item item-name verify-fn read-args)
+	      (lexpr-funcall #'verify-item item-name verify-fn read-args)))
+	    ((not newnewval)) ))))
+
+
+;;; Returns NIL when the user is satisfied with the changes.
+
+(defun verify-item (item-name read-fn &rest read-args &aux newval)
+  (format t "~&   Is this right for ~A?" (doc item-name))
+  (format t "~&   Type what it should look like, or ~@:C if this looks good.~
+	     ~&~A~%"
+	  (or *terminator* #\Return)
+	  (inquir-value item-name))
+  (setq newval (lexpr-funcall read-fn read-args))   ;Get a replacement value.
+  (cond ((not (string-equal newval ""))		    ;Store it.
+	 (setf  (inquir-value item-name) newval)
+	 newval)))  ;Return it, or NIL if there was no replacement.
+
+
+;;; TTY item reader, calls READER.
+;;; Returns a string.
+
+(defun inputter (&optional (prompt "->")
+			   (max #.(* 24. 80.))
+			   multi?
+			   upcase?)
+  (*catch 'too-long
+    (let ((chars (nreverse
+		  (mapcar #'(lambda (x)
+			      (setq x (getcharn x 1))
+			      (if upcase? (setq x (char-upcase x)))
+			      x)
+			  (reader prompt (if multi? '(#^C) '(#\CR #\LF #^C)))))))
+      (if (and multi?
+	       (> (length chars) 1)
+	       (= (car chars) #\CR))
+	  (pop chars))					;Flush trailing CR.
+      (when (> (length chars) max)
+	(format t "~&That's too long for this item.")
+	(dolist (c chars)				;Let him try again.
+	  (untyi c tyi))
+	(*throw 'too-long t))
+      (string (implode (nreverse (trim-bad-chars chars)))))))
+
+
+;;; For reading in items:
+;;; PROMPT-TYI for single chars.
+;;; PROMPT-READLINE for single lines.
+;;; PROMPT-INPUT for multiple lines.
+;;; INPUT-SIXBIT for six uppercase chars.
+
+(defun prompt-readline (&optional (prompt "->") max)
+  (inputter prompt max nil nil))
+
+(defun prompt-tyi (&optional (prompt "->") (upcase? t) &aux c)
+  (format t "~A" prompt)
+  (setq c (tyi))
+  (if (or (equal c #\CR) (equal c #\LF))
+      ""
+    (if upcase? (ascii (char-upcase c))
+      (ascii c))))
+
+
+(defun input-sixbit (&optional (prompt "->"))
+  (inputter prompt 6. nil t))
+
+(defun prompt-input (&optional (prompt "->") (max))
+  (inputter prompt max t nil))
+
+
+;;; INPUT-NETADDR is for typing in network addresses.
+
+(defun input-netaddr (&rest read-args)
+  (let ((netaddr (lexpr-funcall #'inputter read-args)))
+    (if (string-equal netaddr "")
+	(string (status site))
+      netaddr)))
+
+
+
+;;; Fancy completing command reader, calls *COMPLETING-READ1.
+
+(defun get-input-line (prompt options &optional (over-rubout-allowed? t))
+  (cond ((zerop (charpos tyo)) (format t "~&~A" prompt)))
+  (prog1 (do () (nil)
+	   (let ((command (*completing-read1 prompt
+					     options
+					     '()
+					     tyi
+					     tyo
+					     t
+					     t
+					     '(#\ALT)
+					     '(#\RETURN #\SPACE)
+					     t
+					     over-rubout-allowed?)))
+	     (cond ((memq command '(over-rubout line-rubout))
+		    (abort-command))
+		   ((atom command)	  ;line-rubout, word-rubout, etc.
+		    (format t "~&~A" prompt))
+		   (t (return (cadr command))))))
+	 (cond ((and (plusp (listen tyi)) (= (tyipeek nil tyi) #\LF))
+		(tyo (tyi tyi) tyo)))))
+
+
+
+;;;; LSR1 and LOGOUT TIMES database hacking.
+;;;
+;;;		LSRRTN primitives:
+;;;
+;;; (LSRMAP <number of pages to use>) ==> file object.
+;;; (LSRDTA <file-object>) ==> core address of first entry or -1
+;;; (LSRNXT <file-obj> <core address>) ==> core address of next entry or -1
+;;; (LSRUNM <file obj returned by LSRMAP> <uname>) ==> core address or -1
+;;; (LSRITM <item number> <magic number>) ==> item symbol frob
+;;;
+;;;             NETRTN primitives:
+;;;
+;;; (MAP-HOSTS3) ==> gets the network database in core.
+;;; (OWN-HOST network-number) ==> host.
+;;; (HOST-EQUAL host1 host2) ==> T iff they refer to same host.
+;;; (LOOKUP-HOST host-name) ==> host-number.
+;;; (HOST-SIXBIT-NAME host) ==> sixbit host name.
+
+
+(defvar *lsr1* nil)		 ;LSR1 file object.
+;(defvar *logout-times* nil)      ;LGOTIM  file object.
+
+;;; Map databases.
+
+(defun map-inquir ()
+  (setq *lsr1* (lsrmap 20.)))
+
+;(defun map-logout-times ()
+;  (setq *logout-times* (map-lgotim)))
+
+
+;;; GET-ENTRY reads the data for the current INQUIR entry from the
+;;; LSR1 database.  The LSR1 database must already be mapped in.  
+;;; If the named user does not have an entry, GET-ENTRY returns NIL.
+
+(defun get-entry (uname)
+  (without-interrupts	     ;No interruptions, please.
+    ;; Remember who the current entry belongs to.
+    ;; Try looking up in the LSR1 database.
+    (let ((entry (lsrunm *lsr1* uname))
+	  (val))
+      (cond
+	((and entry (not (= entry -1)))
+	 (dolist (item *inquir-items*)	     ;Fill in current entry from LSR1.
+	   (setq val (lsritm (i$number item) entry))
+	   (setf (inquir-value item) (string val)))
+	 t)
+	(t		     ;If unknown, just set Uname.
+	 (setf (inquir-value 'user-name) (string (string-upcase uname)))
+	 nil)))))
+
+
+(defvar *default-local-items-string*
+	"FILE-DIRECTORIES GROUP-AFFILIATION RELATION-TO-GROUP")
+
+
+;;; LAST-ALTERATION returns the current timestamp string for an ALTER item.
+
+(defun last-alteration ()
+  (lexpr-funcall #'format nil "~A ~2,'0D~2,'0D~2,'0D-~2,'0D~2,'0D~2,'0D"
+		 (status uname)
+		 (append (status date) (status daytime))))
+
+
+;;; UPDATE-INQUIR updates the LSR1 file from the current Inquir entry.
+;;; (Actually, it mails off a request for INQUPD to do so.)
+;;; This is the mail routine usually called by DONE.
+
+(defvar *inqupd-request-file* "DSK:.MAIL.;MAIL >")
+
+;;; We have to use this until we get HOSTS3 going in Lisp.
+;;; Would you believe...until we get domains going in Lisp!
+
+(defun old-style-update-inquir ()
+  (setf (inquir-value 'machines-known-on)
+	(string-append *suname* "@AI @MC @ML @MD @DB"))
+  (if (or (null (inquir-value 'authorization))
+	  (string-equal (inquir-value 'authorization) ""))
+      (setf (inquir-value 'authorization) "*"))
+  (setf (inquir-value 'local-fields) "FILDI GROUP RELAT")
+  (setf (inquir-value 'alteration-date) (last-alteration))
+  (with-open-file (s *inqupd-request-file* '(out))
+    (format s "~&FROM-PROGRAM:~A~
+               ~&AUTHOR:~A~
+               ~&RCPT:(UPDATE-ITS-INQUIR)"
+	    (status jname)
+	    (status uname))
+    (format s "~&TEXT;-1~
+               ~&BEGIN:~%~
+               ~&SUNAME:~C~A"
+	    #\tab *suname*)
+    (dolist (item *inquir-items*)
+      (print-inqupd-item s item))
+    (format s "~&END:~%")))
+
+
+;;;; UPDATE-INQUIR is called by the DONE command to update all the
+;;;; databases mentioned.
+;
+;(defun update-inquir ()
+;  ;; Set up the ALTER item.
+;  (setf (inquir-value 'alteration-date) (last-alteration))
+;  (let ((macs (list-from-string (inquir-value 'machines-known-on)))
+;	(updated-hosts nil))
+;    (dolist (mac macs)
+;      (let* ((machine (substring mac (1+ (string-search "@" mac))))
+;	    (suname (substring mac 0 (string-search "@" mac)))
+;	    (host (lookup-host machine)))
+;
+;	(when (not (mem #'host-equal host updated-hosts))
+;	  (update-one-machine suname machine)
+;;	  (push host updated-hosts))))))
+;;;;; *** Need to make sure local host is updated with all the items!
+;
+;
+;
+;
+;;;; UPDATE-ONE-MACHINE sends off an update for a single database.
+;;;; It can optionally ignore the LOCAL-FIELDS item.
+;
+;(defun update-one-machine (suname machi &optional (use-local-fields? t))
+;  (with-open-file (s *inqupd-request-file* '(out))
+;    (format s "~&FROM-PROGRAM:~A~%~
+;               ~&AUTHOR:~A~%~
+;               ~&RCPT:(UPDATE-INQUIR ~A)~%~
+;               ~&TEXT;-1~
+;               ~&BEGIN:~%~
+;               ~&SUNAME:~C~A"
+;	    (status jname)
+;	    (status uname)
+;	    machi
+;	    #\tab suname)
+;    (let ((locals (list-from-string (inquir-value 'local-items))))
+;      (dolist (item *inquir-items*)
+;	(if (and use-local-fields?
+;		 (not (member item locals)))
+;	    (print-inqupd-item s item)))
+;      (format s "~&END:~%"))))
+
+
+
+
+;;;;  Commands.
+
+;;; Amazing hairy macro defining macro frobozz.
+
+(defmacro def-command-type (name)
+  (let ((doc (symbolconc name '-documentation))
+	(var (symbolconc '* name 's*))
+	(def (symbolconc 'define- name))
+	(fn  (symbolconc name '-fn)))
+    `(progn 'compile
+	    (defmacro ,fn  (x) `(get ,x ',',name))
+	    (defmacro ,doc (x) `(get ,x ',',doc))
+	    (defvar   ,var '())
+	    (defmacro ,def (name doc &body body)
+	      `(progn 'compile
+		      (push ',name ,',var)
+		      (defun (,name ,',name) () ,@body)
+		      (setf (,',doc ',name) ',doc)
+		      ',name))
+	    (,def HELP "Gives help on a given command type."
+	     (format t "~&~A"
+		     (,doc (get-input-line
+			     ',(format nil "Help with ~A: " name)
+			     ,var)))
+	     (terminate-command))
+	    ',name)))
+
+
+(defun not-implemented ()
+  (format t "~&I don't know how to do that to ~A ~A, yet!"
+	  (string-downcase (a-or-an *suname*))
+	  *suname*))
+
+
+
+;;;; Primary commands.
+
+(def-command-type command)
+
+(define-command QUIT "Exits the program without updating any entries."
+  (cond (*modified*
+	 (if (yes-or-no-p "~&Cancel all these changes? ")
+	     (flush-inquir t)
+	     (format t "~&Use the DONE command when you are happy with ~
+                   your changes.")))
+	(t
+	 (flush-inquir t))))
+
+
+(define-command DONE "Exits the program and starts the update."
+  (cond (*modified*
+	 (old-style-update-inquir)
+	 (format t "~&Your changes have been sent for processing and~
+		    ~&should be completed in a little while."))
+	(t
+	 (format t "~&(No changes made.)")))
+  (format t "~&Thank you.~%")
+  (flush-inquir t))
+
+
+;;; Commands which affect the mode of interaction.
+
+(define-command WINDY "Make INQUIR be verbose."
+  (setq *windy-mode* t)
+  (setq *prompt* *windy-prompt*)
+  (format t "~&Maximum verbosity."))
+
+
+(define-command BRIEF "Make INQUIR be less verbose."
+  (setq *windy-mode* nil)
+  (setq *prompt* *brief-prompt*))
+
+(define-command VERIFY "Make INQUIR verify all your changes."
+  (setq *verify-mode* t))
+
+
+(define-command NOVERIFY "Make INQUIR stop asking you to verify all your changes."
+  (setq *verify-mode* nil))
+
+
+(define-command LISTME "Show what your entry looks like."
+  (listme))
+
+;;; Routine to list our entry.
+;;; Called automatically from CHANGE-ITEM when in display mode.
+
+(defun listme ()
+  (cursorpos 'C)
+  (dolist (item *inquir-items*)
+    (display-item t item))
+  (terpri)
+  (terpri))
+
+(define-command DESCRIBE
+  "Tell about a particular INQUIR item."
+  (let ((item (get-input-line "Describe item: " *inquir-items*)))
+    (format t (string-append "~&~%" (doc item) ".~&"
+			     (or (windy-doc item) "")
+			     "~2&Current value is:~&~A~2%")
+	    (inquir-value item))))
+
+(define-command REVERT
+  "Cancel all changes; read your old info back in from the database."
+  (if (yes-or-no-p t "~%Cancel all these changes? ")
+      (cond ((get-entry *suname*)
+	     (format t "~&OK.")
+	     (setq *modified* nil)
+	     (listme))
+	    (t
+	     (abort-command "You have no previous info on file.")))
+      (abort-command)))
+
+
+;(define-command NOTME "Update someone else's entry."
+;  (not-implemented))
+
+;(define-command OTHER "Prefix to other, less commonly used commands."
+;  (not-implemented))
+
+(define-command ALL "Change all of your items."
+  (change-all-items nil))
+
+;;; CHANGE-ALL-ITEMS is for changing all the fields in an entry.
+;;; FIRST-TIME? is whether we should ask only for the items we
+;;; expect novices running INQUIR for the first time to fill in.
+
+(defun change-all-items (first-time?)
+  (let ((*inhibit-listme?* t))
+  (dolist (cmd '(NAME NICK-NAME MIT-ADDRESS MIT-PHONE
+		      HOME-ADDRESS HOME-PHONE NETWORK-ADDRESS
+		      SUPERVISOR PROJECT GROUP RELATION BIRTHDAY REMARKS))
+    (funcall (command-fn cmd)))
+  (if (not first-time?)
+      (dolist (cmd '(AUTHORIZATION FILE-DIRECTORIES))
+	(funcall (command-fn cmd))))))
+
+;(define-command WHOIS "Display your entry like WHOIS would show it."
+;  (let ((uname (inquir-value 'uname)))
+;    (format t "~2&~A ~C~C ~A  Last logout ~A"
+;	    uname
+;	    (inquir-value 'group-affiliation)
+;	    (inquir-value 'relation-to-group)
+;	    (first-name-first (inquir-value 'name))
+;	    (implode (last-logout *logout-times* uname)))
+;    (format t "    (~A) [~A] hacking ~A for ~A~
+;	     ~%    Birthday ~A; ~A; ~A~
+;	     ~%    ~A; ~A~%"
+;	    (inquir-item 'nick-name)
+;	    (inquir-item 'network-address)
+;	    (inquir-item 'project)
+;	    (inquir-item 'supervisor)
+;	    (inquir-item 'birthday)
+;	    (first-line-of (inquir-item 'mit-address))
+;	    (inquir-item 'mit-phone)
+;	    (first-line-of (inquir-item 'home-address))
+;	    (inquir-item 'home-phone))))
+
+
+;;;; Commands which change items
+
+;;; I had considered making a form which would automatically
+;;; write these commands, but I don't think it will save
+;;; enough typing to bother with.  Something like:
+;;;
+;;; (defmacro def-item-command (item cmd-doc input-fn)
+;;;  `(progn 'compile
+;;;	  (setf (initial-asked?  ',item) ,initial-asked?)
+;;;	  (define-command ,item ,cmd-doc
+;;;	    (change-item ',item ,input-fn "->" (max-length ',item)))))
+;;;
+
+(define-command USER-NAME "Changes your username."
+  (change-item 'user-name #'inputter "->" 6. nil t))
+
+(define-command NAME "Changes your full personal name."
+  (change-item 'name #'inputter "->" (max-length 'name)))
+
+(define-command NICK-NAME "Changes your nickname."
+  (change-item 'nick-name #'inputter "->" (max-length 'nick-name)))
+
+(define-command GROUP "Changes your group affiliation."
+  (with-terminator nil
+    (change-item 'group-affiliation #'prompt-tyi "->" t)))
+
+(define-command RELATION "Changes your group relation."
+  (with-terminator nil
+    (change-item 'relation-to-group #'prompt-tyi "->" t)))
+
+(define-command AUTHORIZATION "Say whether you are a good-guy."
+  (change-item 'authorization #'inputter  "->"
+                                          (max-length 'authorization)))
+
+(define-command MIT-ADDRESS "Change your MIT (work) address."
+  (with-terminator #^C
+    (change-item 'mit-address #'inputter
+		 "->
+"
+		 (max-length 'mit-address)
+		 t
+		 nil)))
+
+(define-command HOME-ADDRESS "Change your home address."
+  (with-terminator #^C
+   (change-item 'home-address #'inputter
+	       "->
+"
+	       (max-length 'home-address)
+	       t
+	       nil)))
+
+(define-command MIT-PHONE "Change your MIT (office) phone."
+  (change-item 'mit-phone #'inputter "->" (max-length 'mit-phone)))
+
+(define-command HOME-PHONE "Change your home phone."
+  (change-item 'home-phone #'inputter "->" (max-length 'home-phone)))
+
+(define-command SUPERVISOR "Change your supervisor."
+  (change-item 'supervisor #'inputter "->" (max-length 'supervisor)))
+
+(define-command PROJECT "Change your project."
+  (change-item 'project #'inputter "->" (max-length 'project)))
+
+(define-command FILE-DIRECTORIES "Change your home file directories."
+  (change-item 'file-directories #'inputter
+	       "->"
+	       (max-length 'file-directories)))
+
+(define-command BIRTHDAY "Change your birthday."
+  (change-item 'birthday #'inputter "->" (max-length 'birthday)))
+
+(define-command REMARKS "Change your remarks."
+  (with-terminator #^C
+    (change-item 'remarks #'inputter "->"
+		 (max-length 'remarks)
+		 t
+		 nil)))
+
+(define-command NETWORK-ADDRESS "Change your electronic mail address."
+  (change-item1 'network-address
+		#'input-netaddr
+		#'inputter "->" (max-length 'network-address) nil nil)
+  (if (and *display-mode*
+	   (not *inhibit-listme?*))
+      (listme)))
+
+
+;(define-command MACHINES "Change which database your entry is updated on."
+;  (not-implemented))
+
+;(define-command LOCAL-FIELDS "Change which fields are not propogated to foreign INQUIR databases."
+;  (not-implemented))
+
+
+
+;;;; Other commands.
+
+(def-command-type extended-command)
+
+(define-command EXTENDED
+  "Preface to less frequently used commands."
+  (funcall (extended-command-fn
+	    (get-input-line "What else? " *extended-commands*))))
+
+(define-command DISPLAY-MODE
+  "Manually force display terminal mode on."
+  (setq *display-mode* t))
+
+(define-command NODISPLAY-MODE
+  "Manually force display terminal mode off."
+  (setq *display-mode* nil))
+
+
+(define-extended-command DELETE
+  "Delete the entry you are editing from the database.
+INQUIR will forget all about this person."
+  (terpri t)
+  (cond ((yes-or-no-p t "Do you really want to flush ~:[your~*~;~A's~] INQUIR entry? "
+	  (not (eq (status xuname) *suname*))
+	  *suname*)
+	 (setf (inquir-value 'user-name) "")
+	 (setq *modified* t)
+	 (format t "~&OK.")
+	 (if *display-mode* (listme)))
+	(t
+	 (abort-command))))
+
+;(define-extended-command LIST-USERS
+;  "List users."
+;  ;; Massive non-destruction!
+;  (not-implemented))
+
+
+;;; BREAK loop is for hackers only.
+;;; Maybe should be binding ^X and ^G to normal frobs, and ^B to Abort Command.
+
+(define-extended-command BREAK "Enter a break loop for debugging!"
+  (setq *can-flush-more* nil)
+  (break "Type P to continue.")
+  (setq *can-flush-more* t))
+
+
+(define-extended-command IGNORE
+  "Ignore you and get back to regular commands."
+  (terminate-command))
+
+
+
+;;;; Reaping the INQUIR database.
+
+;;; These should really be on a seperate INQREP comtab.
+
+(define-extended-command MASSIVE
+  "Do massive updates to the database."
+  ;; Massive destruction! user could supply predicate somehow.
+  (not-implemented))
+
+(define-extended-command NEXT-LUSER
+  "Update the next luser's entry (used after a MASSIVE command.)"
+  (not-implemented))
+
+
+
+;;;; Spiels.
+
+;;; If we are started as inqchk, we give a little explanatory spiel
+;;; before getting down to business.
+
+(defun inqchk-spiel ()
+  (format t
+    "~2%The program /"INQUIR/" is being run for you so that you can tell us~
+      ~%who you are.  When you are done running inquir you will be left in~
+      ~%DDT, the command interpreter for this computer system."))
+
+;;; Here is the long spiel explaining what inquir is, and giving general help.
+
+(defun explain-inquir-spiel ()
+  (format t
+    "~&~%The purpose of this program is to maintain a list of users for this~
+     ~%computer. It will lead you by the hand; just provide the information~
+     ~%requested.  If you know what you are doing and don't like being lead,~
+     ~%use the BRIEF command.~
+    ~2%Each user on ITS has an individual user-name, or /"UNAME/"; a word of~
+     ~%six characters or less, which you use to log in. INQUIR keeps its~
+     ~%records filed under people's UNAMEs.~
+    ~2%Your dossier consists of several items; each is one piece of ~
+     ~%information, such as your name, or your home address.
+     ~%If you are completely unknown, INQUIR will ask you for all of the~
+     ~%items in order.  If you are already known, you can type the name~
+     ~%of any items you wish to alter.~
+    ~2%You can leave any of the items blank, if you feel the questions are~
+     ~%too nosey.  Most people fill in most of the items so that people in~
+     ~%the user community can find out about them.~
+    ~2%If you are on a display terminal, your entire dossier will be shown~
+     ~%frequently. On printing terminals, you must type the LISTME command~
+     ~%to see it.~
+    ~2%If you make a mistake typing, you can use the Rubout key to erase a~
+     ~%character.  Typing ^U (holding the Control key down and striking /"U/")~
+     ~%will erase the line you are typing. To redisplay the line you are~
+     ~%typing, type ^R.  To clear the screen and redisplay the line, type ^L.~
+    ~2%When INQUIR is ready for a command, it will prompt you.~
+     ~%You can type a question mark (?) to see what the possibilities are.~
+     ~%If you type a question mark in the middle of a command name, 
+     ~%INQUIR will show you what the possible completions are.  
+     ~%Typing a Space or an Escape will complete the command name for you."))
+
+
+;;;; Startup.
+
+;;; TOPLEVEL is magically called when we start up.
+
+(defun toplevel ()
+  (initialize)			     ;Map in database, etc.
+  (dont-catch-**more**
+    (start-inquir))		     ;Prologue.
+  (do ((first-time-thru t nil))
+      (nil)			     ;This is the command infinite-loop.
+    (*catch 'command-abort
+      (catch-**more**
+	(bind-ttyint ((#^G #'abort-command-handler)
+		      (#^S #'flush-command-handler)
+		      (#^B NIL) (#^C NIL) (#^D NIL) (#^R NIL)
+		      (#^T NIL) (#^V NIL) (#^W NIL) (#^X NIL))
+	    (when (and first-time-thru
+		       *display-mode*)
+	      (listme))
+	    (format t "~&")
+	    (when (not
+		    (errset
+		      (funcall
+			(command-fn (get-input-line *prompt*
+						    *commands* nil)))
+		      t))
+	      (bug nil)))))))
+
+(defun initialize ()
+  (without-interrupts
+    (setq *inquir-items* (nreverse *inquir-items*))
+    (setq *commands* (nreverse *commands*))
+    (map-inquir)				;Map in the LSR1 database.
+    #| (map-logout-times) |#			;Map in the LOGOUT TIMES database.
+    (setq *display-mode* (reasonable-display-terminal?))
+    (endpagefn t #'**more**)))			;Turn on **MORE** handler.
+
+
+;;; START-INQUIR makes sure the luser knows who is being hacked,
+;;; figures out how verbose to be, and makes new users fill out
+;;; everything before returning to the main program.
+
+(defun start-inquir ()
+  (unless
+    (errset
+      (*catch 'command-abort
+	(catch-**more**
+	  (bind-ttyint ((#^G #'flush-inquir-handler)
+			(#^S #'flush-inquir-handler)
+			(#^B NIL) (#^C NIL) (#^D NIL) (#^R NIL)
+			(#^T NIL) (#^V NIL) (#^W NIL) (#^X NIL))
+	    (let ((inqchk? (eq (status jname) 'INQCHK))
+		  (jcl (jcl-as-string)))
+	      (setq *suname* (or jcl
+				 (string-upcase (status xuname))))
+	      (cond
+		(inqchk?			;When started by DDT init file,
+ 		 (when (get-entry *suname*)	; if luser already exists
+		   (flush-inquir t))		;   then punt right now.
+		 (unless (yes-or-no-p t "~%You have logged in as ~A, which is a new UNAME.~
+                                         ~&Is this what you  you intended? "
+				      *suname*)
+		   (format t "~&Please type ^Z and try again.")
+		   (valret "0U"))
+		 (inqchk-spiel)
+		 (funcall (command-fn 'WINDY))
+		 (funcall (command-fn 'VERIFY))
+		 (enter-new-user))
+		(t				;See who the luser is hacking.
+		 (format t "~&~@[~A ~]INQUIR.~D"
+			 (get 'inquir 'release-status)
+			 (get 'inquir 'version))
+		 (when (null jcl)
+		   (when (null (get-entry *suname*))
+		     (format t "~%~A is not known." *suname*))
+		   (unless (y-or-n-p t "~&Is ~A your user name? " *suname*)
+		     (format t "~&Well, that's who you are logged in as.~
+                                ~&If you want to modify someone else,~
+                                ~&invoke INQUIR with their UNAME as JCL.")
+		     (flush-inquir t)))
+		 (cond ((null (get-entry *suname*))
+			(unless jcl
+			  (explain-inquir-spiel)
+			  (funcall (command-fn 'WINDY))
+			  (funcall (command-fn 'VERIFY)))
+			(enter-new-user))
+		       (t
+			;; Luser exists, so just set the verbosity level.
+			(funcall (command-fn 'NOVERIFY))
+			(funcall (command-fn (if jcl 'BRIEF 'WINDY)))))))))))
+      t)
+    (bug t)))
+
+(defun enter-new-user ()
+  (*catch 'command-abort
+	  (bind-ttyint ((#^G #'abort-command-handler)
+			(#^S #'flush-command-handler)
+			(#^B NIL) (#^C NIL) (#^D NIL) (#^R NIL)
+			(#^T NIL) (#^V NIL) (#^W NIL) (#^X NIL))
+            (terpri t)
+	    (change-all-items t))))  ;Then put luser to work.
+
+(defun jcl-as-string (&aux jcl)
+  "JCL-AS-STRING finds out if there is JCL, and returns it or NIL.
+   Flushes spaces and JCL-terminators."
+  (setq jcl (status jcl))
+  (when jcl
+    (let ((jcl (delete '#.(ascii #\return)
+		       (delete '#.(ascii #\space)
+			       (delete '#.(ascii #^C)
+				       (delete '#.(ascii #^_) jcl))))))
+      (if jcl			     ;Prevent "".
+	  (string-upcase (substring (implode jcl) 0 6))))))
+
+
+
+;;; TERMINATE-COMMAND, gets us back to toplevel.
+;;;
+;;; ABORT-COMMAND prints an error message for the user and aborts
+;;; the current command.
+;;;
+;;; FLUSH-INQUIR is the way out of the program, rather than just QUIT.
+;;; We offer the user the chance to flush INQUIR (or optionally don't bother.)
+
+
+(defun terminate-command (&rest ignore)
+  (setq *can-flush-more* t)
+  (*throw 'command-abort t))
+
+(defun abort-command (&optional msg)
+  (format t "~&~:[Command aborted.~;~A~]" msg msg)
+  (terminate-command))
+
+(defun flush-inquir-handler (stream nil)
+  (clear-input stream)
+  (flush-inquir))
+
+(defun flush-inquir (&optional without-asking)
+  (if (or without-asking
+	  (yes-or-no-p t "~&~%Do you really want to flush this program now? "))
+      (quit)))
+
+;;; Bug reporting
+
+(defun bug (&optional awful? &rest ignore)
+  (format t "~&~2%A bug in INQUIR has been encountered.~
+   ~%This should never happen.~
+   ~%Please send a message explaining the circumstances leading to this ~
+   ~%to Bug-INQUIR@MIT-MC.   Thank you. ~%")
+  (valret (if awful?
+	      ":PDUMP CRASH;INQUIR >
+:BUG INQUIR An INQUIR crash file was just dumped. 
+:KILL
+"
+	    ":PDUMP CRASH;INQUIR >
+:BUG INQUIR An INQUIR crash file was just dumped. 
+:CONTINUE
+"))
+  (terpri t))
+
+
+;;; Interrupt handlers.
+;;; ABORT-COMMAND-HANDLER and FLUSH-COMMAND-HANDLER abort commands.
+
+(defun abort-command-handler (&rest ignore)
+  (clear-input t)
+  (abort-command))
+
+(defun flush-command-handler (&rest ignore)
+  (clear-input t)
+  (format t "~&Flushed.~%")
+  (terminate-command))
+
+(defun flush-fallthru-handler (&rest ignore)
+  (clear-input t)
+  (format t "~&Flushed.~%"))
+
+
+;;;; Utility Functions
+
+;;; Searching the INQUIR database.
+
+(defun find (item-no target-string fn &optional (stream t) (display item-no))
+  (do ((entry (lsrdta *lsr1*) (lsrnxt *lsr1* entry))
+       (hits 0.)
+       (count 0. (1+ count)))
+      ((= -1 entry) (format stream "~&~%~D//~D entries." hits count))
+    (when (string-search target-string (string (lsritm item-no entry)))
+      (funcall fn entry display stream)
+      (setq hits (1+ hits)))))
+
+
+
+(defun print-entry (entry item-no &optional (stream t))
+   (format stream "~%~A~10T~A~&~A~%"
+	  (lsritm i$unam entry)
+	  (lsritm i$name entry)
+	  (lsritm item-no entry)))
+
+
+
+;;; Local Modes:
+;;; Lisp with-open-file Indent:1
+;;; Lisp with-terminator Indent:1
+;;; Lisp bind-ttyint Indent:1
+;;; Compile Command::qc inquir;inquir >(t):inquir;inqdmp
+;;; End:

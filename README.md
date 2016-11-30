@@ -102,6 +102,7 @@ from scratch.
    - LISP, lisp interpreter and runtime library (autoloads only)
    - COMPLR, lisp compiler
    - BINPRT, display information about binary executable file
+   - INQUIR, user account database
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
