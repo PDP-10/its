@@ -479,6 +479,27 @@ respond "*" ":link sys;ts m,sys;ts mail\r"
 respond "*" ":link sys2;ts featur,sys;ts qmail\r"
 respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
+# lisp
+respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
+respond "*" ":link l;grind fasl,lisp;gfile fasl\r"
+respond "*" ":link l;grinde fasl,lisp;gfn fasl\r"
+respond "*" ":link l;loop fasl,liblsp;loop fasl\r"
+
+respond "*" ":midas .temp.;_l;*lisp\r"
+respond "end input with ^C" "\003"
+expect ":KILL"
+respond "*" ":job lisp\r"
+respond "*" ":load .temp.;*lisp bin\r"
+respond "*" "\033g"
+respond "*" "purify\033g"
+respond "*" ":pdump sys;purqio >\r"
+
+respond "*" ":link sys;ts lisp,sys:purqio >\r"
+respond "*" ":link sys;ts q,sys;purqio >\r"
+respond "*" ":link sys;atsign lisp,sys;purqio >\r"
+
+# ndskdmp tape
+
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape
@@ -490,6 +511,8 @@ respond "Include DDT?" "y"
 respond "Input file" ".;dskdmp bin\r"
 expect ":KILL"
 
+# make nnsalv.tape
+
 respond "*" $emulator_escape
 create_tape "out/nnsalv.tape"
 type ":kshack;mtboot\r"
@@ -498,6 +521,8 @@ respond "Rewind tape first?" "y"
 respond "Include DDT?" "y"
 respond "Input file" ".;nsalv bin\r"
 expect ":KILL"
+
+# make output.tape
 
 respond "*" $emulator_escape
 create_tape "out/output.tape"
