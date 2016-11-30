@@ -100,6 +100,7 @@ from scratch.
    - DQ Device, for doing hostname resolutions. Used by COMSAT.
    - DSKUSE, disk usage information.
    - LISP, lisp interpreter and runtime library (autoloads only)
+   - COMPLR, lisp compiler
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
