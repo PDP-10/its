@@ -556,6 +556,28 @@ respond "*" ":lisp inquir;inquir (dump)\r"
 respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
 respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
+# pword/panda
+respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
+respond "Is this to be a PANDA?" "yes\r"
+expect ":KILL"
+respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
+respond "Is this to be a PANDA?" "no\r"
+expect ":KILL"
+respond "*" ":midas sysbin;pwinit bin_sysen1;pwinit\r"
+expect ":KILL"
+respond "*" ":job pwinit\r"
+respond "*" ":load sysbin;pwinit\r"
+respond "*" "\033g"
+respond "*" ":copy cstacy;big dat,sysbin;\021 \021 \021 big \021 \021 0dat\r"
+respond "*" ":job panda\r"
+respond "*" ":load sysbin;panda bin\r"
+# set password to "panda"
+respond "*" "spword/107150326162\r"
+type "purify\033g"
+respond "*" ":pdump sysbin;panda bin\r"
+respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
+respond "*" ":link sys;ts panda,sysbin;panda bin\r"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
