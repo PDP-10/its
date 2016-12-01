@@ -214,6 +214,13 @@ respond "*" ":print sys2;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
 
+respond "*" ":emacs\r"
+respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
+expect "EINIT"
+respond ":EJ" "\030\003"
+respond "*" ":kill\r"
+respond "*" ":delete emacs;\[prfy\] <\r"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
