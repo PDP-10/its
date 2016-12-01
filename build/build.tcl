@@ -210,6 +210,10 @@ respond "TECPUR" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
 
+respond "*" ":print sys2;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":link sys2;ts emacs,emacs;ts >\r"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
