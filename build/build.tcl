@@ -221,6 +221,22 @@ respond ":EJ" "\030\003"
 respond "*" ":kill\r"
 respond "*" ":delete emacs;\[prfy\] <\r"
 
+respond "*" ":emacs\r"
+respond "for help" "\033xload\033purify\r"
+type "\033xgenerate\033emacs;aux\033emacs1;aux\r"
+respond ":EJ" "\030\003"
+respond "*" ":kill\r"
+
+respond "*" ":delete emacs;ts 126\r"
+respond "*" ":delete \[pure\] 162\r"
+respond "*" ":rename \[pure\] 163, \[pure\] 162\r"
+
+respond "*" "emacs\033\023"
+respond "*" ":teco\r"
+respond "&" "mmrun\033purify\033dump\033ts 126\033\033"
+respond "&" "\003"
+respond "*" ":kill\r"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
