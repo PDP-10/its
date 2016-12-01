@@ -1,6 +1,6 @@
 EMULATOR ?= simh
 
-SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas _teco_ emacs rms klh syshst sra mrc ksc cstacy gren bawden emacs1 _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk inquir acount
+SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc cstacy gren bawden emacs1 _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk inquir acount
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
 MINSYS = _ sys sys3 device sysbin inquir
 
