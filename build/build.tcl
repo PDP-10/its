@@ -632,7 +632,12 @@ respond "*" ":link sys1;ts s,sys;ts send\r"
 respond "*" ":link sys3;ts snd,sys;ts send\r"
 respond "*" ":link sys3;ts sned,sys;ts send\r"
 
+# reatta
 respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
+expect ":KILL"
+
+# timoon
+respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
 
 # ndskdmp tape
