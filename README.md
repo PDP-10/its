@@ -109,6 +109,7 @@ from scratch.
    - INQUPD, processes INQUIR change requests
    - LOOKUP, looks up user info in INQUIR database
    - REATTA, reattaches disowned jobs to terminal
+   - TIMOON, displays the time and phase of the moon
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
