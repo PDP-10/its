@@ -105,6 +105,7 @@ from scratch.
    - INQUIR, user account database
    - PWORD, replacement for sys;atsign hactrn that requires registered logins
    - PANDA, user account management program
+   - SEND, REPLY, replacements for DDT :SEND 
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
