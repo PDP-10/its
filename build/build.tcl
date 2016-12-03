@@ -607,6 +607,18 @@ respond "*" ":pdump sysbin;panda bin\r"
 respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
 respond "*" ":link sys;ts panda,sysbin;panda bin\r"
 
+# sender
+respond "*" ":midas sysbin;sender_sysen1;sender\r"
+expect ":KILL"
+respond "*" ":link sys;ts freply,sysbin;sender bin\r"
+respond "*" ":link sys;ts send,sysbin;sender bin\r"
+respond "*" ":link sys2;ts fr,sysbin;sender bin\r"
+respond "*" ":link sys2;ts reply,sysbin;sender bin\r"
+respond "*" ":link sys3;ts fs,sysbin;sender bin\r"
+respond "*" ":link sys1;ts s,sys;ts send\r"
+respond "*" ":link sys3;ts snd,sys;ts send\r"
+respond "*" ":link sys3;ts sned,sys;ts send\r"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
