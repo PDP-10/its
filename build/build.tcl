@@ -218,6 +218,7 @@ respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
 expect "EINIT"
 respond ":EJ" "\033xgenerate\033emacs;aux\033emacs1;aux\r"
+respond ":EJ" "\033xgenerate\033emacs;info\033emacs1;info\r"
 respond ":EJ" "\030\003"
 respond "*" ":kill\r"
 
