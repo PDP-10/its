@@ -632,6 +632,9 @@ respond "*" ":link sys1;ts s,sys;ts send\r"
 respond "*" ":link sys3;ts snd,sys;ts send\r"
 respond "*" ":link sys3;ts sned,sys;ts send\r"
 
+respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
