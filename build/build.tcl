@@ -640,6 +640,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
 
+# sysmsg
+respond "*" ":midas sys1;ts sysmsg_sysen1;sysmsg\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
