@@ -1,0 +1,1827 @@
+;-*- Mode: midas -*-
+.QMTCH==1
+
+VERSION==.FNAM2
+
+TITLE	INQUIRE UPDATE DEAMON
+	;CStacy, 4/1/83
+
+COMMENT |
+			INQUPD documentation.
+
+The INQUPD deamon is the only process which should update the LSR1
+database.  It is usually started by COMSAT, when the user interface
+process (:INQUIR) writes an update request addressed to UPDATE-INQUIR.
+
+INQUPD maps in the entire LSR1 database, slurps in the the update
+request files, updates the database as specified, and writes out the
+new version.  We keep three old LSR1 versions under other names, in
+case we want them back for some reason.
+
+An update request file must be written by :INQUIR for each host where
+the entry will be updated.  An update request file can contain more
+than one update request.
+
+The update request file (from INQUIR;.UPD1. >) is parsed into its
+component "items", which are identified by their names, and the the
+items are read into slots.  These slots form the data for the new
+database entry.  
+
+Items are indicated by their item-name, a colon, a tab, and the value
+of the item. Only the first 5 chars of the item name matter. Lines
+which begin with only a tab are continuations of the previous item.
+
+The very first item, which needs no value, is called BEGIN.
+Everything until the "BEGIN:" is ignored.  After all the items comes
+"END:<crlf>".
+
+The SUNAME item says which LSR1 entry to modify.  
+This is the only requisite field.
+
+The old entry for the indicated SUNAME is read in, and the items
+from the update request file are merged into it.  The new items
+have precdence; only items specifically mentioned in the request
+are changed.  Items which we never heard of, we simply ignore.
+
+If the UNAME is null, SUNAME's entry is deleted.  If the UNAME differs
+from the SUNAME, SUNAME is changing his name to UNAME.  That is,
+SUNAME's entry is deleted and a new ENTRY is created for UNAME.
+
+The NETAD field can currently be any string.  In the future, it will
+have to be a fully qualified RFC822 format address.
+
+
+COPY mode is useful for changing the format of the database, and
+must be run under a DDT, preferably in DEBUG mode.  
+The program loops down all the entries in the database, filling in the
+update item slots.  Then the entries are canonicalized to the new
+format.  The rest of the procedure is as usual: the entry is updated
+in the core LSR1, and the new database is written out.
+
+Database installation procedures are a little different for COPY mode
+operation.  We use "LSR1 1" as the constant database, and we write out
+a file called "NEWLSR 1".  When the entire database is copied, the
+program pauses. If proceeded, NEWLSR will be installed.
+
+The LSR1 lock is held until the copied database is installed, so that
+no INQUPD jobs can run and change the database out from under us. The
+usual installation procedure is not followed when in COPY mode.
+
+INQPAT mode is useful for hand-patching the database.  In this
+mode, we simply lock and load LSR1, and allow the user to call
+routines (such as LOOKUP, DELETE, and DONE) from DDT.
+
+|
+
+
+
+SUBTTL Basic Definitions
+
+;;; Registers.
+
+X=0		;Super temporary register.
+A=1		;General 
+B=2		; purpose 
+C=3		; utility 
+D=4
+E=5
+F=6		;Flag register.
+T=7		;Temporary.
+TT=10		;Temporary, T+1.
+CHAR=11		;Character being manipulated.
+BP=12		;Byte pointer.
+
+I==12		;Synonyms used
+J==13		;for sorting
+K==14		;routines.
+L==15
+R==16
+
+P=17		;Stack pointer.
+
+
+;;; I/O Channels
+
+LOCKC=14	;Locking channel.
+DSKI=15		;Disk input channel.
+DSKO=16		;Disk output channel.
+
+;;; LH Flags
+
+%COPY==1	;We are a COPY program.
+%RETRY==2	;We are retrying a failed operation.
+%PATCH==3	;We are manually patching the database.
+%MPVOK==4	;MPVs should create core.
+%MUNG==10	;In-core database has been modified. 
+
+
+;;; Basic Macros
+.INSRT KSC;MACROS >
+
+;;; Sleeping.
+DEFINE	SLEEP SECS
+	MOVEI T,30.*SECS
+	SKIPN DEBUG
+	.SLEEP T,
+TERMIN
+
+;;; Decrement Ascii Bp
+DEFINE D7BPT AC
+	ADD AC,[70000,,]
+	SKIPGE AC
+	 SUB AC,[430000,,1]
+TERMIN
+
+
+;;; Uppercase character
+DEFINE	UPPER AC
+	CAIL AC,141
+	 CAILE AC,172
+	  CAIA
+	   SUBI AC,40
+TERMIN
+
+;;; Decrement 7-bit byte pointer.
+DEFINE DBP7 AC
+	ADD AC,[70000,,]
+	SKIPGE AC
+	 SUB AC,[430000,,1]
+TERMIN
+
+
+;;; Simple error macro for now.
+DEFINE	ERROR &MSG
+	.VALUE [ASCIZ /:MSG /]
+TERMIN
+
+
+;;; Definitions for LSR1 database.
+
+$$DEFS==1
+.INSRT SYSENG;LSRTNS >
+
+LSRVER==1	;LSR1 database format version.
+
+
+SUBTTL Filenames
+
+;;; Locking file.
+
+LOCKFL:	SIXBIT /DSK/
+	SIXBIT /LSR1/
+	SIXBIT /LOCK/
+	SIXBIT /INQUIR/
+
+
+;;; File for notifying COMSAT of LSR1.
+
+SATFL:	SIXBIT /DSK/
+	SIXBIT / FROM/
+	SIXBIT /INQUIR/
+	SIXBIT /.MAIL./
+
+
+;;; The HSNAME database.
+
+HSNFIL:	SIXBIT /DSK/
+	SIXBIT /DIRS/
+	SIXBIT /BIN/
+	SIXBIT /INQUIR/
+
+
+;;; The installed LSR1 database.
+
+LSR1:	SIXBIT /DSK/
+	SIXBIT /LSR1/
+	SIXBIT /1/
+	SIXBIT /INQUIR/
+
+;;; The provisionally installed LSR1 database.
+
+LSR2:	SIXBIT /DSK/
+	SIXBIT /NLSR1/
+	SIXBIT /1/
+	SIXBIT /INQUIR/
+
+;;; Old and Ancient versions of the database.
+
+OLD:	SIXBIT /DSK/
+	SIXBIT /LSR1/
+	SIXBIT /OLD/
+	SIXBIT /INQUIR/
+
+OOLD:	SIXBIT /DSK/
+	SIXBIT /LSR1/
+	SIXBIT /OLDOLD/
+	SIXBIT /INQUIR/
+
+
+;;; Crash dump file.
+
+CRASHF:	SIXBIT /DSK/
+	SIXBIT /INQUPD/
+	SIXBIT />/
+	SIXBIT /CRASH/
+
+
+;;; Update request file.
+
+UPDFL:	SIXBIT /DSK/
+	SIXBIT /.UPD1./
+	SIXBIT />/
+	SIXBIT /INQUIR/
+
+;;; Old update request file.
+
+OUPDFL:	SIXBIT /DSK/
+	SIXBIT /.UPD1$/
+	SIXBIT />/
+	SIXBIT /INQUIR/
+
+;;; Losing update request file.
+
+LOSSF:	SIXBIT /DSK/
+	SIXBIT /LOSS/
+	SIXBIT />/
+	SIXBIT /INQUIR/
+
+
+
+
+SUBTTL	Error handler
+
+;;; Fatal error handler to JSR to when something bad happens.
+
+SYSLOS::
+AUTPSY:	0			   ;Fatal errors JSR here.
+	SKIPE DEBUG
+	 .VALUE	[ASCIZ /:Autopsy required/]
+	MOVEM 0,LOSEAC		   ;Remember all ACs.
+	MOVE 0,[1,,LOSEAC+1]	   
+	BLT 0,LOSEAC+17		   ;BLT them to a safe place.
+	.SUSET [.RBCHN,,LOSBCH]	   ;Remember losing channel.
+	.SUSET [.RPICL,,LOSPCL]	   ;Remember interrupts.
+	.SUSET [.SPICL,,[-1]]	   ;Arm interrupts, in case get disk full.
+	SYSCAL STATUS,[ LOSBCH ? %CLOUT,,LOSSTS]   ;Remember losing status.
+	 NOP
+	.CLOSE DSKO,
+	MOVEI A,CRASHF		   ;Try opening the crash file. 
+	SYSCAL OPEN,[%CLBIT,,.UIO ? %CLIMM,,DSKO ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JRST DIE		   ;  Just die if we cannot.
+	.RDATE A,		   ;Read date and time,
+	.RTIME B,		   ;for posterity.
+	MOVE C,LENGTH
+	MOVEI C,DATA(C)	   ;We want to dump all our core.
+	MOVE D,[444400,,0]
+	SYSCAL SIOT,[%CLIMM,,DSKO ? D ? C]  ;Dump our pages to disk.
+	 .LOSE %LSFIL
+	.CLOSE DSKO,
+	JRST DIE
+
+
+SUBTTL	Interrupt Handler and stuff
+
+
+POPJ1:	AOS (P)			   ;Skip
+CPOPJ:	POPJ P,			   ;Return
+
+
+;;; Old style, winning-PC interrupt handler.
+
+TMPLOC 42,{TSINT}
+
+TSINT:	0			   ;Interrupt word stored here.
+TSIPC:	0			   ;Valid PC stored here.
+	PUSHAE P,[A,B]		   ;Save accumulators.
+	MOVE A,TSINT		   ;What's the meaning of this interruption??
+	CAIN A,%PIMPV		   ;Was it an MPV?
+	 JRST MPVINT		   ;  Yes.
+	CAIN A,%PIIOC		   ;Was it an IOC error?
+	 JRST IOCINT		   ;  Yes.
+	JSR AUTPSY		   ;Hmmm. Nothing we know how to handle.
+
+DISMIS:	POPAE P,[B,A]		   ;All handlers should come here to dismiss.
+	.DISMIS TSIPC
+
+IOCINT::.SUSET [.RBCHN,,A]	   ;See which channel is erring.
+	CAIE A,DSKO		   ;If it is not the disk output channel
+	 JSR AUTPSY		   ;  we are in trouble.
+	SYSCAL STATUS,[A ? %CLOUT,,B]
+	 JSR AUTPSY
+	LDB A,[330500,,B]	   ;Get the error code.
+	CAIN A,11		   ;Maybe just out of disk space.
+	 JRST [ SLEEP 60.   	   ;   Hopefully a temporary situation.
+		JRST DISMIS ]
+;	CAIN A,14		   ;Is our directory full?
+	 JSR AUTPSY		   ;  Someday figure out how to handle such.
+
+
+MPVINT:	TLNN F,%MPVOK		   ;If not OK for MPVs to happen npw
+	 JSR AUTPSY		   ; die.
+	.SUSET [.RMPVA,,A]	   ;Get address which caused the MPV.
+	CAIL A,MPVOKB		   ;See if in the range of legal MPVs.
+	 CAIL A,MPVOKE
+	  JSR AUTPSY		   ;If not in range, die.
+	LSH A,-10.		   ;Else round up address to page.
+MPVMAK:	SYSCAL CORBLK,[	%CLIMM,,%CBNDR+%CBNDW
+			%CLIMM,,%JSELF
+			A	   ;Create one new page in our space.
+			%CLIMM,,%JSNEW]
+	 JRST [	SLEEP 60.	   ;   If failed to get core.
+		JRST MPVMAK ]	   ;   Sleep for a minute and retry.
+	JRST DISMIS		   ;When we have created more core, dismiss.
+
+
+SUBTTL Main Program
+
+GO:	MOVE P,[-PDLLEN,,PDL]	   ;Init the  stack.
+	.SUSET [.RJNAME,,A]	   ;Find our job name.
+	CAMN A,[SIXBIT /INQCPY/]   ;If we are in COPY mode
+	 TLO F,%COPY		   ; remember that.
+	CAMN A,[SIXBIT /INQPAT/]   ;If we are in PATch mode.
+	 TLO F,%PATCH		   ; remember that.
+	.SUSET [.ROPTIO,,A]	   ;Find our job options.
+	TLNN F,%PATCH		   ;If are are patching the database
+	 TLNE F,%COPY
+	 JRST [	TLNN A,%OPDDT	   ; Make sure a human is around.
+		 ERROR "Must run with human supervision."
+		JRST .+1]
+	TLO A,%OPOPC
+	.SUSET [.SOPTIO,,A]	   ;Set winning interrupt-PC option.
+	.SUSET [.SMASK,, [%PIPDL+%PIIOC+%PIMPV]]   ;Arm interrupts.
+	CALL LOCK		   ;Try to lock the LSR1 database.
+	 JRST DONE		   ; If already locked, commit suicide.
+	CALL MAPIN		   ;Map all database entries into core.
+	 ERROR "Unable to map LSR1 database."
+	SETZM COUNT		   ;Count of entries is zero based.
+	TLNE F,%PATCH
+	 ERROR "LSR1 loaded and locked. You may call LOOKUP, DELETE, and DONE."
+	TLNE F,%COPY		   ;If copying the database
+	 JRST LOOP		   ; avoid chewing on update files.
+
+;;; Rename any .UPD1$ files to .UPD1. files.  
+;;; .UPD1$ files must be .UPD1. files which had been processed by an
+;;; earlier INQUPD which hadn't written out LSR1 > yet so they need
+;;; to be processed again.  Note that it does no harm to process an
+;;; update twice.
+
+GETOUP:	MOVEI A,OUPDFL		   ;Rename old requests
+	MOVEI B,UPDFL		   ;to new requests.
+	SYSCAL RENAME,[ 0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(B) ? 2(B) ]
+	 JRST LOOP		   ;When all renamed, we can get to work!
+	JRST GETOUP		   ;Else rename the rest of them.
+
+;;; Loop through all the update requests and process them, changing
+;;; the in-core database.  When there are no more updates, write
+;;; out and install the database.
+
+LOOP:	SETZM TOOBIG		   ;Say nothing was truncated yet.
+	CALL GETUPD		   ;Try to read in an update.
+	 JRST DONE0
+	MOVE A,%SUNAM		   ;SUNAME says which entry to update.
+	MOVE B,%SUNAM+1
+	CALL LOOKUP		   ;Look up entry in LSR1
+	 JRST LOOP1		   ; If not there, this is a new entry.
+	MOVE D,WHERE		   ;Get address of entry.
+	CALL DELETE		   ;Delete old entry.
+	 ERROR "Cant delete old entry."
+LOOP1:	SKIPN $UNAME
+	 SKIPE $UNAME+1		   ;If UNAME in request file slots is null
+	  CAIA			   ; we are simply deleting an entry.
+	   JRST LOOP9
+	CAMN A,%UNAME		   ;See if the SUNAME and UNAME differ.
+	 CAME B,%UNAME+1
+	  JRST [ MOVE A,%UNAME	   ;They do - need to delete UNAME's
+		 MOVE B,%UNAME+1   ;entry before we insert under there.
+		 CALL LOOKUP
+		  JRST LOOP2
+		 MOVE D,WHERE
+		 CALL DELETE
+		  ERROR "Cant delete new entry."
+		 JRST LOOP2 ]
+LOOP2:	MOVE D,WHERE		   ;Get address where entry should go.
+	CALL INSERT		   ;Insert new entry.
+	 ERROR "Cant insert entry."
+LOOP9:	AOS COUNT		   ;Keep count of processed entries.
+	SKIPE TOOBIG		   ;If we had to truncate something
+	 CALL WARNER		   ;  be sure to tell him about it.
+	JRST LOOP		   ;Go process another update.
+
+
+;;; Bug fix: Make sure that last entry in DATA area is followed by
+;;; and end-of-data sentinel (-1). If the last DATA area entry is
+;;; deleted and replaced, the DELETE/INSERT logic does not guarantee
+;;; that this is the case. -- EJS
+DONE0: MOVE A,LENGTH		   ;get length of DATA area
+       MOVEI B,-1		   ;end-of-data area sentinel
+       MOVEM B,DATA-1(A)       	   ;store end-of-data sentinel
+
+DONE:	TLNN F,%MUNG		   ;If no modification
+	 JRST DONE3		   ;  don't write out out anything.
+	TLNE F,%COPY		   ;If COPYing
+	 JRST [ MOVE A,WHERE	   ; cons up "final" entry.
+		ADDI A,1
+		SUBI A,DATA
+		MOVEM A,LENGTH
+		JRST .+1 ]
+	CALL CHECK
+	 ERROR "Data bashed."	   ;Make sure LSR1 looks Ok.
+	CALL MAKTAB		   ;Create LSR1 tables.
+	 ERROR "Cant create tables."
+DONE1:	
+;	CALL INSTAL		   ;Make files consistant
+	 NOP			   ;in case previous deamon left a mess.
+DONE2:	CALL WRITE		   ;Write out the new database files.
+	 ERROR "Error writing database."
+	CALL INSTAL		   ;Install it.
+	 NOP
+	MOVEI A,SATFL		   ;Tell COMSAT there is a new LSR1 file.
+	SYSCAL OPEN,[%CLBIT,,.BIO ? %CLIMM,,DSKO ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 NOP
+	.CLOSE DSKO,
+DONE3:	TLNE F,%COPY		   ;Unless we are an INQCPY
+	 JRST DONE5		   ;We will delete all the old update
+	MOVEI A,OUPDFL		   ;request files.
+DONE4:	SYSCAL DELETE,[0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 CAIA
+	  JRST DONE4
+DONE5:	.CLOSE LOCKC,		   ;Relinquish lock on database.
+	SKIPE DEBUG		   ;If being debugged
+	 .VALUE [ASCIZ /:Done./] ;  pause.
+	SYSCAL STDMST,[ [SIXBIT /INQUPD/] ? [-1] ? 0]
+	 NOP
+DIE:	.LOGOUT 1,		   ;Log out.
+
+
+
+SUBTTL	Lock the database
+
+;;; Only one process should ever update the LSR1 database at a time.
+;;; This routine attempts to seize the database lock, which is implemented
+;;; as a file.  If the lock cannot be seized because it is missing, it
+;;; is re-created.
+;;;
+;;; Skip returns if the lock is seized.
+;;; Non-skip probably means some other process has the lock.
+
+LOCK:	MOVEI A,LOCKFL
+	SYSCAL OPEN,[%CLBIT,,100007 ? %CLIMM,,LOCKC ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JRST LOCK1
+	JRST POPJ1		   ;Database locked.
+
+;;; Trouble locking the database.
+
+LOCK1:	.STATUS LOCKC,A		   ;See why open failed.
+	LDB A,[220600,,A]	   ;Get error code.
+	CAIN A,%ENAFL		   ;If someone else has the lock
+	 RET			   ; Take failure return.
+	CAIE A,%ENSFL		   ;Maybe lock file is missing.
+	 JSR AUTPSY		   ; Eh?
+	MOVEI A,LOCKFL		   ;Lock file is missing
+	SYSCAL RENAME,[	0(A) ? 1(A) ?	   ;Maybe ITS had crashed
+			[SIXBIT /LOCK !/]  ;and left this crufty lossage
+			3(A)
+			1(A) ? 2(A) ]	   ;instead of this?
+	 JRST LOCK2		   	   ;   Nope...
+	JRST LOCK		   ;Renaming won - try locking now.
+
+LOCK2:	.STATUS A		   ;See why renaming did not work.
+	LDB A,[220600,,A]	   ;Get error code.
+	CAIE A,%ENSFL		   ;Is lock file really gone?
+	 JSR AUTPSY		   ; Nope, it's hopeless.
+	MOVEI A,LOCKFL
+	SYSCAL OPEN,[%CLBIT,,.UAO ? %CLIMM,,LOCKC ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JSR AUTPSY		   ; Fail miserably if unable to create lock.
+	.CLOSE LOCKC,		   ;Lock file re-created now.
+	JRST LOCK		   ;Try to seize it.
+
+
+SUBTTL	Map in database
+
+;;; Map the entire LSR1 file at DATA using DSKI, and close it.
+
+MAPIN:	PUSHAE P,[A,B,BP]
+	.CORE DATA/2000		   ;Flush core where LSR1 entries mapped.
+	 JSR AUTPSY
+	SETZM LENGTH
+	MOVEI A,LSR1		   ;Open the database file.
+	SYSCAL OPEN,[%CLBIT,,.UII ? %CLIMM,,DSKI
+		    0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JSR AUTPSY
+	MOVEI A,LSRTNS"HDRLEN	   ;Read in the database header, so we
+	MOVE BP,[444400,,HEADER]   ;can find out where entries begin.
+	SYSCAL SIOT,[%CLIMM,,DSKI ? BP ? A]
+	 JSR AUTPSY
+	MOVE B,HEADER+LSRTNS"HDRDTA
+	TRNE B,1777		   ;DATA should start on page boundry.
+	 JSR AUTPSY
+	SYSCAL FILLEN,[%CLIMM,,DSKI ? %CLOUT,,A]
+	 JSR AUTPSY
+	SUB A,B			   ;We dont want Areas before DATA.
+	LSH B,-10.		   ;Get # of 1st page to map.
+	MOVEM A,LENGTH		   ;Remember the DATA length.
+	ADDI A,1777		   ;Round up a page.
+	LSH A,-10.		   ;Convert words to pages.
+	MOVNS A			   ;Make into AOBJN pointer.
+	HRLZS A
+	HRRI A,DATA/2000	   ;A gets AOBJN to pages to map file into.
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDW+%CBCPY ? %CLIMM,,%JSELF ? A
+			%CLIMM,,DSKI
+			B]	   ;Try to map in the DATA Area pages.
+	 JRST [ TLNE F,%RETRY	   ;  If failed twice
+		 JRST CPOPJ	   ;   give up.
+		TLO F,%RETRY	   ;  Else say we are trying again.
+		SLEEP 60.	   ;  Wait a minute.
+		JRST MAPIN ]	   ;  And try again.
+	TLZ F,%RETRY		   ;Success.
+	.CLOSE DSKI,		   ;Close up.
+GETHSN:	MOVEI A,HSNFIL		   ;Now to read the HSNAME table.
+	SYSCAL OPEN,[%CLBIT,,.UII ? %CLIMM,,DSKI ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JSR AUTPSY		   ; Glorp! The HSNAME table is missing!
+	SYSCAL FILLEN,[%CLIMM,,DSKI ? %CLOUT,,A]
+	 JSR AUTPSY
+	CAIL A,HBFLEN		   ;If the HSNAME stuff doesn't fit
+	 JSR AUTPSY		   ;  lose.
+	MOVEM A,HFILEN		   ;Remember how long the file is.
+	MOVE BP,[444400,,HBUF]
+	SYSCAL SIOT,[%CLIMM,,DSKI ? BP ? A]
+	 JSR AUTPSY
+	HLRES A			   ;Find remaining cnt if any.
+	ADDM A,HFILEN		   ;Adjust for # wds actually read.
+	.CLOSE DSKI,		   ;All done with HSNAME file.
+	POPAE P,[BP,B,A]
+	JRST POPJ1
+
+
+
+
+SUBTTL	Get update
+
+;;; Read an update and fill in the slots.
+;;; Process (or finish processing) an update request file.
+;;; For COPY mode, use an entry from the database instead of a request.
+;;; Does not skip if there is no update to process.
+
+
+GETUPD:	SETZM %SUNAM		   ;Clear out the regular slots.
+	MOVE T,[%SUNAM,,%SUNAM+1]
+	BLT T,ITEMND		   ;Zap!
+
+	TLNE F,%COPY		   ;If we are copying
+	 PJRST GETOLD		   ;Form update from database entry.
+
+	PUSHAE P,[A,B,C,D,BP]	   ;Normal update from request file.
+	SKIPE SAVEBP		   ;If already have request in buffer 
+	 JRST GETUP2		   ; continue processing.
+GETUP1:	MOVEI A,UPDFL		   ;Else look for another update request file.
+	SYSCAL OPEN,[%CLBIT,,.UAI ? %CLIMM,,DSKI
+		     0(A) ? 1(A) ? [SIXBIT /</] ? 3(A)]
+	 JRST [	POPAE P,[BP,D,C,B,A]
+		RET ]		   ;Fail if cannot find one.
+	MOVEI A,OUPDFL		   ;Got a request - rename it.
+	SYSCAL RENMWO,[%CLIMM,,DSKI ? 1(A) ? 2(A)]
+	 JSR AUTPSY
+GETUP2:	CALL INATM		   ;Read update request into Alternate slots.
+	 JRST GETUP1		   ; Losing file - see if there is another.
+	CALL INITM		   ;Read old database entry into Regular slots.
+	 NOP			   ; dont care if no entry already.
+	CALL MRGSLT		   ;Merge Alternate into Regular slots.
+GETUP9:	POPAE P,[BP,D,C,B,A]
+	JRST POPJ1
+
+
+
+SUBTTL	Read items from update request file into Alternate slots.
+
+;;; Takes an update request file open on DSKI, and reads the info
+;;; into the alternate slots.  Skip return when done, or non-skip if
+;;; request file is badly formatted.
+
+;;; "New" style inquir message code added by SRA, 26 Aug 86.  It
+;;; attempts to preserve the old functionality as well, decides which
+;;; format of file it is reading by looking at the character just
+;;; after the colon for UNAME and SUNAME entries (if it's not a tab
+;;; this must be a new style entry, otherwise an old style entry).
+;;; The new format is a little more robust and doesn't assume that all
+;;; mail programs in the world use ASCII (they don't, and TAB
+;;; characters tend to decay under such conditions).
+;;;
+;;; Talk to GZ, SRA, or ROMKEY if you want more information on the
+;;; "new" message standard.  You may not have to, it may end up as an
+;;; RFC or something, since we are trying to get it added to the
+;;; standard Berkeley Unix distribution.
+;;;
+;;; As for the stylistic issues involved in making both modes work
+;;; with the same code, I refer the reader to Dave Moon:
+;;;
+;;; 	"Well, it's assembly language, you know.  You don't want to
+;;; 	have too much taste..."
+
+
+INATM:	SETZM ATEMBG		   ;Zap the alternate slots.
+	MOVE B,[ATEMBG,,ATEMBG+1]
+	BLT B,ATEMND-1
+	SETZM ATMUNG		   ;Zap the slot disposition table.
+	MOVE B,[ATMUNG,,ATMUNG+1]
+	BLT B,ATMUNG+NAITEM-1
+
+	SKIPE SAVEBP		   ;Continuation of a file?
+	 JRST [	MOVE BP,SAVEBP	   ; Yes - recover Bp to buffer.
+		SETZM SAVEBP	   ; Flush saved Bp.
+		JRST INAT1 ]	   ; Process buffer contents.
+
+	SETZM REQBUF		   ;We need to read a new file!
+	MOVE T,[REQBUF,,REQBUF+1]  ;Clear update-request buffer.
+	BLT T,REQBUF+<RQPGS*2000>
+	SYSCAL FILLEN,[%CLIMM,,DSKI ? %CLOUT,,A]
+	 JSR AUTPSY
+	CAIL A,RQLEN*5		   ;File is open in .UAI mode.
+	 ERROR "Update request was too big!"
+	MOVE BP,[440700,,REQBUF]
+	SYSCAL SIOT,[%CLIMM,,DSKI ? BP ? A] ;Slurp.
+	 JSR AUTPSY
+	.CLOSE DSKI,
+	MOVE BP,[440700,,REQBUF]   ;Make a Bp to the buffer.
+	SETZM SAVEBP		   ;Flush multiple-update Bp.
+	SKIPN REQBUF		   ;Going to parse item names and
+	 JSR UPDLOS
+
+INAT1:	SETOM INHEDR		   ;First, we skip over the header.
+	SETZM GOTUNM		   ;Say we have not yet seen his (new) UNAME.
+	SETZM NEWINQ		   ;We don't think this is new style (yet).
+INAT2:	SETZ B,			   ;B  gets name of an item from file.
+	MOVE C,[440700,,B]	   ;Make a Bp to it.
+INAT3:	ILDB CHAR,BP		   ;Get char from the file.
+	CAIG CHAR,40		   ;Check for control characters.
+	 JRST [ JUMPLE CHAR,INATND ;If eof, see if have got header yet.
+		CAIE CHAR,^_	   ; Check also if this is ^_
+		 CAIN CHAR,^C	   ; Or maybe ^C.
+		  JRST INATND
+	 	CAIE CHAR,40	   ; If this is a space
+		 CAIN CHAR,^I	   ; Or TAB
+		  JRST INAT3	   ;  Ignore it.
+		CAIE CHAR,^M	   ; If CR
+		 CAIN CHAR,^J	   ; Or LF 
+		  JRST INAT2	   ;  Flush any accumulated label, ignore.
+		 JSR UPDLOS]	   ;Otherwise, its a bad random control char.
+	CAIN CHAR,":"		   ;If this is seperator
+	 JRST INAT4		   ;Go look at its name.
+	TLNE C,760000
+	 IDPB CHAR,C
+	JRST INAT3
+
+;;; Gobble down and ignore the header.
+
+INAT4:	SKIPN INHEDR		   ;Are we still looking for the header?
+	 JRST INAT6		   ; No, process this normally.
+	CAMN B,[ASCII /BEGIN/]	   ;Is this is the BEGIN item name
+	 SETZM INHEDR		   ;  we have gotten past the header.
+INAT5:	ILDB CHAR,BP		   ;Get a char.
+	CAIN CHAR,0		   ;Not expecting EOF yet!
+	 JSR UPDLOS		   ; update-request must be bad.
+	CAIE CHAR,^J		   ;If this is not a newline
+	 JRST INAT5		   ; go gobble chars.
+	JRST INAT2		   ;After the newline comes another item.
+
+;;; Figure out which slot the named item in B goes into.
+
+INAT6:	CAMN B,[ASCII /UNAME/]	   ;Is this the (maybe) new UNAME?
+	 SETOM GOTUNM		   ;Yeah, remember we saw it
+	CAME B,[ASCII /UNAME/]	   ;If it's either the UNAME
+	 CAMN B,[ASCII /SUNAM/]	   ;or the SUNAME
+	  JRST [MOVE X,BP	   ;Peek ahead one character
+		ILDB CHAR,X	   ;for DWIM purposes.
+		CAIE CHAR,^I	   ;Old format insists on tab as next char
+		 SETOM NEWINQ	   ;so anything else means new format.
+		JRST INAT7 ]	   ;Somehow I don't think this is an END: line
+	CAME B,[ASCII /END/]	   ;Is this is the terminating item?
+	 JRST INAT7		   ; No - keep gobbling.
+
+;;; Now we have read the "END" item, we are done reading in a request.
+;;; Now check to see if there seems to be another request in the
+;;; same update request file buffer.
+
+	SKIPN GOTUNM		   ;Did we see a UNAME field?
+	 JRST [	MOVE X,$SUNAM	   ; No - he forgot it.
+		MOVEM X,$UNAME	   ; Pretend it is the same as the SUNAME.
+		MOVE X,$SUNAM+1
+		MOVEM X,$UNAME+1
+	        SETOM ATMUNG+1	   ;Remember that we saw this item!
+		JRST .+1 ]
+	MOVE X,BP		   ;Let's look at any data to come.
+	ILDB CHAR,X		   ;Maybe a CR.
+	ILDB CHAR,X		   ;Maybe a LF.
+	ILDB CHAR,X		   ;A ^_ often ends the file buffer.
+	JUMPLE CHAR,INAT8	   ;Check for EOF too!
+	CAILE CHAR,40		   ;If we have a printing character
+	 MOVEM BP,SAVEBP	   ; there probably are more updates.
+	JRST INAT8		   ;OK, all done hacking this request.
+
+INAT7:	LDB X,[172500,,B]	   ;Check for silly synonyms
+	MOVE D,["MIT"]		   ;for this value
+	CAME X,["WOR"]		   ;(because the rest of the world
+	 CAMN X,["WRK"]		   ; doesn't have MIT address or phone!)
+	  DPB D,[172500,,B]	   ;Was a synonym, zap it to old name.
+	SKIPE NEWINQ		   ;Skip tab check if new format.
+	 JRST INAT7A
+	ILDB CHAR,BP		   ;Process current item (named in B).
+	CAIE CHAR,^I		   ;There had better be a tab
+	 JSR UPDLOS		   ; after the item name.
+INAT7A:	MOVSI D,-NAITEM		   ;Loop through all the items.
+	CAME B,ATEMN(D)		   ;Is this the item?
+	 AOBJN D,.-1		   ; Nope, keep looking.
+	JUMPL D,INAFIL		   ;We found the item - go slurp it.
+INAFLS:	ILDB CHAR,BP		   ;Else gobble and ignore an item.
+	JUMPLE CHAR,INATND	   ;Handle EOF
+	CAIE CHAR,^J		   ;EOL?
+	 JRST INAFLS		   ;nope, next char.
+	MOVE X,BP		   ;Save BP in case we want to back up.
+	SKIPE NEWINQ		   ;New format update message?
+	 JRST INAFL1		   ;yep, handle differently
+	ILDB CHAR,X		   ;Old format, get first char of next line
+	CAIE CHAR,^I		   ;TAB?
+	 JRST INAT2		   ;no, new item
+	JRST INAFLS		   ;yes, continuation line, so skip it too.
+INAFL1:	ILDB CHAR,X		   ;New format, get a char.
+	CAIN CHAR,":"		   ;New style continuation line?
+	 JRST INAFLS		   ;yep, so skip this line too.
+	CAIE CHAR,40		   ;Ignore whitespace.
+	 CAIN CHAR,^I
+	  JRST INAFL1
+	CAIN CHAR,^J		   ;EOL?
+	 SKIPA BP,X		   ;yeah, so that's one line gone for good.
+	  CAIN CHAR,^M		   ;Totally blank lines are whitespace too.
+	   JRST INAFL1
+	JRST INAT2		   ;Anything else is begining of new field.
+
+;;; Read the value of the item whose name is in B and number in D.
+
+INAFIL:	SETOM ATMUNG(D)		   ;Remember that we saw this item!
+	MOVE B,ATEMS(D)		   ;Get Bp to the item's value slot.
+	HRLI B,440700
+	MOVE T,ITEML(D)		   ;Get length of this slot.
+	IMULI T,5.		   ;Convert to chars.
+CPYLIN:	ILDB CHAR,BP		   ;Copy rest of the line into the slot.
+	SOJE T,[ SKIPN TOOBIG
+		  HRRM D,TOOBIG	   ;  If item overflows slot,
+		 DBP7 B		   ;  remember we lost, and back up and
+		 DPB CHAR,B	   ;   bash the last char to zero
+		 JRST INAFLS ]	   ;   and flush the rest of the item.
+	CAIN CHAR,^C		   ;^Cs pad the request file.
+	 JSR UPDLOS		   ; But we are not expecting EOF yet.
+	CAIN CHAR,0		   ; ^@s are the same as ^Cs.
+	 JSR UPDLOS
+	IDPB CHAR,B		   ;Copy a character.
+	CAIE CHAR,^J		   ;EOL?
+	 JRST CPYLIN		   ;no, next char.
+	MOVE E,BP		   ;May have to back out of this....
+	SKIPE NEWINQ		   ;New format update message?
+	 JRST INAFI2		   ;yep, handle differently.
+	ILDB CHAR,BP		   ;See if next line starts
+	CAIN CHAR,^I		   ;With a TAB?
+	 JRST CPYLIN		   ; Then drop the TAB on the floor.
+INAFI1:	SETZ CHAR,		   ;Nope, line copy is complete.
+	DPB CHAR,B		   ;Bash ^J to a zero,
+	DBP7 B			   ;back up
+	DPB CHAR,B		   ;and bash the ^M to a zero.
+	MOVE BP,E		   ;UNTYI the start of the new line.
+	JRST INAT2		   ;Go back for another item.
+INAFI2:	ILDB CHAR,BP		   ;New format, get a char.
+	CAIN CHAR,":"		   ;New style continuation line?
+	 JRST CPYLIN		   ;yep, go snarf some more text.
+	CAIE CHAR,40		   ;Ignore whitespace.
+	 CAIN CHAR,^I
+	  JRST INAFI2
+	CAIN CHAR,^J		   ;EOL?
+	 SKIPA E,BP		   ;Yep, that was a totally useless line.
+	  CAIN CHAR,^M		   ;Ignore blank lines too.
+	   JRST INAFI2
+	JRST INAFI1		   ;Line copy is complete, handle it.
+
+;;; Come here when we think we are done reading.
+
+INATND:	SKIPN INHEDR		   ;Here when EOF.
+	 JSR UPDLOS		   ; Barf if we have not seen data yet.
+INAT8:	MOVE A,[ASCII /_____/]	   ;We know we have data in the slots.
+	MOVE B,[ASCII /_/]	   ;Make sure we are not trying to
+	CAME A,%SUNAM		   ;mung the magic final "______"
+	 JRST INAT9		   ;entry in the database.
+	CAME B,%SUNAM+1
+	  JRST INAT9
+	CAMN A,%UNAME		   ;Else check to make sure UNAME
+	 CAME B,%UNAME+1	   ;is not changing.
+	  CAIA
+	   JSR UPDLOS		   ;Throw away if offensive.
+INAT9:	JRST POPJ1
+
+
+;;; JSR Here to throw away losingly formatted update request files.
+
+UPDLOS:	0
+	MOVEI A,OUPDFL		   ;Rename badly formatted files.
+	MOVEI T,LOSSF
+	SYSCAL RENAME, [0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(T) ? 2(T)]
+	 NOP
+	SKIPE DEBUG		   ;If debugging
+	 JSR AUTPSY		   ; Let hacker can see why we got upset.
+	RET			   ;Else take failure return.
+
+
+
+SUBTTL	Read items from database into Regular Slots.
+
+INITM:	PUSHAE P,[A,B,BP]
+	MOVE A,$SUNAM
+	MOVE B,$SUNAM+1
+	CALL LOOKUP		   ;Find entry in database.
+	 JRST INITM9		   ; If no entry, nothing to copy.
+	MOVE B,WHERE		   ;Address of entry.
+	ADDI B,1		   ;First item is in the following word.
+	HRLI B,440700		   ;Make Bp to the items.
+	MOVE A,[-NITEMS+1,,1]	   ;AOBJN pointer -(NITEMS-1).
+	MOVSI A,-NITEMS		   ;AOBJN pointer to Alternate items.
+	HRRI A,1		   ;excluding SUNAME (since not in database).
+INITM1:	MOVE BP,ITEMS(A)	   ;Make Bp to next slot.
+	HRLI BP,440700
+	CALL CPYSTR		   ;Copy item into Alternate slot.
+	AOBJN A,INITM1		   ;Go do next item.
+	AOS -3(P)
+INITM9:	POPAE P,[BP,B,A]
+	RET
+
+
+
+
+SUBTTL	Merge Alternate into Regular Slots.
+
+;;; The table at ATMUNG says which Alternate slots have something in
+;;; them.  These slots replace what is already in the Regular slots.
+
+MRGSLT:	PUSHAE P,[A,B,C,D,BP]
+	MOVSI A,-NAITEM		   ;AOBJN pointer to Alternate slots.
+MRGSL1:	SKIPN ATMUNG(A)		   ;If the Alternate slot was not updated
+	 JRST MRGSL3		   ; leave the Regular slot alone.
+	MOVE BP,ITEMS(A)	   ;Get Bp to Regular slot.
+	HRLI BP,440700
+	MOVE B,ATEMS(A)		   ;Get Bp to Alternate slot.
+	HRLI B,440700
+	CALL CPYSTR		   ;Copy Alternate --> Regular slot.
+MRGSL3:	AOBJN A,MRGSL1		   ;Check out each of the items.
+	POPAE P,[BP,D,C,B,A]
+	RET
+
+
+
+
+SUBTTL	Generate Update Request from the existing database
+
+;;; Step through the mapped in LSR1 database, until we reach the next
+;;; entry we have not processed.  Read in the entry, and munge it up.
+;;;
+;;; It works to step through a changing LSR1 database, because the
+;;; entries are sorted alphabetically.  An entry will not change its
+;;; relative position unless its UNAME is changed.  Entries are
+;;; shuffled "down" to make room when the new entry is inserted.
+;;; .SEE FIND and .SEE INSERT.
+
+
+GETOLD:	PUSHAE P,[A,B,C,BP]
+	SKIPN DANGER		   ;Paranoid check for losers!!
+	 ERROR "This is too dangerous!"
+	SETZM $SUNAM		   ;Clear out the alternate slots.
+	MOVE T,[$SUNAM,,$SUNAM+1]
+	BLT T,ITEMND		   ;Zap!
+GETOL1:	MOVE B,WHERE		   ;Get address of previous entry.
+	SKIPN B			   ;If it is zero
+	 JRST [	MOVEI B,DATA	   ; addr was not initialized
+		JRST GETOL2 ]	   ; so we want the first entry. 
+	HLRZ C,(B)		   ;Get its length.
+	ADD B,C			   ;Compute address where next entry is.
+GETOL2:	HRRZ C,(B)		   ;Get header of next entry.
+	JUMPE C,GETOL9		   ;If zero, assume its the ______ entry.
+	CAIE C,-1		   ;Make sure it looks like a header.
+	 ERROR "Invalid header found in GETOLD. "
+	HLRZ C,(B)		   ;If entry length is zero
+	JUMPE C,GETOL9		   ; we are past the last entry.
+	AOS B			   ;First item is in the following word.
+	HRLI B,440700		   ;Make Bp to the items.
+	MOVSI A,-<-1+NAITEM>	   ;AOBJN pointer to Alternate items.
+	HRRI A,1		   ;excluding SUNAME (since not in database).
+GETOL3:	MOVE BP,ATEMS(A)	   ;Make Bp to next slot.
+	HRLI BP,440700
+	CALL CPYSTR		   ;Copy item into Alternate slot.
+	AOBJN A,GETOL3		   ;Go do next item.
+	CALL CANON		   ;Canonicalize Alternate to regular slots.
+	AOS -4(P)
+GETOL9:	POPAE P,[BP,C,B,A]
+	RET			   ;Update info is now ready to process.
+
+;;; This ad-hoc routine is the dangerous part of the COPY affair.
+;;; It munges up the items in ad-hoc ways, and puts them into
+;;; the Regular slots.
+;;;
+;;; Currently it:
+;;;	Makes up an SUNAME item.
+;;;	Makes up a  LOCAL item.
+;;;	Makes up an ALTER item.
+;;;	Changes format of MACHI from [SITE1 SITE2...] to [X@SITE1 X@SITE2].
+
+CANON:	MOVE A,$UNAME		   ;Make the luser an SUNAME.
+	MOVE B,$UNAME+1
+	MOVEM A,$SUNAM
+	MOVEM B,$SUNAM+1
+
+	MOVSI A,-NAITEM		   ;AOBJN to Alternate slots.
+CANON1:	MOVE B,ATEMS(A)		   ;Bp to Alternate slots.
+	HRLI B,440700
+	MOVE BP,ITEMS(A)	   ;Bp to Regular slots.
+	HRLI BP,440700
+	CALL CPYSTR		   ;Copy item.
+	AOBJN A,CANON1		   ;First, just copy them all.
+
+;;; Now construct a new MACHI item using luser's SUNAME and site names.
+;;; New MACHI item looks like "CSTACY@MC CSTACY@AI CSTACY@DM CSTACY@ML".
+
+	MOVEI D,LSRTNS"I$MACH	   ;Get MACHI database item number.
+	ADDI D,1		   ;Make it into a slot number.
+	MOVE B,ITEMS(D)		   ;Bp to MACHI item.
+	HRLI B,440700
+	MOVSI D,-3		   ;There were four machines.
+CANON2:	MOVE A,[440700,,%SUNAM]	   ;We are making UNAME@SITE strings.
+CANON3:	ILDB CHAR,A
+	JUMPE CHAR,CANON4	   ;When at end of UNAME, add site.
+	IDPB CHAR,B
+	JRST CANON3		   ;Copy entire UNAME.
+CANON4:	MOVEI CHAR,"@"
+	IDPB CHAR,B
+	MOVEI A,NEWMAC(D)
+	HRLI A,440700
+CANON5:	ILDB CHAR,A
+	JUMPE CHAR,CANON6
+	IDPB CHAR,B
+	JRST CANON5		   ;Copy entire machine name.
+CANON6:	MOVEI CHAR,40
+	IDPB CHAR,B
+	AOBJN D,CANON2
+	MOVEI CHAR,0
+	IDPB CHAR,B
+
+;;; Now make up a LOCAL item.
+
+	MOVE B,[440700,,NEWLCL]	   ;Bp to string for LOCAL data.
+	MOVEI D,LSRTNS"I$LOCL	   ;Get LOCAL item numer.
+	ADDI D,1		   ;Convert to slot number.
+	MOVE BP,ITEMS(D)	   ;Bp to LOCAL slot.
+	HRLI BP,440700
+	CALL CPYSTR		   ;Copy into LOCAL field.
+
+;;; Now make up an ALTER item.
+
+	MOVE B,[440700,,NEWALT]	   ;Bp to string for ALTER data.
+	MOVEI D,LSRTNS"I$ALTR	   ;Get ALTER item numer.
+	ADDI D,1		   ;Convert to slot number.
+	MOVE BP,ITEMS(D)	   ;Bp to ALTER slot.
+	HRLI BP,440700
+	CALL CPYSTR		   ;Copy into ALTER field.
+
+CANON7:	RET			   ;All done with slots conversion.
+
+
+
+
+SUBTTL	Find database entry
+
+;;; Another crufty but working routine from the old source code.
+;;; Rewrite it next pass.
+
+;;; Find the start of the entry for the asciz UNAME specified in
+;;; registers A and B.  If the entry does not exist, return the address
+;;; of the entry to insert it before. Core address goes into WHERE. 
+;;; Skip return if the entry is found.
+
+LOOKUP:	PUSHAE P,[A,B,C,D,E,I]
+	MOVEI E,A-1		   ;Convert UNAME to search for to SIXBIT in D.
+	PUSHJ P,FIND76
+	MOVE B,D		   ;and keep it in B.
+	HRRZI E,DATA		   ;E gets address of 1st user's entry.
+;Now linearly search for the start of an entry, and compare Unames.
+;This code assumes the Uname is the first item in an entry.
+FIND1:	HLRZ C,(E)		   ;Get word count of next user.
+	JUMPE C,FINDL		   ;0 => EOF => user not found
+	PUSHJ P,FIND76
+	CAMLE B,D
+	 JRST [	ADD E,C
+		JRST FIND1 ]
+	CAME B,D
+	 JRST FINDL		   ;got past where it should be => doesn't exist
+	AOS -6(P)		   ;Found it => take success return
+FINDL:	HRRZI D,(E)
+	MOVEM D,WHERE
+	POPAE P,[I,E,D,C,B,A]	   ;Pop off.
+	RET			   ;Return.
+
+;Convert aligned ASCIZ string that E points TO THE WORD BEFORE to SIXBIT in D.
+;Actually, we complement the sign bit of the returned sixbit word
+;so that they compare in the same order as ascii strings.
+;This routine must not use A or B since the arg string can be there.
+FIND76:	PUSH P,I		;Extract uname and convert to sixbit
+	PUSH P,C
+	PUSH P,E
+	MOVEI D,0		;Accumulate sixbit in D
+	HRLI E,010700		;using byte pointer in E to load
+	MOVE I,[440600,,D]	;and byte pointer in B to store
+FIND77:	ILDB C,E
+	JUMPE C,FIND78
+	CAIGE C,140
+	 SUBI C,40
+	TLNE I,770000
+	 IDPB C,I
+	JRST FIND77
+
+FIND78:	POP P,E
+	POP P,C
+	POP P,I
+	TLC D,(SETZ)
+	POPJ P,
+
+
+
+
+SUBTTL	Delete entry.
+
+;;; Delete the entry whose address is in D from the core database.
+;;; The entries after the victim are BLTd up over him.
+
+DELETE:	PUSHAE P,[A,B,C]
+	TLO F,%MUNG
+	HLRZ A,(D)		   ;A GETS LENGTH OF ENTRY IN WORDS.
+	MOVN B,A
+	ADDB B,LENGTH		   ;FILE IS SHRINKING BY THAT MUCH.
+	ADD A,D
+	HRL D,A
+	HRRZ A,D
+	CAIE A,DATA-1(B)	   ;DON'T DO THE BLT IF 0 WORDS ARE TO BE MOVED.
+	 BLT D,DATA-1(B)	   ;MOVE FOLLOWING STUFF DOWN.
+	POPAE P,[C,B,A]
+	JRST POPJ1
+
+
+
+SUBTTL	Insert entry
+
+;;; Insert the entry described in the regular slots into the core database.  
+;;; Address to insert at (where already deleted from) is in RH(D).
+
+INSERT:	PUSHAE P,[A,B,C,D,E,BP]
+	TLO F,%MUNG
+	CALL COMPAC		   ;Compactify the entry.
+	PUSH P,A		   ;Save length. BP now points at end.
+	MOVE B,LENGTH
+	ADDI B,DATA-1		   ;LAST WORD ADDR OF LSR1 FILE, NOW.
+	ADDB A,LENGTH
+	ADDI A,DATA-1		   ;LAST WORD ADDR, AFTER MOVING UP.
+	MOVEI C,2000(A)		   ;MAKE SURE WE HAVE CORE FOR THOSE WORDS.
+	LSH C,-10.
+	.CORE (C)
+	 JSR AUTPSY
+	HRLI B,-1		   ;MAKE C(A) WORDS OF SPACE IN THE LSR1
+	ANDI D,-1		   ;FILE, WHERE D POINTS
+				   ;BY MOVING UP THE STUFF ABOVE IT.
+	CALL SEQPGR		   ;TURN ON REVERSE PAGE-AHEAD
+	CAILE D,(B)		   ;SINCE MOVING DOWNWARD THRU MEMORY
+	 JRST INSER2
+INSER1:	POP B,(A)
+	CAIG D,(B)
+	 SOJA A,INSER1
+INSER2:	POP P,A			   ;GET BACK LENGTH OF NEW ENTRY
+	CALL SEQPGX
+	HRLOM A,(D)		   ;WRITE <LENGTH>,,-1 AS ITS 1ST WORD.
+	ADDI D,1
+	HRLI D,%UNAME		   ;AFTER THAT PUT THE COMPACTED NEW ENTRY.
+	SUBI BP,%UNAME
+	ADDI BP,(D)
+	BLT D,(BP)		   ;BLT entire entry in to place.
+	CALL SEQPGX		   ;TURN OFF SEQUENTIAL PAGING.
+	POPAE P,[BP,E,D,C,B,A]	   ;Restore stuff.
+	JRST POPJ1		   ;All done.
+
+
+;;; Compactify the Regular Slots items.
+;;; This way there is no padding, and items are seperated by ^@s.
+;;; Returns the actual word-length of the entry (+ header) in A,
+;;;  and leaves the updated Bp to the end of the item in BP.
+
+COMPAC:	PUSHAE P,[B,C]
+	MOVE A,[1-NITEMS,,1]	   ;AOBJN ponter to items.
+	MOVE BP,[440700,,%UNAME]   ;Bp to start of 
+COMPA1:	MOVE B,ITEMS(A)		   ;Get addr of next item.
+	HRLI B,440700		   ;Make Bp to read item from.
+COMPA2:	ILDB C,B		   ;Get char from item.
+	HRRZ X,A		   ;Special kludge for UNAME slot.
+	CAIN X,1.		   ;Make damn sure it is uppercased.
+	 JRST [	UPPER C		   ;(SUNAME slot shouldn't matter.)
+		JRST .+1 ]
+	IDPB C,BP		   ;Stuff it.
+	JUMPN C,COMPA2		   ;Stop after the ^@ is inserted.
+	AOBJN A,COMPA1		   ;Go get next item.
+	CAIA
+COMPA3:	 IDPB C,BP		   ;Pad to word boundary.
+	TLNE BP,760000
+	 JRST COMPA3
+
+	HRRZ A,BP		   ;End of compacted entry.
+	SUBI A,%UNAME-1		   ;Find how many words.
+	ADDI A,1		   ;Also count the header word.
+	POPAE P,[C,B]
+	RET
+
+SUBTTL	Check database format
+
+;;; Verify that all the entries' lengths are reasonable.
+
+CHECK:	PUSHAE P,[A,B,C,D]
+	MOVEI A,DATA		   ;Get address of database start.
+	CALL SEQPAG		   ;Turn on page-ahead.
+CHECK1:	HRRZ B,(A)		   ;Get the header check halfword.
+	HLRZ D,(A)		   ;Get the entry length.
+	CAIE B,-1		   ;Make sure it looks correct.
+	 ERROR "Illegal header in database entry."
+	JUMPE D,CHECK2
+	ADD A,D			   ;Compute start of next entry.
+	JRST CHECK1		   ;Go check it.
+CHECK2:	MOVEI A,DATA		   ;Find address of last word.
+	ADD A,LENGTH		   ;(LENGTH points 1 past it.)
+	SETZM (A)
+	SUBI A,1
+	HRRZ B,(A)		   ;Get terminating header word.
+	HLRZ C,(A)		   ;Get terminating header's length.
+	SKIPN C
+	 CAIE B,-1		   ;Are we looking at it?
+	  ERROR "LENGTH screwed up - last header not found."
+
+;;; Clear out any random low bits set where they shouldn't be.
+
+CHECK3:	MOVEI I,DATA		   ;Get address of first entry.
+	CALL SEQPAG		   ;Turn on page ahead.
+	MOVEI B,1
+CHECK4:	HRRZ A,(I)		   ;Get entry header.
+	CAIE A,-1		   ;Make sure it looks like one.
+	 ERROR "Illegal entry header found in CHECK3. "
+	HLRZ A,(I)		   ;Get entry length.
+	JUMPE A,CHECK9		   ; Last entry has zero length.
+	ADD A,I			   ;Compute addr of next entry.
+CHECK5:	AOS I			   ;Clear the low bit in each entry word.
+	CAMN A,I		   ;Count up data words 
+	 JRST [	MOVE I,A	   ; until next entry header.
+		JRST CHECK4 ]
+	ANDCAM B,(I)		   ;Clearing low bits as we go.
+	JRST CHECK5
+
+CHECK9:	CALL SEQPGX		   ;Turn off page-ahead.
+	POPAE P,[D,C,B,A]
+	JRST POPJ1
+
+
+
+SUBTTL	Create tables
+
+;;; This routine and its subrs unmodified from old version.
+;;; (ie, they need rewriting..)
+
+MAKTAB:	PUSHAE P,[A,B,C,D,E,BP,I,J,K,L,R]
+	CALL LSRIDX		   ;Create Tables,
+	POPAE P,[R,L,K,J,I,BP,E,D,C,B,A]
+	JRST POPJ1
+
+;FIRST STEP IS TO MAKE THE UNAME INDEX AND VERIFY THAT EVERYTHING HAS BEEN SORTED.
+;ALSO, WE COLLECT THE LAST NAMES AND SET UP AN UNSORTED LAST NAME TABLE.
+
+LSRIDX:	MOVEI I,DATA		;-> ENTRY
+	CALL SEQPAG
+	SETZM DTALST
+	SETZM NUNMS
+	TLO F,%MPVOK		   ;Say it's OK to create core for tables.
+	MOVSI A,400000
+	MOVEM A,LASUNM
+	MOVEI A,LNMSTR
+	MOVEM A,LNMPTR
+LSRID0:	HLRZ A,(I)		;SEE IF EOF
+	JUMPE A,LSRID3		;YUP.
+	MOVEI R,-DATA(I)	;SAVE RELATIVE ADDRESS
+	MOVE J,I
+	EXCH J,DTALST		;GET ADDRESS OF ENTRY BEFORE THIS ONE
+	XOR J,I			;MAKE J ZERO IF THIS IS ON SAME PAGE
+	ANDI J,-2000
+	HRLI I,010700		;SET UP TO EXTRACT UNAME
+	MOVEI E,0
+	MOVE D,[440600,,E]
+GUNM1:	ILDB A,I
+	JUMPE A,GUNM2
+	CAIGE A,140
+	 SUBI A,40
+	TLNE D,770000
+	 IDPB A,D
+	JRST GUNM1
+
+GUNM2:	MOVE A,LASUNM
+	TLC E,(SETZ)		;CHANGE SIGN BIT SO IT SORTS CORRECTLY
+	CAMGE E,A
+	 JSR AUTPSY
+	MOVEM E,LASUNM
+	JUMPE J,GLNM		;JUMP IF SAME PAGE
+	AOS A,NUNMS		;OTHERWISE, STORE ANOTHER INDEX ENTRY
+	MOVEM E,UNMIDX-1(A)
+GLNM:	MOVE D,LNMPTR		;SET UP TO STORE LAST NAME
+	HRLI D,440700
+GLNM1:	ILDB A,I
+	CAIE A,","
+	 CAIG A,40
+	  JRST GLNM2		;LAST NAME ENDS WITH COMMA, SPACE, NULL, OR CONTROL
+	CAIL A,"a"
+	 CAILE A,"z"
+	  CAIA
+	   SUBI A,40		;UPPER CASE IFY
+	IDPB A,D
+	JRST GLNM1
+
+GLNM2:	MOVEI A,0		;END ASCIZ STRING
+	IDPB A,D
+	TLNE D,760000		;PAD OUT TO WORD BOUNDARY
+	 JRST GLNM2
+	SKIPN @LNMPTR		;IGNORE NULL LAST NAMES
+	 JRST GLNM3
+	MOVEI D,1(D)		;NEW VALUE OF LNMPTR
+	EXCH D,LNMPTR
+	SUBI D,LNMSTR		;MAKE RELATIVE ADDRESS FOR LNM TABLE
+	AOS A,NLNMS
+	HRLM D,LNMIDX-1(A)
+	HRRM R,LNMIDX-1(A)
+GLNM3:	MOVEI I,DATA(R)	;GET BACK BEGINNING OF ENTRY
+	HLRZ A,(I)		;GET LENGTH
+	ADD I,A			;ADVANCE TO NEXT ENTRY
+	JRST LSRID0		;LOOP
+
+;ALL DONE.  NOW WHAT WE HAVE TO DO IS SET UP HDR,
+; SORT THE LNM TABLE, AND DE-RELATIVIZE THE VARIOUS POINTERS.
+LSRID3:	CALL SEQPGX		;NO LONGER ARE WE SCANNING THE DATA.
+	TLZ F,%MPVOK		   ;Done creating tables.
+
+	MOVEI A,LSRVER		   ;Store LSR1 versiob format.
+	MOVEM A,HDR+LSRTNS"HDRVER
+
+	MOVE A,[SIXBIT/LSR1!!/]	   ;Store compilation timestamps.
+	MOVEM A,HDR+LSRTNS"HDRSID
+	.RDATE A,
+	MOVEM A,HDR+LSRTNS"HDRDAT
+	.RTIME A,
+	MOVEM A,HDR+LSRTNS"HDRTIM
+
+	MOVEI A,LSRTNS"HDRLEN	   ;After the header, comes UNAME table.
+	MOVEM A,HDR+LSRTNS"HDRUNM
+
+	MOVE A,NUNMS		   ;After the UNAME table
+	ADDI A,LSRTNS"HDRLEN+1	   ;comes the LASTNAME table.
+
+	MOVEM A,LNMREL		   ;Compute relocation of LASTNAME strings.
+	MOVEM A,HDR+LSRTNS"HDRLNM
+	ADD A,NLNMS
+	ADDI A,1
+	MOVEM A,STRREL
+
+	ADD A,LNMPTR		   ;COMPUTE RELOCATION OF HSNAME TABLE
+	SUBI A,LNMSTR
+	MOVEM A,HDR+LSRTNS"HDRHSN
+
+	ADD A,HFILEN		   ; COMPUTE RELOCATION OF DATA AREA
+	MOVE B,A
+	ADDI A,1777		   ;MUST BE ON PAGE BOUNDARY
+	ANDI A,-2000
+	MOVEM A,DTAREL
+	MOVEM A,HDR+LSRTNS"HDRDTA
+	SUB A,B
+	MOVEM A,DTAPAD		   ;AMOUNT OF SPACE TO PAD TO PAGE BOUNDARY
+	CALL LNMSRT
+
+;RELOCATE THE ENTRY PTRS AND STRING PTRS IN LNM TABLE
+	MOVN B,NLNMS
+	HRLZS B
+REL1:	HRRZ A,LNMIDX(B)
+	ADD A,DTAREL
+	HRRM A,LNMIDX(B)
+	HLRZ A,LNMIDX(B)
+	ADD A,STRREL
+	HRLM A,LNMIDX(B)
+	AOBJN B,REL1
+	RET
+
+
+;SUBROUTINE TO SORT THE LNM TABLE
+;FOR DOCUMENTATION SEE THE LISP-MACHINE QUICKSORT ROUTINE
+;LH OF EACH ENTRY IS A RELATIVE ADDRESS INTO LNMSTR.
+;USES STRCMP.
+LNMSRT:	MOVEI L,0
+	MOVE R,NLNMS
+	SUBI R,1		;INDICES ARE INCLUSIVE
+;RECURSES TO HERE
+LNMSR0:	CAMG R,L		;SKIP IF MORE THAN ONE LONG
+	 POPJ P,		;ALREADY SORTED OR L>R (WHICH CAN HAPPEN!)
+	MOVE D,R		;RANDOMLY CHOOSE A POINT HALFWAY BETWEEN
+	SUB D,L
+	LSH D,-1
+	ADD D,L
+;DO
+	MOVE K,LNMIDX(D)	;K IS OLD D'TH (NEW E'TH) ELEMENT
+	MOVE A,LNMIDX(L)	;STORE L'TH INTO D'TH
+	MOVEM A,LNMIDX(D)
+	MOVE I,L
+	MOVE J,R
+LNMSR1:	;DECREASE J UNTIL K NOT LT A[J]
+	CAME J,I
+	 JRST LNMSR2
+	MOVEM K,LNMIDX(I)
+	MOVE E,I
+	JRST LNMSRX
+
+LNMSR2:	HLRZ B,K
+	HLRZ C,LNMIDX(J)
+	CALL STRCMP
+	 JRST LNMSR3
+	 SOJA J,LNMSR1		;K<A[J]
+LNMSR3:	MOVE A,LNMIDX(J)
+	MOVEM A,LNMIDX(I)
+	ADDI I,1
+LNMSR4:	;INCREASE I UNTIL K NOT GT A[I]
+	CAME I,J
+	 JRST LNMSR5
+	MOVEM K,LNMIDX(J)
+	MOVE E,J
+	JRST LNMSRX
+
+LNMSR5:	HLRZ B,LNMIDX(I)
+	HLRZ C,K
+	CALL STRCMP
+	 JRST LNMSR6
+	 AOJA I,LNMSR4		;A[I]<K
+LNMSR6:	MOVE A,LNMIDX(I)
+	MOVEM A,LNMIDX(J)
+	SOJA J,LNMSR1
+
+LNMSRX:	PUSH P,R
+	PUSH P,E
+	HRREI R,-1(E)
+	CALL LNMSR0		;RECURSIVELY SORT THE LOW ELEMENTS
+	POP P,E
+	POP P,R
+	MOVEI L,1(E)		;RECURSIVELY SORT THE HIGH ELEMENTS
+	JRST LNMSR0
+
+
+;;; B and C point to the two upper-case strings,
+;;; this routine will relocate by LNMSTR.  The LH doesn't need to be set up.
+;;; Clobbers only B and C
+;;; Skip twice if equal, once if B<C, no skip if B>C
+;;; Does assume that both strings are nulled out to word boundaries.
+
+STRCMP:	PUSHAE P,[D,E]
+	ADDI B,LNMSTR
+	ADDI C,LNMSTR
+STRCM1:	MOVE D,(B)
+	LSH D,-1
+	MOVE E,(C)
+	LSH E,-1
+	CAMLE D,E
+	 JRST STRCM3		   ;B>C
+	CAME D,E
+	 JRST STRCM2		   ;B<C
+	TRNN E,177
+	 JRST STRCM4		   ;Compared all, they are equal
+	ADDI B,1
+	AOJA C,STRCM1		   ;Equal so far, compare more
+STRCM4:	AOS -2(P)		   ;Reached end, B=C
+STRCM2: AOS -2(P)
+STRCM3:	POPAE P,[E,D]
+	RET
+
+
+
+
+SUBTTL	Write out updated database
+
+WRITE:	PUSHAE P,[A,B,BP]
+	MOVEI A,LSR2
+	SYSCAL OPEN,[%CLBIT,,.UIO\40 ? %CLIMM,,DSKO
+		     0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 JSR AUTPSY
+
+;;; Write out the tables.
+
+	MOVE BP,[444400,,HDR]	   ;Fullword Bp to database header.
+	MOVE B,LNMREL		   ;Size of HDR and UNM tables.
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+
+	MOVE BP,[444400,,NLNMS]	   ;Fullword Bp to the LastNames tables.
+	MOVE B,NLNMS
+	AOS B
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+
+	MOVE BP,[444400,,LNMSTR]   ;Fullword Bp to the LastNames strings.
+	MOVE B,LNMPTR
+	SUBI B,LNMSTR
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+
+	MOVE BP,[444400,,HBUF]	   ;Fullword Bp to the HSNAME table.
+	MOVE B,HFILEN
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+
+;;; Pad up to the Data area.
+
+	MOVE BP,[444400,,ZERO]	   ;Pad to page boundry.
+	MOVE B,DTAPAD
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+	SYSCAL RFPNTR,[%CLIMM,,DSKO ? %CLOUT,,A]   ;Check length.
+	 JSR AUTPSY
+	TRNE A,1777		   ;If not really on a page boundry
+	 JRST WRITE9		   ;  failure.
+	CAME A,DTAREL		   ;If relocation incorrect
+	 JRST WRITE9		   ;  failure.
+
+;;; Write out the Data area.
+
+	CALL SEQPAG		   ;Turn on page ahead.
+	MOVE BP,[444400,,DATA]	   ;Fullword Bp to the data area.
+	MOVE B,LENGTH
+	SYSCAL SIOT,[%CLIMM,,DSKO ? BP ? B]
+	 JSR AUTPSY
+	.CLOSE DSKO,		   ;Close file.
+	CALL SEQPGX		   ;Turn off page ahead.
+
+WRITE9:	AOS -3(P)		   ;Success return.
+	POPAE P,[BP,B,A]	   ;Restore args
+	RET
+
+
+
+SUBTTL	Install Database	
+
+;;; Files are renamed:  NEW -> LIVE -> OLD -> OOLD -> Deleted
+
+INSTAL:	PUSHAE P,[A,B]
+
+	MOVEI A,OOLD
+	SYSCAL DELETE,[ 0(A) ? 1(A) ? 2(A) ? 3(A)]
+	 NOP
+
+	MOVEI A,OLD
+	MOVEI B,OOLD
+	SYSCAL RENAME,[ 0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(B) ? 2(B) ]
+	 NOP
+
+	MOVEI A,LSR1
+	MOVEI B,OLD
+	SYSCAL RENAME,[ 0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(B) ? 2(B) ]
+	 NOP
+
+	MOVEI A,LSR2
+	MOVEI B,LSR1
+	SYSCAL RENAME,[ 0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(B) ? 2(B) ]
+	 NOP
+
+	POPAE P,[B,A]
+	JRST POPJ1
+
+
+
+SUBTTL	Warn Luser of truncated entry
+
+WARNER:	PUSHAE P,[A,B,C]
+	SYSCAL OPEN,[%CLBIT,,.UAO ? %CLIMM,,DSKO
+			[SIXBIT /DSK/]
+			[SIXBIT /_INQUP/]
+			[SIXBIT /OUTPUT/]
+			[SIXBIT /.MAIL./] ]
+	 JRST WARNE9		   ;  If directory full or something, just punt.
+	MOVEI X,DSKO		   ;Select output channel.
+	MOVEI BP,[ASCIZ "FROM-JOB:INQUPD
+AUTHOR:INQUPD
+RCPT:(UPDATE-INQUIR-LOSSAGE (R-OPTION CC))
+SUBJECT: Problem updating "]
+	CALL TYPSTR
+	MOVEI BP,%SUNAM
+	CALL TYPSTR
+	MOVEI BP,[ASCIZ "'s INQUIR entry
+"]
+	CALL TYPSTR
+	MOVE A,TOOBIG		   ;Get the offending slot number.
+	MOVE B,ITEMN(A)		   ;Get the name of the slot.
+	CAME B,[ASCII "NETADR"]	   ;Is his network address losing?
+	 JRST WARNE3		   ; No, so we can barf at him.
+	MOVEI BP,[ASCIZ "TEXT;-1
+
+(User's NETADR is losing, so I am sending this note here.)
+
+  -- INQUPD
+
+"]
+	CALL TYPSTR
+	JRST WARNE7
+
+WARNE3:	MOVEI BP,[ASCIZ "RCPT:("]
+	CALL TYPSTR
+	MOVEI BP,%SUNAME	   ;Don't try to parse NETADR.
+	CALL TYPSTR		   ;COMSAT will indirect via it.
+	MOVEI BP,[ASCIZ ")
+"]
+	CALL TYPSTR
+	MOVEI BP,[ASCIZ "TEXT;-1
+
+Hello,
+
+I am the INQUIR update system daemon for the ITS machines.
+Some trouble was encountered in processing the latest changes to
+your INQUIR entry here.  One or more of the fields in your entry
+was too long, and has been truncated.  I suggest that you check
+your INQUIR entry on MIT-MC using the WHOIS command.  You may want
+to run INQUIR again to make all your information fit.
+
+Yours Truly,
+  INQUPD
+
+
+"]
+	CALL TYPSTR
+WARNE7:	SYSCAL RENMWO,[%CLIMM,,DSKO ? [SIXBIT /MAIL/] ? [SIXBIT />/] ]
+	 JSR AUTPSY
+	.CLOSE DSKO,
+WARNE9:	POPAE P,[C,B,A]
+	RET
+
+
+
+
+SUBTTL	Little utility routines
+
+;;; Type out ASCIZ string from BP onto (unit) channel in X.
+
+TYPSTR:	HRLI BP,440700
+TYPST1:	ILDB CHAR,BP
+	JUMPE CHAR,CPOPJ
+	SYSCAL IOT,[X ? CHAR]
+	 JSR AUTPSY
+	JRST TYPST1
+
+
+
+;;; Copy ASCIZ string from Bp in B down the Bp in BP.
+;;; Copies the terminating ^@ and always returns.
+
+CPYSTR:	ILDB CHAR,B
+	IDPB CHAR,BP
+	JUMPE CHAR,CPOPJ
+	JRST CPYSTR
+
+
+
+;;; Turn on sequential page ahead for LSR1 data in core.
+
+SEQPAG:	.SUSET [.SPAGAHD,,[2,,-2]] ;For forward scan.
+	JRST SEQPG1
+SEQPGR:	.SUSET [.SPAGAHD,,[-2,,2]] ;For backward scan.
+SEQPG1:	PUSH P,E
+	MOVE E,LENGTH
+	ADDI E,DATA+2000
+	LSH E,-10.
+	HRLI E,DATA/2000
+	.SUSET [.SPAGRAN,,E]
+	POP P,E
+	POPJ P,
+
+;;;Turn off sequential paging.
+
+SEQPGX:	.SUSET [.SPAGAHD,,[0]]
+	.SUSET [.SPAGRAN,,[0]]
+	POPJ P,
+
+
+CONSTANTS
+VARIABLES
+
+
+SUBTTL	Storage
+
+
+;;; AUTPSY cruft stored here.
+
+LOSEAC:	BLOCK 20
+LOSJPC:	0
+LOSPCL:	0
+LOSBCH:	0
+LOSSTS:	0
+UUOJPC:	0
+
+PDLLEN==200
+PDL:	BLOCK PDLLEN	;The stack.
+
+DANGER:	-1		;-1 if Copy-munging.
+
+DEBUG:	-1		;-1 if debugging.
+
+JUNK:	0		;Random sink.
+
+WHERE:	0		;Address of entry found by LOOKUP.
+
+COUNT:	0		;Count of updates done.
+
+GOTUNM:	0		;-1 if have read UNAME from update request file.
+
+INHEDR:	0		;-1 if inside header in update request file.
+
+NEWINQ:	0		;-1 if new style (gz/sra/romkey) request file.
+
+LENGTH:	0		;Length of LSR1 Data Area we mapped.
+
+HFILEN:	0		;Length of the HSNAME file we slurped.
+
+SAVEBP:	0		;Saved Byte pointer into update request file.
+
+TOOBIG:	0		;Slot number of item which was truncated.
+
+;;; These are for the new LOCAL slots when COPYing.
+
+NEWLCL:	ASCIZ /FILDI GROUP RELAT/
+NEWALT:	ASCIZ /INQUIR 830512-000000/
+NEWMAC:	ASCIZ /MC/
+	ASCIZ /ML/
+	ASCIZ /DM/
+
+
+;;; Update request file buffer.
+
+RQPGS==20.
+RQLEN==2000*RQPGS
+REQBUF:	BLOCK RQLEN
+	-1		;Force core to exist
+
+
+
+SUBTTL	Item Slot Definitions
+
+;;; Due to dirty evolution, this is all somewhat of a crock.
+;;;
+;;; There are two buffers (two slots) for each of the item strings.
+;;; The "Regular" slots are are used to construct a LSR1 entry.  
+;;; The "Alternate" slots are filled in by INATM (GETUPD) and for
+;;; frobbing around when we need two copies (for example, when we
+;;; merge two versions of the data.)
+;;;
+;;;
+;;; SLOT is a macro which defines the "Regular" item slots (at ITEMBG)
+;;; and the "Alternate" slots (at ATEMBG), sets up the length of each
+;;; item in ITEML, and counts up ICOUNT and ISIZE.
+;;;
+;;;  *** CAVEAT ****
+;;; Crock #1: SLOT must be called with items in same order as ITMIRP uses.
+;;; Crock #2: SUNAM and UNAME must be first, and must be 2 words each.
+
+
+ITEMBG=<.+1777>&-2000		   ;This page for Regular slots.
+ATEMBG=ITEMBG+2000		   ;Following page for Alternate slots.
+ITEML=ATEMBG+2000		   ;This page for table of lengths.
+.=ITEML+2000			   ;Hop to next page.
+
+ICOUNT==0	;Count of items defined.
+ISIZE==0	;Length of a LSR1 entry.
+IPTR==0		;Pointer into each slot buffer.
+
+DEFINE	SLOT NAME,LENGTH
+	%!NAME=ITEMBG+IPTR
+	$!NAME=ATEMBG+IPTR
+	LOC ITEML+ICOUNT
+		LENGTH
+	ISIZE==ISIZE+LENGTH
+	IPTR==IPTR+LENGTH
+ICOUNT==ICOUNT+1
+TERMIN
+
+
+;;; Now build the slot buffers.
+
+SLOT SUNAM,2			   ;Entry to be updated.
+SLOT UNAME,2			   ;Uname.
+SLOT NAME,20			   ;Full Name.
+SLOT NICK,10			   ;Nickname.
+SLOT LOCAL,10			   ;Local Inquire Items.
+SLOT MITAD,40			   ;MIT Address.
+SLOT MITTE,20			   ;MIT Telephone Number.
+SLOT HOMAD,40			   ;Home Address.
+SLOT HOMTE,20			   ;Home Telephone Number.
+SLOT SUPER,40			   ;Supervisor.
+SLOT PROJE,40			   ;Project.
+SLOT FILDI,20			   ;File Dir Names.
+SLOT AUTHO,10			   ;Authorization
+SLOT GROUP,1			   ;Group Affiliation.
+SLOT RELAT,1			   ;Relation To Group.
+SLOT BIRTH,10			   ;Birthday.
+SLOT REMAR,200			   ;Remarks.
+SLOT NETAD,20			   ;Network Address.
+SLOT ALTER,10			   ;User &Time Of Last Alteration.
+SLOT MACHI,40			   ;Suname/Machines To Be Updated.
+
+
+;;; Define addrs of the end of each set of slots.
+
+ITEMND=ITEMBG+IPTR+1
+ATEMND=ATEMBG+IPTR+1
+
+;;; Macros for pointing to Regular items.
+;;; ITEMS+N points to n'th item. ITEMS+N+1 points to end of n'th item.
+;;; ITEMN+N has name of n'th item, as 5 chars of ascii.
+;;; ATEMS and ATEMN are also defined (for Alternate slots.)
+
+ITEMS:	LSRTNS"ITMIRP [%!ITEM]
+NITEMS==.-ITEMS
+	ITEMND
+
+ITEMN:	LSRTNS"ITMIRP [.1STWD ASCII/ITEM/]
+
+
+ATEMS:	LSRTNS"ITMIRP [$!ITEM]
+NAITEM==.-ATEMS
+	ATEMND
+
+ATEMN:	LSRTNS"ITMIRP [.1STWD ASCII/ITEM/]
+
+;;; Disposition table for alternate slots, 1 word/item.  When
+;;; processing an update-request, a -1 means the item appeared while
+;;; a 0 means it was not mentioned (should be defaulted)
+
+ATMUNG:	BLOCK NAITEM
+
+
+
+SUBTTL	LSR1 database storage
+
+;;; A block of words for the orignial LSR1 database header.
+
+HEADER:	BLOCK LSRTNS"HDRLEN
+
+;;; Variables used in creating the tables for the new LSR1 file.
+
+LNMPTR:	LNMSTR			   ;Next free location in last name strings.
+DTALST:	0			   ;Address of last data entry scanned.
+DTAREL:	0			   ;Relocation of data area.
+STRREL:	0			   ;Relocation of lnm strings.
+LNMREL:	0			   ;Relocation Of lnm index.
+DTAPAD:	0			   ;Number of words to pad to page boundary.
+
+;;; HDR through the filled part of UNMIDX are all
+;;; written into the new LSR1 file.
+
+HDR:	BLOCK LSRTNS"HDRLEN	   ;Fixed header area for new LSR1 file..
+NUNMS:	0			   ;Number of entries in UNAMES table.
+UNMIDX:	BLOCK 400		   ;UNAMES table.
+
+LASUNM:	SETZ			   ;LAST UNAME SEEN, TO CHECK SORTING
+
+CONSTANTS
+VARIABLES
+
+HBFLEN==2000		;Max length of HSNAME file buffer.
+HBUF:	BLOCK HBFLEN	;HSNAME file buffer.
+
+ZERO:	BLOCK 2000	;Zeros, for writing padding out.
+	-1		;Make sure that core exists.
+
+;;; The data pages containing the entries in the LSR1 database
+;;; will be mapped here.
+
+DATA==<.+1777>&-2000	;Place to read LSR1 file into.
+
+;;; Allow 142K for LSR1 file DATA area.
+NPAGES==400-<<50000.+5000.+1+1777>&-2000>/2000-DATA/2000
+.=DATA+NPAGES*2000
+
+;;; The pages for the new tables in the LSR1 database are created here.
+;;; If the core is not already available, an MPV handler creates it.
+
+MPVOKB::		;Beginning of legal MPV area.
+NLNMS:	0		;Number of entries in LastNames table.
+LNMIDX:	BLOCK 5000.	;LastNames table.
+LNMSTR:	BLOCK 50000.	;LastName Strings.
+MPVOKE:			;Ending of legal MPV area.
+
+
+
+;;; Local Modes :::
+;;; Comment Column:35 :::
+;;; End: :::
+
+END GO
+
+
+
+

@@ -585,6 +585,19 @@ respond "*" ":lisp inquir;inquir (dump)\r"
 respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
 respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
+respond "*" ":midas inquir;dirs bin_inquir;dmunch\r"
+expect ":KILL"
+
+respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
+expect ":KILL"
+
+respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
+
+respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
+expect ":KILL"
+
+respond "*" ":link sys1;ts lookup,inquir;ts lookup\r"
+
 # pword/panda
 respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
 respond "Is this to be a PANDA?" "yes\r"
