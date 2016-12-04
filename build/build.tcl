@@ -402,9 +402,6 @@ respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
 expect ":KILL"
 
-respond "*" ":print sys1;..new. (udir)\r"
-type ":vk\r"
-
 respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
 
 respond "*" ":link syseng;fsdefs 999999,system;fsdefs >\r"
