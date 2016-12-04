@@ -315,6 +315,9 @@ expect ":KILL"
 respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
 expect ":KILL"
 
+respond "*" ":midas sys1;ts nwatch_sysen1;nwatch\r"
+expect ":KILL"
+
 respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
