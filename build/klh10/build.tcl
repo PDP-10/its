@@ -48,6 +48,7 @@ proc initialize_comsat {} {
     respond "*" ":load .mail.;comsat launch\r"
     respond "*" "debug/-1\r"
     type "mfinit\033g"
+    respond "*" ":kill\r"
 }
 
 source ../build.tcl
