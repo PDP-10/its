@@ -118,6 +118,7 @@ from scratch.
    - RMTDEV, MLDEV for non-ITS hosts
    - IDLE, list idle users
    - SPELL, ESPELL spell checker
+   - CROCK, analog watch.
    - DCROCK, digital watch.
    - JOBS, list jobs by category
    - HSNDEV, HSNAME device

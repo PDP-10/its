@@ -345,6 +345,10 @@ respond "*" ":link channa; rakash pfthmg,dragon; rakash pfthmg\r"
 
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
+respond "*" ":midas sys1;ts crock_sysen1;crock\r"
+respond "System?" "ITS\r"
+expect ":KILL"
+
 respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
 respond "System?" "ITS\r"
 expect ":KILL"
