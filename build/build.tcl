@@ -667,6 +667,11 @@ respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
 respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
 
+# spell
+respond "*" ":midas sys1;ts spell_syseng;spell\r"
+expect ":KILL"
+respond "*" ":link sys1;ts espell,sys;ts spell\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

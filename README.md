@@ -117,6 +117,7 @@ from scratch.
    - ARCSAL, archive salvager
    - RMTDEV, MLDEV for non-ITS hosts
    - IDLE, list idle users
+   - SPELL, ESPELL spell checker
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
