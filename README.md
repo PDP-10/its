@@ -112,6 +112,7 @@ from scratch.
    - TIMOON, displays the time and phase of the moon
    - SYSMSG, displays system messages
    - METER, displays system metering information
+   - DIRED, directory editor (independent from EMACS DIRED)
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
