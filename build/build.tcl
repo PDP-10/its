@@ -662,10 +662,12 @@ expect ":KILL"
 
 # rmtdev
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
+
+# idle
+respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
 
 # ndskdmp tape
-
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
 respond "*" $emulator_escape

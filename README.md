@@ -116,6 +116,7 @@ from scratch.
    - HSNAME, displays user's HSNAME
    - ARCSAL, archive salvager
    - RMTDEV, MLDEV for non-ITS hosts
+   - IDLE, list idle users
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
