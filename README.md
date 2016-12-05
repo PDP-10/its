@@ -17,8 +17,8 @@ The goals are:
 - To provide an automated build from start to end.  No user
   invervention is necessary.
 
-- To check whether source code exists for all programs.  Actually, we
-  already found a few cases where they don't.
+- To check which programs have source code, and [which programs are missing
+  source code](https://github.com/PDP-10/its/issues/61).
 
 - To ensure that we know how to build all programs.  In many cases we
   can just invoke MIDAS, but some require the use of DDT.
