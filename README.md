@@ -115,6 +115,7 @@ from scratch.
    - DIRED, directory editor (independent from EMACS DIRED)
    - HSNAME, displays user's HSNAME
    - ARCSAL, archive salvager
+   - RMTDEV, MLDEV for non-ITS hosts
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.

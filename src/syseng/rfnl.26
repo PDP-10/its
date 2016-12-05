@@ -1,0 +1,636 @@
+
+.BEGIN RFNL	;-*-MIDAS-*-
+
+SUBTTL Routines for parsing and printing filenames
+
+;Basic conventions:
+
+;We assume that there are accumulators A, B, C, and D, not necessarily
+;consecutive, and that the stack is in P.
+;No routine clobbers ACs other than the
+;ones it is documented to clobber, and none touches even temporarily
+;any AC other than A, B, C, D and P.
+;All code generated is pure, except for a few .SCALAR definitions.
+;The main routines PFN, PFNCT and PFNMCH never skip.
+;The main routines RFN and MERGE skip if the filename block to
+;be filled in was big enough for the data to be put in it.
+;The main routine STKMRG skips if it was able to allocate the result string.
+
+;;; Filename blocks:
+
+;A filename block consists any number of two-word entries,
+;each of which holds a pair of byte pointers to the beginning and end
+;of one component of a filename string.
+;The last character in the component is one of ":", ";", " ", ^@, ^X or ^Y,
+;and it identifies the type of component.
+
+;;; Parsing and unparsing filenames:
+
+;This file contains two routines, RFN to read filenames and PFN to print.
+;The $$RFN and $$PFN assembly switches control them.
+;Both expect a b.p. for ILDB'ing or IDPB'ing the text, in D.
+;Both expect an AOBJN pointer to a filename block in B.
+
+;For RFN, the AOBJN pointer in B should point to the space
+;available for a filename block.  On return, B will be an AOBJN
+;pointer to the space actually used.  RFN skips unless data
+;was lost because the block was full.
+
+;The filename block constructed by RFN contains pointers into the
+;argument string, so that string must be kept intact until after the
+;filename block is no longer needed.  In particular, it does not work
+;to PFN the same filename block, or the result of merging it with another,
+;into the same space that the original string was in.
+
+;The RFN routine assumes that the user has defined the label RFNSPC
+;which says which characters are terminators or start switches.
+;RFNSPC should examine the character in A and skip if it should
+;either terminate the filename or start a switch.
+;If the character is "/" or "(" and $$SWITCH is 1, it will start
+;a switch; otherwise, it will terminate the filespec.
+;If RFNSPC does not skip, the character will neither terminate nor start a switch.
+;However, RFNSPC is not called for the characters ":", ";", " ", and ^Q.
+;For CR and ^@, it makes no difference whether RFNSPC skips.
+
+;PFN similarly assumes that there is a routine PFNSPC which will
+;skip for a character in A that needs a ^Q printed in front of it.
+;Normally, RFNSPC and PFNSPC can be the same routine.
+
+;If you want switches to be processed in filenames,
+;set $$SWITCH to 1 and define the label SWITCH as a routine to read a switch.
+;It will be called with the first character of the switch in A.
+;It can read more characters off D, or by calling RFN"RUC
+;If it skips, RFN assumes that the character in A should be reprocessed.
+;A slash is followed by a single switch, while parentheses enclose
+;any number of switches.  However, neither slash nor "(" will be
+;recognized unless RFNSPC skips for it.  This gives the caller
+;run-time control of whether switches are to be processed.
+
+;If $$MNAME is set, the user must define MNAME to point to
+;a word holding this machine's name in SIXBIT.
+
+;;; Merging defaults:
+
+;The MERGE routine takes two filename blocks (A and B) as input
+;and a third AOBJN pointer in C to space to store a filename block as output.
+;It copies the components of the first block, putting them in canonical order,
+;and defaulting missing components from the second block.
+;The results go in the third block.
+;On return, C is an AOBJN pointer to the part of the output block
+;which was actually filled with data,
+;and MERGE skips unless data was lost because the block was full.
+
+;Because the merged filename block contains pointers copied from the
+;two input filename blocks, the strings which those input filename blocks
+;were parsed from must be kept intact until the merged filename block
+;is passed to PFN.
+
+;^X and ^Y components in the first argument are replaced by the
+;default names from the second argument to which they refer.
+
+;The STKMRG routine is a high level interface which parses, merges
+;and makes a string all on one.  It takes two ASCIZ strings,
+;does RFN on each, does MERGE to the two filename blocks,
+;then does PFN on the result, storing into a dynamically allocated string
+;All temporary storage comes from the stack.
+
+;These symbols should be defined by the user to select parts of this file:
+IFNDEF $$RFN,$$RFN==0		;Include RFN, the routine for reading filenames.
+IFNDEF $$SWITCH,$$SWITCH==0	;Include routines for processing "/" and "(-)" switches.
+IFNDEF $$PFN,$$PFN==0		;Include PFN, the routine for printing filenames.
+IFNDEF $$MNAME,$$MNAME==0	;1 => assume MNAME is defined and holds this machine's name.
+IFNDEF $$MERGE,$$MERGE==0	;1 => provide MERGE routine to merge defaults.
+IFNDEF $$STKMRG,$$STKMRG==0	;1 => provide STKMRG routine.
+
+.AUXIL				;Don't mention all our internal symbols in crefs.
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ INCLUDED IN THIS ASSEMBLY.
+/
+
+DEFINE SYSCAL NAME,ARGS
+.CALL [SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+IFN $$RFN,[	;Routine for parsing a filename.
+
+;Given a BP in D pointing to a filename,
+;store in the filename block <- AOBJN ptr in B
+;pointers to the beginnings and ends of the components of the filename.
+
+;The block <- B contains two-word entries.
+;In each entry is placed a pair of BPs, pointing to the start
+;and end of one name (or device or directory) in the filename.
+
+;Since B contains only pointers to the originally supplied string,
+;you must not clobber the string itself until after you are through
+;with the data in the filename block.
+
+;Advances D through the string.
+;Sets B to an AOBJN pointer to the used portion of the table;
+;skips if the table was long enough.
+;Clobbers C and A.
+
+;If B's right half starts out as 0, then only the left half is incremented
+;and the table is not stored.  So call with B/ SETZ to compute how long
+;a table is required for a given string.
+rfn:	push p,b
+rfn0:	move c,d
+rfn1:	ildb a,d
+rfnunr:	caie a,";
+	 cain a,":		;Check for special pathname syntax chars
+	  jrst rfn2		;that always have these special meanings.
+	cain a,40
+	 jrst rfn2
+	caie a,^X
+	 cain a,^Y
+	  jrst rfn3
+	cain a,^Q
+	 jrst [	ildb a,d
+		jrst rfn4]
+	pushj p,rfnspc		;Otherwise, ask user whether char is special.
+	 jrst rfn4		;No skip => treat char as ordinary.
+ifn $$switch,[
+	cain a,"/		;If stopped on "/" or "(", call switch rtn.
+	 jrst rfnsl		;Read 1 switch.
+	cain a,"(
+	 jrst rfnpar		;Read many switches until ).
+];ifn $$switch
+	setz a,			;If any unrecognized char is "special" according to the user,
+	jrst rfn2		;it must be a terminator.
+
+rfn4:	cain a,^M		;CR and null character terminate, even if quoted.
+	 setz a,
+	jumpn a,rfn1
+rfn2:	push p,c		;Push this entry iff it contains more than one character.
+	ibp c
+	camn c,d
+	 jrst [	pop p,c
+		jrst rfn5]
+	pop p,c
+;Push this component, regardless of its length.
+rfn3:	trnn b,-1
+	 jrst [	add b,[2,,]	;But if B's rh is 0, just increment the lh; don't store.
+		jrst rfn5]
+	jumpge b,rfn6		;Don't actually store in table if past the end.
+	movem c,(b)
+	movem d,1(b)
+rfn6:	add b,[2,,2]
+rfn5:	jumpn a,rfn0		;If string not terminated, keep parsing.
+	camge b,[2,,]		;Else skip if we did not run out of space in the table.
+	 aos -1(p)
+;Adjust B to contain a pointer to the used portion of the filename block.
+	pop p,c			;Else pop original B into C.
+	sub b,c
+	trz b,-1		;LH(B) gets number of words pushed onto the filename block.
+	movns b
+	hrr b,c			;B gets AOBJN ptr to used portion.
+	popj p,
+
+IFN $$SWITCH,[	;Code for processing switches, when a "/" or "(" is seen.
+
+rfnpar:	pushj p,ruc	;Get next char.  Is it a ")"?
+rfnpa1:	cain a,")
+	 jrst rfn1	;Paren ends switches; gobble next character.
+	caie a,0
+	cain a,^M
+	 jrst rfnunr	;CR ends spec even in switch list; reread it.
+	pushj p,switch	;Try to gobble the switch.
+	 jrst rfnpar	;Char in A used up, get another.
+	jrst rfnpa1	;Char in A not part of switch; is it ")"?
+
+rfnsl:	pushj p,ruc
+	caie a,0
+	cain a,^M	;/<CR> ends spec; reread it.
+	 jrst rfnunr
+	pushj p,switch	;Otherwise, process it as switch.
+	 jrst rfnunr	;No skip => char in A was gobbled by switch.
+	jrst rfn1	;Skip => let next RSIXG gobble the char now in A.
+
+;Read a char into A off the bp in D and convert to upper case.
+ruc:	ildb a,d
+	cail a,140
+	 subi a,40
+	popj p,
+
+];IFN $$SWITCH
+
+];IFN $$RFN
+
+IFN $$PFN,[	;Routine to turn a filename block into a single string.
+
+;Given a filename block of two-word entries <- AOBJN ptr in B,
+;output a filename down the BP in D.
+;Clobbers A and C.  Counts B out through the filename block.
+
+;The filename components are printed in the order they appear.
+;If you want them permuted into standard order,
+;merge them with an empty block of defaults first with MERGE
+;(since the output from MERGE always has the components in standard order).
+pfn:	jumpge b,pfn2
+pfnmc2:	jumpge b,pfn2a
+	move c,(b)
+	pushj p,pfn1
+	add b,[2,,2]
+	jumpl b,pfnmc2
+pfn2a:	setz a,			;Replace the space at the end of the last
+	dpb a,d			;entry with a null;
+	ldb a,[300600,,d]	;then decrement the bp in D to point before the null.
+	ldb c,[360600,,d]
+	add c,a
+	dpb c,[360600,,d]
+	popj p,
+
+pfn2:	setz a,			;If filename block is empty,
+	move c,d		;store a null, but don't advance over it.
+	idpb a,c
+	popj p,
+
+;Copy one entry's string into the output string.
+pfn1:	camn c,1(b)		;Stop at end of entry.
+	 jrst [	cain a,40	;If the entry ended in other than space, put in a space.
+		 popj p,
+		movei a,40
+		idpb a,d
+		popj p,]
+	ildb a,c		;Fetch the next character.
+	cain a,0		;If it's a terminating null,
+	 movei a,40		;output a space instead.
+	pushj p,pfnspc		;Is it special in this program?
+	 jrst pfn3
+	push p,a		;If so, put a ^Q in front of it.
+	movei a,^Q
+	idpb a,d
+	pop p,a
+pfn3:	idpb a,d		;In any case, output the char itself.
+	caie a,^Q		;If it is a ^Q, don't check the following char
+	 jrst pfn1		;for being special or for being ^Q.
+	camn c,1(b)
+	 popj p,
+	ildb a,c
+	idpb a,d
+	movei a,1		;Don't leave space in A if it was quoted.
+	jrst pfn1
+
+;Return in D the number of characters required to hold a single string
+;made from the parsed block of two-word entries pointed to by B.
+;Clobbers A and C.
+
+;Use this to decide how long a block to allocate for a string to be
+;constructed with PFN.
+
+;Note that the value returned is the length of the contents of the ASCIZ
+;string that PFN will write.  It does not count the zero written
+;to terminate that string.
+pfnct:	setz d,
+	jumpge b,cpopj
+pfnct0:	jumpge b,[soja d,cpopj]
+	move c,(b)
+	pushj p,pfnct1
+	add b,[2,,2]
+	jrst pfnct0
+
+pfnct1:	camn c,1(b)		;Stop at end of entry, but count one
+	 jrst [	caie a,40	;for a following space if the entry didn't end in one.
+		 cain a,0
+		  aos d
+		popj p,]
+	ildb a,c		;Fetch the next character.
+	addi d,1		;Count it.
+	pushj p,pfnspc		;Is it special in this program?
+	 jrst pfnct3
+	addi d,1		;If so, count a ^Q for it.
+pfnct3:	caie a,^Q		;If it is a ^Q, don't check the following char
+	 jrst pfnct1		;for being special or for being ^Q.
+	camn c,1(b)
+	 popj p,
+	ibp c			;Skip that char, but leave ^Q in A.
+	aoja d,pfnct1		;DO count the char.
+
+;Like PFN, but if the first component in the filename block is "DSK:"
+;we output the machine name instead.
+pfnmch:	pushj p,pfnmc1		;IS the first component "DSK:"?
+	 jrst pfn		;No, just print normally.
+	push p,b
+IFN $$MNAME,move a,mname	;Yes, print the machine name instead
+.ELSE [	syscal sstatu,[repeat 6,[? %clout,,a]]
+	 .lose %lssys
+]
+	movei b,":		;with a colon after it
+	pushj p,sixstr
+	movei b,40		;and a space just as PFN would put after that.
+	idpb b,d
+	pop p,b
+	add b,[2,,2]		;Discard the component "DSK:" and
+	jrst pfnmc2		;process the remaining components.
+
+;Skip if the first component in the filename block in B is "DSK:".
+pfnmc1:	move c,(b)
+irpc char,,[DSK:]
+	ildb a,c
+	caie a,"char
+	 popj p,		;Return non-skip if a character doesn't match.
+termin
+	camn c,1(b)		;Skip only if the entry length is correct.
+	 aos (p)
+	popj p,
+
+;Output sixbit word in A as ASCII down BP in D
+;followed by terminator in B and a null character.  Clobbers C.
+sixstr:	push p,b
+	move b,[440600,,a]
+sixst1:	ildb c,b
+	addi c,40
+	idpb c,d
+	setz c,
+	dpb c,b
+	jumpn a,sixst1
+sixst2:	pop p,b
+	idpb b,d
+	push p,d
+	setz c,
+	idpb c,d
+	pop p,d
+	popj p,
+
+];IFN $$PFN
+
+IFN $$MERGE,[	;Routine to merge defaults from one filename block with another filename block.
+
+;Given in A and B two AOBJN pointers to filename blocks of input data,
+;and in C an AOBJN pointer to an output filename block,
+;merge the two input blocks writing the result in the output one.
+;The first argument's components take priority over the second argument's.
+
+;D should contain nonzero if a single name specified in the
+;first argument should override all names of the second argument.
+;This value is stored in MRGFN2 while MERGE is running.
+;If MRGFN2 is nonzero, then if the first argument contains only one NAME,
+;the second NAME (if any) from the second argument is used as well.
+;If MRGFN2 is zero, then if the first argument contains only one NAME,
+;only that NAME is used.
+.scalar mrgfn2
+
+;On return, C's lh is set to minus the number of words used.
+;We skip if the space provided was sufficient.
+merge:	push p,mrgfn2
+	movem d,mrgfn2
+	push p,c
+	movei d,":
+	pushj p,merge1
+	movei d,";
+	pushj p,merge1
+	movei d,40
+	push p,a
+	push p,b
+	pushj p,msrch
+	 jrst merge2
+	move a,(p)		;No NAME found in input 1 => copy all NAMEs from input 2.
+merge3:	move b,(p)
+	pushj p,mcopy
+mergex:	pop p,b
+	pop p,a
+mergx1:	pop p,d			;Pop original C into D.
+	caml c,[2,,]
+	 jrst [	move c,d
+		jrst mergx2]
+	sub c,d
+	andi c,-1		;C gets number of words pushed onto filename block now in D.
+	movns c
+	hrlzs c
+	hrr c,d			;C gets AOBJN ptr to used portion of filename block.
+	aos -1(p)
+mergx2:	move d,mrgfn2
+	pop p,mrgfn2
+cpopj:	popj p,
+
+merge2:	move b,(p)
+	pushj p,mcopnm		;One NAME found in input 1 => copy it to output.
+	add a,[2,,2]
+	pushj p,msrch		;Search for a second one.
+	 jrst merge3		;Found => copy all remaining NAMEs from input 1.
+	move a,(p)
+	skipe mrgfn2		;Not found: if want no default fn2, return with just this one.
+	 pushj p,mergln
+	jrst mergex
+
+;Search the filename block <- AOBJN ptr in A for an entry whose string
+;ends in the character in D.  Skip if NOT found.
+;Leave A pointing at the entry if it is found.
+;Clobbers B.
+;An entry ending in a null character is considered to end with a space.
+msrch:	jumpge a,popj1
+	move b,1(a)
+	ldb b,b
+	skipn b
+	 movei b,40
+	caie b,^X		;Finding either a ^X or a ^Y
+	 cain b,^Y		;counts as finding a name.
+	  movei b,40
+	cain b,(d)
+	 popj p,
+	add a,[2,,2]
+	jrst msrch
+
+popj1:	aos (p)
+	popj p,
+
+;Copy all the elements ending in the character in D
+;from the filename block <- AOBJN ptr in A if it contains any;
+;otherwise, copy all the ones from the filename block <- AOBJN ptr in B.
+;D should NOT contain a space.
+merge1:	push p,a
+	push p,b
+	pushj p,msrch
+	 jrst merge9
+	move a,(p)
+	pushj p,msrch
+merge9:	 pushj p,mcopy
+popbaj:	pop p,b
+	pop p,a
+	popj p,
+
+;Copy entries from the filename block <- AOBJN ptr in A to that in C.
+;Copy all those whose ending character matches that in D.
+;When copying NAMEs (D contains a space)
+;^X and ^Y entries are processed as well,
+;using the filename block <- AOBJN ptr in B.
+mcopy:	push p,b
+mcopy0:	jumpge c,popbj
+	jumpge a,popbj
+	move b,1(a)
+	ldb b,b
+	caie b,^X
+	 cain b,^Y
+	  caie d,40
+	   caia
+	    jrst mcopy3
+	skipn b
+	 movei b,40
+	came b,d
+	 jrst mcopy1
+mcopy3:	move b,(p)
+	pushj p,mcopnm
+mcopy1:	add a,[2,,2]
+	jrst mcopy0
+
+;Copy the filename component that A points to
+;into the filename block in C, assuming that B
+;contains the filename block to find defaults in (for ^X and ^Y).
+mcopnm:	push p,b
+	move b,1(a)
+	ldb b,b
+	caie b,^X
+	 cain b,^Y
+	  jrst mcopy2
+	jumpge c,mcopn1
+	move b,(a)
+	movem b,(c)
+	move b,1(a)
+	movem b,1(c)
+mcopn1:	add c,[2,,2]
+	jrst popbj
+
+;Copy a NAME which is really a ^X or ^Y.
+;Get, off the stack, the second arg block
+;and copy either its first NAME or its last one.
+mcopy2:	exch a,(p)
+	push p,a
+	pushj p,[cain b,^X
+		  jrst mergfn
+		 jrst mergln]
+	jrst popbaj
+
+;Copy the first NAME from the arg block in A into the output here.
+mergfn:	push p,b
+	push p,d
+	movei d,40
+	pushj p,msrch
+	 jrst mergf1
+	jrst popdbj
+
+;Copy the last NAME from the arg block in A into the output here.
+mergln:	push p,b
+	push p,d
+	movei d,40
+	pushj p,msrch		;Don't even consider the first name.  Find it now
+	 caia			;so we can start from after it.
+	  jrst popdbj
+	push p,[0]
+mergl1:	add a,[2,,2]
+	pushj p,msrch		;Keep searching, and remember the last place we found one.
+	 jrst [	movem a,(p)
+		jrst mergl1]
+	pop p,a
+mergf1:	jumpe a,popdbj
+	jumpge c,mergf2
+	move b,(a)		;Copy that last one into the output.
+	movem b,(c)
+	move b,1(a)
+	movem b,1(c)
+mergf2:	add c,[2,,2]
+popdbj:	pop p,d
+popbj:	pop p,b
+	popj p,
+
+];IFN $$MERGE
+
+IFN $$STKMRG,[
+
+;Parse and merge filenames using temprary storage on the stack.
+
+.scalar stkmp1,stkmp2,stkmp3	;Temporaries used by STKMRG.
+
+;Merge two filename strings to produce a new string,
+;which is stored into freshly allocated storage.
+;The user-provided STRALC routine is used to allocate that new string.
+;All other temporary space is allocated on the stack.
+
+;Call with byte pointers to the two strings in A and B.
+;A points to the specified string and B points to the defaults.
+;On return, A points to the newly allocated string's contents.
+;No accumulators except A, B, C and D are touched,
+;so the allocation routine can return additional information
+;or other sorts of pointers to the string
+;in any of the other accumulators.
+
+;You must supply a subroutine named STRALC which should
+;allocate a string of a size given in C, and return a byte pointer
+;to the string in A.  It should skip if successful,
+;and not skip if such a string cannot be allocated
+;(length is too great).
+
+;STKMRG skips if STRALC did.
+
+stkmrg:	push p,a
+	push p,b
+	move d,a
+	movsi b,(setz)		;How much space do we need for a filename block for the 1st arg?
+	pushj p,rfn
+	hrri b,1(p)
+	movem b,stkmp1		;Save an AOBJN ptr to table we are allocating.
+	hlre c,b
+	movns c			;C gets length required.
+	hrls c
+	move d,-1(p)
+	add p,c			;Mark space as in use.
+	pushj p,rfn		;Parse the 1st arg into the space allocated.
+	move a,stkmp1
+	move d,-1(a)
+	movsi b,(setz)
+	pushj p,rfn		;How much space do we need for a filename block for 2nd arg?
+	hrri b,1(p)
+	movem b,stkmp2		;Save an AOBJN ptr to table we are allocating.
+	hlre c,b
+	movns c			;C gets length required.
+	hrls c
+	add p,c			;Mark space as in use.
+	move a,stkmp1
+	move d,-1(a)		;Get back our 2nd arg and parse into that space.
+	pushj p,rfn
+	move a,stkmp1
+	move b,stkmp2		;Get the AOBJN ptrs to the two tables in the stack.
+	hlre d,a
+	hlre c,b
+	subi c,2
+	addb d,c		;Get (minus) sum of their lengths; allocate filename block
+	hrlzs c			;that long to hold the merged filenames.
+	hrri c,1(p)
+	movem c,stkmp3
+	movns d			;D gets length allocated for merged filename block,
+	hrls d			;in both halves.
+	add p,d			;Allocate the space.
+	pushj p,merge		;Now merge into that table.
+	movem c,stkmp3		;Save ptr to what was used.
+	move b,c
+	pushj p,pfnct		;Put length in D.
+	move c,d
+	pushj p,stralc		;Call user-supplied routine to allocate and put BP in A.
+	 jrst stkmr1
+	move b,stkmp3
+	push p,a
+	move d,a
+	pushj p,pfn		;Store the ultimate name into the user-supplied string.
+	pop p,a
+	move b,p		;Deallocate the temporary storage
+	sub b,stkmp1
+	hrls b
+	sub p,b
+	sub p,[3,,3]
+	aos (p)
+	popj p,
+
+;Return non-skipping.
+stkmr1:	move b,p		;Deallocate the temporary storage
+	sub b,stkmp1
+	hrls b
+	sub p,b
+	sub p,[3,,3]
+	popj p,
+
+] ;end $$STKMRG
+
+.end rfnl
