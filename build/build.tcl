@@ -652,6 +652,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts dired_sysen2;dired\r"
 expect ":KILL"
 
+# hsname
+respond "*" ":midas sys2;ts hsname_sysen1;hsname\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
