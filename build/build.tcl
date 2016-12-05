@@ -660,6 +660,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts arcsal_sysen1;arcsal\r"
 expect ":KILL"
 
+# rmtdev
+respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
