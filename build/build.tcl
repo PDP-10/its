@@ -648,6 +648,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts meter_syseng;meter\r"
 expect ":KILL"
 
+# dired
+respond "*" ":midas sys;ts dired_sysen2;dired\r"
+expect ":KILL"
+
 # ndskdmp tape
 
 respond "*" ":link kshack;good ram,.;ram ram\r"
