@@ -1,9 +1,17 @@
 EMULATOR ?= simh
 
-SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy gren bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk inquir acount gz
+# The directores listed in SRC, DOC, and BIN are put on the sources tape.
+SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas	\
+      _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy gren	\
+      bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk	\
+      inquir acount gz
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
+BIN = sysbin emacs _teco_ inquir
+
+# These directories are put on the minsys tape.
 MINSYS = _ sys sys3 device
 
+# These files are used to create bootable tape images.
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
 DSKDMP = bin/boot/dskdmp.rp06
@@ -28,7 +36,7 @@ out/sources.tape: $(ITSTAR)
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
-	cd bin; $(ITSTAR) -rf ../$@ sysbin emacs _teco_ inquir
+	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	mkdir -p out
