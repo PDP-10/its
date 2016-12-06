@@ -377,12 +377,8 @@ expect ":KILL"
 respond "*" ":link device;jobdev los,device;jobdev loss\r"
 
 respond "*" ":xfile build;dir xfile\r"
-
 respond "*" ":xfile build;mtboot xfile\r"
-expect ":KILL"
-
-respond "*" ":midas syshst;_syshst;hosts3\r"
-expect ":KILL"
+respond "*" ":xfile build;hosts3 xfile\r"
 
 respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
 
