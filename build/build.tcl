@@ -410,9 +410,7 @@ respond "*" ":xfile build;dqxdev xfile\r"
 respond "*" ":xfile build;comsat xfile\r"
 initialize_comsat
 
-respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
-
-respond "*" ":midas sys1;ts rmail_emacs1;rmaill\r"
+respond "*" ":xfile build;rmail xfile\r"
 expect ":KILL"
 
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
