@@ -396,9 +396,7 @@ respond "KLp==" "0\r"
 expect ":KILL"
 
 respond "*" ":xfile build;chtn xfile\r"
-
-respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
-expect ":KILL"
+respond "*" ":xfile build;ttloc xfile\r"
 
 respond "*" ":midas device;jobdev dp_sysen3;dpdev\r"
 expect ":KILL"
