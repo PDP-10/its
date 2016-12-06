@@ -387,11 +387,7 @@ respond "*" ":xfile build;supdup xfile\r"
 respond "*" ":xfile build;ftps xfile\r"
 respond "*" ":xfile build;ftpu xfile\r"
 respond "*" ":xfile build;name xfile\r"
-
-respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
-expect ":KILL"
-
-respond "*" ":link device;jobdev db,device;atsign mldev\r"
+respond "*" ":xfile build;mldev xfile\r"
 
 respond "*" ":midas device;atsign mlslv_sysen2;mlslv\r"
 expect ":KILL"
