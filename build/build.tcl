@@ -343,10 +343,7 @@ respond "*" ":xfile build;nwatch xfile\r"
 respond "*" ":xfile build;taraka xfile\r"
 respond "*" ":xfile build;dmpcpy xfile\r"
 respond "*" ":xfile build;modems xfile\r"
-
-respond "*" ":midas channa;rakash netime_sysen1; netime\r"
-expect ":KILL"
-respond "*" ":link channa;ts netime,channa;rakash netime\r"
+respond "*" ":xfile build;netime xfile\r"
 
 # sources dump tape now creates dragon directory and populates
 # with an initial dragon; dragon hoard file, which is required
