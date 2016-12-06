@@ -376,8 +376,7 @@ respond "*" ":midas device;jobdev loss_syseng;loss\r"
 expect ":KILL"
 respond "*" ":link device;jobdev los,device;jobdev loss\r"
 
-respond "*" ":midas sys1;ts dir_bawden;dir^k\r"
-expect ":KILL"
+respond "*" ":xfile build;dir xfile\r"
 
 respond "*" ":xfile build;mtboot xfile\r"
 expect ":KILL"
