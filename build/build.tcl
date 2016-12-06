@@ -208,6 +208,8 @@ respond "*" "dumpit\033g"
 sleep 2
 respond "TECPUR" "\r"
 respond "*" ":kill\r"
+respond "*" ":print sys3;..new. (udir)\r"
+type ":vk\r"
 respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
 
 respond "*" ":print sys2;..new. (udir)\r"
