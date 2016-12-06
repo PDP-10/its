@@ -2,7 +2,7 @@ EMULATOR ?= simh
 
 SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy gren bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk inquir acount gz
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
-MINSYS = _ sys sys3 device sysbin inquir
+MINSYS = _ sys sys3 device
 
 RAM = bin/boot/ram.262
 NSALV = bin/boot/salv.rp06
@@ -28,7 +28,7 @@ out/sources.tape: $(ITSTAR)
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
-	cd bin; $(ITSTAR) -rf ../$@ emacs _teco_
+	cd bin; $(ITSTAR) -rf ../$@ sysbin emacs _teco_ inquir
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	mkdir -p out
