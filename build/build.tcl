@@ -643,9 +643,7 @@ respond "*" ":link sys;ts listf,sys;ts print\r"
 respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
 expect ":KILL"
 
-# timoon
-respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
-expect ":KILL"
+respond "*" ":xfile build;timoon xfile\r"
 
 # ports
 respond "*" ":midas sys2;ts ports_sysen2;ports\r"
