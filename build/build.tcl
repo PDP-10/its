@@ -739,9 +739,7 @@ expect ":KILL"
 respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
 respond "*" ":link sys1;ts times,sysbin;times bin\r"
 
-# idle
-respond "*" ":midas sys1;ts idle_gren;idle\r"
-expect ":KILL"
+respond "*" ":xfile build;idle xfile\r"
 
 # spell
 respond "*" ":midas sys1;ts spell_syseng;spell\r"
