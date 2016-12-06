@@ -65,65 +65,68 @@ from scratch.
 
 5. Remaining programs are rebuilt:
 
-   - TECO, editor.
-   - EMACS, binaries only.
-   - DUMP, tape backup and restore.
-   - PDSET, set time and date.
-   - LOCK, shut down system.
-   - ATSIGN DEVICE, load device drivers.
-   - TCTYP and CRTSTY, terminal handling.
-   - PEEK, system monitoring.
    - ARCDEV, transparent file system access to archive files.
-   - DIRDEV, list directories, sorted or subsetted.
+   - ARCSAL, archive salvager.
+   - ATSIGN DEVICE, load device drivers.
    - ATSIGN TARAKA, starts dragons.
-   - Dragons: DMPCPY, MODEMS, NETIME, PFTHMG.
-   - MTBOOT, make bootable tapes.
-   - HOSTS3, the host table compiler.
-   - H3MAKE, a job that requests DRAGON to build host table.
-   - ATSIGN TCP, TCP support
-   - TELSER, Telnet/Supdup server
-   - TELNET, Telnet client
-   - SUPDUP, Supdup client
-   - FTPS, FTP Server
-   - FTPU, FTP Client
-   - NAME, Shows logged in users and locations, aka FINGER
-   - TALK/WHO/WHOJ/WHOM/USERS, list users.
-   - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:)
-   - CHTN, CFTP, Chaosnet TELNET and FTP support
-   - FIND, search for files.
-   - TTLOC, Advertises physical location of logged in users
-   - SRCCOM, Compares/merges source files, compares binary files
-   - DDTDOC, interactive DDT documentation.
-   - COMSAT, Mail server
-   - MAIL, Mail sending client
-   - RMAIL, Mail reading client
-   - DQ Device, for doing hostname resolutions. Used by COMSAT.
-   - DSKUSE, disk usage information.
-   - LISP, lisp interpreter and runtime library (autoloads only)
-   - COMPLR, lisp compiler
-   - BINPRT, display information about binary executable file
-   - INQUIR, user account database
-   - PWORD, replacement for sys;atsign hactrn that requires registered logins
-   - PANDA, user account management program
-   - SEND, REPLY, replacements for DDT :SEND 
-   - INQUPD, processes INQUIR change requests
-   - LOOKUP, looks up user info in INQUIR database
-   - REATTA, reattaches disowned jobs to terminal
-   - TIMOON, displays the time and phase of the moon
-   - SYSMSG, displays system messages
-   - METER, displays system metering information
-   - DIRED, directory editor (independent from EMACS DIRED)
-   - HSNAME, displays user's HSNAME
-   - ARCSAL, archive salvager
-   - RMTDEV, MLDEV for non-ITS hosts
-   - IDLE, list idle users
-   - SPELL, ESPELL spell checker
+   - ATSIGN TCP, TCP support.
+   - BINPRT, display information about binary executable file.
+   - CHTN, CFTP, Chaosnet TELNET and FTP support.
+   - COMPLR, lisp compiler.
+   - COMSAT, Mail server.
    - CROCK, analog watch.
    - DCROCK, digital watch.
-   - JOBS, list jobs by category
-   - HSNDEV, HSNAME device
-   - PR, print out various system documentation
+   - DDTDOC, interactive DDT documentation.
+   - DIRDEV, list directories, sorted or subsetted.
+   - DIRED, directory editor (independent from EMACS DIRED).
+   - DMPCPY, crach dump copy dragon.
+   - DQ Device, for doing hostname resolutions. Used by COMSAT.
+   - DSKUSE, disk usage information.
    - NWATCH, small watch display.
+   - DUMP, tape backup and restore.
+   - EMACS, editor.
+   - FIND, search for files.
+   - FTPS, FTP Server.
+   - FTPU, FTP Client.
+   - H3MAKE, a job that requests DRAGON to build host table.
+   - HOSTS3, the host table compiler.
+   - HSNAME, displays user's HSNAME.
+   - HSNDEV, HSNAME device.
+   - IDLE, list idle users.
+   - INQUIR, user account database.
+   - INQUPD, processes INQUIR change requests.
+   - JOBS, list jobs by category.
+   - LISP, lisp interpreter and runtime library (autoloads only).
+   - LOCK, shut down system.
+   - LOOKUP, looks up user info in INQUIR database.
+   - MAIL, Mail sending client.
+   - METER, displays system metering information.
+   - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
+   - MODEMS, modems gragon.
+   - MTBOOT, make bootable tapes.
+   - NAME, Shows logged in users and locations, aka FINGER.
+   - NETIME, network time dragon.
+   - PANDA, user account management program.
+   - PDSET, set time and date.
+   - PEEK, system monitoring.
+   - PFTHMG, Puff the magic dragon.
+   - PR, print out various system documentation.
+   - PWORD, replacement for sys;atsign hactrn that requires registered logins.
+   - REATTA, reattaches disowned jobs to terminal.
+   - RMAIL, Mail reading client.
+   - RMTDEV, MLDEV for non-ITS hosts.
+   - SEND, REPLY, replacements for DDT :SEND.
+   - SPELL, ESPELL spell checker.
+   - SRCCOM, Compares/merges source files, compares binary files.
+   - SUPDUP, Supdup client.
+   - SYSMSG, displays system messages.
+   - TALK/WHO/WHOJ/WHOM/USERS, list users.
+   - TCTYP and CRTSTY, terminal handling.
+   - TECO, editor.
+   - TELNET, Telnet client.
+   - TELSER, Telnet/Supdup server.
+   - TIMOON, displays the time and phase of the moon.
+   - TTLOC, Advertises physical location of logged in users.
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
