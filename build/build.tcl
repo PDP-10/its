@@ -740,11 +740,7 @@ respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
 respond "*" ":link sys1;ts times,sysbin;times bin\r"
 
 respond "*" ":xfile build;idle xfile\r"
-
-# spell
-respond "*" ":midas sys1;ts spell_syseng;spell\r"
-expect ":KILL"
-respond "*" ":link sys1;ts espell,sys1;ts spell\r"
+respond "*" ":xfile build;spell xfile\r"
 
 # jobs
 respond "*" ":midas sys2;ts jobs_sysen1;jobs\r"
