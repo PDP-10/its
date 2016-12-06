@@ -342,16 +342,11 @@ respond "*" ":xfile build;ddtdoc xfile\r"
 respond "*" ":xfile build;nwatch xfile\r"
 respond "*" ":xfile build;taraka xfile\r"
 respond "*" ":xfile build;dmpcpy xfile\r"
-
-respond "*" ":midas channa;rakash modems_syseng; modems\r"
-expect ":KILL"
-respond "*" ":link channa;ts modems,channa;rakash modems\r"
+respond "*" ":xfile build;modems xfile\r"
 
 respond "*" ":midas channa;rakash netime_sysen1; netime\r"
 expect ":KILL"
 respond "*" ":link channa;ts netime,channa;rakash netime\r"
-
-respond "*" ":link dragon;hourly modems,channa;ts modems\r"
 
 # sources dump tape now creates dragon directory and populates
 # with an initial dragon; dragon hoard file, which is required
