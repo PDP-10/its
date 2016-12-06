@@ -672,8 +672,7 @@ respond "*" ":link device;tcp syn045,sysbin;timesrv bin\r"
 # mailt
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
-# rmtdev
-respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
+respond "*" ":xfile build;rmtdev xfile\r"
 
 # decuuo
 respond "*" ":midas decsys;_decuuo\r"
