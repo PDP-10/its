@@ -9,7 +9,7 @@ DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
 BIN = sysbin emacs _teco_ inquir
 
 # These directories are put on the minsys tape.
-MINSYS = _ sys sys3 device
+MINSYS = _ sys device
 
 # These files are used to create bootable tape images.
 RAM = bin/boot/ram.262
