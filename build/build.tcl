@@ -514,8 +514,7 @@ respond "*" ":lisp inquir;inquir (dump)\r"
 respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
 respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
-respond "*" ":midas inquir;dirs bin_inquir;dmunch\r"
-expect ":KILL"
+respond "*" ":xfile build;dmunch xfile\r"
 
 respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
 expect ":KILL"
