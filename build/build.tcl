@@ -337,9 +337,7 @@ respond "*" ":midas sys2;ts talk_gren;untalk\r"
 expect ":KILL"
 
 respond "*" ":xfile build;find xfile\r"
-
-respond "*" ":midas sys;ts dskuse_syseng;dskuse\r"
-expect ":KILL"
+respond "*" ":xfile build;dskuse xfile\r"
 
 respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
 expect ":KILL"
