@@ -34,10 +34,11 @@ out/sources.tape: $(ITSTAR)
 	mkdir -p out
 	rm -f src/system/config.*
 	cp build/$(EMULATOR)/config.* src/system
-	rm -f src/*/*~
+	rm -f src/*/*~ build/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
+	$(ITSTAR) -rf $@ build/*.xfile
 	-cd user; $(ITSTAR) -rf ../$@ *
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
