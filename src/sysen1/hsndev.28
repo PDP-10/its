@@ -1,0 +1,470 @@
+;-*-Midas-*-
+
+	Title HSNAME: jobdevice
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	HS:SNAME;FN1 FN2 translates to DSK:<SNAME's hsname>;FN1 FN2
+;;;
+;;;	HF:FN1 FN2 translates to DSK:<FN1's hsname>;FN1 FN2
+;;;
+;;;	H: and HSNAME: are DWIMish and work as HS: if possible, else HF:
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+A=1	;General porpoise
+B=2
+C=3
+D=4
+E=5
+T1=6
+T2=7
+T3=10
+P=17
+
+Call==PUSHJ P,
+Return==POPJ P,
+
+BOJc==1
+DSKc==2		;Who knows which way the file will be opened?
+LSRi==3		;Channel to map in the Inquire database
+
+PDLen==20
+
+ ;;;
+;;;;;
+ ;;;
+
+Define SYSCAL op,args
+	.Call [Setz ? Sixbit /op/ ? args ((Setz))]
+	Termin
+
+ ;;;
+;;;;;
+ ;;;
+
+	444400,,Buffer*2000	;Image  (BufPtr - 1)  AI = -1 (true)
+BufPtr:	440700,,Buffer*2000	;Ascii  (BufPtr + 0)  AI = 0 (false)
+
+	2000			;Image
+BufLen:	2000*5			;Ascii
+
+
+IO:	0	;True = OUTPUT mode, else INPUT
+AI:	0	;True = IMAGE mode, else ASCII
+
+CalBlk:	SETZ
+CalNam:	0
+CalChn:	%Climm,,DSKc
+CalArg:	Block 10
+
+Opcode:	0		;Stuff given to us by JOBCAL
+Data:	Block 3
+Cargs:	Block 5
+
+OutPtr:	0		;AOBJN to next block of
+Clouts:	Block 7		;values to return to calling program
+
+
+;Call's to already open file, no returned values
+Pass2:	Sixbit /ACCESS/ ? Sixbit /DELEWO/ ? Sixbit /DSKUPD/ ? Sixbit /SREAPB/
+	Sixbit /FINISH/ ? Sixbit /FORCE/  ? Sixbit /RENMWO/ ? Sixbit /RESRDT/
+	Sixbit /SAUTH/  ? Sixbit /SDMPBT/ ? SIxbit /SFDATE/ ? Sixbit /SRDATE/
+nPass2==.-Pass2
+
+;Call's to open file, with values returned.
+Pass3:	Sixbit /DIRSIZ/ ? 2
+	Sixbit /FILBLK/ ? 4
+	Sixbit /FILLEN/ ? 4
+	Sixbit /RAUTH/  ? 1
+	Sixbit /RDMPBT/ ? 1
+	Sixbit /RFDATE/ ? 1
+	Sixbit /RFNAME/ ? 5
+	Sixbit /RFPNTR/ ? 2
+	Sixbit /STATUS/ ? 1
+	Sixbit /LNKEDP/ ? 1
+nPass3==<.-Pass3>/2
+
+
+Mode:	0
+JOBds:	122		;Ascii/Unit/Output/device-code 22
+Device:	0	;5 words starting here are passed to a .RCHST
+FN1:	0
+FN2:	0
+Sname:	0
+DskPtr:	0
+
+PDList:	-PDLen,,PDList
+	Block PDLen
+
+Where:	Open ? Iot ? MLink ? Reset ? Rchst ? Access ? FDele1 ? FDele2 ? SCall
+;Opcode=  0     1      2       3       4       5        6        7       8.
+
+Tsint:	Loc 42
+	-TsintL,,Tsint
+	Loc Tsint
+	P
+	0 ? 1_BOJc ? -1 ? -1 ? Handle
+TsintL==.-Tsint
+
+Error:	0	;Error returned by a syscall
+DWIM:	0	;True for H: or HSNAME:
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Begin:	Move P,PDList
+	.Suset [.sMsk2,,[1_BOJc]]
+	.Suset [.rOption,,T1]
+	Tlo T1,Optint
+	.Suset [.sOption,,T1]
+	Syscal OPEN,[%Clbit,,.uao\10
+		     %Climm,,BOJc
+		     [Sixbit /BOJ/]]
+	  Jrst Die
+	Syscal CORBLK,[%Climm,,%Cbprv		;Make DSK buffer
+		       %Climm,,%Jself
+		       %Climm,,Buffer
+		       %Climm,,%Jsnew]
+	  Jrst Die
+	Movei A,LSRi
+	Move B,[-20,,Inquir]
+	Call LSRTNS"LSRMAP			;Make pages for INQUIR hackery
+	  Jrst Lose
+	Syscal JOBCAL,[%Climm,,BOJc
+		       %Clout,,Opcode
+		         [-12,,Data]]
+	  Jrst Lose
+	Jrst GCS
+
+ ;;;
+;;;;;
+ ;;;
+
+Handle:	Syscal JOBCAL,[%Climm,,BOJc
+		       %Clout,,Opcode
+		         [-12,,Data]]
+	  Jrst Dismis
+GCS:	Hrrz A,Opcode		;Grand Central Station
+	Jrst @Where(A)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	.UUO handling (mostly... sort of...)
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+Open:	Ldb T1,[370200,,Opcode]		;Bits 4.5 and 4.6 on = Close
+	Jumpn T1,Close
+	Move A,Data+5
+	Andi A,5	;No fancy modes, just ascii/image, i/o
+	Call Moder	;Makes IO and AI from control bits
+	Movem A,Mode
+	Move T3,Data+4
+	Call DWIMp
+	Skipn DWIM
+	  Jrst Open1
+	Trne A,1	;No DWIMish open for outputs
+	  Jrst fatMNA
+Open1:	Movem T3,Device
+	Move T1,Data+3	;SNAME
+	Move T2,Data+1	;FN1
+	Movem T2,FN1
+	Call gHsnam
+	Move T1,Data+2
+	Movem T1,FN2
+	Syscal OPEN,[%Clbtw,,Mode ? %Climm,,DSKc
+		     [Sixbit /DSK/] ? FN1 ? FN2 ? Sname
+		     %Clerr,,Error]
+	  Jrst FatErr
+	Syscal CORBLK,[%Climm,,0	;Delete INQUIR pages - No longer needed
+		       %Climm,,%Jself
+		         [-20,,Inquir]]
+	  Jfcl				;ok, ok, we'll keep 'em!
+	.Close LSRi,
+	Syscal JOBSTS,[%Climm,,BOJc ? JOBds		;Specify real SNAME
+		       Device ? FN1 ? FN2 ? Sname]
+	  Jfcl						;...if we can.
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1]
+	  Jrst Lose
+
+Wait:	Jfcl
+	  .Hang		;Now wait until we are needed...
+
+Close:	.Close DSKc,
+	Jrst Die	;If there's no file, why should we stick around?
+
+Iot:	Skipl Data	;Block mode IOT?
+	  Jrst Ioti
+	Hlro B,Data	;-#words	(Indeed)
+	Movns B		;#words
+	Skipn AI
+	  Imuli B,5	;(words x 5 = #bytes for ascii mode)
+	Jrst Siot
+
+Ioti:	Move B,Data
+	Caie B,1
+	  Jrst Siot
+	Skipe IO
+	  Jrst [.Iot BOJc,A	;BOJ --> DSK  (o)
+		.Iot DSKc,A
+		Jrst Handle]
+	.Iot DSKc,A		;DSK --> BOJ  (i)
+	.Iot BOJc,A
+	Jrst Handle
+
+Siot:	Move A,AI		;B has #bytes to SIOT
+	Skipe IO
+	  Jrst Sioto
+Sioti:	Move T1,B
+	Camle T1,BufLen(A)
+	  Move T1,BufLen(A)
+	Move D,T1
+	Move T2,BufPtr(A)
+	Syscal SIOT,[%Climm,,DSKc ? T2 ? T1 ? %Clerr,,Error]
+	  Jrst NFErr
+	Move E,T1
+	Sub D,T1	;# actually gotten from DiSK
+	Move T1,D
+	Move T2,BufPtr(A)
+	Syscal SIOT,[%Climm,,BOJc ? T2 ? T1 ? %Clerr,,Error]
+	  Jrst NFErr
+	Jumpe E,[Sub B,D
+		 Jumpn B,Sioti
+		 Jrst Handle]
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,0]
+	  Jrst Lose
+	Jrst Handle
+
+Sioto:	Move T1,B
+	Camle T1,BufLen(A)
+	  Move T1,BufLen(A)
+	Move D,T1
+	Move T2,BufPtr(A)
+	Syscal SIOT,[%Climm,,BOJc ? T2 ? T1 ? %Clerr,,Error]
+	  Jrst NFErr
+	Move T1,D
+	Move T2,BufPtr(A)
+	Syscal SIOT,[%Climm,,DSKc ? T2 ? T1 ? %Clerr,,Error]
+	  Jrst NFErr
+	Sub B,D
+	Jumpn B,Sioto
+	Jrst Handle
+
+MLink:	Move T3,Data+4	;Device
+	Call DWIMp
+	Skipe DWIM
+	  Jrst fatMNA
+	Move T1,Data+3	;SNAME
+	Move T2,Data+1	;FN1
+	Call gHsnam
+	Move E,Sname
+	Move T1,Data+6
+	Move T2,Data
+	Call gHsnam
+	Exch E,Sname
+	Syscal MLINK,[[Sixbit /DSK/] ? Data+1 ? Data+2 ? Sname
+		      	       Data ? Data+5 ? E
+		      %Clerr,,Error]
+	  Jrst FatErr
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1]
+	  Jrst Lose
+	Jrst Die
+
+Reset:	.Reset DSKc,
+	Jrst Win
+
+Rchst:	Syscal RFPNTR,[%Climm,,DSKc ? %Clout,,DskPtr ? %Clerr,,Error]
+	  Jrst NFErr
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,0 ? [-5,,[Sixbit /DSK/]]]
+	  Jrst Lose
+	Jrst Handle
+
+Access:	.Access DSKc,Data
+	Jrst Win
+
+FDele1:	Move T3,Data+4		;Rename or Delete
+	Call DWIMp
+	Skipe DWIM
+	  Jrst fatMNA
+	Move T1,Data+3
+	Move T2,Data+1
+	Call gHsnam
+	Skipe Data
+	  Skipn Data+5
+	    Jrst Delete
+	Syscal RENAME,[[Sixbit /DSK/] ? Data+1 ? Data+2 ? Sname
+		       Data ? Data+5 ? %Clerr,,Error]
+	  Jrst FatErr
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1]
+	  Jrst Lose
+	Jrst Die
+
+Delete:	Syscal DELETE,[[Sixbit /DSK/] ? Data+1 ? Data+2 ? Sname]
+	  Jrst FatErr
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1]
+	  Jrst Lose
+	Jrst Die
+
+FDele2:	Skipe DWIM
+	  Jrst nfMNA
+	Skipe Data
+	  Skipn Data+5
+	    Jrst DeleWo
+	Syscal RENMWO,[%Climm,,DSKc ? Data ? Data+5 ? %Clerr,,Error]
+	  Jrst NFErr
+	Jrst Win
+
+DeleWo:	Syscal DELEWO,[%Climm,,DSKc ? %Clerr,,Error]
+	  Jrst NFErr
+	Jrst Win
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;	Symbolic .CALL handling (really!)
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+SCall:	Move A,Data	;Name of call
+Look2:	Came A,[Sixbit /CLOSE/]
+	  Jrst Look2a
+	.Close DSKc,
+	Jrst Die
+
+Look2a:	Movsi B,-nPass2
+Loop2:	Came A,Pass2(B)
+	  Jrst [Aobjn B,Loop2
+		Jrst Look3]
+	Movem A,CalNam
+	Sos C,Data+2		;# args (not counting their channel)
+	Move T2,[Setzb Error]
+	Movem T2,CalArg(C)
+Loop2a:	Movei A,CArgs(C)	;Store loc of arg
+	Movem A,CalChn(C)
+	Sojg C,Loop2a
+	.Call CALBLK
+	  Jrst NFErr		;Not fatal if we lose
+	Jrst Win
+
+Look3:	Movsi B,-nPass3
+	Movei C,Pass3
+Loop3:	Came A,(C)
+	  Jrst [Addi C,2
+		Aobjn B,Loop3
+		Jrst nfMNA]
+	Movem A,CalNam
+	Movn B,1(C)		;Minus # VALS needed/wanted
+	Hrlm B,OutPtr
+	Movei T1,Clouts
+	Hrrm T1,OutPtr		;AOBJN pointer to returned-data area
+	Movei T2,CalArg
+	Move E,[%Clout,,Clouts]
+Loop3a:	Movem E,(T2)
+	Aoj E,
+	Aoj T2,
+	Aojn B,Loop3a
+	Move T1,[Setzb Error]
+	Movem T1,(T2)		;Last thing is %Clerr,,Error
+	.Call CALBLK
+	  Jrst NFErr
+	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1 ? OutPtr]
+	  Jrst Lose
+	Jrst DisMis
+
+;;
+;;;	Win or Lose
+;;
+
+Win:	Syscal JOBRET,[%Climm,,BOJc ? %Climm,,1]
+	  Jrst Lose
+	Jrst Handle
+
+DisMis:	Syscal DISMIS,[P]
+	  Jrst Lose
+
+Die:	.Logout 1,
+	.Value
+
+NFErr:	Setz T1,
+FatErr:	Seto T1,
+	Movss Error
+	Syscal JOBRET,[%Climm,,BOJc ? Error]
+	  Jrst Lose
+	Jumpn T1,Die
+	Syscal DISMIS,[P]
+;	  Jrst Lose
+
+Lose:	Syscal JOBRET,[%Climm,,BOJc ? [%Enadv,,]]
+	  Jfcl
+	.Lose %LsSys
+
+fatMNA:	Syscal JOBRET,[%Climm,,BOJc ? [%Ensmd,,0]]	;Mode Not Available
+	  Jfcl
+	Jrst Die
+
+nfMNA:	Syscal JOBRET,[%Climm,,BOJc ? [%Ensmd,,0]]
+	  Jrst Lose
+	Jrst Handle
+
+NotUNM:	Syscal JOBRET,[%Climm,,BOJc ? [%Ebdfn,,0]]	;Illegal FN
+	  Jfcl
+	Jrst Die
+
+;;
+;;;	Subroutines
+;;
+
+DWIMp:	Came T3,[Sixbit /HSNAME/]
+	  Camn T3,[Sixbit /H/]
+	    Setom DWIM
+	Return
+
+gHsnam:	Movei A,LSRi
+	Came T3,[Sixbit /HF/]
+	  Jrst gHp1
+	Move T1,T2
+	Setz T2,
+gHp1:	Move B,T1
+	Call LSRTNS"LSRUNM
+	  Jrst [Camn T3,[Sixbit /HS/]
+		  Jrst NotUNM
+		Move B,T2
+		Call LSRTNS"LSRUNM
+		  Jrst NotUNM
+		Move T1,T2
+		Jrst .+1]
+	Move A,T1
+	Setzb C,D
+	Call LSRTNS"LSRHSN
+	  Jrst NotUNM
+	Movem D,Sname
+	Move T1,D
+	Return
+
+Moder:	Trne A,1		
+	  Setom IO	;Output
+	Trne A,4
+	  Setom AI	;Image
+	Caie A,.uai
+	  Jrst [.Close BOJc,
+		Move T1,A
+		Trc T1,1
+		Syscal OPEN,[%Clbtw,,T1 ? %Climm,,BOJc ? [Sixbit /BOJ/]]
+		  Jrst Lose
+		Return]
+	Return
+
+ ;;;
+;;;;;
+ ;;;
+
+$$HSNM==1
+$$ULNM==0
+$$ULNP==0
+$$UNAM==0
+
+.INSRT SYSENG;LSRTNS
+
+Buffer==._-14+1		;DSK buffer page
+Inquir==Buffer+1	;Start of LSRTNS-mapped-stuff pages
+
+	END BEGIN

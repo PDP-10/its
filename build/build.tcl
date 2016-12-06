@@ -680,6 +680,12 @@ respond "*" ":link sys1;ts espell,sys;ts spell\r"
 respond "*" ":midas sys2;ts jobs_sysen1;jobs\r"
 expect ":KILL"
 
+# hsndev
+respond "*" ":midas device;jobdev hsname_sysen1;hsndev\r"
+expect ":KILL"
+respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
+respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
