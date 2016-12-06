@@ -395,10 +395,7 @@ respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
 respond "KLp==" "0\r"
 expect ":KILL"
 
-respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
-expect ":KILL"
-
-respond "*" ":link sys2;ts chtn,sysbin;chtn bin\r"
+respond "*" ":xfile build;chtn xfile\r"
 
 respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
 expect ":KILL"
