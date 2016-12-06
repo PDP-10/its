@@ -515,10 +515,7 @@ respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
 respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
 respond "*" ":xfile build;dmunch xfile\r"
-
-respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
-expect ":KILL"
-
+respond "*" ":xfile build;inqupd xfile\r"
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 
 respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
