@@ -742,12 +742,7 @@ respond "*" ":link sys1;ts times,sysbin;times bin\r"
 respond "*" ":xfile build;idle xfile\r"
 respond "*" ":xfile build;spell xfile\r"
 respond "*" ":xfile build;jobs xfile\r"
-
-# hsndev
-respond "*" ":midas device;jobdev hsname_sysen1;hsndev\r"
-expect ":KILL"
-respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
-respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
+respond "*" ":xfile build;hsndev xfile\r"
 
 # pr
 respond "*" ":midas sys1;ts pr_sysen1;pr\r"
