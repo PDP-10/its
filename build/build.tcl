@@ -686,6 +686,24 @@ expect ":KILL"
 respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
 respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
 
+# pr
+respond "*" ":midas sys1;ts pr_sysen1;pr\r"
+expect ":KILL"
+respond "*" ":link sys1;ts call,sys1;ts pr\r"
+respond "*" ":link sys1;ts .call,sys1;ts pr\r"
+respond "*" ":link sys1;ts uuo,sys1;ts pr\r"
+respond "*" ":link sys1;ts uset,sys1;ts pr\r"
+respond "*" ":link sys1;ts suset,sys1;ts pr\r"
+respond "*" ":link sys1;ts doc,sys1;ts pr\r"
+respond "*" ":link sys1;ts intrup,sys1;ts pr\r"
+respond "*" ":link sys1;ts ttyvar,sys1;ts pr\r"
+
+respond "*" ":link .info.;its .calls,sysdoc;.calls >\r"
+respond "*" ":link .info.;its uuos,sysdoc;uuos >\r"
+respond "*" ":link .info.;its usets,sysdoc;usets >\r"
+respond "*" ":link .info.;its %pi,sysdoc;%pi >\r"
+respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
