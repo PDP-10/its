@@ -658,10 +658,7 @@ expect ":KILL"
 
 respond "*" ":xfile build;dired xfile\r"
 respond "*" ":xfile build;hsname xfile\r"
-
-# arcsal
-respond "*" ":midas sys1;ts arcsal_sysen1;arcsal\r"
-expect ":KILL"
+respond "*" ":xfile build;arcsal xfile\r"
 
 # acount
 respond "*" ":midas sys;ts acount_sysen3;acount\r"
