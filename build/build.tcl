@@ -406,10 +406,7 @@ respond "Use what filename instead?" "ecc;quotes >\r"
 expect ":KILL"
 
 respond "*" ":xfile build;srccom xfile\r"
-
-respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"
-expect ":KILL"
-
+respond "*" ":xfile build;dqxdev xfile\r"
 respond "*" ":xfile build;comsat xfile\r"
 initialize_comsat
 
