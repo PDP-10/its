@@ -657,10 +657,7 @@ respond "*" ":midas sys1;ts cross_syseng;cross\r"
 expect ":KILL"
 
 respond "*" ":xfile build;dired xfile\r"
-
-# hsname
-respond "*" ":midas sys2;ts hsname_sysen1;hsname\r"
-expect ":KILL"
+respond "*" ":xfile build;hsname xfile\r"
 
 # arcsal
 respond "*" ":midas sys1;ts arcsal_sysen1;arcsal\r"
