@@ -650,10 +650,7 @@ respond "*" ":midas sys2;ts ports_sysen2;ports\r"
 expect ":KILL"
 
 respond "*" ":xfile build;sysmsg xfile\r"
-
-# meter
-respond "*" ":midas sys1;ts meter_syseng;meter\r"
-expect ":KILL"
+respond "*" ":xfile build;meter xfile\r"
 
 # cross
 respond "*" ":midas sys1;ts cross_syseng;cross\r"
