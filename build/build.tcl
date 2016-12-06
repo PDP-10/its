@@ -341,9 +341,7 @@ respond "*" ":xfile build;dskuse xfile\r"
 respond "*" ":xfile build;ddtdoc xfile\r"
 respond "*" ":xfile build;nwatch xfile\r"
 respond "*" ":xfile build;taraka xfile\r"
-
-respond "*" ":midas channa;rakash dmpcpy_syseng; dmpcpy\r"
-expect ":KILL"
+respond "*" ":xfile build;dmpcpy xfile\r"
 
 respond "*" ":midas channa;rakash modems_syseng; modems\r"
 expect ":KILL"
