@@ -380,10 +380,7 @@ respond "*" ":xfile build;dir xfile\r"
 respond "*" ":xfile build;mtboot xfile\r"
 respond "*" ":xfile build;hosts3 xfile\r"
 respond "*" ":xfile build;h3make xfile\r"
-
-# basic TCP support
-respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
-expect ":KILL"
+respond "*" ":xfile build;@tcp xfile\r"
 
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
