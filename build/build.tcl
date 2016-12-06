@@ -676,6 +676,10 @@ respond "*" ":midas sys1;ts spell_syseng;spell\r"
 expect ":KILL"
 respond "*" ":link sys1;ts espell,sys;ts spell\r"
 
+# jobs
+respond "*" ":midas sys2;ts jobs_sysen1;jobs\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
