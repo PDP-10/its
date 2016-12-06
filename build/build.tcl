@@ -338,9 +338,7 @@ expect ":KILL"
 
 respond "*" ":xfile build;find xfile\r"
 respond "*" ":xfile build;dskuse xfile\r"
-
-respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
-expect ":KILL"
+respond "*" ":xfile build;ddtdoc xfile\r"
 
 respond "*" ":midas sys1;ts nwatch_sysen1;nwatch\r"
 expect ":KILL"
