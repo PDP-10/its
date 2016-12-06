@@ -340,10 +340,7 @@ respond "*" ":xfile build;find xfile\r"
 respond "*" ":xfile build;dskuse xfile\r"
 respond "*" ":xfile build;ddtdoc xfile\r"
 respond "*" ":xfile build;nwatch xfile\r"
-
-respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
-expect ":KILL"
-respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
+respond "*" ":xfile build;taraka xfile\r"
 
 respond "*" ":midas channa;rakash dmpcpy_syseng; dmpcpy\r"
 expect ":KILL"
