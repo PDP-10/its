@@ -385,11 +385,7 @@ respond "*" ":xfile build;telser xfile\r"
 respond "*" ":xfile build;telnet xfile\r"
 respond "*" ":xfile build;supdup xfile\r"
 respond "*" ":xfile build;ftps xfile\r"
-
-respond "*" ":midas sysbin;ftpu_sysnet;ftpu\r"
-expect ":KILL"
-
-respond "*" ":link sys;ts ftp,sysbin;ftpu bin\r"
+respond "*" ":xfile build;ftpu xfile\r"
 
 # NAME
 respond "*" ":midas sysbin;name_sysen2;name\r"
