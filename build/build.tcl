@@ -389,11 +389,7 @@ respond "*" ":xfile build;ftpu xfile\r"
 respond "*" ":xfile build;name xfile\r"
 respond "*" ":xfile build;mldev xfile\r"
 respond "*" ":xfile build;mlslv xfile\r"
-
-respond "*" ":midas device;atsign dirdev_syseng;dirdev\r"
-expect ":KILL"
-respond "*" ":link device;jobdev dir,device;atsign dirdev\r"
-respond "*" ":link device;jobdev dirdb,device;atsign dirdev\r"
+respond "*" ":xfile build;dirdev xfile\r"
 
 respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
 respond "KLp==" "0\r"
