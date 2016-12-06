@@ -381,15 +381,7 @@ respond "*" ":xfile build;mtboot xfile\r"
 respond "*" ":xfile build;hosts3 xfile\r"
 respond "*" ":xfile build;h3make xfile\r"
 respond "*" ":xfile build;@tcp xfile\r"
-
-respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
-
-# telnet server
-respond "*" ":midas sysbin;telser_sysnet;telser\r"
-expect ":KILL"
-
-# port 23 (telnet) uses TELSER
-respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
+respond "*" ":xfile build;telser xfile\r"
 
 # telnet client
 respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
@@ -397,9 +389,6 @@ expect ":KILL"
 
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
 respond "*" ":link sys;ts tn,sys;ts telnet\r"
-
-# supdup port (95) uses telser
-respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
 
 # supdup client
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
@@ -467,9 +456,6 @@ respond "*" ":link device;jobdev dirdb,device;atsign dirdev\r"
 respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
 respond "KLp==" "0\r"
 expect ":KILL"
-
-respond "*" ":link device;chaos telnet,sysbin;telser bin\r"
-respond "*" ":link device;chaos supdup,sysbin;telser bin\r"
 
 respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
 expect ":KILL"
