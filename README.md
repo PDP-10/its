@@ -122,6 +122,7 @@ from scratch.
    - DCROCK, digital watch.
    - JOBS, list jobs by category
    - HSNDEV, HSNAME device
+   - PR, print out various system documentation
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
