@@ -656,9 +656,7 @@ respond "*" ":xfile build;meter xfile\r"
 respond "*" ":midas sys1;ts cross_syseng;cross\r"
 expect ":KILL"
 
-# dired
-respond "*" ":midas sys;ts dired_sysen2;dired\r"
-expect ":KILL"
+respond "*" ":xfile build;dired xfile\r"
 
 # hsname
 respond "*" ":midas sys2;ts hsname_sysen1;hsname\r"
