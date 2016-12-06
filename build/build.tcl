@@ -482,9 +482,7 @@ respond "*" ":link sys;ts complr,lspdmp;cl.dmp >\r"
 respond "*" ":link sys;ts cl,sys;ts complr\r"
 respond "*" ":link info;complr 1,info;lispc >\r"
 
-# binprt
-respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
-expect ":KILL"
+respond "*" ":xfile build;binprt xfile\r"
 
 # inquir
 respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
