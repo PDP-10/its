@@ -631,9 +631,7 @@ expect ":KILL"
 respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
 expect ":KILL"
 
-# reatta
-respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
-expect ":KILL"
+respond "*" ":xfile build;reatta xfile\r"
 
 # print
 respond "*" ":midas sys;ts print_sysen2;print\r"
