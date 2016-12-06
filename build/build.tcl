@@ -517,11 +517,7 @@ respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 respond "*" ":xfile build;dmunch xfile\r"
 respond "*" ":xfile build;inqupd xfile\r"
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
-
-respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
-expect ":KILL"
-
-respond "*" ":link sys1;ts lookup,inquir;ts lookup\r"
+respond "*" ":xfile build;lookup xfile\r"
 
 # pword/panda
 respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
