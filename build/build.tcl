@@ -386,29 +386,7 @@ respond "*" ":xfile build;telnet xfile\r"
 respond "*" ":xfile build;supdup xfile\r"
 respond "*" ":xfile build;ftps xfile\r"
 respond "*" ":xfile build;ftpu xfile\r"
-
-# NAME
-respond "*" ":midas sysbin;name_sysen2;name\r"
-expect ":KILL"
-
-respond "*" ":link syseng;ttytyp 999999,system;ttytyp >\r"
-respond "*" ":copy inquir;lsr1 empty,inquir;lsr1 >\r"
-
-respond "*" ":copy sysbin;name bin,sys;ts name\r"
-respond "*" "name\033j"
-respond "*" "\033l sys;ts name\r"
-respond "*" "debug/"
-respond "-1" "0\r\033g"
-
-respond "*" ":link sys1;ts when,sys;ts name\r"
-respond "*" ":link sys1;ts whoare,sys;ts name\r"
-respond "*" ":link sys1;ts whois,sys;ts name\r"
-respond "*" ":link sys1;ts wheres,sys1;ts whois\r"
-respond "*" ":link sys1;ts supnam,sys;ts name\r"
-respond "*" ":link sys1;ts finger,sys;ts name\r"
-respond "*" ":link sys;ts f,sys;ts name\r"
-respond "*" ":link sys2;ts n,sys;ts name\r"
-respond "*" ":link device;tcp syn117,sys;ts name\r"
+respond "*" ":xfile build;name xfile\r"
 
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"
