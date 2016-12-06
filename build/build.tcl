@@ -382,13 +382,7 @@ respond "*" ":xfile build;hosts3 xfile\r"
 respond "*" ":xfile build;h3make xfile\r"
 respond "*" ":xfile build;@tcp xfile\r"
 respond "*" ":xfile build;telser xfile\r"
-
-# telnet client
-respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
-expect ":KILL"
-
-respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
-respond "*" ":link sys;ts tn,sys;ts telnet\r"
+respond "*" ":xfile build;telnet xfile\r"
 
 # supdup client
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
