@@ -407,34 +407,16 @@ expect ":KILL"
 
 respond "*" ":xfile build;srccom xfile\r"
 
-respond "*" ":midas .mail.;comsat_sysnet;comsat\r"
-expect ":KILL"
-
 respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"
 expect ":KILL"
 
-respond "*" "comsat\033j"
-respond "*" "\033l.mail.;comsat bin\r"
-respond "*" "bughst/<<192.\033_24.>+<168.\033_16.>+<1.\033_8.>+100.>\r"
-type "domgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
-type "tcpgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
-type "debug/0\r"
-type "xvers/0\r"
-type "purify\033g"
-respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
-
-respond "*" ":kill\r"
-
+respond "*" ":xfile build;comsat xfile\r"
 initialize_comsat
 
 respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
 
 respond "*" ":midas sys1;ts rmail_emacs1;rmaill\r"
 expect ":KILL"
-
-respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
-respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
-respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "N\r"
