@@ -383,12 +383,7 @@ respond "*" ":xfile build;h3make xfile\r"
 respond "*" ":xfile build;@tcp xfile\r"
 respond "*" ":xfile build;telser xfile\r"
 respond "*" ":xfile build;telnet xfile\r"
-
-# supdup client
-respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
-expect ":KILL"
-
-respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
+respond "*" ":xfile build;supdup xfile\r"
 
 respond "*" ":link syseng;fsdefs 999999,system;fsdefs >\r"
 
