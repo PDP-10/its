@@ -625,6 +625,7 @@ respond "*" ":load sysbin;panda bin\r"
 respond "*" "spword/107150326162\r"
 type "purify\033g"
 respond "*" ":pdump sysbin;panda bin\r"
+respond "*" ":kill\r"
 respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
 respond "*" ":link sys;ts panda,sysbin;panda bin\r"
 
