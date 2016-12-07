@@ -71,6 +71,8 @@ See the [`doc` subdirectory](doc) for documentation.
 
 There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
 
+A list of [known ITS machines](doc/machines.md).
+
 ### Build procedure
 
 1. First, magnetic tape images are created from files in `src` and
