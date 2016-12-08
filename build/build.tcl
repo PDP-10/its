@@ -735,6 +735,11 @@ expect ":KILL"
 respond "*" ":midas sys3;ts fretty_sysen2;fretty\r"
 expect ":KILL"
 
+# bye
+respond "*" ":midas sys1;ts bye_sysen1;bye\r"
+expect ":KILL"
+respond "*" ":link device;chaos bye,sys1;ts bye\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

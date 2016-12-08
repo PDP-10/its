@@ -72,6 +72,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - ATSIGN TARAKA, starts dragons.
    - ATSIGN TCP, TCP support.
    - BINPRT, display information about binary executable file.
+   - BYE, say goodbye to user. Used in LOGOUT scripts.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
