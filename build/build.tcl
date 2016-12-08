@@ -755,10 +755,7 @@ respond "*" ":xfile build;inline xfile\r"
 respond "*" ":xfile build;init xfile\r"
 respond "*" ":xfile build;scandl xfile\r"
 respond "*" ":xfile build;os xfile\r"
-
-# argus
-respond "*" ":midas sys2;ts argus_sysen2;argus\r"
-expect ":KILL"
+respond "*" ":xfile build;argus xfile\r"
 
 # fretty
 respond "*" ":midas sys3;ts fretty_sysen2;fretty\r"
