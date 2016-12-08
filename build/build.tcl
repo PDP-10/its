@@ -757,11 +757,7 @@ respond "*" ":xfile build;scandl xfile\r"
 respond "*" ":xfile build;os xfile\r"
 respond "*" ":xfile build;argus xfile\r"
 respond "*" ":xfile build;fretty xfile\r"
-
-# bye
-respond "*" ":midas sys1;ts bye_sysen1;bye\r"
-expect ":KILL"
-respond "*" ":link device;chaos bye,sys1;ts bye\r"
+respond "*" ":xfile build;bye xfile\r"
 
 # @
 respond "*" ":midas sys;ts @_sysen1;@\r"
