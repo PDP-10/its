@@ -753,10 +753,7 @@ respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 
 respond "*" ":xfile build;inline xfile\r"
 respond "*" ":xfile build;init xfile\r"
-
-# scandl
-respond "*" ":midas sys3;ts scandl_sysen1;scandl\r"
-expect ":KILL"
+respond "*" ":xfile build;scandl xfile\r"
 
 # os
 respond "*" ":midas sys1;ts os_sysen2;os\r"
