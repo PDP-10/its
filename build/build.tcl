@@ -711,6 +711,10 @@ respond "*" ":link .info.;its usets,sysdoc;usets >\r"
 respond "*" ":link .info.;its %pi,sysdoc;%pi >\r"
 respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 
+# inline
+respond "*" ":midas sys2;ts inline_sysen1;inline\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
