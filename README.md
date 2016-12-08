@@ -87,6 +87,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - DUMP, tape backup and restore.
    - EMACS, editor.
    - FIND, search for files.
+   - FRETTY, display list of free TTYs.
    - FTPS, FTP Server.
    - FTPU, FTP Client.
    - H3MAKE, a job that requests DRAGON to build host table.
