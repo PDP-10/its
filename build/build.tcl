@@ -259,7 +259,9 @@ respond ":EJ" "\033xgenerate\033emacs;page\033emacs1;page\r"
 respond ":EJ" "\033xgenerate\033emacs;scrlin\033emacs1;scrlin\r"
 respond ":EJ" "\033xgenerate\033emacs;delim\033emacs1;delim\r"
 respond ":EJ" "\033xgenerate\033emacs;modlin\033emacs1;modlin\r"
-respond ":EJ" "\030\003"
+
+respond ":EJ" "\033xrun\033einit\033? Document\r"
+respond "\n" "\030\003"
 respond "*" ":kill\r"
 
 respond "*" ":midas sysbin;_syseng;dump\r"
