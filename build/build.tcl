@@ -715,6 +715,10 @@ respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 respond "*" ":midas sys2;ts inline_sysen1;inline\r"
 expect ":KILL"
 
+# init
+respond "*" ":midas sys3;ts init_sysen2;init\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
