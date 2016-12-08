@@ -117,6 +117,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - REATTA, reattaches disowned jobs to terminal.
    - RMAIL, Mail reading client.
    - RMTDEV, MLDEV for non-ITS hosts.
+   - SCANDL, TTY OUTPUT SPY
    - SEND, REPLY, replacements for DDT :SEND.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.

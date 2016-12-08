@@ -719,6 +719,10 @@ expect ":KILL"
 respond "*" ":midas sys3;ts init_sysen2;init\r"
 expect ":KILL"
 
+# scandl
+respond "*" ":midas sys3;ts scandl_sysen1;scandl\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
