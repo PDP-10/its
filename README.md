@@ -108,6 +108,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - MTBOOT, make bootable tapes.
    - NAME, Shows logged in users and locations, aka FINGER.
    - NETIME, network time dragon.
+   - OS, realtime TTY spy
    - PANDA, user account management program.
    - PDSET, set time and date.
    - PEEK, system monitoring.
