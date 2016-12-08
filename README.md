@@ -67,6 +67,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
 
    - ARCDEV, transparent file system access to archive files.
    - ARCSAL, archive salvager.
+   - ARGUS, alerts you when specified users login or logout.
    - ATSIGN DEVICE, load device drivers.
    - ATSIGN TARAKA, starts dragons.
    - ATSIGN TCP, TCP support.
