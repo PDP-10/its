@@ -37,6 +37,7 @@ out/sources.tape: $(ITSTAR)
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
+	-cd user; $(ITSTAR) -rf ../$@ *
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	mkdir -p out
