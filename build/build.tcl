@@ -751,9 +751,7 @@ respond "*" ":link .info.;its usets,sysdoc;usets >\r"
 respond "*" ":link .info.;its %pi,sysdoc;%pi >\r"
 respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 
-# inline
-respond "*" ":midas sys2;ts inline_sysen1;inline\r"
-expect ":KILL"
+respond "*" ":xfile build;inline xfile\r"
 
 # init
 respond "*" ":midas sys3;ts init_sysen2;init\r"
