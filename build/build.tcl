@@ -767,6 +767,11 @@ respond "*" ":midas sys1;ts bye_sysen1;bye\r"
 expect ":KILL"
 respond "*" ":link device;chaos bye,sys1;ts bye\r"
 
+# @
+respond "*" ":midas sys;ts @_sysen1;@\r"
+respond "Use what filename instead?" "sysen2;\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

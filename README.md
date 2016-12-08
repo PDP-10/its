@@ -65,6 +65,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
 
 5. Remaining programs are rebuilt:
 
+   - @, cross reference generation tool
    - ARCDEV, transparent file system access to archive files.
    - ARCSAL, archive salvager.
    - ARGUS, alerts you when specified users login or logout.
