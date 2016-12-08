@@ -237,6 +237,16 @@ respond "&" "mmrun\033purify\033dump\033ts 126\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
 
+# BABYL, BABYLM, CACHE, FIXLIB, IVORY, MKDUMP, OUTLINE-MODE, PL1,
+# TEACH-C100, TMACS and WORDAB are generated with IVORY.
+respond "*" ":emacs\r"
+respond "EMACS Editor" "\033xload\033ivory\r"
+respond "\n" "\033xgenerate\033emacs;ivory\033emacs1;ivory\r"
+respond ":EJ" "\033xgenerate\033emacs;wordab\033emacs1;wordab\r"
+respond ":EJ" "\033xgenerate\033emacs;tmacs\033emacs1;tmacs\033tmucs\r"
+respond ":EJ" "\030\003"
+respond "*" ":kill\r"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
