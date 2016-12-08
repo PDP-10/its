@@ -93,6 +93,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - HSNAME, displays user's HSNAME.
    - HSNDEV, HSNAME device.
    - IDLE, list idle users.
+   - INLINE, reads line from TTY and adds to JCL (for DDT init files)
    - INQUIR, user account database.
    - INQUPD, processes INQUIR change requests.
    - JOBS, list jobs by category.
