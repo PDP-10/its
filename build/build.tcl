@@ -754,10 +754,7 @@ respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 respond "*" ":xfile build;inline xfile\r"
 respond "*" ":xfile build;init xfile\r"
 respond "*" ":xfile build;scandl xfile\r"
-
-# os
-respond "*" ":midas sys1;ts os_sysen2;os\r"
-expect ":KILL"
+respond "*" ":xfile build;os xfile\r"
 
 # argus
 respond "*" ":midas sys2;ts argus_sysen2;argus\r"
