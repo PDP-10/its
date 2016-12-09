@@ -972,6 +972,10 @@ respond "*" ":kill\r"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# ten50
+respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
+expect ":KILL"
+
 # stktrn
 respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
 respond "*" "\032:kill\r"
