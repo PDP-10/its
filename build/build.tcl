@@ -714,6 +714,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
 
+# 11sim
+respond "*" ":midas sys1;ts pdp11_syseng;11sim\r"
+expect ":KILL"
+
 # idle
 respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
