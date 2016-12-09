@@ -710,6 +710,10 @@ expect ":KILL"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# palx
+respond "*" ":midas sys;ts palx_sysen1;palx\r"
+expect ":KILL"
+
 # idle
 respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
