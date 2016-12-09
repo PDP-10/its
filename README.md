@@ -80,6 +80,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - CROCK, analog watch.
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
+   - DECUUO, TOPS-10 and WAITS emulator.
    - DIRDEV, list directories, sorted or subsetted.
    - DIRED, directory editor (independent from EMACS DIRED).
    - DMPCPY, crach dump copy dragon.
@@ -127,6 +128,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - SEND, REPLY, replacements for DDT :SEND.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
+   - STINK, linker.
    - SUPDUP, Supdup client.
    - SYSMSG, displays system messages.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
