@@ -701,6 +701,12 @@ expect ":KILL"
 # rmtdev
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
 
+# decuuo
+respond "*" ":midas decsys;ts dec_decuuo\r"
+expect ":KILL"
+respond "*" ":midas decsys;_decbot\r"
+expect ":KILL"
+
 # idle
 respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
