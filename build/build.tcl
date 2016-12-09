@@ -270,6 +270,9 @@ expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
 
+respond "*" ":midas sys1;ts stink_sysen2;stink\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_sysen1;pdset\r"
 expect ":KILL"
 respond "*" ":delete sys;ts pdset\r"
