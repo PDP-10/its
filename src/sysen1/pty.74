@@ -1,0 +1,372 @@
+; PTY - Display STY   -*-MIDAS-*-
+versio==.fnam2
+
+TITLE	PTY
+
+
+.insrt	syseng;$call macro
+.insrt	eak;macros >
+
+
+; Define channel no.s
+ttyich==1			; TTY input channel
+ttyoch==2			; TTY output channel
+styich==3			; STY input channel
+styoch==4			; STY output channel
+dskoch==5			; DSK output channel
+logoch==6			; DSK output channel for debugging log file
+
+disb==a_6+3	; push ACs A,B and C on interrupt
+
+%sinwt==10	; STY input don't hang mode
+%sonwt==10	; STY output don't hang mode
+
+
+var cmdchr			; command character
+var vpos			; current sty cursor position
+var hpos			; ...
+var logflg			   ;set non-zero if want a log file
+
+lpdl==40
+var pdl(lpdl)			; room for our stack
+
+
+pty:	move p,[-lpdl,,pdl-1]	; setup stack
+	$call open,[#ttyich,[sixbit /tty/]],[#%tiint+%tinwt+%tiful+.uii]
+	 .lose %lsfil
+	$call open,[#ttyoch,[sixbit /tty/]],[#%tjsio+.uio]
+	 .lose %lsfil
+	$call open,[#styich,[sixbit /sty/]],[#%sinwt+.uii]
+	 .lose %lsfil
+	$call open,[#styoch,[sixbit /sty/]],[#%sonwt+.uio]
+	 .lose %lsfil
+	move t,[-4,,[
+		.roption ? tlo %opint+%opopc
+		.rmsk2 ? movei 1_styich+1_ttyich
+		]]
+	$call usrvar,[#%jself,t]	; new ints, enable STY and TTY input
+	 .lose %lssys
+	$call cnsget,#ttyich,[a,b,c,d,e]	; get TTY vars
+	 .lose %lssys
+	movei t,^^		; control-^
+	tlne e,%tofci		; full keyboard?
+	 movei t,%txtop+"B	; [BREAK]
+	movem t,cmdchr		; set command character
+	trz e,%tptel+%tpcbs	; avoid lossage
+	$call cnsset,[#styoch,a,b,#%tnsfw,d,e]	; set STY vars
+	 .lose %lssys
+	move t,[-10,,[
+		sixbit /ispeed/ ? movem a
+		sixbit /ospeed/ ? movem b
+		sixbit /ttyrol/ ? movem c
+		sixbit /smarts/ ? movem d
+		]]
+	$call ttyvar,[#ttyich,t]	; get other TTY vars
+	 .lose %lssys
+	move t,[-10,,[
+		sixbit /ispeed/ ? move a
+		sixbit /ospeed/ ? move b
+		sixbit /ttyrol/ ? move c
+		sixbit /smarts/ ? move d
+		]]
+	$call ttyvar,[#styoch,t]	; set other STY vars
+	 .lose %lsfil
+	$call ttyset,[#ttyich,[030303,,030303],[030303,,030303],[%tssii,,0]]
+	 .lose %lsfil
+	.iot styoch,[^Z]	; start a HACTRN on other end of STY
+	jfcl			; hang forever
+	.hang
+	.value
+
+subttl	Interrupt handlers
+
+; TTY input interrupt
+tyiint:	.suset [.rtty,,a]	; check to be sure we have the TTY
+	jumpl a,dismis
+	.iot ttyich,a		; get interrupt char
+	jumpl a,dismis
+	move t1,a
+	trz t1,%txsft		; clear shift lock bit in character
+	camn t1,cmdchr		; command character?
+	 jrst tyi2
+tyi1:	.iot styoch,a		; send to sty
+	jrst tyiint
+tyi2:	$call rcpos,[#styich][a]	; get cursor position
+	 .lose %lssys
+	hlrzm a,vpos
+	hrrzm a,hpos
+	$call finish,#ttyoch		; wait for TTY output to complete
+	 .lose %lssys
+	$call scpos,[#ttyoch,vpos,hpos,[-1]]	; set TTY's cursor position
+	 .lose %lssys
+	sout #ttyoch,#%tjsio+%tjdis,"ZLCOMMAND -->L"	; prompt for command
+	$call iot,[#ttyich,a][][#%tinwt]		; read char, waiting
+	 .lose %lssys
+	sout #ttyoch,#%tjsio+%tjdis,"ZL"		; erase prompt
+	camn a,cmdchr		; command character typed?
+	 jrst [	.iot ttyoch,[%tdmv0]
+		.iot ttyoch,vpos
+		.iot ttyoch,hpos
+		jrst tyi1
+		]
+	andi a,377		; ignore Meta & other wierd bits
+	trne a,%txctl		; ASCIIfy Control bit
+	  andi a,37
+	cail a,"a		; convert to upper case
+	 caile a,"z
+	  caia
+	   subi a,40
+	caie a,"L		; L (LOGOUT)?
+	 cain a,"Q		; Q (QUIT)?
+	  jrst quit
+	caie a,^Z		; CALL?
+	 cain a,"D		; D (DDT)?
+	  jrst [.suset [.sipirqc,,[%pic.z]]
+		jrst tyidis
+		]
+	cain a,"W		; send software codes to wallpaper file?
+	 jrst walbeg
+	cain a,"E
+	 jrst walend
+	cain a,"C
+	 jrst [	sout #ttyoch,#%tjsio+%tjdis,"ZChange PTY command character to -->"
+		$call iot,[#ttyich,cmdchr][][#%tinwt]	;(was %tiint+%tinwt)
+		 .lose %lssys
+		jrst tyidis
+		]
+	cain a,^X		   ;control-X? (debug file)
+	  jrst dbgstr		   ;  yes, go handle setting up or closing
+	caie a,"H
+	  cain a,"?
+	 jrst [	sout #ttyoch,#%tjsio+%tjdis,"TLPTY control commands--
+Q or L  -- Kill this program.
+D or ^Z -- Escape temporarily to DDT.
+C       -- Change PTY command character.
+W	-- Send output to wallpaper file as well as to terminal
+E	-- Undo a W command, end output to wallpaper file, closing file.
+	-- Write a debugging script of the session, showing %TD codes
+?       -- Type this documentation.
+<PTY escape char> -- send a real one on through.
+"
+		jrst tyidis
+		]
+	.iot ttyoch,[%tdbel]
+tyidis:	.iot ttyoch,[%tdmv0]
+	.iot ttyoch,vpos
+	.iot ttyoch,hpos
+	jrst dismis
+
+dbgstr:	skipe logflg		   ;are we logging already?
+	  jrst dbgstp		   ;  yes, stop logging
+	$call open,[#logoch,[sixbit/dsk/],[sixbit/STYOUT/],[sixbit/DEBUG/]][][#.uao]
+	  .lose %lsfil
+	sout #ttyoch,#%tjsio+%tjdis,"ZLogging started, output file is STYOUT DEBUG"
+
+	setom logflg		   ;saw we want logging output
+	jrst tyidis		   ;dismiss
+
+dbgstp:	sout #ttyoch,#%tjsio+%tjdis,"ZLogging stopped."
+	setzm logflg		   ;no more logging
+	.close logoch,		   ;let go of the file
+	jrst tyidis		   ;and on with the world
+
+lbuf==40			; length of STY buffer
+var buf(lbuf)			; buffer for STY output
+var dskflg			; non-zero if output to go to disk
+
+; STY input interrupt
+stiint: move a,[441000,,buf]	;get 8-bit byte pointer to temporary buffer
+	movei b,lbuf*4		;get buffer size in b
+	$call siot,[#styich,a,b]  ;read the input
+	 .lose %lsfil
+	movn c,b
+	addi c,lbuf*4		;get number of chars read
+	skipe dskflg		;wallpaper file open?
+	 pushj p,stydsk		;  then write to it
+	move a,[441000,,buf]	
+ifn 1,	push p,c
+	$call siot,[#ttyoch,a,c]	; output to TTY
+	 .lose %lsfil
+ifn 1,	pop p,c
+	skipn logflg		   ;are we logging?
+	  jrst si9		   ;  no, don't write log file stuff
+ifn 1,{
+	push p,b
+	move b,[441000,,buf]
+	jumpe c,si4
+si1:	ildb a,b
+	caige a,200
+	 jrst si3
+	.iot logoch,["<]
+	move a,tdnam-200(a)
+si2:	ildb t1,a
+	jumpe t1,si4
+	.iot logoch,t1
+	jrst si2
+si3:	.iot logoch,a
+si4:	sojg c,si1
+	pop p,b
+}
+si9:	jumpe b,stiint		; go do more if didn't read it all
+	jrst dismis
+
+
+tdnam:	440700,,[asciz "%TDMOV>"]
+	440700,,[asciz "%TDMV1>"]
+	440700,,[asciz "%TDEOF>"]
+	440700,,[asciz "%TDEOL>"]
+	440700,,[asciz "%TDDLF>"]
+	440700,,[asciz "%TDMTF>"]
+	440700,,[asciz "%TDMTN>"]
+	440700,,[asciz "%TDCRL>
+"]
+	440700,,[asciz "%TDNOP>"]
+	440700,,[asciz "%TDBS>"]
+	440700,,[asciz "%TDLF>"]
+	440700,,[asciz "%TDRCR>"]
+	440700,,[asciz "%TDORS>"]
+	440700,,[asciz "%TDQOT>"]
+	440700,,[asciz "%TDFS>"]
+	440700,,[asciz "%TDMV0>"]
+	440700,,[asciz "%TDCLR>
+"]
+	440700,,[asciz "%TDBEL>"]
+	440700,,[asciz "%TDINI>"]
+	440700,,[asciz "%TDILP>"]
+	440700,,[asciz "%TDDLP>"]
+	440700,,[asciz "%TDICP>"]
+	440700,,[asciz "%TDDCP>"]
+	440700,,[asciz "%TDBOW>"]
+	440700,,[asciz "%TDRST>"]
+	440700,,[asciz "%TDGRF>"]
+	440700,,[asciz "%TDRSU>"]
+	440700,,[asciz "%TDRSD>"]
+	440700,,[asciz "%TD234>"]
+	440700,,[asciz "%TD235>"]
+	440700,,[asciz "%TD236>"]
+	440700,,[asciz "%TD237>"]
+	440700,,[asciz "%TDSYN>"]
+	440700,,[asciz "%TDECO>"]
+	440700,,[asciz "%TDEDF>"]
+	440700,,[asciz "%TDNLE>"]
+	440700,,[asciz "%TDTSP>"]
+	440700,,[asciz "%TDCTB>"]
+	440700,,[asciz "%TDCTE>"]
+	440700,,[asciz "%TDMLT>"]
+	440700,,[asciz "%TDSVL>"]
+	440700,,[asciz "%TDRSL>"]
+	440700,,[asciz "%TDSSR>"]
+	440700,,[asciz "%TDSLL>"]
+	440700,,[asciz "%TDMCI>"]
+
+
+subttl	Wallpaper routines
+
+var bufbp			; B.P. to next byte in output buffer
+var buflen			; no. of bytes left in output buffer
+
+stydsk: jumpe c,cpopj		;if no chars return
+	move a,[441000,,buf]	;get 8 bit byte pointer to temporary buffer
+	push p,b		;save b
+	push p,c
+styds1:	ildb b,a		;get a byte
+	idpb b,bufbp		;deposit it in dsk buf
+	sosn buflen		; reached end of buffer yet?
+	 pushj p,dskfrc		;empty it
+	sojn c,styds1		;and go back for another byte
+	pop p,c
+	pop p,b			;and unsave b
+cpopj:	popj p,
+
+var dskbuf(lbuf)
+
+dskfrc:	push p,a		;save these
+	push p,b
+	move a,[444400,,dskbuf]	; 36 bit B.P. to buffer
+	movei b,lbuf		; no. of words in buffer
+	$call siot,[#dskoch,a,b]	; output to DSK
+	 .lose %lssys
+	move a,[441000,,dskbuf]	; reset BUFBP
+	movem a,bufbp
+	movei b,lbuf*4		; and BUFLEN
+	movem b,buflen
+	pop p,b			;restore 
+	pop p,a
+	popj p,			;and return for more
+
+
+walbeg:	skipe dskflg
+	 jrst [	sout #ttyoch,#%tjsio,"Wallpaper file already open!"
+		jrst tyidis
+		]
+	.call [	setz ? sixbit /open/	; $CALL won't work with ">"
+		5000,,.uio
+		1000,,dskoch
+		[sixbit /dsk/]
+		[sixbit /styout/]
+		setz [sixbit />/]
+		]
+	 .lose %lsfil
+	move a,[441000,,dskbuf]
+	move b,[%tdmv0]		; save cursor position in output file
+	idpb b,a
+	move b,vpos
+	idpb b,a
+	move b,hpos
+	idpb b,a
+	movem a,bufbp		; initialize buffer
+	movei a,4*lbuf-3
+	movem a,buflen
+	setom dskflg
+	.iot ttyoch,[%tdmv0]	;set our cursor back
+	.iot ttyoch,vpos
+	.iot ttyoch,hpos
+	jrst dismis
+
+walend:	skipn dskflg
+	 jrst [	sout #ttyoch,#%tjsio,"No wallpaper file open!"
+		jrst tyidis
+		]
+	move t,buflen		; get no. of unused bytes in last word
+	andi t,3		; ...
+	jumpe t,we2		; if none then skip pad loop
+	movei t1,%tdnop		; pad character
+we1:	idpb t1,bufbp		; pad out last word with %TDNOP's
+	sos buflen
+	sojn t,we1
+we2:	movei b,lbuf*4		; get no. of bytes in buffer
+	sub b,buflen		; 
+	lsh b,-2		; divide by 4
+	move a,[444400,,dskbuf]	; 36 bit B.P. to buffer
+	$call siot,[#dskoch,a,b]	; output stuff left in buffer
+	 .lose %lssys
+	.close dskoch,		; close the wallpaper file
+	setzm dskflg		; zero disk flag
+	jrst tyidis
+
+subttl	End
+
+; DISMIS - dismiss an interrupt
+dismis:	$call dismis,p,,#disb
+	 .lose %lssys
+
+; QUIT - Kill PTY
+quit:	.break 16,160000
+	.value
+
+
+intblk:	loc 42
+	-lintblk,,intblk
+
+	loc intblk
+	disb,,p
+	0 ? 1_ttyich ? 0 ? 1_ttyich+1_styich ? tyiint
+	0 ? 1_styich ? 0 ? 1_styich ? stiint
+lintblk==.-intblk
+
+	constants
+	variables
+
+pat: patch:	block 100
+
+end pty
