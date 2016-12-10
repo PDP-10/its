@@ -122,6 +122,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
    - PR, print out various system documentation.
+   - PTY, pseudo-tty
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
    - REATTA, reattaches disowned jobs to terminal.
    - RMAIL, Mail reading client.
