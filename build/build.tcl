@@ -798,6 +798,11 @@ respond "*" ":link sys1;ts plan,sys3;ts create\r"
 respond "*" ":midas sys1;ts pty_sysen1;pty\r"
 expect ":KILL"
 
+# PRUFD
+respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
+respond "Use what filename instead?" "syseng;jsf macros\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
