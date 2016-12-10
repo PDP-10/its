@@ -34,6 +34,41 @@ The goals are:
 The build currently runs on the SIMH and KLH10 emulators.  Of course,
 we'd be delighted to test this on a real KS10.
 
+### Usage
+
+To build ITS with this repository, you need some tools installed:
+make, C compiler, and expect.  Also, if you plan to use the SIMH
+emulator, it needs to be installed and accessible as `pdp10`.  The
+KLH10 emulator is built from source code.  Ensure all submodules are
+checked out, and then type `make EMULATOR=simh` or `make
+EMULATOR=klh10`.  This will leave built files in the `out` directory,
+one of which is a disk image with ITS installed.
+
+To start ITS, either type
+- `pdp10 build/simh/boot` for SIMH, or
+- `cd build/klh10; sudo kn10-ks-its dskdmp.ini` and then `go` at the
+  `KLH10#` prompt.  Sudo is only needed to enable networking.
+
+When you see the `DSKDMP` prompt, type `its`, press Enter, and then
+`ESC g`.  Eventually, you will see `SYSTEM JOB USING THIS CONSOLE`.
+You are now ready to log in, so type Control-Z.  See
+[doc/DDT.md](doc/DDT.md) for a list of useful commands.  When done,
+shut down orderly by typing `:lock` and then `5down`.
+
+To install your personal user files, add a subdirectory under `user`
+with your files inside.  They will be copied to ITS.  The directory
+name is limited to six characters, and file names must have two
+six-character parts separated by a period.
+
+Here is an overview of the repository:
+- bin - PDP-10 binary files necessary to bootstrap the system.
+- build - build scripts.
+- doc - documentation, most of which appear in the INFO system.
+- src - source code for ITS and all programs.
+- tools - build tools.
+- out - build output.
+- user - optional user files installed in ITS.
+
 ### Documentation
 
 See the [`doc` subdirectory](doc) for documentation.
