@@ -778,11 +778,7 @@ type ":pdump sys1;ts prufd\r"
 respond "*" ":kill\r"
 
 respond "*" ":xfile build;sty xfile\r"
-
-# luser
-respond "*" ":midas sysbin;luser bin_syseng;luser\r"
-expect ":KILL"
-respond "*" ":link sys1;ts luser,sysbin;luser bin\r"
+respond "*" ":xfile build;luser xfile\r"
 
 # ARCCPY
 respond "*" ":midas sys2;ts arccpy_sysen2;arccpy\r"
