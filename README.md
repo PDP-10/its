@@ -134,6 +134,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.
+   - STY, pseudo-terminal for multiple sessions.
    - SUPDUP, Supdup client.
    - SYSMSG, displays system messages.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.

@@ -810,6 +810,10 @@ respond "*" "nlinks+14/ A,,646471\r"
 type ":pdump sys1;ts prufd\r"
 respond "*" ":kill\r"
 
+# STY
+respond "*" ":midas sys1;ts sty_sysen2;sty\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
