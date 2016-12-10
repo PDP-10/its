@@ -803,6 +803,13 @@ respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
 respond "Use what filename instead?" "syseng;jsf macros\r"
 expect ":KILL"
 
+# patch PRUFD to use the TTY: device rather than the LPT: device
+respond "*" ":job prufd\r"
+respond "*" ":load sysbin;prufd bin\r"
+respond "*" "nlinks+14/ A,,646471\r"
+type ":pdump sys1;ts prufd\r"
+respond "*" ":kill\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
