@@ -785,6 +785,11 @@ respond "*" ":midas sys;ts @_sysen1;@\r"
 respond "Use what filename instead?" "sysen2;\r"
 expect ":KILL"
 
+# PLAN/CREATE
+respond "*" ":midas sys3;ts create_syseng;create\r"
+expect ":KILL"
+respond "*" ":link sys1;ts plan,sys3;ts create\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
