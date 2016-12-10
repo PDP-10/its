@@ -779,10 +779,7 @@ respond "*" ":kill\r"
 
 respond "*" ":xfile build;sty xfile\r"
 respond "*" ":xfile build;luser xfile\r"
-
-# ARCCPY
-respond "*" ":midas sys2;ts arccpy_sysen2;arccpy\r"
-expect ":KILL"
+respond "*" ":xfile build;arccpy xfile\r"
 
 # CALPRT
 respond "*" ":midas sys2;ts calprt_sysen2;calprt\r"
