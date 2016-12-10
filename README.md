@@ -102,6 +102,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
 
    - 11SIM, PDP-11 emulator.
    - @, cross reference generation tool.
+   - ARCCPY, copies and old-format archive, converting to new format.
    - ARCDEV, transparent file system access to archive files.
    - ARCSAL, archive salvager.
    - ARGUS, alerts you when specified users login or logout.
