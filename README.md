@@ -111,6 +111,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - ATSIGN TCP, TCP support.
    - BINPRT, display information about binary executable file.
    - BYE, say goodbye to user. Used in LOGOUT scripts.
+   - CALPRT, decode a .CALL instructions CALL block
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
