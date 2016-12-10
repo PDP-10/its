@@ -823,6 +823,10 @@ respond "*" ":link sys1;ts luser,sysbin;luser bin\r"
 respond "*" ":midas sys2;ts arccpy_sysen2;arccpy\r"
 expect ":KILL"
 
+# CALPRT
+respond "*" ":midas sys2;ts calprt_sysen2;calprt\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
