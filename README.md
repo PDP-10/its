@@ -77,6 +77,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
+   - CREATE, creates a text file in your home directory from console input.
    - CROCK, analog watch.
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
@@ -116,6 +117,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - OS, realtime TTY spy.
    - PALX, PDP-11 cross assembler.
    - PANDA, user account management program.
+   - PLAN (CREATE), creates a PLAN file in your home directory from console input.
    - PDSET, set time and date.
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
