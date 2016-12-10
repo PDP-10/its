@@ -764,10 +764,7 @@ respond "*" ":midas sys;ts @_sysen1;@\r"
 expect ":KILL"
 
 respond "*" ":xfile build;create xfile\r"
-
-# PTY
-respond "*" ":midas sys1;ts pty_sysen1;pty\r"
-expect ":KILL"
+respond "*" ":xfile build;pty xfile\r"
 
 # PRUFD
 respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
