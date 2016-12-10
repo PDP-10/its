@@ -827,6 +827,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts calprt_sysen2;calprt\r"
 expect ":KILL"
 
+# HOSTAB
+respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
