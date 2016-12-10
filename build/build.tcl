@@ -763,10 +763,7 @@ respond "*" ":xfile build;bye xfile\r"
 respond "*" ":midas sys;ts @_sysen1;@\r"
 expect ":KILL"
 
-# PLAN/CREATE
-respond "*" ":midas sys3;ts create_syseng;create\r"
-expect ":KILL"
-respond "*" ":link sys1;ts plan,sys3;ts create\r"
+respond "*" ":xfile build;create xfile\r"
 
 # PTY
 respond "*" ":midas sys1;ts pty_sysen1;pty\r"
