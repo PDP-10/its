@@ -777,9 +777,7 @@ respond "*" "nlinks+14/ A,,646471\r"
 type ":pdump sys1;ts prufd\r"
 respond "*" ":kill\r"
 
-# STY
-respond "*" ":midas sys1;ts sty_sysen2;sty\r"
-expect ":KILL"
+respond "*" ":xfile build;sty xfile\r"
 
 # luser
 respond "*" ":midas sysbin;luser bin_syseng;luser\r"
