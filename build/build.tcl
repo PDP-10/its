@@ -781,10 +781,7 @@ respond "*" ":xfile build;sty xfile\r"
 respond "*" ":xfile build;luser xfile\r"
 respond "*" ":xfile build;arccpy xfile\r"
 respond "*" ":xfile build;calprt xfile\r"
-
-# HOSTAB
-respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
-expect ":KILL"
+respond "*" ":xfile build;hostab xfile\r"
 
 # LSPEED
 respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
