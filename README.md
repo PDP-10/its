@@ -143,6 +143,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - LISP, lisp interpreter and runtime library (autoloads only).
    - LOCK, shut down system.
    - LOOKUP, looks up user info in INQUIR database.
+   - LUSER, request help from registered list of logged-in users
    - MAIL, Mail sending client.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
