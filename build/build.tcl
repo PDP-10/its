@@ -819,6 +819,10 @@ respond "*" ":midas sysbin;luser bin_syseng;luser\r"
 expect ":KILL"
 respond "*" ":link sys1;ts luser,sysbin;luser bin\r"
 
+# ARCCPY
+respond "*" ":midas sys2;ts arccpy_sysen2;arccpy\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
