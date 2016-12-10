@@ -134,6 +134,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - FTPU, FTP Client.
    - H3MAKE, a job that requests DRAGON to build host table.
    - HOSTS3, the host table compiler.
+   - HOSTAB, display HOSTS2 format host table
    - HSNAME, displays user's HSNAME.
    - HSNDEV, HSNAME device.
    - IDLE, list idle users.
