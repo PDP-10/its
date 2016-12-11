@@ -153,6 +153,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
    - MODEMS, modems gragon.
+   - MSPLIT, split a file into smaller parts.
    - MTBOOT, make bootable tapes.
    - NAME, Shows logged in users and locations, aka FINGER.
    - NETIME, network time dragon.
