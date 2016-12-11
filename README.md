@@ -164,6 +164,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - PDSET, set time and date.
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
+   - PHOTO, capture STY session output.
    - PR, print out various system documentation.
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
