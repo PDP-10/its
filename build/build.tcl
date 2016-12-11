@@ -797,10 +797,7 @@ expect ":KILL"
 respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
 expect ":KILL"
 
-# GMSGS
-respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
-expect ":KILL"
-respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
+respond "*" ":xfile build;gmsgs xfile\r"
 
 # X, Y, Z
 respond "*" ":midas sys1;ts x_sysen2;x\r"
