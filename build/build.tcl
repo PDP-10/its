@@ -818,9 +818,7 @@ respond "*" ":xfile build;tags xfile\r"
 respond "*" ":midas sys2;ts chatst_sysen3;chatst\r"
 expect ":KILL"
 
-# STYLOG
-respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
-expect ":KILL"
+respond "*" ":xfile build;stylog xfile\r"
 
 # COMIFY
 respond "*" ":midas sys2;ts comify_sysen3;comify\r"
