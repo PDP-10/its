@@ -831,6 +831,18 @@ expect ":KILL"
 respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
 expect ":KILL"
 
+# PROBE
+respond "*" ":link syseng;its defs,sys;itsdfs >\r"
+respond "*" ":midas sysbin;probe bin_bawden;probe\r"
+expect ":KILL"
+# note: setting debug to 0 and running causes it to pdump itself to
+#  sys;ts probe
+respond "*" ":job probe\r"
+respond "*" ":load sysbin;probe bin\r"
+respond "*" "debug/0\r"
+type "\033g"
+respond "*" ":link sys;ts pb,sys;ts probe\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
