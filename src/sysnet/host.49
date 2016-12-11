@@ -1,0 +1,486 @@
+;-*- MIDAS -*-
+
+title HOST -- print information on network hosts
+
+; Canonical location is on MIT-MC, file SYSEN1;HOST >
+; All changes/updates should be copied there or they may
+; be lost.
+
+IFNDEF ITSSW,ITSSW==IFE <.OSMIDAS-SIXBIT/ITS/>,[-1] .ELSE 0
+IFNDEF SAILSW,SAILSW==IFE <.OSMIDAS-SIXBIT/SAIL/>,[-1] .ELSE 0
+IFNDEF TNXSW,TNXSW==IFE <<.OSMIDAS-SIXBIT/TENEX/>&<.OSMIDAS-SIXBIT/TWENEX/>>,[-1] .ELSE 0
+
+ifn tnxsw,.decsav
+
+;=:0
+a=:1
+b=:2
+c=:3
+d=:4
+e=:5
+t=:6
+tt=:7
+bp=:10
+;=:11
+oc=:12
+u1=:13
+u2=:14
+u3=:15
+u4=:16
+p=:17
+
+; I/O channels
+tyoc==1
+hstc==2
+
+pat::
+patch:	block 100
+
+ifn itssw,.insrt ksc;macros
+ifn tnxsw,.insrt macros
+
+
+ifn itssw,.insrt ksc;out
+ifn tnxsw,.insrt out
+
+define type &str&	; Beware of unbalanced parens/brackets/braces/brokets
+out(,(str))
+termin
+
+$$HST3==1			; Use HOSTS3 now.
+$$ARPA==1			;Hack the ARPAnet
+;$$CHAOS==1			;Hack the CHAOSnet
+$$ALLNET==1			;Lookup routines will handle any host
+$$HOSTNM==1			;Host name lookup routines
+$$SYMLOOK==1
+$$HSTMAP==1
+hstpag==:50			;Page to put host table on
+hsttab=:hstpag*pg$siz
+
+
+ifn itssw,.insrt syseng;netwrk
+ifn tnxsw,.insrt netwrk
+
+nw%lcs==:<22_24.>		;LCSnet
+
+popj1:	aosa (p)
+popaj:	 pop p,a
+cpopj:	ret
+
+pdl:	-100,,pdl
+	block 100
+
+FL20X:	0		; Zero if 10X, -1 if 20X.
+
+ljcl==100
+jclbuf:	block ljcl
+	-1
+hstbuf:	block 20		;for the host string
+
+
+go:	move p,pdl		; Set up PDL
+ifn itssw,[
+	syscal OPEN,[%clbit,,.uao ? %climm,,tyoc ? [sixbit /TTY/]]
+	  .lose %lsfil
+	out(,ch(tyoc),open(uc$iot))
+]
+ifn tnxsw,[
+	SETZM FL20X		; Default assumes TENEX.
+	MOVE A,['LOADTB]
+	SYSGT			; See if LOADTB table defined...
+	CAIN B,
+	 SETOM FL20X		; If not, must be Twenex.
+	out(,ch(tyoc),open(uc$iot,[.priou]))
+]
+	movei a,jclbuf
+	movei b,ljcl*5
+	call sysjcl		; Gobble the JCL
+	jumple b,[		; Jump if no JCL.
+		out(,("Usage is: HOST <host name or address>"),eol)
+		jrst sysdon]
+
+	move bp,a		; Set up BP to JCL.  Save start BP in A.
+go0:	ildb t,bp
+	caie t,0		;null?
+	  cain t,^M		;Return
+	    jrst go1
+	caie t,^J
+	  cain t,^C
+	    jrst go1
+	cain t,^_
+	  jrst go1
+	cain t,",
+	 jrst [	push p,bp	; Comma.  Set to zero unless it's a pair ",,"
+		ildb t,bp
+		cain t,",
+		 jrst [	sub p,[1,,1]	; Won!
+			jrst .+1]
+		pop p,bp
+		setz t,
+		dpb t,bp		; Set single commas to zero
+		jrst .+1]
+	jrst go0
+
+go1:	setz t,			;null out the terminating character
+	dpb t,bp		;to make HSTLOOK happy
+	idpb t,bp		;and a second one to indicate the end
+	push p,a		; Save start BP
+	movei a,hstpag		;Page to put
+	movei b,hstc		;channel to use to load
+	call netwrk"hstmap	;Map in HOSTS3
+	 jrst [	type "Couldn't map in HOSTS3 data file!"
+		jrst sysdon]
+	pop p,a			; Restore start BP
+
+go2:	move b,[440700,,hstbuf]	; Copy an arg into word-aligned buffer
+	ildb t,a
+	jumpe t,sysdon		; If no more JCL to parse, done.
+	idpb t,b
+
+	ildb t,a
+	idpb t,b
+	jumpn t,.-2
+
+	push p,a
+	type /
+/
+	setz b,
+	movei a,hstbuf
+	call netwrk"hstlook	; Convert string to host #
+	 jrst go3
+	move b,a		; Lookup host info for that number
+	call netwrk"hstsrc	; Find the site pointer
+	 jrst go3
+	call shohst		; Show entry for site pointer in D.
+	pop p,a
+	jrst go2
+go3:	pop p,a			; Lost for the entry.
+	out(,(|Lookup failed for "|),tz(hstbuf),(|"  |))
+	skipe b			; If we parsed any host number,
+	 outcal(,hv(b))		;  show the luser the loser.
+	out(,eol)
+	jrst sysdon		; All done.
+
+
+; SHOHST - Type out all info for a given host.
+;	D/ addr of SITE entry
+;	A/ as returned by NETWRK"HSTSRC - sign bit set if TIP/TAC
+
+shohst:	push p,a			; Save stupid tip/tac bit
+	hlrz c,netwrk"stlnam(d)		; Get official name
+	out(,tz(hsttab(c)),("  "))	; First type official name
+
+	; Now type out all nicknames for this site.
+	setz e,				; Clear cnt of nicknames
+	move b,hsttab+netwrk"namptr	; Get addr of NAMES table
+	movn a,hsttab(b)		; Get # entries
+	hrl b,a				; Make AOBJN
+	addi b,hsttab+2			; pointing at 1st entry.
+shoh12:	hlrz a,(b)
+	caie a,-hsttab(d)		; Matches our site entry?
+	 jrst shoh15			; Nope
+	hrrz a,(b)			; Get pointer to name string
+	cain a,(c)			; and not the official name?
+	 jrst shoh15			; Not right site, or is official name.
+	jumpe e,[out(,lpar)
+		jrst shoh14]
+	type ", "
+shoh14:	out(,tz(hsttab(a)))		; Type out nickname!
+	addi e,1			; bump count of nicknames.
+shoh15:	aobjn b,shoh12
+	jumpn e,[out(,rpar)
+		jrst .+1]
+
+	; Now show "type" of host, on same line.
+	pop p,a				; Restore stuff HSTSRC gave.
+	out(,(|  "|))
+	jumpl a,[out(,("TIP/TAC"))
+		  jrst shoh30]
+	skipge a,netwrk"stlflg(d)
+	 jrst [	out(,("SERVER"))
+		tlne a,netwrk"stfgwy		; Also a gateway?
+		 outcal(,("+"))
+		jrst .+1]
+	tlne a,netwrk"stfgwy			; See if gateway
+	 outcal(,("GATEWAY"))
+	tlnn a,netwrk"stfsrv+netwrk"stfgwy	; If neither,
+	 outcal(,("USER"))		; call it a user.
+
+shoh30:	out(,(|"|),eol)
+	hlrz bp,netwrk"stlsys(d)	; Get system name
+	skipn bp
+	  movei bp,[asciz /??/]-hsttab
+	out(,("  System: "),tz(hsttab(bp)))
+	hrrz bp,netwrk"strmch(d)	; Get machine name
+	skipn bp
+	  movei bp,[asciz /??/]-hsttab
+	out(,("  CPU: "),tz(hsttab(bp)),eol)
+
+	call shoadr		; Now type out addresses
+	ret
+	
+; SHOADR - Type out all addresses for a site.
+;	D/ addr of SITE entry
+; During processing, 
+;	D/ addr of an ADDRESS entry for this site.
+
+shoadr:	hrrz d,netwrk"stradr(d)	;D <= address-table entry
+adrlop:	type /  /		; Space out a couple cols
+	move b,hsttab+netwrk"addadr(d)	;Get address
+	netwrk"getnet c,b	; Get network #
+
+	move t,hsttab+netwrk"netptr	;ptr to NETWORKS table
+	move tt,hsttab(t)	;# of entries
+	move e,hsttab+1(t)	;Size of entries
+	movei t,2(t)		;skip count and size
+netchk:	camn c,hsttab(t)	;Is this the network?
+	  jrst netfnd		;  Yep
+	add t,e			;next entry
+	sojg tt,netchk
+	type /(unknown network)/	;Can't find the network?  Foo!
+	jrst netfn1
+
+netfnd:	hlrz t,hsttab+netwrk"ntlnam(t)	;Get the loc of the network name
+	out(,tz(hsttab(t)))	;Get core address of network name
+
+	; B/ full HOSTS3 address
+	; C/ network #
+netfn1:	out(,(" = "))
+	tlne c,(netwrk"ne%str)	; String type addr?
+	 jrst [	out(,tz(hsttab(b)))	   ; Use ptr to ASCIZ string
+		jrst adrnxt]
+
+	call inttyp		; Plausibly normal, use Internet format first
+	out(,("  "))
+
+	; Now handle any addresses that we know want some special
+	; representations.
+	came c,[netwrk"nw%arp]	; Is this the Arpanet?
+	 camn c,[netwrk"nw%mil]	; Or Milnet?
+	  jrst arptyp		; Yes, go hack host/imp
+	camn c,[netwrk"nw%chs]	; Is this the chaosnet?
+	  jrst [move a,b
+		andi a,177777
+		out(,lpar,o(a),(" = "))
+		ldb a,[101000,,b]
+		out(,o(a),("/"))
+		ldb a,[001000,,b]
+		out(,o(a),rpar)
+		jrst adrnxt]
+	camn c,[nw%lcs]		; Is this the LCSnet?
+	  jrst [ldb a,[201000,,b]
+		out(,lpar,o(a),("/"))
+		ldb a,[001000,,b]
+		out(,o(a),rpar)
+		jrst adrnxt]
+
+adrnxt:	out(,("   "),hv(b),eol)	; Always finish with halfword value
+	call shosvc		; Show services for address D points to.
+	hrrz d,hsttab+netwrk"adrcdr(d)	; Get next address
+	jumpn d,adrlop
+	ret
+
+
+inttyp:	ldb a,[400400,,b]		; Get high 4 flag bits
+	jumpn a,[out(,o(a),(":"))	; Flag bits in octal if any!
+		jrst .+1]
+	ldb a,[301000,,b]
+	out(,d(a),("."))
+	ldb a,[201000,,b]
+	out(,d(a),("."))
+	ldb a,[101000,,b]
+	out(,d(a),("."))
+	ldb a,[001000,,b]
+	out(,d(a))
+	ret
+
+arptyp:	out(,lpar,("Host "))
+	ldb a,[201000,,b]		; decimal host
+	out(,d(a),(", Imp "))
+	ldb a,[002000,,b]
+	out(,d(a),rpar)			; decimal IMP
+IFN 0,[	; Stuff to print out various old-style formats... retained just
+	; in case.
+	lsh b,-16.
+	andi b,377
+	dpb a,[112000,,b]		; Make hosts2 style number.
+	trnn b,700374		   ; See if fits in old-style
+	  call [ move a,b	   ; It does, convert it
+		 lsh b,-9
+		 dpb a,[060200,,b]
+		 ret ]
+	out(,o(b))		   ; Print octal value
+] ;IFN 0
+	jrst adrnxt
+
+shosvc:	type /	/
+	hrrz c,hsttab+netwrk"adrsvc(d)	; Get fileaddr of services list
+	jumpe c,[type /(no services listed)/
+		jrst shosv9]
+shosv2:	hrrz bp,hsttab+netwrk"svrnam(c)
+	addi bp,hsttab
+	out(,tz((bp)))
+	hrrz c,hsttab+netwrk"svrcdr(c)
+	jumpn c,[type /, /
+		jrst shosv2]
+shosv9:	type /
+/
+	ret
+
+IFN ITSSW,[
+; SYSDON - Called to terminate program gracefully.
+
+SYSDON:	.LOGOUT 1,
+
+; SYSHLT - Called to halt program violently.  If user tries to continue,
+;	oblige resignedly.
+
+SYSHLT:	.VALUE
+	RET
+
+; SYSJCL - Called to read in a JCL line if any.
+;	A/ address to read JCL into
+;	B/ # chars available
+; Returns .+1 if JCL too long for buffer.
+; Returns .+2:
+;	A/ BP to ASCIZ JCL string
+;	B/ # chars of JCL read  (-1 = no JCL at all)
+; Clobbers T, TT
+
+SYSJCL:	MOVEI T,(B)		; Save # chars avail
+	SETZ B,
+	.SUSET [.ROPTIO,,TT]
+	TLNN TT,%OPCMD		; Has our superior said it has a cmd?
+	 SOJA B,POPJ1		; Nope.
+	CAIG T,5*3		; Ensure reasonable JCL buffer size
+	 RET
+	IDIVI T,5		; Get # words we can use
+	ADDI T,(A)		; Get 1st non-usable addr
+	SETOM -1(T)		; Ensure last word non-zero
+	MOVEI TT,1(A)		; Zero the buffer
+	HRLI TT,(A)
+	SETZM (A)
+	BLT TT,-2(T)		; Zap!
+	HRLI A,5
+	.BREAK 12,A		; Try to read command string.
+	SETZM -1(T)		; Get rid of terminating -1
+	SKIPE -2(T)		; Next-to-last word should still be zero
+	 RET			; Ugh, didn't have room for all of it.
+	SKIPN (A)
+	 JRST POPJ1		; Nothing there.
+	HRLI A,440700		; Hurray, all's well!  Make a BP
+	MOVE TT,A		; Count # of chars in JCL.
+	ILDB T,TT
+	JUMPE T,POPJ1
+	AOJA B,.-2
+] ;IFN ITSSW
+
+IFN TNXSW,[
+
+SYSDON:	HALTF
+	JRST .-1	; Never allow continuation
+SYSHLT:	HALTF
+	RET
+
+SYSJCL:	SKIPN FL20X
+	 JRST SYSJCT	; Jump to handle Tenex differently.
+	MOVEI TT,(A)	; Save buffer addr
+	HRLI TT,440700	; Make a BP out of it.
+	SETZ A,		; Check RSCAN.
+	RSCAN		; See if have anything in RSCAN buffer.
+	 SETO A,	; Huh?  Shouldn't happen, but ignore it.
+	CAIL A,(B)	; Ensure there's enough room for the input.
+	 RET		; No, take failure return.
+	SKIPG B,A	; Find # chars waiting for us
+	 JRST [	MOVE A,TT	; None, just return.
+		JRST POPJ1]
+	MOVEI T,(B)
+	PUSH P,C
+	MOVNI C,(A)	; Aha, set up cnt for SIN
+	MOVE B,TT
+	MOVEI A,.PRIIN	; Now ready for business...
+	SIN
+	POP P,C
+	SETZ A,
+	IDPB A,B	; Ensure string is ASCIZ.
+	MOVE A,TT	; Set up original BP
+	MOVEI B,(T)	; and original length
+
+	; Now must flush cruft that crufty EXEC sticks in crufty
+	; front of crufty line!!
+	IRP PRE,,[RUN,ERUN]		; Cruft to flush
+	CAILE B,<.LENGTH /PRE/>
+	 JRST [	IRPC X,,[PRE]
+			ILDB T,A
+			CAIE T,"X
+			 CAIN T,"X-40
+			  CAIA
+			   JRST .+1
+			TERMIN
+		ILDB T,A
+		CAIE T,40
+		 JRST .+1
+		SUBI B,1+<.LENGTH /PRE/>
+		JRST SYSJC2]
+	MOVE A,TT		; Restore original BP
+	TERMIN
+	; Now flush the crufty name of the program or file being run.
+SYSJC2:	ILDB T,A		; Flush spaces
+	CAIN T,40
+	 SOJA B,.-2
+	JUMPLE B,POPJ1		; Return if zero cnt (with right BP)
+	ILDB T,A
+	CAILE T,40
+	 SOJA B,.-2		; Flush until random ctl seen (space, ^M)
+	SUBI B,1
+	CAIE T,40		; If it wasn't a space,
+	 SETZ B,		; then forget about the whole thing.
+	JRST POPJ1
+
+; Get JCL if on TENEX
+
+SYSJCT:	MOVEI TT,(A)
+	HRLI TT,440700
+	MOVEI T,(B)
+	SETZ B,
+	MOVEI A,.PRIIN
+	BKJFN		; Get prev char
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Shouldn't happen, but claim no JCL if so
+	PBIN		; Get the char
+	CAIE A,40	; Space?
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Nope, no JCL.
+
+	; TENEX "JCL" desired, must read directly from .PRIIN.
+	; This code provides a very crude rubout facility.
+	PUSH P,TT	; Save original BP
+SYSJC4:	PBIN
+	CAIE A,^_	; TENEX EOL?
+	 CAIN A,^M	; or CR?
+	  JRST SYSJC5
+	CAIN A,177	; Rubout?
+	 SOJA B,[CAIGE B,
+		 AOJA B,SYSJC4
+		MOVEI A,"/
+		PBOUT
+		LDB A,TT
+		PBOUT
+		MDBP7 TT
+		JRST SYSJC4]
+	IDPB A,TT
+	CAIL B,-3(T)		; Ensure enough room for terminator chars
+	 JRST POPAJ		; Ugh!  Restore BP and take failure return.
+	AOJA B,SYSJC4
+
+SYSJC5:	MOVEI A,^M
+	IDPB A,TT
+	SETZ A,
+	IDPB A,TT		; Ensure string is ASCIZ.
+	POP P,A			; Restore BP to start of string.
+	AOJA B,POPJ1		; Include terminating CR in count.
+
+] ;IFN TNXSW
+
+end go
+ 
