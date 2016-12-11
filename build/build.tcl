@@ -787,17 +787,7 @@ respond "*" ":xfile build;hostab xfile\r"
 respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
 expect ":KILL"
 
-# PROBE
-respond "*" ":link syseng;its defs,sys;itsdfs >\r"
-respond "*" ":midas sysbin;probe bin_bawden;probe\r"
-expect ":KILL"
-# note: setting debug to 0 and running causes it to pdump itself to
-#  sys;ts probe
-respond "*" ":job probe\r"
-respond "*" ":load sysbin;probe bin\r"
-respond "*" "debug/0\r"
-type "\033g"
-respond "*" ":link sys;ts pb,sys;ts probe\r"
+respond "*" ":xfile build;probe xfile\r"
 
 # TTY
 respond "*" ":midas sys1;ts tty_sysen1;tty\r"
