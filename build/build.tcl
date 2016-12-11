@@ -863,6 +863,11 @@ expect ":KILL"
 respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
 expect ":KILL"
 
+# TMPKIL
+respond "*" ":midas sys2;ts tmpkil_syseng;tmpkil\r"
+expect ":KILL"
+respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
