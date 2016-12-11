@@ -188,6 +188,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - TELNET, Telnet client.
    - TELSER, Telnet/Supdup server.
    - TIMOON, displays the time and phase of the moon.
+   - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
 
 6. A brand new host table is built from the host table source and
