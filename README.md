@@ -180,6 +180,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - STY, pseudo-terminal for multiple sessions.
    - SUPDUP, Supdup client.
    - SYSMSG, displays system messages.
+   - TAGS, generate tags table for sources.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
    - TCTYP and CRTSTY, terminal handling.
    - TECO, editor.
