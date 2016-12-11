@@ -824,10 +824,7 @@ respond "*" ":xfile build;stylog xfile\r"
 respond "*" ":midas sys2;ts comify_sysen3;comify\r"
 expect ":KILL"
 
-# TMPKIL
-respond "*" ":midas sys2;ts tmpkil_syseng;tmpkil\r"
-expect ":KILL"
-respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
+respond "*" ":xfile build;tmpkil xfile\r"
 
 # WHAT
 respond "*" ":midas sys2;ts what_syseng;what\r"
