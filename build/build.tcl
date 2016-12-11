@@ -859,6 +859,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts tags_sysen2;tags\r"
 expect ":KILL"
 
+# STYLOG
+respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
