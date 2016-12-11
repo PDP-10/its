@@ -812,10 +812,7 @@ respond "*" ":midas sys2;ts acclnk_sysen2;acclnk\r"
 expect ":KILL"
 
 respond "*" ":xfile build;msplit xfile\r"
-
-# TAGS
-respond "*" ":midas sys2;ts tags_sysen2;tags\r"
-expect ":KILL"
+respond "*" ":xfile build;tags xfile\r"
 
 # CHATST
 respond "*" ":midas sys2;ts chatst_sysen3;chatst\r"
