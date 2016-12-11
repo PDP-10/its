@@ -162,6 +162,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
    - PR, print out various system documentation.
+   - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
    - PTY, pseudo-tty
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
