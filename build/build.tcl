@@ -851,6 +851,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
 expect ":KILL"
 
+# MSPLIT
+respond "*" ":midas sys2;ts msplit_sysen2;msplit\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
