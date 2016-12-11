@@ -132,6 +132,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - FRETTY, display list of free TTYs.
    - FTPS, FTP Server.
    - FTPU, FTP Client.
+   - GMSGS, copy system messages to mail file.
    - H3MAKE, a job that requests DRAGON to build host table.
    - HOSTS3, the host table compiler.
    - HOSTAB, display HOSTS2 format host table
