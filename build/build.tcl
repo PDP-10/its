@@ -847,6 +847,10 @@ respond "*" ":link sys;ts pb,sys;ts probe\r"
 respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
 expect ":KILL"
 
+# LOADP
+respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

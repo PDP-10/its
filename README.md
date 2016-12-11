@@ -145,6 +145,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - INQUPD, processes INQUIR change requests.
    - JOBS, list jobs by category.
    - LISP, lisp interpreter and runtime library (autoloads only).
+   - LOADP, displays system load.
    - LOCK, shut down system.
    - LOOKUP, looks up user info in INQUIR database.
    - LUSER, request help from registered list of logged-in users
