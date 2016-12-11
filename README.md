@@ -178,6 +178,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.
    - STY, pseudo-terminal for multiple sessions.
+   - STYLOG, convert PTY output file into ascii file.
    - SUPDUP, Supdup client.
    - SYSMSG, displays system messages.
    - TAGS, generate tags table for sources.
