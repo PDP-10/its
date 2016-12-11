@@ -805,9 +805,7 @@ expect ":KILL"
 respond "*" ":link sys1;ts y,sys1;ts x\r"
 respond "*" ":link sys1;ts z,sys1;ts x\r"
 
-# LOADP
-respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
-expect ":KILL"
+respond "*" ":xfile build;loadp xfile\r"
 
 # ACCLNK
 respond "*" ":midas sys2;ts acclnk_sysen2;acclnk\r"
