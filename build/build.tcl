@@ -880,6 +880,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts type8_sra;ar3:type8\r"
 expect ":KILL"
 
+# HOST
+respond "*" ":midas sys3;ts host_sysnet;host\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
