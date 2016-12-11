@@ -191,6 +191,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - TIMOON, displays the time and phase of the moon.
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
+   - TYPE8, type 8-bit file
    - WHAT, humorous quips to various "what" questions.
 
 6. A brand new host table is built from the host table source and
