@@ -313,6 +313,10 @@ respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
+# JOBDEV D (DSKDEV)
+respond "*" ":midas device;jobdev d_syseng;dskdev\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_ar1:cstacy;whoj\r"
 expect ":KILL"
 respond "*" ":link sys1;ts talk,sysbin;whoj bin\r"
