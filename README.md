@@ -151,6 +151,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - LOADP, displays system load.
    - LOCK, shut down system.
    - LOOKUP, looks up user info in INQUIR database.
+   - LOSS (device)
    - LUSER, request help from registered list of logged-in users
    - MAIL, Mail sending client.
    - METER, displays system metering information.
