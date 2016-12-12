@@ -798,10 +798,7 @@ respond "*" ":midas sys2;ts comify_sysen3;comify\r"
 expect ":KILL"
 
 respond "*" ":xfile build;tmpkil xfile\r"
-
-# WHAT
-respond "*" ":midas sys2;ts what_syseng;what\r"
-expect ":KILL"
+respond "*" ":xfile build;what xfile\r"
 
 # EXECVT
 respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
