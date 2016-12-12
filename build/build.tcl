@@ -509,6 +509,9 @@ respond "*" ":link sys2;ts chtn,sysbin;supdup bin\r"
 respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
 expect ":KILL"
 
+respond "*" ":midas device;jobdev dp_ar5:alan;dpdev 19\r"
+expect ":KILL"
+
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
 

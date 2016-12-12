@@ -123,6 +123,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - DIRDEV, list directories, sorted or subsetted.
    - DIRED, directory editor (independent from EMACS DIRED).
    - DMPCPY, crach dump copy dragon.
+   - DP Device, 7-bit conversions?
    - DQ Device, for doing hostname resolutions. Used by COMSAT.
    - DSKDEV, D - short disk device.
    - DSKUSE, disk usage information.
