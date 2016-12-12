@@ -666,18 +666,7 @@ respond "*" ":link device;tcp syn045,sysbin;timesrv bin\r"
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
 respond "*" ":xfile build;rmtdev xfile\r"
-
-# decuuo
-respond "*" ":midas decsys;_decuuo\r"
-expect ":KILL"
-respond "*" ":job decuuo\r"
-respond "*" ":load decsys;decuuo bin\r"
-respond "*" "purify\033g"
-respond "TS DEC" "\r"
-respond "*" ":kill\r"
-
-respond "*" ":midas decsys;_decbot\r"
-expect ":KILL"
+respond "*" ":xfile build;decuuo xfile\r"
 
 # stktrn
 respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
