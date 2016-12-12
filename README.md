@@ -173,6 +173,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - PTY, pseudo-tty
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
    - REATTA, reattaches disowned jobs to terminal.
+   - RIPDEV, replacement for MLDEV for no-longer-existing machines.
    - RMAIL, Mail reading client.
    - RMTDEV, MLDEV for non-ITS hosts.
    - SCANDL, TTY OUTPUT SPY
