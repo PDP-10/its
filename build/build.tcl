@@ -813,9 +813,7 @@ respond "*" ":link dragon;hourly uptime,sysbin;uptime bin\r"
 respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
 expect ":KILL"
 
-# PHOTO
-respond "*" ":midas sys2;ts photo_sysen2;photo\r"
-expect ":KILL"
+respond "*" ":xfile build;photo xfile\r"
 
 # TYPE8
 respond "*" ":midas sys;ts type8_sysen3;type8\r"
