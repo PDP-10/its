@@ -296,11 +296,8 @@ respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
 respond "*" ":link sys;ts load,sys;ts dump\r"
 
-respond "*" ":midas sys1;ts stink_sysen2;stink\r"
-expect ":KILL"
-
+respond "*" ":xfile build;stink xfile\r"
 respond "*" ":xfile build;pdset xfile\r"
-
 respond "*" ":xfile build;lock xfile\r"
 respond "*" ":xfile build;@dev xfile\r"
 respond "*" ":xfile build;tctyp xfile\r"
