@@ -323,11 +323,7 @@ respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
 expect ":KILL"
 
 respond "*" ":xfile build;arcdev xfile\r"
-
-# JOBDEV D (DSKDEV)
-respond "*" ":midas device;jobdev d_syseng;dskdev\r"
-expect ":KILL"
-
+respond "*" ":xfile build;dskdev xfile\r"
 respond "*" ":xfile build;whoj xfile\r"
 
 respond "*" ":midas sys2;ts talk_gren;untalk\r"
