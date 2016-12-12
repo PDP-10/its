@@ -1,0 +1,215 @@
+	title D short DSK directory device
+	subttl Definitions
+
+; Mark Crispin, AI, September, 1976; Last updated: MRC November 13, 1976
+
+; Insert my macro library, defining all sorts of goodies.
+
+	.insrt MRC;MACROS >
+
+; Insert the file structure definitions file
+
+if1	.insrt SYSTEM;FSDEFS >
+
+;  AC definitions.  CH and CH1 are used for counting
+; characters and their order is important.  A, B,
+; and C are interrupt level AC's and are not to be
+; used for any other purpose.  P is defined in
+; MRC;MACROS > as 17 .  I is an index into the
+; directory.  X, Y, and Z are temporary AC's.
+
+acdef. [i x y z ch ch1 a b c]
+
+;  I/O channels.  BOJ is the channel for the BOJ pipeline.
+; DSK is the channel to read the directory.
+
+acdef. [boj dsk]
+
+; Assembly switches
+
+nd. pdllen==5.		; length of PDL(hardly ever used at all)
+nd. patlen==100.	; length of patch area
+
+	subttl Data area
+
+	loc 100				; where almost everything begins
+
+tmploc 42,jsr tsint			; address of interrupt server
+
+pdl:	block pdllen			; pushdown list
+udir:	block 2000			; the specified directory
+dirblk==udir(,,-2000)			; I/O word pointer to read directory
+args:	block 12			; arguments passed to JOBCAL
+argblk==args(,,-12)			; argument block pointer
+opcode:	block 1				; JOBDEV opcode
+test:	%fword				; -1 := I'm not finished yet
+pat:	block patlen			; patch area
+patch=pat				; beginning of free patch area
+
+	subttl Startup
+
+; Initialize BOJ pipeline, insure request was for "directory"
+
+DSKDEV:	movx ch,%zeros			; clear character counter
+	movx p,<iowd pdllen,pdl>	; load pdp
+	syscal OPEN,[clctl. .uao\10	; open in unit ASCII output mode
+		     clarg. boj		; channel for BOJ pipeline
+		     clarg. ('BOJ)]	; BOJ pipeline device
+	 jsr lose			; lossage!
+	useti MSK2,1_boj		; want interrupts on BOJ channel
+	syscal JOBCAL,[clarg. boj	; information over BOJ pipeline
+		       clarg. argblk	; argument block
+		       %clval opcode]	; instruction that created me
+	 jsr lose			; lossage!
+	move x,args+1			; gobble down FN1
+	caxe x,'.FILE.			; insure directory
+	 jrst illfnm			; claim illegal file name
+	move x,args+2			; gobble down FN2
+	caxe x,sixbit/(DIR)/		; insure directory
+	 jrst illfnm			; claim illegal file name
+
+; Open up the directory
+
+	move x,args+3			; get desired SNAME
+	syscal OPEN,[clctl. .bii	; open in block image input
+		     clarg. dsk		; disk channel
+		     clarg. ('DSK)	; device DSK:
+		     clarg. '.FILE.	; directory FN1
+		     clarg. sixbit/(DIR)/; directory FN2
+		     x]			; SNAME
+	 jrst nonexd			; claim that no such directory
+	syscal IOT,[clarg. dsk		; read on channel
+		    clarg. dirblk]	; into directory block
+	 jsr lose			; lossage!
+	.close dsk,			; close off channel
+	syscal JOBRET,[clarg. boj	; value return to BOJ channel
+		       clarg. 1]	; tell other end it's winning
+	 jsr lose			; PCLSR'd out probably
+
+; Loop through the directory, displaying each files
+
+	move i,udir+udnamp		; read pointer to name area
+	.rdate y,			; get today's date
+	txz y,sixbit/__/		; flush the year
+	caxe y,sixbit/  0401/		; magic date?
+	 syscal SSTATU,[repeat 5,%clval	; system status
+			%clval y]	; name of this machine
+	  movx y,sixbit/TENEX/		; some fooling around if fails!
+	pushj p,sixdis			; display machine name
+	.iot boj,[":]			; and a delimiter
+	move y,args+3			; get SNAME
+	pushj p,sixdis			; display it
+	.iot boj,[";]			; delimiter
+	addx ch,2			; count delimiters in
+	pushj p,crlf			; and crlf
+	addx i,udir			; offset it by address of dir in core
+	movx z,%zeros			; clear counter
+uloop:	.iot boj,[" ]			; output a space
+	addx ch,1			; and bump character counter
+	move y,unfn1(i)			; load up FN1
+	pushj p,sixdis			; type it
+	.iot boj,[^I]			; output a tab
+	addx ch,1			; bump character counter
+	move y,unfn2(i)			; load up FN2
+	pushj p,sixdis			; type it
+	addx z,1			; bump file counter
+	txne z,3			; did three files?
+	 jrst [	.iot boj,[^I]		; no, just tab over
+		aoja ch,.+2]		; and continue
+	pushj p,crlf			; and crlf
+	addx i,lunblk			; move to next file
+	caxge i,2000+udir		; end of UFD?
+	 jrst uloop			; no, not yet
+
+; Send termination codes, and sit around until flushed
+
+	.iot boj,[^L]			; write a terminating form feed
+	addx ch,1			; bump character counter
+	idivx ch,5			; get # of chars to fill out this word
+	subx ch1,5			; compute how many to write
+	.iot boj,[-1,,^C]		; that's all folks!
+	aojl ch1,.-1			; more to go maybe
+	aose test			; claim to be finished
+	 jrst hang			; hang around now
+	syscal JOBRET,[clarg. boj	; value return over the BOJ pipeline
+		       clarg. 1]        ; tell the IOTs that they've won
+	 jfcl				; so what?
+hang:	jfcl				; hang forever
+	.hang				; ...zzz...
+
+	subttl Interrupt server
+
+;  Handle interrupts on the BOJ pipeline.  If a CLOSE happens, commit suicide.
+; If an IOT, and the listing is still being generated, then ignore the
+; interrupt, because the data is being sent along the pipeline anyway.  If
+; the listing is done, send an okay return to the IOT, even though nothing
+; actually is getting sent, and wait for the program at the other end to realize
+; that there is nothing more for it.  Otherwise, just send an okay return, and
+; hope for the best.
+
+tsint:	0				; interrupt bits
+	0				; PC
+	skipge a,tsint			; expect bit 0 on
+	 txne a,%infin#<1_boj>		; expect only my bit on
+	  .lose				; huh???
+	hrroi a,c			; only one word
+	syscal JOBCAL,[clarg. boj	; get information from the BOJ pipeline
+		       %clarg a		; information pointer
+		       %clval b]	; return value in B
+	 jsr lose			; moby lossage
+	txne b,(60000)			; want to close?
+	 jsr lose			; all right, then go die
+	caxn c,'FILLEN			; FILLEN had better fail...
+	 jrst [	syscal JOBRET,[clarg. boj; value return over BOJ pipeline
+			       clarg. (%ebddv)]; return wrong type device
+		 jrst lose		; barf
+		.dismiss tsint+1]	; and dismiss int
+	hrrzs b				; remove left half
+	caxn b,1			; IOT?
+	 skipl test			; finished with my stuff?
+	  syscal JOBRET,[clarg. boj	; value return over the BOJ pipeline
+			 clarg. 1]	; not IOT or finished, claim to win
+	   jfcl				; ...sigh...
+	.dismiss tsint+1		; dismiss interrupt
+
+	subttl Random subroutines, literals, etc.
+
+; Here to display a SIXBIT word in Y.  Both X and Y are clobbered.
+
+sixdis:	jumpe y,cpopj			; return when done
+	movx x,%zeros			; clear out any junk
+	rotc x,wid. '_			; load a SIXBIT character
+	addx x,<" >			; convert to ASCII
+	.iot boj,x			; type it
+	aoja ch,sixdis			; and try for next character
+
+; Here to output a carriage return
+
+crlf:	.iot boj,[^M]			; CR
+	.iot boj,[^J]			; LF
+	addx ch,2			; bump char counter
+cpopj:	popj p,				; and return
+
+; Here to punt out after winning or losing
+
+lose:	jfcl				; for JSR debugging information
+	.logout				; suicide
+	.lose				; in case not top level
+
+; Here to complain if file name not .FILE. (DIR)
+
+illfnm:	syscal JOBRET,[clarg. boj	; value return over the BOJ channel
+		       clarg. (%ebdfn)]	; illegal file name
+	 jsr lose			; and die
+	jsr lose			; no matter what happens
+
+; Here to complain if directory not found
+
+nonexd:	syscal JOBRET,[clarg. boj	; value return over the BOJ channel
+		       clarg. (%ensdr)]	; no such directory
+	 jsr lose			; and die
+	jsr lose			; no matter ...
+
+...lit:	constants
+
+	end DSKDEV

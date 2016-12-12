@@ -124,6 +124,7 @@ There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
    - DIRED, directory editor (independent from EMACS DIRED).
    - DMPCPY, crach dump copy dragon.
    - DQ Device, for doing hostname resolutions. Used by COMSAT.
+   - DSKDEV, D - short disk device.
    - DSKUSE, disk usage information.
    - NWATCH, small watch display.
    - DUMP, tape backup and restore.
