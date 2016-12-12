@@ -693,9 +693,7 @@ respond "*" ":midas sys1;ts who%_sysen3;who%\r"
 expect ":KILL"
 respond "*" ":link sys1;ts %,sys1;ts who%\r"
 
-# palx
-respond "*" ":midas sys;ts palx_sysen1;palx\r"
-expect ":KILL"
+respond "*" ":xfile build;palx xfile\r"
 
 # itsdev
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
