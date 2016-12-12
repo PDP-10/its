@@ -538,6 +538,7 @@ respond "*" ":midas sys1;ts rmail_emacs1;rmaill\r"
 expect ":KILL"
 
 respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
+respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
 respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
