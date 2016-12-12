@@ -489,6 +489,8 @@ respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
 
 respond "*" ":midas device;atsign dirdev_syseng;dirdev\r"
 expect ":KILL"
+respond "*" ":link device;jobdev dir,device;atsign dirdev\r"
+respond "*" ":link device;jobdev dirdb,device;atsign dirdev\r"
 
 respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
 respond "KLp==" "0\r"
