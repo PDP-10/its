@@ -820,9 +820,7 @@ respond "*" ":xfile build;type8 xfile\r"
 respond "*" ":midas sys2;ts usq_sysen3;usq\r"
 expect ":KILL"
 
-# HOST
-respond "*" ":midas sys3;ts host_sysnet;host\r"
-expect ":KILL"
+respond "*" ":xfile build;host xfile\r"
 
 # WHOLIN
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
