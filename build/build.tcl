@@ -814,10 +814,7 @@ respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
 expect ":KILL"
 
 respond "*" ":xfile build;photo xfile\r"
-
-# TYPE8
-respond "*" ":midas sys;ts type8_sysen3;type8\r"
-expect ":KILL"
+respond "*" ":xfile build;type8 xfile\r"
 
 # USQ
 respond "*" ":midas sys2;ts usq_sysen3;usq\r"
