@@ -705,20 +705,13 @@ respond "*" ":midas sys1;ts charfc_sysen3;charfc\r"
 expect ":KILL"
 respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
 
-# 11sim
-respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
-respond "end input with ^C" "45p==0\r"
-respond "\n" "\003"
-expect ":KILL"
-respond "*" ":midas sys;ts pdp45_syseng;11sim\r"
-expect ":KILL"
-
 # times
 respond "*" ":midas sysbin;times bin_sysnet;times\r"
 expect ":KILL"
 respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
 respond "*" ":link sys1;ts times,sysbin;times bin\r"
 
+respond "*" ":xfile build;11sim xfile\r"
 respond "*" ":xfile build;idle xfile\r"
 respond "*" ":xfile build;spell xfile\r"
 respond "*" ":xfile build;jobs xfile\r"
