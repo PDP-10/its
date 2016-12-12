@@ -843,6 +843,10 @@ respond "*" "debug/0\r"
 type "\033g"
 respond "*" ":link sys;ts pb,sys;ts probe\r"
 
+# RIPDEV
+respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
+expect ":KILL"
+
 # GMSGS
 respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
 expect ":KILL"
