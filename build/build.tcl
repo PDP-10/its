@@ -760,10 +760,7 @@ respond "*" ":xfile build;probe xfile\r"
 respond "*" ":midas sys1;ts tty_sysen1;tty\r"
 expect ":KILL"
 
-# RIPDEV
-respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
-expect ":KILL"
-
+respond "*" ":xfile build;ripdev xfile\r"
 respond "*" ":xfile build;gmsgs xfile\r"
 
 # X, Y, Z
