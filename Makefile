@@ -6,10 +6,10 @@ SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas	\
       bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk	\
       inquir acount gz sys decsys alan
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
-BIN = sysbin emacs _teco_ inquir
+BIN = sysbin device emacs _teco_ inquir
 
 # These directories are put on the minsys tape.
-MINSYS = _ sys device
+MINSYS = _ sys
 
 # These files are used to create bootable tape images.
 RAM = bin/boot/ram.262
