@@ -44,14 +44,10 @@ checked out, and then type `make EMULATOR=simh` or `make
 EMULATOR=klh10`.  This will leave built files in the `out` directory,
 one of which is a disk image with ITS installed.
 
-To start ITS, either type
-- `pdp10 build/simh/boot` for SIMH, or
-- `cd build/klh10; sudo kn10-ks-its dskdmp.ini` and then `go` at the
-  `KLH10#` prompt.  Sudo is only needed to enable networking.
-
-When you see the `DSKDMP` prompt, type `its`, press Enter, and then
-`ESC g`.  Eventually, you will see `SYSTEM JOB USING THIS CONSOLE`.
-You are now ready to log in, so type Control-Z.  See
+To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
+Enter.  When you see the `DSKDMP` prompt, type `its`, press Enter, and
+then `ESC g`.  Eventually, you will see `SYSTEM JOB USING THIS
+CONSOLE`.  You are now ready to log in, so type Control-Z.  See
 [doc/DDT.md](doc/DDT.md) for a list of useful commands.  When done,
 shut down orderly by typing `:lock` and then `5down`.
 

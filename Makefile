@@ -47,7 +47,13 @@ out/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	mkdir -p out
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
-build/klh10/stamp: $(KLH10)
+build/$(EMULATOR)/stamp: start
+	touch $@
+
+start: build/$(EMULATOR)/start
+	ln -s $< $*
+
+build/klh10/stamp: $(KLH10) start
 	touch $@
 
 $(KLH10):
@@ -67,4 +73,4 @@ $(WRITETAPE):
 	cd tools/tapeutils; make
 
 clean:
-	rm -rf out
+	rm -rf out start
