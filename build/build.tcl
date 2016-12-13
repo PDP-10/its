@@ -364,11 +364,7 @@ respond "*" ":link sys2;tc dc,sys1;ts dcrock\r"
 respond "*" ":midas sys1;ts instal_sysen2;instal\r"
 expect ":KILL"
 
-# LOSS device
-respond "*" ":midas device;jobdev loss_syseng;loss\r"
-expect ":KILL"
-respond "*" ":link device;jobdev los,device;jobdev loss\r"
-
+respond "*" ":xfile build;loss xfile\r"
 respond "*" ":xfile build;dir xfile\r"
 respond "*" ":xfile build;mtboot xfile\r"
 respond "*" ":xfile build;hosts3 xfile\r"
