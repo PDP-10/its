@@ -386,9 +386,7 @@ expect ":KILL"
 
 respond "*" ":xfile build;chtn xfile\r"
 respond "*" ":xfile build;ttloc xfile\r"
-
-respond "*" ":midas device;jobdev dp_sysen3;dpdev\r"
-expect ":KILL"
+respond "*" ":xfile build;dpdev xfile\r"
 
 respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
 respond "Use what filename instead?" "ecc;quotes >\r"
