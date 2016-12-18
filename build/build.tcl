@@ -731,6 +731,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts meter_syseng;meter\r"
 expect ":KILL"
 
+# cross
+respond "*" ":midas sys1;ts cross_syseng;cross\r"
+expect ":KILL"
+
 # dired
 respond "*" ":midas sys;ts dired_sysen2;dired\r"
 expect ":KILL"
