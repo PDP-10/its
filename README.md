@@ -169,6 +169,7 @@ A list of [known ITS machines](doc/machines.md).
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
    - PHOTO, capture STY session output.
+   - PORTS, display free network ports.
    - PR, print out various system documentation.
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.

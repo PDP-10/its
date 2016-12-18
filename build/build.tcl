@@ -752,6 +752,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
 
+# ports
+respond "*" ":midas sys2;ts ports_sysen2;ports\r"
+expect ":KILL"
+
 # sysmsg
 respond "*" ":midas sys1;ts sysmsg_sysen1;sysmsg\r"
 expect ":KILL"
