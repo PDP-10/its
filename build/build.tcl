@@ -743,6 +743,11 @@ expect ":KILL"
 respond "*" ":midas sys1;ts arcsal_sysen1;arcsal\r"
 expect ":KILL"
 
+# timsrv
+respond "*" ":midas sysbin;timsrv bin_sysnet;timsrv\r"
+expect ":KILL"
+respond "*" ":link device;tcp syn045,sysbin;timesrv bin\r"
+
 # rmtdev
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
 

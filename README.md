@@ -192,6 +192,7 @@ A list of [known ITS machines](doc/machines.md).
    - TELNET, Telnet client.
    - TELSER, Telnet/Supdup server.
    - TIMOON, displays the time and phase of the moon.
+   - TIMSRV, RFC 868 network time protocol.
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
    - TYPE8, type 8-bit file
