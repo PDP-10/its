@@ -548,6 +548,7 @@ expect ":KILL"
 
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
+respond "*" ":link sys2;ts =,sys;ts srccom\r"
 
 respond "*" ":midas .mail.;comsat_sysnet;comsat\r"
 expect ":KILL"
