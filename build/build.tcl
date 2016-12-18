@@ -543,6 +543,10 @@ expect ":KILL"
 respond "*" ":midas device;jobdev dp_ar5:alan;dpdev 19\r"
 expect ":KILL"
 
+respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
+respond "Use what filename instead?" "ecc;quotes >\r"
+expect ":KILL"
+
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
 

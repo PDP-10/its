@@ -4,7 +4,7 @@ EMULATOR ?= simh
 SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas	\
       _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy gren	\
       bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk	\
-      inquir acount gz sys decsys alan
+      inquir acount gz sys decsys alan ecc
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
 BIN = sysbin device emacs _teco_ inquir
 
