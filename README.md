@@ -115,6 +115,7 @@ A list of [known ITS machines](doc/machines.md).
    - COMSAT, Mail server.
    - CREATE, creates a text file in your home directory from console input.
    - CROCK, analog watch.
+   - CROSS, cross assembler for micros.
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
    - DECUUO, TOPS-10 and WAITS emulator.
