@@ -330,6 +330,9 @@ respond "*" "purify\033g"
 respond "Idle" "q"
 expect ":KILL"
 
+respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
+expect ":KILL"
+
 respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
