@@ -416,6 +416,9 @@ respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
 respond "System?" "ITS\r"
 expect ":KILL"
 
+respond "*" ":midas sys1;ts instal_sysen2;instal\r"
+expect ":KILL"
+
 # LOSS device
 respond "*" ":midas device;jobdev loss_syseng;loss\r"
 expect ":KILL"
