@@ -191,6 +191,7 @@ A list of [known ITS machines](doc/machines.md).
    - TECO, editor.
    - TELNET, Telnet client.
    - TELSER, Telnet/Supdup server.
+   - TIME, displays date/time/uptime and other info.
    - TIMOON, displays the time and phase of the moon.
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.

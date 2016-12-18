@@ -587,6 +587,10 @@ respond "*" ":link sys;ts m,sys;ts mail\r"
 respond "*" ":link sys2;ts featur,sys;ts qmail\r"
 respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
+# TIME
+respond "*" ":midas sys1;ts time_sysen2;time\r"
+expect ":KILL"
+
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
 respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
