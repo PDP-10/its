@@ -715,6 +715,23 @@ respond "*" ":link sys1;ts s,sys;ts send\r"
 respond "*" ":link sys3;ts snd,sys;ts send\r"
 respond "*" ":link sys3;ts sned,sys;ts send\r"
 
+# NICNAM
+
+respond "*" ":midas sys2;ts nicnam_ar2:cstacy;nicnam\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+expect ":KILL"
+
+# NICWHO
+respond "*" ":midas sys2;ts nicwho_ar2:cstacy;nicwho\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+respond "Use what filename instead?" "dsk:\r"
+expect ":KILL"
+
 # reatta
 respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
 expect ":KILL"

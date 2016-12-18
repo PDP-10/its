@@ -159,6 +159,7 @@ A list of [known ITS machines](doc/machines.md).
    - MTBOOT, make bootable tapes.
    - NAME, Shows logged in users and locations, aka FINGER.
    - NETIME, network time dragon.
+   - NICNAM/NICWHO, look up someone in the ARPAnet directory.
    - OS, realtime TTY spy.
    - PALX, PDP-11 cross assembler.
    - PANDA, user account management program.
