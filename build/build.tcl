@@ -620,11 +620,7 @@ respond "*" ":xfile build;timoon xfile\r"
 respond "*" ":xfile build;ports xfile\r"
 respond "*" ":xfile build;sysmsg xfile\r"
 respond "*" ":xfile build;meter xfile\r"
-
-# cross
-respond "*" ":midas sys1;ts cross_syseng;cross\r"
-expect ":KILL"
-
+respond "*" ":xfile build;cross xfile\r"
 respond "*" ":xfile build;dired xfile\r"
 respond "*" ":xfile build;hsname xfile\r"
 respond "*" ":xfile build;arcsal xfile\r"
