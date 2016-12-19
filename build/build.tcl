@@ -766,15 +766,11 @@ respond "*" ":xfile build;what xfile\r"
 respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
 expect ":KILL"
 
-# UPTIME
-respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
-expect ":KILL"
-respond "*" ":link dragon;hourly uptime,sysbin;uptime bin\r"
-
 # HEXIFY
 respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
 expect ":KILL"
 
+respond "*" ":xfile build;uptime xfile\r"
 respond "*" ":xfile build;photo xfile\r"
 respond "*" ":xfile build;type8 xfile\r"
 
