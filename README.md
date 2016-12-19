@@ -192,6 +192,7 @@ A list of [known ITS machines](doc/machines.md).
    - STY, pseudo-terminal for multiple sessions.
    - STYLOG, convert PTY output file into ascii file.
    - SUPDUP, Supdup client.
+   - SYSCHK, check up on system job.
    - SYSMSG, displays system messages.
    - TAGS, generate tags table for sources.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
@@ -205,6 +206,7 @@ A list of [known ITS machines](doc/machines.md).
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
    - TYPE8, type 8-bit file.
+   - UNTALK, split-screen comm-link program.
    - UPTIME, Chaosnet uptime server.
    - WHAT, humorous quips to various "what" questions.
 
