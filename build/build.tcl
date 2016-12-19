@@ -617,11 +617,7 @@ respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
 expect ":KILL"
 
 respond "*" ":xfile build;timoon xfile\r"
-
-# ports
-respond "*" ":midas sys2;ts ports_sysen2;ports\r"
-expect ":KILL"
-
+respond "*" ":xfile build;ports xfile\r"
 respond "*" ":xfile build;sysmsg xfile\r"
 respond "*" ":xfile build;meter xfile\r"
 
