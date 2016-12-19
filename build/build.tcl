@@ -610,12 +610,7 @@ respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
 expect ":KILL"
 
 respond "*" ":xfile build;reatta xfile\r"
-
-# print
-respond "*" ":midas sys;ts print_sysen2;print\r"
-expect ":KILL"
-respond "*" ":link sys;ts copy,sys;ts print\r"
-respond "*" ":link sys;ts listf,sys;ts print\r"
+respond "*" ":xfile build;print xfile\r"
 
 # fdir 
 respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
