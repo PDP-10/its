@@ -319,9 +319,7 @@ respond "*" "purify\033g"
 respond "Idle" "q"
 expect ":KILL"
 
-respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
-expect ":KILL"
-
+respond "*" ":xfile build;syschk xfile\r"
 respond "*" ":xfile build;arcdev xfile\r"
 respond "*" ":xfile build;dskdev xfile\r"
 respond "*" ":xfile build;whoj xfile\r"
