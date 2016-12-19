@@ -978,6 +978,11 @@ expect ":KILL"
 respond "*" ":midas sys3;ts host_sysnet;host\r"
 expect ":KILL"
 
+# FED
+respond "*" ":midas sys;ts fed_sysen2;fed\r"
+respond "Use what filename instead?" "dsk:sysen2;\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"

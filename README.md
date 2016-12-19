@@ -129,6 +129,7 @@ A list of [known ITS machines](doc/machines.md).
    - NWATCH, small watch display.
    - DUMP/LOAD, tape backup and restore.
    - EMACS, editor.
+   - FED, font editor.
    - FIND, search for files.
    - FRETTY, display list of free TTYs.
    - FTPS, FTP Server.
