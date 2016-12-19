@@ -1016,7 +1016,6 @@ expect ":KILL"
 
 # FED
 respond "*" ":midas sys;ts fed_sysen2;fed\r"
-respond "Use what filename instead?" "dsk:sysen2;\r"
 expect ":KILL"
 
 # ndskdmp tape
