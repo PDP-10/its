@@ -892,6 +892,7 @@ expect ":KILL"
 # GMSGS
 respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
 expect ":KILL"
+respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
 
 # LOADP
 respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
