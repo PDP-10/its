@@ -917,7 +917,6 @@ expect ":KILL"
 
 # PRUFD
 respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
-respond "Use what filename instead?" "syseng;jsf macros\r"
 expect ":KILL"
 
 # patch PRUFD to use the TTY: device rather than the LPT: device
