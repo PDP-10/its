@@ -172,6 +172,7 @@ A list of [known ITS machines](doc/machines.md).
    - PHOTO, capture STY session output.
    - PORTS, display free network ports.
    - PR, print out various system documentation.
+   - PRINT, print long-named files.   
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
    - PTY, pseudo-tty

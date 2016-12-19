@@ -1,0 +1,306 @@
+;-*- Mode:MIDAS; Fonts: MEDFNT -*-
+
+TITLE PRINT - Print long-named file (yeeech)
+
+;;; We take a fully spec'd long filename as JCL, open the file in UAI
+;;; mode, and print it out on the terminal.  ^S works to flush it.
+;;; Use ^Q to quote commas, nuls, linefeeds, etc., in a filename.
+
+;;; If XJNAME is ^F or LISTF, we append ;.FILE. (DIR) to the filename.
+;;; This kludge should be fixed to use DIR: device if possible.
+
+;;; If XJNAME is $^R or COPY we take sourcefile, destfile as JCL.
+;;; Maybe there should be a switch specifying to first copy into
+;;; _COPY_ OUTPUT and then rename instead of copying directly?
+
+;;; It'll take lots of hacking to make ITS *really* support long filenames!
+
+PG$SIZ==2000
+
+Z=0			;Super temp
+A=1			;A-E general purpose,
+B=2			;    always preserved
+C=3
+D=4
+E=5
+CH=6			;Character being hacked.
+T=10			;Temps
+TT=T+1
+P=17			;Stack pointer
+
+FOOO=13			;Device output.
+FOOI=14			;Device input.
+TTYO=15			;Console typeout
+TTYI=16			;Console typein
+
+	   
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT/A/ ? B ((SETZ))]
+TERMIN
+
+CALL==:<PUSHJ P,>
+RET==:<POPJ P,>	
+CALRET==:JRST
+NOP==:<JFCL>
+
+DEFINE TMPLOC VAL,?ARG
+	%%%TLC==.
+	LOC VAL
+	ARG
+	LOC %%%TLC
+TERMIN
+
+
+DEFINE	NORM7 AC
+	SKIPGE AC
+         SUB AC,[430000,,1]
+TERMIN
+
+
+DEFINE	DECBP AC
+	ADD AC,[70000,,]
+	SKIPGE AC
+	 SUB AC,[430000,,1]
+TERMIN
+
+
+DEFINE	TYPE CH,&STRING
+	CALL [	MOVEI T,<.LENGTH STRING>
+		MOVE TT,[440700,,[ASCII STRING]]
+		SYSCAL SIOT,[%CLIMM,,CH ? TT ? T]
+		 .LOSE %LSFIL
+		RET ]
+TERMIN
+
+
+
+;;; Various returns.
+
+INTRET:	SYSCAL DISMIS,[%CLBIT,,INTACS ? P]
+	 .LOSE %LSSYS
+
+POPJ1:	AOS (P)			   ;Skip
+CPOPJ:	RET			   ;Return
+
+DEATH:	SKIPE DEBUG
+	 .VALUE
+	.LOGOUT 1,
+
+
+;;; Interrupt vector.
+
+TMPLOC 42,{-LTSINT,,TSINT}	   ;New style interrupt handler.
+INTACS==2+T_6			   ;Protect T,TT for handlers.
+TSINT:	INTACS,,P
+	0 ? 1_TTYI ? 0 ? <1_TTYO>\<1_TTYI> ? INTCHR
+	0 ? 1_TTYO ? 0 ? 0 ? INTMOR
+LTSINT==:.-TSINT
+
+
+;;; INTCHR - Handler for console input interrupts.
+
+INTCHR:	MOVEI T,TTYI		   ;Get interrupt character in T.
+	.ITYIC T,
+	 JRST INTRET
+	CAIN T,^G		;^G flushes anything, even copy
+	 JRST INTC10
+	skipn copyp		;^S should not flush copying
+	 CAIE T,^S
+	 JRST INTRET
+INTC10:	.RESET TTYO,		;^G and ^S should echo on flushing.  Do they?
+	SYSCAL TTYFLS,[	%CLBIT,,1 ? %CLIMM,,TTYI]
+	 .LOSE %LSSYS
+	.value [asciz/:!kill :î/]	;type !<crlf><prompt>
+	jrst death			;try again, just in case
+
+;;; INTMOR - Handler for **MORE** condition.
+
+INTMOR:	TYPE TTYO,"--More--"
+	SYSCAL IOT,[%CLBIT,,%TIPEK ? %CLIMM,,TTYI ? %CLOUT,,T]
+	 .LOSE %LSFIL
+	CAIE T,40
+	 CAIN T,177
+	  .IOT TTYI,T
+	CAIN T,40
+	 JRST [ TYPE TTYO,"A"
+		JRST INTRET ]
+	type ttyo,"Flushed "
+	.value [asciz/:kill /]	;type Flushed, leave cursor there.
+	.BREAK 16,64000			;try again, supposedly silent
+	JRST DEATH			;what, still alive after all that???
+
+
+SUBTTL	Main program
+
+GO:	MOVE P,[-PDLLEN,,PDL-1]
+	SYSCAL OPEN,[%CLBIT,,<.UAO\%TJDIS> ? %CLIMM,,TTYO ? [SIXBIT /TTY/]]
+	 .LOSE %LSFIL
+	SYSCAL OPEN,[%CLBIT,,.UAI ? %CLIMM,,TTYI  ? [SIXBIT /TTY/]]
+	 .LOSE %LSFIL
+
+	;; Set up TTY interrupts like DDT has.
+	SYSCAL TTYSET,[%CLIMM,,TTYI ? [222222,,222222] ? [230222,,220222]]
+	 aos ttinit			;not really a TTY, don't clear screen
+
+	MOVE A,[-8.,,[	.ROPTION ? TLO %OPINT\%OPOPC
+			.RMSK2   ? IOR [<1_TTYI>\<1_TTYO>]
+			.ROPTION ? MOVEM B
+			.RXJNAME ? MOVEM C]]
+	SYSCAL USRVAR,[	%CLIMM,,%JSELF ? A ]	;temp keep XJNAME in C.
+	 .LOSE %LSSYS
+	setz tt
+	came c,[sixbit/COPY/]		;COPY command
+	 camn c,[sixbit/$^R/]
+	  aos tt			;wants a comma
+	movem tt,copyp
+	TLNN B,%OPCMD			;Require JCL.
+	 JRST [	TYPE TTYO,"A Usage is	:PT long filename to print
+	:PF long directory to list
+	:CY source, destination"
+		JRST DEATH ]
+	.CORE BUFPAG+1			;Get buffer page.
+	 JRST [	TYPE TTYO,"ACan't get core."
+		JRST DEATH ]
+	.BREAK 12,[..RJCL,,JCLBUF]	;Gobble JCL.
+	MOVE A,[440700,,JCLBUF]	
+	MOVE B,[440700,,FNAME]		;Read filename from JCL.
+	movei ch,40
+JCLGET:	ILDB T,A
+	cain t,",
+	 jrst [	skipe copyp		;if not copy
+		 skipe comma		;or too many commas
+		  .lose %lssys+%ebdfn	;bad filename
+		movem b,comma
+		move b,[440700,,CNAME]
+		jrst jclget]
+	CAIE T,0
+	 CAIN T,33
+	  JRST jclend
+	CAIE T,^_
+	 CAIN T,^C
+	  JRST jclend
+	CAIE T,^J
+	 CAIN T,^M
+	  JRST jclend
+	IDPB T,B
+	caie t,":
+	 cain t,";
+	  movem b,devdir
+	caie t,40
+	 movem b,nonbl
+	caie t,^Q
+	 jrst jclget
+	ildb t,a
+	idpb t,b
+	movem b,nonbl
+	JRST JCLGET
+
+jclend:	came c,[sixbit/LISTF/]	;LISTF kludge
+	 camn c,[sixbit/^F/]
+	  skipa
+	   jrst jclopn
+	move a,[440700,,[asciz/;.file. (dir)/]]
+	move b,nonbl
+	ldb t,b
+	cain t,";
+	 came b,devdir
+	  skipa
+	   ibp a	;already have an unquoted semicolon, don't append one
+jcldir:	ildb t,a
+	idpb t,b
+	jumpn t,jcldir
+
+jclopn:	MOVE A,[440700,,FNAME]     ;Open up the file.
+	SYSCAL SOPEN,[%CLBIT,,.UAI ? %CLERR,,B ? %CLIMM,,FOOI ? a ]
+	 JRST OPNERR
+
+	movei e,ttyo		   ;channel to output to
+	skipe copyp
+	 jrst [movei e,fooo
+	       move a,[440700,,cname]	   ;later use _COPY_ OUTPUT with RNFL.
+		syscal sopen,[%clbit,,.uao ? %clerr,,b ? e ? a ]
+		 jrst opnerr
+		jrst .+1]
+
+LOOP:	MOVE B,[440700,,BUFFER]	   ;Bp to buffer.
+	MOVEI D,BUFLEN*5	   ;Chars buffer can hold.
+	MOVE C,D		   ;Ask for full buffer.
+	SYSCAL SIOT,[%CLIMM,,FOOI ? B ? C ]
+	 .LOSE %LSFIL
+	SUB D,C			   ;D gets chars in buffer.
+	skipe copyp
+	 jrst copy
+	MOVE T,B		   ;Get Bp to end of buffer.
+	NORM7 T
+trim:	LDB CH,T		   ;Get the possibly offensive character.
+	cain CH,^C		   ;If this is the magic EOF character
+	 JRST [	DECBP T		   ; back up the bp
+		SOJN D,trim	   ; and decrement real length.
+		TYPE TTYO,"ANo data!"
+		JRST DEATH ]
+	aosn ttinit		   ;Once only
+	 TYPE TTYO,"C"	   ;clear the screen.
+copy:	MOVE B,[440700,,BUFFER]
+	MOVE C,D
+	SYSCAL SIOT,[ E ? B ? C ]
+	 .LOSE %LSFIL
+	CAIL D,BUFLEN		   ;If we received a full buffer of data
+	 JRST LOOP		   ; go back and see if there is more.
+	skipn copyp		   ;Else reached EOF - wrap up.
+	 JRST DEATH
+	syscal close,[ e ]	   ;RENMWO eventually
+	 .lose %lsfil
+	.value [asciz/:kill :î/]	;type <crlf><prompt>
+	jrst death		   ;in case ddt missed
+
+OPNERR:	TYPE TTYO,"A"
+OPNER1:	ILDB T,A
+	CAIE T,0
+	 CAIN T,33
+	  JRST OPNER2
+	CAIE T,^_
+	 CAIN T,^C
+	  JRST OPNER2
+	CAIE T,^J
+	 CAIN T,^M
+	  JRST OPNER2
+	.IOT TTYO,T
+	JRST OPNER1
+OPNER2:	SYSCAL OPEN,[%CLIMM,,FOOI ? [SIXBIT/ERR/] ? [4] ? B]
+	 JRST DEATH
+	TYPE TTYO," - "
+OPNER3:	.IOT FOOI,T
+	CAIN T,^M
+	 JRST OPNER4
+	CAIE T,^L
+	 CAIN T,^C
+	  JRST OPNER4
+	JUMPL T,OPNER4
+	.IOT TTYO,T
+	JRST OPNER3
+OPNER4:	JRST DEATH
+
+DEBUG:	0
+	PDLLEN==512.
+PDL:	BLOCK PDLLEN	;The Stack.
+PATCH:	BLOCK 40
+
+ttinit:	-1
+copyp:	0		;1 Iff COPY instead of PRINT
+
+comma:	0		;BP to last , in JCL
+devdir:	0		;BP to last unquoted : or ; in FNAME
+nonbl:	0		;BP to last non-blank in FNAME
+
+JCLBUF:	BLOCK 40.	;JCL buffer.
+FNAME:	BLOCK 100.	;input file name
+CNAME:	BLOCK 100.	;copy output file name
+
+CONSTANTS
+VARIABLES
+
+BUFPAG==<.+1777>/PG$SIZ
+BUFFER==BUFPAG*PG$SIZ
+BUFLEN==PG$SIZ-1
+
+END GO
