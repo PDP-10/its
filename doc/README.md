@@ -29,3 +29,4 @@
 - PDSET: [manual](sysdoc/pdset.info)
 - DUMP: [manual](_info_/dump.info), [format](sysdoc/dump.format)
 - DSKDMP: [commands](sysdoc/dskdmp.order)
+- NSALV: [commands](kshack/nsalv.order)
