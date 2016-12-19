@@ -109,7 +109,7 @@ A list of [known ITS machines](doc/machines.md).
    - ATSIGN TCP, TCP support.
    - BINPRT, display information about binary executable file.
    - BYE, say goodbye to user. Used in LOGOUT scripts.
-   - CALPRT, decode a .CALL instructions CALL block
+   - CALPRT, decode a .CALL instructions CALL block.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
@@ -126,7 +126,6 @@ A list of [known ITS machines](doc/machines.md).
    - DQ Device, for doing hostname resolutions. Used by COMSAT.
    - DSKDEV, D - short disk device.
    - DSKUSE, disk usage information.
-   - NWATCH, small watch display.
    - DUMP/LOAD, tape backup and restore.
    - EMACS, editor.
    - FIND, search for files.
@@ -136,24 +135,24 @@ A list of [known ITS machines](doc/machines.md).
    - GMSGS, copy system messages to mail file.
    - H3MAKE, a job that requests DRAGON to build host table.
    - HOST, display information about network host.
+   - HOSTAB, display HOSTS2 format host table.
    - HOSTS3, the host table compiler.
-   - HOSTAB, display HOSTS2 format host table
    - HSNAME, displays user's HSNAME.
    - HSNDEV, HSNAME device.
    - IDLE, list idle users.
    - INIT, a helper program for LOGIN, LOGOUT, and other script files.
-   - INLINE, reads line from TTY and adds to JCL (for DDT init files)
+   - INLINE, reads line from TTY and adds to JCL (for DDT init files).
    - INQUIR, user account database.
    - INQUPD, processes INQUIR change requests.
-   - ITSDEV, ITS device server.
    - INSTAL, install executables on other ITS machines.
+   - ITSDEV, ITS device server.
    - JOBS, list jobs by category.
    - LISP, lisp interpreter and runtime library (autoloads only).
    - LOADP, displays system load.
    - LOCK, shut down system.
    - LOOKUP, looks up user info in INQUIR database.
-   - LOSS (device)
-   - LUSER, request help from registered list of logged-in users
+   - LOSS (device).
+   - LUSER, request help from registered list of logged-in users.
    - MAIL, Mail sending client.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
@@ -163,28 +162,29 @@ A list of [known ITS machines](doc/machines.md).
    - NAME, Shows logged in users and locations, aka FINGER.
    - NETIME, network time dragon.
    - NICNAM/NICWHO, look up someone in the ARPAnet directory.
+   - NWATCH, small watch display.
    - OBS, observe system activities.
    - OS, realtime TTY spy.
    - PALX, PDP-11 cross assembler.
    - PANDA, user account management program.
-   - PLAN (CREATE), creates a PLAN file in your home directory from console input.
    - PDSET, set time and date.
    - PEEK, system monitoring.
    - PFTHMG, Puff the magic dragon.
    - PHOTO, capture STY session output.
+   - PLAN (CREATE), creates a PLAN file in your home directory from console input.
    - PORTS, display free network ports.
    - PR, print out various system documentation.
-   - PRINT, print long-named files.   
+   - PRINT, print long-named files.
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
-   - PTY, pseudo-tty
+   - PTY, pseudo-tty.
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
    - QUOTE, prints out a random quote.
    - REATTA, reattaches disowned jobs to terminal.
    - RIPDEV, replacement for MLDEV for no-longer-existing machines.
    - RMAIL, Mail reading client.
    - RMTDEV, MLDEV for non-ITS hosts.
-   - SCANDL, TTY OUTPUT SPY
+   - SCANDL, TTY OUTPUT SPY.
    - SEND, REPLY, replacements for DDT :SEND.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
@@ -204,7 +204,7 @@ A list of [known ITS machines](doc/machines.md).
    - TIMSRV, RFC 868 network time protocol.
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
-   - TYPE8, type 8-bit file
+   - TYPE8, type 8-bit file.
    - UPTIME, Chaosnet uptime server.
    - WHAT, humorous quips to various "what" questions.
 
