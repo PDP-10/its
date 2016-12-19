@@ -145,6 +145,7 @@ A list of [known ITS machines](doc/machines.md).
    - INLINE, reads line from TTY and adds to JCL (for DDT init files)
    - INQUIR, user account database.
    - INQUPD, processes INQUIR change requests.
+   - ITSDEV, ITS device server.
    - INSTAL, install executables on other ITS machines.
    - JOBS, list jobs by category.
    - LISP, lisp interpreter and runtime library (autoloads only).

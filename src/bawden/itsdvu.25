@@ -1,0 +1,666 @@
+; -*- Midas -*-
+
+subttl ITSDVU
+
+.begin itsdvu
+
+; Modification history:
+; 1/4/89 Alan:  Wrote it.
+
+COMMENT 
+
+File: ITSDVU, Node: Top, Up: (LIB)
+
+ITSDVU is a .INSRTable MIDAS library for using the ITSDEV server.
+
+Requires accumulators A, B, C, D, E, F, G, T, TT, and P.  TT must be T+1.
+P should contain a stack pointer.
+
+Calls CHACON and TCPCON as if they were the routines of those names in NETWRK.
+
+All definitions made in ITSDVU block.
+
+Routines: CONNECT, OPEN, CLOSE, READ, WRITE, SCALLn, XCALLn
+
+
+ ; end comment
+
+.auxil				; Don't CREF
+
+.tyo6 .ifnm1
+.tyo 40
+.tyo6 .ifnm2
+printx / included in this assembly.
+/
+
+version==:.ifvrs		; Version of this library (not inserter)
+
+; Switches
+
+ifndef $$defs, $$defs==:0	; 1 => definitions only, generate no code
+ifndef $$dbug, $$dbug==:0	; 1 => assemble for debugging library
+
+
+; Definitions for ITSDEV protocol.
+
+ifn $$defs, .end itsdvu		; Do definitions in inserter's block
+
+; Chaosnet contact name:
+define chname prefix
+prefix!ITSDEV!termin
+
+; TCP port number:
+define tcport prefix
+prefix!723!termin		; must be exactly 3 octal digits
+
+; ITSDEV is designed for the convenience of PDP10's running the ITS
+; operating system.  It allows a remote user process to access a single ITS
+; channel.
+
+; Both the input and output byte-streams are divided into "blocks" of 32
+; 8-bit bytes.
+;
+; Each block is used to encode 7 36-bit words plus a 4-bit "opcode", using
+; the following scheme:
+;
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high0 |                              low0                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high1 |                              low1                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high2 |                              low2                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high3 |                              low3                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high4 |                              low4                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high5 |                              low5                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; | high6 |                              low6                             |
+; +-------+-------+-------+-------+-------+-------+-------+-------+-------+
+; 
+;                                     +
+; 
+;                                 +-------+
+;                                 | opcod |
+;                                 +-------+
+; 
+;                                     =
+; 
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     | opcod | high6 | high5 | high4 | high3 | high2 | high1 | high0 |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low0                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low1                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low2                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low3                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low4                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low5                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;     |                              low6                             |
+;     +-------+-------+-------+-------+-------+-------+-------+-------+
+;
+; (As usual, these 32-bit words are transmitted high-order byte first.)
+; 
+; Over Chaosnet (or any packet-oriented protocol), a block is not allowed
+; to cross a packet boundary.
+ 
+; 4-bit opcodes for command blocks:
+
+..bop==:0,,17
+
+opdata==:0	; 7 words of data: <w0> - <w6>.
+		; No response.
+oplast==:1	; <w6> words of data: <w0> - <w5>.
+		; Responds with RSVALS or RSERROR.
+opread==:2	; Requests <w0> words of data.
+		; Responds with a series of RSDATA blocks, terminated by an
+		; RSLAST, followed by either an RSVALS or RSERROR block.
+		; Or perhaps just an RSERROR block.
+opsync==:3	; Synchronize.  Also flush out any buffered network output.
+		; Responds with an RSSYNC that echoes back <w0> - <w6>.
+		; (Normally there is no need to use this for flushing
+		; network output because that is done whenever the server
+		; is about to block waiting for network input.  However, if
+		; you were about to issue a command that would cause the
+		; server to block for some other reason (perhaps waiting
+		; for device input), then you might send an OPSYNC first to
+		; be sure you get any other buffered response blocks first.)
+opopen==:4	; Open <w0>:<w3>;<w1> <w2>.  Mode in RH(<w4>).
+		; Responds with RSVALS or RSERROR.
+opclose==:5	; Close channel.
+		; Responds with RSVALS or RSERROR.
+opscall==:6	; Perform .CALL <w6> with LH(<w5>) arguments (1 - 6).
+		; Bits in RH(<w5>).  First argument is CHDEV, <w0> - <w4>
+		; are the remaining arguments.
+		; If 4.9(<w5>) is set, then <w0> - <w4> are the only
+		; LH(<w5>) arguments.
+		; Responds with RSVALS or RSERROR.
+opxcall==:7	; Perform extended command named <w6>.
+		; All extended commands respond with RSVALS or RSERROR.
+oplink==:8	; Make link from <w0>:<w3>;<w1> <w2> to <w0>:<w6>;<w4> <w5>.
+		; Responds with RSVALS or RSERROR.
+opmax==:9	; First unused opcode.
+
+; 4-bit opcodes for response blocks:
+
+..brs==:0,,17
+
+rsdata==:0	; Same format as OPDATA.
+rslast==:1	; Same format as OPLAST.
+rsvals==:2	; <w0> - <w6> are values.
+rserror==:3	; Reports error <w6>.   <w0> words were discarded in case
+		; this is a response to an OPLAST.
+rslose==:4	; Irrecoverable lossage.
+rssync==:5	; Respond to OPSYNC.
+
+; Extended commands
+
+; LOGIN		; Login with XUNAME <w0>, XJNAME <w1>, and SNAME <w2> from
+		; "terminal" <w3>.  Client version number in <w4> and
+		; program name in <w5>.
+		; Returns UNAME in <w0> and JNAME in <w1> and server
+		; version number in <w3>.  
+; MTAPE		; Perform .MTAPE [CHDEV,,[<w0>]],.
+		; Returns value in <w0>.
+; RENAME	; Rename <w0>:<w3>;<w1> <w2> to <w0>:<w3>;<w4> <w5>.
+
+ifn itsdvu"$$defs, .ineof	; All done if only definitions wanted
+
+; Utilities
+
+call=:pushj p,
+return=:popj p,
+save==:push p,
+rest==:pop p,
+flose=:.lose %lsfil
+slose=:.lose %lssys
+
+define syscall name,args
+	.call [setz ? .1stwd sixbit /name/ ? args(400000)]
+termin
+
+; JSP TT,ACBLK
+acblk:	save a
+	save b
+	save c
+	save d
+	save e
+	save f
+	save g
+	movei g,-6(p)
+	call (tt)
+	 caia
+	  aos -7(p)
+	rest g
+	rest f
+	rest e
+	rest d
+	rest c
+	rest b
+	rest a
+	return
+
+e0popj:	movei t,0
+cpopj:	return
+
+; JSP TT,ACSAV
+acsav:	save g
+	save f
+	save e
+	save d
+	save c
+	save b
+	save a
+	call (tt)
+	 caia
+	  aos -7(p)
+	rest a
+	rest b
+	rest c
+	rest d
+	rest e
+	rest f
+	rest g
+	return
+
+.vector vals(7)
+
+; CALL WRITE:  Write data from buffer
+;  Skip if no error
+; A (a/v):  aobjn to buffer, updated
+; T (val):  error code if error
+write:	jsp tt,acsav
+	move g,-1(p)		; G:  buffer aobjn
+write0:	caml g,[-6,,0]
+	 jrst write1
+	movei t,opdata
+	call gsend
+	add g,[7,,7]
+	jrst write0
+
+write1:	movei t,0
+	jumpge g,write2
+write3:	move tt,(g)
+	movem tt,vals(t)
+	aoj t,
+	aobjn g,write3
+write2:	movem t,vals+6
+	movem g,-1(p)		; Update caller's aobjn
+	movei g,vals
+	movei t,oplast
+	call gcmd
+	 jrst write9
+	aos (p)
+	return
+
+; Preserve error code in T:
+write9:	hrloi a,-2		; -2,,-1 = -<1,,1>
+	imul a,vals+0
+	addm a,-1(p)		; Correct caller's aobjn
+	return
+
+; CALL READ:  Read data into buffer
+;  Skip if no error
+; A (a/v):  aobjn to buffer, updated
+; T (val):  error code if error
+read:	jsp tt,acsav
+	hlre a,-1(p)
+	movn a,a
+	movei t,opread
+	call send		; Start the data flowing in
+	call flush
+	move g,-1(p)		; G: buffer aobjn
+	jrst read0
+
+read1:	add g,[7,,7]
+read0:	caml g,[-6,,0]
+	 jrst read2
+	call grecv
+ifn rsdata, .err RSDATA assumed to be 0!
+	jumpe t,read1
+	hrli tt,(g)
+	hrri tt,vals+0
+	blt tt,vals+6
+	movem g,-1(p)		; Update caller's aobjn
+	jrst read3
+
+read2:	movem g,-1(p)		; Update caller's aobjn
+	movei g,vals
+	call grecv
+read3:	;; Now VALS contains the next block.  Its opcode is in T.  The
+	;; caller's aobjn has been updated for the work so far.
+	cain t,rserror
+	 jrst epopj
+	caie t,rslast
+	 .lose
+	move tt,vals+6
+	caige tt,0
+	 .lose
+	caile tt,6
+	 .lose
+	hrloi t,-1(tt)
+	eqvi t,vals+0
+	jumpge t,cmdrs0
+	move a,-1(p)		; A: buffer aobjn
+read8:	skipl a
+	 .lose
+	move tt,(t)
+	movem tt,(a)
+	aobjn a,.+1
+	aobjn t,read8
+	movem a,-1(p)		; Update caller's aobjn
+cmdrs0:	movei g,vals
+	jrst gcmdrs
+
+; CALL CONNECT
+;  Skips if no error
+; A (arg):  Network input channel
+; B (arg):  Foreign host
+; T (val):  Error code if error
+connec:	jsp tt,acsav
+	movem a,inchn
+	movem a,outchn
+	aos outchn
+	tdne b,[-1_16.]
+	 tlne b,(-1_32.)
+	  jrst chago
+	jrst tcpgo
+
+; CALL LOGIN:  Login (last part of CONNECT)
+;  Skip if no error
+; T (val):  error code if error
+login:	syscall usrvar,[movei %jself ? [sixbit /XUNAME/] ? movem a]
+	 slose
+	move b,[sixbit /ITSDEV/]
+	syscall sstatu,[repeat 6,[ ? movem c]]
+	 slose
+	move d,c
+	hrri d,(sixbit /DEV/)
+	move e,[version]
+	move f,[.fnam1]
+	move g,[sixbit /LOGIN/]
+ife $$dbug, jrst xcall
+ifn $$dbug,[
+	call xcall
+	 return
+	format "~&Logged in ~S ~S (version ~D)~&",[a,b,c]
+	aos (p)
+	return
+] ; ifn $$dbug
+
+; CALL OPEN:  Open
+;  Skip if no error
+; A (arg):  device
+; B (arg):  name1
+; C (arg):  name2
+; D (arg):  directory
+; E (arg):  mode
+; T (val):  error code if error
+open:	jsp tt,acsav
+	movei t,opopen
+	jrst cmd
+
+; CALL CLOSE:  Close
+;  Skip if no error
+; T (val):  error code if error
+close:	jsp tt,acsav
+	movei t,opclose
+	jrst cmd
+
+.scalar syncnt
+
+; CALL SYNC:  Synchronize
+sync:	jsp tt,acsav
+	aos a,syncnt
+	movei t,opsync
+	call send
+	call flush
+sync1:	call recv
+	cain t,rssync
+	 came a,syncnt
+	  jrst sync1
+	return
+
+; CALL XCALL:  Do extended command
+;  Skip if no error
+; A - F (arg):  Arguments
+; G (arg):  Extended command name
+; A - G (val):  Values
+; T (val):  Error code if error
+; CALL SCALL:  Do system call
+;  Skip if no error
+; A - E (arg):  <arg2> - <arg6>
+; F (arg):  <# args>,,<control bits>
+; G (arg):  System call name
+; A - G (val):  <val1> - <val7>
+; T (val):  Error code if error
+; CALL CMD:  Do command
+;  Skip if no error
+; T (arg):  Opcode
+; T (val):  Error code if error
+; CALL GCMD:  Do command using block
+;  Skip if no error
+; G (a/v):  Address of block
+; T (arg):  Opcode
+; T (val):  Error code if error
+; Clobbers F
+; CALL GCMDRS:  Read command response (RSVALS or RSERROR)
+;  Skip if no error
+; G (a/v):  Address of block
+; T (val):  Error code if error
+; Clobbers F
+xcall:	skipa t,[opxcall]
+scall:	 movei t,opscall
+cmd:	jsp tt,acblk
+gcmd:	call gsend
+	call flush
+gcmdrs:	call grecv
+	caie t,rsvals
+	 jrst gcmdr1
+	aos (p)
+	return
+
+gcmdr1:	caie t,rserror
+	 .lose
+epopj:	move t,6(g)
+ifn $$dbug, format "~&Error: ~:H (~:E) ~:H ~:H~&",[6(g),6(g),0(g),1(g)]
+	return
+
+.scalar outcnt
+.scalar outptr
+
+; CALL SEND:  Send 7 words
+; A - G (a/v):  7 words to send
+; T (arg):  Opcode
+; CALL GSEND:  Send 7 words from block
+; G (a/v):  Address of 7-word block
+; T (arg):  Opcode
+; Clobbers F
+send:	jsp tt,acblk
+gsend:	move f,outptr
+repeat 7,[
+	move tt,6-.rpcnt(g)
+	lshc t,4
+	movem tt,7-.rpcnt(f)
+] ; repeat 7
+	lsh t,4
+	movem t,0(f)
+	movei f,8(f)
+	movem f,outptr
+	sosle outcnt
+	 return
+flush:	skipn tcpp
+	 jrst chafls
+	jrst tcpfls
+
+.scalar incnt
+.scalar inptr
+
+; CALL RECV:  Receive 7 words
+; A - G (val):  7 words recieved
+; T (val):  Opcode
+; CALL GRECV:  Receive 7 words into block
+; G (a/v):  Address of 7-word block
+; T (val):  Opcode
+; Clobbers F
+recv:	jsp tt,acblk
+grecv:	sosge incnt
+	 jrst grecv1
+	move f,inptr
+	move t,0(f)
+	lsh t,-4
+repeat 7,[
+	move tt,1+.rpcnt(f)
+	lshc t,-4
+	movem tt,.rpcnt(g)
+] ; repeat 7
+	movei f,8(f)
+	movem f,inptr
+ife $$dbug,[
+	cain t,rslose
+	 .lose
+	return
+] ; ife $$dbug
+ifn $$dbug,[
+	caie t,rslose
+	 return
+	format "~&Lose at ~:H    CMD/ ~:H~@
+		  Error ~:H (~:E)~@
+		  C/ ~:H    D/ ~:H    TT/ ~:H    T2/ ~:H~@
+		  ",[3(g),2(g),6(g),6(g),0(g),1(g),4(g),5(g)]
+	 .lose
+] ; ifn $$dbug
+
+grecv1:	save [grecv]
+	skipn tcpp
+	 jrst chaget
+	jrst tcpget
+
+; Network
+
+; Just in case...
+ifndef $cpkop, .insrt dsk:syseng;chsdef >
+
+.scalar tcpp
+
+chacnt==:<%cpmxw-%cpkdt>/8
+tcpcnt==:160.			; See comment in ITSDEV
+
+; Make buffers big enough for both:
+ifge <tcpcnt*8>-%cpmxw, liobuf==:<tcpcnt*8>
+.else, liobuf==:%cpmxw
+
+.scalar inchn
+.scalar outchn
+
+.vector inbuf(liobuf)
+.vector outbuf(liobuf)
+
+; Chaosnet
+
+$cpknx==:$cpknb+<050000,,0>-<000500,,0>
+
+ifn $cpkop&777777, .err $CPKOP not in first word?
+ifn $cpknb&777777, .err $CPKNB not in first word?
+
+define cpkop (op,nb)
+<.dpb <op>,$cpkop,<.dpb <nb>,$cpknb,0>>!termin
+
+pktin:	setz ? sixbit /PKTIOT/
+	move inchn
+	setzi inbuf
+
+pktout:	setz ? sixbit /PKTIOT/
+	move outchn
+	setzi outbuf
+
+chago:	setzm tcpp
+	move c,[440700,,[chname asciz ","]]
+	movei d,15
+	call chacon
+	 jrst e0popj
+	move t,[cpkop %codat,0]
+	movem t,outbuf+0
+	setzm incnt
+	call chflsi
+	jrst login
+
+chafls:	movei t,chacnt
+	sub t,outcnt
+	jumpe t,cpopj
+	dpb t,[$cpknx outbuf]
+	.call pktout
+	 slose
+chflsi:	movei t,outbuf+%cpkdt
+	movem t,outptr
+	movei t,chacnt
+	movem t,outcnt
+	return
+
+chaget:	.call pktin
+	 slose
+	ldb t,[$cpkop inbuf]
+	caie t,%codat
+	 .lose
+	ldb t,[$cpknb inbuf]
+	trne t,37
+	 .lose
+	lsh t,-5
+	jumple t,chaget
+	movem t,incnt
+	movei t,inbuf+%cpkdt
+	movem t,inptr
+	return
+
+; TCP
+
+tcpcnt==:liobuf/8
+
+tcpgo:	setom tcpp
+	movei c,<tcport 0,>
+	call tcpcon
+	 jrst e0popj
+	call tpgeti
+	call tpflsi
+	jrst login
+
+tcpfls:	movei t,tcpcnt
+	sub t,outcnt
+	jumpe t,cpopj
+	lsh t,5
+	move tt,[440800,,outbuf]
+	syscall siot,[move outchn ? move tt ? move t]
+	 slose
+	syscall force,[move outchn]
+	 slose
+tpflsi:	movei t,outbuf
+	movem t,outptr
+	movei t,tcpcnt
+	movem t,outcnt
+	return
+
+; TCP input is coded in this crazy way because there is a bug in WHYINT
+; such that you can't trust the results of a WHYINT unless you have read
+; every last byte that it told you about the last time you called it.
+
+.scalar bytcnt			; # unread bytes still in system
+.scalar maxcnt			; Largest BYTCNT ever seen (for debugging)
+.scalar xtrabc			; # bytes at start of INBUF
+.scalar xtrabp			; BP to space in INBUF
+
+tpgeti:	setzm incnt
+	setzm bytcnt
+	setzm maxcnt
+	jrst tcpgtj
+
+tcpgtx:	;; Screw case:  Before we can call WHYINT, we must pull the last
+	;; few extra bytes out of the system into the beginning of the
+	;; INBUF.  (Note how the SIOT below advances XTRABP and clears
+	;; BYTCNT correctly!)
+	movem t,xtrabc
+	syscall siot,[move inchn ? move xtrabp ? move bytcnt]
+	 slose
+tcpgt1:	syscall netblk,[move inchn ? movei %ntopn]
+	 slose
+	syscall whyint,[move inchn ? movem tt ? movem tt ? movem t]
+	 slose
+	caie tt,%ntinp		; Input available?
+	 jrst [	caie tt,%ntcli	; Any last dregs of input?
+		 .lose
+		jrst .+1 ]
+	movem t,bytcnt
+	camle t,maxcnt
+	 movem t,maxcnt
+tcpget:	skipg t,bytcnt
+	 jrst tcpgt1
+	add t,xtrabc		; T: # bytes available
+	caige t,40
+	 jrst tcpgtx		; Not enough for a block, screw case
+	lsh t,-5		; T: # blocks available
+	caile t,tcpcnt
+	 movei t,tcpcnt
+	movem t,incnt		; INCNT: # blocks that will fit this time
+	lsh t,5
+	sub t,xtrabc		; T: # bytes we have to read to get there
+	movni tt,(t)
+	addm tt,bytcnt		; BYTCNT: # bytes that will leave in system
+	syscall siot,[move inchn ? move xtrabp ? move t]
+	 slose
+	movei t,inbuf
+	movem t,inptr
+tcpgtj:	move t,[440800,,inbuf]
+	movem t,xtrabp		; When he comes back, there won't
+	setzm xtrabc		; be any extra.
+	return
+
+.end itsdvu
+
+; Local Modes:
+; Compile Command: :MIDAS BAWDEN;ITSDEW/Eî
+; End:

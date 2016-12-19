@@ -1,0 +1,713 @@
+; -*- Midas -*-
+
+title ITSDEV - ITS device server.
+
+a=:1
+b=:2
+c=:3
+d=:4
+cmd=:5
+t=:6
+tt=:7
+t2=:10
+e=:11				; Error code
+
+ip=:14				; Input block pointer
+op=:15				; Output block pointer
+bp=:16				; Buffer pointer
+p=:17
+
+ch==:0,,-1
+chneti==:1
+chneto==:2
+chdev==:3
+
+%fr==:0,,525252
+%fl==:1,,525252
+%flin==:200000			; Channel is open for input
+%flout==:100000			; Channel is open for output
+%flnet==:040000			; Network input interrupts clear this flag
+%fltcp==:020000			; Using TCP, not Chaos
+%fllos==:010000			; Losing...
+
+call=:pushj p,
+return=:popj p,
+save==:push p,
+rest==:pop p,
+flose=:.lose %lsfil
+slose=:.lose %lssys
+
+quit=:call .
+$quit:	skipe debug
+	 .break 16,100000
+	.logout 1,
+
+define bltdup org,len
+	move tt,[<org>,,<org>+1]
+	blt tt,<org>+<len>-1
+termin
+
+define syscall name,args
+	.call [setz ? .1stwd sixbit /name/ ? args(400000)]
+termin
+
+define conc foo,bar
+foo!bar!termin
+
+popj1:	aos (p)
+cpopj:	return
+
+itsdvu"$$defs==:1		; Just get the definitions
+.insrt itsdvu >
+
+.vector pdl(lpdl==:100.)
+.scalar cname			; contact name
+
+usrvar:	sixbit /OPTION/	? tlo %opint\%opopc
+	sixbit /MASK/	? move [%pipdl\%piioc]
+	sixbit /MSK2/	? movei 1_chneti
+	sixbit /HSNAME/	? move cname
+lusrvar==:.-usrvar
+
+dbg:	setom debug		; Debugging entry point
+	move 0,[chname sixbit /,/]
+	.value [asciz ""]
+go:	move p,[-lpdl,,pdl-1]	; Normal entry point
+	.close 1,
+	movem 0,cname
+	setzi 0,		; Clear flags
+	move t,[-lusrvar,,usrvar]
+	syscall usrvar,[movei %jself ? move t]
+	 slose
+	move a,cname
+	camn a,[chname sixbit /,/]
+	 jrst chago
+	camn a,[tcport sixbit /SYN,/]
+	 jrst tcpgo
+	.value
+
+gogo:	call brecv
+	jrst @cmdtab(cmd)
+
+cmdtab:	offset -.
+opdata::	adata
+oplast::	alast
+opread::	aread
+opsync::	async
+opopen::	aopen
+opclose::	aclose
+opscall::	ascall
+opxcall::	axcall
+oplink::	alink
+opmax::	offset 0
+repeat 20-<.-cmdtab>, aerror
+
+axcall:	move c,6(bp)
+	camn c,[sixbit /MTAPE/]
+	 jrst amtape
+	camn c,[sixbit /LOGIN/]
+	 jrst alogin
+	camn c,[sixbit /RENAME/]
+	 jrst a6call
+	jrst rerr+%enscl
+
+lbuffer==:2000
+.vector buffer(lbuffer+6)	; I/O buffer, with room for extra block
+
+adata:	tlne %flout
+	 jrst adata0
+	movei d,%ensio
+	movei c,7		; 7 words (the first!) not written
+	jrst adata5		; Go wait for the OPLAST
+
+alast:	tlne %flout
+	 jrst alast0
+	move c,6(bp)
+	jrst rerr+%ensio
+
+adata0:	movei bp,7(bp)
+	cail bp,buffer+lbuffer	; Still room?
+	 jrst adata1
+adata2:	call recv
+ifn opdata, .err OPDATA must be 0
+	jumpe cmd,adata0
+	caie cmd,oplast
+	 jsp t,rlose
+alast0:	move c,6(bp)
+	cail c,0
+	 caile c,6
+	  jsp t,rlose
+	addi bp,(c)
+	hrloi t,-1-buffer(bp)
+	eqvi t,buffer
+	jumpge t,rvals		; Don't trust your luck...
+	syscall iot,[moves e ? movei chdev ? move t]
+	 caia
+	  jrst rvals
+	movei c,(bp)
+	subi c,(t)		; C: # words not written
+	jrst rerror
+
+adata1:	move t,[-lbuffer,,buffer]
+	syscall iot,[moves d ? movei chdev ? move t]
+	 jrst adata3
+	movei bp,-lbuffer(bp)
+	move t,[buffer+lbuffer,,buffer]
+	blt t,buffer+5		; Copy down 6 words
+	jrst adata2
+
+adata3:	movei c,(bp)
+	subi c,(t)		; C: # words not written
+	jrst adata5
+
+adata4:	addi c,7		; 7 more words not written
+adata5:	;; Error code is in D to avoid clobberage.
+	call brecv
+ifn opdata, .err OPDATA must be 0
+	jumpe cmd,adata4
+	caie cmd,oplast
+	 jsp t,rlose
+	add c,6(bp)		; last 0 to 6 words not written
+	move e,d
+	jrst rerror
+
+aread:	tlnn %flin
+	 jrst rerr+%ensio
+	skipge d,0(bp)		; D: # words requested
+	 jrst rerr+%ebdrg
+	movei c,buffer		; C: -> BUFFER
+	jrst aread1
+
+aread2:	movei cmd,rsdata
+	call send
+	movei a,7(a)
+aread0:	caig a,-7(c)
+	 jrst aread2
+	hrli t,(a)
+	hrri t,buffer
+	blt t,buffer+5		; Copy down 6 words
+	subi c,-buffer(a)
+aread1:	movei a,buffer
+	jumple d,aread7		; If no more wanted, flush buffer
+	movei t,lbuffer
+	camle t,d
+	 movei t,(d)
+	subi d,(t)
+	movni t,(t)
+	hrli c,(t)
+	syscall iot,[moves e ? movei chdev ? move c]
+	 jrst aread5
+	jumpge c,aread0		; Usual case, go empty buffer
+	tdza d,d		; EOF => D = 0
+aread5:	 setoi d,		; Error => D = -1
+	jrst aread0		; Don't ask for more after emptying buffer
+
+aread7:	movei t,-buffer(c)
+	movem t,buffer+6
+	movei cmd,rslast
+	call send
+	jumpe d,rvals
+	jrst rerror
+
+ascall:	hlrz t,5(bp)
+	trze t,400000
+	 jrst ancall
+	caige t,1
+	 jrst rerr+%etfrg
+	caile t,6
+	 jrst rerr+%etmrg
+xscall:	xct ascltb-1(t)
+	 jrst rerror
+	jrst rvals
+
+ascltb:
+repeat 6,[
+	syscall call,[moves e ? move 6(bp) ? movei chdev
+			repeat .rpcnt, move .rpcnt(bp)
+			repeat 7, movem vals+.rpcnt
+			movs 5(bp)]
+] ; repeat 6
+
+ancall:	caige t,0
+	 jrst rerr+%etfrg
+	caile t,5
+	 jrst rerr+%etmrg
+xncall:	xct ancltb(t)
+	 jrst rerror
+	jrst rvals
+
+ancltb:
+repeat 6,[
+	syscall call,[moves e ? move 6(bp)
+			repeat .rpcnt, move .rpcnt(bp)
+			repeat 7, movem vals+.rpcnt
+			movs 5(bp)]
+] ; repeat 6
+
+a6call:	syscall call,[moves e ? move 6(bp)
+			move 0(bp) ? move 1(bp) ? move 2(bp) ? move 3(bp)
+			move 4(bp) ? move 5(bp)]
+	 jrst rerror
+	jrst rvals
+
+amtape:	tlnn %flin\%flout
+	 jrst rerr+%ensch
+	movei a,0(bp)
+	hrli a,chdev
+xmtape:	.mtape a,
+	 jrst rerr+0		; Non-specific error
+	movem a,vals+0
+	jrst rvals
+
+xerror:	hlrzm c,e
+	movei t,rerror
+	movem t,intpc(p)
+	.call dismis
+	 slose
+
+aerror:	jsp t,rlose
+
+aopen:	tlz %flin\%flout	; Now closed
+	hrrz t,4(bp)
+	trnn t,%doblk		; Block mode only
+	 jrst rerr+%ensmd
+	syscall open,[moves e ? movsi (t) ? movei chdev
+			move 0(bp) ? move 1(bp) ? move 2(bp) ? move 3(bp)]
+	 jrst rerror
+	tlo %flin		; Now open for input
+	trne t,%doout
+	 tlc %flin#%flout	; Make that output
+	jrst rvals
+
+aclose:	tlz %flin\%flout
+	.close chdev,
+	jrst rvals
+
+alink:	syscall mlink,[moves e
+			move 0(bp) ? move 1(bp) ? move 2(bp) ? move 3(bp)
+			move 4(bp) ? move 5(bp) ? move 6(bp)]
+	 jrst rerror
+	jrst rvals
+
+async:	movei a,0(bp)
+	movei cmd,rssync
+	call send
+	call flush
+	call brecv
+	jrst @cmdtab(cmd)
+
+xuvars:	sixbit /XUNAME/	? move 0(bp)
+	sixbit /XJNAME/	? move 1(bp)
+	sixbit /SNAME/	? move 2(bp)
+	sixbit /HSNAME/	? move cname
+lxuvars==:.-xuvars
+
+.scalar clvers,clprog		; Save client version and program name
+
+alogin:	move t,4(bp)
+	movem t,clvers
+	move t,5(bp)
+	movem t,clprog
+	move c,0(bp)
+	syscall login,[moves e ? move c ? move 3(bp) ? move 0(bp)]
+	 jsp t,alogn7
+	movem c,vals+0
+	move c,1(bp)
+	syscall usrvar,[moves e ? movei %jself ? [sixbit /JNAME/] ? move c]
+	 jsp t,alogn7
+	movem c,vals+1
+	move t,[-lxuvars,,xuvars]
+	syscall usrvar,[movei %jself ? move t]
+	 slose
+	move t,[.fvers]
+	movem t,vals+2
+	jrst rvals
+
+alogn7:	cain e,%eexfl
+	 aoja c,-2(t)
+	skipe debug		; If you are debugging
+	 jrst (t)		; Then don't sweat the small stuff
+	jrst rerror
+
+.vector vals(7)
+
+; JRST RVALS to return values in VALS.
+rvals:	movei cmd,rsvals
+	call vsend
+	call brecv
+	jrst @cmdtab(cmd)
+
+; JRST RERR+<n> to report error <n>.
+rerr:
+repeat 100, jsp e,rerr1
+
+; JRST RERROR to report error in E.
+rerr1:	movei e,-<rerr+1>(e)
+rerror:	move a,[c,,vals]	; Send him:
+	blt a,vals+6		; C, D, CMD, T, TT, T2, E
+	movei cmd,rserror
+	call vsend
+	call flush		; Make sure he gets it as soon as possible.
+	call brecv
+	jrst @cmdtab(cmd)
+
+; JSP T,RLOSE to report fatal lossage.
+rlose:	tloe %fllos
+	 .lose			; Don't lose recursively
+	move a,[c,,vals]	; Send him:
+	blt a,vals+6		; C, D, CMD, T, TT, T2, E
+	movei cmd,rslose
+	call vsend
+	call flush
+	syscall finish,[movei chneto]
+	 jfcl
+	quit
+
+.scalar incnt			; Number of blocks available for reading
+
+; CALL RECV:  Receive next 7 words
+; BP (a/v):  Address of 7 word input block
+; CMD (val):  4 bit opcode
+brecv:	movei bp,buffer
+recv:	sosge incnt
+	 jrst recv1		; No blocks available, get more
+	move cmd,0(ip)
+	lsh cmd,-4
+repeat 7,[
+	move t,.rpcnt+1(ip)
+	lshc cmd,-4
+	movem t,.rpcnt(bp)
+] ; repeat 7
+	movei ip,8(ip)
+	return
+
+recv2:	skiple incnt
+	 jrst recv
+	call flush		; Don't hang with buffered output
+	tlne %flnet
+	 .hang
+recv1:	save [recv2]
+	tlnn %fltcp
+	 jrst chaget
+	jrst tcpget
+
+.scalar outcnt
+
+; CALL SEND:  Send next 7 words
+; CMD (arg):  4 bit opcode
+; A (a/v):  Address of 7 word output block
+vsend:	movei a,vals
+send:
+repeat 7,[
+	move t,6-.rpcnt(a)
+	lshc cmd,4
+	movem t,7-.rpcnt(op)
+] ; repeat 7
+	lsh cmd,4
+	movem cmd,0(op)
+	movei op,8(op)
+	sosle outcnt
+	 return
+flush:	tlnn %fltcp		; No more blocks empty, send them off
+	 jrst chafls
+	jrst tcpfls
+
+; Network
+
+.insrt dsk:syseng;chsdef >
+
+chacnt==:<%cpmxw-%cpkdt>/8	; Chaos:  a packet's worth of blocks
+tcpcnt==:160.			; TCP:  160. blocks
+.see maxcnt	; A look at the ITS TCP code suggests that it might offer
+		; as much as 4820. bytes (150. blocks).  Experiments with
+		; MAXCNT have seen TCP offer as much as 4768. bytes (149.
+		; blocks), but usually when things get backed up it offers
+		; 3856. (120. blocks).  (Note that a disk block of 2000
+		; words fits in 147. blocks.)
+
+; Make buffers big enough for both:
+ifge <tcpcnt*8>-%cpmxw, liobuf==:<tcpcnt*8>
+.else, liobuf==:%cpmxw
+
+.vector inbuf(liobuf)
+.vector outbuf(liobuf)
+
+; Chaosnet
+
+$cpknx==:$cpknb+<050000,,0>-<000500,,0>
+
+ifn $cpkop&777777, .err $CPKOP not in first word?
+ifn $cpknb&777777, .err $CPKNB not in first word?
+
+define cpkop (op,nb)
+<.dpb <op>,$cpkop,<.dpb <nb>,$cpknb,0>>!termin
+
+pktin:	setz ? sixbit /PKTIOT/
+	moves e
+	movei chneti
+	setzi inbuf
+
+pktout:	setz ? sixbit /PKTIOT/
+	moves e
+	movei chneto
+	setzi outbuf
+
+chago:	syscall chaoso,[movei chneti ? movei chneto ? movei 15]
+	 slose
+	move t,[cpkop %colsn,<chname .length ",">]
+	movem t,outbuf+0
+	move t,[440700,,[chname asciz ","]]
+	move tt,[440800,,outbuf+%cpkdt]
+chago1:	ildb t2,t
+	idpb t2,tt
+	jumpn t2,chago1
+	.call pktout
+	 slose
+	movei tt,5*30.		; 5 seconds
+	skipe debug
+	 movei tt,60.*60.*30.	; 1 hour
+	syscall netblk,[movei chneti ? movei %cslsn ? move tt ? movem t]
+	 slose
+	caie t,%csrfc
+	 quit
+	.call pktin
+	 slose
+	move t,[cpkop %coopn,0]
+	movem t,outbuf+0
+	.call pktout
+	 slose
+	move t,[cpkop %codat,0]
+	movem t,outbuf+0
+	call chflsi
+	call chgeti
+	jrst gogo
+
+chafls:	movei t,chacnt
+	sub t,outcnt
+	jumpe t,cpopj
+	dpb t,[$cpknx outbuf]
+	.call pktout
+	 jrst chalos
+chflsi:	movei t,chacnt
+	movem t,outcnt
+	movei op,outbuf+%cpkdt
+	return
+
+chalos:	caie e,12000		; CHNL IN ILLEGAL MODE ON IOT?
+	 .lose			; No, can't JSP T,RLOSE
+	quit			; Yes, well it can happen...
+
+.scalar pktcnt			; # packets we know system has for us
+
+chgeti:	setzm incnt
+	setzm pktcnt
+	return
+
+chagt1:	tlo %flnet
+	syscall whyint,[movei chneti ? movem tt ? movem tt ? movem t]
+	 slose
+	caie tt,%csopn
+	 quit			; Not open?  He must not care what we do!
+	tlnn t,-1
+	 return
+	hlrzm t,pktcnt
+chaget:	sosge pktcnt
+	 jrst chagt1
+	.call pktin
+	 jsp t,rlose
+	ldb tt,[$cpkop inbuf]
+	ldb t2,[$cpknb inbuf]
+	caie tt,%cocls		; Close (should be impossible)
+	 cain tt,%coeof		; or EOF
+	  quit			; then quit
+	cain tt,%codat
+	 trne t2,37
+	  jsp t,rlose
+	lsh t2,-5
+	jumple t2,chaget
+	movem t2,incnt
+	movei ip,inbuf+%cpkdt
+	return
+
+; TCP
+
+tcpcnt==:liobuf/8
+
+tcpgo:	tlo %fltcp
+	syscall tcpopn,[movei chneti ? movei chneto
+			movei <tcport 0,> ? [-1] ? [-1]]
+	 slose
+	movei tt,5*30.		; 5 seconds
+	skipe debug
+	 movei tt,60.*60.*30.	; 1 hour
+	movei t,%ntlsn
+tcpgo1:	syscall netblk,[movei chneto ? move t ? move tt
+			movem t ? movem tt]
+	 slose
+	skipg tt
+	 quit			; Time ran out
+	cain t,%ntsyr
+	 jrst tcpgo1		; Can pass though %NTSYR
+	caie t,%ntopn
+	 cain t,%ntwrt
+	  caia
+	   quit			; Wrong state
+	call tpflsi
+	call tpgeti
+	jrst gogo
+
+tcpfls:	movei t,tcpcnt
+	sub t,outcnt
+	jumpe t,cpopj
+	lsh t,5
+	move tt,[440800,,outbuf]
+	syscall siot,[moves e ? movei chneto ? move tt ? move t]
+	 .lose			; Can't JSP T,RLOSE
+	syscall force,[moves e ? movei chneto]
+	 .lose			; Can't JSP T,RLOSE
+tpflsi:	movei t,tcpcnt
+	movem t,outcnt
+	movei op,outbuf
+	return
+
+; TCP input is coded in this crazy way because there is a bug in WHYINT
+; such that you can't trust the results of a WHYINT unless you have read
+; every last byte that it told you about the last time you called it.
+
+.scalar bytcnt			; # unread bytes still in system
+.scalar maxcnt			; Largest BYTCNT ever seen (for debugging)
+.scalar xtrabc			; # bytes at start of INBUF
+.scalar xtrabp			; BP to space in INBUF
+
+tpgeti:	setzm incnt
+	setzm bytcnt
+	setzm maxcnt
+	jrst tcpgtj
+
+tcpgtx:	;; Screw case:  Before we can call WHYINT, we must pull the last
+	;; few extra bytes out of the system into the beginning of the
+	;; INBUF.  (Note how the SIOT below advances XTRABP and clears
+	;; BYTCNT correctly!)
+	movem t,xtrabc
+	syscall siot,[moves e ? movei chneti ? move xtrabp ? move bytcnt]
+	 jsp t,rlose
+tcpgt1:	tlo %flnet
+	syscall whyint,[movei chneti ? movem tt ? movem tt ? movem t]
+	 slose
+	caie tt,%ntinp		; Input available?
+	 jrst [	caie tt,%ntopn	; No, still open?
+		 quit		; No.  Then he must not care what we do!
+		return ]
+	movem t,bytcnt
+	camle t,maxcnt
+	 movem t,maxcnt
+tcpget:	skipg t,bytcnt
+	 jrst tcpgt1
+	add t,xtrabc		; T: # bytes available
+	caige t,40
+	 jrst tcpgtx		; Not enough for a block, screw case
+	lsh t,-5		; T: # blocks available
+	caile t,tcpcnt
+	 movei t,tcpcnt
+	movem t,incnt		; INCNT: # blocks that will fit this time
+	lsh t,5
+	sub t,xtrabc		; T: # bytes we have to read to get there
+	movni tt,(t)
+	addm tt,bytcnt		; BYTCNT: # bytes that will leave in system
+	syscall siot,[moves e ? movei chneti ? move xtrabp ? move t]
+	 jsp t,rlose
+	movei ip,inbuf
+tcpgtj:	move t,[440800,,inbuf]
+	movem t,xtrabp		; When he comes back, there won't
+	setzm xtrabc		; be any extra.
+	return
+
+; Interrupts
+
+intsv0==:a			; Save A
+intsv9==:t2			; Through T2
+intsvn==:intsv9+1-intsv0
+
+intctl==:400000+intsv0_6+intsvn	; control bits
+intpc==:-<3+intsvn>		; INTPC(P) is PC before interrupt.
+intdf1==:intpc-2		; INTDF1(P) is .DF1 before interrupt.
+intdf2==:intpc-1		; INTDF2(P) is .DF2 before interrupt.
+intrq1==:intpc-4		; INTRQ1(P) are first word bits.
+intrq2==:intpc-3		; INTRQ2(P) are second word bits.
+intac0==:intpc+1-intsv0		; INTAC0+C(P) is C before interrupt.
+
+tsint:
+loc 42
+	-ltsint,,tsint
+loc tsint
+	intctl,,p
+	%piioc ? 0 ? -1 ? -1 ? iocint
+	0 ? 1_chneti ? 0 ? 1_chneti ? netint
+ltsint==:.-tsint
+
+dismis:	setz ? sixbit /DISMIS/ ? movsi intctl ? setz p
+
+; JRST LOSINT to dismis interrupt and do .LOSE at interrupting PC.
+losint:	move t,intrq1(p)
+	jffo t,.+2
+	 caia			; So just .LOSE 0
+	  addi tt,1
+	hrl tt,intpc(p)
+	syscall dismis,[movsi intctl ? move p ? move intpc(p)
+			move intdf1(p) ? move intdf2(p) ? move tt]
+	 slose
+
+; Network input interrupts just clear %FLNET.
+netint:	tlz %flnet
+	.call dismis
+	 slose
+
+; IOC interrupt of .CALL with error return argument just fails to skip and
+; returns with IOC error number as error code.
+iocint:	hrrz a,intpc(p)
+	.suset [.rbchn,,b]
+	syscall status,[movei (b) ? movem c]
+	 slose
+	tlnn c,-100		; Better not look like standard error
+	 .lose
+	caie a,xscall		; Special cases for various reasons
+	 cain a,xmtape
+	  jrst xerror
+	cain a,xncall
+	 jrst xerror
+	move b,(a)
+	tlc b,(.call)
+	movsi t,(setz)
+	tlnn b,-1		; Better be .CALL [ SETZ ? ... ]
+	 came t,(b)
+	  jrst losint
+iocnt2:	move t,2(b)
+	tlc t,%clerr
+	tlne t,(7^9 @(17))	; Unindexed, direct, error return?
+	 aoja b,iocnt1		; Nope, keep looking
+	movei t,(t)
+	caig t,intsv9
+	 caige t,intsv0
+	  caia
+	   addi t,intac0(p)	; Some locations are on the stack now
+	hlrzm c,(t)
+	aos intpc(p)
+	.call dismis
+	 slose
+
+iocnt1:	jumpge t,iocnt2
+	jrst losint
+
+cnst0:				; Today's weird idea...
+constants
+repeat <.-cnst0+77>/100, conc cnst,\.rpcnt,=:cnst0+.rpcnt*100
+
+variables
+
+debug:	0
+
+patch::
+pat:	block 100.
+epatch:	-1			; Make memory exist, end of patch area
+
+end go
