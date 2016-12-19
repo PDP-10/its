@@ -772,6 +772,11 @@ expect ":KILL"
 respond "*" ":link sys;ts copy,sys;ts print\r"
 respond "*" ":link sys;ts listf,sys;ts print\r"
 
+# fdir 
+respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
+respond "Use what filename instead?" "gren;\r"
+expect ":KILL"
+
 # timoon
 respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
