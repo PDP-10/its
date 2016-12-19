@@ -356,9 +356,7 @@ respond "System?" "ITS\r"
 expect ":KILL"
 respond "*" ":link sys2;tc dc,sys1;ts dcrock\r"
 
-respond "*" ":midas sys1;ts instal_sysen2;instal\r"
-expect ":KILL"
-
+respond "*" ":xfile build;instal xfile\r"
 respond "*" ":xfile build;loss xfile\r"
 respond "*" ":xfile build;dir xfile\r"
 respond "*" ":xfile build;mtboot xfile\r"
