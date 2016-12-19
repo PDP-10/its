@@ -749,6 +749,12 @@ expect ":KILL"
 respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
 expect ":KILL"
 
+# print
+respond "*" ":midas sys;ts print_sysen2;print\r"
+expect ":KILL"
+respond "*" ":link sys;ts copy,sys;ts print\r"
+respond "*" ":link sys;ts listf,sys;ts print\r"
+
 # timoon
 respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
