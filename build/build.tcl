@@ -774,7 +774,6 @@ respond "*" ":link sys;ts listf,sys;ts print\r"
 
 # fdir 
 respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
-respond "Use what filename instead?" "gren;\r"
 expect ":KILL"
 
 # timoon
