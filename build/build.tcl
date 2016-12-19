@@ -290,6 +290,7 @@ respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
+respond "*" ":link sys;ts load,sys;ts dump\r"
 
 respond "*" ":midas sys1;ts stink_sysen2;stink\r"
 expect ":KILL"
