@@ -798,6 +798,11 @@ expect ":KILL"
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
 
+# itsdev
+respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
+respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
+expect ":KILL"
+
 # 11sim
 respond "*" ":midas sys1;ts pdp11_syseng;11sim\r"
 expect ":KILL"
