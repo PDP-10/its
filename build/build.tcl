@@ -784,9 +784,7 @@ respond "*" ":xfile build;host xfile\r"
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
 
-# OBS
-respond "*" ":midas sys;ts obs_bawden;obs\r"
-expect ":KILL"
+respond "*" ":xfile build;obs xfile\r"
 
 # FED
 respond "*" ":midas sys;ts fed_sysen2;fed\r"
