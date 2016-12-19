@@ -629,14 +629,10 @@ respond "*" ":xfile build;arcsal xfile\r"
 respond "*" ":midas sys;ts acount_sysen3;acount\r"
 expect ":KILL"
 
-# timsrv
-respond "*" ":midas sysbin;timsrv bin_sysnet;timsrv\r"
-expect ":KILL"
-respond "*" ":link device;tcp syn045,sysbin;timesrv bin\r"
-
 # mailt
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
+respond "*" ":xfile build;timsrv xfile\r"
 respond "*" ":xfile build;rmtdev xfile\r"
 respond "*" ":xfile build;decuuo xfile\r"
 
