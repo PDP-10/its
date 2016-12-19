@@ -127,7 +127,7 @@ A list of [known ITS machines](doc/machines.md).
    - DSKDEV, D - short disk device.
    - DSKUSE, disk usage information.
    - NWATCH, small watch display.
-   - DUMP, tape backup and restore.
+   - DUMP/LOAD, tape backup and restore.
    - EMACS, editor.
    - FIND, search for files.
    - FRETTY, display list of free TTYs.
