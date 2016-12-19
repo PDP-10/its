@@ -662,11 +662,8 @@ expect ":KILL"
 respond "*" ":link sys1;ts %,sys1;ts who%\r"
 
 respond "*" ":xfile build;palx xfile\r"
-
-# itsdev
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
-respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
-expect ":KILL"
+respond "*" ":xfile build;itsdev xfile\r"
 
 # charfc/charfs
 respond "*" ":midas sys1;ts charfc_sysen3;charfc\r"
