@@ -904,7 +904,6 @@ respond "*" ":link device;chaos bye,sys1;ts bye\r"
 
 # @
 respond "*" ":midas sys;ts @_sysen1;@\r"
-respond "Use what filename instead?" "sysen2;\r"
 expect ":KILL"
 
 # PLAN/CREATE
