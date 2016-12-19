@@ -323,10 +323,7 @@ respond "*" ":xfile build;syschk xfile\r"
 respond "*" ":xfile build;arcdev xfile\r"
 respond "*" ":xfile build;dskdev xfile\r"
 respond "*" ":xfile build;whoj xfile\r"
-
-respond "*" ":midas sys2;ts talk_gren;untalk\r"
-expect ":KILL"
-
+respond "*" ":xfile build;untalk xfile\r"
 respond "*" ":xfile build;find xfile\r"
 respond "*" ":xfile build;dskuse xfile\r"
 respond "*" ":xfile build;ddtdoc xfile\r"
