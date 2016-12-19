@@ -594,7 +594,7 @@ respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
 respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
-respond "PWORD version (Y or N)? " "Y\r"
+respond "PWORD version (Y or N)? " "N\r"
 expect ":KILL"
 
 respond "*" ":link sys;ts mail,sysbin;qmail bin\r"
@@ -607,6 +607,11 @@ respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
 # TIME
 respond "*" ":midas sys1;ts time_sysen2;time\r"
+expect ":KILL"
+
+# PWMAIL
+respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
+respond "PWORD version (Y or N)? " "Y\r"
 expect ":KILL"
 
 # lisp

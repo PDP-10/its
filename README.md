@@ -178,6 +178,7 @@ A list of [known ITS machines](doc/machines.md).
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
    - PTY, pseudo-tty.
+   - PWMAIL, a limited version of MAIL when not yet logged in under PWORD.
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
    - QUOTE, prints out a random quote.
    - REATTA, reattaches disowned jobs to terminal.
