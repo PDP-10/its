@@ -1046,6 +1046,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts fed_sysen2;fed\r"
 expect ":KILL"
 
+# XHOST
+respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
+expect ":KILL"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
