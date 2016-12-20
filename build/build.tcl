@@ -1060,6 +1060,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts type8_sysen3;type8\r"
 expect ":KILL"
 
+# USQ
+respond "*" ":midas sys2;ts usq_sysen3;usq\r"
+expect ":KILL"
+
 # HOST
 respond "*" ":midas sys3;ts host_sysnet;host\r"
 expect ":KILL"
