@@ -781,10 +781,7 @@ respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
 
 respond "*" ":xfile build;obs xfile\r"
-
-# FED
-respond "*" ":midas sys;ts fed_sysen2;fed\r"
-expect ":KILL"
+respond "*" ":xfile build;fed xfile\r"
 
 # XHOST
 respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
