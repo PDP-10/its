@@ -1,10 +1,10 @@
 EMULATOR ?= simh
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
-SRC = system syseng sysen1 sysen2 sysnet kshack dragon channa midas	\
-      _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy gren	\
-      bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom rwk	\
-      inquir acount gz sys decsys alan ecc
+SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
+      midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak cstacy	\
+      gren bawden _mail_ l lisp liblsp libdoc comlap lspsrc nilcom	\
+      rwk inquir acount gz sys decsys alan ecc
 DOC = info _info_ sysdoc kshack _teco_ emacs emacs1
 BIN = sysbin device emacs _teco_ inquir
 
