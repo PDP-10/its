@@ -151,8 +151,7 @@ respond "cpusw" "3\r"
 respond "New One Proceed" "1\r"
 expect ":KILL"
 
-respond "*" ":midas .;_kshack;nsalv\r"
-respond "Which machine?" "KSRP06\r"
+respond "*" ":xfile build;nsalv xfile\r"
 expect ":KILL"
 
 respond "*" ":midas .;_system;dskdmp\r"
