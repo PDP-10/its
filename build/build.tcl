@@ -326,17 +326,7 @@ respond "*" ":xfile build;taraka xfile\r"
 respond "*" ":xfile build;dmpcpy xfile\r"
 respond "*" ":xfile build;modems xfile\r"
 respond "*" ":xfile build;netime xfile\r"
-
-# sources dump tape now creates dragon directory and populates
-# with an initial dragon; dragon hoard file, which is required
-# by PFT
-#
-# respond "*" ":print dragon;..new. (udir)\r"
-#
-respond "*" ":midas dragon;rakash pfthmg_syseng; pft\r"
-respond "mcp=" "0\r"
-expect ":KILL"
-respond "*" ":link channa; rakash pfthmg,dragon; rakash pfthmg\r"
+respond "*" ":xfile build;pfthmg xfile\r"
 
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
