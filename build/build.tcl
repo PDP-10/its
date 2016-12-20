@@ -322,10 +322,8 @@ respond "*" ":xfile build;pfthmg xfile\r"
 
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
-respond "*" ":midas sys1;ts crock_sysen1;crock\r"
-respond "System?" "ITS\r"
-expect ":KILL"
-respond "*" ":link sys2;tc c,sys1;ts crock\r"
+respond "*" ":xfile build;crock xfile\r"
+expect "done"
 
 respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
 respond "System?" "ITS\r"
