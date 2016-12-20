@@ -223,6 +223,7 @@ A list of [known ITS machines](doc/machines.md).
    - TYPE8, type 8-bit file.
    - UNTALK, split-screen comm-link program.
    - UPTIME, Chaosnet uptime server.
+   - USQ, unsqueeze/uncram a file.
    - XHOST, tool for replacing host nicnames with real hostnames.
    - WHAT, humorous quips to various "what" questions.
    - WHO%, list index/uname/jname/%time in sorted list.
