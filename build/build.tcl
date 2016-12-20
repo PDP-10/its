@@ -1035,6 +1035,10 @@ respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
 respond "*" ":midas sys2;ts what_syseng;what\r"
 expect ":KILL"
 
+# EXECVT
+respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
+expect ":KILL"
+
 # UPTIME
 respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
 expect ":KILL"
