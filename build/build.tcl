@@ -1064,6 +1064,10 @@ expect ":KILL"
 respond "*" ":midas sys3;ts host_sysnet;host\r"
 expect ":KILL"
 
+# WHOLIN
+respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
+expect ":KILL"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"
