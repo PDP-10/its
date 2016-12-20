@@ -214,6 +214,8 @@ respond "*" ":print sys2;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":print sys3;..new. (udir)\r"
 type ":vk\r"
+respond "*" ":print cstacy;..new. (udir)\r"
+type ":vk\r"
 
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
@@ -350,7 +352,7 @@ respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 respond "*" ":midas device;jobdev d_syseng;dskdev\r"
 expect ":KILL"
 
-respond "*" ":midas sysbin;_ar1:cstacy;whoj\r"
+respond "*" ":midas sysbin;_sysen3;whoj\r"
 expect ":KILL"
 respond "*" ":link sys1;ts talk,sysbin;whoj bin\r"
 type ":vk\r"
@@ -558,7 +560,7 @@ respond "*" ":link sys2;ts chtn,sysbin;chtn bin\r"
 respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
 expect ":KILL"
 
-respond "*" ":midas device;jobdev dp_ar5:alan;dpdev 19\r"
+respond "*" ":midas device;jobdev dp_sysen3;dpdev\r"
 expect ":KILL"
 
 respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
@@ -747,19 +749,11 @@ respond "*" ":link sys3;ts sned,sys;ts send\r"
 
 # NICNAM
 
-respond "*" ":midas sys2;ts nicnam_ar2:cstacy;nicnam\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
+respond "*" ":midas sys2;ts nicnam_sysen3;nicnam\r"
 expect ":KILL"
 
 # NICWHO
-respond "*" ":midas sys2;ts nicwho_ar2:cstacy;nicwho\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
-respond "Use what filename instead?" "dsk:\r"
+respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
 expect ":KILL"
 
 # reatta
@@ -1006,7 +1000,7 @@ respond "*" ":midas sys2;ts photo_sysen2;photo\r"
 expect ":KILL"
 
 # TYPE8
-respond "*" ":midas sys;ts type8_sra;ar3:type8\r"
+respond "*" ":midas sys;ts type8_sysen3;type8\r"
 expect ":KILL"
 
 # HOST
