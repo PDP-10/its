@@ -324,12 +324,8 @@ respond "*" ":link sys; ts p,sys; ts peek\r"
 
 respond "*" ":xfile build;crock xfile\r"
 expect "done"
-
-respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
-respond "System?" "ITS\r"
-expect ":KILL"
-respond "*" ":link sys2;tc dc,sys1;ts dcrock\r"
-
+respond "*" ":xfile build;dcrock xfile\r"
+expect "done"
 respond "*" ":xfile build;instal xfile\r"
 respond "*" ":xfile build;loss xfile\r"
 respond "*" ":xfile build;dir xfile\r"
