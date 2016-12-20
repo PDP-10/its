@@ -696,11 +696,7 @@ respond "*" ":xfile build;os xfile\r"
 respond "*" ":xfile build;argus xfile\r"
 respond "*" ":xfile build;fretty xfile\r"
 respond "*" ":xfile build;bye xfile\r"
-
-# @
-respond "*" ":midas sys;ts @_sysen1;@\r"
-expect ":KILL"
-
+respond "*" ":xfile build;@ xfile\r"
 respond "*" ":xfile build;create xfile\r"
 respond "*" ":xfile build;pty xfile\r"
 
