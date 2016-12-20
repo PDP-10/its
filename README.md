@@ -131,6 +131,7 @@ A list of [known ITS machines](doc/machines.md).
    - DSKUSE, disk usage information.
    - DUMP/LOAD, tape backup and restore.
    - EMACS, editor.
+   - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
    - FDIR, fast directory listing.
    - FED, font editor.
    - FIND, search for files.
