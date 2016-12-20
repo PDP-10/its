@@ -1,0 +1,578 @@
+;-*- Midas -*-
+;Hex format:
+;:LL AAAA TT DD DD DD DD .. DD   CC
+;LL: number of DD bytes   AAAA: load address  TT: 00 (or 01 for end rec)
+;DD: data bytes.    CC: complemented checksum of all the bytes
+;Last record has rec-len 0, or can use TT=01 thing with AAAA=execution address
+;For CP/M execution address is irrelevant. (always 0100)
+
+A=1   		;general purpose, arg passing
+B=2
+C=3
+D=4
+
+RLen=5		;intended record length
+RRLen=6		;real record length (after ignoring gapchrs)
+Chksum=7	;checksum while record-building
+
+Cnt=10		;number of bytes left in file
+BP=11		;ildb byte point to file buffer
+
+TT=12		;super temps, clobberable by all routines/macros
+TT1=13
+
+p=17
+
+dskf==1		;disk channel
+ttyo==2		;tty output channel, for typeout.
+
+Call=PUSHJ P,
+Return=POPJ P,
+
+PDLen==20
+JCLen==20			;100 chars, more than enuff
+
+;;offsets in filename blocks
+DEV==0
+FN1==1
+FN2==2
+SNM==3
+
+define syscal op,args
+	.CALL [SETZ ? SIXBIT /op/ ? args ((SETZ))]
+termin
+
+define Type &string
+	movei TT,<.Length string>
+	move TT1,[440700,,[Ascii string]]
+	.call TTYTYP
+	  .Lose %LsSys
+Termin
+
+define Terpri chnl
+	.iot chnl,CR
+	.iot chnl,LF
+Termin
+
+;;options variables
+RecSep:	1			;0: nothing separates record
+				;1: CRLF after each record
+				;other choices as need arises.
+gapchr: -1			;if ge 0, character which we assume gets placed
+				;in gaps.  Will make hex file which may have
+				;gaps instead of writing out this character, if
+				;that will save some room in the file.
+				;if -1, write out all chars, no gaps allowed.
+
+Addr:	400			;100H - initial load addr, updated as we go
+
+EAddr:	-1			;execution address (defaultly same as Addr)
+EType:	1			;type of last, 0-length record - 0 or 1
+
+RecLen:	16.			;maximum record length
+
+Switch:	;;A has character
+	cain A,"C		;/C - contiguous records
+	  jrst SwiC
+	cain A,"G
+	  jrst SwiG		;/G - gaps allowed
+	cain A,"A
+	  jrst SwiA		;/A - load address
+	cain A,"E
+	  jrst SwiE		;/E - execution address
+	cain A,"T
+	  jrst SwiT		;/T - type of last record
+	cain A,"R
+	  jrst SwiR		;/R - record length
+	Type "AUnknown switch /"
+	.iot ttyo,A
+	Type " ignored.
+"
+Ret1:	aos (p)			;don't re-use char
+Ret:	return
+
+SwiC:	setzm RecSep
+	jrst Ret1
+
+SwiG:	;;Gaps allowed. /G:hh where hh are hex digits.
+	setzm GapChr		;default gap char is 0
+	ildb A,BP
+	caie A,":
+	  return
+	call UnHex
+	cain A,"H
+	  aos (p)		;don't reuse char if luser typed "H" at end
+	movem TT,GapChr		;if GapChr out of range, no big deal...
+	return
+
+SwiA:	;;/A:hhhh - load address
+	ildb A,BP
+	caie A,":
+	  return
+	call UnHex
+	cain A,"H
+	  aos (p)
+	movem TT,Addr
+	return
+
+SwiE:	;;/E:hhhh - execution address
+	ildb A,BP
+	caie A,":
+	  return
+	call UnHex
+	cain A,"H
+	  aos (p)
+	movem TT,EAddr
+	return
+
+SwiT:	;;/T - type of last record is 00
+	setzm EType
+	jrst ret1
+
+SwiR:	;;/R:hh - record length
+	ildb A,BP
+	caie A,":
+	  return
+	call UnHex
+	cain A,"H
+	  aos (p)
+	andi TT,377
+	jumpe TT,[Type "ARecord length must be between 1 and FF
+"
+		  return]
+	movem TT,RecLen
+	return
+
+
+UnHex:	;;Read Hex until get non-hex (leave in A).  TT gets value
+	setz TT,
+UnHex1:	ildb A,BP
+	cail A,140
+	  subi A,40
+	cail A,"0
+	  caile A,"F
+	    return
+	caile A,"9
+	  cail A,"A
+	    skipa
+	      return
+	subi A,"0
+	cail A,10.
+	  addi A,"0-"A+10.
+	imuli TT,16.
+	add TT,A
+	jrst UnHex1
+
+Begin:	Move P,PDList
+	Syscal OPEN,[%Clbit,,.uao\%TJDIS	;Allow ^P usage
+		     %Climm,,TTYo
+		     [Sixbit /TTY/]]
+	  .Lose %LsFil
+	call Jcl		;parse jcl
+	skipge EAddr
+	  jrst [move TT,Addr ? movem TT,EAddr ? jrst .+1]
+	skipn ISNAME
+	  .suset [.rHSname,,ISNAME]
+	skipn IFN1
+	  .suset [.rUNAME,,IFN1]
+	call RdFile		;snarf file, set up BP,Cnt
+	Type "AHexifying file "
+	movei A,IDEV ? Call FilTyp
+	Terpri ttyo
+	skipn OSNAME
+	  .suset [.rHSname,,OSNAME]
+	skipn OFN1
+	  jrst [move TT,IFN1 ? movem TT,OFN1 ? jrst .+1]
+	call OutOpn		;open output file
+	Type "ALoad Address="
+	move A,Addr ? Call H2Typ
+	Type "H, Execution Address="
+	move A,EAddr ? Call H2Typ ?
+	Type "HARecord Length="
+	move A,RecLen  ? Call H1Typ
+	skipge A,GapChr
+	  jrst [Type "H, no gaps"
+		jrst B1]
+	jumpe A,[Type "H, gaps allowed"
+		 jrst B1]
+	Type "H, gap char="
+	call H1Typ
+B1:	type ".
+"
+	call Hex		;Do it (closes file)
+	.close dskf,
+	move A,RecNum ? Call HTyp
+	type "H records written to "
+	movei A,ODEV ? call FilTyp
+Die:	.logout 1,
+
+Help:	Type "A:HEXIFY input file,output file /switch /switch /switch
+
+Convert input file, which must be a 'COM' file, into Intel Hex format.
+
+Input file defaults to DSK:hsname;uname COM,
+output file defaults to DSK:hsname;input_fn1 HEX.
+
+Normally creates records of length 10H, each followed by CRLF, starting
+with load address of 0100H.  The last record has length 0, and is of type
+01, with address same as the initial load address.  Switches can be used
+to change this.
+
+In the switch descriptions, 'h' stands for hex digits.
+
+/C  -- make records Contiguous, i.e. do not put CRLF after each one.
+/A:hhhh -- Make the initial load address hhhh
+/E:hhhh -- Make the execution address (the address on last record) be hhhh
+/T  -- make the last record be of type 00
+/G  -- allow 'gaps'.  The program will try to save space by not writing out
+       all the 0 bytes,  manipulating the address field of records instead.
+/G:hh -- like /G, but do it for 'hh' bytes, rather than 00.  This is if your
+	 loader fills gaps with something other than 0's (Huh?)
+/R:hh -- make each record (at most) hh bytes long.
+"
+	jrst Die
+
+Jcl:	;;BP=pointer to jcl, D=first filename block.
+	;;clobbers everything in sight
+	.break 12,[..rJCL,,JCLBUF]
+	skipn JCLBUF
+	  jrst Help		;No jcl -> help
+	move BP,[440700,,JCLBUF]
+JclQp:	;;check for first char being ?
+	ildb A,BP
+	caie A,40
+	  cain A,^I
+	    jrst JclQp
+	cain A,"?
+	  jrst Help
+	movei D,IDEV
+	jrst JclReU
+JclNew:	seto A,			;don't re-use last char
+JclReU:	movei Cnt,6
+	setz C,
+	move B,[440600,,C]
+	skipge A
+JclNxt:	  ildb A,BP
+	jumpe A,JclFil
+	caie A,^C
+	  cain A,^M
+	    jrst JclFil
+	skipe Quote
+	  jrst [setzm Quote ? jrst JclAdd] ;if quoting, ok
+	cain A,^Q
+	  jrst [setom Quote ? jrst JclNxt]
+	cain A,":
+	  jrst [skipe C ? movem C,DEV(D)
+		jrst JclNew]
+	cain A,";
+	  jrst [skipe C ? movem C,SNM(D)
+		jrst JclNew]
+	caie A,",
+	  cain A,"/
+	    jrst JclFil
+	caie A,40
+	  cain A,^I
+	    jrst JclFil
+JclAdd:	sojl Cnt,JclNxt		;ignore extra chars if passed limit
+	cail A,140
+	  subi A,40
+	subi A,40
+	idpb A,B
+	jrst JclNxt
+
+JclFil:	;A has ^@,^C,^M,comma,/,space,tab
+	jumpe C,JclF1
+	skipn FN1(D)
+	  jrst [movem C,FN1(D) ? jrst JclF1]
+	movem C,FN2(D)
+JclF1:	caie A,40
+	  cain A,^I
+	    jrst JclNew
+	cain A,",
+	  jrst [movei D,ODEV ? jrst JclNew]
+	caie A,"/
+	  return		;all but Space,tab,slash and comma say DONE!
+	;;Ok, have a switch
+JclSwi:	ildb A,BP
+	cail A,140
+	  subi A,40
+	call Switch		;skip return if don't want to reuse A
+	  jrst JclReU
+	jrst JclNew
+
+;;FilTyp(A=file block)
+FilTyp:	move TT,DEV(A)
+	call 6Type		;print device
+	.iot ttyo,[":]
+	.iot ttyo,Space
+	move TT,SNM(A)
+	call 6Type
+	.iot ttyo,[";]
+	.iot ttyo,Space
+	move TT,FN1(A)
+	call 6Type
+	.iot ttyo,Space
+	move TT,FN2(A)
+6Type:	setz TT1,
+	rotc TT,6
+	addi TT1,40
+	.iot ttyo,TT1
+	jumpn TT,6TYPE
+	return
+
+Hexout:	;;A has byte to add to Record buffer
+	move TT,A
+	lsh TT,-4
+	call Hexou1
+	move TT,A
+Hexou1:	call HToA
+	idpb TT,RecBP
+	return
+
+HTyp:	;;A has number- type it out in full.
+	move TT,A
+	jffo TT,.+3
+	  .iot ttyo,["0]
+	  return
+	andi TT1,74		;TT1= 4*(number of leading zero digits)
+	subi TT1,40
+HTyp1:	lsh TT,(TT1)
+	call HToA
+	.iot ttyo,TT
+	move TT,A
+	addi TT1,4
+	jumple TT1,HTyp1
+	return
+
+H2Typ:	;;A has word
+	push p,A
+	lsh A,-8.
+	call H1Typ
+	pop p,A
+H1Typ:	;;A has byte
+	move TT,A
+	lsh TT,-4
+	call H1Typ1
+	move TT,A
+H1Typ1:	call HToA
+	.iot ttyo,TT
+	return
+
+
+
+HToA:	andi TT,17
+	addi TT,"0
+	caile TT,"9
+	  addi TT,-10.+"A-"0
+	return
+
+
+WrRec:	;;RRLen has length of record (number of data bytes) - clobbered
+	;;write stored record to disk file, reset record bp.
+	add RRLen,RRLen
+	addi RRLen,11.		;A:total length,in chars, of output record
+	move TT,[440700,,Record]
+	syscall SIOT,[%Climm,,dskf ? TT ? RRLen]	;output it
+	  .Lose %LsFil
+	aos RecNum		;for record keeping
+	move TT,[350700,,Record]
+	movem TT,RecBP		;reset byte pointer
+	skipg RecSep
+	  return
+	terpri dskf
+	return
+
+
+Hex:	;;ADDR / RecLen set up
+	;;File snarfed, Cnt,BP set up.  Assume Cnt greater'n 0
+	ildb A,BP
+	came A,gapchr
+	  jrst Hex1
+	aos Addr
+	sojle Cnt,Done
+	jrst Hex
+Hex1:   ;gapchrs skipped. A has first byte, BP moved over
+	move RLen,RecLen		;maximum length of record
+	camle RLen,Cnt
+	  move RLen,Cnt		;use real length if all fits
+	sub Cnt,RLen		;update Cnt
+	;;ok, compute real length, after removing gapchrs, into RRLen
+	;;maybe leaving the new BP on stack (if there's a gapchr)
+	move RRLen,RLen
+	skipge gapchr
+	  jrst DoIt		;dont bother with this if no gapchr
+	;;ok, there is a gapchr - trim off trailing gapchr's
+	push p,BP
+	push p,RLen
+Hex2:	sojle RLen,Hex3
+	ildb TT,BP
+	came TT,gapchr
+	  move RRLen,RLen
+	jrst Hex2
+Hex3:	pop p,RLen
+	subm RLen,RRLen		;RRLen: real record length, minus
+	aoj RRLen,		;trailing gapchrs 
+	exch BP,(p)		;save the new BP on stack
+;;ok, RLen has claimed record len(for updating Addr),
+;;RRLen is real number of chars to send in record (having ignored gapchrs)
+;;possibly have new BP saved on stack.
+;;A has first byte
+;;Output record, update addr, BP
+DoIt:	push p,A
+	move Chksum,RRLen		;Chksum: checksum
+	move A,RRLen ? call Hexout	;append length to record buffer
+	move A,Addr ? lsh A,-10	;A: high byte of address
+	addm A,Chksum ? call Hexout	;output it
+	move A,Addr ? addm A,Chksum ? call Hexout	;low byte of address
+	addm RLen,Addr		;update address
+	setz A, ? call Hexout	;output type (00)
+	pop p,A			;get back the first byte
+	move B,RRLen		;B: real record length
+HexDat:	addm A,Chksum ? call Hexout	;output data bytes
+	sojle B,RecOut
+	ildb A,BP
+	jrst HexDat
+RecOut:	movn A,Chksum		;output negative of checksum
+	call Hexout
+	call WrRec		;Note: needs RRLen, clobbers it.
+	skipl gapchr
+	  pop p,BP		;if doing gap stuff, get real next BP
+
+	jumpg Cnt,Hex		;if more to send, do it again
+
+
+Done:	;;send out the final record
+	setz A, ? call Hexout	;0 length record
+	move A,EAddr ? lsh A,-8. ? move Chksum,A ? call Hexout
+	move A,EAddr ? add Chksum,A ? call Hexout
+	move A,EType ? add Chksum,A ? call Hexout
+	movn A,Chksum ? call Hexout
+	setz RRLen,
+	jrst WrRec		;write out last record and return
+
+
+OutOpn:	;;open output file on dskf channel
+	;;ODEV,OSNAME,OFN1,OFN2 get truenames
+	came OFN2,[sixbit/>/]
+	  camn OFN2,[sixbit/</]
+	    jrst OutOpY
+	camn ODEV,[sixbit/TTY/]
+	  jrst OutOpY
+	syscall OPEN,[%Clbit,,.uii ? %Climm,,dskf
+		      ODEV ? OFN1 ? OFN2 ? OSNAME]
+	  jrst OutOpY
+	.call ORFNAM
+	  .Lose %LsFil
+	.close dskf,
+	syscall OPEN,[%Clbit,,.uai ? %Climm,,dskf ? [sixbit/TTY/]]
+	  .Lose %LsFil
+	Type "File "
+	movei A,ODEV
+	call FilTyp
+	Type " already exists.  Write over it (Y or N)?"
+	.iot dskf,TT
+	.close dskf,
+	caie TT,"Y
+	  cain TT,"y
+	    jrst OutOpY
+	jrst Die
+
+OutOpY:	syscal OPEN,[%Clbit,,.uao ? %Climm,,dskf ? ODEV ? OFN1 ? OFN2 ? OSNAME]
+	  .Lose %LsFil
+	.call ORFNAM
+	  .Lose %LsFil
+	return
+
+
+RdFile:	;;read in file, check DSK8, set up BP and Cnt.
+	call SNARF
+	move TT,FILBFR
+	came TT,[sixbit/DSK8/]
+	  jrst [Type "Not a standard COM file."
+		jrst Die]
+	move BP,[440800,,FILBFR+1]	;pointer into file
+	soj Cnt, ? imuli Cnt,4		;4 bytes per word
+	return
+
+SNARF:	;;snarf input file into memory at FILBFR.  Allocates pages as needed.
+	;;IDEV,IFN1,IFN2,ISNAME get updated to truenames.
+	syscall OPEN,[%Clbit,,.uii ? %Climm,,dskf
+			IDEV ? IFN1 ? IFN2 ? ISNAME]
+	  jrst [type "Can't open file "
+		movei A,IDEV
+		call FilTyp
+		jrst Die]
+	syscall RFNAME,[%Climm,,dskf ? %Clout,,IDEV
+			%Clout,,IFN1 ? %Clout,,IFN2 ? %Clout,,ISNAME]
+	  .Lose %LsFil
+	syscall fillen,[%Climm,,dskf ? %Clout,,A] ;file length
+	  .Lose %LsFil
+	jumpe A,[type "Empty input file?"
+		 jrst Die]
+	movem A,Cnt		;save for future use
+	addi A,<FILBFR-1>+2000	;A: last address which we need + 2000
+	lsh A,-12		;A: number of pages we need
+	movei TT,<FILBFR_-12>+1	;TT: first page we need to get
+	subm TT,A		;A: -<number of pages to get>
+	jumpe A,SNARF0		;if fits in what we have, done
+	hrl TT,A		;TT: -#pages to get,,first page to get
+	syscal corblk,[%Climm,,%Cbprv		;Get fresh pages
+		       %Climm,,%Jself
+		       TT
+		       %Climm,,%Jsnew]
+	  jrst [Type "Can't get enough memory"
+		jrst Die]
+SNARF0:	move A,[444400,,FILBFR]	;A: BP to first file address
+	move TT,Cnt		;number of words
+	Syscal siot,[%Climm,,dskf ? A ? TT]	;Inhale file
+	  .Lose %LsFil
+	jumpg TT,[Type "SIOT lost!?!? Couldn't read in whole file! Try again."
+		 jrst Die]
+	.close dskf,
+	return
+
+
+IDEV:	sixbit/DSK/
+IFN1:	0
+IFN2:	sixbit/COM/
+ISNAME:	0
+
+ODEV:	sixbit/DSK/
+OFN1:	0
+OFN2:	sixbit/HEX/
+OSNAME:	0
+
+	;;RFNAME call for Output file
+ORFNAM: setz ? sixbit/RFNAME/ ? %Climm,,dskf
+	%Clout,,ODEV ? %Clout,,OFN1 ? %Clout,,OFN2 ? %Clout,,OSNAME ((setz))
+
+	;;SIOT call for tty typeout - TT has length, TT1 has BP
+TTYTYP:	SETZ ? SIXBIT /SIOT/ ? %Climm,,ttyo ? TT1 ? TT ((SETZ))
+
+
+Space:	40			;seems to be used often enough...
+CR:	^M
+LF:	^J
+
+Quote:	0			;used inside Jcl parser
+
+Record:	ascii/:0000/		;at most data bytes, so total length of
+	block 150		;record is at most 521. chars, i.e.
+				;151 (105.) words
+RecBP: 350700,,Record		;pointer to next chr
+
+RecNum:	0			;number of records written.  For reporting
+
+JCLBuf:	Block JCLen
+
+PDList:	-PDLen,,PDList
+	Block PDLen
+
+
+
+Variables
+Constants
+
+FILBFR: 0	;final address. File will go here.
+
+	END Begin

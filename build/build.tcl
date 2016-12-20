@@ -1048,6 +1048,10 @@ respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
 expect ":KILL"
 respond "*" ":link dragon;hourly uptime,sysbin;uptime bin\r"
 
+# HEXIFY
+respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
+expect ":KILL"
+
 # PHOTO
 respond "*" ":midas sys2;ts photo_sysen2;photo\r"
 expect ":KILL"

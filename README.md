@@ -143,6 +143,7 @@ A list of [known ITS machines](doc/machines.md).
    - FTPU, FTP Client.
    - GMSGS, copy system messages to mail file.
    - H3MAKE, a job that requests DRAGON to build host table.
+   - HEXIFY, convert COM file into Intel HEX format.
    - HOST, display information about network host.
    - HOSTAB, display HOSTS2 format host table.
    - HOSTS3, the host table compiler.
