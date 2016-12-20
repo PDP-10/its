@@ -38,7 +38,7 @@ out/sources.tape: $(ITSTAR)
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
-	$(ITSTAR) -rf $@ build/*.xfile
+	$(ITSTAR) -rf $@ build/*.xfile build/*.input
 	-cd user; $(ITSTAR) -rf ../$@ *
 
 out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
