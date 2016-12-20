@@ -699,18 +699,7 @@ respond "*" ":xfile build;bye xfile\r"
 respond "*" ":xfile build;@ xfile\r"
 respond "*" ":xfile build;create xfile\r"
 respond "*" ":xfile build;pty xfile\r"
-
-# PRUFD
-respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
-expect ":KILL"
-
-# patch PRUFD to use the TTY: device rather than the LPT: device
-respond "*" ":job prufd\r"
-respond "*" ":load sysbin;prufd bin\r"
-respond "*" "nlinks+14/ A,,646471\r"
-type ":pdump sys1;ts prufd\r"
-respond "*" ":kill\r"
-
+respond "*" ":xfile build;prufd xfile\r"
 respond "*" ":xfile build;sty xfile\r"
 respond "*" ":xfile build;luser xfile\r"
 respond "*" ":xfile build;arccpy xfile\r"
