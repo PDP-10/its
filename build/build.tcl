@@ -833,7 +833,11 @@ respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
 expect ":KILL"
 
 # 11sim
-respond "*" ":midas sys1;ts pdp11_syseng;11sim\r"
+respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
+respond "end input with ^C" "45p==0\r"
+respond "\n" "\003"
+expect ":KILL"
+respond "*" ":midas sys;ts pdp45_syseng;11sim\r"
 expect ":KILL"
 
 # idle
