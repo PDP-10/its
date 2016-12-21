@@ -570,9 +570,7 @@ expect ":KILL"
 #respond "_" "\032"
 #type ":kill\r"
 
-# NICNAM
-respond "*" ":midas sys2;ts nicnam_sysen3;nicnam\r"
-expect ":KILL"
+respond "*" ":xfile build;nicnam xfile\r"
 
 # NICWHO
 respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
