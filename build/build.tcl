@@ -840,6 +840,12 @@ expect ":KILL"
 respond "*" ":midas sys;ts pdp45_syseng;11sim\r"
 expect ":KILL"
 
+# times
+respond "*" ":midas sysbin;times bin_sysnet;times\r"
+expect ":KILL"
+respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
+respond "*" ":link sys1;ts times,sysbin;times bin\r"
+
 # idle
 respond "*" ":midas sys1;ts idle_gren;idle\r"
 expect ":KILL"
