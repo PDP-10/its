@@ -357,19 +357,8 @@ initialize_comsat
 
 respond "*" ":xfile build;rmail xfile\r"
 expect ":KILL"
-
-respond "*" ":midas sysbin;qmail_ksc;qmail\r"
-respond "PWORD version (Y or N)? " "N\r"
-expect ":KILL"
-
-respond "*" ":link sys;ts mail,sysbin;qmail bin\r"
-respond "*" ":link sys;ts qmail,sysbin;qmail bin\r"
-respond "*" ":link sys;ts qsend,sysbin;qmail bin\r"
-respond "*" ":link sys1;ts bug,sysbin;qmail bin\r"
-respond "*" ":link sys;ts m,sys;ts mail\r"
-respond "*" ":link sys2;ts featur,sys;ts qmail\r"
-respond "*" ":link .info.;mail info,.info.;qmail info\r"
-
+respond "*" ":xfile build;qmail xfile\r"
+expect "done"
 respond "*" ":xfile build;time xfile\r"
 
 # PWMAIL
