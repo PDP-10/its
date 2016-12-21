@@ -669,11 +669,7 @@ respond "*" ":xfile build;photo xfile\r"
 respond "*" ":xfile build;type8 xfile\r"
 respond "*" ":xfile build;usq xfile\r"
 respond "*" ":xfile build;host xfile\r"
-
-# WHOLIN
-respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
-expect ":KILL"
-
+respond "*" ":xfile build;wholin xfile\r"
 respond "*" ":xfile build;obs xfile\r"
 respond "*" ":xfile build;fed xfile\r"
 
