@@ -662,10 +662,7 @@ respond "*" ":xfile build;stylog xfile\r"
 respond "*" ":xfile build;comify xfile\r"
 respond "*" ":xfile build;tmpkil xfile\r"
 respond "*" ":xfile build;what xfile\r"
-
-# EXECVT
-respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
-expect ":KILL"
+respond "*" ":xfile build;execvt xfile\r"
 
 # HEXIFY
 respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
