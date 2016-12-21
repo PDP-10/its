@@ -847,7 +847,7 @@ expect ":KILL"
 # spell
 respond "*" ":midas sys1;ts spell_syseng;spell\r"
 expect ":KILL"
-respond "*" ":link sys1;ts espell,sys;ts spell\r"
+respond "*" ":link sys1;ts espell,sys1;ts spell\r"
 
 # jobs
 respond "*" ":midas sys2;ts jobs_sysen1;jobs\r"
