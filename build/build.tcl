@@ -341,11 +341,7 @@ respond "*" ":xfile build;name xfile\r"
 respond "*" ":xfile build;mldev xfile\r"
 respond "*" ":xfile build;mlslv xfile\r"
 respond "*" ":xfile build;dirdev xfile\r"
-
-respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
-respond "KLp==" "0\r"
-expect ":KILL"
-
+respond "*" ":xfile build;cftp xfile\r"
 respond "*" ":xfile build;chtn xfile\r"
 respond "*" ":xfile build;ttloc xfile\r"
 respond "*" ":xfile build;dpdev xfile\r"
