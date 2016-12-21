@@ -574,11 +574,7 @@ respond "*" ":xfile build;nicnam xfile\r"
 respond "*" ":xfile build;nicwho xfile\r"
 respond "*" ":xfile build;reatta xfile\r"
 respond "*" ":xfile build;print xfile\r"
-
-# fdir 
-respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
-expect ":KILL"
-
+respond "*" ":xfile build;fdir xfile\r"
 respond "*" ":xfile build;timoon xfile\r"
 respond "*" ":xfile build;ports xfile\r"
 respond "*" ":xfile build;sysmsg xfile\r"
