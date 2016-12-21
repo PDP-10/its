@@ -583,10 +583,7 @@ respond "*" ":xfile build;cross xfile\r"
 respond "*" ":xfile build;dired xfile\r"
 respond "*" ":xfile build;hsname xfile\r"
 respond "*" ":xfile build;arcsal xfile\r"
-
-# acount
-respond "*" ":midas sys;ts acount_sysen3;acount\r"
-expect ":KILL"
+respond "*" ":xfile build;acount xfile\r"
 
 # mailt
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
