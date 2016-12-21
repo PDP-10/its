@@ -157,6 +157,7 @@ A list of [known ITS machines](doc/machines.md).
    - LOCK, shut down system.
    - LOOKUP, looks up user info in INQUIR database.
    - LOSS (device).
+   - LSPEED, set tty line parameters.
    - LUSER, request help from registered list of logged-in users.
    - MAIL, Mail sending client.
    - MAILT, allows editing mail (from :MAIL) in EMACS.
