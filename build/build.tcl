@@ -447,26 +447,10 @@ respond "*" ":xfile build;dmunch xfile\r"
 respond "*" ":xfile build;inqupd xfile\r"
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 respond "*" ":xfile build;lookup xfile\r"
-
-# pword/panda
-respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
-respond "Is this to be a PANDA?" "yes\r"
-expect ":KILL"
-respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
-respond "Is this to be a PANDA?" "no\r"
-expect ":KILL"
 respond "*" ":xfile build;pwinit xfile\r"
 respond "*" ":copy cstacy;big dat,sysbin;\021 \021 \021 big \021 \021 0dat\r"
-respond "*" ":job panda\r"
-respond "*" ":load sysbin;panda bin\r"
-# set password to "panda"
-respond "*" "spword/107150326162\r"
-type "purify\033g"
-respond "*" ":pdump sysbin;panda bin\r"
-respond "*" ":kill\r"
-respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
-respond "*" ":link sys;ts panda,sysbin;panda bin\r"
-
+respond "*" ":xfile build;pword xfile\r"
+respond "*" ":xfile build;panda xfile\r"
 respond "*" ":xfile build;sender xfile\r"
 
 # more lisp packages
