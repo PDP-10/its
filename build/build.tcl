@@ -816,6 +816,11 @@ expect ":KILL"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# who%
+respond "*" ":midas sys1;ts who%_sysen3;who%\r"
+expect ":KILL"
+respond "*" ":link sys1;ts %,sys1;ts who%\r"
+
 # palx
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"

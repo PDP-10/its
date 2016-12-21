@@ -212,6 +212,7 @@ A list of [known ITS machines](doc/machines.md).
    - UNTALK, split-screen comm-link program.
    - UPTIME, Chaosnet uptime server.
    - WHAT, humorous quips to various "what" questions.
+   - WHO%, list index/uname/jname/%time in sorted list.
 
 6. A brand new host table is built from the host table source and
    installed into SYSBIN; HOSTS3 > using H3MAKE.
