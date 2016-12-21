@@ -667,11 +667,7 @@ respond "*" ":xfile build;hexify xfile\r"
 respond "*" ":xfile build;uptime xfile\r"
 respond "*" ":xfile build;photo xfile\r"
 respond "*" ":xfile build;type8 xfile\r"
-
-# USQ
-respond "*" ":midas sys2;ts usq_sysen3;usq\r"
-expect ":KILL"
-
+respond "*" ":xfile build;usq xfile\r"
 respond "*" ":xfile build;host xfile\r"
 
 # WHOLIN
