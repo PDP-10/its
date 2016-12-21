@@ -1006,6 +1006,10 @@ respond "*" ":link sys1;ts z,sys1;ts x\r"
 respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
 expect ":KILL"
 
+# ACCLNK
+respond "*" ":midas sys2;ts acclnk_sysen2;acclnk\r"
+expect ":KILL"
+
 # MSPLIT
 respond "*" ":midas sys2;ts msplit_sysen2;msplit\r"
 expect ":KILL"
