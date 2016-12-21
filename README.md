@@ -208,6 +208,7 @@ A list of [known ITS machines](doc/machines.md).
    - TIMSRV, RFC 868 network time protocol.
    - TMPKIL, clean out old files in .TEMP.;.
    - TTLOC, Advertises physical location of logged in users.
+   - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
    - TYPE8, type 8-bit file.
    - UNTALK, split-screen comm-link program.
    - UPTIME, Chaosnet uptime server.
