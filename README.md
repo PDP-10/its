@@ -100,6 +100,7 @@ A list of [known ITS machines](doc/machines.md).
 
    - 11SIM, PDP-11 emulator.
    - @, cross reference generation tool.
+   - ACCLNK, sets com-link accept bit for specified TTY.
    - ACOUNT, dummy account program used for users from safe sites.
    - ARCCPY, copies and old-format archive, converting to new format.
    - ARCDEV, transparent file system access to archive files.
