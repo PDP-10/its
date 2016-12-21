@@ -360,10 +360,7 @@ expect ":KILL"
 respond "*" ":xfile build;qmail xfile\r"
 expect "done"
 respond "*" ":xfile build;time xfile\r"
-
-# PWMAIL
-respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
-respond "PWORD version (Y or N)? " "Y\r"
+respond "*" ":xfile build;pwmail xfile\r"
 expect ":KILL"
 
 # lisp
