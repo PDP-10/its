@@ -654,11 +654,7 @@ respond "*" ":xfile build;ripdev xfile\r"
 respond "*" ":xfile build;gmsgs xfile\r"
 respond "*" ":xfile build;x xfile\r"
 respond "*" ":xfile build;loadp xfile\r"
-
-# ACCLNK
-respond "*" ":midas sys2;ts acclnk_sysen2;acclnk\r"
-expect ":KILL"
-
+respond "*" ":xfile build;acclnk xfile\r"
 respond "*" ":xfile build;msplit xfile\r"
 respond "*" ":xfile build;tags xfile\r"
 
