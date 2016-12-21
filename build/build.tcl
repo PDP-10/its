@@ -571,11 +571,7 @@ expect ":KILL"
 #type ":kill\r"
 
 respond "*" ":xfile build;nicnam xfile\r"
-
-# NICWHO
-respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
-expect ":KILL"
-
+respond "*" ":xfile build;nicwho xfile\r"
 respond "*" ":xfile build;reatta xfile\r"
 respond "*" ":xfile build;print xfile\r"
 
