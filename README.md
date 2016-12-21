@@ -113,6 +113,7 @@ A list of [known ITS machines](doc/machines.md).
    - CALPRT, decode a .CALL instructions CALL block.
    - CHARFC/CHARFS, Chaos RFC.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
+   - COMIFY, convert HEX to COM format.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
    - CREATE, creates a text file in your home directory from console input.
