@@ -616,11 +616,7 @@ respond "*" ":xfile build;who% xfile\r"
 respond "*" ":xfile build;palx xfile\r"
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
 respond "*" ":xfile build;itsdev xfile\r"
-
-# charfc/charfs
-respond "*" ":midas sys1;ts charfc_sysen3;charfc\r"
-expect ":KILL"
-respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
+respond "*" ":xfile build;charfc xfile\r"
 
 # times
 respond "*" ":midas sysbin;times bin_sysnet;times\r"
