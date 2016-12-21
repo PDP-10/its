@@ -652,13 +652,7 @@ respond "*" ":xfile build;probe xfile\r"
 respond "*" ":xfile build;tty xfile\r"
 respond "*" ":xfile build;ripdev xfile\r"
 respond "*" ":xfile build;gmsgs xfile\r"
-
-# X, Y, Z
-respond "*" ":midas sys1;ts x_sysen2;x\r"
-expect ":KILL"
-respond "*" ":link sys1;ts y,sys1;ts x\r"
-respond "*" ":link sys1;ts z,sys1;ts x\r"
-
+respond "*" ":xfile build;x xfile\r"
 respond "*" ":xfile build;loadp xfile\r"
 
 # ACCLNK
