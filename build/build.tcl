@@ -1008,6 +1008,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts tags_sysen2;tags\r"
 expect ":KILL"
 
+# CHATST
+respond "*" ":midas sys2;ts chatst_sysen3;chatst\r"
+expect ":KILL"
+
 # STYLOG
 respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
 expect ":KILL"
