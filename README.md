@@ -116,6 +116,7 @@ A list of [known ITS machines](doc/machines.md).
    - CREATE, creates a text file in your home directory from console input.
    - CROCK, analog watch.
    - CROSS, cross assembler for micros.
+   - CTIMES, Chaosnet time server.
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
    - DECUUO, TOPS-10 and WAITS emulator.
@@ -204,6 +205,7 @@ A list of [known ITS machines](doc/machines.md).
    - TELNET, Telnet client.
    - TELSER, Telnet/Supdup server.
    - TIME, displays date/time/uptime and other info.
+   - TIMES, TCP time server.
    - TIMOON, displays the time and phase of the moon.
    - TIMSRV, RFC 868 network time protocol.
    - TMPKIL, clean out old files in .TEMP.;.
