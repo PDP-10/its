@@ -649,11 +649,7 @@ respond "*" ":xfile build;calprt xfile\r"
 respond "*" ":xfile build;hostab xfile\r"
 respond "*" ":xfile build;lspeed xfile\r"
 respond "*" ":xfile build;probe xfile\r"
-
-# TTY
-respond "*" ":midas sys1;ts tty_sysen1;tty\r"
-expect ":KILL"
-
+respond "*" ":xfile build;tty xfile\r"
 respond "*" ":xfile build;ripdev xfile\r"
 respond "*" ":xfile build;gmsgs xfile\r"
 
