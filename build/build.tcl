@@ -657,11 +657,7 @@ respond "*" ":xfile build;loadp xfile\r"
 respond "*" ":xfile build;acclnk xfile\r"
 respond "*" ":xfile build;msplit xfile\r"
 respond "*" ":xfile build;tags xfile\r"
-
-# CHATST
-respond "*" ":midas sys2;ts chatst_sysen3;chatst\r"
-expect ":KILL"
-
+respond "*" ":xfile build;chatst xfile\r"
 respond "*" ":xfile build;stylog xfile\r"
 
 # COMIFY
