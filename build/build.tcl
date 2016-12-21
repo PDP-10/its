@@ -612,11 +612,7 @@ respond "*" ".jbsa/strt\r"
 respond "'" "\033y sys;ts fail\r"
 respond "*" ":kill\r"
 
-# who%
-respond "*" ":midas sys1;ts who%_sysen3;who%\r"
-expect ":KILL"
-respond "*" ":link sys1;ts %,sys1;ts who%\r"
-
+respond "*" ":xfile build;who% xfile\r"
 respond "*" ":xfile build;palx xfile\r"
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
 respond "*" ":xfile build;itsdev xfile\r"
