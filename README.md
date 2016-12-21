@@ -113,6 +113,7 @@ A list of [known ITS machines](doc/machines.md).
    - BYE, say goodbye to user. Used in LOGOUT scripts.
    - CALPRT, decode a .CALL instructions CALL block.
    - CHARFC/CHARFS, Chaos RFC.
+   - CHATST, Chaos test.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMPLR, lisp compiler.
    - COMSAT, Mail server.
