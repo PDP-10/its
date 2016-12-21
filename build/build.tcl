@@ -659,11 +659,7 @@ respond "*" ":xfile build;msplit xfile\r"
 respond "*" ":xfile build;tags xfile\r"
 respond "*" ":xfile build;chatst xfile\r"
 respond "*" ":xfile build;stylog xfile\r"
-
-# COMIFY
-respond "*" ":midas sys2;ts comify_sysen3;comify\r"
-expect ":KILL"
-
+respond "*" ":xfile build;comify xfile\r"
 respond "*" ":xfile build;tmpkil xfile\r"
 respond "*" ":xfile build;what xfile\r"
 
