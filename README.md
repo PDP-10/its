@@ -157,6 +157,7 @@ A list of [known ITS machines](doc/machines.md).
    - LOSS (device).
    - LUSER, request help from registered list of logged-in users.
    - MAIL, Mail sending client.
+   - MAILT, allows editing mail (from :MAIL) in EMACS.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
    - MODEMS, modems gragon.
