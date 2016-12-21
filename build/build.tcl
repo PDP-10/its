@@ -647,11 +647,7 @@ respond "*" ":xfile build;luser xfile\r"
 respond "*" ":xfile build;arccpy xfile\r"
 respond "*" ":xfile build;calprt xfile\r"
 respond "*" ":xfile build;hostab xfile\r"
-
-# LSPEED
-respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
-expect ":KILL"
-
+respond "*" ":xfile build;lspeed xfile\r"
 respond "*" ":xfile build;probe xfile\r"
 
 # TTY
