@@ -944,6 +944,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
 expect ":KILL"
 
+# LSPEED
+respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
+expect ":KILL"
+
 # PROBE
 respond "*" ":link syseng;its defs,sys;itsdfs >\r"
 respond "*" ":midas sysbin;probe bin_bawden;probe\r"
