@@ -672,10 +672,7 @@ respond "*" ":xfile build;host xfile\r"
 respond "*" ":xfile build;wholin xfile\r"
 respond "*" ":xfile build;obs xfile\r"
 respond "*" ":xfile build;fed xfile\r"
-
-# XHOST
-respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
-expect ":KILL"
+respond "*" ":xfile build;xhost xfile\r"
 
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
