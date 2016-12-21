@@ -663,11 +663,7 @@ respond "*" ":xfile build;comify xfile\r"
 respond "*" ":xfile build;tmpkil xfile\r"
 respond "*" ":xfile build;what xfile\r"
 respond "*" ":xfile build;execvt xfile\r"
-
-# HEXIFY
-respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
-expect ":KILL"
-
+respond "*" ":xfile build;hexify xfile\r"
 respond "*" ":xfile build;uptime xfile\r"
 respond "*" ":xfile build;photo xfile\r"
 respond "*" ":xfile build;type8 xfile\r"
