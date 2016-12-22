@@ -210,6 +210,7 @@ A list of [known ITS machines](doc/machines.md).
    - TAGS, generate tags table for sources.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
    - TCTYP and CRTSTY, terminal handling.
+   - TEACHE, Emacs tutorial.
    - TECO, editor.
    - TELNET, Telnet client.
    - TELSER, Telnet/Supdup server.
