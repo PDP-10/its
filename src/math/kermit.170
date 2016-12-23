@@ -1,0 +1,1140 @@
+;;; -*- Mode: LISP; Syntax: Common-Lisp; Package: (KERMIT LISP) -*-
+
+;;; Common Lisp KERMIT
+
+;;; Authorship Information:
+;;;    Mark David (LMI)           Original version, using KERMIT.C as a guide
+;;;    George Carrette (LMI)      Various enhancements
+;;;    Mark Ahlstrom (Honeywell)  Port to 3600 (edits marked with ";1;")
+;;;    Jonathan Rees (MIT)	  Major total rewrite for Maclisp/Common Lisp
+
+;;; Don't make any attempt to understand this code without having access
+;;; to the Kermit Protocol Manual, Frank Da Cruz, Columbia University,
+;;; 5th edition.
+
+;;; This code is written in Common Lisp, but will run in Maclisp given
+;;; a Common Lisp compatibility mode (see AI: MATH; COMMON >).  To
+;;; port to an arbitrary CL implementation, one must supply
+;;; appropriate low-level primitives for doing read-with-timeout and
+;;; no-echo terminal I/O.
+
+;;; I think the main thing making it not yet usable outside of Maclisp
+;;; is that it doesn't convert CR/LF into NEWLINE on the way in and out.
+
+;;;+ Bugs
+;;; What to do about the control-C's at the end of ITS files?
+;;; There's apparently no way to distinguish them from legitimate control-C's.
+;;; Right now they're interpreted exactly the same as end of file.
+;;;
+;;; The receive packet size rightly ought to be about 93 or so, but
+;;; for some reason can't RECEIVE packets bigger than about 64 bytes.
+;;; For the life of me I can't figure out why.  Debug this some day.
+;;;  [And due to a bug in Kermit-9000, I have set the packet size down
+;;;  to 50 (probably should be 32) to try to make SURE...]
+
+;;; The low level 3600 hacks are undebugged!!
+;;;-
+
+#+Maclisp
+(EVAL-WHEN (EVAL LOAD COMPILE)
+  (OR (GET 'COMMON 'LOADEDP) (LOAD '((DSK MATH) COMMON))))
+
+(IN-PACKAGE 'KERMIT :USE '(LISP))
+
+(SHADOW '(LOG))
+
+(EXPORT '(SERVE
+	  SET-LINE
+	  GET-FILE
+	  SEND-FILE
+	  FINISH
+	  BYE))
+
+(DEFVAR *KERMIT-VERSION*
+	#+Maclisp   (STATUS OPSYS)
+	#+Symbolics "Symbolics"
+	#-(or Maclisp Symbolics) (LISP-IMPLEMENTATION-TYPE))
+
+#+Maclisp
+(PROGN 'COMPILE
+  (DECLARE (*LEXPR SEND-ERROR-PACKET INIT-SERIAL-I/O))
+  (DECLARE (FIXNUM (SERIAL-WRITE-CHAR FIXNUM))
+	   (FIXNUM (SERIAL-READ-CHAR))))
+
+;;; Fundamental constants
+(DEFCONSTANT *SOH*     (CODE-CHAR 1)    "start of header")
+(DEFCONSTANT *MAX-PACKET-SIZE* (- 128. 32.) "maximum packet size")
+
+;;; The following three values merely need to answer true to FAILP
+;;; and not be legal packet types.
+(DEFCONSTANT *TIMED-OUT*       (CODE-CHAR 2))
+(DEFCONSTANT *LENGTH-ERROR*    (CODE-CHAR 3))
+(DEFCONSTANT *CHECKSUM-ERROR*  (CODE-CHAR 4))
+(DEFCONSTANT *BOGUS-CHARACTER* (CODE-CHAR 5))
+
+;;; If you want Kermit to be re-entrant you'll have to specbind everything
+;;; from here on down, excpting the state machine variables which are
+;;; bound by RUN-STATE-MACHINE.
+
+;;; Global parameters, user-adjustable
+(DEFVAR *IMAGE?*          NIL "T means 8-bit mode")
+(DEFVAR *DEBUG?*	  NIL "T means supply debugging info as you run")
+(DEFVAR *VERSION-NUMBERS?* NIL "T means include version numbers in file names")
+(DEFVAR *MAX-RETRY-COUNT* 10. "times to retry a packet")
+(DEFVAR *MIN-TIMEOUT*	  2   "minimum timeout interval in seconds")
+(DEFVAR *SERVER-TIMEOUT*  30  "timeout interval when in server mode")
+(DEFVAR *SERIAL-INPUT*	  NIL "input stream for serial line")
+(DEFVAR *SERIAL-OUTPUT*	  NIL "output stream for serial line")
+(DEFVAR *COMMENTARY-STREAM* *TERMINAL-IO* "stream for messages to user")
+(DEFVAR *LOG*		  NIL "log file")
+
+;;; Packet reception parameters (see KPM page 26):
+(DEFVAR *RECEIVE-PACKET-SIZE* 50 "maximum packet size")  ;see bug remark, above
+(DEFVAR *MY-TIMEOUT*  10       "seconds after which I time out")
+(DEFVAR *MY-PAD*      0        "number of padding characters I need")
+(DEFVAR *MY-PAD-CHAR* #\SPACE  "char I want as a padding char")
+(DEFVAR *MY-EOL*      #\RETURN "my kind of return char")
+(DEFVAR *MY-QUOTE*    #\#      "my quote character")
+
+;;; Packet transmission parameters:
+(DEFVAR *SEND-PACKET-SIZE* 80 "maximum send packet size")	;MAXL
+(DEFVAR *TIMEOUT*  15       "timeout for remote host on sends")	;TIME
+(DEFVAR *PAD*	   0        "how much padding to send")		;NPAD
+(DEFVAR *PAD-CHAR* #\SPACE  "padding character to send")	;PADC
+(DEFVAR *EOL*	   #\RETURN "end-of-line character to send")	;EOL
+(DEFVAR *QUOTE*	   #\#      "quote character in outgoing data")	;QCTL
+
+;;; Packet buffers, globally allocated for no very good reason
+(DEFPARAMETER *RECEIVE-PACKET*
+  (MAKE-ARRAY *MAX-PACKET-SIZE* :ELEMENT-TYPE 'STRING-CHAR :FILL-POINTER 0)
+  "receive packet buffer")
+
+(DEFPARAMETER *SEND-PACKET*
+  (MAKE-ARRAY *MAX-PACKET-SIZE* :ELEMENT-TYPE 'STRING-CHAR :FILL-POINTER 0)
+  "send packet buffer")
+
+;;; State machine variables, bound by RUN-STATE-MACHINE
+(DEFVAR *SERVER-MODE*     NIL "true if in server mode")
+(DEFVAR *FILES-TO-SEND*   '() "list of source/dest filename pairs")
+(DEFVAR *COMMAND*         NIL "generic or other command to execute")
+(DEFVAR *SEQUENCE-NUMBER* 0   "the packet number")
+(DEFVAR *RETRY-COUNT*     0   "times this packet retried")
+(DEFVAR *STREAM*	  NIL "file pointer for current disk file")
+(DEFVAR *DISCARD*	  NIL "T if current file is to be discarded")
+
+
+;;; Utility routines & macros
+
+#-(OR Maclisp Symbolics)  ;COMMON > defines this for Maclisp
+(DEFMACRO DEFSUBST (NAME ARGS &BODY BODY)
+  `(PROGN 'COMPILE
+	  (DEFUN ,NAME ,ARGS ,@BODY)
+	  (PROCLAIM '(INLINE ,NAME))))
+
+#+Symbolics
+(DEFMACRO DEFSUBST (NAME ARGS &BODY BODY)
+  `(SCL:DEFSUBST ,NAME ,ARGS ,@BODY))
+
+#-Maclisp
+(PROGN 'COMPILE
+
+(DEFSUBST STRING-ELT (S I)   ;Not the same as CHAR!
+  (AREF (THE STRING S) I))
+
+(DEFSUBST SET-STRING-ELT (S I C)
+  (SETF (AREF (THE STRING S) I) C))
+
+(DEFMACRO UNKLUDGIFY-STRING (S)
+  S)
+
+(DEFUN QUIT () NIL)
+)  ;psilcaM-#
+
+
+(DEFMACRO MESSAGE (&REST CRUFT)
+  `(IF (OR (NOT *SERVER-MODE*) *DEBUG?* *LOG*)
+       (FORMAT *COMMENTARY-STREAM* ,@CRUFT)))
+
+(DEFMACRO DEBUG-MESSAGE (&REST CRUFT)
+  `(IF *DEBUG?*
+       (FORMAT *DEBUG-IO* ,@CRUFT)))
+
+(DEFMACRO STRING-APPEND (&REST STRINGS)
+  `(CONCATENATE 'STRING ,@STRINGS))
+
+#-Maclisp
+(PROGN 'COMPILE
+;;; Character-set-independent ASCII character conversion
+
+(DEFPARAMETER ASCII-CHARS
+  (CONCATENATE 'VECTOR
+	       '(#\NULL)
+	       (MAKE-LIST 7)
+	       '(#\BACKSPACE #\TAB #\NEWLINE NIL #\PAGE #\RETURN)
+	       (MAKE-LIST 18)
+	       " !\"#$%&'()*+,-./0123456789:;<=>?"
+	       "@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_"
+	       "`abcdefghijklmnopqrstuvwxyz{|}~"
+	       '(#\RUBOUT)))
+
+(DEFUN ASCII->CHAR (N)
+  (OR (SVREF ASCII-CHARS N)
+      (CODE-CHAR N)))
+
+(DEFPARAMETER NATIVE-CHARS
+  (LET ((TABLE (MAKE-HASH-TABLE :TEST 'EQUAL :SIZE 128))
+	(LEAST     10000000)
+	(GREATEST -10000000))
+    (DO ((I 0 (+ I 1)))
+	((>= I (LENGTH ASCII-CHARS))
+	 (LET ((V (MAKE-ARRAY (+ (- GREATEST LEAST) 1))))
+	   (DO ((I LEAST (+ I 1)))
+	       ((> I GREATEST) (CONS LEAST V))
+	     (SETF (SVREF V (- I LEAST)) (GETHASH I TABLE)))))
+      (LET ((CH (SVREF ASCII-CHARS I)))
+	(WHEN CH
+	  (LET ((CODE (CHAR-CODE CH)))
+	    (SETQ LEAST    (MIN LEAST    CODE))
+	    (SETQ GREATEST (MAX GREATEST CODE))
+	    (SETF (GETHASH CODE TABLE) I)))))))
+
+(DEFUN CHAR->ASCII (CHAR)
+  (LET ((INDEX (- (CHAR-CODE CHAR) (CAR NATIVE-CHARS))))
+    (IF (OR (< INDEX 0)
+	    (>= INDEX (LENGTH (CDR NATIVE-CHARS))))
+	(CHAR-CODE CHAR)
+	(OR (SVREF (CDR NATIVE-CHARS) INDEX)
+	    (CHAR-CODE CHAR)))))
+)
+
+#+Maclisp
+(PROGN 'COMPILE
+(DEFMACRO CHAR->ASCII (C) C)
+(DEFMACRO ASCII->CHAR (N) N)
+)
+
+;;; INTEGER->GRAPHIC: converts a number to a graphic character by adding
+;;;   32 and deasciizing.
+;;; GRAPHIC->INTEGER: undoes INTEGER->GRAPHIC.
+;;; CTL: converts between control characters and printable characters by
+;;;   toggling the control bit (i.e. ^a becomes a and a becomes ^a).
+
+(DEFSUBST INTEGER->GRAPHIC (N)
+  (ASCII->CHAR (+ N 32.)))
+
+(DEFSUBST GRAPHIC->INTEGER (CH)
+  (- (CHAR->ASCII CH) 32.))
+
+(DEFSUBST CTL (CH)
+  (ASCII->CHAR (LOGXOR (CHAR->ASCII CH) #o100)))
+
+(DEFSUBST COMPUTE-FINAL-CHECKSUM (CHKSUM)
+  (LOGAND (+ (ASH (LOGAND CHKSUM #o0300) -6) CHKSUM) #o077))
+
+;;; ACKP, NACKP, ERRP, FAILP
+;;; Predicates applied to packet type returned by RECEIVE-PACKET:
+;;; an ACK (Y), a NACK (N), an error message (E), or a failed
+;;; packet transmission (timeout, bad checksum, or illegal length).
+
+(DEFSUBST ACKP (TYPE)
+  (CHAR= TYPE #\Y))
+
+(DEFSUBST NACKP (TYPE)
+  (CHAR= TYPE #\N))
+
+(DEFSUBST ERRP (TYPE)
+  (CHAR= TYPE #\E))
+
+(DEFSUBST FAILP (TYPE)
+  (CHAR< TYPE #\SPACE))
+
+;;; Top-level entry routines
+
+;;; Specify a terminal line [e.g. (SET-LINE "TTA1:")]:
+
+(DEFUN SET-LINE (LINE)
+  (INIT-SERIAL-I/O LINE))
+
+;;; Server mode:
+
+(DEFUN SERVE ()				;See LIBDOC; TTY >
+  (FORMAT *COMMENTARY-STREAM*
+	  "~&Entering KERMIT server mode.~
+	   ~%Control-G throws to Lisp top level, (SERVE) starts serving again.~%")
+  ;; Kludge!!!  Logging isn't done right at all.  Ought to use broadcast stream
+  ;; so that logging works even when not in server mode.
+  (IF *LOG*
+      (FORMAT *LOG* "~2&----- Entering server mode -----~&"))
+  (UNWIND-PROTECT
+    (LET ((*COMMENTARY-STREAM* (OR *LOG* *COMMENTARY-STREAM*))
+	  (*DEBUG-IO* (OR *LOG* *DEBUG-IO*)))
+      (LET ((STATUS (RUN-STATE-MACHINE #'RECEIVE-SERVER-IDLE T '() NIL)))
+	(IF (EQ STATUS 'LOGOUT) (QUIT) STATUS)))
+    (IF *LOG* (FORMAT *LOG* "~&----- Leaving server mode -----~&"))))
+
+;;; Send a file:
+
+(DEFUN SEND-FILE (LOCAL-FILESPEC &OPTIONAL REMOTE-FILESPEC)
+  (LET ((XFER-LIST (MAKE-TRANSFER-LIST LOCAL-FILESPEC REMOTE-FILESPEC)))
+    (COND ((NULL XFER-LIST)
+	   (MESSAGE "~&No files match this specification: ~S" LOCAL-FILESPEC))
+	  (T
+	   (RUN-STATE-MACHINE #'SEND-INIT NIL XFER-LIST NIL)))))
+
+;;; Get a file:
+
+(DEFUN GET-FILE (REMOTE-SPEC &OPTIONAL LOCAL-SPEC)
+  (RUN-STATE-MACHINE #'SEND-MISC
+		     NIL
+		     '()
+		     `(GET ,REMOTE-SPEC ,LOCAL-SPEC)))
+
+;;; Receive file: useless, but included for completeness.
+
+(DEFUN RECEIVE-FILE (&OPTIONAL LOCAL-SPEC)
+  (RUN-STATE-MACHINE #'RECEIVE-INIT
+		     NIL
+		     '()
+		     `(GET NIL ,LOCAL-SPEC)))
+
+;;; Tell remote server to go away:
+
+(DEFUN FINISH ()
+  (RUN-STATE-MACHINE #'SEND-MISC NIL '() '(FINISH)))
+
+(DEFUN BYE ()
+  (RUN-STATE-MACHINE #'SEND-MISC NIL '() '(BYE)))
+
+(DEFUN LOG (&OPTIONAL PATH)
+  (COND ((NULL PATH)
+	 (COND ((NULL *LOG*)
+		(FORMAT T "~&There is no log file to close."))
+	       (T
+		(FORMAT T "~&Closing log file ~s" (TRUENAME *LOG*))
+		(LISP:CLOSE *LOG*)
+		(SETQ *LOG* NIL))))
+	((NULL *LOG*)
+	 (SETQ *LOG* (LISP:OPEN PATH :DIRECTION :OUTPUT))
+	 (FORMAT T "~&Logging on ~s" (TRUENAME *LOG*)))))
+
+;;; The KERMIT state machine
+
+(DEFUN RUN-STATE-MACHINE (STATE *SERVER-MODE*
+				*FILES-TO-SEND*
+				*COMMAND*)
+  (IF (NULL *SERIAL-INPUT*) (INIT-SERIAL-I/O))
+  (LET ((TEMP (SERIAL-STATE)))
+    (UNWIND-PROTECT
+      (PROGN (DISABLE-ECHOING TEMP)
+	     (FLUSH-INPUT)
+	     (LISP:CATCH 'DONE
+	       (DO ()
+		   (NIL)
+		 (LISP:CATCH 'ABORT
+		   (UNWIND-PROTECT
+		     (LET ((*SEQUENCE-NUMBER* 0)
+			   (*RETRY-COUNT* 0)
+			   (*DISCARD* NIL)
+			   (*TIMEOUT* *TIMEOUT*))
+		       (DO ((STATE STATE (FUNCALL STATE)))
+			   (NIL)
+			 ;; (DEBUG-MESSAGE "~&State = ~S~&" STATE)
+			 ))
+		     (COND (*STREAM*
+			    (LISP:CLOSE *STREAM* :ABORT T)
+			    (SETQ *STREAM* NIL)))))
+		 (IF (NOT *SERVER-MODE*) (RETURN 'ABORTED)))))
+      (SET-SERIAL-STATE TEMP))))
+
+(DEFMACRO DEFSTATE (NAME &REST BODY)
+  `(DEFUN ,NAME () ,@BODY))
+
+;(DEFMACRO GOTO-STATE (STATE)
+;  `#',STATE)
+(defmacro goto-state (state)
+  `(%goto-state #',state))
+(defun %goto-state (state)
+  (if (null state) (error "null state") state))
+
+(DEFUN ABORT ()
+  (DEBUG-MESSAGE "~&Aborting.")
+  (LISP:THROW 'ABORT NIL))
+
+(DEFUN COMPLETE ()
+  (IF *SERVER-MODE*
+      (GOTO-STATE RECEIVE-SERVER-IDLE)
+      (LISP:THROW 'DONE 'COMPLETE)))
+
+(DEFSUBST NEXT-SEQUENCE-NUMBER ()
+  (LOGAND (1+ *SEQUENCE-NUMBER*) #o77))
+
+(DEFSUBST PREVIOUS-SEQUENCE-NUMBER ()
+  (LOGAND (+ *SEQUENCE-NUMBER* #o77) #o77))
+
+(DEFUN BUMP-SEQUENCE-NUMBER ()
+  (SETQ *SEQUENCE-NUMBER* (NEXT-SEQUENCE-NUMBER))
+  (SETQ *RETRY-COUNT* 0))
+
+(DEFUN BUMP-RETRY-COUNT ()
+  (INCF *RETRY-COUNT*)
+  (COND ((> *RETRY-COUNT* *MAX-RETRY-COUNT*)
+	 (SEND-ERROR-PACKET "aborting after ~D retries" *MAX-RETRY-COUNT*)
+	 (ABORT))))
+
+;;; Rec_Server_Idle -- Server idle, waiting for a message
+
+(DEFSTATE RECEIVE-SERVER-IDLE
+  (SETQ *SEQUENCE-NUMBER* 0)
+  (SETQ *TIMEOUT* *SERVER-TIMEOUT*)  ;will get reset later
+  (MULTIPLE-VALUE-BIND (TYPE NUM DATA)
+		       (RECEIVE-PACKET)
+    (COND ((FAILP TYPE)
+	   (SEND-NACK 0)
+	   (GOTO-STATE RECEIVE-SERVER-IDLE))
+	  ((ERRP TYPE)
+	   ;; Error has already been reported, so don't worry about it.
+	   (GOTO-STATE RECEIVE-SERVER-IDLE))
+	  ((NOT (= NUM 0))
+	   (SEND-ERROR-PACKET "bad sequence number - ~S" NUM)
+	   (GOTO-STATE RECEIVE-SERVER-IDLE))
+	  ((CHAR= TYPE #\I)
+	   ;; Initialize & send ACK
+	   (INITIALIZE-PARAMETERS DATA)
+	   (GOTO-STATE RECEIVE-SERVER-IDLE))
+	  ((CHAR= TYPE #\S)
+	   ;; Remote host wants to send a file; we should prepare to receive.
+	   (INITIALIZE-PARAMETERS DATA)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (SETQ *COMMAND* '(GET NIL NIL))
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  ((CHAR= TYPE #\R)
+	   ;; Remote host wants to receive a file, i.e. we should send it.
+	   (SETQ *FILES-TO-SEND*
+		 (MAKE-TRANSFER-LIST (UNKLUDGIFY-STRING DATA) NIL))
+	   (COND ((NULL *FILES-TO-SEND*)
+		  (SEND-ERROR-PACKET "no files matching this specification")
+		  (GOTO-STATE RECEIVE-SERVER-IDLE))
+		 (T
+		  (DEBUG-MESSAGE "~&Files to send: ~S" *FILES-TO-SEND*)
+		  (GOTO-STATE SEND-INIT))))
+	  ((CHAR= TYPE #\G)
+	   (COND ((< (LISP:LENGTH DATA) 1)
+		  (SEND-ERROR-PACKET "ill-formed generic command packet")
+		  (GOTO-STATE RECEIVE-SERVER-IDLE))
+		 (T
+		  (PERFORM-GENERIC-COMMAND DATA))))
+	  (T
+	   (SEND-ERROR-PACKET "unimplemented server command - ~C" TYPE)
+	   (GOTO-STATE RECEIVE-SERVER-IDLE)))))
+
+(DEFUN PERFORM-GENERIC-COMMAND (DATA)
+  (CASE (STRING-ELT DATA 0)
+    ((#\F)				;Finished
+     (SEND-ACK *SEQUENCE-NUMBER*)
+     (LISP:THROW 'DONE 'FINISHED))
+    ((#\L)				;Logout
+     (SEND-ACK *SEQUENCE-NUMBER*)
+     (LISP:THROW 'DONE 'LOGOUT))
+    ((#\C)				;Change working directory
+     ;; Data looks something like
+     ;;   C$directory#password  (I think)
+     ;; where $ is the length of the directory name (! = 1, etc.)
+     ;; and # is the length of the password.
+     ;; This has only been tested with Kermit-32 (on VMS), and I haven't
+     ;; checked the protocol manual to see what's really supposed to
+     ;; happen.  -- JAR 3 March 1988
+     (IF (> (LISP:LENGTH DATA) 3)
+	 (LET ((END (MIN (LISP:LENGTH DATA)
+			 (+ 2 (GRAPHIC->INTEGER (AREF DATA 1))))))
+	   (DO ((I 2 (1+ I))
+		(L '() (CONS (AREF DATA I) L)))
+	       ((>= I END)
+		(LET ((DIR (COERCE (REVERSE L) 'STRING)))
+		  (MESSAGE "~&Directory ~S" DIR)
+		  (SETQ *DEFAULT-PATHNAME-DEFAULTS* (PATHNAME DIR))
+		  (SEND-ACK 0)))))
+	 (SEND-ERROR-PACKET "missing directory name or ill-formed packet - ~A"
+			    (UNKLUDGIFY-STRING DATA)))
+     (GOTO-STATE RECEIVE-SERVER-IDLE))
+    ;; Unimplemented: Directory, diskUsage,
+    ;; dEletefile, Type, Rename, Kopy, Whoisloggedin,
+    ;; sendMessage, runProgram, Journal, Variable
+    (T
+     (SEND-ERROR-PACKET "unimplemented generic command - ~A"
+			(UNKLUDGIFY-STRING DATA))
+     (GOTO-STATE RECEIVE-SERVER-IDLE))))
+
+;;; Rec_Init - entry point for non-server RECEIVE command (pretty useless)
+;;; *COMMAND* should be (GET remote local)
+
+(DEFSTATE RECEIVE-INIT
+  (SETQ *SEQUENCE-NUMBER* 0)
+  (MULTIPLE-VALUE-BIND (TYPE NUM DATA)
+		       (RECEIVE-PACKET)
+    (COND ((AND (CHAR= TYPE #\S) (= NUM 0))
+	   (INITIALIZE-PARAMETERS DATA)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  ((FAILP TYPE)
+	   (SEND-NACK 0)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE RECEIVE-INIT))
+	  (T
+	   (SEND-NACK 0)
+	   (ABORT)))))
+
+;;; Rec_File -- look for a file header or EOT message
+;;; *COMMAND* should be (GET remote local)
+
+(DEFSTATE RECEIVE-FILE-HEADER
+  (MULTIPLE-VALUE-BIND (TYPE NUM PACKET)
+		       (RECEIVE-PACKET)
+    (COND ((AND (CHAR= TYPE #\F) (= NUM *SEQUENCE-NUMBER*))
+	   ;; File header; ignore it if a local name was specified.
+	   (LET* ((REMOTE (UNKLUDGIFY-STRING PACKET))
+		  (LOCAL (OR (CADDR *COMMAND*) (CADR *COMMAND*)))
+		  (LOCAL (IF LOCAL
+			     (MERGE-PATHNAMES (FLUSH-WILDCARDS LOCAL) REMOTE)
+			     REMOTE)))
+	     (COND ((SETQ *STREAM* (MAYBE-OPEN-FOR-OUTPUT LOCAL))
+		    (MESSAGE "~&Receiving ~A as ~A"
+			     REMOTE
+			     (LISP:NAMESTRING LOCAL))
+		    (SEND-ACK NUM)
+		    (BUMP-SEQUENCE-NUMBER)
+		    (GOTO-STATE RECEIVE-DATA))
+		   (T
+		    (MESSAGE "~&Can't create ~S" LOCAL)
+		    (SEND-ERROR-PACKET "Can't create ~S" LOCAL)
+		    (ABORT)))))
+	  ((AND (CHAR= TYPE #\B) (= NUM *SEQUENCE-NUMBER*))
+	   ;; End of transmission
+	   (SEND-ACK NUM)
+	   (COMPLETE))
+	  ((AND (CHAR= TYPE #\S) (= NUM (PREVIOUS-SEQUENCE-NUMBER)))
+	   ;; Send init
+	   (SEND-PARAMETERS #\Y NUM)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  ((AND (CHAR= TYPE #\Z) (= NUM (PREVIOUS-SEQUENCE-NUMBER)))
+	   ;; End of file
+	   (SEND-ACK NUM)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  ((FAILP TYPE)
+	   ;; Timeout
+	   (SEND-NACK *SEQUENCE-NUMBER*)
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  (T
+	   (SEND-ERROR-PACKET "error receiving file header")
+	   (ABORT)))))
+
+;;; Rec_Data - Receive data up to end of file
+
+(DEFSTATE RECEIVE-DATA
+  (MULTIPLE-VALUE-BIND (TYPE NUM DATA)
+		       (RECEIVE-PACKET)
+    (COND ((AND (CHAR= TYPE #\D) (= NUM *SEQUENCE-NUMBER*))
+	   (EMPTY-BUFFER DATA)
+	   (SEND-ACK NUM)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (GOTO-STATE RECEIVE-DATA))
+	  ((AND (OR (CHAR= TYPE #\D) (CHAR= TYPE #\F))
+		(= NUM (PREVIOUS-SEQUENCE-NUMBER)))
+	   (SEND-ACK NUM)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE RECEIVE-DATA))
+	  ((AND (CHAR= TYPE #\Z) (= NUM *SEQUENCE-NUMBER*))
+	   (LET (#+Maclisp
+		 (IO-LOSSAGE #'(LAMBDA IGNORE
+				       (SEND-ERROR-PACKET "error closing file")
+				       (ABORT))))
+	     (COND ((OR (< (LISP:LENGTH DATA) 1)
+			(NOT (CHAR= (STRING-ELT DATA 0) #\D)))
+		    (MESSAGE "~&File received successfully: ~A"
+			     (LISP:NAMESTRING *STREAM*))
+		    (LISP:CLOSE *STREAM*))
+		   (T
+		    ;; Discard
+		    (MESSAGE "~&File discarded: ~A"
+			     (LISP:NAMESTRING *STREAM*))
+		    (LISP:CLOSE *STREAM* :ABORT T)))
+	     (SEND-ACK NUM)
+	     (SETQ *STREAM* NIL)
+	     (BUMP-SEQUENCE-NUMBER)
+	     (GOTO-STATE RECEIVE-FILE-HEADER)))
+	  ((FAILP TYPE)
+	   (SEND-NACK *SEQUENCE-NUMBER*)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE RECEIVE-DATA))
+	  (T
+	   (IF (NOT (ERRP TYPE))
+	       (SEND-ERROR-PACKET "error during data reception"))
+	   (ABORT)))))
+
+
+;;; Send_Init - entry for SEND command (or remote kermit's GET)
+
+(DEFSTATE SEND-INIT
+  (SETQ *SEQUENCE-NUMBER* 0)
+  (SEND-PARAMETERS #\S 0)
+  (MULTIPLE-VALUE-BIND (REPLY NUM PACKET)
+		       (RECEIVE-PACKET)
+    (COND ((AND (ACKP REPLY) (= *SEQUENCE-NUMBER* NUM))
+	   (DECODE-PARAMETERS PACKET)	      ;Check and set defaults
+	   (BUMP-SEQUENCE-NUMBER)
+	   (GOTO-STATE OPEN-FILE))
+	  ((ERRP REPLY)
+	   (ABORT))
+	  (T
+	   (GOTO-STATE SEND-INIT)))))
+
+;;; Open_File 
+
+(DEFSTATE OPEN-FILE
+  (COND ((NULL *FILES-TO-SEND*)
+	 (GOTO-STATE SEND-BREAK))
+	(T
+	 (LET ((LOCAL-FILENAME (CAAR *FILES-TO-SEND*)))
+	   (COND ((NOT (SETQ *STREAM* (MAYBE-OPEN-FOR-INPUT LOCAL-FILENAME)))
+		  ;; This ain't right, but what's to do for it??
+		  (MESSAGE "~&Can't open file ~A" LOCAL-FILENAME)
+		  (POP *FILES-TO-SEND*)
+		  (SETQ *DISCARD* T)
+		  (GOTO-STATE SEND-EOF))
+		 (T
+		  (GOTO-STATE SEND-FILE-HEADER)))))))
+
+;;; Send_File
+
+(DEFUN NORMAL-ACKP (TYPE NUM)
+  (OR (AND (ACKP TYPE) (= NUM *SEQUENCE-NUMBER*))
+      (AND (NACKP TYPE) (= NUM (NEXT-SEQUENCE-NUMBER)))))
+
+(DEFUN NORMAL-NACKP (TYPE)
+  (OR (FAILP TYPE)
+      (NACKP TYPE)))
+
+(DEFSTATE SEND-FILE-HEADER
+  (SEND-PACKET #\F *SEQUENCE-NUMBER*
+	       (KERMITIFY-PATHNAME (CDAR *FILES-TO-SEND*)
+				   *VERSION-NUMBERS?*))
+  (MULTIPLE-VALUE-BIND (REPLY NUM IGNORE)
+		       (RECEIVE-PACKET)
+    IGNORE
+    (COND ((NORMAL-ACKP REPLY NUM)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (GOTO-STATE SEND-DATA))
+	  ((NORMAL-NACKP REPLY)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE SEND-FILE-HEADER))
+	  (T
+	   (IF (NOT (ERRP REPLY))
+	       (SEND-ERROR-PACKET "error sending file header"))
+	   (ABORT)))))
+
+;;; Send_Data -- Send contents of file
+
+(DEFSTATE SEND-DATA
+  (IF (= *RETRY-COUNT* 0)
+      (FILL-BUFFER *SEND-PACKET*))
+  (COND ((= (LISP:LENGTH *SEND-PACKET*) 0)
+	 (GOTO-STATE SEND-EOF))
+	(T
+	 (SEND-PACKET #\D *SEQUENCE-NUMBER* *SEND-PACKET*)
+	 (MULTIPLE-VALUE-BIND (REPLY NUM PACKET)
+			      (RECEIVE-PACKET)
+	   (COND ((NORMAL-ACKP REPLY NUM)
+		  (BUMP-SEQUENCE-NUMBER)
+		  (COND ((AND (> (LISP:LENGTH PACKET) 0)
+			      (OR (CHAR= (STRING-ELT PACKET 0) #\X)
+				  (CHAR= (STRING-ELT PACKET 0) #\Z)))
+			 (SETQ *DISCARD* T)
+			 (GOTO-STATE SEND-EOF))
+			(T
+			 (GOTO-STATE SEND-DATA))))
+		 ((NORMAL-NACKP REPLY)
+		  (BUMP-RETRY-COUNT)
+		  (GOTO-STATE SEND-DATA))
+		 (T
+		  (IF (NOT (ERRP REPLY))
+		      (SEND-ERROR-PACKET "error during data transmission"))
+		  (ABORT)))))))
+
+;;; Send_EOF -- Send end of file indicator
+
+(DEFSTATE SEND-EOF
+  (SEND-PACKET #\Z *SEQUENCE-NUMBER* (IF *DISCARD* "Z" NIL))
+  (MULTIPLE-VALUE-BIND (REPLY NUM IGNORE)
+		       (RECEIVE-PACKET)
+    IGNORE
+    (COND ((NORMAL-ACKP REPLY NUM)
+	   (MESSAGE "~&File sent successfully: ~A~%"
+		    (TRUENAME *STREAM*))
+	   (CLOSE *STREAM*)
+	   (SETQ *STREAM* NIL)
+	   (POP *FILES-TO-SEND*)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (SETQ *DISCARD* NIL)
+	   (GOTO-STATE OPEN-FILE))
+	  ((NORMAL-NACKP REPLY)
+	   (GOTO-STATE SEND-EOF))
+	  (T
+	   (SETQ *DISCARD* NIL)
+	   (IF (NOT (ERRP REPLY))
+	       (SEND-ERROR-PACKET "error during EOF transmission"))
+	   (ABORT)))))
+
+;;; Send_Break - End of transaction
+
+(DEFSTATE SEND-BREAK
+  (SEND-PACKET #\B *SEQUENCE-NUMBER* NIL)
+  (MULTIPLE-VALUE-BIND (REPLY NUM IGNORE)
+		       (RECEIVE-PACKET)
+    IGNORE
+    (COND ((OR (AND (ACKP REPLY) (= NUM *SEQUENCE-NUMBER*))
+	       (AND (NACKP REPLY) (= NUM 0)))
+	   (COMPLETE))
+	  ((OR (AND (NACKP REPLY) (= NUM *SEQUENCE-NUMBER*))
+	       (FAILP REPLY))
+	   (GOTO-STATE SEND-BREAK))
+	  (T
+	   (IF (NOT (ERRP REPLY))
+	       (SEND-ERROR-PACKET "error during break transmission"))
+	   (ABORT)))))
+
+;;; Send_Gen_Cmd - Command to server
+
+(DEFSTATE SEND-MISC
+  (CASE (CAR *COMMAND*)
+    ((FINISH) (SEND-PACKET #\G 0 "F"))
+    ((LOGOUT) (SEND-PACKET #\G 0 "L"))
+    ((GET)
+     (SEND-PACKET #\R 0 (KERMITIFY-PATHNAME (CADR *COMMAND*)
+					    *VERSION-NUMBERS?*)))
+    (OTHERWISE (ERROR "weird command in SEND-MISC" *COMMAND* 'FAIL-ACT)))
+  (MULTIPLE-VALUE-BIND (TYPE NUM DATA)
+		       (RECEIVE-PACKET)
+    (COND ((AND (ACKP TYPE) (= NUM 0))
+	   (MESSAGE "~&OK")
+	   (COMPLETE))
+	  ((AND (CHAR= TYPE #\S) (= NUM 0) (>= (LISP:LENGTH DATA) 6))
+	   (DECODE-PARAMETERS DATA)
+	   (SEND-PARAMETERS #\Y 0)
+	   (BUMP-SEQUENCE-NUMBER)
+	   (GOTO-STATE RECEIVE-FILE-HEADER))
+	  ((NORMAL-NACKP TYPE)
+	   (BUMP-RETRY-COUNT)
+	   (GOTO-STATE SEND-MISC))
+	  (T
+	   (IF (NOT (ERRP TYPE))
+	       (SEND-ERROR-PACKET "error during command transmission"))
+	   (ABORT)))))
+
+;;; Packet sending and receiving
+
+(DEFUN SEND-ERROR-PACKET (&REST CRUFT)
+  (LET* ((FROB (LISP:APPLY #'FORMAT NIL CRUFT))
+	 (FROB (FORMAT NIL "Kermit/~A: ~A" *KERMIT-VERSION* FROB)))
+    (DEBUG-MESSAGE "~&Sending error packet: ~A" FROB)
+    (SEND-PACKET #\E *SEQUENCE-NUMBER* FROB)))
+
+(DEFUN SEND-ACK (NUM)
+  (SEND-PACKET #\Y NUM NIL))
+
+(DEFUN SEND-NACK (NUM)
+  (SEND-PACKET #\N NUM NIL))
+
+;;; Remember remote parameters and ackowledge with ours
+
+(DEFUN INITIALIZE-PARAMETERS (DATA)
+  (DECODE-PARAMETERS DATA)
+  (SEND-PARAMETERS #\Y *SEQUENCE-NUMBER*))
+
+(DEFUN DECODE-PARAMETERS (DATA)
+  (SETQ *SEND-PACKET-SIZE* (GRAPHIC->INTEGER (STRING-ELT DATA 0)))
+  (SETQ *TIMEOUT*          (GRAPHIC->INTEGER (STRING-ELT DATA 1)))
+  (SETQ *PAD*		   (GRAPHIC->INTEGER (STRING-ELT DATA 2)))
+  (SETQ *PAD-CHAR*	   (CTL (STRING-ELT DATA 3)))
+  (SETQ *EOL*		   (ASCII->CHAR (GRAPHIC->INTEGER (STRING-ELT DATA 4))))
+  (SETQ *QUOTE*		   (STRING-ELT DATA 5)))
+
+(DEFUN SEND-PARAMETERS (TYPE NUM)
+  (LET ((PACKET *SEND-PACKET*))
+    (SET-STRING-ELT PACKET 0 (INTEGER->GRAPHIC *RECEIVE-PACKET-SIZE*))
+    (SET-STRING-ELT PACKET 1 (INTEGER->GRAPHIC *MY-TIMEOUT*))
+    (SET-STRING-ELT PACKET 2 (INTEGER->GRAPHIC *MY-PAD*))
+    (SET-STRING-ELT PACKET 3 (CTL *MY-PAD-CHAR*))
+    (SET-STRING-ELT PACKET 4 (INTEGER->GRAPHIC (CHAR->ASCII *MY-EOL*)))
+    (SET-STRING-ELT PACKET 5 *MY-QUOTE*)
+    (SETF (FILL-POINTER PACKET) 6)
+    (SEND-PACKET TYPE NUM PACKET)))
+
+
+;;; SEND-PACKET
+;;;  TYPE -- a number, the type of packet this is.
+;;;  NUM  -- a number, the packet-number of this packet.
+;;;  DATA -- a string, i.e. an art-string type of array, the data of this pkt.
+
+(DEFUN SEND-PACKET (TYPE NUM DATA)
+  (LET ((CHKSUM 0)
+	(LEN (IF DATA (LISP:LENGTH DATA) 0)))
+    (DECLARE (FIXNUM CHKSUM LEN))
+    (DEBUG-MESSAGE "~&Sending packet:     ")
+    (DO ((I 0 (1+ I)))
+	((>= I *PAD*))
+      (SERIAL-WRITE-CHAR *PAD-CHAR*))
+    (SERIAL-WRITE-CHAR *SOH*)
+    (INCF CHKSUM (SERIAL-WRITE-CHAR (INTEGER->GRAPHIC (+ LEN 3))))
+    (INCF CHKSUM (SERIAL-WRITE-CHAR (INTEGER->GRAPHIC NUM)))
+    (INCF CHKSUM (SERIAL-WRITE-CHAR TYPE))
+    (IF DATA
+	(DO ((I 0 (1+ I)))
+	    ((>= I LEN))
+	  (DECLARE (FIXNUM I))
+	  (INCF CHKSUM (SERIAL-WRITE-CHAR (STRING-ELT DATA I)))))
+    (SERIAL-WRITE-CHAR (INTEGER->GRAPHIC (COMPUTE-FINAL-CHECKSUM CHKSUM)))
+    (SERIAL-WRITE-CHAR *EOL*)
+    (FORCE-OUTPUT *SERIAL-OUTPUT*)
+    (DEBUG-MESSAGE "~&type = ~3C, num = ~3D, len = ~3D~&  Data = ~A"
+		   TYPE NUM LEN (IF DATA (UNKLUDGIFY-STRING DATA) ""))))
+
+;;; RECEIVE-PACKET
+;;;  Values returned are, in order:
+;;;  TYPE -- a character (fixnum), in {#\A, #\S, ...}.  E.g. #\A means "abort".
+;;;  NUM  -- a number, the packet-number of this packet.
+;;;  DATA -- a string, the data of this packet, which is as many
+;;;             characters as appropriate/desired for this type of packet.
+;;; Many callers need only one (usually the type) value.
+
+(DEFUN RECEIVE-PACKET ()
+  (LISP:CATCH 'TIMEOUT
+    (LET ((ALARMCLOCK #'(LAMBDA (IGNORE) IGNORE
+			  (DEBUG-MESSAGE "~&RECEIVE-PACKET timed out")
+			  (LISP:THROW 'TIMEOUT *TIMED-OUT*))))
+      (DECLARE (SPECIAL ALARMCLOCK))
+      (UNWIND-PROTECT
+        (PROGN
+	  (ALARMCLOCK 'TIME (MAX *TIMEOUT* *MIN-TIMEOUT*))
+	  (REALLY-RECEIVE-PACKET))
+	(ALARMCLOCK 'TIME NIL)))))
+
+(DEFUN REALLY-RECEIVE-PACKET ()
+  (LET ((CH 0) (TYPE 0) (I 0) (CCHKSUM 0) (RCHKSUM 0) (LEN 0) (NUM 0)
+	(DATA *RECEIVE-PACKET*))
+    (DECLARE (FIXNUM TYPE I CCHKSUM RCHKSUM LEN NUM)
+	     #+Maclisp (FIXNUM CH))
+    (PROG ()
+     CONTINUE
+     
+      (SETQ CH (SERIAL-READ-CHAR))
+      (COND ((NOT (CHAR= CH *SOH*))
+	     (DEBUG-MESSAGE "~&Noise: ")
+	     (GO CONTINUE)))
+
+      (DEBUG-MESSAGE "~&Receiving packet: ")
+
+     (SETQ CH (SERIAL-READ-CHAR))
+     (IF (CHAR= CH *SOH*) (GO CONTINUE))
+     (SETQ CCHKSUM (CHAR->ASCII CH))		;OK, start checksum
+     (SETQ LEN (- (GRAPHIC->INTEGER CH) 3))	;Get character count
+     ;; (if *debug?* (format t "<~d>" len))
+
+     (COND ((OR (< LEN 0) (> LEN (- *MAX-PACKET-SIZE* 3)))
+	    (DEBUG-MESSAGE "~&RECEIVE-PACKET got illegal packet length: ~D"
+			   LEN)
+	    (RETURN (VALUES *LENGTH-ERROR* NUM DATA))))
+
+     (SETQ CH (SERIAL-READ-CHAR))
+     (IF (CHAR= CH *SOH*) (GO CONTINUE))
+     (INCF CCHKSUM (CHAR->ASCII CH))		;OK, update checksum
+     (SETQ NUM (GRAPHIC->INTEGER CH))		;Get packet number
+
+     (SETQ CH (SERIAL-READ-CHAR))
+     (IF (CHAR= CH *SOH*) (GO CONTINUE))
+     (INCF CCHKSUM (CHAR->ASCII CH))		;OK, update checksum
+     (SETQ TYPE CH)				;Get packet type
+
+     (DEBUG-MESSAGE "type = ~3C, num = ~3D, len = ~3D~%"
+		    TYPE NUM LEN)
+      (SETQ I 0)
+     READ-THE-PACKET
+      (COND ((< I LEN)
+	     (SETQ CH (SERIAL-READ-CHAR))
+	     (IF (CHAR= CH *SOH*) (GO CONTINUE))
+	     (INCF CCHKSUM (CHAR->ASCII CH))    ;OK, update checksum
+	     (SET-STRING-ELT DATA I CH)
+	     (INCF I)
+	     (GO READ-THE-PACKET)))
+      
+      ;; (SET-STRING-ELT DATA LEN 0)		;Mark end of data
+      ;; ^^ unnecessary!?
+      (SETF (FILL-POINTER DATA) LEN)
+
+      (DEBUG-MESSAGE "  Data = ~A" (UNKLUDGIFY-STRING DATA))
+
+     (SETQ CH (SERIAL-READ-CHAR))
+     (SETQ RCHKSUM (GRAPHIC->INTEGER CH))	;OK, get checksum
+
+     (SETQ CH (SERIAL-READ-CHAR))
+     (IF (CHAR= CH *SOH*) (GO CONTINUE))	;OK, get eol char and toss it
+							;Safe!
+     (SETQ CCHKSUM (COMPUTE-FINAL-CHECKSUM CCHKSUM))
+
+     (COND ((NOT (= CCHKSUM RCHKSUM))
+	    (DEBUG-MESSAGE "RECEIVE-PACKET received bad checksum (expected ~A, got ~A)"
+			   RCHKSUM CCHKSUM)
+	    ;; Corruption, oh no!
+	    (RETURN (VALUES *CHECKSUM-ERROR* NUM DATA)))
+	   (T
+	    ;; Else checksum ok, 'uncorrupted'.
+	    (IF (ERRP TYPE)
+		(MESSAGE "~&Aborting with following error from remote host:~%  ~S~%"
+			 (UNKLUDGIFY-STRING DATA)))
+	    (RETURN (VALUES TYPE NUM DATA)))))))
+
+
+;;; Serial I/O.  Everything here is pretty implementation-dependent, or at
+;;; least tunable for speed.
+
+#-Maclisp
+(DEFUN ALARMCLOCK (WHICH SECONDS) WHICH SECONDS
+  ;; Call the value of global variable ALARMCLOCK when SECONDS seconds
+  ;; have passed.  If SECONDS is NIL then disable the alarm.
+  'UNIMPLEMENTED)
+
+(DEFUN INIT-SERIAL-I/O (&OPTIONAL IN (OUT IN))
+  #-Maclisp
+  (PROGN (SETQ *SERIAL-INPUT*
+	       (OR (OPEN IN  :DIRECTION :INPUT)  *TERMINAL-IO*))
+	 (SETQ *SERIAL-OUTPUT*
+	       (OR (OPEN OUT :DIRECTION :OUTPUT) *TERMINAL-IO*)))
+  #+Maclisp
+  (PROGN (IF *SERIAL-INPUT* (TERMINATE-SERIAL-I/O))
+	 (SETQ *SERIAL-INPUT*
+	       (OPEN `((,(OR IN 'TTY))) '(TTY SINGLE IMAGE IN)))
+	 (SETQ *SERIAL-OUTPUT*
+	       (OPEN `((,(OR IN 'TTY))) '(TTY BLOCK IMAGE OUT)))))
+
+#+DEC   ;; For testing purposes
+(DEFUN MBX (&OPTIONAL IN (OUT IN))
+  (SETQ *EOL*    #\NEWLINE)
+  (SETQ *MY-EOL* #\NEWLINE)
+  (SETQ *SERIAL-INPUT*  (OPEN-MAILBOX IN))
+  (SETQ *SERIAL-OUTPUT*
+	(IF (EQUAL OUT IN)
+	    *SERIAL-INPUT*
+	    (OPEN-MAILBOX OUT)))
+  (VALUES (NAMESTRING *SERIAL-INPUT*) (NAMESTRING *SERIAL-OUTPUT*)))
+
+(DEFUN TERMINATE-SERIAL-I/O ()
+  (IF (NOT (EQ *SERIAL-INPUT* *TERMINAL-IO*))
+      (CLOSE *SERIAL-INPUT*))
+  (IF (NOT (EQ *SERIAL-OUTPUT* *TERMINAL-IO*))
+      (CLOSE *SERIAL-OUTPUT*))
+  (SETQ *SERIAL-INPUT* NIL *SERIAL-OUTPUT* NIL))
+
+(DEFUN SERIAL-STATE ()
+  #-Maclisp
+  NIL
+  #+Maclisp
+  (SYSCALL 3. 'TTYGET *SERIAL-INPUT*))
+
+(DEFUN SET-SERIAL-STATE (TEMP)
+  #-Maclisp
+  TEMP
+  #+Maclisp
+  (SYSCALL 0. 'TTYSET *SERIAL-INPUT* (CAR  TEMP) (CADR TEMP)))
+
+(DEFUN DISABLE-ECHOING (TEMP)
+  #-Maclisp
+  TEMP
+  #+Maclisp
+  (SYSCALL 0. 'TTYSET *SERIAL-INPUT*
+	   (LOGAND (CAR  TEMP) #o070707070707)
+	   (LOGAND (CADR TEMP) #o070707070707)))
+
+;(DEFUN ENABLE-ECHOING (TEMP)
+;  (SYSCALL 0. 'TTYSET *SERIAL-INPUT*
+;	   (LOGIOR (CAR  TEMP) #o202020202020)
+;	   (LOGIOR (CADR TEMP) #o202020200020)))
+
+(DEFUN SERIAL-READ-CHAR ()
+  #-(or Maclisp Symbolics)
+  ;; This is supposed to read without echoing.
+  (READ-CHAR *SERIAL-INPUT*)
+  #+Maclisp
+  (LET ((CH (+TYI *SERIAL-INPUT*)))
+    (IF *IMAGE?* CH (LOGAND CH #o177)))
+  #+Symbolics
+  (PROGN (ZL:SEND *SERIAL-INPUT* :INPUT-WAIT NIL
+		  #'ZL:TIME-ELAPSED-P
+		  (FLOOR (* (MAX *TIMEOUT* *MIN-TIMEOUT*) 60))
+		  (ZL:TIME))
+	 (IF (ZL:SEND *TERMINAL-IO* :LISTEN)
+	     (LET ((CH (ZL:SEND *TERMINAL-IO* :TYI)))
+	       (CODE-CHAR (ZL:CHAR-CODE CH) (ZL:CHAR-BITS CH)))
+	     (LISP:THROW 'TIMEOUT *TIMED-OUT*))))
+
+(DEFUN SERIAL-WRITE-CHAR (CH)
+  #-(or Maclisp Symbolics)
+  (WRITE-CHAR CH *SERIAL-OUTPUT*)
+  #+Maclisp
+  (+TYO CH *SERIAL-OUTPUT*)
+  #+Symbolics
+  (ZL:SEND *SERIAL-OUTPUT* :TYO (CHAR->ASCII CH))  ;?
+  (CHAR->ASCII CH))  ;for checksums
+
+(DEFUN FLUSH-INPUT ()
+  (CLEAR-INPUT *SERIAL-INPUT*))
+
+;;; Implementation-dependent fast character file I/O:
+
+#-Maclisp
+(PROGN 'COMPILE
+(DEFSUBST +TYI (STREAM)
+  (READ-CHAR STREAM NIL NIL))
+
+(DEFSUBST +TYO (CH STREAM)
+  (WRITE-CHAR CH STREAM))
+
+(DEFSUBST END-OF-FILE-P (C)     ;Called only on value of +TYI
+  (NULL C))
+)
+
+;;; File I/O
+
+;;; Put a pathname into Kermit standard form.
+
+(DEFUN KERMITIFY-PATHNAME (PATHNAME VERSIONP)
+  (LET* ((NAME    (STRINGIFY-COMPONENT (PATHNAME-NAME PATHNAME)))
+	 (TYPE    (STRINGIFY-COMPONENT (PATHNAME-TYPE PATHNAME)))
+	 (VERSION (STRINGIFY-COMPONENT (PATHNAME-VERSION PATHNAME))))
+    (COND ((AND VERSIONP VERSION)
+	   (STRING-APPEND NAME "." (OR TYPE "") "." VERSION))
+	  (TYPE
+	   (STRING-APPEND NAME "." TYPE))
+	  (T NAME))))
+
+(DEFUN STRINGIFY-COMPONENT (X)
+  (COND ((EQ X ':WILD) "*")
+	((EQ X ':NEWEST) "0")
+	((EQ X ':OLDEST) "-1")
+	((NUMBERP X) (FORMAT NIL "~d" X))
+	(T X)))
+
+;;; Use by SEND-FILE and by SERVE to service remote GET requests.
+;;; Returns a list of pairs (<local-pathname> . <remote-filespec>).
+
+(DEFUN MAKE-TRANSFER-LIST (LOCAL-FILESPEC REMOTE-FILESPEC)
+  #+Maclisp (DECLARE (SPECIAL REMOTE-FILESPEC))  ;No closures
+  (LET* ((PATH (PATHNAME LOCAL-FILESPEC))
+	 (PATH (IF (NULL (PATHNAME-VERSION PATH))
+		   (MAKE-PATHNAME :DEFAULTS PATH :VERSION :NEWEST)
+		   PATH))
+	 (PATHS (LISP:DIRECTORY PATH)))
+    (MAPCAR #'(LAMBDA (PATH)
+		(CONS PATH (IF REMOTE-FILESPEC
+			       (MERGE-PATHNAMES REMOTE-FILESPEC PATH
+						(PATHNAME-VERSION PATH))
+			       PATH)))
+	    PATHS)))
+
+;;; Opening files...
+
+(DEFUN MAYBE-OPEN-FOR-INPUT (FILESPEC)
+  (LISP:OPEN FILESPEC :DIRECTION :INPUT :IF-DOES-NOT-EXIST NIL))
+
+(DEFUN MAYBE-OPEN-FOR-OUTPUT (FILESPEC)
+  (LISP:OPEN FILESPEC :DIRECTION :OUTPUT :IF-EXISTS NIL))
+
+;;; Get around vagaries of file merging.
+
+(DEFUN FLUSH-WILDCARDS (PATHNAME)
+  (MAKE-PATHNAME :HOST      (PATHNAME-HOST PATHNAME)
+		 :DEVICE    (NOT-WILD (PATHNAME-DEVICE PATHNAME))
+		 :DIRECTORY (NOT-WILD (PATHNAME-DIRECTORY PATHNAME))
+		 :NAME      (NOT-WILD (PATHNAME-NAME PATHNAME))
+		 :TYPE	    (NOT-WILD (PATHNAME-TYPE PATHNAME))))
+
+(DEFUN NOT-WILD (COMPONENT)
+  (IF (OR (EQ COMPONENT :WILD)
+	  (EQUAL COMPONENT "*"))
+      NIL COMPONENT))
+
+;;; Write a packet buffer into the currently open local output file.
+
+(DEFUN EMPTY-BUFFER (BUFFER)
+  "Put data from an incoming packet into a local disk file."
+  (LET ((LEN (LISP:LENGTH BUFFER)))
+    (DO ((I 0 (1+ I)))
+	((>= I LEN) BUFFER)
+      (LET ((CH (STRING-ELT BUFFER I)))
+	(DECLARE (FIXNUM CH))
+	(COND ((CHAR= CH *MY-QUOTE*)
+	       (SETQ CH (STRING-ELT BUFFER (INCF I)))
+	       (IF (NOT (CHAR= CH #|(LOGAND CH #o177)|# *MY-QUOTE*))
+		   (SETQ CH (CTL CH)))))
+	;; (IF (NOT *IMAGE?*) (SETQ CH (LOGAND CH #o177)))
+	(+TYO CH *STREAM*)))))
+
+;;; Fill a packet buffer from the currently open local input file.
+;;; Returns the number of characters stored into the packet buffer.
+;;; A return value of zero means that the end of the file has been reached.
+
+;;; There are four ways to fill a buffer:
+;;; 1. kermit default: 7-bit, quote all control characters.
+;;; 3. image mode: send everything through with no conversion, except for
+;;;    quoting the quote character.
+;;; 2, 4: lose mode: excised by JAR.
+
+(DEFUN FILL-BUFFER (BUFFER)
+  "Fill buffer with the outgoing data from the file *STREAM* points to.
+Only control quoting is done; 8-bit and repeat count prefixes are not handled."
+  ;;1; Changed 6 to 7!! See lmbugs.doc file item #14.
+  (LET ((INDEX 0)
+	(LIMIT (- *SEND-PACKET-SIZE* 7)))
+    (DECLARE (FIXNUM LIMIT INDEX))
+    (DO ()
+	((>= INDEX LIMIT))
+      (LET ((C (+TYI *STREAM*)))
+	#+Maclisp (DECLARE (FIXNUM C))
+	(COND ((END-OF-FILE-P C)	;???
+	       (RETURN NIL))
+	      (T (LET ((N (CHAR->ASCII C)))
+		   (COND ((CHAR= C *QUOTE*)
+			  (SET-STRING-ELT BUFFER INDEX *QUOTE*)
+			  (INCF INDEX)
+			  (SET-STRING-ELT BUFFER INDEX C)
+			  (INCF INDEX))
+			 ((GRAPHIC-CHAR-P C)
+			  ;; Regular character
+			  (SET-STRING-ELT BUFFER INDEX C)
+			  (INCF INDEX))
+			 ((AND (NOT *IMAGE?*)
+			       (> N #o177))
+			  ;; Weird character.  Don't send anything for it.
+			  (MESSAGE "~&The character ~C [~N octal] couldn't be translated to ASCII."
+				   C N))
+			 ;; Deal with newline characters?
+			 (T (SET-STRING-ELT BUFFER INDEX *QUOTE*)
+			    (INCF INDEX)
+			    (SET-STRING-ELT BUFFER
+					    INDEX
+					    (IF (OR *IMAGE?* (>= N 32.))
+						C
+						(CTL C)))
+			    (INCF INDEX))))))))
+    (SETF (FILL-POINTER BUFFER) INDEX)
+    INDEX))
+
+
+#+Symbolics
+(defvar cl-readtable (copy-readtable nil))
+
+#+Symbolics
+(defun zl-user::setup ()
+  (zl:setq-standard-value *readtable* cl-readtable)
+  (zl:setq-standard-value *package* (find-package 'kermit)))
+
+

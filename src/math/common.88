@@ -1,0 +1,659 @@
+;;; -*- Mode: LISP; Syntax: Common-Lisp; Package: (KERMIT LISP) -*-
+
+;;; Common-Lisp-in-Maclisp
+;;; Jonathan Rees   MIT   Jan-Feb 1986
+
+;;; Please don't take this seriously.  It exists only to make KERMIT and
+;;; a couple of other things of mine work.
+
+(setq gc-overflow nil)
+
+;;; Change read syntax
+
+(eval-when (eval load compile)
+  (setq base 10. ibase 10. *nopoint t)
+  (sstatus syntax 47. 2.)
+  (sstatus syntax 92. 132416.)
+  (or (get 'sharpm 'version)
+      (load '((lisp) sharpm)))
+  (defprop defsetf ((dsk math) defset fasl) autoload))
+
+(declare (mapex t))
+
+(eval-when (eval load compile)
+(defsharp \\ (macro-arg)
+  (declare (special \#-symbolic-characters-table))
+  (let ((first-char (tyipeek)))
+    (cond ((not (or (and (>= first-char 65.) (<= first-char 90.))
+		    (and (>= first-char 97.) (<= first-char 122.))))
+	   ;; Not alphabetic
+	   (tyi))
+	  (t
+	   (let ((foo (read)))
+	     (cond ((= (flatc foo) 1) first-char)
+		   (t
+		    (let ((probe (assq foo \#-symbolic-characters-table)))
+		      (cond (probe (cdr probe))
+			    (t (error "unknown #\\ character name" foo 'fail-act)))))))))))
+)
+
+(push '(LINE . 10.) |#-SYMBOLIC-CHARACTERS-TABLE|)
+(push '(PAGE . 12.) |#-SYMBOLIC-CHARACTERS-TABLE|)
+
+;;; -- Macros & special forms
+
+(defmacro lisp:catch (tag &rest body)
+  `(*catch ,tag ,@body))
+
+(defmacro lisp:throw (tag value)
+  `(*throw ,tag ,value))
+
+(defmacro defparameter (var val &rest foo)
+  `(progn 'compile
+	  (defvar ,var nil ,@foo)
+	  (setq ,var ,val)))
+
+(defmacro defconstant (&rest x)
+  `(defconst ,@x))  ;randomness in MLMAC
+
+(defun require (module &optional (filename module))
+  (or (get module 'version)
+      (load filename)))
+
+(defun provide (module)
+  (putprop module t 'version))
+
+(defmacro the (type obj) type obj)
+
+;;; DEFSUBST isn't Common Lisp, but Maclisp has no (declare (inline ...)).
+
+(defmacro defsubst (name bvl &rest body)
+  (let ((body (if (null (cdr body)) (car body) `(progn ,@body))))
+    `(defmacro ,name ,bvl
+       (sublis (list ,@(mapcar #'(lambda (var) `(cons ',var ,var)) bvl))
+	       ',body))))
+
+(defmacro incf (place &optional (amount 1))
+  `(setf ,place (+ ,place ,amount)))
+
+(defmacro decf (place &optional (amount 1))
+  `(setf ,place (- ,place ,amount)))
+
+(defmacro multiple-value-setq (&rest x)
+  `(multiple-value ,@x))
+
+(defmacro case (key &rest clauses)
+  `(caseq ,key ,@(mapcar #'(lambda (clause)
+			     (if (eq (car clause) 'otherwise)
+				 (cons 't (cdr clause))
+				 clause))
+			 clauses)))
+
+;(eval-when (eval load compile)
+;  (or (status feature defstruct)
+;      (load '((dsk liblsp) struct))))
+
+;;; -- Internal utility
+
+(defmacro let-keyword-args (specs rest &rest body)
+  (cond ((null specs) body)
+	(t `(let* ,(mapcar #'(lambda (spec)
+			       (let ((name (if (atom spec) spec (car spec)))
+				     (init (if (atom spec) nil  (cadr spec))))
+				 `(,name
+				   (let ((,name (member ',(symbolconc ': name) ,rest)))
+				     (if ,name (cadr ,name) ,init)))))
+			   specs)
+	      ,@body))))
+
+;;; -- Randomness
+
+(declare (unspecial args))
+
+(defvar *terminal-io* t)
+(defvar *debug-io* t)
+(defvar *standard-input* t)
+(defvar *standard-output* t)
+
+;;; -- Various functions
+
+(cond ((status feature complr)
+       (*lexpr import export in-package make-package lisp:open lisp:close
+	       aref concatenate make-pathname merge-pathnames
+	       make-broadcast-stream)))
+
+(defmacro consp (x) `(not (atom ,x)))
+(defmacro symbol-value (x) `(symeval ,x))
+(defmacro symbol-function (x) x)
+(defmacro lisp:apply (&rest stuff) `(lexpr-funcall ,@stuff))
+
+(defmacro char-code (x) x)
+(defmacro code-char (x) x)
+(defmacro char= (&rest stuff) `(= ,@stuff))
+(defmacro char< (&rest stuff) `(< ,@stuff))
+(defmacro char> (&rest stuff) `(> ,@stuff))
+(defmacro char<= (&rest stuff) `(<= ,@stuff))
+(defmacro char>= (&rest stuff) `(>= ,@stuff))
+
+(defun alpha-char-p (c)
+  (or (and (>= c 65.) (<= c 90.))
+      (and (>= c 97.) (<= c 122.))))
+
+(defun graphic-char-p (c)
+  (and (>= c 32.) (< c 127.)))
+
+;;; Packages
+
+(defvar *package* 'user)
+
+(defconstant :use ':use)
+
+(defun find-package (name) name)
+
+(defun in-package (package &rest ignore)
+  (setq *package* package))
+
+(defun export (symbols &rest ignore) nil)
+
+(defmacro shadow (symbols &optional (pkg '*package*))
+  `(eval-when (eval load compile)
+     (*shadow ,symbols ,pkg)))
+
+(defun *shadow (symbols pkg) pkg
+  (mapc #'(lambda (symbol)
+	    (cond ((and (not (get symbol 'shadows))
+			(not (get symbol 'shadowed-by)))
+		   (remob symbol)
+		   (let ((new (intern (copysymbol symbol nil))))
+		     (putprop symbol new 'shadowed-by)
+		     (putprop new symbol 'shadows)))))
+	(if (and symbols (atom symbols))
+	    (list symbols)
+	    symbols)))
+
+(defun make-package (&rest ignore)
+  (*array nil 'obarray nil))
+
+;;; Arrays
+
+(defconstant :element-type ':element-type)
+(defconstant :fill-pointer ':fill-pointer)
+
+(defun make-array (dimensions &rest rest)
+  (let-keyword-args ((element-type 't)
+		     (fill-pointer nil))
+		    rest
+    (let* ((dimensions (if (atom dimensions) (list dimensions) dimensions))
+	   (the-array
+	     (lexpr-funcall #'*array nil
+			    (cond ((memq element-type
+					 '(character string-char fixnum))
+				   'fixnum)
+				  ((eq element-type 'float) 'flonum)
+				  (t 't))
+			    dimensions)))
+      (hunk the-array
+	    (if (not (fixp fill-pointer)) (car dimensions) fill-pointer)
+	    'array))))
+
+(defun lisp:arrayp (obj)
+  (and (hunkp obj) (eq (cdr obj) 'array)))
+
+(defmacro array-array (array)
+  `(cxr 1 ,array))
+
+(defmacro fill-pointer (array)
+  `(cxr 2 ,array))
+
+(defun aref (array &rest subscripts)
+  (cond ((simple-string-p array)
+	 (getcharn array (1+ (car subscripts))))
+	(t
+	 (apply (array-array array) subscripts))))
+
+;;; (defsetf aref ((aref array &rest subscripts) value) t
+;;;   `(store (funcall (array-array ,array) ,@subscripts) ,value))
+
+(PROGN 'COMPILE
+       (DEFUN |AREF SETF-X-ACCESS| (|SETF-struct..44| ARRAY &REST SUBSCRIPTS) 
+	 (LET ((|Function..43| (SETF-FUNCTION |SETF-struct..44|)))
+	   (LIST* |Function..43| ARRAY SUBSCRIPTS)))
+       (DEFUN |AREF SETF-X-INVERT| (|SETF-struct..44| VALUE ARRAY &REST SUBSCRIPTS) 
+	 (LET ((AREF (SETF-FUNCTION |SETF-struct..44|)))
+	   AREF
+	   `(STORE (FUNCALL (ARRAY-ARRAY ,ARRAY) ,@SUBSCRIPTS) ,VALUE)))
+       (DEFUN (AREF SETF-X) (|access-spec..42|) 
+	 (LET (((|Function..43| ARRAY . SUBSCRIPTS) |access-spec..42|))
+	      (SETF-STRUCT '|AREF SETF-X-ACCESS|
+			   '|AREF SETF-X-INVERT|
+			   'T
+			   (LIST* ARRAY SUBSCRIPTS)
+			   |Function..43|)))
+       'AREF)
+
+;;; Simple strings
+
+(defun simple-string-p (obj)
+  (and (symbolp obj) (get obj '+internal-string-marker)))
+
+(defun stringicate (symbol)
+  (putprop symbol t '+internal-string-marker)
+  symbol)
+
+;;; Strings
+
+(defun stringp (obj)
+  (or (simple-string-p obj)
+      (lisp:arrayp obj)))
+
+(defun string-elt (string index)
+  (cond ((symbolp string)
+	 (getcharn string (1+ index)))
+	(t
+	 (arraycall fixnum (array-array string) index))))
+
+(defun set-string-elt (string index value)
+  (store (arraycall fixnum (array-array string) index) value))
+
+(defsetf string-elt ((string-elt string index) value) t
+  `(set-string-elt ,string ,index ,value))
+
+(defun coerce (obj type)
+  (cond ((and (listp obj) (eq type 'string))
+	 (stringicate (maknam obj)))
+	((and (stringp obj) (eq type 'string)) obj)
+	((and (symbolp obj) (eq type 'list)) (exploden obj))
+	((and (lisp:arrayp obj) (eq type 'list))
+	 (do ((i (1- (fill-pointer obj)) (1- i))
+	      (l '() (cons (aref obj i) l)))
+	     ((< i 0) l)))
+	((and (listp obj) (eq type 'list)) obj)
+	((eq (typep obj) type) obj)
+	(t (error "bad args to COERCE" (list obj type) 'fail-act))))
+
+(defun unkludgify-string (data)
+  (cond ((simple-string-p data) data)
+	(t (coerce (coerce data 'list) 'string))))
+
+;;; Sequences
+
+(defun concatenate (type &rest seqs)
+  (coerce (apply #'append
+		 (mapcar #'(lambda (seq) (coerce seq 'list))
+			 seqs))
+	  type))
+
+(defun lisp:length (seq)
+  (cond ((symbolp seq) (flatc seq))
+	((lisp:arrayp seq) (fill-pointer seq))
+	(t (length seq))))
+
+
+
+;;; Pathnames
+
+(defsubst pathname-host      (pathname) (cxr 1 pathname))
+(defsubst pathname-device    (pathname) (cxr 2 pathname))
+(defsubst pathname-directory (pathname) (cxr 3 pathname))
+(defsubst pathname-name	     (pathname) (cxr 4 pathname))
+(defsubst pathname-type	     (pathname) (cxr 5 pathname))
+(defsubst pathname-version   (pathname) (cxr 6 pathname))
+    
+(defsubst pathnamep (thing)
+  (and (hunkp thing) (eq (cdr thing) 'pathname)))
+
+(defun pathname (thing)
+  (cond ((pathnamep thing) thing)
+	((symbolp thing) (parse-namestring thing))
+	((stringp thing) (parse-namestring (unkludgify-string thing)))
+	((consp thing)
+	 ;; ITS namelist!
+	 (namelist->pathname thing))
+	(t (error "can't coerce to pathname" thing 'fail-act))))
+
+(defconstant :defaults  ':defaults)
+(defconstant :host	':host)
+(defconstant :device	':device)
+(defconstant :directory ':directory)
+(defconstant :name	':name)
+(defconstant :type	':type)
+(defconstant :version   ':version)
+
+(defvar *default-pathname-defaults*
+  (hunk nil nil nil nil nil nil 'pathname))
+
+(defun make-pathname (&rest rest)
+  (let-keyword-args ((defaults  *default-pathname-defaults*)
+		     (host      (pathname-host      defaults))
+		     (device	(pathname-device    defaults))
+		     (directory (pathname-directory defaults))
+		     (name	(pathname-name	    defaults))
+		     (type	(pathname-type	    defaults))
+		     (version	(pathname-version   defaults)))
+		    rest
+    (hunk host device directory name type version 'pathname)))
+
+(defconstant :newest ':newest)
+(defconstant :oldest ':oldest)
+(defconstant :wild   ':wild)
+
+(defun merge-pathnames (pathname &optional
+				 (defaults *default-pathname-defaults*)
+				 (default-version ':newest))
+  (let ((pathname (pathname pathname))
+	(defaults (pathname defaults)))
+    (hunk (or (pathname-host pathname) (pathname-host defaults))
+	  (or (pathname-device pathname) (pathname-device defaults))
+	  (or (pathname-directory pathname) (pathname-directory defaults))
+	  (or (pathname-name pathname) (pathname-name defaults))
+	  (or (pathname-type pathname) (pathname-type defaults))
+	  (or (pathname-version pathname) default-version (pathname-version defaults))
+	  'pathname)))
+
+;;;   [device:] [directory;] name [.type [.version]]
+
+(defun parse-namestring (thing)
+  (cond ((lisp:arrayp thing)
+	 (parse-namestring (unkludgify-string thing)))
+	(t
+	 (parse-namestring-aux (coerce thing 'list)))))
+
+(defun parse-namestring-aux (l)
+  (multiple-value-bind (piece delimiter l)
+		       (get-namestring-piece l '(#\: #\; #\. #\space))
+    (cond ((null delimiter)
+	   (make-pathname ':name piece))
+	  ((char= delimiter #\:)
+	   (make-pathname ':device piece ':defaults (parse-namestring-aux l)))
+	  ((char= delimiter #\;)
+	   (make-pathname ':directory piece ':defaults (parse-namestring-aux l)))
+	  (t
+	   (multiple-value-bind (type delimiter l)
+				(get-namestring-piece l '(#\. #\space))
+	     (make-pathname ':name piece
+			    ':type type
+			    ':version (if (not delimiter)
+					  nil
+					  (string->version (get-namestring-piece-aux l)))))))))
+
+(defun get-namestring-piece (l delims)
+  (do ((l l (cdr l))
+       (z '() (cons (car l) z)))
+      ((null l)
+       (values (get-namestring-piece-aux (reverse z)) nil '()))
+    (if (member (car l) delims)
+	(return (values (get-namestring-piece-aux (reverse z)) (car l) (cdr l))))))
+
+(defun get-namestring-piece-aux (l)
+  (let ((l (coerce l 'string)))
+    (cond ((samepnamep l '*) :wild)
+	  ((samepnamep l '>) :newest)
+	  ((samepnamep l '<) :oldest)
+	  (t l))))
+
+(defun string->version (sym)
+  (let ((probe (*catch 'foo
+		 (let ((*rset-trap #'(lambda ignore (*throw 'foo nil))))
+		   (readlist (exploden sym))))))
+    (cond ((not (numberp probe)) sym)
+	  ((= probe 0) :newest)
+	  ((= probe -1) :oldest)
+	  (t probe))))
+
+(defun pathname-lessp (n1 n2)
+  (let ((h1 (pathname-host n1))
+	(h2 (pathname-host n2)))
+    (or (component-lessp h1 h2)
+	(and (component-equalp h1 h2)
+	     (let ((d1 (pathname-device n1))
+		   (d2 (pathname-device n2)))
+	       (or (component-lessp d1 d2)
+		   (and (component-equalp d1 d2)
+			(let ((d1 (pathname-directory n1))
+			      (d2 (pathname-directory n2)))
+			  (or (component-lessp d1 d2)
+			      (and (component-equalp d1 d2)
+				   (let ((a1 (pathname-name n1))
+					 (a2 (pathname-name n2)))
+				     (or (component-lessp a1 a2)
+					 (and (component-equalp a1 a2)
+					      (let ((t1 (pathname-type n1))
+						    (t2 (pathname-type n2)))
+						(or (component-lessp t1 t2)
+						    (and (component-equalp t1 t2)
+							 (component-lessp (pathname-version n1)
+									  (pathname-version n2))))))))))))))))))
+
+;;; null < string < number  [keywords don't figure]
+
+(defun component-lessp (x y)
+  (cond ((null x) (not (null y)))
+	((null y) nil)
+	((symbolp x) (and (symbolp y) (alphalessp x y)))
+	(t (and (numberp y) (< x y)))))
+
+;;; The following ought to do case-insensitive comparison!!
+
+(defun component-equalp (x y)
+  (or (equal x y)
+      (and (symbolp x) (symbolp y) (samepnamep x y))))
+
+;;; Pathname ITSification stuff: coercion between namelists & pathnames.
+
+(defun namelist->pathname (thing)
+  (let* ((thing (namelist thing))
+	 (v (de-its-ify-component (caddr thing) t)))
+    (hunk (status site)
+	  (de-its-ify-component (caar thing) nil)
+	  (de-its-ify-component (cadar thing) nil)
+	  (de-its-ify-component (cadr thing) nil)
+	  (if (versionp v) nil v)	;Check file attribute list?
+	  (if (versionp v) v nil)
+	  'pathname)))
+
+(defun de-its-ify-component (x numberp)
+  numberp   ;was useful once, I guess
+  (cond ((eq x '*) nil)
+	((null x) "NIL")
+	((not (symbolp x)) x)
+	((eq x '>) ':newest)
+	((eq x '<) ':oldest)
+	(t (string->version x))))
+
+(defun versionp (x)
+  (or (numberp x) (eq x ':newest) (eq x ':oldest)))
+
+(defvar *its-uninteresting-types*
+  '("TXT" "LSP" "LISP" "SCM" "" "txt" "lsp" "lisp" "scm" :unspecific))
+
+(defun pathname->namelist (pathname)
+  (let ((dev (pathname-device pathname))
+	(dir (pathname-directory pathname))
+	(name (pathname-name pathname))
+	(type (pathname-type pathname))
+	(version (pathname-version pathname)))
+    `((,(its-ify-component dev)
+       ,@(if (null (pathname-directory pathname))
+	     '()
+	     `(,(its-ify-component dir))))
+      ,(its-ify-component name)
+      ,(if (or (null type)
+	       (string-member type *its-uninteresting-types*))
+	   (its-ify-component version)
+           (its-ify-component type)))))
+
+(defun its-ify-component (x)
+  (cond ((null x) '*)
+	((eq x ':wild) '*)
+	((eq x ':newest) '>)
+	((eq x ':oldest) '<)
+	(t x)))
+
+(defun string-member (string string-list)
+  (do ((l string-list (cdr l)))
+      ((null l) nil)
+    (if (and (symbolp (car l)) (samepnamep string (car l)))
+	(return l))))
+
+(defun lisp:namestring (thing)
+  (stringicate (namestring (if (pathnamep thing)
+			       (pathname->namelist thing)
+			       thing))))
+
+;;; I/O routines
+
+(format nil "T")    ;Make sure FORMAT is loaded
+
+(defun probe-file (pathname)
+  (let* ((p (pathname pathname))
+	 (q (probef (pathname->namelist p))))
+    (and q (merge-pathnames q p nil))))
+
+;;; DIRECTORY: returns a list of pathnames for all local files
+;;; matching a given pattern.
+(defun lisp:directory (p)
+  (let ((p (pathname p)))
+    (cond ((and (not (eq (pathname-device    p) ':wild))
+		(not (eq (pathname-directory p) ':wild))
+		(not (eq (pathname-name	     p) ':wild))
+		(not (eq (pathname-type	     p) ':wild))
+		(not (eq (pathname-version   p) ':wild)))
+	   (let ((p (probe-file p)))
+	     (if p (list p) '())))
+	  (t
+	   (let* ((p (merge-pathnames p (pathname defaultf) nil))
+		  (p1 (cond ((eq (pathname-version p) ':newest)
+			     (make-pathname :version ':wild
+					    :defaults p))
+			    (t p)))
+		  (n (pathname->namelist p1))
+		  (foo (sort (mapcan #'(lambda (n)
+					 (let ((q (pathname n)))
+					   (if (pathname-matches-p q p)
+					       (list q)
+					     '())))
+				     (allfiles (list n)))
+			     #'pathname-lessp)))
+	     (cond ((eq (pathname-version p) ':newest)
+		    ;; Remove all but newest versions from list.
+		    (do ((l (reverse foo)
+			    (do ((ll l (cdr ll)))
+				((or (null ll)
+				     (not (equal-except-version (car l) (car ll))))
+				 ll)))
+			 (z '() (cons (car l) z)))
+			((null l) z)))
+		   (t foo)))))))
+
+(defun pathname-matches-p (p q)
+  (and (component-matches-p (pathname-host      p) (pathname-host q))
+       (component-matches-p (pathname-device    p) (pathname-device q))
+       (component-matches-p (pathname-directory p) (pathname-directory q))
+       (component-matches-p (pathname-name	p) (pathname-name q))
+       (component-matches-p (pathname-type	p) (pathname-type q))
+       (component-matches-p (pathname-version	p) (pathname-version q))))
+
+(defun component-matches-p (x y)
+  (or (null x)
+      (null y)
+      (eq y ':wild)
+      (and (numberp x) (memq y '(:newest :oldest)))
+      (component-equalp x y)))
+
+#+clutter-up-address-space
+(defun dir (x)   ;Test routine for above - arg should be upper case!
+  (mapc #'(lambda (p)
+	    (format t "~&~7@<~a:~> ~7@<~a;~> ~6a ~6a ~6d"
+		    (pathname-device p)
+		    (pathname-directory p)
+		    (pathname-name p)
+		    (or (pathname-type p) "")
+		    (or (pathname-version p) "")))
+	(directory (pathname x)))
+  '*)
+
+(defun equal-except-version (p q)
+  (and (component-equalp (pathname-host      p) (pathname-host q))
+       (component-equalp (pathname-device    p) (pathname-device q))
+       (component-equalp (pathname-directory p) (pathname-directory q))
+       (component-equalp (pathname-name	p) (pathname-name q))
+       (component-equalp (pathname-type	p) (pathname-type q))))
+
+;;; OPEN and other common-lispy file functions.
+
+(defconstant :direction ':direction)
+(defconstant :output	':output)
+(defconstant :input	':input)
+(defconstant :if-does-not-exist ':if-does-not-exist)
+(defconstant :if-exists ':if-exists)
+(defconstant :abort     ':abort)
+
+(defvar *open-output-files* '())  ;a-list of (<file> . <final-name>)
+
+;;; For opening files only!  And in image mode no less!
+;;; The only parameter combinations implemented are those needed for
+;;; KERMIT!
+
+(defun lisp:open (pathname &rest r)
+  (let-keyword-args ((direction :input)
+		     (if-does-not-exist 'unsupplied)
+		     (if-exists 'unsupplied))
+		    r
+    (let ((n (pathname->namelist (pathname pathname))))
+      (*catch 'fnf
+        (cond ((eq direction :input)
+	       (let ((io-lossage
+		      (if (null if-does-not-exist)
+			  #'(lambda ignore (*throw 'fnf nil))
+			  io-lossage)))
+		 (open n '(in image block))))
+	      (t
+	       (let* ((io-lossage
+		       (if (null if-exists)
+			   #'(lambda ignore (*throw 'fnf nil))
+			   io-lossage))
+		      (file (open (mergef '((* *) _kerm_ >) n)
+				  '(out image block))))
+		 (push (cons file n) *open-output-files*)
+		 file)))))))
+
+(defun lisp:close (stream &rest r)
+  (let-keyword-args ((abort nil)) r
+    (let ((probe (assq stream *open-output-files*)))
+      (cond ((not probe) (close stream))
+	    (t
+	     (setq *open-output-files* (delq probe *open-output-files*))
+	     (if abort
+		 (delete-file stream)
+		 (rename-file stream (cdr probe))))))))
+
+(defun rename-file (from to)
+  (renamef from (if (pathnamep to)
+		    (pathname->namelist to)
+		    to)))
+
+(defun delete-file (file)
+  (deletef (if (pathnamep file)
+	       (pathname->namelist file)
+	       file)))
+
+(defun make-broadcast-stream (&rest streams)
+  (apply #'append
+	 (mapcar #'(lambda (stream)
+		     (if (atom stream) (list stream) stream))
+		 streams)))
+
+(defsubst end-of-file-p (c)     ;Called only on value of +TYI
+  ;; ITS end-of-file
+  (or (< c 0)
+      (let ()
+	(declare (special *image?*))
+	(and (not *image?*) (= c 3)))))
+
+;;; That's all, folks
+
+(setf (get 'common 'loadedp) t)
+
+;;; Local Modes:
+;;; Lisp let-keyword-args Indent:2
+;;; End:
