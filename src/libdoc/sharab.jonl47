@@ -1,0 +1,747 @@
+;;;   SHARAB 						  -*-LISP-*-
+;;;   **************************************************************
+;;;   ***** MACLISP ****** Sharable Extensions to LISP *************
+;;;   **************************************************************
+;;;   ** (C) Copyright 1981 Massachusetts Institute of Technology **
+;;;   ****** This is a read-only file! (All writes reserved) *******
+;;;   **************************************************************
+
+
+(eval-when (eval compile)
+  (or (get 'SUBLOAD 'VERSION)
+      (load  '((lisp) subload)))
+  (setq defmacro-for-compiling ()  defmacro-displace-call () )
+  (setq macros () IBASE 8. BASE 8.)
+)
+
+
+
+;;; Following temporary macro is nearly an open-coding of HERALD, but
+;;;  differs so that the "version" number is available when compiling
+(defmacro C-HERALD 
+	  (group-name &optional (version-number '||) (ofile 'MSGFILES))
+   (or (symbolp group-name)
+       (check-type group-name #'SYMBOLP 'HERALD))
+   (let* ((ifile (and (filep infile)
+		      (car (last (truename infile)))))
+	  (v (cond ((and ifile 
+			 (fixp (car (errset (readlist (exploden ifile)) () ))))
+		    ifile)
+		   ((symbolp version-number) version-number)
+		   ('||)))
+	  (putpropper `(DEFPROP ,group-name ,v VERSION))
+	  (text (symbolconc '|;Loading | group-name '| | v)) )
+     (setq text (copysymbol text () ))
+     (set text text)
+     (putprop text 'T '+INTERNAL-STRING-MARKER)
+     (if (status feature COMPLR) (putprop text `(SPECIAL ,text) 'SPECIAL))
+      ;; Remember, this is a maclisp-only file!
+      ;;In older lisps, or for cross-compilation, we simply forget 
+      ;;  about delaying-until-exit the putprop of version number.
+     (setq putpropper 
+	   `(COND ((ALPHALESSP (STATUS LISPV) '/2071) ,putpropper) 
+		  ('T (PUSH #'(LAMBDA (X) (OR X ,putpropper))
+			    FILE-EXIT-FUNCTIONS))))
+     (putprop group-name v 'C-VERSION)
+     `(PROGN 
+	(COND ((STATUS NOFEATURE NOLDMSG)
+	        (TERPRI ,ofile)
+		(PRINC ,text ,ofile)))
+	,putpropper
+	',v)))
+
+;; (SELECT-A-BIT? x b1 b2 ... bn) is true iff 'x' has one of the selected
+;;  bits turned on;  bit 'i', selected by 'bi' is 2^i
+(defmacro SELECT-A-BIT? (val &rest l) 
+  (let ((n (apply 'plus (mapcar '(lambda (x) (lsh 1 x)) l))))
+    `(NOT (= (BOOLE 1 ,val ,n) 0))))
+
+(defmacro CLEAR-BITS (mask val) `(BOOLE 2 ,mask ,val))
+
+
+
+
+;;; WARNING!! You loser, don't ever let the version number run over
+;;;   two digits.  The 2nd filename "JONLxx" will lose, and also the
+;;;   2nd filename of the dump file  will lose ("SHBDMP xx.yyy" where 
+;;;   "yyy" is the lisp version number over which the SHARABLE is built).
+
+(c-herald SHARABLE /47)
+
+;;; Functions for creating heirachical MACLISP dumps on ITS.
+;;; PURE-SUSPEND - suspend, but also delete pure pages that are shared with 
+;;; 		   previous dumps, re-sharing them upon loading.  No deletions
+;;; 		   are done unless PURE-SUSPEND is non-() and also unless 
+;;; 		   (status FLUSH) ==> T; but regardless of deletions, starting
+;;;		   up after a call to PURE-SUSPEND will cause sharing with the 
+;;; 		   previous dumped files.  Two arguments required - both passed
+;;; 		   to SUSPEND (q.v.) - but the second is analyzed as a file 
+;;; 		   name and will cause a proceedable break loop if PDUMPing
+;;; 		   by SUSPEND will clobber an existing file.
+;;; ANNOUNCE-&-LOAD-INIT-FILE - Handy little function for systems that want to
+;;; 		   to announce themselves upon loading,  and try to load an 
+;;; 		   "init" file.  See the file JONL;SHARAB LISP for an example.
+;;; 		   First argument is a symbol, which is the "name" to be
+;;; 		   announced (if there is a VERSION property on this symbol, it
+;;; 		   will be included in the "announcement");  optional second
+;;;		   argument is either () or a list of characters like returned
+;;;		   by (STATUS JCL) to be parsed as filename to be used instead
+;;;		   of the usual init file.  If a third argument is supplied, it
+;;;		   is a "fix" file to be loaded before loading the "name" init
+;;;		   file.
+;;; DEPURIFY-SYMBOL - depurifies, so that if pure pages have been deleted ...
+;;; 		   The value of DEPURIFY-SYMBOL is a list of symbols which
+;;; 		   must never be purified, since they are needed during the
+;;; 		   "chilly" load of the system.
+
+;;; Hacked up during February 1980, by JONL, from the NSHARE file of GSB
+;;; Comments, complaints, suggestions, etc. to BUG-LISP
+
+;;; For Optimal sharing, this file should be loaded into a nearly fresh
+;;;  lisp, with PURE bound to T;  in this case, *PURE ###must### be
+;;;  bound to () during the loading of this file.
+;;; Then a pure dump is made by loading up other functions and data 
+;;;  with *PURE set to T, and PURE set either to a small fixnum or to T.
+;;; When finished loading, you probably want to set *PURE to (), and then
+;;;  call PURE-SUSPEND (rather than SUSPEND) with 2 arguments -  the second 
+;;;  arg is the name of the file to PDUMP into, and the first is passed to 
+;;;  SUSPEND.  If the first arg is (), then SUSPEND merely does the PDUMP
+;;;  and returns;  if it is 0, SUSPEND will valret to DDT after PDUMPing.
+
+;;; Hackers note - 
+;;; This only maps in pure pages from a file, and only pages which are
+;;; not absolute.  (It does not recognize public pages though.)  
+;;; It will not clobber an impure page in the job with a pure page from
+;;; a file.  If, however, an earlier dump has had a patch put into a
+;;; pure area and the page has been repurified, then that change will
+;;; propagate to all dumps made from that one.
+;;; It also tries to distinguish a page which has been patchd and
+;;; repurified, but is not part of a dumped file.
+
+
+(declare (special *SHARING-FILE-LIST*  |+internal-page-map/|| 
+		  PURE-SUSPEND  COMMUNIZE-SINGLE-FILE COMMUNIZE-FILE-ARRAY 
+		  ANNOUNCE-&-LOAD-INIT-FILE )
+	 (*expr PURE-SUSPEND  COMMUNIZE-SINGLE-FILE)
+	 (*lexpr ANNOUNCE-&-LOAD-INIT-FILE)
+	 (special JOB-MSG-FILE)
+	 (setq USE-STRT7 'T))
+
+;;; Can only play the FLUSH game if this file is loaded with PURE = T
+;;;  Otherwise, you may try to "CALL 1 'CONS" during  COMMUNIZE, and find
+;;;  that the plist of CONS was on a pure page which is not yet back!
+(eval-when (load) 
+   (or (eq pure 'T) (error '|PURE must be "T" when loading SHARABLE|))
+)
+
+(setq-if-unbound *SHARING-FILE-LIST* () 
+		 PURE-SUSPEND 'T 
+		 |+internal-page-map/|| () )
+(setq ANNOUNCE-&-LOAD-INIT-FILE (status LISPV))
+
+;;; Information about the purity of pages is stored in a fixnum array,
+;;;  packed 8 4-bit bytes per word.  Meaning of the 4 bits is:
+;;;   0 	- non-existent page
+;;;   1 (1_0) 	- writeable page
+;;;   2 (1_1) 	- LISP system pure page
+;;;   4 (1_2) 	- other pure page
+;;;   8 (1_3) 	- temporary setting for purity, just before suspension
+;;; This array, "|+internal-page-map/||", is set up at the end of this file.
+
+(defmacro (LDB-A-BYTE defmacro-for-compiling () defmacro-displace-call () )
+	  (&optional (index 'PAGE-NUMBER) 
+		     (byte-size 4)
+		     (bytes-per-word 8)
+		     (ar '|+internal-page-map/||))
+    `(LOAD-BYTE (ARRAYCALL FIXNUM ,ar (// ,index ,bytes-per-word))
+		(* ,byte-size (\ ,index ,bytes-per-word))
+		,byte-size))
+
+(defmacro (DPB-A-BYTE defmacro-for-compiling () defmacro-displace-call () )
+	  (byte &optional (index 'PAGE-NUMBER) 
+			  (byte-size 4)
+			  (bytes-per-word 8)
+			  (ar '|+internal-page-map/||)
+		&aux wordno remwordno body)
+   (cond ((and (fixnump index) (fixnump bytes-per-word))
+	  (setq wordno (* index bytes-per-word)
+		remwordno (\ index bytes-per-word)))
+	 ('T (si:gen-local-var wordno)
+	     (si:gen-local-var remwordno)))
+   (setq body `(STORE (ARRAYCALL FIXNUM ,ar ,wordno)
+		      (DEPOSIT-BYTE (ARRAYCALL FIXNUM ,ar ,wordno)
+				    (* ,byte-size ,remwordno)
+				    ,byte-size 
+				    ,byte)))
+    ;;Foo - don't we wish we had a multiple-value-returning version of
+    ;;  division, which also returned the remainder!
+   (if (not (fixnump wordno))
+       (setq body `(LET ((,wordno (// ,index ,bytes-per-word))
+			 (,remwordno (\ ,index ,bytes-per-word)))
+		     (DECLARE (FIXNUM ,wordno ,remwordno))
+		     ,body)))
+   body)
+
+
+(comment PURE-SUSPEND)
+
+(putprop 'PURE-SUSPEND  (lsh bporg -10.) 'BPORG)
+
+
+(defun PURE-SUSPEND (argument-to-suspend file-namelist)
+  (prog (*PURE NORET flushp oni b-low b-hi npurep purepage? tpno tmp 
+	 file-object file-to-dump-to open-files flstbl flstbl-addr )
+	(declare (fixnum b-low b-hi npurep purepage? tpno flstbl flstbl-addr))
+	(setq npurep -1 purepage? 0 tpno 0)
+	(setq b-low (1- (or (get 'PURE-SUSPEND 'BPORG) 1000.))
+	      b-hi (1+ (or (get 'PURE-SUSPEND 'BPEND) -1000.)))
+	(setq flushp (and PURE-SUSPEND (status FLUSH)))
+    FIND-FILE 
+	(cond ((probef file-namelist)
+	       (terpri)
+	       (prin1 file-namelist)
+	       (princ '| will :PDUMP over existing file ?/
+ P to go ahead, or RETURN another file name/Ó|)
+	       (cond ((setq tmp (+internal-fac-break file-namelist))
+		      (setq file-namelist tmp)
+		      (go FIND-FILE)))))
+	(setq file-object (open file-namelist '(OUT FIXNUM SINGLE))
+	      file-to-dump-to (truename file-object))
+    FIND-FLSTBL 	
+	(cond ((null flushp) () )
+	      ((null (setq tmp (cond ((getddtsym 'FLSTBL))
+				     ((eq (status hactrn) 'DDT) 
+				      (valret '|:SYMLOD/Ó:VP |)
+				      (getddtsym 'FLSTBL)))))
+	       (princ '|/ÓDDT symbols?|)
+	       (+internal-fac-break () )
+	       (go FIND-FLSTBL))
+	      ('T (setq FLSTBL tmp)
+		   ;Unpurify symbols of the file's namelist - so can call OPEN 
+		   ; after dumping, but before pure data pages are loaded in.
+		  (mapc 'DEPURIFY-SYMBOL (append (car file-to-dump-to)
+						 (cdr file-to-dump-to)))))
+	(cond ((null argument-to-suspend))
+	      ((not (eq (status hactrn) 'DDT))
+	       (setq argument-to-suspend () ))
+	      ((symbolp argument-to-suspend)
+	       (depurify-symbol argument-to-suspend)))
+	(close file-object)
+	(setq file-object () )
+	(and (boundp 'JOB-MSG-FILE)	;just in case LDDT is here
+	     (filep JOB-MSG-FILE)
+	     (setq tmp (status filemo JOB-MSG-FILE))
+	     (push (cons JOB-MSG-FILE tmp) open-files))
+	;; First, set up some data passed in thru special variable 
+	;; Since this can do a GC, we must do it before we flush any pages.
+	(setq COMMUNIZE-SINGLE-FILE (*array () 'FIXNUM 256.))
+	(gctwa)
+	 ; Since NORET is bound to NIL, this should minimize BPS pages
+	(gc)
+	 ; This GC may close a few "lost" files
+	(do ((l (munkam (examine (getddtsym 'GCMKL))) (cddr l))
+	     (dedsar (getddtsym 'DEDSAR))
+	     (losing-files) )
+	    ((null l) 
+	     (cond (losing-files 
+		    (terpri)
+		    (prin1 losing-files)
+		    (princ '|/ÓFiles open during PURE-SUSPEND -- P to close them/Ó|) 
+		    (+internal-fac-break losing-files)
+		    (mapc 'CLOSE losing-files ))))
+	  (cond ((or (eq (car l) dedsar) 
+		     (not (filep (car l)))
+		     (null (setq tmp (status filemode (car l)))) )
+		 () )
+		((not (memq 'TTY (car tmp))) (push (car l) losing-files))
+		((and (not (eq (car l) TYI)) (not (eq (car l) TYO)))
+		 (push (cons (car l) (car tmp)) open-files))))
+
+	  ;; Round up binary program space to a page boundary. (This should 
+	  ;;   not be necessary but user's program may fail to do it.)
+	(pagebporg)
+	  ;; Now, do the purification.  This purifies all binary program space,
+	  ;;  a and also list structure etc. which  was 'purcopied'.
+	(purify 0 0 'BPORG)
+	  ;; Save away the name of the file we are dumping to, in effect by
+	  ;;   (push tmp (cdr *sharing-file-list*))
+	(setq tmp (list file-to-dump-to))
+	(cond ((null *SHARING-FILE-LIST*) (setq *SHARING-FILE-LIST* tmp))
+	      ('T (rplacd tmp (cdr *SHARING-FILE-LIST*))
+		  (rplacd *SHARING-FILE-LIST* tmp)))
+	(do ((l open-files (cdr l)))
+	    ((null l))
+	  (close (caar l)))
+
+	  ;; The next phase must be indivisible - hence NOINTERRUPT
+	(setq oni (nointerrupt 'T))
+	(let ((BASE 10.)
+	      (*NOPOINT 'T) 
+	      f date time PRINLEVEL PRINLENGTH)
+	  (do ((i 3 (1- i))) 
+	      ((or (< i 0)
+		   (errset (setq f (open '|DSK:LISP;LOCK MAIL| '(APPEND))) ()))
+	       (cond ((< i 0) 
+		      (errset (renamef '|DSK:LISP;LOCK MAIL| 
+				       '|DSK:LISP;LCKMAI >|) 
+			      () )
+		      (setq f (open '|DSK:LISP;LOCK MAIL| '(OUT))))))
+	    (terpri tyo)
+	    (princ '|LOCK MAIL file not available -- waiting 10 seconds.| tyo)
+	    (sleep 10.))
+	  (setq date (status date)
+		time (status daytime))
+	  (terpri f)
+	  (princ (status USERID) f)
+	  (princ '|  | f)
+	  (princ (cadr date) f)
+	  (princ '// f)
+	  (princ (caddr date) f)
+	  (princ '// f)
+	  (princ (car date) f)
+	  (princ '|  | f)
+	  (princ (car time) f)
+	  (princ '/: f)
+	  (princ (cadr date) f)
+	  (princ '/: f)
+	  (princ (caddr date) f)
+	  (terpri f)
+	  (prin1 (cons ANNOUNCE-&-LOAD-INIT-FILE *SHARING-FILE-LIST*) f)
+	  (terpri f)
+	  (princ '|| f)
+	  (close f))
+	(|+internal-call/|| () 'INIT)
+	  ;; Remember any newly shared pages, and disconnect others if flushing
+	(do ((page-number 0 (1+ page-number)))
+	    ((not (< page-number 256.)))
+	  (declare (fixnum page-number))
+	  (setq npurep (cond ((lessp b-low page-number b-hi)
+			      ;; This page needed for restart after SUSPEND, so
+			      ;;  mark as "other pure", but not cuttable.
+			      1_2)				  
+			     ((zerop (setq tpno (|+internal-call/|| page-number 'CORTYP))) 
+			      ;; 0 ==> page doesn't exist, negative ==> impure 
+			      0)
+			     ((< tpno  0) 
+			       ;; add 1_0 bit, and clear others except 1_1
+			      (logior 1_0 (clear-bits #o15 (ldb-a-byte))) )
+			     ('T -1)))
+	  (cond ((not (< npurep 0)) (dpb-a-byte npurep))
+		  ;; If npurep = -1, then page is pure, and is a candidate for
+		  ;;  for cutting out from pdump.
+		((select-a-bit? (setq tpno (ldb-a-byte)) 1)
+		  ;; 1_1-bit of internal-page-map says, "LISP" system pure page
+		 (setq flstbl-addr (+ flstbl (// page-number 36.)))
+		 (and (cond ((null (|+internal-call/|| page-number 'DSK)) 
+			      ;; But what if it was just patched?  Then diddle
+			      ;;  table SUSPEND uses, so that it isn't flushed
+			     (setq purepage? 0)
+			      ;; Also mark it as a "newly-shared"  page
+			     (setq tpno #.(+ 1_3 1_1) )
+			     'T)
+			    ((select-a-bit? tpno 2)  
+			      ;; If dumped in previous round, then permit
+			      ;;  SUSPEND to flush it in this round
+			     (setq purepage? 1)
+			      ;; Call it a "system" page, since SUSPEND will
+			      ;;  flush it in the future
+			     (setq tpno 1_1)
+			     'T))
+		      (deposit flstbl-addr  
+			       (deposit-byte (examine flstbl-addr) 
+					     (- 35. (\ page-number 36.)) 
+					     1  
+					     purepage?))
+		      (dpb-a-byte tpno))) 
+		((select-a-bit? tpno 2 3)
+		  ;Try to flush page from this job, if random shared page
+		 (and flushp (|+internal-call/|| page-number 'FLUSH)))	      
+		('T  ;; Otherwise Mark as "newly-purified" page 
+		     ;;  (maybe flush next in next cascade pdump?)
+		    (dpb-a-byte 1_3) )))
+	 ;; And finally, suspend.
+	(suspend argument-to-suspend file-to-dump-to)
+	(if flushp 
+	    (do ((page-number 0 (1+ page-number)))
+		((not (< page-number 256.)))
+	      (declare (fixnum page-number))
+	       ;;Any page that was "newly purified" just before SUSPENDing 
+	       ;; is now a random sharable pure page, and may be cut out on 
+	       ;; subsequent dumps.  So mark it in the internal-page-map.
+	      (and (select-a-bit? (setq tpno (ldb-a-byte)) 3) 
+		   (dpb-a-byte (logior 1_2 (clear-bits 1_3 tpno))))))
+	(nointerrupt oni)
+          ;; Now, since we are suspended, map in the pages from other files
+          ;;  found on *SHARING-FILE-LIST*, which restores the "1_2" pages
+	(mapc 'COMMUNIZE-SINGLE-FILE *SHARING-FILE-LIST*)
+	(*rearray COMMUNIZE-SINGLE-FILE)
+	(do ((l open-files (cdr l)))
+	    ((null l))
+	  (open (caar l) (cadar l)))
+	(return 'T)))
+
+
+(defun COMMUNIZE-SINGLE-FILE (file-namelist)
+   (prog (file-page-number entry purepage? tmp)
+	 (declare (fixnum entry purepage? file-page-number))
+	 (setq entry 0 
+	       file-page-number 1)
+	 ;; Unit mode:  keeps the file array smaller (no buffer)
+	 (cnamef COMMUNIZE-FILE-ARRAY file-namelist)
+	 (setq tmp (errset (open COMMUNIZE-FILE-ARRAY '(IN FIXNUM SINGLE))))
+	 (cond ((or (atom tmp) (not (= (in COMMUNIZE-FILE-ARRAY) 0)))
+		(princ '|;File not shared since it | msgfiles)
+		(prin1 file-namelist msgfiles)
+		(cond ((atom tmp)
+		       (princ '| could not be opened| msgfiles))
+		      ((princ '| is not in PDUMP format| msgfiles)))
+;		(princ tmp msgfiles)
+		(return (close COMMUNIZE-FILE-ARRAY))))
+	  ;; Try to COMMUNIZE-SINGLE-FILE here!
+	  ;; Get page map from first block of file - 256. words
+	 (fillarray COMMUNIZE-SINGLE-FILE COMMUNIZE-FILE-ARRAY)
+	 (do ((page-number 0 (1+ page-number)))
+	     ((not (< page-number 256.)))
+	    (declare (fixnum page-number))
+	    (setq entry (arraycall fixnum COMMUNIZE-SINGLE-FILE page-number))
+	    (cond ((plusp entry) 
+		    ;; < 0 ==> absolute page; = 0 ==> non-existent page
+		   (setq purepage? (load-byte entry 16. 2))
+		    ;; File contains a page corresponding to PAGE-NUMBER?
+		   (or (plusp purepage?)
+		       (error 'COMMUNIZE-SINGLE-FILE))
+		   (and 
+		     ;; Read-only iff bits <2.9,2.8> is 01
+		    (= purepage? 1.)
+		     ;; Tbl entry is 1 if page is writeable in most recent dump
+		    (not (select-a-bit? (ldb-a-byte) 0)) 
+		     ;; If not in us, or unpatched-pure in us
+		    (not (minusp (|+internal-call/|| page-number 'CORTYP)))
+		     ;; then map it in!
+		    (setq tmp (fetch-file-page/|  page-number 
+						  COMMUNIZE-FILE-ARRAY
+						  file-page-number))
+		     ;;  Non-null indicates an error.
+		    (error 'CORBLK))
+		   (setq file-page-number (1+ file-page-number)))))
+	 (close COMMUNIZE-FILE-ARRAY)))
+
+
+
+(lap-a-list '(
+   (lap |+internal-call/|| subr)
+	(args |+internal-call/|| (() . 2))	;a kind of "SYSCALL"
+	(defsym *ruind 23 			; 2nd arg is "message"
+		**rlfi 2 
+		f*chan 11)
+	(defsym immed-info     1000_22 	 	;arg ptrs for "CALL" uuo
+		get-info       2000_22 
+		get-error      3000_22 
+		immed-control  5000_22 )
+	(cain 2 'CORTYP)			;"CORTYP" to do a "CORTYP" call
+	 (jrst 0 do-cortyp)
+	(cain 2 'FLUSH)				;"FLUSH" to do a "CORBLK" call 
+	 (jrst 0 do-flush)			; to delete a page from our map
+	(cain 2 'DSK)				;"DSK" to find out if argument 
+	 (jrst 0 dsk-sharedp)			; page is shared with dsk file
+	(cain 2 'INIT)				;"INIT" to initialize above
+	 (jrst 0 dsk-sharedp-init)
+	(cain 2 'FILE)				;"FILE" for finding file which
+	 (jrst 0 who-bore-me?)			; was loaded to make this job
+	(lerr 0 (% sixbit |BAD MSG TO +internal-call!|))
+
+     do-flush 
+	(jsp t fxnv1)
+        (*call 0 flush-request)
+	 (*lose)
+	(jrst 0 fix1)
+      flush-request 
+	(setz)
+	(sixbit |CORBLK|)
+	 (immed-info 0 0)			;delete page
+	 (immed-info 0 -1)			;from myself
+	 (setz 0 tt)				;just 1 page, found in tt
+
+     do-cortyp 
+        (*call 0 cortyp-request)
+	 (*lose)
+	(jrst 0 fix1)
+      cortyp-request 
+	(setz)
+	(sixbit |CORTYP|)
+	 (0 0 @ a)
+	 ((setz get-info) 0 tt)
+
+     dsk-sharedp-init 
+	(move tt (% SQUOZE 0 L))
+	(*eval tt)
+	 (*lose)
+	(*suset 0 (% 0 0 t *ruind))	;Get our user index
+	(imuli tt 0 t)
+	(move t (% squoze 0 UPGCP))
+	(*eval t)			;get address of first page map
+	 (*lose)
+	(addi tt 0 t)			;get address of our page map 
+	(jsp t fxcons)			; circular links
+	(movem A (special *OUR-PAGE-MAP-ADDRESS))
+	(move tt (% squoze 0 MMPEAD))
+	(*eval tt)
+	 (*lose)
+	(movss 0 tt)
+	(hrri tt tt)
+	(*getloc tt)			;get contents of mmpead
+	(jsp t fxcons)
+	(movem a (special *ITS-VAL-MMPEAD))
+	(movei a 'T)
+	(popj p)
+
+      dsk-sharedp  
+	(move tt @ (special *OUR-PAGE-MAP-ADDRESS))
+	(move t 0 a)		   ;get page number
+	(rot t -1)		   ;get offset into page table
+	(addi tt 0 t)		   ;get location of page circular links table
+	(movss 0 tt)		   ;address from which to fetch in left half
+	(hrri tt tt)		   ;get result in TT
+	(*getloc tt)		   ;get word
+	(skipl 0 t)		   ;is our index even?
+	 (movss 0 tt)		   ;we want the other (left) half
+	(trzn tt 400000)	   ;is it an MMP/MEMPNT entry?
+	 (jrst 0 yes-on-dsk)	   ;  nope, probably not on disk
+	(trze tt 200000)	   ;Is it a MEMPNT entry?
+	 (jrst 0 yes-on-dsk)	   ;  Yes, I don't know what to do with these..
+	(add tt @ (special *ITS-VAL-MMPEAD))  ;index into mmp table
+	(aos 0 tt)		   ;we want the second word
+	(movss 0 tt)		   ;getloc wants absolute address in LH
+	(hrri tt tt)		   ;we want the result in TT
+	(*getloc tt)		   ;get the MMP second word
+	(hrrzs 0 tt)		   ;we just look at the right half
+	(jumpn tt yes-on-dsk)	   ;not on disk, not in shared-page hash table
+     ret-nil 
+	(tdza a a)		   ;Ha, it's shareable
+     yes-on-dsk	
+	(movei a 'T)
+	(popj p)
+
+     who-bore-me? 
+	(movei tt 1 flp)
+	(hrli tt **rlfi)
+	(jsp t (/0*0PUSH -4))
+	(*break 10. tt)
+	(pushj p take2)
+	(push p 1)
+	(pushj p take2)
+	(pop p 2)
+	(jcall 2 'CONS)
+     take2
+	(pop flp tt)
+	(pushj p sixatm)
+	(call 1 'NCONS)
+	(push p 1)
+	(pop flp tt)
+	(pushj p sixatm)
+	(pop p 2)
+	(jcall 2 'CONS)
+
+  (entry fetch-file-page/| subr)
+	(move d ttsar b)
+	(hrrz d f*chan d)	
+	(*call 0 fetch-request)
+	 (jrst 0 fix1)
+	(jrst 0 ret-nil)
+      fetch-request 
+	(setz)
+	(sixbit |CORBLK|)
+	 (immed-info 0 1_12.)		;Control - Fail if can't find page
+	 (immed-info 0 -1)		;from myself
+	 (0 0 @ a)			;just 1 page into core
+	 (0 0 d)			;dsk channl number
+	 (0 0 @ c)			;just 1 page from file
+	 ((setz get-error) 0 tt)
+
+	() 
+
+))
+
+
+(or (get 'BLTARRAY 'VERSION) (load '((LISP) BLTARRAY FASL)))
+(putprop 'PURE-SUSPEND (lsh bporg -10.) 'BPEND)
+
+
+
+(lap-a-list '((lap DEPURIFY-SYMBOL subr)
+		(args DEPURIFY-SYMBOL (() . 1))
+		(hlrz t 0 A)
+		(jsp r skipit?)		;Is the SY2 block marked pure?
+		(hrrz t 1 t)
+		(jsp r skipit?)		; or is the pname-list pure?
+		(hlrz t 0 t)
+		(jsp r skipit?)		; or even a pname-word pure?
+		(movei A '() )
+		(popj p)
+	    skipit? 
+		(move tt t)		;If item is pure, then copy it
+		(lsh tt -11)
+		(move tt ST tt)
+		(tlnn tt 40)		; unlesss it is alread pure
+		 (jrst 0 0 R)
+	    copyit 
+		(push p a)		;save original symbol
+		(hlrz t 0 A)
+		(hrrz t 1 t)
+	        (push p t)		;ptr to pname list
+		(setz a)
+	    loop 
+		(skipn t @ 0 P)		;depurify the pname list
+		 (jrst 0 goon)
+		(move b a)
+		(hlrz a t)
+		(hrrzm t 0 P)
+		(jsp t fxnv1)
+		(jsp t fwcons)
+		(call 2 'CONS)
+		(jrst 0 loop)
+	   goon 
+		(call 1 'NREVERSE)
+		(sub p (% 0 0 1 1))
+		(movei b '() )
+		(call 2 'PNPUT)		;really only interested in sy2 block
+		(move b a)
+		(pop p a)		;original symbol
+		(hlrz r 0 b)		;addr of new sy2 block
+		(hlrz d 0 a)		;addr of old sy2 block
+		(move t 0 d)
+		(tlo t 300)		;CCN bits etc.
+		(movem t 0 r)		;transfer first word of sy2-block
+		(move t 1 d)
+		(hllm t 1 r)		;transfer args property
+		(hrlm r 0 a)		;clobber in new sy2 block
+		(popj p)
+	      () ))
+
+
+;;;; ANNOUNCE-&-LOAD-INIT-FILE
+
+;; Note that as a global variable, ANNOUNCE-&-LOAD-INIT-FILE holds
+;;  the lisp version number as returned by (STATUS LISPV)
+; (program-name &optional jcl-line fix-file)
+;  "program-name" is the name of the program to be announced.
+;    It should have a VERSION property.  It will also be used
+;    as the FN2 of the (default) init file to be loaded.
+;  JCL-LINE should be () or a line of JCL to be parsed as a file
+;    to use instead of the normal init file.
+;  FIX-FILE is a file of fixes to be loaded at startup time, just 
+;    before loading the init file.
+; This function is grossly hacked to fit in the small amount of
+;    core we have on this page.
+
+(defun ANNOUNCE-&-LOAD-INIT-FILE n 
+ (and 
+   (not (= n 0))
+   (let ((INFILE 'T)
+	 (ERRSET)
+	 (opsys (status OPSYS))
+	 (name (arg 1) )
+	 jclp usn uid ofile file fix-file )
+	(setq DEFAULTF `((,(cond ((eq opsys 'TOPS-20) 'PS) ('DSK))
+			  ,(status UDIR))
+			 *
+			 ,(cond ((eq opsys 'ITS)	 '>) 
+				('T 			 'LSP))))
+	(terpri)
+	(princ name)
+	(cond ((setq uid (get name 'VERSION)) 
+	       (princ '| |)
+	       (princ uid)))
+	(princ '#.(maknam (nconc (exploden '| (in SHARABLE | )
+				 (exploden (get 'SHARABLE 'C-VERSION))
+				 (exploden '|, LISP |))))
+	(princ ANNOUNCE-&-LOAD-INIT-FILE)
+	(tyo #/) )
+	(terpri)
+	(and (> n 2) (setq fix-file (arg 3)))
+	(cond ((and fix-file (setq fix-file (probef fix-file)))
+	       (terpri)
+	       (princ '|;Loading FIX file |)
+	       (prin1 (namestring fix-file))
+	       (let (FASLOAD) (load fix-file))
+	       (terpri) ))
+	(setq jclp (and (> n 1) (arg 2))
+	      usn (cond ((status status HOMED) (status HOMED)) 
+			((status UDIR)))
+	      uid (cond (jclp (maknam (nreverse (cdr (reverse jclp)))))
+			((status USERID)))
+	      ofile (mergef uid `((DSK ,usn) * ,name))
+	      file (probef ofile)) 
+	(cond ((cond (file (setq uid (cadr ofile)) 'T)
+		     ((eq opsys 'ITS)
+		      (rplaca (cdr ofile) '*)
+		      (setq uid usn)
+		      (progn 
+		        (setq jclp () )
+			(errset  
+			  (let ((tfile (open ofile '(NODEFAULT))))
+			    (setq file (truename tfile))
+			    (and (not (eq (cadr file) '*))
+				 (setq uid (cadr file)))
+			    (close tfile)
+			    (setq jclp 'T))
+			  () )
+			jclp)))
+	       (princ '|/ÓLoading |) 
+	       (princ name)
+	       (princ '| INIT file for |)
+	       (princ uid)
+	       (terpri)
+	       (and (atom (errset (load file)))
+		    (princ '| **** Errors while loading|)))
+	      ('T (setq file () )))
+	'*)))
+	  
+
+
+
+(eval-when (load) 
+  (prog (*rset file-page-table file-namelist x y)
+	 ; set up shared pages table
+	(declare (fixnum page-number n i x))
+	(setq file-page-table (array () FIXNUM 256.)
+	      COMMUNIZE-FILE-ARRAY (open (|+internal-call/|| () 'FILE)
+					 '(IN FIXNUM SINGLE))
+	      file-namelist (truename COMMUNIZE-FILE-ARRAY))
+	(cond ((cond ((not (= (in COMMUNIZE-FILE-ARRAY) 0)) (setq y () ) 'T)
+		     ((or (not (memq (cadr file-namelist) '(PURQIO PURQIX)))
+			  (not (eq (caddr file-namelist) ANNOUNCE-&-LOAD-INIT-FILE))) 
+		      (setq y 'T)
+		      'T)) 
+	       (princ '|/ÓFile | msgfiles)
+	       (prin1 (namestring file-namelist) msgfiles)
+	       (princ '| is not this pdump'd LISP file| msgfiles) 
+	       (cond ((null y)  (error '|LISP| COMMUNIZE-FILE-ARRAY))
+		     ('t (princ '|/ÓThis has been only a courtesy warning message/Ó|
+				msgfiles)))))
+	(fillarray file-page-table COMMUNIZE-FILE-ARRAY)
+	(close COMMUNIZE-FILE-ARRAY)
+	(setq y (array () FIXNUM 32.))
+	(unwind-protect 
+	 (do ((page-number 0 (1+ page-number)) 
+	      (i 0 (+ i 4)) 
+	      (x 0) (n 0)  )
+	     ((= page-number 256.) 
+	      (mapc 'DEPURIFY-SYMBOL 
+		    (setq DEPURIFY-SYMBOL 
+			  (append (car file-namelist)
+				  (cdr file-namelist)
+				  '(COMMUNIZE-SINGLE-FILE COMMMUNIZE-FILE-ARRAY
+				    CORBLK DSK |:PDUMPED/Ó| ))))
+	        ; Success!
+	      (setq |+internal-page-map/|| y))
+	   (setq x (arraycall FIXNUM file-page-table page-number))
+	   (cond ((and (plusp x) (= (logand 3 (lsh x -16.)) 01))
+		   ; LISP system pure pages, which LISP itself 
+		   ; will cut out during a suspend
+		  (setq n (+ n (lsh 1_1 i)))))
+	 (cond ((= i 28.) 
+		(store (arraycall FIXNUM y (// page-number 8.)) n)
+		(setq i -4 n 0))) )))
+)
+

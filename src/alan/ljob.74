@@ -1,0 +1,291 @@
+; -*- Lisp -*-
+
+(declare (load '((alan) lspenv init)))
+
+(declare ;; HUMBLE
+	 (*expr select-job kill-job load-job
+		deposit-job examine-job
+		job-uset-write job-uset-read
+		*atty *dtty)
+	 (*lexpr create-job)
+	 (special current-job)
+	 ;; MACITS
+	 (*expr %getsys %sixbit %unsixbit %squoze %unsquoze)
+	 (fixnum (%sixbit notype) (%squoze notype))
+	 )
+
+(eval-when (eval compile load)
+
+(or (fboundp '%getsys) (fasload (liblsp) macits))
+
+(defvar *uset-vars*
+  (do ((l (%getsys 'usyms) (cddr l))
+       (a nil (cons (cons (logand #o37777777777 (car l)) (cadr l)) a)))
+      ((null l) a)))
+
+(defmacro *uset (var &optional (val nil write?))
+  (let ((num (cdr (or (assoc (%squoze var) *uset-vars*)
+		      (error "-- unknown .USET variable" var)))))
+    (if write?
+	`(job-uset-write ,(+ #o400000 num) ,val)
+	`(job-uset-read ,num))))
+
+) ;end (eval-when (eval compile load) ...)
+
+(eval-when (eval compile)
+
+(defun convert-flonum-to-bit (f)
+  (or (floatp f) (error "-- non flonum argument to BIT or BITS." f))
+  (do ((x (-$ f .05))
+       (y 1.1 (+$ y .1))
+       (n 1 (1+ n))
+       (i 1 (lsh i 1)))
+      ((zerop i) (error "-- bad flonum to BIT or BITS." f))
+    (and (zerop (\ n 10.))
+	 (setq y (+$ y .1))
+	 (setq n (1+ n)))
+    (and (< x y) (return i))))
+
+(defmacro bit (x)
+  `',(convert-flonum-to-bit x))
+
+(defmacro bits l
+  `',(do ((l l (cdr l))
+	  (x 0 (logior x (convert-flonum-to-bit (car l)))))
+	 ((null l) x)))
+
+) ;end (eval-when (eval compile) ...)
+
+(defvar *value-handler '*value-handler)
+(defvar *break-handler '*break-handler)
+(defvar ljob-job-jcl nil)
+(defvar ljob-debug-p nil)
+(defvar ljob-search-rules
+  (let ((sr (cons (status homedir) '(sys sys1 sys2 sys3)))
+	(udir (status udir)))
+    (if (eq udir (car sr))
+	sr
+	(cons udir sr))))
+(defvar ljob-hang 'finished)
+(defconst ljob-start-addr-addr
+  (or (getddtsym 'j*stadr) #o71))	;educated guess!
+
+(defun ljob-interrupt-handler (job)
+  (*dtty)
+  (select-job job)
+  (let* ((pirqc (*uset *pirqc))
+	 (xpirqc (logand pirqc (bits 1.2 1.8 2.2 3.1 4.4)))
+	 (npirqc (logxor pirqc xpirqc)))
+    (cond ((= xpirqc (bit 1.2))		;%pic.z (call)
+	   (*uset *pirqc npirqc)
+	   (stop-job "^Z"))
+	  ((= xpirqc (bit 1.8))		;%pival (.value)
+	   (*uset *pirqc npirqc)
+	   (funcall *value-handler
+		    (logand #o777777 (*uset *sv40))))
+	  ((= xpirqc (bit 2.2))		;%pibrk (.break)
+	   (*uset *pirqc npirqc)
+	   (let ((x (*uset *sv40)))
+	     (funcall *break-handler
+		      (lsh x -27.)		;not necessarily .break!
+		      (logand #o17 (lsh x -23.))
+		      (logand #o777777 x))))
+	  ((= xpirqc (bit 3.1))		;%pilos (.lose)
+	   (*uset *pirqc npirqc)
+	   (error-job ".lose"))
+	  ((= xpirqc (bit 4.4))		;%pidcl (defered call)
+	   (*uset *pirqc npirqc)
+	   (stop-job "^_D"))
+	  (t
+	   (error-job pirqc)))))
+
+(defun ljob-channel-interrupt-handler n
+  n	;ignored (what is it anyway?)
+  (*dtty)
+  (error-job "channel interrupt"))
+
+(defun J (name)
+  (create-job #'ljob-interrupt-handler
+	      #'ljob-channel-interrupt-handler
+	      name))
+
+(defun L (file)
+  (let ((v (load-job file)))
+    (and ljob-job-jcl
+	 (*uset *option (logior (bit 4.6) (*uset *option))))
+    (*uset *sname (%sixbit (status udir)))
+    v))
+
+(defun gzp ()
+  (*uset *upc (+ (boole 2 #o777777 (*uset *upc))
+		 (logand #o777777 (arraycall fixnum current-job
+					     ljob-start-addr-addr))))
+  (^P))
+
+(defun ^P ()
+  (*uset *ustp 0))
+
+(defun P ()
+  (^P)
+  (pass-tty))
+
+(defun G ()
+  (gzp)
+  (pass-tty))
+
+(defun pass-tty ()
+  (setq ljob-hang nil)
+  (terpri)
+  (*atty)
+  (ljob-hang)
+  (*dtty)		;doesn't work to .dtty while interrupting sometimes?
+  '*)
+
+(defun ljob-set-jcl (jcl)
+  (cond ((null jcl)
+	 (setq ljob-job-jcl nil)
+	 (*uset *option (boole 2 (bit 4.6) (*uset *option))))
+	(t
+	 (setq ljob-job-jcl (maknam (nconc (explodec jcl) '(#\cr))))
+	 (*uset *option (logior (bit 4.6) (*uset *option))))))
+
+(defun *value-handler (loc)
+  (cond ((zerop loc)
+	 (error-job ".value"))
+	(t
+	 (stop-job ".value"))))
+
+(defun get-valret-string ()
+  (let ((loc (logand #o777777 (*uset *sv40)))
+	l)
+    (do ((loc (1+ loc) (1+ loc))
+	 (cs (examine-job loc) (examine-job loc))
+	 (c)
+	 (i 5 5))
+	(())
+    L (setq cs (rot cs 7))
+      (and (zerop (setq c (logand #o177 cs)))
+	   (return t))
+      (push c l)
+      (or (zerop (setq i (1- i)))
+	  (go L)))
+    (implode (nreverse l))))
+
+(defun finish-job (why)
+  (terpri)
+  (princ ";finished")
+  (cond (ljob-debug-p
+	 (princ " (")
+	 (princ why)
+	 (tyo #/))))
+  (princ ": ")
+  (print-job)
+  (terpri)
+  (kill-job)
+  (setq ljob-hang 'finished))
+
+(defun stop-job (why)
+  (terpri)
+  (princ ";stopped")
+  (cond (ljob-debug-p
+	 (princ " (")
+	 (princ why)
+	 (tyo #/))))
+  (princ ": ")
+  (print-job)
+  (terpri)
+  (setq ljob-hang 'stopped))
+
+(defun error-job (why)
+  (terpri)
+  (princ ";error (")
+  (princ why)
+  (princ "): ")
+  (print-job)
+  (terpri)
+  (setq ljob-hang 'error))
+
+(defun print-job ()
+  (princ (shortnamestring current-job)))
+
+(defun *break-handler (op ac loc)
+  (cond ((not (= op #o45))			;.break
+	 (cond ((and (= op #o42) (= loc #o33))	;.logout
+		(finish-job ".logout"))
+	       (t
+		(error-job ".break???"))))
+	((= ac #o16)
+	 (if (zerop (logand (bits 2.5 2.6) loc))
+	     (stop-job ".break")
+	     (finish-job ".break")))
+	((= ac #o12)
+	 (let ((req (examine-job loc))
+	       type)
+	   (cond ((not (zerop (logand req (bit 4.8))))
+		  (do ((aobjn (examine-job (logand #o777777 req))
+			      (+ (bits 1.1 3.1) aobjn)))
+		      ((> aobjn 0))
+		    (*break-handler op ac (logand #o777777 aobjn))))
+		 ((or (not (zerop (logand req (bit 4.9))))
+		      (not (= (setq type (logand #o177777
+						 (lsh req -18.))) 5)))
+		  (error-job ".break 12,??"))
+		 (t
+		  (or (null ljob-job-jcl)
+		      (do ((l (pnget ljob-job-jcl 7) (cdr l))
+			   (loc (logand #o777777 req) (1+ loc)))
+			  ((not (zerop (examine-job loc))))
+			(and (null l)
+			     (return (deposit-job loc 0)))
+			(deposit-job loc (car l))))
+		  (^P)
+		  (*atty)))))
+	(t
+	 (error-job ".break ??,"))))
+
+;;;(ljob-hang) hangs until the value of ljob-hang is non-null.
+(deflap (ljob-hang subr 0)
+	(skipn 0 (special ljob-hang))
+	 (*hang)
+	(popj p))
+
+(defun ljob-run-job (xname file jcl)
+  (do ((name xname)
+       (x (J xname) (J name)))
+      ((cond ((null x) (error "-- couldn't create job." xname))
+	     ((eq (car x) 'inferior)
+	      (let ((file (or file (ljob-search-for xname))))
+		(cond ((null (L file))
+		       (*uset *xjname (%sixbit xname))
+		       (ljob-set-jcl jcl)
+		       (G)
+		       t)
+		      (t (error "-- can't load file." file)))))
+	     ((eq (car x) 'reowned)
+	      (P)
+	      t)
+	     (t nil)))
+    (let ((l (exploden name)))
+      (cond ((> (length l) 5)
+	     (setf (caddr (cdddr l))
+		   (1+ (caddr (cdddr l)))))
+	    (t (rplacd (last l) (list #/'))))
+      (setq name (implode l))))
+  '*)
+
+(defun ljob-search-for (name)
+  (do ((l ljob-search-rules (cdr l))
+       (rest (list 'ts name))
+       (file))
+      ((null l)
+       (error "-- can't find file to load." name))
+    (and (probef (setq file (cons (if (symbolp (car l))
+				      (list 'dsk (car l))
+				      (car l))
+				  rest)))
+	 (return file))))
+
+(defun ljob-expand-run-macro (x)
+  (bind-arguments ((name &optional (jcl `nil)) x
+		    (error "-- wrong format." x))
+    `(ljob-run-job ',name ',(get name 'ljob-filename) ,jcl)))

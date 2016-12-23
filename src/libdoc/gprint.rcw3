@@ -1,0 +1,1700 @@
+;-*- Mode:LISP; Package: (GPRINT GLOBAL 1000) ; base:10.; -*-
+
+;The master version of this file is oz:<dick.pgms>gprint.lsp.  Changes can
+;only be made through requests to BUG-GPRINT
+
+;This file implements a pretty printer.  All bugs and suggestions should
+;be sent to BUG-GPRINT@MIT-OZ.  all internal functions and symbols are
+;in the package GPRINT on lispm.
+
+;The basic documentation for this GPRINT is in MIT/AIM-611a.  The documentation
+;in this file is only of an internal nature and does not duplicate that
+;documentation.
+
+#M(herald gprint)
+#M(declare (macros nil) (fixnum i j k spaces default-spaces indent max))
+#Q(eval-when (eval load compile)
+    (mapc #'globalize   ;note user may have typed one of these already.
+	   '(Gcheckrecursion prinmode prinlevel prinlength prinendline
+	     miser-width major-width prinstartline prinmargin
+	     Gfn-format Gapply-format Gforce-mores Gshow-errors
+	     grind-macroexpanded Gsymbol-car-format Gnon-symbol-car-format
+	     Gspecial-formatters Glist-formatters Garray-formatters
+	     Goverriding-list-formatters Gatom-pcode Gprinlevel-abbrev
+	     Gset-up-printer Gprint1 Gprintc Gprint Gexplode Gexplodec
+	     deformat Gformat Gcheck-indentation Gdispatch
+	     GF-next GF-next-period GF-initial Ginspecting Gloc |gf-var|
+	     plp pl GF GQ defGF Gfunction)))
+
+;These are the basic user control variables (see aim611a).
+
+(defvar GRIND-MACROEXPANDED nil)
+#M(defvar PRINLEVEL)
+#M(defvar PRINLENGTH)
+(defvar GSHOW-ERRORS nil "T/NIL controls GPRINT's error handling")
+(defvar GFORCE-MORES T "T/NIL always forces mores when GPRINTing")
+(defvar PRINENDLINE 4 "+#/NIL truncates GPRINTing after # lines")
+(defvar PRINSTARTLINE nil "+#/NIL GPRINTing is supressed before # line")
+(defvar PRINMARGIN nil "+#/NIL the right margin for printing")
+(defvar MISER-WIDTH 40 "Misering starts when there is less than this width")
+(defvar MAJOR-WIDTH 20 "Major units left shift if there isn't this much width")
+(defvar GCHECKRECURSION T "T/NIL causes GPRINT to check for circularity")
+(defvar PLP-PROPERTIES '(:function :value) "the properties printed by PLP")
+(defvar GSPECIAL-FORMATTERS nil "list of format fns for arbitrary things")
+#M(defvar GHUNK-FORMATTERS nil "list of format fns for hunks")
+(defvar GARRAY-FORMATTERS nil "list of format fns for arrays")
+(defvar GPRINT-ARRAY-CONTENTS T "T/NIL causes GPRINTing of array contents")
+(defvar GOVERRIDING-LIST-FORMATTERS nil "list of format fns for lists")
+(defvar GLIST-FORMATTERS nil "list of format fns for lists")
+(defvar GSYMBOL-CAR-FORMAT ':G1Tblock "format for atom car data lists")
+(defvar GNON-SYMBOL-CAR-FORMAT ':G1Tblock "format for non-atom car data lists")
+(defvar GAPPLY-FORMAT ':Gapply-format "format for literal LAMBDA applications")
+(defvar GFN-FORMAT ':Gfn-format "format for function applications")
+;The following describes some internal system variables.  You should
+;never ever change any of their values.  The system rebinds all of
+;these variables so that it is reentrant.  It will work right if you
+;use it to print something when it was interrupted in the middle of
+;printing something else.
+
+(defvar GPRINLEVEL-ABBREV #M'|#| #Q'|**| "the thing to print when abbreving")
+(defvar PLP nil "saves the last argument to the fn PLP")
+#M(defvar ^R) #M(defvar ^W) #M(defvar OUTFILES) #M(defvar TYO)
+#Q(declare (special TERMINAL-IO STANDARD-OUTPUT))
+(defvar GSUGGESTED-FORMAT)
+(defvar GINSPECTING NIL "FN if creating locatives for inspector.")
+ ;   to use this with the inspector bind this to the locative 
+ ;   notification function (fn #/(-#/)-atom locative atom-p) and Gloc
+ ;   to an appropriate top level locative and call Gprint!
+(defvar GLOC nil "Locative for current thing being dispatched.")
+
+;These encode the arguments and environment input to
+;the fn GFORMAT-OBJ.  They control the form of the printing process.
+
+(defvar GPRINLEVEL) (defvar GPRINLENGTH) 
+(defvar GPRINENDLINE) (defvar GPRINSTARTLINE) 
+ ;   +# - these reflect the values of the corresponding user control variables.
+ ;   They are kept seperate for 2 reasons.  1- it is easier to deal
+ ;   with them because they are always numbers.  2- they are insulated
+ ;   from any changes to the user control variables during a single
+ ;   call to the printer.
+(defvar GATOM-PCODE)
+ ;   :PRIN1/:PRINC - specifies how to print atoms encountered in
+ ;   the object printed.
+(defvar GEXPLODING)
+ ;   If non nil, then this keeps a growing list of the result
+ ;   created when the printer is used to explode something instead of
+ ;   print it.
+(defvar GOUT)
+ ;   This specifies where the output is going to go.
+(defvar Gmainfile)
+ ;   This is the primary output (on the Lispm this is the same as GOUT).
+(defvar GLINELEN)
+ ;   +# - the line length of the output device minus 5.  (This
+ ;   reduction is a fudge factor that leaves room for trailing parens.)
+(defvar GINITIAL-CHARPOS)
+ ;   +# - this is the character position where printing
+ ;   is to begin.  The printer will NEVER go left of this position
+ ;   while printing.
+(defvar GNOWPRINTING nil "T if GPRINT is in operation")
+ ;   T/NIL - if T this signifies that the printer is being reentered.
+(defvar |gf-var| nil "used by the formatters made with GF")
+
+;These variables are used to control the fn Gredo.
+(defvar GABBREVED)
+ ;   T/NIL - this is set to T if the object being printed was
+ ;   abbreviated in any way.
+(defvar GTRUNCATED nil)
+ ;   If GABBREVED is T, then this variable is set to record
+ ;   the state of the printing process so that it can be continued, or
+ ;   redone.  Note that this information for an incomplete print will
+ ;   be saved until another incomplete print occures.
+
+;These variables are used when checking for circularity.
+(defvar GPARENTS nil)
+ ;   Array - this is used to remember the objects which have beed
+ ;   visited already.  It acts as a stack.
+(defvar GRPTR)
+ ;   +#/-1 - this points to the top of the above stack.  It is
+ ;   repeatedly bound and unbound as well as incremented, so that the
+ ;   stack pushes and pops in occordance with the nested structure of
+ ;   the object being printed.
+;Next there are several variables which are used by GQ as it queues up
+;the stuff to be printed.  Primary amoung these is the queue itself.
+;Note that by managing storage in this queue itself, the printer does
+;virtually no consing at all under normal operation.
+(defvar GQUEUE nil)
+ ;   array - this holds a queue of the formatting entries as they
+ ;   are produced.  The queue holds three pieces of information about
+ ;   each entry.  (note that there are special macros below to make
+ ;   referencing these fields more mnemoinic.)
+ ;1. Gtype - :START/:END/:PRIN1/:PRINC/:SPECIAL/:SPACE/:TAB/:IND/:NEWLINE/:EVAL
+ ;    this specifies the type of the entry.
+ ;2. Gobj - some item of information.  what it means depends on the type.
+ ;    :START NIL - ignored
+ ;    :END NIL - ignored.
+ ;    :PRIN1 - object to prin1.
+ ;    :PRINC - object to princ.
+ ;    :SPECIAL - object to princ, but not counted as part of the number of
+ ;               items printed at this level.
+ ;    :SPACE # - Number of spaces to print if not at end of a line.
+ ;    :TAB +#/NIL - the tab size (estimated by the system if NIL).
+ ;    :IND #/NIL - Amount to change the indentation in this substructure.
+ ;          (Computed based on the next item in the substructure if NIL.)
+ ;    :NEWLINE :ALWAYS/:NORMAL/:BLOCK/:MISER - (says when to newline).
+ ;    :EVAL - a sexpr which is evaluated.  the printer first makes sure that
+ ;            all pending output is performed and then evaluates the sexpr.
+ ;            This makes it possible for you to make free form extensions to
+ ;            the printer.  However, you should realize that you are playing 
+ ;            with fire if you do this.
+ ;3. Gsize #/NIL - the print length of the associated structure or NIL if this 
+ ;    length is not known.  (In general printing will be delayed until the
+ ;    length is known.)  For :PRINC, :PRIN1, :SPECIAL, :SPACE
+ ;    this is just the print size of the object.  For :END, :TAB then
+ ;    this is set to 0 and is just ignored.  For :START this starts out
+ ;    as NIL indicating that the print length is unknown, and is set to
+ ;    the length of the whole substructure when the corresponding end
+ ;    is reached.  For :NEWLINE, if the obj is :ALWAYS or :NORMAL then
+ ;    the size is set to 0 and ignored.  If the obj is
+ ;    :BLOCK, then it starts as NIL, and is not updated to the
+ ;    corrected size until the size of the :PRINC, :PRIN1, :SPECIAL,
+ ;    :SPACE, :END, :START following it is known.
+(defvar GQL)
+ ;   +# - this points to the next entry to dequeue
+(defvar GQR)
+ ;   +# - this points to the spot where the next entry should be put
+ ;   (the queue is empty when (= GQL GQR)).
+(defvar GTSIZE)
+ ;   +# - the total size of everything in GQUEUE up to GQR.
+(defvar GLSIZE)
+ ;   +# - the total size of everything in GQUEUE up to GQL (ie
+ ;   everything that has been poped off).  The total size of the stuff
+ ;   that is queued but not yet processed is (- GTSIZE GRSIZE).
+(defvar GQS nil)
+ ;   array - this holds things you need to remember while the subparts
+ ;   of a structure are being queued up.  
+ ;1. Gbegin +#/-1 - the place in Gq where the corresponding substructure starts
+ ;            (-1 if this spot is no longer in the queue.)
+ ;2. Glevel +# - the depth of this structure in the overall structure. (note
+ ;            that start entries with indentations of 0 are not
+ ;            counted)  (This is used to control PRINLEVEL abbreviation.)
+ ;3. Glength +# - the number of PRIN1, PRINC, and substructure items in this
+ ;             substructure so far.  (this is used to control PRINLENGTH
+ ;             abbreviation.) 
+ ;4. Gsave-Gtsize +# - a saved value of Gtsize.  (Used when computing
+ ;                     the actual length of a substructure.)
+(defvar GQSP)
+ ;   +# - stack pointer for GQS.
+
+;Then there are a group of variables that hold the state of the output
+;actually being produced.
+
+(defvar GLINENO)
+ ;   +# - this counts the lines printed, with the
+ ;   line the print was initiated on as line 0.  (Therefore the first
+ ;   line printed by a Gprint1 is line 0 and the first one printed by a
+ ;   Gprint is line 1.)
+(defvar GFREELEN)
+ ;   +# - this keeps track of how much space is left at the end
+ ;   of the current line.  The charcter position is (- GLINELEN GFREELEN).
+(defvar GPENDING)
+ ;   +# - this is the number of spaces (caused by (GQ ':SPACE #)
+ ;   and (GQ ':TAB #) requests) which have been logically
+ ;   printed, but have not actually been printed yet.  They will not be
+ ;   printed until some non blank object must be printed, and their
+ ;   printing will be aborted if a new line is forced before then.  (Ie
+ ;   trailing blanks are never printed.)
+(defvar GPENDING-NEWLINE)
+ ;   T/NIL - if T then a new line must be done before
+ ;   anything more can be printed out.  It will not actually be done
+ ;   until some non blank thing has to be printed.
+(defvar GWENT-UP)
+ ;   This is T if and only if more structures have been exited than entered
+ ;   on the current line.  
+(defvar GDEPTH)
+ ;   This records the relative depth of the item on the top of the queue
+ ;   in the most deeply embedded structure which has been broken up
+ ;   accross multiple lines.
+ ;      As an example of this consider the following:
+ ;   (A (B
+ ;       C -1- D) (E -2- F))
+ ;   Suppose that the printer is at the point marked "-1-" in printing out 
+ ;   the above.  At that moment, GDEPTH=0, GWENT-UP=NIL.
+ ;   At the point "-2-" GDEPTH=1, GWENT-UP=T.
+
+(defvar GPS nil)
+ ;   array - this is a stack which is used to hold information that
+ ;   must be remebered when the printout fn goes down a level and
+ ;   breaks up a substructure.  It has two coponents:
+ ;1. Gtabsize +#/-1 - the appropriate tab size to use.  (-1 if not yet known.)
+ ;2. Gpindent +# - the appropriate indentation to use for the next thing.
+(defvar GPSP)
+ ;   +# - this is the stack pointer for GPS.
+(defvar GF-ARGS)
+ ;   This is used by the macro GF.
+
+;an important issue to note is that on the LISPM, at least Gqueue, Gqs, Gps, 
+;Gparents, and Gtruncated should be bound seperately in each lisp listener.
+;in fact probably many of the other control variables probably should be too.
+;The problem is that as things stand now, they aren't bound anywhere!
+
+;For debugging, this lets you see easily what is in the various vectors
+
+(eval-when (eval)
+  (defun sq ()
+    (terpri) (princ '|type            obj     size|)
+    (do ((i gql (1+ i))
+	 (k 0 (cond ((zerop k) 2) (t (1- k)))))
+	((= i (+ gqr 3)))
+	(cond ((zerop k) (terpri)))
+	(prin1 (arraycall nil Gqueue i))
+	(cond ((zerop k) (princ '|     |)))
+	(tyo #M9. #Q137.)))
+  (defun sqs ()
+    (print `(Gtsize ,Gtsize Glsize ,Glsize Grptr ,Grptr))
+    (terpri) (princ '|begin   level   length  tsize|)
+    (do ((i 0 (1+ i))
+	 (k 0 (cond ((zerop k) 3) (t (1- k)))))
+	((= i (+ Gqsp 4)))
+	(cond ((zerop k) (terpri)))
+	(prin1 (arraycall fixnum Gqs i)) (tyo #M9. #Q137.)))
+  (defun sps ()
+    (print `(Glineno ,Glineno Gfreelen ,Gfreelen Gdepth ,Gdepth Gwent-up
+	     ,Gwent-up Gpending ,Gpending Gpending-newline ,Gpending-newline))
+    (terpri) (princ '|tab     indent|)
+    (do ((i 0 (1+ i))
+	 (k 0 (cond ((zerop k) 1 ) (t (1- k)))))
+	((= i (+ Gpsp 2)))
+	(cond ((zerop k) (terpri)))
+	(prin1 (arraycall fixnum Gps i)) (tyo #M9. #Q137.))))
+
+;these macros just make accessing the above things easier.
+
+(defun Gtype macro (body) `(Gaccess .,body))
+(defun Gobj macro (body) `(Gaccess .,body))
+(defun Gsize macro (body) `(Gaccess .,body))
+(defun Gbegin macro (body) `(Gaccess .,body))
+(defun Glevel macro (body) `(Gaccess .,body))
+(defun Glength macro (body) `(Gaccess .,body))
+(defun Gsave-Gtsize macro (body) `(Gaccess .,body))
+(defun Gtabsize macro (body) `(Gaccess .,body))
+(defun Gpindent macro (body) `(Gaccess .,body))
+
+(defun Gaccess macro (whole-body)
+ (let ((body (cdr whole-body)))
+  (displace body
+   (let* ((field (car body))
+	  (vect (caseq field
+		  ((Gtype Gobj Gsize) 'Gqueue)
+		  ((Gbegin Glevel Glength Gsave-Gtsize) 'Gqs)
+		  ((Gtabsize Gpindent) 'Gps)
+		  (T (error '|GACCCESS -- bad field name| body))))
+	  (type (cdr (assq vect '((Gqueue)(Gqs . fixnum)(Gps . fixnum)))))
+	  (offset (cdr (assq field '((Gtype . 0)(Gobj . 1)(Gsize . 2)
+				     (Gbegin . 0)(Glevel . 1)
+				     (Glength . 2)(Gsave-Gtsize . 3)
+				     (Gtabsize . 0)(Gpindent . 1)))))
+	  (index (cond ((null (cdr body))
+			(cdr (assq vect '((Gqueue . Gql)(Gqs . Gqsp)
+					  (Gps . Gpsp)))))
+		       (T (cadr body))))
+	  (spot (cond ((zerop offset) index)
+		      ((equal index 0) offset)
+		      (T `(+ ,index ,offset)))))
+     `(arraycall ,type ,vect ,spot)))))
+
+(defun Gpush macro (body)
+ (displace body
+  (let* ((vector (cadr body))
+	 (info (cdr (assq vector '((Gqueue Gqr 3. nil)(Gqs Gqsp 4. fixnum)
+				   (Gps Gpsp 2. fixnum))))))
+    `(cond (;note that it is vital that the dimension is congruent to
+	    ;zero mod the step size so that this test actually works.
+	    (not (> (array-dimension-n 1 ,vector)
+		    (setf ,(car info) (+ ,(car info) ,(cadr info)))))
+	    (*rearray ,vector ',(caddr info)
+		      (+ ,(car info) ,(* (cadr info) 20.))))))))
+
+(defun Gpop macro (body)
+ (displace body
+  (let* ((vector (cadr body))
+	 (info (cdr (assq vector '((Gqueue Gql -3.)(Gqs Gqsp 4.)
+				   (Gps Gpsp 2.))))))
+    `(progn (setf ,(car info) (- ,(car info) ,(cadr info)))
+	    (cond ((minusp ,(car info))
+		   (error "Too many }s in format")))))))
+
+;this is for lisp machine compatability
+#M
+(defun Glinel macro (body) (displace body `(linel ,(cadr body))))
+#Q
+(defun Glinel macro (body) 
+  `(cond ((memq ':size-in-characters
+		(funcall ,(cadr body) ':which-operations))
+	  (funcall ,(cadr body) ':size-in-characters))
+	 (T 94.)))
+
+#M
+(defun Gcursorpos macro (body)
+  (displace body
+   `(cond ((memq 'cursorpos (status filemode ,(car (last body))))
+	   (cursorpos .,(cdr body))))))
+#Q
+(defun Gcursorpos macro (body)
+  (cond ((null (cddr body))
+	 `(cond ((memq ':read-cursorpos
+		       (funcall ,(cadr body) ':which-operations))
+		 (multiple-value-bind (x y)
+		     (funcall ,(cadr body) ':read-cursorpos ':character)
+		   (cons y x)))))
+	(T `(cond ((memq ':set-cursorpos
+			 (funcall ,(car (last body)) ':which-operations))
+		   (cursorpos .,(cdr body)))))))
+
+#M
+(defun Gcharpos macro (body) (displace body `(charpos ,(cadr body))))
+#Q
+(defun Gcharpos macro (body) `(or (cdr (Gcursorpos ,(cadr body))) 0))
+
+#Q
+(defun *rearray macro (body)
+  `(adjust-array-size ,(cadr body) ,(cadddr body)))
+ 
+;this macros are at the center of the formatting system.  They make
+;it easy to define simple formatting functions.
+
+(eval-when (eval load compile)
+
+(defun (GF macro) (body)
+  (displace body
+    `(progn .,(GF-code (GF-group (GF-parse3 (GF-parse2 (GF-parse1 (cadr body)))
+					    (cddr body)))))))
+
+(defun (deformat macro) (body)
+  (displace body `(defun (,(cadr body) :Gformat) ,(caddr body)
+		    .,(cdddr body))))
+
+(defun (defGF macro) (body)
+  (displace body `(defun (,(cadr body) :Gformat) (|gf-var|)
+		    (GF ,(caddr body) |gf-var|))))
+
+(defun (Gfunction macro) (body)
+  (displace body `(function (lambda (|gf-var|) (GF ,(cadr body) |gf-var|)))))
+
+;Note must always make list of args so that dispatcher will use
+;specified format function.
+
+(defun (Gformat macro) (body)
+  (displace body
+    (let* ((file (cadr body))
+	   (template (caddr body))
+	   (args (cdddr body))
+	   (params (do ((i 0 (1+ i))
+			(l args (cdr l))
+			(res nil (cons `(nth ,i stuff) res)))
+		       ((null l) (nreverse res))))
+	   (arg (cond (args `(list ., args)) (T '(ncons nil))))
+	   (gf `(function (lambda (stuff) (GF ,template ., params)))))
+      (cond (file `(Gprint1 ,arg ,file ,gf nil nil nil nil))
+	    (T `(implode (Gexplode ,arg nil ,gf nil nil nil nil)))))))
+
+;this is an example showing how the macro expansion works.
+
+;(GF-parse1 "(*<~(*)B>)")
+;(OPEN NIL * < ~ NIL OPEN NIL * CLOSE B > CLOSE) 
+;
+;(GF-parse2 *)
+;(START IND NIL QUOTE '|(| GO-IN * < ~ NIL
+; START-SUB START IND NIL QUOTE '|(| GO-IN * GO-OUT QUOTE '|)| END END-SUB
+; B > GO-OUT QUOTE '|)| END) 
+;
+;(GF-parse3 * '(item))
+;(START IND NIL QUOTE '|(| GO-IN ITEM * (CAR |gf-var|) X < ~ NIL
+; START-SUB (CAR |gf-var|) START
+;   IND NIL QUOTE '|(| GO-IN |gf-var| * (CAR |gf-var|) X GO-OUT QUOTE '|)|
+; END END-SUB
+; X B > GO-OUT QUOTE '|)| END) 
+;
+;(GF-group *)
+;(START IND NIL QUOTE '|(| GO-IN ITEM (* (CAR |gf-var|) X < ~ NIL
+; START-SUB (CAR |gf-var|) (START IND NIL QUOTE '|(| GO-IN |gf-var| (* (CAR |gf-var|) X) QUOTE '|)| END)
+; X B >) QUOTE '|)| END) 
+;
+;(GF-code *)
+;((GQ ':START NIL)
+; (GQ ':IND NIL)
+; (GQ ':SPECIAL '|(|)
+; (LET ((|gf-var| ITEM))
+;   (PROG NIL
+;       (COND ((GF-INITIAL) (RETURN NIL)))
+;       (GDISPATCH NIL (CAR |gf-var|))
+;       (COND ((GF-NEXT) (RETURN NIL)))
+;     L (GQ ':SPACE 1)
+;       (GDISPATCH #'(LAMBDA (|gf-var|)
+;		       (GQ ':START NIL)
+;                      (GQ ':IND NIL)
+;		       (GQ ':SPECIAL '|(|)
+;		       (LET ((|gf-var| |gf-var|))
+;			 (PROG NIL
+;			    (COND ((GF-INITIAL) (RETURN NIL)))
+; 	 	 	    (GDISPATCH NIL (CAR |gf-var|))
+;			    (COND ((GF-NEXT) (RETURN NIL)))))
+;		       (GQ ':SPECIAL '|)|)
+;		       (GQ ':END NIL))
+;		    (CAR |gf-var|))
+;       (COND ((GF-NEXT) (RETURN NIL)))
+;       (GQ ':NEWLINE ':BLOCK)
+;       (GO L)))
+; (GQ ':SPECIAL '|)|)
+; (GQ ':END NIL)) 
+
+;This scans the template string and produces a sequence of tokens.
+;each command is converted to an atom (case ignored) and the
+;parameters are parsed.  Some of the commands are renamed so that
+;emacs will be happier with the file; their character codes are
+;refered to directly in octal.
+; (=50 -> open    )=51 -> close     {=173 -> start     }=175 -> end
+; [=133 -> go-in  ]=135 -> go-out   $/" -> start-sub   /" -> end-sub
+; ' -> quote      . -> period
+
+(declare (special GF-chars))
+
+(defun GF-parse1 (string)
+  (prog (GF-chars result n codes)
+      (setq GF-chars (exploden string))
+    L (cond ((null GF-chars) (return (nreverse result))))
+      (setq n (pop GF-chars))
+      (cond ((and GF-chars (= (car GF-chars) #/") (equal n #/$))
+	     (pop GF-chars)
+	     (setq n 'start-sub)))
+      (setq codes
+	    (assoc n `((#o133 GO-IN) (#o135 GO-OUT)
+		       (#o56 PERIOD) (#/< <) (#/> >)
+		       (#/P P) (#/p P) (#/C C) (#/c C)
+		       (#/S S) (#/s S) (#/I I) (#/i I)
+		       (#/' QUOTE quote-arg)
+		       (#/~ ~ number-arg) (#/T T number-arg) (#/t T number-arg)
+		       (#/* *)
+		       (#/$ $ string-arg) (#/% % string-arg) (#/& & string-arg)
+		       (start-sub START-SUB) (#/" END-SUB)
+		       (#o173 START IND number-arg) (#o175 END)
+		       (#/+ + number-arg)
+		       (#o50 OPEN START IND number-arg QUOTE '|(| GO-IN)
+		       (#o51 GO-OUT QUOTE '|)| END CLOSE)
+		       (#/A A) (#/a A) (#/! A)
+		       (#/N N) (#/n N) (#/- ~ number-arg N)
+		       (#/B B) (#/b B)
+		       (#/, ~ number-arg B) (#/; ~ NIL T number-arg B)
+		       (#/M M) (#/m M) (#/_ ~ number-arg M)
+		       (#/E E)(#/e E)
+		       (#\sp) (#\tab) (#\cr) (#\lf))))
+      (cond ((null codes) (error '|GF - unknown character| (list n string))))
+      (do ((cs (cdr codes) (cdr cs)) (c)) ((null cs))
+	(setq c (car cs))
+	(push (cond ((eq c 'quote-arg) (GFP-quote-arg n string))
+		    ((eq c 'string-arg) (GFP-string-arg n))
+		    ((eq c 'number-arg) (GFP-number-arg))
+		    (T (car cs)))
+	      result))
+      (go L)))
+
+(defun GFP-quote-arg (n string)
+  (prog (temp)
+    L (cond ((null GF-chars) (error '|GF - unmatched '| string))
+	    ((= (car GF-chars) n) (pop GF-chars)
+	     (cond ((or (null (cdr GF-chars))
+			(not (= (car GF-chars) n)))
+		    (return `',(implode (nreverse temp)))))))
+      (push (pop GF-chars) temp)
+      (go L)))
+
+(defun GFP-string-arg (n)
+  (prog (temp)
+      (cond ((= (car GF-chars) #o43) (pop GF-chars) (return '|#|)))
+    L (cond ((or (null GF-chars)
+		 (= (car GF-chars) n) (= (car GF-chars) #\space))
+	     (pop GF-chars)
+	     (return `',(readlist (nreverse temp)))))
+      (push (pop GF-chars) temp)
+      (go L)))
+
+(defun GFP-number-arg ()
+  (prog (temp)
+	(cond ((null GF-chars) (go E)))
+	(cond ((= (car GF-chars) #o43) (pop GF-chars) (return '|#|)))
+	(cond ((member (car GF-chars) '#.(exploden "-01234567890"))
+	       (push (pop GF-chars) temp))
+	      (T (go E)))
+      L (cond ((member (car GF-chars) '#.(exploden "01234567890."))
+	       (push (pop GF-chars) temp) (go L)))
+      E (return (cond (temp (readlist (nreverse temp)))))))
+
+;this takes the output list from gf-parse1 and does some second order
+;processing on it.  The sequence is checked to see that all of the
+;commands which appear in pairs are properly nested.  It checks to see
+;whether thins in parentheses have to forced into subtempaltes.
+;Commands that can only appear in certain contexts (such as <, >) are
+;checked to see that they are in the right place.
+
+(defun GF-parse2 (list)
+  (prog (result c balance)
+    L (cond ((null list) (return (nreverse result))))
+      (setq c (pop list))
+      (cond ((and (memq c '(< PERIOD)) (not (eq (car balance) 'GO-IN)))
+	     (error '|GF - < and . must be immediately in [] or ()| nil)))
+      (cond ((and (memq c '(START END)) (eq (car balance) 'GO-IN))
+	     (error '|GF - { and } unsafe immediately in [] or ()| nil)))
+      (cond ((and (memq c '(CLOSE GO-OUT END-SUB >))
+		  (not (eq c (cdr (assq (pop balance)
+					'((OPEN . CLOSE) (GO-IN . GO-OUT)
+				          (START-SUB . END-SUB) (< . >)))))))
+	     (error '|GF - unmatched brackets| c)))
+      (caseq c
+	(OPEN
+	 (cond ((Gfirst '(GO-IN OPEN) '(START-SUB) balance)
+		(push 'START-SUB result))))
+	(CLOSE
+	 (cond ((Gfirst '(GO-IN OPEN) '(START-SUB) balance)
+		(push 'END-SUB result))))
+	((QUOTE & % $ IND + ~ T) (push c result) (push (pop list) result))
+	(T (push c result)))
+      (cond ((memq c '(OPEN GO-IN START-SUB <))
+	     (push c balance)))
+      (go L)))
+
+;This returns T if it finds an element of HITS in the LIST before an element
+;of MISSES.  NIL if it doesn't find either.
+
+(defun Gfirst (hits misses list)
+  (do ((l list (cdr l)))
+      ((null l) nil)
+    (cond ((memq (car l) hits) (return T))
+	  ((memq (car l) misses) (return nil)))))
+;This passes over the token list a third time, adding in the
+;appropriate information from the args.  Each # is replaced by an arg,
+;and each thing that requires an input (ie [] P C S I % $ E) gets an
+;input.  Note that this input precedes the parameter for % and $.
+;Also note that if the format is nested inside [] then it doesn't use
+;up an input but rather an internal variable (except for E which still
+;uses an input).  The commands NEXT and NEXTP are inserted at the
+;proper points where the internal stepping variables should be
+;advanced.
+;  The length of the list stored in the variable NESTED shows how far
+;deep in [] you are.  This variable also stores saved values of period
+;which says whether or not you have encountered a period command.
+
+(defun GF-parse3 (list args)
+  (prog (period nested result c)
+    L (cond ((null list)
+	     (cond (args (error "GF - too many args" args)))
+	     (return (nreverse result))))
+      (setq c (pop list))
+      (push c result)
+      (cond ((memq c '(GO-IN P C S I * % $ START-SUB))
+	     (cond (nested (push (cond (period '|gf-var|)
+				       (T '(car |gf-var|))) result))
+		   ((null args) (error "GF - Too few args" nil))
+		   (T (push (pop args) result)))))
+      (cond ((memq c '(QUOTE & % $ IND + ~ T))
+	     (cond ((not (eq (car list) '|#|)) (push (pop list) result))
+		   ((null args) (error "GF - Too few args" nil))
+		   (T (pop list) (push (pop args) result)))))
+      (cond ((eq c 'E)
+	     (cond ((null args) (error "GF - Too few args" nil))
+		   (T (push (pop args) result)))))	     
+      (cond ((memq c '(GO-OUT END-SUB)) (setq period (pop nested))))
+      (cond ((and (memq c '(GO-OUT P C S I * % $ END-SUB)) nested (not period))
+	     (cond ((Gfirst '(PERIOD)
+			    '(GO-IN GO-OUT P C S I * % $ START-SUB END-SUB)
+			    list)
+		    (push 'XP result))
+		   (T (push 'X result)))))
+      (caseq c
+	(PERIOD (setq period T))
+	(GO-IN (push period nested) (setq period nil))
+	(START-SUB (push period nested) (setq period T)))
+      (go L)))
+
+;This groups the [] and subtemplates up into sublists.  The end marker is
+;discarded, and the entire subgroup becomes a list after the head.  Note that
+;the argument is not included and stays seperate.  Note that we already know
+;that everything matches up.
+(declare (special GF-group-list))
+
+(defun GF-group (GF-group-list) (GF-group1))
+(defun GF-group1 ()
+  (prog (result c)
+    L (cond ((null GF-group-list) (return (nreverse result))))
+      (setq c (pop GF-group-list))
+      (caseq c
+	((GO-OUT END-SUB) (return (nreverse result)))
+	((GO-IN START-SUB)
+	 (push c result) (push (pop GF-group-list) result)
+	 (push (GF-group1) result))
+	((P C S I QUOTE * & IND + ~ T)
+	 (push c result) (push (pop GF-group-list) result))
+	((% $)
+	 (push c result) (push (pop GF-group-list) result)
+	 (push (pop GF-group-list) result))
+	(T (push c result)))
+      (go L)))
+;This produces the code.  There is a simple code template for each
+;kind of command.  Note the way it recurses.
+
+(defun GF-code (list)
+  (prog (result)
+    L (cond ((null list) (return (nreverse result))))
+      (push
+       (caseq (pop list)
+	 (GO-IN `(let ((|gf-var| ,(pop list)))
+		   (prog ()
+		     (cond ((GF-initial) (return nil)))
+		     .,(GF-code (pop list)))))
+	 (X `(cond ((GF-next) (return nil))))
+	 (XP `(GF-next-period))
+	 (PERIOD 'PERIOD)
+	 (< `L)
+	 (> `(go L))
+	 (P `(GQ Gatom-pcode ,(pop list)))
+	 (C `(GQ ':princ ,(pop list)))
+	 (S `(GQ ':special ,(pop list)))
+	 (I (pop list))
+	 (QUOTE `(GQ ':special ,(pop list)))
+	 (* `(Gdispatch nil ,(pop list)))
+	 (& `(funcall ,(pop list)))
+	 (% (let ((arg (pop list)) (fn (pop list)))
+	      `(funcall ,fn ,arg)))
+	 ($ (let ((arg (pop list)) (fn (pop list))) `(Gdispatch ,fn ,arg)))
+	 (START-SUB (let ((arg (pop list)) (code (GF-code (pop list))))
+		      `(Gdispatch #'(lambda (|gf-var|) .,code) ,arg)))
+	 (START `(GQ ':start nil)) 
+	 (IND `(GQ ':ind ,(pop list)))
+	 (+ `(GQ ':ind ,(or (pop list) 1)))
+	 (END `(GQ ':end nil))
+	 (A `(GQ ':newline ':always))
+	 (N `(GQ ':newline ':normal))
+	 (B `(GQ ':newline ':block))
+	 (M `(GQ ':newline ':miser))
+	 (~ `(GQ ':space ,(or (pop list) 1)))
+	 ((T) `(GQ ':tab ,(pop list)))
+	 (E `(GQ ':eval ,(pop list)))
+	 (T (error "GF - internal bug GF-code" nil)))
+       result)
+      (go L)))   )
+
+;this implements the standard end test used in the functions produced
+;by GF.
+
+(defun GF-next ()
+#Q(setq Gloc (locf (cdr |gf-var|)))
+  (setq |gf-var| (cdr |gf-var|))
+  (cond ((null |gf-var|))
+	((not (listp |gf-var|))
+	 (GF ",{0'. '*}" |gf-var|) T)
+	((Gabbrev-length (null (cdr |gf-var|)) (car |gf-var|)))
+	(T #Q(cond (Ginspecting (setq Gloc (locf (car |gf-var|))))) nil)))
+
+;this tests whether the length abbreviation limit has been exceeded.
+
+(defun Gabbrev-length (is-last next-item)
+  (cond ((let ((len (cond ((= Gprinlevel (Glevel)) 2) (t Gprinlength))))
+	   (cond ((> (Glength) len))
+		 ((< (Glength) len) nil)
+		 ((null is-last))
+		 ((= Gprinlevel (Glevel)) nil)
+		 ((or (symbolp next-item) (numberp next-item)) nil)
+		 (T T)))
+	 (setq Gabbreved T)
+	 (GF "~'...'") T)))
+
+(defun GF-next-period ()
+  #Q(setq Gloc (locf (cdr |gf-var|)))
+    (setq |gf-var| (cdr |gf-var|)))
+
+(defun GF-initial ()
+  (cond ((not (#Mpairp #Qlistp |gf-var|)))
+      #Q(Ginspecting (setq GLoc (locf (car |gf-var|))) nil)))
+
+;this saves you from having to make a lot of declarations in MacLisp
+
+#M(cond ((fboundp '*fexpr)
+	 (*fexpr plp)
+	 (*lexpr Gprint1 Gprintc Gprint Gexplode Gexplodec)
+	 (*expr Gdispatch GQ GF-next GF-next-period GF-initial)
+	 (special Gcheckrecursion prinstartline prinendline Gatom-pcode)))
+
+;this is a macro used only on this page to make the definitions easier
+
+(defun defGprin macro (body)
+  (let ((name (cadr body))
+	(pcode (caddr body))
+	(exploding (cadddr body))
+	(print-like (cadddr (cdr body))))
+    `(defun ,name (obj &optional (file-or-stream nil)
+		                 (format nil)
+				 (Gprinlevel prinlevel)
+				 (Gprinlength prinlength)
+				 (Gprinendline prinendline)
+				 (Gprinstartline prinstartline)
+		       &aux (Gatom-pcode ',pcode)
+		            (Gexploding ,exploding))
+       (Gformat-obj ,print-like format obj file-or-stream))))
+
+;the following are the main user functions for calling the Gprinter
+;they are all in the form of a call on Gformat-obj.
+
+(defGprin Gprint1 :prin1 nil nil)
+(defGprin Gprintc :princ nil nil)
+(defGprin Gprint :prin1 nil T)
+(defGprin Gexplode :prin1 (ncons nil) nil)
+(defGprin Gexplodec :princ (ncons nil) nil)
+
+;this is an incompatable version of an obsolete function.  it is useful
+;for printing something out with no abbreviation.
+
+(defun pl (obj &optional (file-or-stream #Mnil #Qstandard-output) (format nil))
+  (Gprint obj file-or-stream format nil nil nil nil) #Q(values))
+
+;this is available for setting up the suggested printing environment. it MUST
+;BE CALLED BY THE USER if you want it to happen.
+;The next page shows the definitions of all this for the LISPM.
+#M
+(defun Gset-up-printer ()
+  (sstatus ttyint #^S 'Gprintabort)
+  (cond ((memq 'tops-20 (status features))
+	 (sstatus ttyint #^R 'Gcontinue))
+	(T (sstatus ttyint #^C 'Gcontinue)))
+  (sstatus ttyint #^P 'Greprint)
+  (setq prin1 'Gprint1))
+
+;this sets things up on the LISPM.  (see TV:KBD-ESC in
+;LMWIN;BASSTR > to learn about TV:*ESCAPE-KEYS*).
+#Q
+(cond ((not (assoc #o220 TV:*ESCAPE-KEYS*))
+       (push '(#o220 gprint:Gprintabort "Stop Gprinting" :keyboard-process)
+	     TV:*ESCAPE-KEYS*)
+       (push '(#o222 gprint:Greprint
+	       "Continue Gprinting; arg re-Gprints in full"
+	       :keyboard-process)
+	      TV:*ESCAPE-KEYS*)))
+#Q
+(defun Gset-up-printer ()
+  (setq prin1 'Gprint1))
+
+;FORMAT interface. This makes ~N (~G is taken already) be GPRINT1 and
+;~:N be GPRINTC.  Numeric pre-arguments are taken to be prinlevel, 
+;prinlength, etc.  Note there is a possible bug here if you use FORMAT NIL
+;with a long thing because you are going to get crlfs in your output.
+
+(declare (special colon-flag standard-output))
+
+(defun (#Q format: n #Q format: format-ctl-one-arg
+	             #M format-ctl-one-arg)
+    (obj args)
+  (apply (cond (#Q format: colon-flag 'Gprintc) (T 'Gprint1))
+	 (list* obj standard-output nil args)))
+
+;this function prints out parts of plists and function cells.  It fills
+;the same cultural niche as GRINDEF but is simpler and incompatable.
+;it takes in a sequence of arguments unevaluated.  each one is either
+;an atom in which case all of the properties and other aspects of the atom
+;are printed out, or a list where the car is an atom, and the cdr is a list of
+;properties to be printed (:VALUE means the value cell, :FUNCTION means the
+;function cell (most recent functional deffn for MACLISP)).  If you give it
+;no arguments at all it does whatever it did last again.
+
+(defun plp fexpr (arg)
+  (setq plp (or arg plp))
+  (prog (list arg)
+     (setq list plp)
+   L (cond ((null list) (return nil)))
+     (setq arg (pop list))
+     (cond ((cdr plp) (terpri) (princ "   ;for the symbol ")
+		      (prin1 (cond ((atom arg) arg) (T (car arg))))))
+     (let* ((symbol (cond ((atom arg) arg) (T (car arg))))
+	    (props (cond ((atom arg) plp-properties) (T (cdr arg))))
+	    (print-header (or (atom props) (cdr props)))
+	    (save))
+       (cond ((and (or (atom props) (memq ':value props)) (boundp symbol))
+	      (plp2 symbol nil (symeval symbol) 'value print-header)))
+       (cond ((and (or (atom props) (memq ':function props)) (fboundp symbol))
+	    #Q(let ((fn (fsymeval symbol)))
+		(cond ((and (listp fn) (eq (car fn) 'macro))
+		       (plp2 symbol 'macro (cdr fn) 'fncell print-header))
+		      (T (plp2 symbol 'expr fn 'fncell print-header))))
+	    #M(setq save (getl symbol '(expr fexpr macro subr lsubr fsubr)))
+	    #M(plp2 symbol (car save) (cadr save) 'prop print-header)))
+       (do ((p (plist symbol) (cddr p)))
+	   ((null p))
+	 (cond ((eq p save))
+	       ((or (atom props) (memq (car p) props))
+	        (plp2 symbol (car p) (cadr p) 'prop print-header)))))
+     (go L))
+  #Q(values))
+
+(defun plp2 (symbol prop val type print-header)
+  (cond ((and (not (eq type 'value)) (listp val)
+	      (memq (car val) '(lambda named-lambda named-subst)))
+	 (setq type (cond ((eq (car val) 'named-subst) 'defsubst) (T 'defun)))
+	 (setq val
+	  `(defun ,(cond ((eq prop 'expr) symbol) (T `(,symbol ,prop)))
+	    .,(cond ((eq (car val) 'lambda) (cdr val))
+		    (T (cddr val)))))))
+  (terpri)
+  (cond ((or (null print-header) (eq type 'defun))
+	 (Gprint1 val nil nil nil nil nil nil))
+	((eq type 'value) (Gformat T "{1';Value -'_*}" val))
+	((eq type 'fncell) (Gformat T "{1';Function cell -'_*}" val))
+	((eq type 'prop) (Gformat T "{1';'*' property -'_*}" prop val))))
+
+;this should be put on an interrupt character i.e. (sstatus ttyint 19.
+;'Gprintabort) it enables you to stop printing in the middle of
+;something.
+#M
+(defun Gprintabort (ignore ignore-ch)
+  (nointerrupt nil)
+  (or (memq 'tops-20 (status features)) (tyi tyi))
+  (cond (Gnowprinting (*throw 'Gprintabort '|aborted|))))
+
+;this allows you to continue output which was truncated because it was
+;too many lines long.  It is only intended to work for tty output
+#M
+(defun Gcontinue (ignore ignore-ch)
+  (nointerrupt nil)
+  (or (memq 'tops-20 (status features)) (tyi tyi))
+  (Gredo nil))
+#M
+(defun Greprint (ignore ignore-ch)
+  (nointerrupt nil)
+  (or (memq 'tops-20 (status features)) (tyi tyi))
+  (Gredo T))
+
+;this does the actual reprinting.  note that if you ask for a full 
+;reprinting, and you are ABOVE the place where the printing happended
+;last time, it just does the printing at the plae where you are instead
+;of going back to the old spot.
+
+(defun Gredo (all?)
+  (cond ((and Gtruncated (car Gtruncated))
+	 (let* ((initial-line (nth 0 Gtruncated))
+		(final-line (nth 1 Gtruncated))
+		(initial-charpos (nth 2 Gtruncated))
+		(mainfile (nth 3 Gtruncated))
+		(params (nth 4 Gtruncated))
+		(form (nth 5 Gtruncated))
+		(current-line (car (Gcursorpos mainfile)))
+		(start-line (cond (all? (min current-line initial-line))
+				  (T final-line))))
+	   (Gcursorpos start-line initial-charpos mainfile)
+	   (Gcursorpos 'l mainfile)
+	   (let ((Gprinlevel (cond (all? 6400.) (T (nth 0 params))))
+		 (Gprinlength (cond (all? 6400.) (T (nth 1 params))))
+		 (Gprinendline (cond (all? 6400.) (T (nth 2 params))))
+		 (Gprinstartline (cond (all? 0) (T (nth 3 params))))
+		 (Gatom-pcode (nth 4 params))
+		 (Gexploding nil))
+	     (eval form))
+	   (cond ((not (= final-line current-line)) (terpri mainfile)))
+	   (cond ((not all?)  ;so can ^P after ^C
+		  (rplaca Gtruncated initial-line)))
+	 #Q(funcall terminal-io ':refresh-rubout-handler)))))
+#Q
+(defun Ginterrupt-current-process (form)
+  (let ((p (and tv:selected-window
+		(funcall tv:selected-window ':process))))
+    (cond (p (funcall p ':interrupt 'eval form)))))
+#Q
+(defun Gprintabort (ignore)
+  (Ginterrupt-current-process
+    '(cond (Gnowprinting (*throw 'Gprintabort '|aborted|)))))
+#Q
+(defun Greprint (all?)
+  (Ginterrupt-current-process (list 'gredo all?)))
+
+;this is the main entry function into the internals of the printer.
+;it sets up the initial values of all of the internal globals and fires up the
+;format functions.
+
+(defun Gformat-obj (print-like format obj file-or-stream)
+  (setq Gprinlevel (or Gprinlevel 64000.)
+	Gprinlength (or Gprinlength 64000.)
+	Gprinendline (or Gprinendline 64000.)
+	Gprinstartline (or Gprinstartline 0.))
+#Q(cond ((null file-or-stream) (setq file-or-stream standard-output))
+	((eq file-or-stream T) (setq file-or-stream terminal-io)))
+#M(cond ((not (or (null file-or-stream) (eq (typep file-or-stream) 'list)))
+	 (setq file-or-stream (ncons file-or-stream))))
+#M(setq file-or-stream (subst tyo t file-or-stream))
+  (cond ((and print-like (null Gexploding) (not (plusp Gprinstartline))
+	      (plusp Gprinendline))
+	 (terpri file-or-stream)))
+  (let* ((Gout file-or-stream)
+         (Gmainfile #M(or (car Gout) (and ^r ^w (car outfiles)) tyo) #QGout)
+	 (initial-cursorpos (Gcursorpos Gmainfile))
+	 (Ginitial-charpos (cond (print-like 0) (T (Gcharpos Gmainfile))))
+	 (Glinelen (- (or prinmargin (Glinel Gmainfile)) Ginitial-charpos 5))
+	 (Gfreelen Glinelen)
+	 (Glineno 0)
+	 (Gpending 0)
+	 (Gpending-newline nil)
+	 (Gdepth 0)
+	 (Gwent-up nil)
+	 (Gqueue (cond (Gnowprinting (array nil nil 60.))
+		       (Gqueue)
+		       ((setq Gqueue (array nil nil 300.)))))
+	 (Gql 0)
+	 (Gqr 0)
+    	 (Gqs (cond (Gnowprinting (array nil fixnum 20.))
+		    (Gqs)
+		    ((setq Gqs (array nil fixnum 120.)))))
+	 (Gqsp 0)
+	 (Gps (cond (Gnowprinting (array nil fixnum 10.))
+		    (Gps)
+		    ((setq Gps (array nil fixnum 60.)))))
+	 (Gpsp 0)
+	 (Gparents (cond (Gnowprinting (array nil nil 10.))
+			 (Gparents)
+			 ((setq Gparents (array nil nil 50.)))))
+	 (Gabbreved nil)
+	 (Grptr -1)
+	 (Gtsize 0)
+	 (Glsize 0))
+    (setf (Gbegin) -1)
+    (setf (Glevel) 0)
+    (setf (Glength) 0)
+    (setf (Gsave-Gtsize) 0)
+    (setf (Gtabsize) -1)
+    (setf (Gpindent) 0)
+
+    (cond (#MGforce-mores
+	   #Q(and Gforce-mores
+		  (memq ':home-cursor (funcall Gmainfile ':which-operations)))
+	   (Gcursorpos 't Gmainfile)
+	   (Gcursorpos (car initial-cursorpos)
+		       (cdr initial-cursorpos)
+		       Gmainfile)))
+    (cond (Gshow-errors (Gformat-obj1 obj print-like format))
+	  ((errset (Gformat-obj1 obj print-like format)))
+	  ((errset (progn (princ '|error while GPRINTing:|) (print obj))))
+	  (T (terpri) (princ '|error while PRINTing |)
+	   #M(princ '|MUNKAM of |) #M(princ (maknum obj))))
+    (cond ((and Gabbreved (null Gexploding) initial-cursorpos)
+	   (setq Gtruncated
+		 `(,(car initial-cursorpos) ,(car (Gcursorpos Gmainfile))
+		   ,Ginitial-charpos ,Gmainfile
+		   (,Gprinlevel ,Gprinlength 64000. ,Glineno ,Gatom-pcode)
+		   (Gformat-obj nil ',format ',obj ',Gmainfile)))))
+    (cond (Gexploding (cdr (nreverse Gexploding)))
+	  (T #MT #Q(values)))))
+
+(defun Gformat-obj1 (obj print-like format)
+  (or (null (*catch 'Gprintabort
+	      (let* ((Gnowprinting T)
+		     (prin1 nil))
+		(GF "$#" obj format)
+		(cond ((or (not (zerop Gqsp)) (not (zerop Gpsp)))
+		       (error "Note enough }s in format")))
+		(cond (print-like (GF "' '"))))))
+      (setq Gabbreved T)))
+
+
+;this is a local macro used only in the next function.
+;this checks to see if any of a list of special formatters is appropriate.
+
+(defun Gselect macro (body)
+  (let ((list (cadr body)) (default (caddr body)))
+   (displace body
+    `(cond ((do ((fns ,list (cdr fns)))
+	     ((null fns) ,(cond ((null default) nil)
+				((atom default) `(,default obj))
+				(T `(funcall ,default obj))))
+	   (cond ((funcall (car fns) obj) (return T)))))))))
+
+(defmacro Ginspect-atom (form)
+  #Mform
+  #Q`(progn (cond ((and Ginspecting loc)
+		   (GQ ':eval `(funcall ',Ginspecting ',obj ',loc T))))
+	    ,form))
+
+(defmacro Ginspect (form)
+  #Mform
+  #Q`(progn (cond ((and Ginspecting loc)
+		   (GQ ':eval `(funcall ',Ginspecting #/( ',loc nil))))
+	    ,form
+	    (cond ((and Ginspecting loc)
+		   (GQ ':eval `(funcall ',Ginspecting #/) ',loc nil))))))
+
+;this is the basic dispatch routine that decides what to do based on the
+;type of the object to print.  (It takes care of depth abbreviation, and 
+;checks for circularity abbreviation.)  Special format functions can be put
+;on the variables Gspecial-formatters, Glist-formatters, Ghunk-formatters, and 
+;Garray-formatters.  They should return T when they succeed.
+;all of the standard tests are inline coded for speed.
+
+(defun Gdispatch (Gsuggested-format obj)
+  (let ((Grptr Grptr) #Q(loc Gloc) #QGloc)
+    (cond (Gcheckrecursion (setq obj (Gcheckrecursion obj))))
+    (cond ((not (or (< (Glevel) Gprinlevel) (symbolp obj) (numberp obj)))
+	   (setq Gabbreved T) (GQ ':PRINC Gprinlevel-abbrev))
+	  ((Gselect Gspecial-formatters nil))
+	  ((or (symbolp obj) (numberp obj) #Q(stringp obj))
+	   (Ginspect-atom (GQ Gatom-pcode obj)))
+	  ((listp obj)
+	   (Ginspect
+	     (cond ((Gselect Goverriding-list-formatters nil))
+		   (Gsuggested-format (funcall Gsuggested-format obj))
+		   (T (Gselect Glist-formatters
+			(let* ((head (car obj)))
+			  (cond ((symbolp head)
+				 (cond ((get head ':Gformat))
+				       ((fboundp head) Gfn-format)
+				       (T Gsymbol-car-format)))
+				((and (listp head)
+				      (memq (car head)
+					'(lambda named-lambda named-subst)))
+				 Gapply-format)
+				(T Gnon-symbol-car-format))))))))
+	#M((hunkp obj)
+	   (let* ((usrhunk (status usrhunk))
+		  (sendi (status sendi))
+		  (ops (and usrhunk (funcall usrhunk obj)
+			    (funcall sendi obj ':which-operations))))
+	     (cond ((memq ':Gformat-self ops)
+		    (funcall sendi obj ':Gformat-self obj))
+		   ((or (memq ':print-self ops) (memq 'print ops))
+		    (GQ Gatom-pcode obj))
+		   ((Gselect Ghunk-formatters Gformat-hunk)))))
+	#Q((named-structure-p obj)
+	   (cond ((let ((name (named-structure-symbol obj)))
+		    (and (symbolp name)
+			 (get name 'named-structure-invoke)
+			 (memq ':Gformat-self
+			   (named-structure-invoke obj ':which-operations))))
+		  (Ginspect (named-structure-invoke obj ':Gformat-self obj)))
+		 (T (Ginspect-atom (GQ Gatom-pcode obj)))))
+        #Q((and (or (typep obj ':entity) (typep obj ':instance))
+		(memq ':Gformat-self (funcall obj ':which-operations)))
+	   (Ginspect (funcall obj ':Gformat-self obj)))
+	  ((eq (typep obj) #M'array #Q':array)
+	   (Ginspect (Gselect Garray-formatters Gformat-array)))
+	  (T (Ginspect-atom (GQ Gatom-pcode obj))))))
+
+;this checks to see if the thing has been encountered before.
+;note lists are treated specially because they are the only data
+;structure which has a horizontal structure which can be circular.
+;(Due to the fact that each list is treated as an indivisable structure,
+;if some element of a list points to some internal cdr of a list it is
+;inside, the circularity will not be detected as soon as you might think,
+;but the printer won't blow up.)
+;Note that Gdispatch is the only place where circularity is checked.
+;if you following any pointers without calling Gdispatch on EACH new
+;structure, all bets are off circularity-wise.
+
+(defun Gcheckrecursion (thing)
+  (setq Grptr (1+ Grptr))
+  (cond ((not (< Grptr (array-dimension-n 1 Gparents)))
+	 (*rearray Gparents nil (+ Grptr 20))))
+  (store (arraycall nil Gparents Grptr) thing)
+  (cond ((Gcheckrecursion1 thing))
+	((#Mpairp #Qlistp thing) (Gcheckrecursion-list thing))
+	(T thing)))
+
+;note that this works hard so that there is no consing when there
+;is no circularity.  Note that when there is cicularity this copying
+;will confuse the inspector a little.
+
+(defun Gcheckrecursion-list (thing)
+  (do ((lst (cdr thing) (cdr lst))
+       (n 1 (1+ n)))
+      ((not (#Mpairp #Qlistp lst)) thing)
+    (let ((rec (or (Gcheckrecursion1 lst)
+		   (Gcrl1 lst thing n))))	  
+      (cond (rec (return (do ((l (cdr thing) (cdr l))
+			      (r (ncons (car thing)) (cons (car l) r))
+			      (i (1- n) (1- i)))
+			     ((zerop i)
+			      (prog1 (nreverse r) (rplacd r rec))))))))))
+
+(defun Gcrl1 (lst thing n)
+  (do ((l thing (cdr l))
+       (i n (1- i)))
+      ((zerop i) nil)
+    (cond ((eq l lst)
+	   (return (let ((*nopoint T))
+		     (intern (format nil "%~a" i))))))))
+
+(defun Gcheckrecursion1 (thing)
+  (do ((i (1- Grptr) (1- i)))
+      ((minusp i) nil)
+    (cond ((eq thing (arraycall nil Gparents i))
+	   (return (let ((*nopoint T))
+		     (intern (format nil "^~a" (- Grptr i)))))))))
+
+;this prints out a hunk in the standard MacLisp way.
+#M
+(defun Gformat-hunk (hunk)
+  (GF "{1'('")
+  (prog (j end)
+     (setq end (hunksize hunk)
+	   j (cond ((= end 1) 0) (T 1)))
+   L (GF "B*' .'" (cxr j hunk))
+     (cond ((zerop j) (return nil)))
+     (setq j (1+ j))
+     (cond ((= j end) (setq j 0)))
+     (GF "~")
+     (cond ((Gabbrev-length (= j 0) (cxr j hunk)) (return nil)))
+     (go L))
+  (GF "')'}"))
+
+;this prints out an array by printing out what is in it.  It first
+;just prints out what the normal printer would, and then prints out
+;the things inside (if GPRINT-ARRAY-CONTENTS is T), using sublists if
+;the array is multi-dimensional.  This only does fancy stuff for single and
+;double dimensioned arrays at the current time.
+
+(defun Gformat-array (array)
+  (GF "{2")
+  (GQ Gatom-pcode array)
+  (cond ((null Gprint-array-contents))
+	(T (let ((dims (arraydims array)))
+	     (and #M(memq (car dims) '(fixnum flonum T nil))
+		  (not (zerop (cadr dims)))
+		  (caseq (length (cdr dims))
+		    (1 (Gformat-array-1 array dims))
+		    (2 (Gformat-array-2 array dims)))))))
+  (GF "}"))
+
+(defun Gformat-array-1 (array dims)
+  (GF "' contains'-")
+  (cond ((not (< (Glevel) Gprinlevel))
+	 (setq Gabbreved T)
+	 (GQ ':PRINC Gprinlevel-abbrev))
+	(T (GF "{1'['")
+	   (prog (j end type)
+	       (setq type (car dims)
+		     end (1- (cadr dims))
+		     j 0)
+	     L #Q(cond (Ginspecting (setq Gloc (locf (aref array j)))))
+	       (GF "TB*" #Q(aref array j)
+		         #M(caseq type
+			     (fixnum (arraycall fixnum array j))
+			     (flonum (arraycall flonum array j))
+			     (T (arraycall nil array j))))
+	       (setq j (1+ j))
+	       (cond ((> j end) (return nil)))
+	       (cond ((Gabbrev-length (= j end) '(nil)) (return nil)))
+	       (GF "~")
+	       (go L))
+	   (GF "']'}"))))
+
+(defun Gformat-array-2 (array dims)
+  (GF "' contains'-")
+  (cond ((not (< (Glevel) Gprinlevel))
+	 (setq Gabbreved T)
+	 (GQ ':PRINC Gprinlevel-abbrev))
+	(T (GF "{1'['")
+	   (prog (j end)
+	       (setq end (1- (cadr dims))
+		     j 0)
+	     L (Gformat-array-2-1 array j dims)
+	       (setq j (1+ j))
+	       (cond ((> j end) (return nil)))
+	       (cond ((Gabbrev-length (= j end) '(nil)) (return nil)))
+	       (GF "-")
+	       (go L))
+           (GF "']'}"))))
+
+(defun Gformat-array-2-1 (array i dims)
+  (cond ((not (< (Glevel) Gprinlevel))
+	 (setq Gabbreved T)
+	 (GQ ':PRINC Gprinlevel-abbrev))
+	(T (GF "{1'['")
+	   (prog (j end type)
+	       (setq type (car dims)
+		     end (1- (caddr dims))
+		     j 0)
+	     L #Q(cond (Ginspecting (setq Gloc (locf (aref array i j)))))
+	       (GF "TB*" #Q(aref array i j)
+		         #M(caseq type
+			     (fixnum (arraycall fixnum array i j))
+			     (flonum (arraycall flonum array i j))
+			     (T (arraycall nil array i j))))
+	       (setq j (1+ j))
+	       (cond ((> j end) (return nil)))
+	       (cond ((Gabbrev-length (= j end) '(nil)) (return nil)))
+	       (GF "~")
+	       (go L))
+	   (GF "']'}"))))
+
+;this section contains list formatters.
+;note that most of these templates are effecient but obscure!
+
+;this macro defines a format, but only if you haven't defined one yet!
+;this is so that loading Gprint won't overwrite formats you write.
+
+(defmacro defun-default-Gformat (atom args . body)
+  (let ((fn (intern (format nil "~a-:Gformat" atom))))
+    `(eval-when (eval load)
+       (defun ,fn ,args .,body)
+       (defprop-default-Gformat ',atom ',fn))))
+
+(defun defprop-default-Gformat (atom fn)
+  (cond ((null (get atom ':Gformat))
+	 (putprop atom fn ':Gformat))))
+
+;first we have some of general utilities that you can use
+;inside formats you create or as the format argument of GPRINT.
+
+(defun :Gfn-format (x) (GF "(*_<*->)" x))
+(defun :GTblock (x) (GF "(1<TB$:GTblock ~>)" x))
+(defun :G1Tblock (x) (GF "(1<TB*~>)" x))
+(defun :Gblock (x) (GF "(1<$:Gblock ,>)" x))
+(defun :G1block (x) (GF "(1<*,>)" x))
+(defun :Gmiser (x) (GF "(1<$:Gmiser ->)" x))
+(defun :G1miser (x) (GF "(1<*->)" x))
+(defun-default-Gformat :Gnothing (ignore) nil)
+(defun-default-Gformat :Gunterpri (ignore) (GQ ':eval '(:Gunterpri Gmainfile)))
+(defun :Gunterpri (file)
+  (let ((pos (car (Gcursorpos file))))
+    (cond ((and pos (> pos 0))
+	   (Gcursorpos (1- pos) (1- (Glinel file)) file)))))
+
+(defun :Gsetq-format (x) (GF "(*_<*+1,*+-1!>)" x))
+(defun-default-Gformat setq (x) (:Gsetq-format x))
+(defun-default-Gformat psetq (x) (:Gsetq-format x))
+(defun-default-Gformat setf (x) (:Gsetq-format x))
+
+(defun :Gquote-format (key list)
+  (cond ((and (#Qlistp #Mpairp (cdr list)) (null (cddr list)))
+	 (GF "{0S[I*]}" key list))
+	(T (:Gfn-format list))))
+(defun-default-Gformat quote (x) (:Gquote-format '|'| x))
+(defun-default-Gformat function (x) (:Gquote-format '|#'| x))
+
+(defun :Gback-quote-format (key list)
+  (GF "{0S[I.*]}" key list))
+(defun-default-Gformat |`-expander/|| (x) (:Gback-quote-format '|`| x))
+(defun-default-Gformat |`,/|| (x) (:Gback-quote-format '|,| x))
+(defun-default-Gformat |`,@/|| (x) (:Gback-quote-format '|,@| x))
+(defun-default-Gformat |`,./|| (x) (:Gback-quote-format '|,.| x))
+(defun-default-Gformat |`.,/|| (x) (:Gback-quote-format '|.,| x))
+;Note that in maclisp, '`(a .,d) doesn't print right because 
+;the marker is not a list car.
+
+(defun-default-Gformat defselect (x) 
+  (GF "(2*_$:G1block <!(2*_$:Gblock <!*>)>)" x))
+(defun-default-Gformat progw (x) (GF "(2*_<*!>)" x))
+(defun-default-Gformat progv (x) (GF "(*_*-*+-5<!*>)" x))
+(defun-default-Gformat multiple-value-bind (x)
+  (GF "(4*_$:G1block !*+-2<!*>)" x))
+
+;this makes the Gprinter obay the grind-macroexpanded flag from the
+;file DEFMAX so that macro expansions print pretty.
+
+(defun-default-Gformat macroexpanded (obj)
+  (GF "*" (cond (grind-macroexpanded (cadddr (cdr obj)))
+		(t (cadddr obj)))))
+
+;This makes si:displaced things come out right.
+#Q
+(defun-default-Gformat si:displaced (obj)
+  (GF "*" (cond (grind-macroexpanded (caddr obj))
+		(t (cadr obj)))))
+
+;this makes defun print out right by checking whether it is of the one or two
+;keyword form.
+
+(defun-default-Gformat defun (obj)
+  (cond ((or (memq (cadr obj) '(expr fexpr macro))
+	     (memq (caddr obj) '(expr fexpr macro)))
+	 (GF "(2*_*_*_$:Gblock <-*>)" obj))
+	(T (GF "(2*_$:G1block _$:Gblock <-*>)" obj))))
+
+(defun-default-Gformat defunS (obj)
+  (GF "(2*~*~$:Gblock <-*>)" obj))
+
+;the following fns just check for indentation changes and then print 
+;out the forms
+
+(defun :Gapply-format (list)
+  (GF "(1*-<*,>)" list))
+(defun-default-Gformat lambda (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(2*_$:Gblock <-*>)" x))))
+(defun-default-Gformat named-lambda (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(*~*,$:Gblock +-12<-*>)" x))))
+(defun-default-Gformat named-subst (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(*~*,$:Gblock +-11 <-*>)" x))))
+(defun-default-Gformat let (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(2*~$Gformat-bind-list <-*>)" x))))
+(defun-default-Gformat let* (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(2*~$Gformat-bind-list <-*>)" x))))
+(defun-default-Gformat letS (list)
+  (Gcheck-indentation list
+    #'(lambda (x) (GF "(2*~$Gformat-bind-list <-*>)" x))))
+
+(defun Gformat-bind-list (list)
+  (cond ((do ((l list (cdr l))) ((null l) T)
+	   (cond ((not (symbolp (car l))) (return nil))))
+	 (GF "(1<*,>)" list))
+	(T  (GF "(1(1$:Gblock <,*>) <-$/"!(1$:Gblock <,*>)/" >)" list))))
+
+;This makes cond come out right, and makes T clauses look good.
+
+(defun-default-Gformat cond (x) (GF "(*_<$Gcond-format2 ->)" x))
+
+(defun Gcond-format2 (list)
+  (cond ((eq (car list) T)
+	 (GF "(*_<*->)" list))
+	(T (GF "(1<*->)" list))))
+
+;this takes care of making the tags come out right in a prog.  It works
+;even if there are two or more tags in a row.
+
+(declare (special Gwas-label))
+
+(defun-default-Gformat prog (list)
+  (cond ((and (listp (cdr list)) (cadr list) (symbolp (cadr list)))
+	 (Gnamed-prog-format list))
+	(T (Gprog-format list))))
+
+(defun-default-Gformat prog* (list)
+  (cond ((and (listp (cdr list)) (cadr list) (symbolp (cadr list)))
+	 (Gnamed-prog-format list))
+	(T (Gprog-format list))))
+
+(defun Gprog-format (list)
+  (let* (Gwas-label)
+    (Gcheck-indentation list 
+      #'(lambda (x) (GF "(*_$Gformat-bind-list <%Gprog-format2 >)" x)))))
+
+(defun Gnamed-prog-format (list)
+  (let* (Gwas-label)
+    (Gcheck-indentation list 
+      #'(lambda (x) (GF "(*~*_$Gformat-bind-list <%Gprog-format2 >)" x)))))
+
+(defun Gprog-format2 (item)
+  (cond ((not Gwas-label) (GF "!")))
+  (cond ((atom item) (setq Gwas-label T)
+	 (GF "~#*~" (- -1 (flatsize item)) item))
+	(T (GF "*" item) (setq Gwas-label nil))))
+
+;DO must be handled much like PROG in case there are any labels.
+
+(defun-default-Gformat do (list)
+  (let* (Gwas-label)
+    (Gcheck-indentation list 
+      #'(lambda (x) (GF "(*_(1<$:G1block !>)!(1<*->)+-2
+			   <%Gprog-format2 >)" x)))))
+
+(defun-default-Gformat do-named (list)
+  (let* (Gwas-label)
+    (Gcheck-indentation list
+      #'(lambda (x)
+	  (GF "{2'('*~*_{0(1<$:G1block !>)!(1<*->)}[<%Gprog-format2 >]')'}"
+	      (nth 0 x) (nth 1 x) (nth 2 x) (nth 3 x) (nthcdr 4 x))))))
+
+(defun-default-Gformat dolist (list) (GF "(2*_<*->)" list))
+(defun-default-Gformat dotimes (list) (GF "(2*_<*->)" list))
+#Q
+(defGF loop "(*_*<%Gloop-format >)")
+#Q
+(defun Gloop-format (item)
+  (if (or (si:loop-tassoc item si:loop-keyword-alist)
+	  (si:loop-tassoc item si:loop-iteration-keyword-alist))
+      (gf "-*" item)
+      (gf "_*" item)))
+
+;The following is almost more kludge than it is worth, but it works.
+
+;this checks to see if the maximum reasonable indentation has been
+;exceeded, and if so reduces the indentation.  Note the  cludge so
+;that it will work even if we are misering.
+
+(defun Gcheck-indentation (list format-fn)
+  (let ((ind (Gestimate-indent)))
+    (cond ((> (- Glinelen ind) major-width) (GF "%#" list format-fn))
+	  (T (GF "!~#';----------'~#'|'!" (- ind) (- ind 11.))
+	     (GF "~#%#" (- 5 ind) list format-fn)
+	     (GF "!~#';----------'~#'|'!" (- ind) (- ind 11.))))))
+
+;This looks down the queue, and estimates what the indentation will be
+;when everything now in the queue is printed if the substructures have
+;to be broken up.
+
+(defun Gestimate-indent ()
+  (let ((indent (Gpindent))
+	(Gql Gql)
+	(count 0)
+	(misering (Gmisering)))
+    (prog ()
+     L (cond ((not (< Gql Gqr)) (return nil)))
+       (caseq (Gtype)
+	 (:ind (cond ((and (zerop count) (not misering))
+		      (setq indent (max (+ indent (or (Gobj) (Gget-indent)))
+					0)))))
+	 (:end (setq count (1- count)))
+	 (:start (cond ((and (zerop count) (null (Gsize)))
+			(cond ((< Glinelen (+ indent miser-width))
+			       (setq misering T)
+			       (setq indent (1+ indent)))))
+		       (T (setq count (1+ count))))))
+       (Gpop Gqueue)
+       (go L))
+    indent))
+
+;this makes backquote grind right on the LISPM. 
+;[Won't work right with locatives.]
+
+#Q(defun-default-Gformat si:xr-bq-cons (obj)
+    (:Gback-quote-format '|`| (cons '|`-expander/|| (Gunbackquotify obj))))
+#Q(defun-default-Gformat si:xr-bq-list (obj)
+    (:Gback-quote-format '|`| (cons '|`-expander/|| (Gunbackquotify obj))))
+#Q(defun-default-Gformat si:xr-bq-list* (obj)
+    (:Gback-quote-format '|`| (cons '|`-expander/|| (Gunbackquotify obj))))
+#Q(defun-default-Gformat si:xr-bq-append (obj)
+    (:Gback-quote-format '|`| (cons '|`-expander/|| (Gunbackquotify obj))))
+#Q(defun-default-Gformat si:xr-bq-nconc (obj)
+    (:Gback-quote-format '|`| (cons '|`-expander/|| (Gunbackquotify obj))))
+
+;Convert the backquote form to a list resembling what the user typed in,
+;with "calls" to |`,/||, etc., representing the commas.
+;Lifted from lmio;grind.
+#Q
+(defun Gunbackquotify (exp)
+  (cond ((or (numberp exp) (eq exp t) (null exp) (stringp exp)) exp)
+	((symbolp exp) `(|`,/|| . ,exp))
+	((atom exp) exp)
+	((eq (car exp) 'quote) (cadr exp))
+	((eq (car exp) 'si:xr-bq-cons)
+	 (cons (Gunbackquotify (cadr exp))
+	       (Gunbackquotify-segment (cddr exp) nil t)))
+	((eq (car exp) 'si:xr-bq-list)
+	 (mapcar 'Gunbackquotify (cdr exp)))
+	((eq (car exp) 'si:xr-bq-list*)
+	 (nconc (mapcar 'Gunbackquotify (butlast (cdr exp)))
+		(Gunbackquotify-segment (last exp) nil t)))
+	((eq (car exp) 'si:xr-bq-append)
+	 (mapcon 'Gunbackquotify-segment (cdr exp)
+		 (circular-list t) (circular-list nil)))
+	((eq (car exp) 'si:xr-bq-nconc)
+	 (mapcon 'Gunbackquotify-segment (cdr exp)
+		 (circular-list nil) (circular-list nil)))
+	(t `(|`,/|| . ,exp))))
+
+;Convert a thing in a backquote-form which should appear as a segment,
+;not an element.  The argument is the list whose car is the
+;segment-form, and the value is the segment to be appended into the
+;resulting list.
+#Q
+(defun Gunbackquotify-segment (loc copy-p tail-p)
+  (cond ((and tail-p (atom (cdr loc)))
+	 (let ((tem (Gunbackquotify (car loc))))
+	   (cond ((and (listp tem) (eq (car tem) '|`,/||))
+		  (list `(|`.,/|| . ,(car loc))))
+		 (t tem))))
+	((and (listp (car loc))
+	      (eq (caar loc) 'quote)
+	      (listp (cadar loc)))
+	 (cadar loc))
+	(t (list (cons (if copy-p '|`,@/|| '|`,./||)
+		       (car loc))))))
+
+;this creates queue entries.
+
+(defun GQ (type obj)
+;make a new entry in the queue.
+  (setf (Gtype Gqr) type)
+  (setf (Gobj Gqr) obj)
+  (setf (Gsize Gqr)
+	(caseq type
+	  (:start nil)
+	  (:newline (cond ((memq obj '(:always :normal :miser)) 0)))
+	  (:prin1 (flatsize obj))
+	  ((:princ :special) (flatc obj))
+	  (:space obj)
+	  ((:ind :end :tab :eval) 0)
+	  (T (error "GPRINT -- bad type to GQ" type))))
+;do special processing for start and end of a substructure.
+  (caseq type
+    (:start (let ((i (Glevel)))
+	     (Gpush Gqs)
+	     (setf (Gbegin) Gqr)
+	     (setf (Gsave-Gtsize) Gtsize)
+	     (setf (Glevel) (cond ((equal obj 0) i) (T (1+ i))))
+	     (setf (Glength) 0)))
+    (:end (cond ((not (minusp (Gbegin)))
+		 (setf (Gsize (Gbegin)) (- Gtsize (Gsave-Gtsize)))
+		 (Gupdate-sizes (Gbegin))))
+	  (Gpop Gqs)))
+;update the total size
+  (cond ((memq type '(:princ :prin1 :special :space))
+	 (setf Gtsize (+ Gtsize (Gsize Gqr)))))
+;update Glength
+  (cond ((memq type '(:princ :prin1 :end)) (setf (Glength) (1+ (Glength)))))
+;if this is a real printing thing then propagate the size to waiting newlines.
+  (cond ((memq type '(:princ :prin1 :special)) (Gupdate-sizes Gqr)))
+;entry is now completely processed.
+  (Gpush Gqueue)
+;check if we can now process any queue entries.
+  (prog ()
+   L (cond (Gexploding (Gexplode-it))
+	   ((Gsize) (Gprintout))
+	   ((or (and (eq type ':newline) (eq obj ':always))
+		(> (- Gtsize Glsize) Glinelen)) ;gives extra look ahead
+	    (setf (Gsize) 64000.)
+	    (Gprintout))
+	   (T (return nil)))
+     (cond ((memq (Gtype) '(:prin1 :princ :special :space))
+	    (setq Glsize (+ Glsize (Gsize)))))
+     (Gpop Gqueue)
+     (cond ((< Gql Gqr) (go L))))
+;if the queue was emptied reset it, setting any hanging begins to -1.
+  (cond ((= Gql Gqr)
+	 (setq Gql 0 Gqr 0 Gtsize 0 Glsize 0)
+	 (let ((Gqsp Gqsp))
+	   (prog ()
+	    L (setf (Gbegin) -1)
+	      (cond ((not (zerop Gqsp)) (Gpop Gqs) (go L))))))))
+
+;this copies a size back to any newline entries that are waiting.
+
+(defun Gupdate-sizes (ptr)
+  (do ((i (- ptr 3) (- i 3)))
+    ((or (< i Gql) (not (memq (Gtype i)
+			      '(:newline :tab :space :eval :ind)))))
+    (cond ((null (Gsize i)) (setf (Gsize i) (Gsize ptr))))))
+
+(defun Gprintout ()
+  (cond ((and (zerop Gdepth)
+	      (or (and (eq (Gtype) ':newline)		  
+		       (caseq (Gobj)
+			 ((:always :normal) T)
+			 (:miser (Gmisering))
+			 (:block (or Gwent-up
+				     (and (< (Gpindent) (- Glinelen Gfreelen))
+					  (> (Gsize) Gfreelen))))))
+		  (and (memq (Gtype) '(:princ :prin1 :special))
+		       (> (Gsize) (+ Gfreelen 5))
+		       (< (Gpindent) (- Glinelen Gfreelen)))))
+	 (setq Gpending (Gpindent)
+	       Gfreelen (- Glinelen Gpending)
+	       Gwent-up nil
+	       Gpending-newline T)))
+  (caseq (Gtype)
+   (:start (cond ((and (zerop Gdepth) (> (Gsize) Gfreelen))
+		  (Gpush Gps)
+		  (setf (Gpindent) (- Glinelen Gfreelen))
+		  (cond ((Gmisering) (setf (Gpindent) (1+ (Gpindent)))))
+		  (setf (Gtabsize) -1))
+		 (T (setq Gdepth (1+ Gdepth)))))
+   (:ind (cond ((and (zerop Gdepth) (not (Gmisering)))
+		(setf (Gpindent)
+		      (max (+ (Gpindent) (or (Gobj) (Gget-indent))) 0)))))
+   (:end (cond ((zerop Gdepth)
+		(setq Gwent-up T)
+		(Gpop Gps))
+	       (T (setq Gdepth (1- Gdepth)))))
+   ((:princ :prin1 :special :eval)
+    (cond (Gpending-newline ;print pending newline if any
+	   (cond ((not (< Glineno Gprinendline))
+		  (cond ((plusp Gfreelen) (princ '| ---| Gout)))
+		  (*throw 'Gprintabort '|prinendline exceeded|)))
+	   (cond ((not (< Glineno Gprinstartline))
+		  (terpri Gout)
+		  (setq Gpending (+ Gpending Ginitial-charpos))))
+	   (setq Glineno (1+ Glineno)
+		 Gpending-newline nil)))
+    (cond ((not (< Glineno Gprinstartline)) ;print pending blanks
+	   (do ((i Gpending (1- i))) ((not (plusp i))) (tyo 32. Gout))))
+    (cond ((eq (Gtype) ':eval) (eval (Gobj))))
+    (cond ((not (< Glineno Gprinstartline)) ;print stuff
+	   (caseq (Gtype)
+	     (:prin1 (prin1 (Gobj) Gout))
+	     ((:princ :special) (princ (Gobj) Gout)))))
+    (setq Gfreelen (- Gfreelen (Gsize)))
+    (setq Gpending 0))
+   (:space (let ((space (Gobj))) ;set up spaces as pending
+	     (cond ((minusp space) (setq space (max (- Gpending) space))))
+	     (setq Gpending (+ Gpending space)
+		   Gfreelen (- Gfreelen space))))
+   (:tab (cond ((and (zerop Gdepth)
+		     (not Gpending-newline))
+		(let* ((tab (cond ((Gobj))
+				  ((not (minusp (Gtabsize))) (Gtabsize))
+				  (T (setf (Gtabsize) (Gestimate-Gtabsize))
+				     (Gtabsize))))
+		       (offset (\ (- (- Glinelen Gfreelen) (Gpindent)) tab)))
+		   (cond ((not (zerop offset)) (setq offset (- tab offset))))
+		   (setq Gpending (+ Gpending offset)
+			 Gfreelen (- Gfreelen offset))))))))
+
+;Note that there is a gross abstraction violation here when we
+;refer to the last indentation level.
+
+(defun Gmisering ()
+  (cond ((plusp Gpsp)
+	 (< Glinelen (+ (arraycall fixnum Gps (1- Gpsp)) miser-width)))
+	(T (< Glinelen miser-width))))
+
+;this looks down the queue and calculates an indentation increment as the sum
+;of the sizes of everything up to and including the first :PRIN1 or
+;:PRINC, and any :SPACE after it.  Note that if there isn't enough stuff 
+;queued up, then this will get an indentation which is too small.
+;this only happens when you are printing right up against the margin.
+
+(defun Gget-indent ()
+  (let ((indent 0)
+        (found-print nil)
+	(Gql Gql))
+    (prog ()
+     L (Gpop Gqueue)
+       (cond ((not (< Gql Gqr)) (return nil)))
+       (caseq (Gtype)
+	 ((:prin1 :princ) (cond (found-print (return nil))
+				(T (setq indent (+ indent (Gsize))
+					 found-print T))))
+	 (:space (setq indent (+ indent (Gsize))))
+	 (:special (cond (found-print (return nil))
+			 (T (setq indent (+ indent (Gsize)))))))
+       (go L))
+    indent))
+
+;this looks down the queue and estimates what the Gtabsize should be.
+;Note that it always returns at least a size big enough to accomodate
+;one element.
+
+(defun Gestimate-Gtabsize ()
+  (let ((max 2)
+	(i 0)
+	(space (- Glinelen (Gpindent)))
+	(Gql Gql))
+    (prog () 
+     L (cond ((and (zerop i) (numberp (Gsize))) (setq max (max max (Gsize)))))
+       (caseq (Gtype)
+	 (:start (setq i (1+ i)))
+	 (:end (setq i (1- i))))
+       (Gpop Gqueue)
+       (cond ((not (< Gql Gqr)) (return nil)))
+       (go L))
+    (setq max (1+ max)) ;to allow for spaces between items.
+    (setq max (+ max (// max 5))) ;to allow for possible bigger items to come.
+    (cond ((> space max) (setq max (// space (// space max))))) ;use all space.
+    max))
+
+;This explodes a thing adding it to Gexploding.
+
+(defun Gexplode-it ()
+  (caseq (Gtype)
+    (:space (do ((i (Gobj) (1- 1))) ((zerop i))
+	      (setq Gexploding (cons '| | Gexploding))))
+    (:prin1 (setq Gexploding (nreconc (explode (Gobj)) Gexploding)))
+    ((:special :princ)
+     (setq Gexploding (nreconc (explodec (Gobj)) Gexploding)))))
+
+
+
+ 

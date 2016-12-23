@@ -1,0 +1,221 @@
+;;;-*- Mode:Lisp; Package:SI -*-
+
+(declare (and (status feature maclisp)
+	      (load '((alan) lspenv init))))
+
+(declare (special *rest* *normal* *optional*))
+
+(defun bind-arguments-&parse (pattern body)
+  (prog (pat x)
+	(setq pat pattern)
+   norm (cond ((atom pat)
+	       (setq *rest* pat)
+	       (return body)))
+	(setq x (car pat))
+	(cond ((eq x '&optional)
+	       (go opt))
+	      ((memq x '(&rest &body))
+	       (go rst))
+	      ((eq x '&aux)
+	       (go ax)))
+	(push x *normal*)
+	(setq pat (cdr pat))
+	(go norm)
+    opt (cond ((atom (setq pat (cdr pat)))
+	       (setq *rest* pat)
+	       (return body)))
+	(setq x (car pat))
+	(cond ((eq x '&optional)
+	       (go barf))
+	      ((memq x '(&rest &body))
+	       (go rst))
+	      ((eq x '&aux)
+	       (go ax)))
+	(push (if (atom x) (list x) x) *optional*)
+	(go opt)
+    rst (if (atom (setq pat (cdr pat)))
+	    (go barf))
+	(setq *rest* (car pat))
+	(if (null (setq pat (cdr pat)))
+	    (return body))
+	(if (or (atom pat)
+		(not (eq (car pat) '&aux)))
+	    (go barf))
+     ax (return
+	  (do ((l (reverse (cdr pat)) (cdr l))
+	       (var) (val)
+	       (body body `(((lambda (,var) ,@body) ,val))))
+	      ((null l) body)
+	    (if (atom (car l))
+		(setq var (car l) val nil)
+		(setq var (caar l) val (cadar l)))))
+   barf (ferror "Bad pattern: ~S" pattern)))
+
+(eval-when (eval compile)
+(defmacro bind-arguments-ignorable (x)
+  `(memq ,x '(ignore ignored))))
+
+(defun bind-arguments/ macro (x)
+  (bind-arguments (((pattern form &optional barf) &body body) (cdr x)
+		    (error '|-- bad format.| x))
+    (let ((body (bind-arguments-internal pattern form barf body)))
+      (if (null (cdr body))
+	  (car body)
+	  `(progn ,@body)))))
+
+(defun bind-arguments-internal (pattern form barf body)
+  (cond
+    ((bind-arguments-ignorable pattern) `(,form ,@body))
+    ((null pattern) `((or (null ,form) ,barf) ,@body))
+    ((atom pattern) `(((lambda (,pattern) ,@body) ,form)))
+    (t
+     (let* ((*normal* nil)
+	    (*optional* nil)
+	    (*rest* nil)
+	    (body (bind-arguments-&parse pattern body))
+	    (lst? (if (null *normal*)
+		      (or (null *optional*)
+			  (and (atom form)
+			       (null *rest*)
+			       (null (cdr *optional*))))
+		      (and (null *optional*)
+			   (atom form)
+			   (null *rest*)
+			   (null (cdr *normal*)))))
+	    (lst (if lst? form (gensym)))
+	    (len? (or (null *optional*)
+		      (and (null (cdr *optional*))
+			   (null *normal*)
+			   (not (null *rest*)))))
+	    (len (if len? `(length ,lst) (gensym)))
+	    (barf (or barf `(ferror '|~S doesn't match pattern ~S|
+				    ,lst ',pattern))))
+       (setq body `(,@(bind-arguments-error-check len barf)
+		    ,@(bind-arguments-internal-1 barf body lst len
+						 #'bind-arguments-nth
+						 #'bind-arguments-nthcdr)))
+       (or len?
+	   (setq body `(((lambda (,len) ,@body) (length ,lst)))))
+       (if lst?
+	   body
+	   `(((lambda (,lst) ,@body) ,form)))))))
+
+(defun bind-arguments-internal-1 (barf body lst len ref-one ref-rest)
+  (let ((n (+ (length *normal*) (length *optional*))))
+    (or (null *rest*)
+	(setq body
+	      (bind-arguments-internal *rest* (funcall ref-rest n lst)
+				       barf body)))
+    (dolist (opt *optional*)
+      (setq n (1- n))
+      (cond ((cddr opt)
+	     (setq body
+		   `(((lambda (,(caddr opt))
+			,@(if (bind-arguments-ignorable (car opt))
+			      body
+			      (bind-arguments-internal
+				(car opt)
+				`(cond (,(caddr opt) ,(funcall ref-one n lst))
+				       (t ,(cadr opt)))
+				barf
+				body)))
+		      (> ,len ,n)))))
+	    ((not (bind-arguments-ignorable (car opt)))
+	     (setq body
+		   (bind-arguments-internal
+		     (car opt)
+		     `(cond ((> ,len ,n) ,(funcall ref-one n lst))
+			    (t ,(cadr opt)))
+		     barf
+		     body)))))
+    (dolist (pat *normal*)
+      (setq n (1- n))
+      (or (bind-arguments-ignorable pat)
+	  (setq body
+		(bind-arguments-internal pat (funcall ref-one n lst)
+					 barf body))))
+    body))
+
+(defun bind-arguments-error-check (len barf)
+  (let ((nlen (length *normal*))
+	(olen (length *optional*)))
+    (if (null *rest*)
+	(if (null *optional*)
+	    `((or (= ,len ,nlen)
+		  ,barf))
+	    (if (null *normal*)
+		`((and (> ,len ,olen)
+		       ,barf))
+		`((and (or (< ,len ,nlen)
+			   (> ,len ,(+ olen nlen)))
+		       ,barf))))
+	(if (null *normal*)
+	    `()
+	    `((and (< ,len ,nlen)
+		   ,barf))))))
+
+(defun bind-arguments-nth (n v)
+  (caseq n
+    (0 `(car ,v))
+    (1 `(cadr ,v))
+    (2 `(caddr ,v))
+    (3 `(cadddr ,v))
+    (t (bind-arguments-nth (- n 4) `(cddddr ,v)))))
+
+(defun bind-arguments-nthcdr (n v)
+  (caseq n
+    (0 v)
+    (1 `(cdr ,v))
+    (2 `(cddr ,v))
+    (3 `(cdddr ,v))
+    (t (bind-arguments-nthcdr (- n 4) `(cddddr ,v)))))
+
+#+maclisp
+(defun (defun& macro) (x)
+  (let ((name (cadr x))
+	(pattern (caddr x))
+	(body (cdddr x)))
+    (cond ((memq pattern '(fexpr macro))
+	   (ferror "Cannot mix &-keywords and ~S definitions: ~S"
+		   pattern x))
+	  ((eq pattern 'expr)
+	   (setq pattern (pop body)))
+	  ((not (symbolp pattern)))
+	  ((memq name '(fexpr macro))
+	   (ferror "Cannot mix &-keywords and ~S definitions: ~S"
+		   pattern x))
+	  ((eq name 'expr)
+	   (setq name pattern)
+	   (setq pattern (pop body))))
+    (if (bind-arguments-ignorable pattern)
+	(let ((n (gensym)))
+	  `(defun ,name ,n ,n ,@body))
+	(let* ((*normal* nil)
+	       (*optional* nil)
+	       (*rest* nil)
+	       (body (bind-arguments-&parse pattern body))
+	       (len (gensym))
+	       (barf `(ferror '|~S doesn't match pattern ~S|
+			      (listify ,len) ',pattern)))
+	  `(defun ,name ,len
+	     ,@(bind-arguments-error-check len barf)
+	     ,@(bind-arguments-internal-1 barf body len len
+					  #'bind-arguments-arg
+					  #'bind-arguments-listify))))))
+
+#+maclisp
+(defun bind-arguments-arg (n v)
+  v	;ignored
+  `(arg ,(1+ n)))
+
+#+maclisp
+(defun bind-arguments-listify (n v)
+  (if (zerop n)
+      `(listify ,v)
+      `(listify (- ,n ,v))))
+
+#+maclisp
+(defprop bind-arguments bind-arguments/ macro macro)
+
+#+lispm
+(fdefine 'bind-arguments '(macro . bind-arguments/ macro) t)
