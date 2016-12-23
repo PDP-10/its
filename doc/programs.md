@@ -101,6 +101,7 @@
 - JEDGAR, counter spying tool.
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
+- KERMIT, file transfer.
 - KLDCP, KL10 diagnostics console program.
 - KLFEDR, KL10 frontend directory tool.
 - KLRUG, KL10 frontend debugger.
