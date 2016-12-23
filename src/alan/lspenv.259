@@ -1,0 +1,895 @@
+;;;-*-Lisp-*-
+
+(declare (load '((alan) lspenv init)))
+
+(setq flush '(defmax backq let defmacro lodbyt mlmac defvst defsetf
+	      setf sharpm macaid cgol subseq string extmac extend
+	      cerror yesnop errck extstr defvsy extbas defvsx cerror
+	      mlsub describe extsfa grindef))
+
+(mapatoms
+  #'(lambda (x)
+      ((lambda (p)
+	 (and (not (atom p))
+	      (memq (cadr p) flush)
+	      (remprop x 'autoload)))
+       (get x 'autoload))))
+
+(defun |forget-macromemos/|| (()) nil)
+
+(defun flush-macromemos (() ()) nil)
+
+(defun macrofetch (()) nil)
+
+(defun macromemo (x y ()) (displace x y))
+
+;;;In case of fire, break glass:
+;;;(defun (macroexpanded macro) (x) (displace x (car (cddddr x))))
+
+(defun define-autoloads (file l)
+  (dolist (name l)
+    (putprop name file 'autoload)))
+
+(defun define-autoload-macros (file l)
+  (define-autoloads file l)
+  (when (status feature complr)
+    (dolist (name l)
+      (putprop name 'autoload-macro 'macro))))
+
+(defun autoload-macro (x)
+  (remprop (car x) 'macro)
+  (load (or (get (car x) 'autoload)
+	    (error "-- autoload-macro without autoload property." x)))
+  x)
+
+;;;BACKQUOTE:
+;;; The flags passed back by BACKQUOTIFY can be interpreted as follows:
+;;;
+;;;   |`,|: [a] => a
+;;;    NIL: [a] => a			;the NIL flag is used only when a is NIL
+;;;      T: [a] => a			;the T flag is used when a is self-evaluating
+;;;  QUOTE: [a] => (QUOTE a)
+;;; APPEND: [a] => (APPEND . a)
+;;;  NCONC: [a] => (NCONC . a)
+;;;   LIST: [a] => (LIST . a)
+;;;  LIST*: [a] => (LIST* . a)
+;;;
+;;; The flags are combined according to the following set of rules:
+;;;  ([a] means that a should be converted according to the previous table)
+;;;
+;;;    \ car   ||    otherwise    |    QUOTE or     |     |`,@|      |     |`,.|      |
+;;;  cdr \     ||		  |    T or NIL     |                |		      |
+;;;====================================================================================
+;;;    |`,|    || LIST* ([a] [d]) | LIST* ([a] [d]) | APPEND (a [d]) | NCONC  (a [d]) |
+;;;    NIL     || LIST    ([a])   | QUOTE    (a)    | <hair>    a    | <hair>    a    |
+;;; QUOTE or T || LIST* ([a] [d]) | QUOTE  (a . d)  | APPEND (a [d]) | NCONC  (a [d]) |
+;;;   APPEND   || LIST* ([a] [d]) | LIST* ([a] [d]) | APPEND (a . d) | NCONC  (a [d]) |
+;;;   NCONC    || LIST* ([a] [d]) | LIST* ([a] [d]) | APPEND (a [d]) | NCONC  (a . d) |
+;;;    LIST    || LIST  ([a] . d) | LIST  ([a] . d) | APPEND (a [d]) | NCONC  (a [d]) |
+;;;    LIST*   || LIST* ([a] . d) | LIST* ([a] . d) | APPEND (a [d]) | NCONC  (a [d]) |
+;;;
+;;;<hair> involves starting over again pretending you had read ".,a)" instead of ",@a)"
+
+(setsyntax '/` 'macro 'xr-backquote-macro)
+
+(setsyntax '/, 'macro 'xr-comma-macro)
+
+(declare (special **backquote-count** **backquote-flag**
+		  **backquote-/,-flag** **backquote-/,/@-flag** **backquote-/,/.-flag**))
+
+(setq **backquote-count** 0
+      **backquote-/,-flag** (copysymbol '|`,| nil)
+      **backquote-/,/@-flag** (copysymbol '|`,@| nil)
+      **backquote-/,/.-flag** (copysymbol '|`,.| nil)
+      )
+
+(defun xr-backquote-macro ()
+  ((lambda (**backquote-count** **backquote-flag** thing)
+     (setq thing (backquotify (read)))
+     (cond ((eq **backquote-flag** **backquote-/,/@-flag**)
+	    (error '|-- ",@" right after a "`".| thing))
+	   ((eq **backquote-flag** **backquote-/,/.-flag**)
+	    (error '|-- ",." right after a "`".| thing))
+	   (t
+	    (backquotify-1 **backquote-flag** thing))))
+   (1+ **backquote-count**)
+   nil
+   nil))
+
+(defun xr-comma-macro ()
+  (or (> **backquote-count** 0)
+      (error "Comma not inside a backquote."))
+  ((lambda (c **backquote-count**)
+     (cond ((= c #/@)
+	    (tyi)
+	    (cons **backquote-/,/@-flag** (read)))
+	   ((= c #/.)
+	    (tyi)
+	    (cons **backquote-/,/.-flag** (read)))
+	   (t (cons **backquote-/,-flag** (read)))))
+   (tyipeek)
+   (1- **backquote-count**)))
+
+(defun backquotify (code)
+  (prog (aflag a dflag d)
+	(cond ((atom code)
+	       (cond ((null code)
+		      (setq **backquote-flag** nil)
+		      (return nil))
+		     ((or (numberp code)
+			  (eq code t))
+		      (setq **backquote-flag** t)
+		      (return code))
+		     (t (setq **backquote-flag** 'quote)
+			(return code))))
+	      ((eq (car code) **backquote-/,-flag**)
+	       (setq code (cdr code))
+	       (go comma))
+	      ((eq (car code) **backquote-/,/@-flag**)
+	       (setq **backquote-flag** **backquote-/,/@-flag**)
+	       (return (cdr code)))
+	      ((eq (car code) **backquote-/,/.-flag**)
+	       (setq **backquote-flag** **backquote-/,/.-flag**)
+	       (return (cdr code))))
+	(setq a (backquotify (car code)))
+	(setq aflag **backquote-flag**)
+	(setq d (backquotify (cdr code)))
+	(setq dflag **backquote-flag**)
+	(and (eq dflag **backquote-/,/@-flag**)
+	     (error '|-- ",@" after a ".".| code))
+	(and (eq dflag **backquote-/,/.-flag**)
+	     (error '|-- ",." after a ".".| code))
+	(cond ((eq aflag **backquote-/,/@-flag**)
+	       (cond ((null dflag)
+		      (setq code a)
+		      (go comma)))
+	       (setq **backquote-flag** 'append)
+	       (return (cond ((eq dflag 'append)
+			      (cons a d))
+			     (t (list a (backquotify-1 dflag d))))))
+	      ((eq aflag **backquote-/,/.-flag**)
+	       (cond ((null dflag)
+		      (setq code a)
+		      (go comma)))
+	       (setq **backquote-flag** 'nconc)
+	       (return (cond ((eq dflag 'nconc)
+			      (cons a d))
+			     (t (list a (backquotify-1 dflag d))))))
+	      ((null dflag)
+	       (cond ((memq aflag '(quote t nil))
+		      (setq **backquote-flag** 'quote)
+		      (return (list a)))
+		     (t (setq **backquote-flag** 'list)
+			(return (list (backquotify-1 aflag a))))))
+	      ((memq dflag '(quote t))
+	       (cond ((memq aflag '(quote t nil))
+		      (setq **backquote-flag** 'quote)
+		      (return (cons a d)))
+		     (t (setq **backquote-flag** 'list*)
+			(return (list (backquotify-1 aflag a)
+				      (backquotify-1 dflag d)))))))
+	(setq a (backquotify-1 aflag a))
+	(and (memq dflag '(list list*))
+	     (setq **backquote-flag** dflag)
+	     (return (cons a d)))
+	(setq **backquote-flag** 'list*)
+	(return (list a (backquotify-1 dflag d)))
+
+  comma (cond ((atom code)
+	       (cond ((null code)
+		      (setq **backquote-flag** nil)
+		      (return nil))
+		     ((or (numberp code)
+			  (eq code 't))
+		      (setq **backquote-flag** t)
+		      (return code))
+		     (t (setq **backquote-flag**
+			      **backquote-/,-flag**)
+			(return code))))
+	      ((eq (car code) 'quote)
+	       (setq **backquote-flag** 'quote)
+	       (return (cadr code)))
+	      ((memq (car code) '(append list list* nconc))
+	       (setq **backquote-flag** (car code))
+	       (return (cdr code)))
+	      ((eq (car code) 'cons)
+	       (setq **backquote-flag** 'list*)
+	       (return (cdr code)))
+	      (t (setq **backquote-flag** **backquote-/,-flag**)
+		 (return code)))))
+
+(defun backquotify-1 (flag thing)
+  (cond ((or (eq flag **backquote-/,-flag**)
+	     (memq flag '(t nil)))
+	 thing)
+	((eq flag 'quote)
+	 (list 'quote thing))
+	((eq flag 'list*)
+	 (cond ((null (cddr thing))
+		(cons 'cons thing))
+	       (t (cons 'list* thing))))
+	(t (cons flag thing))))
+
+(setsyntax '/: (ascii #^J) nil)
+
+(setsyntax '/" 'macro 'hack-strings)
+
+(defun hack-strings ()
+  (do ((l nil (cons c l))
+       (c (tyi) (tyi)))
+      ((= c #/")
+       (list 'quote (maknam (nreverse l))))
+    (declare (fixnum c))
+    (cond ((= c #//)
+	   (setq c (tyi))))))
+
+(setsyntax '/# 'splicing '/#-macro)
+
+(declare (special /#-macro-arg))
+
+(defun /#-macro ()
+  (do ((c (tyi) (tyi))
+       (n nil (cond ((null n) (- c #/0))
+		    (t (+ (* 10. n)
+			  (- c #/0))))))
+      ((or (< c #/0)
+	   (> c #/9))
+       (or (< c #/a)
+	   (> c #/z)
+	   (setq c (- c #.(- #/a #/A))))
+       ((lambda (ch /#-macro-arg)
+	  ((lambda (chf)
+	     (cond (chf (if (eq (car chf) '/#-macro)
+			    (list (funcall (cadr chf)))
+			    (list (subrcall t (cadr chf)))))
+		   ((setq chf (getl ch '(/#-splicing /#-splicing-subr)))
+		    (if (eq (car chf) '/#-splicing)
+			(funcall (cadr chf))
+			(subrcall t (cadr chf))))
+		   (t (error "-- unknown character to #" ch))))
+	   (getl ch '(/#-macro /#-macro-subr))))
+	(ascii c)
+	n))
+    (declare (fixnum c))))
+
+(defun (// /#-macro /#-macro-subr) ()
+  (tyi))
+
+(defun (/\ /#-macro /#-macro-subr) ()
+  (let ((frob (read)))
+    (cdr (or (assq frob /#/\-alist)
+	     (error "-- unknown frob to #\" frob)))))
+
+(defconst /#/\-alist
+  #O '((sp . 40) (cr . 15) (lf . 12) (line . 12)
+       (bs . 10) (alt . 33) (altmode . 33)
+       (vt . 13) (newline . 15) (help . 4110)
+       (return . 15) (space . 40) (tab . 11)
+       (form . 14) (ff . 14) (rubout . 177)))
+
+(defun (/' /#-macro /#-macro-subr) ()
+  (list 'function (read)))
+
+(declare (special squid))
+
+(defun (/, /#-macro /#-macro-subr) ()
+  (cond ((status feature complr)
+	 (list squid (read)))
+	(t (eval (read)))))
+
+(defun (/. /#-macro /#-macro-subr) () (eval (read)))
+
+(defun (/_ /#-macro /#-macro-subr) () (munkam (read)))
+
+(defun (/B /#-macro /#-macro-subr) () ((lambda (ibase) (read)) 2.))
+
+(defun (/O /#-macro /#-macro-subr) () ((lambda (ibase) (read)) 8.))
+
+(defun (/D /#-macro /#-macro-subr) () ((lambda (ibase) (read)) 10.))
+
+(defun (/X /#-macro /#-macro-subr) ()
+  ((lambda (old ibase)
+     (prog2 (sstatus + t)
+	    (read)
+	    (sstatus + old)))
+   (status +)
+   16.))
+
+(defun (/R /#-macro /#-macro-subr) ()
+  (cond ((fixp /#-macro-arg)
+	 ((lambda (ibase) (read)) /#-macro-arg))
+	(t
+	 (error "-- #<digits>r please!" /#-macro-arg))))
+
+(defun (/^ /#-macro /#-macro-subr) ()
+  ((lambda (c)
+     (declare (fixnum c))
+     (or (< c #/a)
+	 (> c #/z)
+	 (setq c (- c 40)))
+     (logxor #o100 c))
+   (tyi)))
+
+(defun (/| /#-splicing /#-splicing-subr) ()
+  (prog (n)
+        (setq n 0)
+        (go home)
+  sharp (caseq (tyi)
+	  (#/# (go sharp))
+	  (#/| (setq n (1+ n)))
+	  (#// (tyi))
+	  (-1 (go eof)))
+   home (caseq (tyi)
+	  (#/| (go bar))
+	  (#/# (go sharp))
+	  (#// (tyi) (go home))
+	  (-1 (go eof))
+	  (t (go home)))
+    bar (caseq (tyi)
+	  (#/# (cond ((zerop n)
+		      (return nil))
+		     (t
+		      (setq n (1- n))
+		      (go home))))
+	  (#/| (go bar))
+	  (#// (tyi) (go home))
+	  (-1 (go eof))
+	  (t (go home)))
+    eof (error "End of file while parsing /#/| comment.")))
+
+(defun (/Q /#-splicing /#-splicing-subr) () (read) nil)
+
+(defun (/M /#-splicing /#-splicing-subr) () (list (read)))
+
+(defun (/N /#-splicing /#-splicing-subr) () (read) nil)
+
+(defun (/+ /#-splicing /#-splicing-subr) ()
+  ((lambda (test form)
+     (cond ((feature-test test (status features)) (list form))
+	   (t nil)))
+   (read)
+   (read)))
+
+(defun (/- /#-splicing /#-splicing-subr) ()
+  ((lambda (test form)
+     (cond ((feature-test test (status features)) nil)
+	   (t (list form))))
+   (read)
+   (read)))
+
+(defun (defmacro macro) (x)
+  (bind-arguments ((name pattern &body body) (cdr x)
+		      (error '|-- bad format.| x))
+    (let ((x (gensym)))
+      `(defun (,name macro) (,x)
+	 (bind-arguments (,pattern (cdr ,x)
+			     (error '|-- bad format.| ,x))
+	   ,@body)))))
+
+(defmacro let (pairs &body body)
+  (do ((pairs pairs (cdr pairs))
+       (vars nil)
+       (vals nil))
+      ((atom pairs)
+       `((lambda ,(nreverse vars) ,@body) ,@(nreverse vals)))
+    (cond ((atom (car pairs))
+	   (push (car pairs) vars)
+	   (push nil vals))
+	  (t
+	   (bind-arguments ((var &optional (init `nil))
+			    (car pairs)
+			    (error "-- bad variable spec in LET." (car pairs)))
+	     (push var vars)
+	     (push init vals))))))
+
+(defmacro let* (pairs &body body)
+  (cond ((atom pairs) `(progn ,@body))
+	((atom (car pairs))
+	 `((lambda (,(car pairs))
+	     (let* ,(cdr pairs) ,@body))
+	   nil))
+	(t
+	 (bind-arguments ((var &optional (init `nil))
+			  (car pairs)
+			  (error "-- bad variable spec in LET*." (car pairs)))
+	   `((lambda (,var)
+	       (let* ,(cdr pairs) ,@body))
+	     ,init)))))
+
+(defmacro push (item list)
+  `(setf ,list (cons ,item ,list)))
+
+(defmacro pop (x)
+  `(prog1 (car ,x) (setf ,x (cdr ,x))))
+
+(defmacro if (a b &optional (c nil c?))
+  (cond (c? `(cond (,a ,b) (t ,c)))
+	(t `(and ,a ,b))))
+
+(defmacro defvar (var &optional (init nil init?) (doc nil doc?))
+  `(progn 'compile
+	  (comment **special** ,var)
+	  (eval-when (eval load compile)
+	    (and (fboundp 'special) (special ,var)))
+	  ,@(and doc? `((putprop ',var ,doc 'variable-documentation)))
+	  ,@(and init? `((or (boundp ',var) (setq ,var ,init))))
+	  ',var))
+
+(defmacro defconst (var &optional (init nil init?) (doc nil doc?))
+  `(progn 'compile
+	  (comment **special** ,var)
+	  (eval-when (eval load compile)
+	    (and (fboundp 'special) (special ,var)))
+	  ,@(and doc? `((putprop ',var ,doc 'variable-documentation)))
+	  ,@(and init? `((setq ,var ,init)))
+	  ',var))
+
+(defmacro defparameter (var init &optional (doc nil doc?))
+  `(progn 'compile
+	  (comment **special** ,var)
+	  (eval-when (eval load compile)
+	    (and (fboundp 'special) (special ,var)))
+	  ,@(and doc? `((putprop ',var ,doc 'variable-documentation)))
+	  (setq ,var ,init)
+	  ',var))
+
+(defmacro defconstant (var init &optional (doc nil doc?))
+  `(progn 'compile
+	  (comment **special** ,var)
+	  (eval-when (eval load compile)
+	    (and (fboundp 'special) (special ,var))
+	    (defprop ,var t defconstant))
+	  ,@(and doc? `((putprop ',var ,doc 'variable-documentation)))
+	  (setq ,var ,init)
+	  ',var))
+
+(defmacro lambda (bvl &body body)
+  `(function (lambda ,bvl ,@body)))
+
+(defmacro selectq (op &rest stuff)
+  (do ((arg (cond ((atom op) op)
+		  (t (gensym))))
+       (l stuff (cdr l))
+       (r nil (cons `(,(cond ((memq (caar l) '(otherwise t)) 't)
+			     ((atom (caar l)) `(eq ,arg ',(caar l)))
+			     ((null (cdaar l)) `(eq ,arg ',(caaar l)))
+			     (t `(memq ,arg ',(caar l))))
+		      ,@(cdar l))
+		    r)))
+      ((null l) ((lambda (l) (cond ((atom op) l)
+				   (t `((lambda (,arg) ,l) ,op))))
+		 `(cond ,@(nreverse r))))))
+
+(defmacro select (op &rest stuff)
+  (do ((arg (cond ((atom op) op)
+		  (t (gensym))))
+       (l stuff (cdr l))
+       (r nil (cons `(,(cond ((memq (caar l) '(otherwise t)) 't)
+			     (t `(equal ,arg ,(caar l))))
+		      ,@(cdar l))
+		    r)))
+      ((null l) ((lambda (l) (cond ((atom op) l)
+				   (t `((lambda (,arg) ,l) ,op))))
+		 `(cond ,@(nreverse r))))))
+
+(defmacro grindef (&rest args)
+  `(plp ,@args))
+
+(defmacro first (x) `(car ,x))
+(defmacro second (x) `(cadr ,x))
+(defmacro third (x) `(caddr ,x))
+(defmacro fourth (x) `(cadddr ,x))
+(defmacro fifth (x) `(car (cddddr ,x)))
+(defmacro sixth (x) `(cadr (cddddr ,x)))
+(defmacro seventh (x) `(caddr (cddddr ,x)))
+(defmacro eighth (x) `(cadddr (cddddr ,x)))
+
+(defmacro rest (x) `(cdr ,x))
+
+(defmacro <= (a b) `(not (> ,a ,b)))
+(defmacro >= (a b) `(not (< ,a ,b)))
+(defmacro / (a b) `(not (> ,a ,b)))
+(defmacro / (a b) `(not (< ,a ,b)))
+(defmacro / (a b) `(not (= ,a ,b)))
+
+(defmacro neq (x y) `(not (eq ,x ,y)))
+
+(defmacro logand x `(boole #b0001 . ,x))
+(defmacro logior x `(boole #b0111 . ,x))
+(defmacro logxor x `(boole #b0110 . ,x))
+(defmacro logeqv x `(boole #b1001 . ,x))
+
+(defmacro lognand  (x y) `(boole #b1110 ,x ,y))
+(defmacro lognor   (x y) `(boole #b1000 ,x ,y))
+(defmacro logandc1 (x y) `(boole #b0010 ,x ,y))
+(defmacro logandc2 (x y) `(boole #b0100 ,x ,y))
+(defmacro logorc1  (x y) `(boole #b1011 ,x ,y))
+(defmacro logorc2  (x y) `(boole #b1101 ,x ,y))
+
+(defmacro lognot (x) `(boole #b0110 -1 ,x))
+
+(defmacro logtest (x y) `(not (zerop (boole #b0001 ,x ,y))))
+
+(defmacro logbitp (i x) `(not (zerop (boole #b0001 (lsh 1 ,i) ,x))))
+
+(defmacro dotimes ((var form) &body body)
+  (let ((dum (gensym)))
+    `(do ((,var 0 (1+ ,var))
+	  (,dum ,form))
+	 ((not (< ,var ,dum)))
+       (declare (fixnum ,var ,dum))
+       . ,body)))
+
+(defmacro dolist ((var form) &body body)
+  (let ((dum (gensym)))
+    `(do ((,dum ,form (cdr ,dum))
+	  (,var))
+	 ((null ,dum))
+       (setq ,var (car ,dum))
+       . ,body)))
+
+(defmacro arrayp (object) `(eq (typep ,object) 'array))
+
+(defmacro rem (pred item list &optional (n #.(lognot (rot 1 -1))))
+  `(*rem ,pred ,item ,list ,n))
+
+(defmacro remove (item list &optional (n #.(lognot (rot 1 -1))))
+  `(*rem #'equal ,item ,list ,n))
+
+(defmacro remq (item list &optional (n #.(lognot (rot 1 -1))))
+  `(*rem #'eq ,item ,list ,n))
+
+(defmacro del (pred item list &optional (n #.(lognot (rot 1 -1))))
+  `(*del ,pred ,item ,list ,n))
+
+(defmacro aref (array &rest coords)
+  `(arraycall t ,array ,@coords))
+
+(defmacro aset (data array &rest coords)
+  (let ((g (gensym)))
+    `((lambda (,g)
+	(store (arraycall t ,array ,@coords) ,g))
+      ,data)))
+
+(defmacro byte (size &optional (position 0))
+  (setq size (macroexpand size))
+  (setq position (macroexpand position))
+  (if (fixp size)
+      (if (fixp position)
+	  (dpb position #o0606 (logand size #o77))
+	  `(dpb ,position #o0606 ,(logand size #o77)))
+      (if (fixp position)
+	  (let ((pp00 (dpb position #o0606 0)))
+	    (if (zerop pp00)
+		`(logand ,size #o77)
+		`(dpb ,size #o0006 ,pp00)))
+	  `(dpb ,position #o0606 (logand ,size #o77)))))
+
+(defmacro byte-size (byte-spec)
+  `(logand ,byte-spec #o77))
+
+(defmacro byte-position (byte-spec)
+  `(ldb #o0606 ,byte-spec))
+
+;;;In incf and decf we assume that the user is not using bignums.  Also we
+;;;promote the use of 1+ and 1- for no good reason...
+(defmacro incf (ref &optional (inc 1))
+  (if (equal inc 1)
+      `(setf ,ref (1+ ,ref))
+      `(setf ,ref (+ ,ref ,inc))))
+
+(defmacro decf (ref &optional (dec 1))
+  (if (equal dec 1)
+      `(setf ,ref (1- ,ref))
+      `(setf ,ref (- ,ref ,dec))))
+
+(defmacro copylist (l)
+  `(append ,l nil))
+
+(defmacro copylist* (l)
+  `(append ,l nil))
+
+(defmacro when (test &body body)
+  `(cond (,test (progn ,@body))))
+
+(defmacro unless (test &body body)
+  `(cond ((not ,test) (progn ,@body))))
+
+(defmacro with-open-stream ((var stream) &body body)
+  `((lambda (,var)
+      (unwind-protect (progn ,@body)
+		      (close ,var)))
+    ,stream))
+
+(defmacro with-open-file ((var &rest openargs) &body body)
+  `((lambda (,var)
+      (unwind-protect (progn ,@body)
+		      (close ,var)))
+    (open ,@openargs)))
+
+(defmacro deflap ((name type &optional (arg1 nil args-p) (arg2 arg1 arg2-p))
+		  &body lap)
+  `(progn 'compile
+	  (lap-a-list
+	    '((lap ,name ,type)
+	      ,@(and args-p
+		     `((args ,name
+			     ,(cond ((or (not (atom arg1)) (eq type 'subr))
+				     (when arg2-p
+				       (error "-- self-contradictory deflap."
+					      name))
+				     (if (atom arg1)
+					 `(nil . ,arg1)
+					 arg1))
+				    (t `(,arg1 . ,arg2))))))
+	      ,@lap
+	      ()))
+	  ',name))
+
+(defmacro make-array (dims &rest rest)
+  (do ((l rest (cddr l))
+       (type t))
+      ((null l)
+       (cond ((fixp dims)
+	      `(array nil ,type ,dims))
+	     ((or (atom dims)
+		  (not (memq (car dims) '(quote list))))
+	      `(*make-array ,dims '(type ,type)))
+	     ((eq (car dims) 'list)
+	      `(array nil ,type ,@(cdr dims)))
+	     ((fixp (cadr dims))
+	      `(array nil ,type ,(cadr dims)))
+	     (t
+	      `(array nil ,type ,@(cadr dims)))))
+    (let ((i (car l))
+	  (p (cadr l)))
+      (and (or (fixp p)
+	       (memq p '(t nil)))
+	   (setq p (list 'quote p)))
+      (if (or (atom i)
+	      (not (eq (car i) 'quote))
+	      (caseq (cadr i)
+		((type /:type)
+		 (or (atom p)
+		     (not (eq (car p) 'quote))
+		     (progn
+		      (setq type
+			    (caseq (cadr p)
+			      ((art-q t) t)
+			      ((art-32b art-16b art-8b art-4b
+				art-2b art-1b fixnum)
+			       'fixnum)
+			      ((art-float flonum) 'flonum)
+			      ((nil) nil)
+			      (t (error "-- unsupported make-array type."
+					(cadr p)))))
+		      nil)))
+		((area /:area named-structure /:named-structure) nil)
+		((initial-value /:initial-value) t)
+		(t (error "-- unsupported make-array option." (cadr i)))))
+	   (return `(*make-array ,dims (list ,@rest)))))))
+
+(defmacro feature-case (&body clauses)
+  (let ((name (if (atom (car clauses))
+		  (pop clauses)
+		  'feature-case)))
+    (do ((clauses clauses (cdr clauses))
+	 (features (status features)))
+	((null clauses)
+	 (error "-- no matching features found." name))
+      (when (feature-test (caar clauses) features)
+	(return (if (null (cddar clauses))
+		    (cadar clauses)
+		    `(progn 'compile
+			    ,@(cdar clauses))))))))
+
+(defun feature-test (feature features)
+  (cond ((atom feature)
+	 (memq feature features))
+	((eq (car feature) 'not)
+	 (not (feature-test (cadr feature) features)))
+	((eq (car feature) 'and)
+	 (loop for feature in (cdr feature)
+	       always (feature-test feature features)))
+	((eq (car feature) 'or)
+	 (loop for feature in (cdr feature)
+	       thereis (feature-test feature features)))
+	(t (error "-- unknown feature form." feature))))
+
+(defmacro append-symbols args
+  (do ((l (reverse args) (cdr l))
+       (x)
+       (a nil (if (or (atom x)
+		      (not (eq (car x) 'quote)))
+		  (if (null a)
+		      `(exploden ,x)
+		      `(nconc (exploden ,x) ,a))
+		  (let ((l (exploden (cadr x))))
+		    (cond ((null a) `',l)
+			  ((= 1 (length l)) `(cons ,(car l) ,a))
+			  (t `(append ',l ,a)))))))
+      ((null l) `(implode ,a))
+    (setq x (car l))))
+
+;;;first arg is ALWAYS a symbol or a quoted symbol:
+(defmacro transgression (message &rest args)
+  (let* ((chars (nconc (exploden (if (atom message)
+				     message
+				     (cadr message)))
+		       '(#/.)))		;"Bad frob" => "Bad frob."
+	 (new-message
+	  (maknam (if (null args)
+		      chars
+		      (let ((c (car chars)))	;"Bad frob." => "-- bad frob."
+			(or (< c #/A)
+			    (> c #/Z)
+			    (rplaca chars (+ c #o40)))
+			(append '(#/- #/- #\space) chars))))))
+  `(error ',new-message
+	  ,@(cond ((null args) `())
+		  ((null (cdr args)) `(,(car args)))
+		  (t `((list ,@args)))))))
+
+(defvar *val2*)
+(defvar *val3*)
+(defvar *val4*)
+(defvar *val5*)
+(defvar *val6*)
+(defvar *val7*)
+(defvar *val8*)
+(defvar *val9*)
+(defconst *values-vars* '(*val2* *val3* *val4* *val5*
+			  *val6* *val7* *val8* *val9*))
+
+(defmacro values (first &rest rest)
+  (unless (<= (length rest) (length *values-vars*))
+    (error "-- too many values." rest))
+  `(prog1 ,first
+	  ,@(loop for var in *values-vars*
+		  for val in rest
+		  collecting `(setq ,var ,val))))
+
+(defmacro with-values (((first &rest rest) form) &body body)
+  (unless (<= (length rest) (length *values-vars*))
+    (error "-- too many values." rest))
+  `((lambda (,first ,@rest) ,@body)
+    ,form
+    ,@(loop for foo in rest
+	    for var in *values-vars*
+	    collecting var)))
+
+;;;third arg is ALWAYS a symbol or a quoted symbol:
+(defmacro check-arg (place predicate description)
+  (let ((test (if (symbolp predicate)
+		  `(,predicate ,place)
+		  predicate))
+	(msg (append-symbols "-- is not "
+			     (if (atom description)
+				 description
+				 (cadr description))
+			     ".")))
+    `(do ()
+	 (,test)
+       (setf ,place (error ',msg ,place 'wrng-type-arg)))))
+
+(declare (or (get 'defstruct-description-predicate 'macro)
+	     (load '((alan) struct))))
+
+;;;second arg is ALWAYS a symbol
+;;;third arg, if given, is ALWAYS a symbol or a quoted symbol:
+(defmacro check-arg-type (place type-name &optional description)
+  (let ((description (or description
+			 (get type-name 'check-arg-type-description)
+			 (append-symbols "a " type-name)))
+	(predicate (or (get type-name 'check-arg-type-predicate)
+		       (let ((desc (get type-name 'defstruct-description)))
+			 (and (not (null desc))
+			      (defstruct-description-predicate desc)))
+		       (append-symbols type-name "?"))))
+    `(check-arg ,place ,predicate ,description)))
+
+(defprop :symbol symbolp check-arg-type-predicate)
+(defprop :list |a cons| check-arg-type-description)
+(defprop :list list-check-arg-type check-arg-type-predicate)
+(defmacro list-check-arg-type (x) `(eq 'list (typep ,x)))
+(defprop :array |an array| check-arg-type-description)
+(defprop :array arrayp check-arg-type-predicate)
+(defprop :atom |an atom| check-arg-type-description)
+(defprop :atom atom check-arg-type-predicate)
+(defprop :hunk hunkp check-arg-type-predicate)
+(defprop :file filep check-arg-type-predicate)
+(defprop :sfa |an SFA| check-arg-type-description)
+(defprop :sfa sfap check-arg-type-predicate)
+(defprop :list-or-nil |a cons or nil| check-arg-type-description)
+(defprop :list-or-nil list-or-nil-check-arg-type check-arg-type-predicate)
+(defmacro list-or-nil-check-arg-type (x) `(or (null ,x) (eq 'list (typep ,x))))
+(defprop :number numberp check-arg-type-predicate)
+(defprop :fix |an integer| check-arg-type-description)
+(defprop :fix fixp check-arg-type-predicate)
+(defprop :fixnum fixnum-check-arg-type check-arg-type-predicate)
+(defmacro fixnum-check-arg-type (x) `(and (fixp ,x) (not (bigp ,x))))
+(defprop :bignum bigp check-arg-type-predicate)
+(defprop :float floatp check-arg-type-predicate)
+(defprop :float |a floating point number| check-arg-type-description)
+(defprop :flonum floatp check-arg-type-predicate)
+
+; So who needs a code walker?
+
+(defun macrolet-process-body (defs body)
+  (if (atom body)
+      body
+      (cons (macrolet-process-expr defs (car body))
+	    (macrolet-process-body defs (cdr body)))))
+
+(defun macrolet-process-expr (defs expr)
+  (if (atom expr)
+      expr
+      (let ((def (assq (car expr) defs)))
+	(if (null def)
+	    (macrolet-process-body defs expr)
+	    (macrolet-process-expr defs (funcall (cdr def) (cdr expr)))))))
+
+(defmacro macrolet (defs &body body)
+  (let ((var (gensym)))
+    `(progn
+       ,@(macrolet-process-body
+	   (loop for def in defs
+		 collecting (cons (car def)
+				  `(lambda (,var)
+				     (bind-arguments (,(cadr def) ,var)
+				       ,@(cddr def)))))
+	   body))))
+
+(defmacro defsubst (name vars expr)
+  `(progn 'compile
+	  (defun ,name ,vars ,expr)
+	  (defprop ,name (,vars . ,expr) defsubst)
+	  (defprop ,name expand-defsubst macro)))
+
+(declare (special dumper-info-list))
+
+(defun lspenv-dumper (dump-name init-name)
+  (let ((f #'(lambda (x) (list (+ #/0 (// x 10.)) (+ #/0 (\ x 10.)))))
+	(ti (status daytime))
+	(d (status date))
+	(*nopoint t)
+	(base 10.))
+    (setq dumper-info-list
+	  (list
+	   (status xuname)
+	   (implode (nconc (exploden (cadr d))
+			   (cons #//
+				 (nconc (exploden (caddr d))
+					(cons #// (exploden (car d)))))))
+	   (implode (nconc (exploden (car ti))
+			   (cons #/:
+				 (nconc (funcall f (cadr ti))
+					(cons #/: (funcall f (caddr ti)))))))
+	   dump-name
+	   init-name)))
+  (sstatus flush t)
+  (gc)
+  (cond ((status feature ITS)
+	 (suspend #o160000 dump-name))
+	((status feature TOPS-20)
+	 (suspend dump-name))
+	(t
+	 (error "Unknown site for dumping.")))
+  (sstatus gctime 0)
+  (defaultf (list (list (status udir))))
+  (cond ((status feature ITS)
+	 (let ((init (let ((jcl (status jcl)))
+		       (if (not (null jcl))
+			   (implode (nreverse (cdr (nreverse jcl))))
+			   `((DSK ,(status hsname))
+			     ,(status xuname)
+			     ,init-name)))))
+	   (if (probef init)
+	       (load init))))
+	((status feature TOPS-20)
+	 (let ((init `((PS ,(status hsname)) ,init-name INI)))
+	   (if (probef init)
+	       (load init)))))
+  '*)
+
+(sstatus feature alan/;lspenv)

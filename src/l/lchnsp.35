@@ -1,0 +1,328 @@
+;-*-MIDAS-*-
+
+TITLE LISP CHAOS NETWORK SUPPORT PACKAGE
+
+;;; This is the low-level chaos-net handling package for LISP.
+;;; All functions in this file are prefixed with %CHAOS-
+;;; A CHAOS net connection data structure is a cons containing
+;;; an input file array and an output file array open on the CHAOS device.
+
+;;; Note: packet buffers are allocated specially as GC protected arrays
+;;;    to allow interrupts while in a PKTIOT call.
+
+;;; TODO:  Make %CHAOS-ALLOCATE-BUFFER more clever for subsequent allocations
+;;;        Fix up OPEN and CLOSE routines
+
+;;; Insert CHAOS network definitions and FASL defs.
+
+IF1, .INSRT SYSTEM;CHSDEF >
+IF1, .INSRT LISP;.FASL DEFS
+.FASL
+
+VERPRT LCHNSP
+
+; note: this form of syscal does not allow LH stuff in last arg, e.g. indirect bit, etc.
+DEFINE SYSCAL NAME,ARGS
+	.CALL [SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+	 .LOSE 1000
+TERMIN
+
+;;; (%CHAOS-OPEN-CHANNELS <receive-window-size>)
+;;; Creates the a pair of file arrays, returns a cons of them, and
+;;; a CHAOS connection is created in the ITS NCP by a call to CHAOSO.
+;;; <receive-window-size> is optional and defaults to the value of
+;;; CHAOS-DEFAULT-RECEIVE-WINDOW.
+;;; Note: this cons must be saved to protect the file arrays from GC.
+
+;.SXEVAL (SETQ CHAOS-DEFAULT-RECEIVE-WINDOW 5.)
+
+.ENTRY %CHAOS-OPEN-CHANNELS LSUBR 001002	;lsubr 0 or 1 arg
+	SKIPE T			;if no args, use the default
+ 	 SKIPA TT,@(P)		;pick up arg 1
+	  MOVE TT,@.SPECIAL CHAOS-DEFAULT-RECEIVE-WINDOW
+	ADD P,T			;clean up the pdl
+	PUSH FXP,TT		;save window size on the fxpdl
+	MOVE TT,[SIXBIT /CHAOS/]	;get a file array on the CHAOS device
+	PUSHJ P,ALFILE		;allocate a channel
+	 JRST OPNLOS		;couldn't get it
+	PUSH P,A		;save this file array
+	MOVE TT,[SIXBIT /CHAOS/]	;get another file array on the CHAOS device
+	PUSHJ P,ALFILE		;allocate again
+	 JRST OPNLO1		;couldn't
+	HLLZ TT,TTSAR(A)	;pick up the LH of the TTSAR
+	TLO TT,TTS.IO		;set the output bit
+	HLLM TT,TTSAR(A)	;store it
+	MOVE B,A		;save the output array in B
+	POP P,A			;get back the input array into A
+	POP FXP,R		;get the receive window size in R
+	MOVEI TT,F.CHAN		;index into the file array channel number slot
+	SYSCAL CHAOSO,[	@TTSAR(A) ? @TTSAR(B) ? R] ; in, out, rcv window
+	JCALL 2,.FUNCTION CONS	;return a cons of the file arrays
+
+OPNLO1:	POP P,A
+OPNLOS:	POP FXP,TT
+	SETZ A,
+	POPJ P,
+
+;;; (%CHAOS-CLOSE-CHANNELS <connection>)
+;;; Takes a cons which is a connection as returned by %CHAOS-OPEN-CHANNELS.
+;;; Forces output and closes the channels, but does not send a CLS packet
+;;; (do this first if the connection should be closed cleanly).
+;;; Note: this routine has to be fixed up to allow LISP I/O to work.
+
+.ENTRY %CHAOS-CLOSE-CHANNELS SUBR 0002	;subr 1 arg
+	MOVEI TT,F.CHAN		;index into the file array channel slot
+	HRRZ B,(A)		;B gets the CDR (output file array)
+	HLRZ A,(A)		;A gets the CAR (input file array)
+	.CALL [	SETZ ? 'FINISH ? SETZ @TTSAR(B) ]	;force out any queued packets
+	JFCL			;no-op if this fails (connection was closed)
+	.CALL [	SETZ ? SIXBIT/CLOSE/ ? SETZ @TTSAR(A) ]
+	JFCL
+	.CALL [	SETZ ? SIXBIT/CLOSE/ ? SETZ @TTSAR(B) ]
+	JFCL
+; should we bother to turn on the close bit in the file arrays? so channels get reused
+	POPJ P,
+
+;;; (%CHAOS-EOF <connection>)
+;;; Sends a %COEOF packet.
+
+.ENTRY	%CHAOS-EOF SUBR 0002	;subr of 1 arg
+	MOVE TT,.SPECIAL CHAOS-INTERNAL-PKT-BUFFER	;pointer to pk buffer ttsar
+	HRRZ TT,TTSAR(TT)	;pointer to actual data area (array is GC protected).
+	MOVEI T,%COEOF		;set the packet opcode to RFC
+	DPB T,[$CPKOP (TT)]
+	SETZ T,			;0 byte count
+	DPB T,[$CPKNB (TT)]
+	HRRZ A,(A)		;get output file array
+	MOVE B,-2(TT)		;get pointer to the asar of the packet array
+	JCALL 2,.FUNCTION %CHAOS-PKTIOT	;send the packet
+
+;;; (%CHAOS-PKTIOT <file array> <packet array>)
+;;; <file array> is a file array open on the CHAOS device.
+;;; <packet array> is an array pointer to a GC protected array.
+;;; Thus it is usually passed one of the buffers created by %CHAOS-ALLOCATE-BUFFER.
+;;; If an IOC error occurs, a THROW will be done to CHAOS-PKTIOT-ERROR.
+
+.ENTRY %CHAOS-PKTIOT SUBR 0003	;subr 2 args
+	PUSH FXP,D		;don't clobber D
+	MOVEI D,IOTLOS
+	JSP T,SPECBIND		;bind the IOCINS location
+	 D_5,,IOCINS
+	POP FXP,D
+	MOVEI TT,F.CHAN
+PKIOTC:	SYSCAL PKTIOT,[@TTSAR(A) ? TTSAR(B)]
+	JRST UNBIND		;unbind IOCINS
+
+;;; Ioc error interrupt routine for the PKTIOT
+
+IOTLOS:	HRRI R,PKTLS1		;process the error here
+	HRLI R,PKTERR
+	TLO R,400000
+	AOS (FLP)
+	POPJ FLP,		;YES, its FLP!!!! (super crock...)
+PKTERR:	0
+
+;;; This is called at non interrupt level. Error code in CHAOS-PKTIOT-ERROR-CODE
+
+PKTLS1:	UNLOCKI
+	MOVE TT,PKTERR		;pick up the error code
+	JSP T,FXCONS		;make a fixnum (guaranteed to be an inum, so no GC)
+	MOVEM A,.SPECIAL CHAOS-PKTIOT-ERROR-CODE
+	MOVEI A,.ATOM CHAOS-PKTIOT-ERROR
+	SETZ B,
+	JCALL 2,.FUNCTION *THROW
+
+;;; Allocate a GC protected, immoveable packet-buffer array
+;;; (gag, using a whole page for this poor little buffer - should
+;;;  hack something more efficient one of these days...)
+
+.ENTRY %CHAOS-ALLOCATE-BUFFER SUBR 0001	;subr 0 args
+	JSP T,SACONS		;allocate an array header
+	MOVEI TT,1		;get a page of core
+	PUSHJ P,GETCOR
+	SKIPN TT
+	 JRST [	SETZ A ? POPJ P,]
+	HRR T,TT		;stuff in array prefix info
+	HRLI T,AHEAD
+	BLT T,4(TT)
+	HRLI T,TTS<1D>+TT	;1D array, indexed by TT
+	HRLI TT,AS.FX		;fixnum type array
+	MOVEM T,TTSAR(A)
+	MOVEM TT,ASAR(A)
+	MOVEM A,-2(T)		;backward pointer in the array prefix
+	HRRM T,(TT)		;and pointer to data area.
+	POPJ P,
+
+AHEAD:	-200,,0
+	PUSHJ P,CFIX1
+	JSP T,1DIMF
+	0
+	200
+
+;;; might as well do this at load time...
+.SXEVAL (SETQ CHAOS-INTERNAL-PKT-BUFFER (%CHAOS-ALLOCATE-BUFFER))
+
+	
+;;; (%CHAOS-REQUEST-CONNECTION <connection> <destination host> <contact-name>
+;;;			 <request-or-listen-flag> <netblk-time>)
+;;; Open the chaos net channel. Arguments are:
+;;; <connection> is a cons as returned byt %CHAOS-OPEN-CHANNELS.
+;;; <destination host> is a fixnum 16 bit host address 
+;;;                    (host number + subnet number).
+;;; <contact-name> is a symbol or a list of fixnums which is considered to be
+;;;                the contact name optionally followed by a space and JCL.
+;;; <request-or-listen-flag> is T if this is a RFC or NIL if a LSN.
+;;; <netblk-time> is the amount of time to wait for a response.
+;;; Uses CHAOS-INTERNAL-PKT-BUFFER for the buffer.
+;;; Returns a connection state as a fixnum.
+
+.ENTRY %CHAOS-REQUEST-CONNECTION SUBR 0006	;subr 5 args
+	PUSH P,[FIX1]		;make it NCALLable
+	PUSH P,AR1		;save request/listen flag
+	PUSH P,AR2A		;save netblk time
+	MOVE TT,.SPECIAL CHAOS-INTERNAL-PKT-BUFFER	;pointer to pk buffer ttsar
+	HRRZ TT,TTSAR(TT)	;pointer to actual data area (array is GC protected).
+	MOVEI T,%CORFC		;set the packet opcode to RFC
+	SKIPN AR1
+	 MOVEI T,%COLSN
+	DPB T,[$CPKOP (TT)]
+	MOVE T,(B)		;get destination host number arg
+	DPB T,[$CPKDA (TT)]	;deposit it
+	SETZ T,			;zero destination index
+	DPB T,[$CPKDI (TT)]	;depost it
+	MOVEI T,(C)		;check TYPEP of contact name = SYMBOL
+	LSH T,-11		;standard hack (don't bother checking for NIL)
+	MOVE T,ST(T)		;look it up in the segment table
+	TLNE T,ST.SY		;SYMBOL?
+	 PUSHJ P,EXPSYM		;yes, go exploden it
+
+	SETZ T,			;loop for copying contact name, jcl.  T is byte cnt.
+	MOVE D,[441000,,%CPKDT(TT)]	;8-bit bytes, place to put data bytes
+CNAMLP:	HLR B,(C)		;get the car of the list (a fixnum)
+	MOVE F,(B)		;turn into a machine number
+	IDPB F,D		;deposit it into the packet
+	HRR C,(C)		;CDR the list
+	AOS T			;increment the byte count
+	JUMPN C,CNAMLP		;loop if we didn't CDR off the end of the list
+
+	DPB T,[$CPKNB (TT)]	;deposit the byte count into the packet
+	PUSH P,A		;save A (the connection)
+	HRRZ A,(A)		;get output file array
+	MOVE B,-2(TT)		;get pointer to the asar of the packet array
+	CALL 2,.FUNCTION %CHAOS-PKTIOT	;send the packet
+	POP P,A			;get A back
+	MOVEI TT,F.CHAN
+	HLRZ A,(A)		;CAR is the input file array
+	POP P,B			;get the netblk time-out time off the stack
+	POP P,C			;get request/listen flag back
+	MOVEI R,%CSRFS		;assume RFC
+	SKIPN C			;if T, then it was
+	 MOVEI R, %CSLSN	;otherwise listening
+	MOVE T,(B)		;time-out time
+	SYSCAL NETBLK,[ MOVE @TTSAR(A)	;CHAOS input channel
+			MOVE R		;current state
+			MOVE T		;time-out time
+			MOVEM TT]	;new state returned here
+	POPJ P,			;TT gets converted at FIX1 if needed
+
+;;; explode a symbol pointed to by C
+EXPSYM:	PUSH P,A		;save A, TT, AR1
+	PUSH P,TT
+	PUSH P,AR1
+	MOVEI A,(C)
+	CALL 1,.FUNCTION EXPLODEN
+	MOVEI C,(A)		;back into C
+	POP P,AR1
+	POP P,TT
+	POP P,A
+	POPJ P,
+
+;;; (%CHAOS-OPEN-CONNECTION <connection>)
+;;; Sends an OPN packet (pretty useless since easy to do with %CHAOS-PKTIOT)
+
+.ENTRY %CHAOS-OPEN-CONNECTION SUBR 0002	;subr 1 arg
+	MOVE TT,.SPECIAL CHAOS-INTERNAL-PKT-BUFFER
+	HRRZ TT,TTSAR(TT)	;get pointer to array data
+	MOVEI T,%COOPN		;OPN opcode
+	DPB T,[ $CPKOP (TT)]	;deposit it in the opcode field
+	HRRZ A,(A)		;CDR is the output file array
+	MOVE B,-2(TT)		;pointer to asar
+	JCALL 2,.FUNCTION %CHAOS-PKTIOT	;send the packet
+
+;;; MISC utility functions
+
+;;; (%CHAOS-SET-PKT-OPCODE <array> <opcode>)
+;;; Sets the opcode field in a packet buffer array pointed to by <array>.
+;;; <opcode> is a fixnum.
+
+.ENTRY %CHAOS-SET-PKT-OPCODE SUBR 0003	;subr 2 args
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	MOVE T,(B)		;get the number
+	DPB T,[$CPKOP (TT)]	;deposit it in the opcode field
+	MOVEI A,.ATOM T
+	POPJ P,
+
+;;; (%CHAOS-GET-PKT-OPCODE <array>)
+;;; Gets the opcode field in a packet buffer array pointed to by <array>.
+
+.ENTRY %CHAOS-GET-PKT-OPCODE SUBR 0002	;subr 1 arg
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	LDB TT,[$CPKOP (TT)]	;load from the opcode field
+	JSP T,FXCONS		;convert number in TT to a fixnum
+	POPJ P,
+
+;;; (%CHAOS-SET-PKT-LENGTH <array> <length>)
+;;; Sets the byte count for a packet.
+
+.ENTRY %CHAOS-SET-PKT-LENGTH SUBR 0003	;subr 2 args
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	MOVE T,(B)		;get the fixnum count
+	DPB T,[$CPKNB (TT)]	;deposit it in the byte count field
+	MOVEI A,.ATOM T
+	POPJ P,
+
+;;; (%CHAOS-GET-PKT-LENGTH <array>)
+;;; Gets the byte count for a packet.
+
+.ENTRY %CHAOS-GET-PKT-LENGTH SUBR 0002	;subr 1 arg
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	LDB TT,[$CPKNB (TT)]	;load from the byte count field
+	JSP T,FXCONS		;convert number in TT into a FIXNUM
+	POPJ P,
+
+;;; (%CHAOS-GET-BYTE <array> <index>)
+;;; Gets data byte specified by <index> from packet in <array>.
+.ENTRY	%CHAOS-GET-BYTE SUBR 0003	;subr 2 args
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	MOVE R,(B)		;get fixnum index 
+	IDIVI R,4		;compute word offset and remainder
+	ADD TT,R
+	IMULI F,8		;compute byte position
+	MOVEI T,28.
+	SUB T,F
+ 	LSH T,30.		;and position it
+	IOR T,[001000,,%CPKDT(TT)]
+	LDB TT,T
+	JSP T,FXCONS
+	POPJ P,
+
+;;; (%CHAOS-PUT-BYTE <array> <byte>)
+;;; Puts <byte> at the end of the packet and updates the packet length.
+.ENTRY	%CHAOS-PUT-BYTE SUBR 0003	;subr 2 args
+	HRRZ TT,TTSAR(A)	;get pointer to array data
+	LDB R,[$CPKNB(TT)]	;get the number of bytes
+	MOVEI T,1(R)
+	DPB T,[$CPKNB(TT)]	;increment and redeposit
+	IDIVI R,4		;compute word offset and remainder
+	ADD TT,R
+	IMULI F,8		;compute byte position
+	MOVEI T,28.
+	SUB T,F
+ 	LSH T,30.		;and position it
+	IOR T,[001000,,%CPKDT(TT)]
+	MOVE R,(B)
+	DPB R,T
+	MOVEI A,.ATOM T
+	POPJ P,
+
+FASEND
