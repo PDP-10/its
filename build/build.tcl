@@ -338,11 +338,7 @@ respond "*" ":xfile build;cftp xfile\r"
 respond "*" ":xfile build;chtn xfile\r"
 respond "*" ":xfile build;ttloc xfile\r"
 respond "*" ":xfile build;dpdev xfile\r"
-
-respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
-respond "Use what filename instead?" "ecc;quotes >\r"
-expect ":KILL"
-
+respond "*" ":xfile build;quote xfile\r"
 respond "*" ":xfile build;srccom xfile\r"
 respond "*" ":xfile build;dqxdev xfile\r"
 respond "*" ":xfile build;comsat xfile\r"
