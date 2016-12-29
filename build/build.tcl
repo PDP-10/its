@@ -298,12 +298,10 @@ respond "*" ":xfile build;complr xfile\r"
 expect "Dumping"
 respond "*" ":xfile build;compl2 xfile\r"
 respond "*" ":xfile build;binprt xfile\r"
+respond "*" ":xfile build;lsrrtn xfile\r"
 
 # inquir
 respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
-respond "*" ":link sys;.fasl defs,lisp;.fasl defs\r"
-respond "*" ":midas inquir;_lsrrtn\r"
-expect ":KILL"
 respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
 respond "*" ":link lisp;debug fasl,liblsp;debug fasl\r"
 respond "*" "complr\013"
