@@ -302,11 +302,8 @@ respond "*" ":xfile build;lsrrtn xfile\r"
 expect ":KILL"
 respond "*" ":xfile build;fasls xfile\r"
 expect "done"
-
-respond "*" ":lisp inquir;inquir (dump)\r"
-respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
-respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
-
+respond "*" ":xfile build;inquir xfile\r"
+expect "done"
 respond "*" ":xfile build;dmunch xfile\r"
 respond "*" ":xfile build;inqupd xfile\r"
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
