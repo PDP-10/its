@@ -30,6 +30,8 @@ proc pdset {} {
 	respond "IT IS NOW" "Q"
     } "IT IS NOW" {
         type "Q"
+    } "ITS revived" {
+        type "Q"
     }
     expect ":KILL"
 }
@@ -201,7 +203,7 @@ respond "DSKDMP" "m\033nsalv bin\r"
 expect "\n"; type "d\033nits\r"
 expect "\n"; type "nits\r"
 expect "\n"; type "\033g"
-pdset
+maybe_pdset
 
 respond "*" ":login db\r"
 sleep 1
