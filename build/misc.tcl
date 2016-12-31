@@ -896,6 +896,16 @@ respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
+# Maze War
+respond "*" ":midas /t sysbin;_imsrc; maze\r"
+respond "with ^C" "MOUSE==1\r\003"
+respond "with ^C" "MOUSE==1\r\003"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; m iml_sysbin; maze bin\r"
+respond "@" "\032"
+type ":kill\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
