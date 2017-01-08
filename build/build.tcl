@@ -918,8 +918,14 @@ respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
 
 # decuuo
-respond "*" ":midas decsys;ts dec_decuuo\r"
+respond "*" ":midas decsys;_decuuo\r"
 expect ":KILL"
+respond "*" ":job decuuo\r"
+respond "*" ":load decsys;decuuo bin\r"
+respond "*" "purify\033g"
+respond "TS DEC" "\r"
+respond "*" ":kill\r"
+
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
