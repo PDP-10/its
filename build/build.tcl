@@ -933,6 +933,22 @@ expect ":KILL"
 respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
 respond "*" "\032:kill\r"
 
+# fail
+respond "*" ":fail sail;fail rel_sail;fail >\r"
+respond "*" "\032:kill\r"
+respond "*" ":stink\r"
+respond "\n" "m sail;jobdat rel\033l\033\033"
+respond "\n" "m sail;stktrn rel\033l\033\033"
+respond "\n" "m sail;fail rel\033l\033\033"
+respond "\n" "m sail;fail bin\033y\033\033"
+expect ":KILL"
+respond "*" ":job fail\r"
+respond "*" ":load sail;fail bin\r"
+respond "*" "\033\0331l decsys;decbot bin\r"
+respond "*" ".jbsa/strt\r"
+respond "'" "\033y sys;ts fail\r"
+respond "*" ":kill\r"
+
 # who%
 respond "*" ":midas sys1;ts who%_sysen3;who%\r"
 expect ":KILL"
