@@ -929,6 +929,10 @@ respond "*" ":kill\r"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# stktrn
+respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
+respond "*" "\032:kill\r"
+
 # who%
 respond "*" ":midas sys1;ts who%_sysen3;who%\r"
 expect ":KILL"
