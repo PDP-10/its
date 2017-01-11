@@ -929,6 +929,10 @@ respond "*" ":kill\r"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# jobdat
+respond "*" ":fail sail;jobdat rel_decsys;jobdat >\r"
+respond "*" "\032:kill\r"
+
 # stktrn
 respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
 respond "*" "\032:kill\r"
