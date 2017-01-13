@@ -17,13 +17,14 @@ NSALV = bin/boot/salv.rp06
 DSKDMP = bin/boot/dskdmp.rp06
 
 KLH10=${PWD}/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
+SIMH=${PWD}/tools/simh/BIN/pdp10
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
 all: out/rp0.dsk
 
 out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
-	expect -f build/$(EMULATOR)/build.tcl
+	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl
 
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
@@ -53,7 +54,10 @@ build/$(EMULATOR)/stamp: start
 start: build/$(EMULATOR)/start
 	ln -s $< $*
 
-build/klh10/stamp: $(KLH10) start
+build/klh10/stamp: $(KLH10)
+	touch $@
+
+build/simh/stamp: $(SIMH)
 	touch $@
 
 $(KLH10):
@@ -66,6 +70,9 @@ $(KLH10):
 	make base-ks-its; \
 	make -C bld-ks-its install
 
+$(SIMH):
+	cd tools/simh; make pdp10
+
 $(ITSTAR):
 	cd tools/itstar; make
 
@@ -73,4 +80,4 @@ $(WRITETAPE):
 	cd tools/tapeutils; make
 
 clean:
-	rm -rf out start
+	rm -rf out start build/*/stamp
