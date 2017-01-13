@@ -37,12 +37,10 @@ we'd be delighted to test this on a real KS10.
 ### Usage
 
 To build ITS with this repository, you need some tools installed:
-make, C compiler, and expect.  Also, if you plan to use the SIMH
-emulator, it needs to be installed and accessible as `pdp10`.  The
-KLH10 emulator is built from source code.  Ensure all submodules are
-checked out, and then type `make EMULATOR=simh` or `make
-EMULATOR=klh10`.  This will leave built files in the `out` directory,
-one of which is a disk image with ITS installed.
+make, C compiler, and expect.  Ensure all submodules are checked out,
+and then type `make EMULATOR=simh` or `make EMULATOR=klh10`.  This
+will leave built files in the `out` directory, one of which is a disk
+image with ITS installed.
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
 Enter.  When you see the `DSKDMP` prompt, type `its`, press Enter, and
