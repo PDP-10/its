@@ -1,0 +1,360 @@
+								-*- Text -*-
+
+
+	This file contains documentation for both the LOCK device,
+	and the locked switch list and critical routine features.
+
+
+
+THE LOCK DEVICE.	[ In ITS version 1630 and later ]
+
+The LOCK device provides a simple and foolproof technique for interlocking
+between jobs.  While not as efficient as using an AOSE-style switch in
+shared memory, the LOCK device is much easier to use and is suitable for
+use in those situations where a lock is only rarely seized, and is only
+held for brief periods of time.
+
+Locks are identified using a single SIXBIT word as a lock name.  (Actually,
+and non-zero 36-bit word can be used.)  A job can lock the FOO lock by
+opening "LOCK:FOO" for output.  The LOCK device ignores any second filename
+or directory name you might supply.  The lock will be released when the
+channel is closed.  As long as the job keeps the lock channel open, any
+other attempts to lock the same lock result in a %ENAFL (FILE LOCKED)
+error.
+
+When opening the LOCK device, bit 1.4 indicates that the opener wishes to
+hang waiting for the lock, rather than receiving a %ENAFL error.
+
+It is also possible to receive a %EFLDV (DEVICE FULL) error when opening
+the LOCK device if the table of currently held locks that ITS maintains
+overflows.
+
+Here is the registry of all lock names.  Any program that uses the LOCK
+device should register the name of the locks it uses here.
+
+	Name		Purpose
+	------		------
+	NUTMEG		This lock is used in an example later
+			on in this file.
+
+	MBXxxx		The set of locks whose names start with the
+			characters "MBX" are used by COMSAT and GMSGS to
+			coordinate access to mailboxes.  The algorithm for
+			computing the lock for the mailbox named
+			SNAME;NAME1 NAME2 is:
+
+				MOVE A,NAME1
+				ROT A,1
+				ADD A,NAME2
+				ROT A,1
+				ADD A,SNAME
+				IDIVI A,777773		; Largest prime < 1,,0
+				HRLI B,(SIXBIT /MBX/)	; Result in B = A + 1
+
+
+
+
+THE LOCKED SWITCH LIST AND CRITICAL ROUTINE FEATURES.
+
+There is an obvious technique for interlocking between jobs on
+the PDP-10 - namely, the use of AOSE - which has been unusable
+under ITS simply because a job might be killed while it had a
+switch locked, thus causing the switch to remain locked forever.
+These implemented features allow that problem, and the similar
+problem of system crashes while a switch in a permanent data
+base is locked, to be solved without any loss of efficiency.
+
+The locked switch list feature allows a program to maintain a
+list of switches which it has locked, so that ITS can unlock
+them when the job is killed (or logs out, or is gunned)
+or is reset (for example, $l'd by DDT). The critical routine
+feature allows the program to cause ITS to perform certain
+actions if the job is killed or reset with the PC in a specified range.
+
+These features do not prevent bugs in the programs accessing
+a switch from causing the switch not to be unlocked. They make
+possible successful interlocking but do not guarantee it.
+
+
+A. THE DEFINITIONS OF THE FEATURES.
+
+These features are all activated by setting the %OPLOK bit in
+the .OPTION USET-variable to 1 (This bit is 1000,,). If that is
+not done, words 43 and 44 are not in any way special. Also, the
+addresses used do not have to be 43 and 44; that is merely their
+default values. The actual adresses used are relative to the
+contents of the .40ADDR USET-variable, which initially contains
+40 . If .40ADDR were set to 1000, locations 1003 and 1004 would
+used. Of course, all system actions that normally use locations
+40, 41 and 42 would use 1000, 1001 and 1002.
+
+ 1. THE LOCKED SWITCH LIST.
+
+When the %OPLOK bit is 1, location 43 is taken to be the pointer
+to the job's locked switch list. The list pointer
+should either be 0, meaning the list is empty, or the address of
+the first two-word switch block. The format of a switch block is
+as follows:
+
+ 1st word:	the switch, or, if the indirect bit is set in
+		 the second word, the address of the switch
+		 (multiple indirection is not allowed).
+ 2nd word:	the RH holds the address of the next switch
+		 block, or 0 (this is the CDR of the list).
+		the LH holds the instruction to be executed to
+		 unlock the switch. The index field is ignored.
+		 The instruction must either be an AOS or SOS
+		 with 0 in the AC field, a logical instruction
+		 (such as SETAM, IORM, SETOM, ANDCAM), a halfword
+		 instruction, a MOVEM, MOVNM, MOVSM, MOVMM,
+		 ADDM or SUBM. The AC will never be modified
+		 even if the instruction
+		 says to do so. If the LH is 0, the instruction
+		 SETOM is used, as the most common choice.
+
+When the job is killed or reset, if the locked switch list is
+not null, the system looks at the first switch block, unlocks
+the switch by executing the unlock instruction with the switch
+word as its memory argument, and the copying the RH of the
+second word of the switch block into 43 to remove the block
+from the list (this makes sure that no switch is ever unlocked
+twice due to PCLSR'ing).
+This procedure is repeated until 43 contains 0,
+thus unlocking all the switches in the list. Obviously since the
+job's pages are about to be discarded this action will have no
+consequence unless the switches are in pages shared with other
+jobs.
+
+If in the process of unlocking the switches
+the system tries to read from a nonexistent page or write in a
+pure page, it gives up entirely, ignoring the rest of the
+locked switch list, and also the critical routine table. Also
+if the end of the list is not reached after 512. switch blocks
+have been unlocked, the system gives up.
+
+ 2. THE CRITICAL ROUTINE TABLE.
+
+When the %OPLOK bit is 1, location 44 is considered to be an
+AOBJN pointer to a table of critical sections of code, which are
+involved in the manipulation of switches or the locked switch
+list. The table should be a vector of two-word entries, one for
+each critical section of code. The first word of each entry
+should give the boundaries of the critical section: the left
+half should have the the address of the first instruction of the
+critical section; the right half, the address of the first
+instruction after the critical section. The second word of the
+entry should have an unlock instruction, subject to the same
+restrictions as for locked switch list unlock instructions,
+the only difference being that the address field of the
+instruction is taken from the RH of the word, as one would expect,
+whereas in unlock instructions in switch blocks the address of
+the switch block is used, and the RH of the word is the CDR.
+Examples will make all this clear.
+
+If the job is killed or reset while the PC is in the range
+specified by a critical routine table entry, the switch
+specified by the entry will be unlocked by executing the unlock
+instruction. It is possible
+for the ranges specified by two entries to overlap; to make sure
+that no entry is processed more than once, the system updates 44
+as it processes each entry.
+
+As with the switch list unlocking, the system abandons the whole
+thing if it needs to read or write in a page that won't allow it.
+
+ 3. FATAL INTERRUPTS IN TOP-LEVEL JOBS WITH LOCKED LOCKS.
+
+When the %OPLKF bit in a job's .OPTION variable is set to 1, and if the job
+is the top-level job of a non-disowned tree, then if that job ever receives
+a fatal interrupt its locks will be unlocked by the system job as part of
+the process of detaching it.  Thus fatal interrupts in network servers,
+toplevel DDTs, system demons, etc. that happen while those jobs have shared
+databases locked, will not keep other jobs blocked waiting for someone to
+gun down the corpse.  
+
+The reason you might not want to set %OPLKF is that after a jobs locks are
+unlocked, it will not in general work to proceed the job.  Such a detached
+corpse will only be good for autopsy, not revival.
+
+
+B. USING THE FEATURES FOR SWITCHES IN A SHARED PAGE.
+
+In this section it is assumed that the page is not part of a
+disk file, and will not survive through a system crash. That
+means that it is not necessary to worry about unlocking switches
+that are locked at the time of a system crash.
+
+ 1. LOCKING AN AOSE-STYLE SWITCH.
+
+The proper routine to use for locking a switch follows:
+The address of the two-word switch block is assumed to be in A.
+
+LOCK:	AOSE (A)		;LOCK THE SWITCH, OR WAIT TILL WE CAN.
+	 .HANG
+LOCK1:	MOVE B,43		;PUT THE SWITCH ON THE
+	HRLI B,(SETOM)
+	MOVEM B,1(A)		;LOCKED SWITCH LIST
+	MOVEM A,43
+LOCK2:	POPJ P,
+
+This routine will set up the switch as a switch block, and make
+43 point to it. The contents of the switch block will be:
+
+	0		;This word is the switch itself!
+	SETOM <previous contents of 43>
+			;The SETOM is the unlock instruction.
+			;The RH has nothing to do with the SETOM;
+			;it points to the next block of the list.
+
+Note that the HRLI instruction is superfluous, because 0 in the
+left half of the second word of the block is the same as (SETOM).
+
+The three instructions starting at LOCK1 are critical because
+the switch has been locked but is not on the locked switch list.
+Therefore, an entry in the critical routine table of the form
+
+	LOCK1,,LOCK2
+	SETOM @A
+
+is needed, in case the job is killed while executing there.
+
+
+ 2. UNLOCKING AN AOSE-STYLE SWITCH.
+
+The correct way to unlock a switch follows:
+(assuming that A points to the switch block and that
+the switch block is the first item on the locked switch list).
+
+UNLOCK:	HRRZ B,1(A)	;REMOVE THE SWITCH FROM THE
+	MOVEM B,43	;LOCKED SWITCH LIST.
+UNLOC1:	SETOM (A)	;THEN UNLOCK THE SWITCH.
+UNLOC2:	POPJ P,
+
+The instruction at UNLOC1 is critical because the switch is
+locked but not on the locked switch list. Therefore, an entry
+is needed in the critical routine table as follows:
+
+	UNLOC1,,UNLOC2
+	SETOM @A
+
+Note that the switch must be removed from the list before
+unlocking. That is because if the switch is locked but not on
+the list, the critical routine table may be used to unlock it,
+but if the switch is on the list but not locked, it will be set
+to -1 if the job is killed, and that could cause problems if
+some other job had locked the switch.
+
+
+C. HANDLING SWITCHES IN DISK FILES.
+
+The extra problem here is to make sure that if the system crashes, the next
+time the data base is accessed after the system is reloaded all the
+switches will be reinitialized.  This may be done by using the time and
+date that the system was started to distinguish different incarnations of
+it.
+
+The technique uses a variable INITDN, stored in the database, and a LOCK
+device lock named "NUTMEG".  Whenever a program accesses the database for
+the first time, it must check INITDN.  If INITDN does not equal the time
+the system was started, the database requires initialization.  If a job
+detects that the database requires initialization, it seizes the NUTMEG
+lock, checks to see that initialization really is required, performs the
+initialization, updates INITDN, and releases the lock.
+
+The skeleton of the necessary routine is as follows, assuming that the file
+has already been opened and its pages mapped into core with a CORBLK system
+call, and INITDN is the address of the variable and SWIT1, SWIT2, etc. are
+the addresses of switches.
+
+INIT:	.CALL [	SETZ ? SIXBIT /RQDATE/
+		MOVEM A		; Ignore 1st value
+		SETZM A]	; 2nd value is time of system startup.
+	 .LOSE 1000
+	JUMPL A,[MOVEI A,300.	; System doesn't know time,
+		 .SLEEP A,	; Sleep 10. sec and hope it
+		 JRST INIT]	; finds out the time.
+	CAMN A,INITDN		; Init needed?
+	 POPJ P,		; No => No need for the lock, just return.
+	.CALL [	SETZ ? SIXBIT /OPEN/
+		MOVSI 10\.UAO	; 1.4 => Hang waiting for initialization lock
+		MOVEI CH
+		MOVE [SIXBIT /LOCK/]
+		SETZ [SIXBIT /NUTMEG/]]	; Registered, database specific lock
+	 .LOSE
+	CAMN A,INITDN		; Init needed?
+	 JRST INIT1		; No => someone else did it, unlock and return.
+	SETOM SWIT1		; Start setting switches to unlocked
+	SETOM SWIT2		; state. These insns should address
+	SETOM SWIT3		; locations in the mapped file pages.
+	;; etc.
+	SETOM SWIT9
+	MOVEM A,INITDN		; Mark init complete.
+INIT1:	.CLOSE CH,
+	POPJ P,
+
+Note that the first CAMN A,INITDN can be omitted, and the algorithm is
+still correct, but the second CAMN A,INITDN can -not- be safely omitted.
+
+
+D. REFERENCE COUNTS.
+
+Sometimes it is desirable to keep a count of the number of jobs
+looking at a data base. When the count is AOS'd, an entry must
+be put on the locked switch list to cause it to be SOS'd if the
+job is killed. For example, assuming that A points to the count
+and B points to an available two word block of memory:
+
+LOOK:	AOS (A)
+LOOK1:	MOVEM A,(B)
+	MOVSI C,(SOS @)
+	HRR C,43
+	MOVEM C,1(B)	;SET UP UNLOCK INSN & CDR POINTER.
+	MOVEM B,43	;PUT THE BLOCK ON THE LIST.
+LOOK2:	POPJ P,
+
+The critical code table entry needed is:
+
+	LOOK1,,LOOK2
+	SOS @A
+
+When finished looking, the count must be SOS'd, and removed from
+the list. The following routine will work, assuming only that
+the block at the front of the list was put on by the LOOK routine
+above:
+
+UNLOOK:	MOVE B,43
+	HRRZ A,(B)	;GET ADDRESS OF THE COUNT VARIABLE TO BE SOS'D .
+	HRRZ B,1(B)	;GET CDR POINTER.
+UNLOO1:	MOVEM B,43	;REMOVE BLOCK FROM LIST.
+UNLOO2:	SOS (A)		;DECREMENT THE COUNT.
+	POPJ P,
+
+The critical code table entry needed is:
+
+	UNLOO1,,UNLOO2
+	SOS @A
+
+
+E. THE .HANG INSTRUCTION.
+
+The .HANG UUO is to make it easy for programs to wait for various
+conditions, such as locks becoming unlocked.  It should be used the way a
+JRST .-1 would be used in a stand-alone program.  .HANG is documented
+completely in .INFO.;ITS UUOS.
+
+
+F. THE UNLOCK SYSTEM CALL.
+
+The UNLOCK system call can be used to unlock the switches of a specified
+job.  Usually this is used by a job to unlock its own switches, but it can
+be used on the switches of any job that the executing job is allowed to
+write.
+
+Usual case:
+
+	.CALL [	SETZ ? SIXBIT /UNLOCK/
+		SETZI %JSELF ]	; Unlock all my switches
+	 .LOSE %LSSYS
+
+(Note that this has nothing to do with the LOCK device.  In particular it
+will -not- close LOCK device channels.)

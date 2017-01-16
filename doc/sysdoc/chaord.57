@@ -1,0 +1,2184 @@
+;skip 1
+;list
+;lftmar 350
+;kset 20fg
+
+				CHAOS	ORDER
+
+			       **** DRAFT ****
+NOTES:
+Work more on dynamic flow control, see end of that section.
+Data grams seem to have a bug that the two parties can never
+ agree on whether they both agree that it really happened.  Am I losing?
+Flush cruft at end?
+Add QES, which is the same as RFC but implies you expect ANS?  Any point to it?
+For ITS, a flavor of listening which queues RFCs coming in while index is busy,
+ or otherwise avoids that timing problem.
+-------
+This table of contents has not been kept up to date *******
+
+	Goals
+	Non-goals
+	Hardware Assumptions and Constraints
+
+User appearance
+
+	Connections
+	Contact Names
+	ITS implementation
+	Lisp Machine implementation
+
+Network Control Program
+
+	Packets
+	Hosts attached to more than one subnet
+	Subnet and Host numbers
+	Packet numbers
+	Indices
+	Routing
+	Operations
+	Table of packet field use vs opcode
+	Flow and Error Control
+	Dynamic Window-size Adjustment
+	Uniquization
+	Media Handlers
+	Buffers
+	ITS System Calls
+
+Comparison with LCSNET
+	Principle differences
+	High priority data packets, interrupts, and flushing
+	Data grams
+	Multiple messages per packet
+	Checksums in the packet
+	Host-independent user-level protocols
+	Very Small Hosts
+
+Transmission Media
+
+	Ethernet
+	TEN11 Interface
+	DL10 & DTE20
+	Asynchronous line
+
+Higher-Level Protocols
+
+	Telnet
+	File Access
+	Mail
+	Locate-named-service
+
+>Goals
+
+High speed communication between processes running in various local machines.
+By "high speed", I mean much faster than the Arpanet.
+At least comparable to TU20 magtape (30000 characters/second),
+about 10 times the speed of the Arpanet.
+(30-50 kcps seems to be the measured preformance, with ITS, 10/2/78)
+
+No undetected errors in data transmission.
+
+Not to depend on a particular medium.  (However, we are compromising
+by picking a fixed packet size.  The simplicity and efficiency are worth it.)
+
+Simple enough to put in small pdp11's.  Also, simple to the user.
+
+As much power as the Arpanet but, hopefully, a lot less hair.
+
+Work well for both "telnet" and "file transfer."
+
+The initial implementation in ITS should have the "in-system" part as
+small and simple as possible.  This includes no per-host tables
+in the NCP, which allows large nets and easy reconfiguration.
+There is, of course, a host-name to address translation table
+used by "user" programs.  The NCP has to have a per-subnet table
+which remembers where the bridge(s) to that subnet from
+the local subnet are.
+
+The acknowledgement protocol must be designed not to limit
+performance.
+
+Statistical flow control ((see below.))
+
+Avoid bottlenecks such as the Arpanet "control link".  Be immune
+to transmission medium failures which cause deleted, duplicated,
+or out-of-order packets.
+
+
+>Non-goals
+
+Byte sizes other than 8 bits.  (pdp10 binary transmission should
+be part of a user-level file-transfer/ML-device protocol.)
+
+Compatibility with the Arpanet.
+
+Substituting for TEN11 interface functions such as running
+the AI TV11 and XGP.
+
+Automatic routing will be deferred.  Initially the routing
+tables will be assembled into the programs.  A host needs
+one routing table for each subnet it is connected to
+(or one for each network interface it possesses.)
+
+
+>Hardware Assumptions and Constraints
+
+Transmission is physically in "packets" which have headers, rather
+than in, e.g., continuous streams.
+
+The chaos net (ether) interface limits the physical length
+of a packet to 4097 bits including overhead bits.  The net result
+is the maximum number of data bytes (excluding the header
+defined by this protocol) in any packet is 488.  This limitation
+will be extended to the whole network (to keep things simple).
+However some provision will be made for a possible network-wide
+packet-size expansion, which has already been done once.
+
+All transmission media will be assumed to be highly-reliable
+but not perfect; "perfect" reliability will be assured by having
+the two ends of a connection use an acknowledgement protocol
+which detects lost messages.  Transmission media are required
+to lose any messages that they don't deliver intact.  (I.e. there
+must be hardware checksums.)
+
+>User appearance
+
+The network allows user processes in various machines to
+communicate with each other in various ways, for instance,
+in imitation of a terminal, or in imitation of a disk file
+system.  These facilities are built on top of the basic
+capability to send "packets" (a header plus some data in the
+form of 8-bit bytes) through the network.  The network undertakes
+never to lose or garble any packets, except when the connection
+is cut off entirely.
+
+This document defines the low-level, "in-system" part of the
+protocol.  On top of this, special programs (running in user-mode)
+will implement the higher-level protocol that the general user
+program sees.  These protocols and programs won't be discussed
+further in this document, but remember that the strange packet
+formats and so forth are not seen by most user programs.
+
+>>Connections
+
+When two processes wish to communicate, they establish a
+connection between them.  This connection allows two streams
+of packets to flow, one in each direction.  [Explain why
+connections should be bi-directional rather than uni-directional.
+Basically that's what you always want, and it makes things simpler.]
+
+Connections are essentially the only facility provided by the network.
+However, when first establishing the connection it is necessary
+for the two processes to contact each other, and make each
+other known to their respective operating systems.  In addition,
+it is often the case (in the usual user-server situation) that
+one of the processes does not exist beforehand, but is to be created
+and made to run a specified program.
+
+>>Contact Names
+
+The way we choose to implement contacting is to say that one process
+is always a "user" and one process is always a "server".  The server
+has some "contact name" to which it "listens".  The user requests its
+operating system to connect it to a specified contact name at a
+specified host.  If a process at that host is listening to that
+contact name, the two are connected.  If no one is listening to that
+contact name, the operating system must create a server process
+which will load itself with the appropriate program and connect up.
+
+Discovering which host to connect to to obtain a given service
+is an issue for higher-level protocols.  It will not be dealt
+with at all initially (that is, there will be a table of host
+names and numbers and the user will have to enter the name.)
+
+Once the connection has been established, there is no more need for
+the contact name, and it is discarded.  Indeed, often the contact name
+is simply the name of a network protocol (such as "telnet") and several
+users may want to have connections to that service at the same time,
+so contact names must be "reusable."  (In the other common case, the
+contact name will be a "gensym".)
+
+As far as the operating systems involved are concerned, contact names
+are simply arbitrary ascii strings defined by user programs.  It is
+expected that the various higher-level protocols will define standard
+contact names; for instance, to get the telnet protocol one would
+connect to "telnet"; to get the file transfer protocol one would
+connect to "file-transfer".  If a machine receives a request to connect
+to a contact name which no one is currently listening to, a server
+process must be created and made to execute a program which decides,
+from the contact name, what server program to load and execute, or else
+to refuse the request for connection. 
+
+Contact names have no relation to file names; they are simply
+a device for introducing two processes to each other.  If one was
+using the network to transfer a file, one would first contact
+the file transfer server at the appropriate host, then send a
+packet containing the name of the file to be accessed.
+
+
+>>ITS system calls
+
+Ordinary user programs will not access the network directly; they will
+go indirectly through a job-device or sty-type program which will
+use a higher-level protocol to make the network look like what the
+user wants, the traditional things being a terminal and a disk
+file system.
+
+Since these intermediate user-mode programs for using the network will
+exist, there is no reason for the interface to the low level network
+provided by the system to look at all like a standard device. Instead,
+it will be designed solely for simplicity and ease of implementation,
+and for a certain degree of efficiency.  This interface will be
+described after the interface between Network Control Programs in
+different machines (the low-level protocol) is described.
+
+At some future time the intermediate programs might get moved into the
+system for reasons of efficiency, but that should not be allowed to
+complicate the initial implementation.
+
+As of October 1978, the opening and closing of connections is completely
+device-dependent, as are "status"-type operations, however byte-string
+I/O is supported in a fashion which is device-independent except when
+errors occur, which is handy in several programs.  Packet-level,
+device-dependent I/O is also supported.
+
+The .INSRT-able file of routines NETWRK, will be augmented to handle
+both the Chaos net and the Arpa net.
+
+
+>>Lisp Machine implementation
+
+In the case of the Lisp Machine, the only distinction between user
+programs and system programs is who maintains and documents them,
+and how carefully.
+
+(More?)
+
+>Network Control Program
+
+This is the part of the operating system(s) that implements the network
+(obviously).
+
+>>Packets
+
+The NCP's operate by exchanging packets.  A packet consists of a
+header containing control information, and zero or more 8-bit bytes of
+data. Hardware restrictions of the Chaos net interface
+restrict the maximum length of a packet to 253 16-bit words.  In fact,
+we will limit it to 252 words (to make packet buffers in pdp10's be 128
+words including two overhead words).  Again for the convenience of
+pdp10's, the header should be an even number of 16-bit words.
+
+In this section the packets will be described as they look to a pdp11. 
+They look the same inside a Lisp Machine, since the byte structure is the
+same.  Inside a pdp10, packets are stored with two 16-bit words
+left-adjusted in each pdp10 word. Additionally, the bytes in the data
+portion of the packet are swapped so as to put them in pdp10 standard
+order.  pdp11's that act as network interfaces for pdp10's will be required
+to do this byte swapping since they're likely to have more time available
+than the 10 to do it in, and can also do it faster, having a special
+instruction for it.  pdp10's that communicate directly to the network will
+have hardware assistance for byte reshuffling in their interfaces.  See the
+transmission media section for how packets are encapsulated during
+transmission through the various media. 
+
+The header is 8 16-bit words and contains the following fields:
+
+	-----------------------
+	|opcode(8) | unused(8)|
+	-----------------------
+	|fc(4) |  nbytes(12)  |
+	-----------------------
+	|  destination host # |
+	-----------------------
+	|  destination index  |
+	-----------------------
+	|    source host #    |
+	-----------------------
+	|    source index     |
+	-----------------------
+	|      packet #       |
+	-----------------------
+	|    ack packet #     |
+	-----------------------
+
+	opcode - tells the receiver of the packet how to interpret
+		it.  See the Operations section below.
+		This is 8 bits long.  The 128 opcodes with high
+		order bit =0 are for NCP use.  The 128 with high
+		order bit =1 are for user-program use.
+
+	unused	8 bits reserved for future use.
+
+	fc - forwarding count. 4 bits which count the number of times this 
+		packet has been forwarded by bridges.  Initially this field
+		is always generated as zero.  Each bridge increments it;
+		if it overflows, there is assumed to be a loop
+		and the packet is discarded.
+
+	nbytes - the number of 8-bit bytes of data in the data part.
+		The maximum value of nbytes is 488.  The minimum is 0.
+		This is 12 bits long to allow for 4K-bit packets.
+		(Actually 12 bits is enough for up to 32K-bit packets.)
+
+	destination host #
+		This is divided into two 8-bit fields.  The high
+		byte specifies which subnet.  The low byte specifies
+		which host on that subnet, and (on ethernet subnets)
+		is identical to the hardware host number.  Neither
+		field may be zero in a valid host number.
+
+	destination index - index for this connection assigned by the
+		destination host's NCP.
+
+	source host # - see destination host #.
+
+	source index - index for this connection assigned by the
+		source host's NCP.
+
+	packet # - an ascending reference number used in error and
+		flow control (see below).
+
+	ack packet # - used in error and flow control (see below.)
+
+>>Hosts attached to more than one subnet
+
+(This also applies to hosts with more than one interface to
+the same subnet, if there ever are any.)
+
+Such hosts ought to act as bridges.  That is, if a packet
+is received which is not addressed to this host, it should
+be sent back out, using this host's routing tables.  The
+forwarding count should be used to prevent infinite loops
+in the event of inconsistent forwarding tables in two bridges.
+
+It is undesirable for a host to have more than one number.
+So a host connected to multiple subnets should choose one
+subnet as its "home", which is the address which is advertised
+as that host.  The host's other network connections are
+un-named bridges.  In some causes it may be preferable
+not to pick a "home" subnet; instead, one invents a new
+private subnet which only has that one host on it,
+and all the host's network connections act as bridges
+to that subnet (also to each other).
+
+The routing should be set up so that packets destined for such
+a host from a subnet on which it has an interface choose that
+interface as the bridge to that host, so that in fact data flows
+the same way as if the host had more than one number and the
+host-name to host-number lookup magically chose the right number.
+
+
+>>Subnet and host numbers.
+
+Subnet numbers are arbitrary.  Host numbers are assigned according to
+position on the cable, as explained (elsewhere).
+
+These numbers may be found in the file SYSENG;HOSTS >
+
+The physical cable address of a host should include both its subnet number
+and its host number (prior to October 1978 the subnet field of a physical
+address was always 0).  This allows the physical address to be used as
+a unique machine identifier and makes it possible for a host to discover
+its full 16-bit host address without prior knowledge.
+
+>>Packet numbers
+
+Each time the sending user puts another packet into the network, this
+number is increased by one.  (These numbers are independent for the
+two directions of a connection.)  The receiver uses these numbers to
+get the packets into order and ensure that there are no duplications
+nor omissions.  The packet numbers are 16 bits and wrap around to zero
+when they overflow.  When the connection is first opened, an initial
+value for the packet# is established.  If it was 0, then the packet#
+of the first data packet would be 1.
+
+Packet #'s should be compared modulo 2**16.  On pdp11's, use
+
+	CMP A,B
+	BMI <A is less>		(BMI rather than BLT or BLO)
+
+On pdp10's, use
+
+	SUB A,B
+	TRNE A,100000		(rather than CAMGE A,B)
+	 JRST <A is less>
+
+On Lisp machines, use
+
+	(AND (BITTEST 100000 (- A B))
+	     <A is less>)	[rather than (AND (< A B) ...)]
+
+>>Indices
+
+Each connection has two indices assigned to it, one at each end.  Each
+index is an arbitrary 16-bit number assigned by the NCP at its end; usually
+it is an index into that NCP's tables.  Indices are required to be
+non-zero.  For maximum simplicity, all packets include both indices.  The
+receiver of a packet uses the destination index to find out who to give the
+packet to.  Generally the source index is used only for error checking, but
+when a connection is first opened the source index has to be saved and used
+as the destination index in future packets in the reverse direction.
+
+To prevent packets somehow left over from old connections from
+interfering with new connections, we require that a certain time
+elapse between successive connections between the same pair of hosts
+with the same index numbers at each end, this time to be longer than
+the maximum time a packet is reasonably expected to sit around in
+the network somewhere (the maximum transit time through all bridges, etc.)
+This requirement is implemented by making part of the index number be
+a "uniquizer"; when a host reuses a slot in its tables, it increments
+the uniquizer, so that the index number for that slot is not the same
+as it was previously.  Then if the uniquizer field is sufficiently wide,
+and the rate of creation of connections (actually the rate of allocation
+of indices) is sufficiently low, the requirement will be satisfied.
+For the kind of network we're talking about, the time is a few tens of
+seconds, and the uniquizer need only be a few bits wide.  It is up
+to each host how wide it makes the uniquizer, depending on how big
+it wants its tables to be.  It is best if table slots are also
+allocated circularly, so that slots are reused at the minimum possible rate.
+
+The uniquizer also serves to "more or less" uniquely identify connections
+so that duplicate copies of a Request For Connection (RFC) packet
+can be identified and discarded.
+
+A user process's "capability" or "channel" to a connection, used by it
+to ask the NCP to operate on that connection, simply contains the
+appropriate index.
+
+Associated with each index the NCP has a "state", the host # and index
+# of the other end of the connection, some read buffers and associated
+variables, including a current packet #, and some write buffers and
+associated variables, again including a current packet #.
+
+The "state" can be Closed (no connection or other activity currently
+associated with this index), Open (this index has a connection to
+another index at another machine), RFC-sent (requested another machine
+for a connection, but no answer yet), Listen (listening for a request
+for connection to a certain contact name), Broken (connection closed
+abnormally by network or machine lossage), and RFC-received (waiting
+for a server process to get going and pick up a request for connection
+that came in).
+
+
+>>Routing
+
+This section is a place-holder.  Initially routing will be kludged with
+a fixed table.  Once the network is set up automatic routing will
+be put in.
+
+The routing decision consists of looking at the destination subnet
+field of a packet and deciding which interface (on a multi-interface
+host) to transmit it on, i.e. what is the best route to that subnet.
+In addition, if the destination is not on a subnet to which there
+is a direct interface, one must determine what is the host number of
+the bridge it should be sent to.
+
+It also involves recognizing packets which are destined to the
+current host and receiving them.
+
+
+The following is not yet implemented.  It is an initial plan for routing.
+
+Gaetways will broadcast RUT packets periodically, perhaps once a minute.
+The destination field is zero and the source field is the address of the
+gateway on the net on which the packet is being broadcasted.  The data field
+contains a bunch of 16-bit words, divided into fields in the same way as
+a host address.  The subnet field of each word contains the number of a
+subnet which this gateway is able to reach.  The host field of each word
+contains the hop count, which is 0 if the gateway is physically connected
+to the specified (non-ether) subnet, 1 if the gateway is connected to
+the specified (ether) subnet, or 1+ the hop count of the closer gateway
+if this gateway indirects through another.  The hop counts allow the gateways
+to avoid loops when there are multiple paths; they may not need to be
+looked at by non-gateway hosts.
+
+Each host maintains a routing table, with entries keyed by subnet number.
+For subnets to which the host is physically connected, the entry points
+to the host's physical interface.  For subnets which the host knows how to
+get to because it has been informed of a gateway via a RUT packet, the entry
+contains the gateway's host address, the hop count, and the time that this
+route was last confirmed by a RUT packet.  If the NCP remembers only one
+route to a given subnet, it wants to remember the one with the smallest
+hop count unless that one is more than (say) 5 minutes old.  If the NCP
+remembers all the routes, it should stop using ones which are more than
+(say) 5 minutes old.  It is not clear that it should ever use one with
+a hop count larger than the minimum.  The reason for the time-out is to
+avoid forever losing packets by sending to a gateway which has gone down.
+If there are no gateways up and known about by the NCP which reach a given
+host, it will look like that host is down.
+
+>>Operations
+
+This section tells what the values of the opcode field in a packet are, and
+how an NCP responds to each one.
+
+1    RFC - Request for Connection
+
+This message is sent from user to server in order to open a
+connection.  The data contains the contact name.  Actually, if
+the data contains a space, the characters before the space are
+the contact name and the characters after the space are "arguments".
+This is done so that simple transactions can work (see below).
+
+The destination index is zero, because it is not known yet.  The
+responses are:
+
+	OPN, if a server process is found or created that wishes
+	to accept the request and open up a connection.
+
+	CLS, if the connection cannot be opened.  The data field
+	contains an ascii explanation of why not.
+
+	ANS, if a simple transaction is occuring.  The data contains
+	the answer, and no connection is ever created.
+
+	FWD, if there is no server process at this host, but there
+	might be a suitable one some place else.
+
+There may also be no response, if the RFC was lost in the network, or
+the destination host is down, or the reply was lost in the network. 
+
+To increase the reliability of establishment of connections, RFC's and
+OPN's are retransmitted, just as data packets are, until a response is
+elicited.  CLS, ANS, and FWD cannot be retransmitted because we take
+the position that retransmission is implemented by something associated
+with a connection, and these packets are not sent by connections (and are
+not acknowledged).  OPN is sent by a connection, and RFC is sent by
+a sort of embryonic connection which continues to exist while it awaits
+an OPN or other reply.
+
+Since RFC is retransmitted, it is the responsibility of the NCP to detect
+and discard duplicates.  When an RFC is received, all existing connections
+in the OPN or RFC-RECEIVED state, and all "pending" RFC's which are awaiting
+servers to connect to them (if the NCP has such), should be checked to see
+if they have the same source host and index number as the received RFC.
+If so, the RFC is a duplicate and should be ignored.  Note that connections
+in the LOST, CLOSED, or BROKEN states should not be checked, since these
+are not really connections as far as the foreign host is concerned, but simply
+ghosts of connections left around to remember error status for their controlling
+user programn.
+
+Since the response to RFC is not guaranteed, processes issueing RFC's
+must have timeouts.  In most implementations the normal host-down timeout
+will suffice.
+
+[We should discuss why the special kludgery for control packets, rather
+than using the regular connection mechanism to assure reliable transmission
+of control packets, as the Arpanet does.  Also a discussion of which control
+operations inherently need reliability and which inherently don't, and
+why that should be so.]
+
+The packet # field contains the first packet # that will be assigned
+to data transmitted from the user process, minus one modulo 2**16.  In
+the simplest case, this can be zero, and the first packet sent will be
+packet # 1.  One might also imagine uniquizing the packet numbers
+as an extra error check, but this should not be necessary, because
+the indices are uniquized, and connections must be explicitly agreed
+to by each end before data can flow.
+
+
+2    OPN - Connection Open
+
+This is the positive acknowledgement to RFC.  The source index field
+conveys the acknowledger's connection index to the requester.  The packet #
+field contains the first packet # that will be assigned to data transmitted
+from the server process, minus one modulo 2**16.  The data portion of this
+packet is the same as a STS packet (see below), and mainly serves to convey
+the server's window-size to the user.  The ack packet # field must contain
+the usual value, i.e. the number that was sent in the packet # field of the RFC.
+The receipt and ack in the OPN serve primarily to terminate retransmission of the RFC.
+
+When an OPN is received, a STS is sent in response, telling the server
+the user's window-size.  The exchange of an OPN and a STS also serves
+as acknowledgement to each side that the other believes the connection
+is open.  No data packets may be committed to the network until after
+this has occurred.  If this rule was not followed, and packets happened
+to get out of order, a data packet could arrive before the connection
+was open and cause a LOS.
+
+To improve the reliability of establishment of connections, OPN's are
+retransmitted, just as data packets are, until receipted (and
+acknowledged) by STS.  Because of this retransmission, the NCP must
+detect and discard duplicate OPN's.  If an OPN is received for a connection
+which exists and is not in the RFC-SENT state, the OPN should be ignored
+and no LOS should be sent.
+
+OPN's contain 16-bit data and are not byte-swapped.  See below under opcode 300.
+
+3    CLS - Connection Closed
+
+CLS is the negative response to RFC.  It indicates that no server was
+listening to the contact name, and one couldn't be created, or for
+some reason the server didn't feel like accepting this request for a
+connection, or the destination NCP was unable to complete the
+connection (e.g. connection table full.)  The destination index will
+be the source index of the RFC.  The source index will be zero because
+the NCP did not put this connection into its tables.  The data bytes,
+if there are any, contain an ascii explanation.
+
+CLS is also used to close a connection after it has been open for a while.
+In the Arpanet, the NCP undertakes not to close the connection when the
+user requests it, but waits until all data transfer has completed.  This is
+a source of extra complexity, since data transfer may be hung up, there
+have to be timeouts, there have to be connections waiting to be closed
+which aren't owned by any user, etc.  It seems simpler to make CLS take
+effect immediately, and let the user processes assure that data transfer
+has been completed.  Note that telnet-like applications don't need it, and
+ftp-like applications have to have it separately from closing anyway.
+
+Since there is no error recovery or retransmission mechanism for CLS,
+the use of CLS is necessarily optional.  However, it is desirable to
+send a CLS when possible to decrease user confusion.
+
+4    FWD - forward a request for connection
+
+This is a response to RFC which indicates that the desired service
+is not available at the process contacted, but may be available at
+a possibly-different contact name at a possibly-different host.  The
+data field contains the new contact name and the ack packet # field
+contains the new host number.  The issuer of the RFC should issue
+another RFC to that address.
+
+5    ANS - answer to a simple transaction
+
+Simple transactions are transactions which consist of a single question
+(request) and a single answer (response).  They have no side effects,
+so it is not necessary for either party to know whether the other party
+thinks the transaction was completed or not.  Simple transactions need
+no flow control and no error control, other than a timeout by the user
+side to detect lost messages.  They are a simple, efficient way for
+doing simple-minded things such as extracting information (such as the
+time or a host name table) from a central server. 
+
+A simple transaction is initiated by sending an RFC to a server which
+happens to use simple transactions rather than full connections.  The
+data field of the RFC consists of the contact name of the server,
+optionally followed by a space and arguments to the request.  The
+server responds by sending an ANS packet, whose data field is the
+answer.  The destination address of the ANS comes from the source
+address of the RFC.  The source address, packet #, and ack packet #
+fields of the ANS are not used and should be zero. 
+
+The difference between simple transactions (2 packets) and
+full datagrams (4 packets) is that in the simple transaction the two
+parties don't have to agree about whether or not the transaction
+in fact took place, while in the full datagram they do, making
+acknowledgement necessary.
+
+The server of a simple transaction should be prepared to process
+the transaction multiple times without error.  Simple transactions
+should not have side effects which would be dangerous if repeated.
+
+200-377 DATA - Transmits Data
+
+The data portion of the packet is data being sent through the
+connection.  The packet # is a number that increments by one for each
+data packet sent in this direction on this connection.  This is used to
+detect lost packets (which includes packets garbled in transmission and
+packets lost in the statistical flow control scheme) and duplicated
+packets (caused by lost or delayed acknowledges.  The NCP undertakes to
+deliver the packets to the destination process in the same order that
+they came from the source process, with no duplications and no
+omissions.  Note that any opcode with the sign bit on is a data packet
+as far as the NCP is concerned; if they wish, higher-level protocols
+may use the opcode field to define various different kinds of data
+packets.  Thus, what is herein called a data packet may be a "control"
+packet to a higher-level protocol.  Normally, opcodes 200 and 300
+should be used.  Opcodes 201-277 and 301-377 are to be used for special
+purposes, as defined by higher-level protocols.
+
+Opcodes 300-377 are defined to be "16-bit data".  Note that this does not
+affect the byte count in the packet header; it is still a count of 8-bit
+bytes.  The sole effect of 16-bit data is to prevent byte-swapping when
+communicating with pdp10's; pdp10's store the 2 8-bit bytes in a 16-bit
+"word" in the reverse of the network standard order (defined by pdp11's
+and Lisp machines).  ((For purposes of 16-bit data, Interdata machines
+are considered pdp10's.))
+
+6    SNS - sense status
+
+This packet is a request for a STS packet to be returned.  It is used for
+"probing", see the section on flow and error control.
+
+Note that, to avoid a timing error, a SNS received by a connection in the
+RFC-sent state should be ignored.  This can happen if an OPN is transmitted
+followed by a SNS and the packets get out of order.
+
+SNS should not be transmitted on a connection that is not in the Open state.
+
+
+7    STS - report status
+
+STS is used for a variety of purposes.  It is the vehicle to carry an
+acknowledgement, when no data packet is being sent on which the
+acknowledge could be piggy-backed.  STS is used to set or change the
+window size, to acknowledge opening of a connection, and to carry
+receipts (see the flow control section.)  In the future STS will (may)
+be used to carry information used in automatic window-size adjustment.
+Like most packets, the ack packet# field of STS carries an
+acknowledgement, the number of the last packet given to the user
+process.  The first two bytes of the data field (low-order byte first)
+carry a receipt, the number of the last packet guaranteed to be given
+to the user process eventually.  The next 2 data bytes carry the window
+size (low-order byte first).  Additional data bytes will be defined in
+the future.
+
+STS's contain 16-bit data and are not byte-swapped.  See above under opcode 300.
+
+10   RUT - routing information
+
+This packet type is reserved for the future, when automatic routing exists.
+
+RUT's contain 16-bit data and are not byte-swapped.  See above under opcode 300.
+
+11   LOS - you are losing
+
+If a host receives a packet for a connection that does not exist (other
+than RFC which isn't associated with a particular connection, LOS, and
+CLS which is safe to ignore), it should return a LOS packet to the
+source of the offending packet.  The source of the LOS should be the
+destination of the offending packet, and the packet# and ack packet#
+fields should be copied.  The data portion of a LOS contains an ascii
+explanation of the problem.  A host receiving a LOS should break the
+connection specified by the destination index and inform the associated
+process that something has gone wrong.  It should make the LOS packet
+available to that process so the explanation of the problem can be
+read.
+
+The LOS packet isn't actually necessary, since if the supposed other
+end of a connection refuses to cooperate (i.e. never sends any
+packets), after a while the NCP will give up, close the connection, and
+inform the user that the foreign host appears to be dead.
+
+For debugging, an echo feature is implemented as follows.  If you send
+a packet with a data opcode and source and destination indices of 0,
+it will be sent back as a LOS packet.  The data field will be destroyed
+by the error explanation, but the packet # and ack packet # fields can
+be used to remember any sequencing or checking information.
+
+12   LSN - listen (never transmitted through the net, see below)
+
+13   MNT - maintenance
+
+Normal NCPs will discard MNT packets, without generating a LOS.  This packet
+type is reserved for use by maintenance programs.  
+
+>>Table of packet field use vs opcode
+
+The unused field is never used and must be zero, the forwarding count
+field is always used in the same way, and the nbytes field is always
+the length of the data.  Fields marked "0" below are don't care
+rather than must be zero, but zero is certainly recommended.  The packet#
+field of CLS, SNS, and STS would best be set the same as the packet# of
+the next data packet to be sent (just as in RFC and OPN).
+
+	 Destination	   Source
+Opcode	Host	Index	Host	Index	 Packet#     Ack pk#	Data
+------	----	-----	----	-----	 -------     -------	----
+ RFC	usual	  0	usual	usual	first - 1	0	contact name
+
+ OPN	usual	usual	usual	usual	first - 1     usual	0, window size
+
+ CLS	usual	usual	usual	  0	    0	        0	reason
+
+ ANS	usual	usual	usual	  0	    0	        0	answer
+
+ FWD	usual	usual	usual	  0	    0	     new host	contact name
+
+ SNS	usual	usual	usual	usual	    0	      usual	   0
+
+ STS	usual	usual	usual	usual	    0	      usual  receipt#, window size
+
+ LOS	src h	src i	dst h	dst i	   pk#	    ack pk #	reason
+
+ LSN	  0	  0	  0	  0	    0		0	contact name
+
+Data	usual	usual	usual	usual	  usual	      usual	data
+
+ MNT	completely nonstandard
+
+ RUT	completely nonstandard
+
+>>Flow and Error Control
+
+The NCPs conspire to ensure that data packets are sent from user to
+user with no duplications, omissions, or changes of order.
+Secondarily, the NCPs attempt to achieve a maximum rate of flow of
+data, and a minimum of overhead and retransmission.
+
+The transmission medium is required to lose all damaged packets.  Therefore
+error control reduces to retransmission of lost packets, plus immunity to
+duplicated and out-of-sequence packets.
+
+The following concepts must be explained:  the window, acknowledgement,
+receipt, retransmission, and probing.
+
+The window is the set of data packets "in the network" between the
+sending process and the receiving process.  Conceptually the window
+slides along as transmission proceeds.  When a packet is acknowledged,
+that means that the window is to the right of that packet, since the
+receiving process has gobbled that packet.  The window has a fixed size
+to limit the amount of buffer space that is used up if the sender sends
+faster than the receiver receives.  If the sending user process tries
+to transmit more packets than the window size allows, it should be made
+to wait until some packets have been acknowledged.  The window is made
+sufficiently large to regulate how often acknowledgements must be
+returned.  Note that the window includes only data packets, not
+control packets.  Control packets are to be processed immediately
+when they are received, and do not take up buffer space.  Separate
+mechanisms are provided to deal with control packets being lost in
+the network.
+
+No sender is actually required to pay any attention to the window size.
+No receiver is actually required to set the window size to something
+reasonable.  However, those hosts that want to maximize performance
+should do something about the window size.  The size is initially set
+during the RFC/OPN/STS dialogue, presumably according to the type of
+protocol being used.  An NCP may, if it chooses, dynamically adjust the
+window size according to observed network behavior.  (See dynamic
+window-size adjustment section below.)
+
+An acknowledgement is a signal from a receiver to a sender that all
+packets through packet number "n" have been given to the receiving
+process, therefore the window should go from n+1 through n+window_size.
+Note that acknowledgements can get out of order, so one should use
+the maximum (mod 2^16) of all the acknowledgements ever received
+as the start of the window.  Since acknowledgements are so common,
+there is a field (ack packet #) in the data packet which allows
+an acknowledgement to be "piggy-backed" on another packet.
+
+A receipt is a signal from a receiver to a sender that all packets
+through packet number "n" have been received successfully by the NCP
+and are guaranteed to be delivered to the user process, therefore they
+need not be retransmitted.  Note that acknowledgement implies receipt.
+The separate receipt mechanism is supplied so that useless
+retransmissions can be limited, when the data have been received but
+cannot be acknowledged because the receiving process is being slow
+about reading them.  The STS packet is used to send a
+receipt.  Receipts are optional.
+
+Retransmission is the process of sending all unreceipted data packets
+in the sender's queue through the network to the receiver, except those
+that were last sent very recently (within 1/30'th of a second in ITS.)
+Retransmission occurs every 1/2 second, and when a STS packet is
+received.  The idea of retransmission is to keep sending a packet until
+it has been proven to have successfully reached its destination (by
+receipt or acknowledgement.)  The reason retransmission occurs in
+response to STS is so that a receiver may cause a faster retranmission
+rate than twice a second, if it so desires.  Since STS carries a
+receipt, and very-recently-transmitted packets are not retransmitted,
+this should never cause useless retransmission.
+
+A probe is the sending of a SNS packet, in the hope of eliciting
+either a STS or a LOS, depending on whether the other side believes
+in the connection.  Probing is used periodically as a way of testing
+that the connection is still open, and also serves as a way to get STS
+packets retransmitted as a hedge against the loss of an acknowledgement,
+which could otherwise stymie the connection.
+
+We probe every five seconds, on connections which have unacknowledged
+packets outstanding (a non-empty window), and on connections which have
+not received any packets for one minute.  If a connection receives no
+packets for 1 1/2 minutes, this means that at least 5 probes have been
+ignored, and the connection is declared to be broken.
+
+The receiver generates STS packets under the following circumstances:
+When a SNS is received (thus a response to a probe).  When a duplicate
+packet is received, so that further useless retransmission will be
+prevented by the receipt.  When the number of received but not
+acknowledged packets is more than 1/3 the window size; evidently the
+normal piggy-backed acknowledge mechanism is not working, so we
+generate a STS to carry the acknowledge that will empty the window back
+out, hopefully in time before transmission becomes clogged.  When the
+window size changes (to tell the other end of the change).
+
+When it is time to send a STS, we attempt to send one immediately.
+If this fails (for instance, there might be no buffers available),
+we keep trying to send one every half-second.
+
+The receiver can also generate "spontaneous" STS's, to stimulate
+retransmission or to carry an acknowledge, to keep things moving on
+fast devices with insufficient buffering, such as the Gould printer.
+This provides a way for the receiver to speed up the retransmission
+timeout in the sender, and to make sure that acknowledges are happening
+often enough.  For example, one might use a timer to generate a STS
+every 1/10th of a second.
+
+Note that spontaneous STS's should not be generated until the connection
+is fully open.  This means that the server should not send STS until it
+has gotten a STS back from its OPN.  STS's other than spontaneous ones
+have no such problem.
+
+>>Host Status
+
+All physical Chaosnet hosts, even gateways, are required to answer an
+RFC with contact name STATUS and byte count 5 (no "arguments" allowed
+in the data field of the packet) by returning an ANS packet whose data
+field contains:  the name of the host in ascii, an octal 200 (any byte
+with the sign bit on terminates the name), and additional status and
+metering information to be defined later, perhaps in a site-dependent
+way.  This makes it possible to write a program which determines the
+status of all nodes in the network; the program could either be driven
+by a host table or could try all possible host addresses; the NCP should
+respond promptly to the STATUS RFC rather than starting up a program
+to handle it, if starting up a program would take more than a second
+or two.
+
+>>>Here is some narrative description of the NCP.
+
+Each receiver (each end of each connection is a receiver, and also a
+sender; think of receivers and senders as little actors inside the NCP)
+has a list of buffers containing packets which have been successfully
+received and are waiting to be read by the user process, and two
+packet# variables.  One is the number of the last packet read by the
+user process.  The other is the number of the last packet which has
+been acknowledged.  If these two are not equal, the receiver needs to
+send an acknowledgement "soon."
+
+The received-packet list needs to be kept sorted by packet number, and
+the NCP has to make sure that the user process does not see duplicates
+or omissions.  If packets arrive out of order, the NCP has to sort them. 
+This means that the user process may not be able to read a packet even
+though the receive list is non-empty, because the first packet in the
+receive list is not the successor of the last packet read by the user
+process. 
+
+A good way to do this is to have two lists of received packets, each
+of which is sorted.  The first list contains those packets which
+the user process may read; the first in the list is the successor
+to the last packet read, and there are no gaps in the list.
+The second list is the remaining packets, which the user may not
+read until some other packet arrives to fill in the gap.  Each
+list needs a pointer to head and tail, and the packet number of
+the next packet to be appended to the tail.
+
+It is not actually a requirement that an NCP support out-of-order
+packets, rather than simply discarding them and hoping that they
+will be retransmitted in order, but if it's not very hard to do
+one might as well do it.
+
+Acknowledgements are sent by putting the last-received variable into
+the "ack packet #" field of an outgoing packet on the opposite
+direction of the appropriate connection, and copying the last-received
+variable into the last-acknowledged variable.  Where does the outgoing
+packet come from?  First of all, all outgoing data, SNS, and STS
+packets automatically carry acknowledgement for the reverse direction
+of their connection.  So if an outgoing packet happens to be sent at a
+time when an acknowledgement is necssary, that takes care of it. 
+
+Secondly, if the number of outstanding unacknowledged packets is more
+than 1/3 the window size, a STS should be generated and sent immediately
+to acknowledge those packets before the sender fills up the window.
+
+Thirdly, the "soon" of four paragraphs back is implemented by a timeout
+in the NCP.  If an acknowledgement remains required for a certain amount
+of time, a STS should be generated and sent to carry it.  The appropriate
+time interval is 1 second, I would guess.  This timeout does not have
+to be too exact, however.  One could also not bother with this and let
+the other end's probe timeout trigger the STS via a SNS.  However, it
+is desirable to send a receipt fairly soon after receiving a packet
+to avoid useless retransmission.  This could be done either by a timeout
+or by sending a receipt when the packet is received for the second time.
+[No known NCP has such a timeout.  10/2/78]
+
+The reason for having a timeout here, rather than just sending an
+acknowledgement right away, is two-fold.  It allows "batching" of
+acknowledgements, where a single packet can be used to acknowledge
+many packets, which halves the network traffic caused by bulk
+data transfer.  It also allows "piggy-backing" of acknowledgements
+on data packets, which (for instance) decreases the network traffic
+caused by remote-echoing telnet connections.
+
+When a receiver receives a data packet, it compares the packet # of
+that packet with the last-received variable.  If it is less or equal
+(modulo 2^16), it is a duplicate of a packet already given to the user,
+and should be discarded (or it is at least 30000 packets ahead of the
+user, which is unlikely.)
+
+If it is greater, it is sorted into the received-packet list at the
+appropriate position (if it has the same packet# as a packet already in
+that list, it is a duplicate and is discarded.)  It is NOT acknowledged
+at this time; no packet is ever acknowledged until it has been given to
+the user process ("end to end acknowledgement").  Since a packet on the
+received packet list has not yet been acknowledged, it may be safely
+discarded at any time if the operating system runs out of buffer space,
+PROVIDED that it has not yet been receipted.
+Also, if the receiving user process is not listening to the net, the
+NCP cannot be swamped with arbitrary numbers of packets, since the
+sending user process is not supposed to send more than window-size
+packets past the last one the receiving user process read. 
+However, if receipts are being used, once a receipt has been sent for
+a packet that packet may not be discarded.  It is up to the individual
+NCP which strategy it prefers to use.
+
+Note that the most likely cause of packet duplication is that an
+acknowledge or a receipt was lost, so whenever a duplicate packet is
+discarded, a STS packet should be sent back containing the current
+receipt and acknowledge packet numbers.
+
+The sender has a list of packets which have been entrusted to it by the
+user for transmission and one packet # variable, the number of the last
+packet sent by the user.  When the user next sends a packet, the sender
+will increment this variable and set the packet# of the sent packet to
+the result.  The sender also sets the source and destination host
+numbers and indices of the packet, sets the "ack packet #" to the
+last-received variable of its corresponding receiver, sets the
+receiver's last-acknowledged variable to that (clearing the receiver's
+need-an-acknowledge flag), chooses a transmission medium by checking
+the routing tables, and gives the packet to the transmission medium for
+"immediate" transmission (perhaps it has to wait its turn in a queue.)
+It also saves the packet on a list, in case retransmission is required.
+
+With each buffered packet the sender holds in trust, it remembers the time
+that packet was last transmitted.  From time to time "retransmission"
+occurs.  The sender gives one or more packets from its list to the
+transmission medium.  It always starts with the oldest, so as to keep
+things in order, and sends the rest in order until it gets to one that was
+transmitted too recently to do again.  Retransmission is used to recover
+from lost or damaged packets, lost or damaged acknowledgements, and packets
+discarded by the receiver due to lack of buffering capacity.
+
+Each time a receiver receives a packet, it gives the "ack packet #"
+from that packet to its corresponding sender.  The sender discards any
+packets with numbers less than or equal to that, since their successful
+receipt has just been acknowledged, and advances the window.  If a STS
+packet is received, its receipt field is processed by discarding
+packets, but the window is not advanced.
+
+>>Dynamic Window-size Adjustment
+
+This section has not been updated for receipts.  Also, it is a bunch
+of junk.  Probably we can do without this stuff.
+
+Permit me to stress that this stuff is optional for small NCPs.
+
+The goals of flow control are:
+	1. Error recovery.
+	2. If the receiver is faster than the sender, avoid unnecessary
+	   delays in transmission due to having to wait for an
+	   acknowledge or having to wait for the sender process to wake up.
+	3. If the sender is faster than the receiver, minimize
+	   retransmissions due to receive buffer overflow.
+	4. Minimize the number of otherwise-useless packets generated
+	   to carry an acknowledgement or a window-size negotiation,
+	   and minimize useless retransmissions.
+
+Consequences of the goals:
+	1. All packets will be retransmitted until acknowledged.
+	2. The sending NCP must buffer several packets, and packets
+	   must be acknowledged in groups, not one-by-one.
+	3. If the receiver is slow, something must force the sender
+	   not to send packets too fast.
+	4. The interval between retransmissions should not be too small.
+	   It may be desirable for it to increase if the receiving
+	   process is not listening for some reason.
+
+The window size is the maximum number of packets which may be in the
+network at one time (for one direction of one connection).  "In the
+network" means output by the sending process and not yet input by
+the receiving process.  (These processes are the entities which
+determine the rate, unless they are so fast that the network slows
+them down.)
+
+The window size is not the number of packets acknowledged at a time;
+for best operation the latter must be 1/2 to 1/3 of the former.
+See below.
+
+If the sending process is slow (and determines the rate), things
+are relatively simple.  We just have to have a big enough window
+size and frequent enough acknowledgement to cover for sending
+process wakeup delays.
+
+If things are not limited by the sender, then
+		      Window size
+	Flow rate = ---------------
+		    Round trip time
+
+	Round trip time = time to wake up sender process (multiplied
+				by the fraction of the time this
+				is necessary)
+			+ time packet is sitting in sender buffers
+				before it is transmitted
+			+ transit time through the net
+			+ time packet is sitting in receiver buffers
+				before it is read; this is the maximum
+				of time to process previous packets
+				and time to wakeup sender process
+			+ time until acknowledge is generated and sent
+			+ transit time through the net
+
+The round trip time is the time between when packet N is output by the
+sending process and when it is acknowledged, permitting the sending
+process to output packet N+WS. 
+
+The main variable components of the round trip time are the delay
+before acknowledgement and the delay waiting in the receiver buffer for
+packets to be processed.  If these were zero, the round trip time would
+consist of two process wakeups and two network transit times
+(determined by the delay waiting for the cable and waiting for previous
+packets from this host to be transmitted, the time needed to load and
+unload the interface in the buffer, and the actual transmission time,
+multiplied by the number of bridges in the path.)
+
+This ideal round trip time is probably on the order of 2 seconds.
+The timeout for retransmission should be 2 to 3 times the round trip
+time.  The timeout for acknowledgement should be 1/3 to 1/2 the
+round trip time.  One could either measure the actual round trip time,
+or use an estimate of say 3 seconds, a little higher than the ideal.
+It would be a good idea to measure the round trip time in any case,
+which is done by getting the elapsed time since transmission when
+a packet is discarded due to its being acknowledged, and averaging
+that.
+
+The receiver process should initially set the window size to the
+maximum flow rate it wants to handle times the desirable round trip
+time. 
+
+Symptoms of improper window size:
+
+If the window-size is too large, the round trip time becomes
+long due to packet processing delay in the receiver buffer.
+(There will be many packets in the receiver buffer, and the
+receiver will be processing them slowly.)  The long round-trip
+time will cause unnecessary retransmissions.  Retransmissions
+could also be caused by the NCP's discarding received packets
+due to insufficient core to buffer them.
+
+If the window-size is too small, excessive process blocking
+and waking up occurs.  The receiver process often empties its
+buffer and has to block until more packets arrive.  The sender
+process often fills up its buffer and has to block until
+some of the buffered packets are acknowledged.  A small window
+size also causes acknowledgements to have to be sent more
+frequently than necessary.  Note that from the receiver's
+point of view it is impossible to distinguish between the
+window size being too small and the sending process being
+too slow.
+
+Here is a scheme for dynamic adjustment of the window size:
+
+Note that window-size adjustments cannot take effect
+(in the sense of fixing the symptoms) immediately, so it
+is necessary to limit the rate at which the window size
+is adjusted.
+
+When the receiver receives (and discards) a duplicate of a
+packet it already has in its buffer, this indicates either
+that an acknowledgement was lost or that the window size
+is too large.  Since packets are assumed not be lost very
+often, we may as well assume the window size is too large
+and send a WIN packet to decrease it.  Another possibility
+would be to have the sender detect the long round-trip
+time and complain to the receiver, who could adjust the
+window size.  The receiver must not decrease the window
+size again until all packets currently buffered have
+been read and acknowledged, indicating that the sender
+has had a chance to decrease the number of packets
+buffered at its end.  A reasonable amount to decrease
+the window size by is 1/3 of its current value.
+
+When the sending process wants to output a packet, but the number of
+packets already buffered is greater than or equal to the window size,
+it should send a WTS, indicating that the problem is too small a window
+size or too slow a receiver rather than too slow a sender.  When the
+receiving process wants to input a packet, but the buffer is empty, and
+a flag is set indicating that a WTS has been received, it should send a
+WIN packet adjusting the window size upward by 1/2 of its current value
+(and clear the WTS-received flag).  This is rate-limited by preventing
+the sender from sending a second WTS until all the packets buffered at
+the time the first WTS was sent have been acknowledged, indicating that
+the receiver has had time to act on the first WTS. 
+
+The variables required.  For both the sending and receiving sides, a
+packet number which has to be acknowledged before WTS or WIN can be
+sent again, and a flag saying whether this number is operative.  Also,
+a WTS-received flag in the receiver. 
+
+It is important to meter the performance of this mechanism and find out
+whether it does anything and whether what it does is right. 
+
+Consider the possibilities of changing this into a more symmetric and
+negotiation-based scheme, where the sender always initiates window size
+changing and the receiver either agrees or ignores the request. 
+Consider using elapsed time as an additional rate-limiter (have to use
+the other thing, too, so idle connections don't keep changing window
+size; this may be deleteable if it is always sender-initiated.)
+
+More notes on the subject of window-size too small.
+This is identical to receiver too slow.  The net flow rate
+out of the sender is trying to be higher than that into
+the receiver, so packets pile up in buffers at each end.
+The round-trip becomes arbitrarily high to preserve the
+equation and divide window size down enough to get the
+flow rate.
+
+The situation where the window-size is too small and we want to do
+something about it has to be distinguished from two other situations. 
+One, the receiver is accepting packets slowly but the sender is also
+sending them slowly.  We don't want to change the window-size, because
+it doesn't matter since packets aren't piling up, and at any time they
+might both decide to go fast.  Two, the receiver's net flow rate is
+high, but its response time is long (it's taking packets in bursts). 
+Here the round-trip time is still long, but making the window size
+smaller would make things worse. 
+
+The symptoms that distinguish the case where we want to make the
+window-size smaller are:  the round-trip time is long, the sender
+buffer is full, and the number of packets acknowledged at a time is
+small compared to the window size.  Actually, the last two are sufficient,
+since if the acknowledgement batch size is small, and we know it's
+not the sender's fault, may as well decrease the window size
+to save buffer space and decrease the round-trip time.
+
+>>Uniquization
+
+To avoid problems with packets left over from old connections
+causing problems with new connections, we do two things.  First of
+all, packets are not accepted as input unless the source and
+destination hosts and indices correspond to a known, existent
+connection.  By itself, this should be adequate, provided that
+retransmission is only done by the originating host, not by intervening
+gateways and bridges in the network.  This is because we can safely
+assume that when a host agrees to open a connection with a certain
+index number at its end, it will give up on any previous connection
+with the same index, therefore it won't retransmit any old packets
+with that index once it has sent out a new RFC or OPN.  The indications
+are that our network will be "local" enough that indeed retransmission
+will only be done by the original host.
+
+Problems could still occur if packets get out of order, so that an OPN
+establishing a new connection gets ahead of a data packet for an old
+connection with the same index.  To protect against this, it is
+necessary to assure that at least a few seconds elapse before an index
+number is reused.  This could be done either by remembering when an
+index is last used, or by reserving part of the 16-bit index number as
+a uniquization field, which is incremented each time an
+otherwise-the-same index is reused.  This field needs to big enough to
+cover for the maximum delay of an old data packet with the same index,
+and depends on the rate of creation of connections.  Which method is
+chosen is at the discretion of each local NCP.  Another necessary
+assumption is that when a system crashes and is reloaded (thus
+forgetting any remembered information about which indices were in use
+when and so forth) that the time to reload it is more than a few
+seconds. 
+
+Problems could occur not only with left over data packets, but also
+with left over control packets.  This isn't too much of a problem since
+control packets are not retransmitted, but it could still happen that a
+host gets faked out into thinking that it has a connection to another
+host that the other host doesn't know about.  In this case, it should
+just look like the connection was opened and then either the other host
+went down or the connection was broken by a LOS packet, since the other
+host won't generate any data packets and won't accept any. 
+
+>>Media handlers
+
+A host may be connected to more than one transmission medium.  It has
+service programs for each.
+
+When a packet is received that is not addressed to this host, the
+forwarding count should be incremented.  If it doesn't overflow, the
+packet should be sent back out according to the routing tables,
+otherwise it should be discarded.  Normally it would not be useful to
+send a packet back out on the same subnet it came in on, but we may as
+well let the forwarding count catch this along with other loops. 
+
+When a packet is received, if the opcode is RFC, it is handled
+specially.  The contact name is compared against those of all the
+indices which are in the Listening state.  If a match is found, that
+index is put into the RFC-received state, its LSN packet is discarded,
+and the RFC packet is put into its input list so that the server
+process can see it.  If no server is listening to that contact name,
+the RFC packet is placed on the  pending-RFC list, and (in the case of
+ITS) a server process is created which will load itself with a suitable
+program to open an index in "server" mode, gobble an RFC packet, look
+at the contact name, and either reload itself with the  appropriate
+server program or send a CLS reply. 
+
+When a non-RFC packet is received, the system must look for a receiver
+index to handle it.  If none is found, or the state is wrong, or the
+source host and index don't match, a LOS should be sent unless the
+received packet was a LOS.  Otherwise, if the received packet is WIN,
+WTS, or NOP, it is processed and discarded.  Other packets are given to
+the user; OPN, CLS, and LOS cause a state change but are also given to
+the user as input. 
+
+The transmitting side of a transmission medium handler has a queue of
+packets to be transmitted.  It should send them out, in order, as fast
+as possible, except that if a receiving host has no buffer space (which
+can be detected because its chaosnet interface will cause
+"interference" on the ether), it should look down the list for another
+host to send to.  [No known NCP bothers to look for another
+host to send to.  10/2/78]  As long as packets to the same host are sent in the
+order they are queued, everything will be all right.  (Actually, this
+normally shouldn't matter much.) In addition, when the packets are put
+into the transmit queue, the destination host number has to be looked
+up in a table to determine which transmission medium to use to get to
+it and (in the case of ether) which physical host number to put in the
+packet trailer for the hardware. 
+
+>>Buffers
+
+In ITS, the buffering scheme will be as follows.  There will be a pool of
+128-word packet buffers available.  When it runs out, more can be made.  When
+there are many free some can be flushed.  128-word buffers are made out of
+1024-word pages (adding a new page type), rather than using the existing
+128-word buffer mechanism, because there is a limited number of 128-word
+buffers, and that mechanism is a little painful to use.  There are likely
+to be several hundred (?) packet buffers (say 12K of core) in use when
+high-speed (e.g. mag-tape speed) file transfer is going on.
+
+Each packet buffer has a two-word header, and 126 words which can hold a
+packet.  Packet buffers can be on one (or sometimes two) of six lists:
+The free list.  The receive list, of which there are two for each
+index, one for packets which the user may safely read and one for
+out-of-order packets which are awaiting the arrival of an earlier
+packet before the user may read them.  The send list, of which there is
+one for each index.  The transmission list.  The pending-RFC list.  The
+pending-LSN list. 
+
+The free list contains packet buffers which are free.  They are threaded
+together through addresses in the first word.  Zero ends the list.
+
+The transmission list contains packets which are to be transmitted out
+on the network "immediately".  At interrupt level packets are pulled
+off of this list and sent.  (There might be more than one transmission
+list if a machine is connected to more than one physical medium.)
+The transmission list is threaded through addresses in the left half
+of the first word.  Zero ends the list.  After transmission -1 is stored
+to indicate that the packet is not on the transmission list any more.
+If the right half of the first word is -1, indicating that the packet
+is not also on a send list, it is returned to free.
+
+Each send list contains packets for a particular connection which have
+been entrusted to the system by the user to be sent, but have not yet
+been acknowledged.  They are threaded together through the right half
+of the first word.  The second word contains the time that the packet
+was last transmitted (actually, the time that it was last put on the
+transmission list.)
+
+Each receive list contains packets which have been received on a particular
+connection and not yet read by the user.  They are threaded together
+by addresses in the first word, and the list ends with zero.  The receive
+lists must be kept sorted by packet number.
+
+The pending-RFC list contains request-for-connection packets which have
+not yet been either accepted or rejected.  They are threaded together
+through the first word.  When a server process finishes getting created
+and loaded, it will take an RFC off the pending-RFC list and put it
+on its own receive list.  The second word of these packets contains
+the time received so that the system can know when something has gone
+wrong and they should be thrown away.
+
+The pending-LSN list contains LSN packets for all the listening users.
+These packets are just used as a handy place to save the contact name
+being listened to.  They are threaded together through the first word.
+The source-index field in the packet header can, of course, be used
+to find which user this packet belongs to.
+
+>>ITS System Calls
+
+(Other systems would have similar calls, with appropriate
+changes for their own ways of doing things.)
+
+OPEN
+
+	Not allowed.  (I said this wasn't a "standard" device!)
+	Instead use:
+
+CHAOSO
+
+	arg 1 - receive channel number
+	arg 2 - transmit channel number
+	arg 3 - receive window size
+
+	First, the two specified channels are closed.  Then an index
+	is assigned to the user and the two channels are set up to
+	point to it.  Two channels are used since in general ITS
+	channels are unidirectional, and to allow to the user to
+	handle receive and transmit interrupts differently.
+
+	The created index is placed in the Closed state.  To set up
+	a connection, IOT an RFC or LSN packet down the transmit
+	channel.
+
+
+PKTIOT
+	arg 1 - channel number
+	arg 2 - address of a 126.-word block.
+
+	Always transfers exactly one packet.
+	The format of the 126.-word block is:
+			 16		  16	      4
+		-----------------------------------------
+		| opcode | unused | fc |   nbytes   | 0 |
+		-----------------------------------------
+		|destination host |destination index| 0 |
+		-----------------------------------------
+		|   source host   |   source index  | 0 |
+		-----------------------------------------
+		|    packet #     |  ack packet #   | 0 |
+		-----------------------------------------
+		| data1  |  data2  ...
+	
+		                            ... data487 |
+		-----------------------------------------
+
+	In the descriptions below, if an error is said to
+	occur that means IOC error 10. (channel in illegal mode) [3?]
+	is signalled.  (Probably change this to an error return?) *******
+
+	In the case of an output PKTIOT, the user sets only
+	the opcode, nbytes, and data-n fields.  When the
+	NCP copies the packet into a buffer in the system
+	it sets the other fields of the header to the
+	appropriate values.
+
+	This is not completely true.  When outputting an RFC,
+	the user sets the destination host field, and sets the
+	ack packet # to the receive window size desired.  The user
+	also sets the window size when outputting an OPN.
+
+	The NCP checks for the following special values
+	in the opcode field of a packet output by the user:
+
+	RFC - error if the index is not in the Closed state.
+	      The packet is transmitted (but not queued for
+	      possible retransmission) and the index enters
+	      the RFC-sent state.  The user should do an input
+	      PKTIOT which will wait for the OPN, CLS, FWD, or ANS reply
+	      packet to arrive.  The NCP also copies and saves
+	      the user-specified host number and window size.
+
+	LSN - error if the index is not in the Closed state.
+	      It is put into the Listen state.  The packet
+	      is not transmitted, but it is saved so that
+	      when an RFC comes in the system can compare
+	      the contact names.  (Note- LSN is a special
+	      opcode which is never actually transmitted
+	      through the net.)  The pending-RFC list is searched
+	      to see if an RFC with the same contact name has
+	      been received.  If so, it is given to this index
+	      as if it was received just after the LSN was
+	      sent out.
+
+	OPN - error if the connection is not in the RFC-received
+	      state.  It is put into the Open state.  The
+	      packet is transmitted (but not queued for
+	      retransmission, since until it is received
+	      the other end does not know what index to
+	      send acknowledgements to.)  The system also
+	      copies and remembers the window size.
+
+	CLS - error if the connection is not in the Open
+	      or the RFC-received state.  It is put into
+	      the Closed state and the packet is transmitted
+	      (but not queued for retransmission).  This packet
+	      may optionally contain data bytes which are
+	      an ascii excuse for the close.
+
+	FWD - error if the connection is not in the RFC-received
+	      state.  The packet is transmitted, but not queued
+	      for retransmission, and the connection is put into
+	      the Closed state.
+
+	ANS - error if the connection is not in the RFC-received
+	      state.  The packet is transmitted, but not queued
+	      for retransmission, and the connection is put into
+	      the Closed state.
+
+	200 or higher - This is a data packet.  Error if the
+	      connection is not in the Open state.  A packet#
+	      is assigned, the destination and source fields
+	      are filled in, and the packet is transmitted and
+	      queued for retransmission.
+
+	Any other opcode causes an error.
+
+	In the case of an input PKTIOT, the user will get an error
+	if the connection is in the Closed or Broken state,
+	except if it is in the Closed state and there are data
+	packets queued.  This is so that the user can read the
+	CLS packet.  Otherwise, it will hang until a packet
+	arrives, then return the packet into the user's
+	126.-word block.
+
+	The user should check the sign bit of the first word,
+	which will be set if this is a data packet.  The 
+	non-data packets which can get given to the user are
+	RFC, OPN, FWD, ANS, LOS, and CLS.  (You shouldn't be
+	surprised if you get something else, though!)
+
+
+IOT, SIOT
+	These can be used to do unit-mode 8-bit-byte transfers.
+	Control bit 1.4 means don't-hang, and applies to both input
+	and output.  Only data packets with opcode 200 will be
+	transferred.  Anything else on input causes the transfer
+	to stop, like an end-of-file.  Use PKTIOT to find out what
+	the story is.  (The correct way is to verify that there are
+	some packets in the input buffer, then do a SIOT, and if it
+	transfers 0 bytes then the first packet in the input buffer
+	must not be a data packet, so PKTIOT it in.)
+
+	There can be input available to SIOT even when the state is
+	not %CSOPN (e.g. if the input buffer contains data and
+	a CLS packet.)  In this case, you should first SIOT (if you
+	care to pick up the data) then PKTIOT.
+
+CLOSE
+
+	Immediately closes the connection.  All buffers and other
+	information associated with the index are discarded.  Normally
+	the user should first IOT a CLS
+	packet containing an ascii explanation for why it is
+	closing.  Note that any data previously written on the
+	connection but not yet received by the other end will be
+	lost.  User programs should exchange "bye" commands of some
+	sort before closing if they care about losing data.  It is
+	done this way to keep the NCP simple.
+
+
+RESET
+
+	Does nothing.
+
+
+FORCE
+
+	If there is a partially-filled output packet (created by IOT
+	or SIOT), it is transmitted.
+
+FLUSH
+
+	On an output channel, does FORCE and then waits until
+	there are no queued output buffers.  I.e., waits for
+	all output to be received and acknowledged by the foreign
+	host.  This in fact waits for acknowledge, not just receipt.
+
+
+RCHST
+
+	val 1 	SIXBIT/CHAOS/
+	val 2	0
+	val 3	0
+	val 4	0
+	val 5	-1
+
+
+RFNAME
+
+	val 1 	SIXBIT/CHAOS/
+	val 2	0
+	val 3	0
+	val 4	0
+	val 5	0 or 1  (i.e. .UAI or .UAO)
+
+
+WHYINT
+
+	val 1 - %WYCHA
+	val 2 - state
+	val 3 - number of packets queued (receive,,transmit)
+	val 4 - window size (receive,,transmit)
+	val 5 - input channel#,,output channel# (-1 if not open or I/O-pushed)
+
+	LH(val 3) is the number of packets available to input IOT.
+		  This is different from the number of received packets
+		  if some are out of order.  This is increased by 1 if
+		  there is a partially-read buffer available to SIOT;
+		  this packet is not available to PKTIOT.  This is zero
+		  if the connection is direct-connected to a STY.
+
+	RH(val 3) is the number of packets which have been transmitted
+		  by output IOT but which have not yet been received and
+		  acknowledged by the foreign host.
+
+	The state codes are:
+
+		%CSCLS	Closed
+		%CSLSN	Listen
+		%CSRFC	RFC-received
+		%CSRFS	RFC-sent
+		%CSOPN	Open
+		%CSLOS	Broken by receipt of "LOS" packet.
+		%CSINC	Broken by incomplete transmission (no acknowledge
+			for a long time)
+
+
+NETBLK
+
+	Similar to Arpanet NETBLK.
+
+
+STYNET
+
+	arg 1 - STY channel
+	arg 2 - Chaos channel to connect to, or
+		-1 to disconnect
+	arg 3 - Other Chaos channel (not actually used)
+	arg 4 - Output-reset character sequence, up to 3 8-bit
+		characters left-justified.
+
+	This works the same as on the Arpanet.  The specified STY
+	is connected to or disconnected from a Chaos net channel.
+	Data is transferred in and out by the system without the
+	need for intervention by the user program.  If an unusual
+	condition occurs, the STY is disconnected from the Chaos
+	channel and the user is interrupted.  It is illegal to do
+	I/O on any of the involved channels while they are connected.
+
+	This call is provided for the benefit of the "Telnet" server.
+
+
+CHAOSQ
+
+	arg 1 - address of a 126.-word block (packet buffer)
+
+	This is a special system call for use by the ATSIGN CHAOS
+	program, which is a daemon program that gets run when
+	an RFC is received that does not match up against an
+	existing LSN.  
+
+	The first packet on the pending-RFC queue is copied
+	into the packet buffer, then moved to the end of the
+	queue (so that the right thing happens when several
+	RFC's are pending at the same time.)
+
+	The call fails if the pending-RFC queue is empty.
+
+	The program should use the contact name in this
+	packet to choose a server program to execute.  This
+	server program will then LSN to (presumably) the same
+	contact name, thus picking up the RFC.
+
+Interrupts
+
+	IOC error interrupts occur if an attempt is made to IOT
+	when the connection is in an improper state, or to IOT
+	a packet with an illegal opcode.
+
+	An I/O channel interrupt is signalled on the input channel
+	when the number of queued buffers changes from zero to
+	non-zero.
+
+	An I/O channel interrupt is signalled on the output channel
+	when the number of queued buffers changes from greater or
+	equal to the window size, to less than the window size.
+
+	An I/O channel interrupt is signalled on the input channel
+	when the connection state changes.
+
+	Interrupts can be used for
+
+		(1) detecting when input arrives.
+		(2) detecting when the system is willing to accept
+		    output.
+		(3) detecting when the other end does a CLOSE.
+		(4) detecting when a requested connection
+		    is accepted or rejected.
+		(5) detecting when a request for connection
+		    comes into a listening server.
+
+>ITS packages
+
+Here document CHSDEF and NNETWK someday.  Also the host table.
+
+>An NCP in English
+
+This section contains the salient routines and variables of the ITS
+Chaos Network Control Program, in English.
+
+The following variables exist per-connection:
+
+CHSUSR	the user who owns the connection, and his channel number for
+	it.  This is used for reporting interrupts, and to keep track
+	of who owns what.
+
+CHSSTA	the state.  The following states exist:
+	Closed - this is the initial state
+	Listening - awaiting an RFC that matches the user's LSN.
+	RFC-received - entered from the Listening state when a matching 
+		RFC arrives.
+	RFC-sent - entered from the closed state when an RFC is transmitted.
+	Open - entered from RFC-sent when an OPN is received, from RFC-received
+		when an OPN is sent.  This is the "active" state.
+	Lost - entered when a LOS is received
+	Incomplete transmission - entered when probing produces no response.
+
+	Some flags also exist:
+	Send STS as soon as possible
+	Connection is direct-connected to a STY.
+
+CHSIBF	List of received packets, in order, which the user may read.
+
+CHSPBF	List of out-of-order received packets.  The user may not read these.
+	When the missing packets arrive, these are transferred to CHSIBF.
+
+CHSOBF	List of transmitted packets which have not yet been receipted.  This
+	list retains the packets for retransmission.  Control packets do
+	not go on this list, only data packets.  RFC's and OPN's DO go on this list.
+
+CHSNOS	Number of output slots.  This is the number of packets which the user
+	may output before the window fills and the user must wait.  It is equal
+	to the window size minus the number of unacknowledged packets.
+
+CHSPKN	The number of the last packet given to the user, and the number of
+	the last packet sent by the user.  Used in assigning packet numbers,
+	checking order, and sending acknowledgements.
+
+CHSACK	The numbers of the last packets acknowledged in each direction
+	of the connection.
+
+CHSNBF	The number of packets in CHSIBF and the number of packets in CHSPBF.
+	Redundant information which is handy now and then.
+
+CHSITM	The time (in 30ths of a second) that a packet was last received
+	from the network for this connection.  Used in probing/incomplete-transmission.
+
+CHSWIN	The two window sizes for the two directions of the connection.
+
+CHSLCL	The local host and index numbers.
+
+CHSFRN	The foreign host and index numbers.
+
+---
+When the user reads a packet, this algorithm is executed:
+If the CHSIBF list is empty, then if the connection state is
+not Open, give an error, otherwise await the arrival of a packet
+into CHSIBF.  Remove the first packet in CHSIBF and give it to
+the user.  If it is a data packet (opcode >= 200), "virtually
+acknowledge" it as follows.  Put its packet number into CHSPKN
+as the last packet given to the user.  Get the last packet number
+acknowledged from CHSACK.  If the difference of these is more than
+1/3 the window size, send a STS.
+
+When the user outputs a packet, this algorithm is executed:
+(what algorithm?)
+
+---------- Material after this point may be inoperative ----------
+
+>Comparison with LCSnet
+		, and other blathering.
+
+>>Principle differences
+
+The LCSnet proposed protocol is called DSP.  The Chaosnet protocol will
+just be called chaos in this section.
+
+(1) DSP specifies things in terms of bytes where Chaosnet specifies
+them in terms of packets.  We choose packets to increase the simplicity
+and efficiency of the scheme.  DSP has to work in terms of bytes because
+it allows packets to be reformatted en route, hence
+
+(2) DSP assumes that gateways can exist between networks with the same
+protocols but different packet sizes.  Therefore, the protocol has to
+allow for the fact that packets may be reformatted en route.  I happen
+to believe that this situation is extremely unlikely to exist, and in
+fact gateways between "different" networks will have to do much more
+than just change the packet size.  Therefore, it makes sense to make
+the gateway worry about gateway issues, rather than have them permeate
+the whole protocol.  I believe that gateways will look more like
+regular network ports than like transmission media; to get from a host
+on the local net to a host on the arpa net, one will connect to the
+arpa net gateway and ask it to open a connection from itself to the
+host on the arpa net, then tie those connections together.  A gateway
+will perform not only packet reformatting, but protocol translation,
+flow control on both sides, and maybe even character set translation.
+There can also be entities called "bridges", which connect two networks
+(or two separate segments of one network) with the same protocol.  A bridge
+simply forwards any packets it receives, but never alters the packets,
+and never looks inside them except to find out where to forward them to.
+
+(3) A related difference is that DSP includes the arpa net, and TCP,
+and by extension all the networks in the universe, in its port number
+address space.  Chaosnet would have you connect to a gateway, then
+send the gateway the port number to connect to in the foreign
+address space separately.  Chaosnet does have to include all networks
+reachable by bridges in its address space.
+
+(4) Chaosnet has an "opcode" field in the packet header, where DSP
+does not.  DSP acheives the same effect with various bits here and
+there.  It makes little difference unless user-level programs decide
+to exploit the opcode field.
+
+(5) DSP and Chaosnet have quite different mechanisms for creating
+connections.  In DSP, one never creates a connection, exactly;
+one simply starts sending to a port address.  Local network note
+#3 mumbles about how one discovers which port address to send to,
+but I have not seen any specifics.  In Chaosnet, the mechanism
+for finding out where to send to and the mechanism for creating
+a connection are intertwined; the excuse is that often the process
+being connected to is created at the same time as the connection.
+
+(6) DSP uses unique, never-reused port IDs.  Chaosnet does not.
+The problem with unique, never-reused IDs is that I know of no
+system that can implement them.  Multics comes close, with the
+aid of a special hardware clock.  The clock is set from the
+operator's watch when the system is powered on, and the mechanism
+depends on the fact that the error in the operator's watch is
+less then the time required to bring up the system after a power
+failure.  Small systems that cannot afford special hardware just
+for this, and don't have permanent disk storage, would find it
+very hard to generate unique IDs.
+
+Chaosnet prefers to rely on a scheme that doesn't require special
+hardware, but nearly always works.  By requiring a connection
+to be opened before data packets can be sent through it, and by
+some assumptions about the structure of the network, the problem
+is eliminated.  See the Flow and Error Control section for
+further discussion.
+
+(7) DSP closes the two directions of a connection separately.  Why?
+
+>>High priority data packets, interrupts, and flushing.
+
+The basic idea is to note that if you want to send a high priority
+message, this means you want it out of order with respect to previously-
+sent data on some connection.  Therefore, high priority data should
+be sent over an auxiliary connection.  The per-connection overhead
+is not prohibitively high, and this eliminates vast quantities of
+hair from the innermost portion of the system.
+
+One advantage that DSP gains by having "high priority messages"
+built into the system is that it also incorporates a standardized
+way to "mark" a particular point in a data stream.  However, this
+is comparatively unimportant, particularly since I think high-priority
+messages will probably never get used.  The only place I've heard
+them proposed to be used is with Telnet, but ordinary terminals
+get along quite well without "out of band" signals when used with
+reasonable operating system software.
+
+Interrupts and flushing of input are random crocks associated
+with high priority messages.  I don't propose to implement them either.
+
+>>Datagrams.  (connections only used to pass a single packet.)
+
+These are easy.  The guy who wishes to send a datagram does
+OPEN, IOTs an RFC to the service to which the gram is to be
+sent, and NETBLKs waiting for the connection to open up.  He
+then IOTs the data packet, FLUSHes waiting for it to get there,
+then CLOSEs.
+
+The server OPENs and IOTs an OPN in response to the RFC.  She
+then IOTs in the datagram packet, CLOSEs, and goes off processing
+the message.
+
+Four packets are transmitted, two in each direction.  (An RFC, an OPN,
+a DATA, and an ACKing NOP.)  No need to send any CLS messages, since
+each user process knows to do a CLOSE system call after one data
+packet has been transmitted.  It has been claimed that this is
+the theoretical minimum if acknowledgement is required.  The reason
+is that the data packet must contain some unique id generated by
+the RECEIVER to avoid duplicates, and it must be acknowledged,
+so that's two packets in each direction, with no combining possible.
+
+Note that as [someone at] PARC has pointed out, for the important
+case of side-effect-free transactions, a timeout can substitute
+for acknowledgement, and only two packets are necessary.  See ANS.
+
+
+>>Why not multiple messages per packet?
+
+[1] Not needed for data.  The division of the data stream into
+packets is invisble to the real user, anyway.  It's only used by
+the "user-ring" portion of the network system software.
+
+[2] Extra complexity.  Consider the hair involved with packed
+control messages in the Arpanet.  Because of the control link being
+shared between multiple connections between the same pair of hosts,
+this could save a little.  I don't know of any NCP that does this;
+furthermore, having that shared facility is a bad idea.  The only
+case in the Arpanet where packing two control messages into one
+packet is useful is when opening a connection the receiver wants
+to send STR and ALL both.  In this protocol we just put the window
+size in as part of the RFC and OPN messages.
+
+[3] There is an argument that having message boundaries separate
+from packet boundaries is useful because gateways between different
+networks may need to split up packets because the two networks
+may have different maximum packet sizes.  My feeling about this
+is that the gateway is likely to have to do a good deal more than
+that.  It seems like too much to wish for that the two networks
+should use exactly the same packet format, protocols, or even character
+set; so the gateway rather than being a packet-reformatting device
+is much more likely to look like a user program with two connections,
+one on one network and one on the other, which passes data between
+the connections with appropriate conversion.  In particular, flow
+control is likely to be host1 to gateway and host2 to gateway,
+rather than host1 to host2.
+
+
+>>Why not have a checksum in the packet?
+
+This network is likely to have a very diverse collection of machines
+on it, which means it will be impossible to define a checksum which
+can be computed efficiently in software on all machines.  Now all
+hardware links in the system ought to have whatever amount of
+hardware checking is appropriate to them, but due to the efficiency
+costs of a user-level end to end checksum, this should not be
+a built-in requirement of the basic low-level protocol.  Instead,
+checksumming should be an optional feature which some higher-level
+protocols (those that need it because the data being passed through
+them is so vitally important that every possible effort must be made
+to ensure its correctness) may implement.  Checksumming should
+be implemented at the user level in exactly the same way and for exactly
+the same reasons as encryption should be implemented at the user level.
+
+
+>>How about host-independent user-level protocols, where one just
+connects to a service and doesn't have to know what host it's at today?
+
+Yeah, how about it?  As far as I know, this protocol provides an
+adequate base for constructing such a thing.  Also I haven't
+seen anything published on the subject.
+
+
+>>Very small hosts.
+
+E.g. we'd like to put the Chess machine on the net.  It has very little
+memory, but not totally impotent microcode.  A small host need only
+support one connection, may ignore WIN, LOS, and CLS, may only have one packet
+in transmission at a time, and may process receive packets one at a time
+(ignoring any that come in until the first one has been fully processed).
+It IS necessary to check that received DATA packets come in in the right order.
+
+RFC may be handled by remembering the other guy's host number and index,
+and sending back a completely canned OPN.  The contact name is ignored.
+If a second user tries to connect while a first user is connected,
+the first user gets bumped.  Let them fight it out on some larger
+machine (or the floor) for who will get to use the small machine.
+Never originate any packet type other than DATA and that one OPN.
+
+Attaching ordinary terminals "directly" to the network is obviously
+undesirable.  
+
+>Transmission Media
+
+This section describes how packets are encapsulated for transmission
+through various media, and what auxiliary hair is needed by each
+medium.
+
+
+>>Ethernet
+
+The messages transmitted through the ether (or CAIOS) net consist of
+a packet followed by a three-word trailer:
+
+	+----------------+
+	|     header     |  8 words
+	+----------------+
+	|      data      |  0-52 words
+	+----------------+
+	| immediate dest |  1 word
+	+----------------+
+	| immediate src  |  1 word
+	+----------------+
+	| CRC check word |  1 word
+	+----------------+
+
+The three trailer words are looked at by the hardware; the last two
+of them are supplied by the hardware.  The reason this stuff is in
+a trailer rather than a leader is that the caiosnet hardware actually
+transmits the packet backwards.  However, this is transparent to
+the software.
+
+Bytes are sent two per word.  The low-order byte is first (pdp11 standard).
+
+
+>>TEN11 Interface
+
+[The following total hair has not been checked recently.]
+
+Since interrupts can't be sent through the TEN11 interface, the pdp10 can
+only service the network at relatively-infrequent intervals, for instance
+every 1/60'th of a second.  Therefore it is necessary to have queues of
+packet buffers in each direction.  This provides high speed by allowing
+several packets to be processed at a time.
+
+The speed and reliability of the TEN11 interface eliminates any need for
+error checking.  (ha ha) [ho ho] <he he>   To decrease the load on the AI
+pdp10, it is assumed that the pdp11's will be responsible for swapping the
+bytes in the data portions of packets so that they will be in pdp10
+standard order. 
+
+Even though the contents of packets will not be error-checked, the
+pdp10 must check addresses to avoid being screwed by a losing pdp11.
+
+The form of a packet encapsulated for the TEN11 interface will then be
+
+	|-----------------|-----------------|----|
+	|  queue thread   | 0=empty, 1=full |  0 |
+	|-----------------|-----------------|----|
+	| #bytes | opcode |     unused      |  0 |
+	|-----------------|-----------------|----|
+	|destination host |destination index|  0 |
+	|-----------------|-----------------|----|
+	|   source host   |   source index  |  0 |
+	|-----------------|-----------------|----|
+	|    packet #     |   ack packet #  |  0 |
+	|-----------------|-----------------|----|
+	| data 0 | data 1 | data 2  . . .   |  0 |
+	|				    |  0 |
+	|-----------------|-----------------|----|
+
+for a total of 31 36-bit words, or 62 pdp11 words.
+
+The queue thread is the pdp11 address of the next packet-buffer in
+a queue, or zero if this is the last.  The empty/full indicator
+says whether this buffer currently contains a packet, or not.
+
+The following is an attempt to express the algorithms of the
+pdp10 and pdp11 in concise form.  Hopefully they are self-
+explanatory.
+
+Several queues of buffers need to exist in the pdp11.  Only
+two of these are known to the pdp10.
+
+TO10QF - first buffer queued for transmission to the 10.
+
+TO10QL - last buffer queued for transmission to the 10.
+	 Exists so that buffers can be appended to the
+	 list more quickly.
+
+TO10AC - first buffer in list of buffers actively being
+	 gobbled by the 10.  Set by 11, cleared by 10.
+
+TO10FR - copy of TO10AC.  Used to free the buffers after
+	 the 10 gobbles them.
+
+(come-from pdp11-packet-receivers
+      when (eq (destination-host ?packet) pdp10)
+       ;re-arrange 8-bit bytes for 10
+	(swap-bytes (data-part packet))
+       ;Add to to-10 queue
+	(set (thread packet) nil)	;nil=0
+	(cond ((null TO10QF)
+	       (setq TO10QF packet TO10QL packet))
+	      (t (set (thread TO10QL) packet)
+		 (setq TO10QL packet)))
+       ;Try to activate to-10 queue
+	(cond ((null TO10FR)
+	       (setq TO10FR TO10QF
+		     TO10AC TO10QF
+		     TO10QF nil
+		     TO10QL nil)))
+)
+
+(come-from pdp11-polling-loop
+      when (and (not (null TO10FR))  ;buffers were sent to 10
+		(null TO10AC))	     ;and 10 has finished gobbling
+	(mapcar 'make-buffer-free TO10FR)	;mapcar follows queue words
+	(setq TO10FR nil)	     ;OK to activate more buffers now
+	(cond ((not (null TO10QF))   ; more stuff waiting, activate it now
+	       (setq TO10FR TO10QF
+		     TO10AC TO10QF
+		     TO10QF nil
+		     TO10QL nil)))
+)
+
+(come-from pdp10-clock-level
+      when (and (not (null TO10AC))  ;11 is sending buffers
+		(not web-buffers-locked))
+       ;copy to user, process control message, or reject if buffers full
+	(mapcar 'process-input
+		TO10AC)
+       ;signal pdp11 that all packets have been gobbled
+	(setq TO10AC nil))
+
+
+FRBFLS - list of free buffers.  cons-buffer gets from here,
+	 make-buffer-free puts here.
+
+FM10AC - list of buffers into which pdp10 may place packets
+	 set by 11 / cleared by 10.
+
+FM10GB - copy of FM10AC, used by 11 to process buffers after
+	10 has placed packets into them.
+
+(come-from pdp11-polling-loop
+      when (and (null FM10GB)	     ;10 needs some buffers &
+		(not (null FRBFLS))) ; free buffers available
+       ;give the 10 a list of a suitable number of empty buffers
+	(repeat max-at-a-whack times
+	  (and (null FRBFLS) (exitloop))
+          (setq buffer (cons-buffer)) ;pull off free list
+	  (set (full-indicator buffer) nil) ;contains no packet
+	  (set (thread buffer) FM10GB) ;cons onto list
+	  (setq FM10GB buffer))
+	(setq FM10AC FM10GB)	     ;give buffer list to 10
+)
+
+(come-from pdp11-polling-loop
+      when (and (not (null FM10GB))  ;gave 10 some buffers
+		(null FM10AC))	     ;which it has used
+       ;process packets sent from 10.
+	(mapcar
+	 '(lambda (buffer)
+	    (cond ((null (full-indicator buffer))
+		   (make-buffer-free buffer)) ;didn't get used
+		  (t (swap-bytes buffer)
+		     (send-to-destination buffer))))
+	 FM10GB)
+	(setq FM10GB nil))	     ;no buffers active in 10 now
+
+(come-from pdp10-clock-level
+      when (and (not (null FM10AC))  ;buffer space avail
+		(not web-buffers-locked)) ;no M.P. interference
+       ;send as many packets as possible
+	(mapcar
+	 '(lambda (buffer)
+	    (cond ((needs-to-be-sent ?packet)	;find a sendable packet somewhere
+		   (copy-into buffer packet)
+		   (set (full-indicator buffer) t))))
+	 FM10AC)
+       ;signal pdp11 to gobble the packets
+	(setq FM10AC nil))
+
+
+To avoid the need for a gross number of exec pages in the pdp10,
+the FM10AC and TO10AC words, and all the packet buffers, should
+lie in a single 4K page.  The best location for this page varies
+from machine to machine.  On dedicated 11's such as the AI TV11,
+the MC console 11, etc. it should probably just be the first 4K
+of memory.  On the logo machine, it would probably be best to put
+this page up in high memory where RUG won't mess with it.  In the
+case of the mini-robot system, I'm not sure.
+
+It would be best not to try to use this protocol with "general
+purpose" machines, because of problems with finding the list
+headers and packet buffers, problems with telling whether the
+machine is running the right program, etc.  It should be used
+just as a way for the AI machine to get a path to the net.
+
+>>DL10 & DTE20
+
+[Outline only]
+
+[Just use the pdp11 as a substitute for a direct chaosnet interface.]
+
+[Basically, the 11 says ready to transfer (in either direction), the 10
+sets up the pointers and says to transfer, and the 11 transfers the cruft.
+To eliminate an extra level of buffering, on input transfers the 11 makes a
+copy of the first 4 16-bit words of the header available to the 10 when it first
+says "ready to transfer."  The 10 uses these to decide where to copy the
+packet into.  It helps if you don't try to use a DL10 on a machine with a
+cache.]
+
+>>Asynchronous line
+
+Packets are encapsulated by preceding them with start of text (202),
+and following them with a 1-byte additive checksum and an end of text (203).
+The 16-bit words are transmitted low order byte first.  If the checksum
+is wrong the receiver ignores the packet.  The start and end characters are
+just there to help in ignoring random noise on the line.  If they don't
+appear, the packet is ignored.  The full 60-word packet is not transmitted;
+the #bytes count is used to determine how many of the data bytes to
+transmit; the receiver fills the remainder with zero (or garbage, at its
+convenience.)
+
+This protocol is intended mainly for communication between the plasma
+physics pdp11 in bldg. 38 and a pdp11 in 545, until the caiosnet
+gets extended that far (or a longer-distance, lower-speed caiosnet
+is extended to various machines off in that direction.)

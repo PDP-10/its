@@ -1,0 +1,169 @@
+-*-Text-*-						Alan 12/31/83
+
+Here is what I know about the core link device(s).
+
+The core link device is a primitive mechanism for connecting two jobs
+together with a uni-directional stream.  The basic idea is very simple:
+suppose job A opens CLO:FOO;BAR BAZ for input and job B opens 
+CLO:FOO;BAR BAZ for output, then by virtue of the fact that they used the
+same name (FOO;BAR BAZ) they are connected together and anything job B
+happens to output to its channel will be what job A reads from its channel.
+For many simple hacks, that's all you really need to know about it!
+
+The core link device is not a random access device.  Only the most basic
+system calls are supported (like OPEN, IOT, SIOT, STATUS, RFNAME, and
+CLOSE).  There is no way for either job to cause the other to receive a
+second word interrupt.  For more advanced applications where a more
+complicated interface is desired the JOB device can be used.  See
+.INFO.;ITS JOBONL (or .INFO.;ITS JOB).
+
+ITS keeps an I/O buffer for each core link, so the two jobs will not
+actually be kept running in lock-step.  The outputting job will wait when
+it tries to output only if the buffer becomes full, and the inputting job
+will wait when it tries to input only if the buffer becomes empty.  The
+buffer is about 100. words long.  Because of this buffering it is not
+necessary for both jobs to open their channels in identical modes, one job
+can read (write) 36-bit words while the other is writing (reading) 7-bit
+characters.  [This should be contrasted with the JOB device, where ITS
+cannot keep any internal state for the JOB/BOJ connection because of
+PCLSRing considerations.]
+
+If the reading job closes its input channel, the writing job's output
+channel acts like the NUL device.  All output is simply discarded.  If the
+writing job closes its output channel, the reading job's input channel acts
+like it has reached end of file (after it has read whatever remained in the
+buffer of course).  [Actually, in .UII mode if you IOT beyond end of file
+it starts returning random 36-bit words.  It should be fixed to generate an
+IOC interrupt like other devices do at EOF in .UII mode.  I guess it really
+doesn't matter much since you don't open things in image mode unless you
+know exactly what they are anyway...]
+
+There are actually 4 core link devices: CLO (Core Link Open), CLU (Core
+Link Use), CLI (Core Link Interrupt), and CLA (Core Link Answer).  The
+differences between them all have to do with what happens when you open
+them.  In fact, after you have completed the process of opening a channel
+with any of these devices, an RFNAME call on that channel will always
+report that it is the CLO device, since from that point on they all behave
+identically.
+
+In order match up jobs that desire to use the core link device, ITS
+maintains a table called the "core link directory".  At any given time the
+core link directory contains a number of "core links".  Each core link has
+three names: an SNAME, a first name, and a second name (SNAME;NAME1 NAME2).
+
+When a job tries to open CLO:FOO;BAR BAZ, ITS searches the core link
+directory for a core link named FOO;BAR BAZ.  If no core link is found with
+that name, then a new core link is created with that name and entered in
+the directory.  (If the core link directory gets full a %EFLDR error can be
+returned at this point.)
+
+The CLU device behaves identically to the CLO device, except that if no
+existing core link has the proper name then instead of creating a new one,
+a file not found error is returned (%ENSFL).  Thus you should use the CLU
+device when you are certain that some other job has already created a core
+link of a given name.
+
+Also potentially associated with each core link is a pair of jobs.  One for
+reading, and one for writing.  After an appropriately named core link has
+been located or created, ITS checks to see whether some other job already
+has this core link open in the same direction.  If so, a file locked error
+is returned (%ENAFL), otherwise this job is recorded as the one reading or
+writing the core link, and the channel is successfully opened.
+
+You can list the core link directory.  Opening CLO:.FILE. (DIR) will
+allow you to read a table like the following:
+
+ SNAME  NAME1  NAME2  ALAN   A     -> ALAN   B     
+ SPAZM  FOOBAR 259    CLOSED-> ALAN   A     
+ QAZWSX FOOBAR 259    ALAN   FOOBAR-> CLOSED
+ FOO    BAR    BAZ    CLOSED-> CLOSED
+
+(Try typing CLO^F to DDT.  Probably the core link directory will be empty,
+so you won't seen anything interesting.)
+
+This table is interpreted as follows:
+
+ SNAME  NAME1  NAME2  ALAN   A     -> ALAN   B     
+ ^      ^      ^      ^      ^        ^      ^
+ |      |      |      |      |        |      |    UNAME and JNAME of
+ |      |      |      |      |        +------+--- job reading from
+ |      |      |      |      |                    this core link.
+ |      |      |      |      |
+ |      |      |      |      |   UNAME and JNAME of
+ |      |      |      +------+---job writing into
+ |      |      |                 this core link.
+ |      |      |
+ |      |      |   SNAME and first and
+ +------+------+---second names for 
+                   this core link.
+
+If no job is reading from the core link, the word CLOSED will appear after
+the arrow instead of a UNAME/JNAME pair.  Similarly if no job is writing
+into the core link, CLOSED appears before the arrow.
+
+If you are trying to debug something that uses the core link device, a
+listing of the core link directory is a valuable debugging aid.
+
+In the core link directory listing above, the core link named FOO;BAR BAZ
+has neither an associated reading nor writing job.  You might think that
+such a core link would be worthless, but this is not necessarily the case!
+Suppose that job A opens CLO:FOO;BAR BAZ for output intending to only
+transmit 100. ascii characters through the link.  Since 100. characters can
+easily fit in the core link's buffer, job A can output all 100. characters
+and close its channel before the reading job even gets as far as opening
+its channel.  Thus for a brief time the core link has no associated jobs.
+
+Unfortunately there is no way to guarantee that any job will ever open the
+core link FOO;BAR BAZ for input to pick up those 100. characters.  For this
+reason ITS will garbage collect any core link that has not had any
+associated jobs for several minutes (about 5 minutes).
+
+You can also delete core links from the core link directory yourself.  Thus
+from DDT you can type "^O CLO:FOO;BAR BAZ" to get rid of a garbage core
+link.  Normally there is no need to do this, since ITS will flush them
+eventually anyway.  [Indeed, it is a BAD idea to use this feature currently
+because there is a bug such that instead of deleting the core link, you
+sometimes cause it to become permanently locked down.  Since there are a
+finite number of core links (12. currently), if you do this often enough
+you will render the core link device unusable.]
+
+A reasonable person might wonder what happens if some job tries to re-open
+the core link FOO;BAR BAZ for output and write more characters into it.
+Well, each core link actually acts as a SEQUENCE of files separated by
+end-of-file markers.  If a second job opens CLO:FOO;BAR BAZ and writes more
+data into it, that data will be available to the SECOND job that opens that
+core link for input.  Thus if one job is in a loop opening the core link
+named FOO;BAR BAZ, outputting a single character, and then closing it
+again, and a second job is in a loop opening that core link, reading
+characters until end of file, and then closing it again, then the second
+job will see a sequence of single character length files.
+
+We haven't yet mentioned the CLI and CLA devices.  These two devices enable
+one job to interrupt another job indicating that it wishes to send a
+message through a core link.  This is how interactive messages work on ITS.
+
+The sending job opens the CLI device with first and second filenames equal
+to the UNAME and JNAME of the job that it wishes to interrupt.  For
+example, a job might try to open CLI:CSTACY HACTRN (any SNAME supplied will
+be ignored).  ITS then checks to see that a job named CSTACY HACTRN really
+does exist.  If it does, ITS checks to see that that job has enabled the
+%PICLI interrupt.  If it is not the case that both conditions are met, the
+open returns an illegal file name error (%EBDFN).  If both conditions are
+met, then we proceed as if we were opening CLO:_CLI_;CSTACY HACTRN.  If
+that succeeds, then we actually give the job CSTACY HACTRN the %PICLI
+interrupt, and the open succeeds.
+
+The UNAME and JNAME of the sending job are now placed in the core link's
+I/O buffer so that the receiving job will be able to read them out before
+any additional data that the sender might wish to transmit.  (Note that you
+can only open the CLI device for output.)
+
+In order to handle the %PICLI interrupt the job CSTACY HACTRN opens CLA:
+(any additional names supplied will be ignored).  This is like opening
+CLU:_CLI_;CSTACY HACTRN, except that it saves the interrupted job from
+having to figure out its own name.  The receiving job can now read the
+UNAME and JNAME of its interrupter by inputting the first two 36-bit words
+from the newly opened channel.
+
+The jobs are now talking through an ordinary core link named 
+_CLI_;CSTACY HACTRN.

@@ -1,0 +1,562 @@
+Overview of ITS User Interrupts
+
+When ITS wishes to signal a user program of the existence of an
+unusual interesting condition or occurrence, it does so via
+the "user interrupt" mechanism.  This mechanism essentially
+causes the user program to call an interrupt handling subroutine
+in the middle of what it had been doing.  The interrupt handler has
+enough information to be able to return to the interrupted code
+without any effects on it if desired, and to determine the cause
+of the interrupt so as to take appropriate action.  The program
+can specify which interrupt conditions it wishes to handle, and
+what their priority order should be; un-handled interrupts are
+either ignored or fatal depending on the condition.  Some interrupt
+conditions represent errors in the execution of the job;  some
+indicate the occurrence of asynchronous events such as I/O operation
+completion;  some exist for debugging and are always fatal.
+
+The noun "interrupt" may mean either the event of interrupting
+a program (causing it to call the handler), or a condition which
+can cause a program to be interrupted.  Also, the distinction
+between an interrupt condition and the bit which is 1 when the
+condition is present is often blurred.
+
+Unlike TENEX, ITS never gives the user an interrupt "in the middle
+of a system call".  The PC saved by an interrupt is always a user-mode PC.
+This is a great advantage when it comes to having the interrupt handler
+understand what the interrupted code was doing and fix it up.
+System calls will either be finished or backed out of (to be redone)
+when it is necessary for the job to be interrupted.  To avoid having to
+do a lot of work twice, all ITS system calls that take a long time to
+complete are designed so that if restarted they will continue from
+where they left off.  They do this by updating their arguments to
+indicate how much progress they have made, just like the BLT instruction.
+Now you know why SIOT and block-mode IOT update their pointer and
+byte count as they go.
+
+Section A describes how interrupts are signaled and enabled, etc.
+Section B describes what is actually done to a job when it is
+  interrupted, if it uses the older simple interrupt mechanism.
+Section C gives an example of an old-style interrupt handler.
+Section D describes what is actually done to a job when it is
+  interrupted, if it uses the newer vectored interrupt mechanism.
+Section E describes the individual interrupt conditions in the
+  first interrupt request word (.PIRQC).
+Section F describes the individual interrupt conditions in the
+  second interrupt request word (.IFPIR).
+
+A. The ITS Interrupt Mechanism
+
+Each ITS job has two "interrupt request words", called .PIRQC
+and .IFPIR, and readable with .SUSET.  Each distinct interrupt
+condition is assigned one of the bits in one of the words.
+The interrupt is "pending" when the bit is 1.
+.PIRQC is called the "first interrupt word" and interrupts in it
+are "first word interrupts".  .IFPIR is the "second interrupt  word"
+and its interrupts are "second word interrupts".
+
+Interrupt conditions are divided by the system into three severity classes.
+Class 1 interrupts are always fatal.  They are genarally conditions caused
+by the user or the superior, for debugging purposes;  for example,
+breakpoints, ^Z typed, and single-instruction-proceed interrupts are
+of class 1.  Class 2 interrupts are fatal unless the program is set up
+to handle the interrupt.  Most error conditions are class 2;  for example,
+MPV (memory protect violation), ILOPR (illegal operation), IOCERR
+(I/O channel error).  All class 1 and 2 interrupts are first word
+interrupts.  Class 3 interrupts are never fatal unless the user
+explicitly makes them so;  either the program is eventually interrupted
+or nothing happens.  Most asynchronous conditions are class 3.
+
+When a job receives a fatal interrupt, that job is not interrupted
+itself;  instead, it is stopped, as if its superior had stopped it,
+and an "inferior got a fatal interrupt" interrupt is signaled for the
+superior.  If a top level job receives a fatal interrupt, then it will
+be stopped and detached (see the symbolic system call DETACH).
+
+Each interrupt word has a corresponding mask word:  .MASK for .PIRQC,
+and .MSK2 for .IFPIR.  An interrupt is enabled if the appropriate bit in
+the mask word is 1.  A program will not receive an interrupt which is
+disabled, but if the interrupt condition is in class 2 it
+will be fatal if it is not enabled.  Class 3 interrupts will not even
+be signaled if they are disabled.  Class 1 interrupts are not allowed
+to be enabled, the idea being that the job which gets an always-fatal
+interrupt is not allowed to handle the interrupt itself.
+
+Each interrupt word also has a defer word:  .DF1 for .PIRQC, and
+.DF2 for .IFPIR.  If the appropriate bit in the defer word is set,
+the interrupt is "deferred".  For a class 2 interrupt, deferment has
+the same effect as disablement:  the interrupt becomes fatal.
+For a class 1 interrupt, deferment has no effect.  For a class 3
+interrupt, deferment differs from disablement in that a deferred
+interrupt will still be signaled;  it will then remain pending until
+it is no longer deferred, when it will be given to the user.
+The system makes it easy to defer a specified set of interrupts while
+processing an interrupt.  That is how different priorities of
+interrupts may exist.
+
+Slightly obsolete but still useful is the variable .PICLR, which is
+normally -1.  If this variable is set to 0, all interrupts are deferred.
+The actual values of the defer words are unaltered.  .PICLR was
+the original way to defer interrupts, before the defer words existed.
+The older style of interrupt handling on ITS sets .PICLR to 0 while
+an interrupt is being processed;  thus, there is only one interrupt
+priority level.
+
+To help eliminate timing errors, the six variables .PIRQC, .IFPIR,
+.MASK, .MSK2, .DF1 and .DF2 have aliases which have the same value
+when read, but when written either IORM or ANDCAM into the variable
+instead of setting all the bits in it.  These aliases are called
+.IPIRQC, .IIFPIR, .IMASK, .IMSK2, .IDF1 and .IDF2 for IORM'ing,
+and .APIRQC, .AIFPIR, .AMASK, .AMSK2, .ADF1 and .ADF2 for ANDCAM'ing.
+Thus, depositing 20 in .APIRQC will clear the 20 bit in .PIRQC.
+
+Error-condition interrupts (MPV, ILOPR, IOCERR, WIRO, DTTY and some others)
+usually abort the instruction that causes them.  When this happens,
+the old convention (still the default) is to leave the PC pointing
+AFTER the aborted instruction.  This is very bad since it is hard
+for the user's interrupt handler to tell whether to decrement the PC.
+The new convention, selected by setting bit %OPOPC in the LH of the
+.OPTION variable to 1, is for the system to decrement the PC when
+a fatal interrupt happens, so that if the interrupt handler fixes
+the problem (e.g. creates the nonexistent page of core) and dismisses,
+the instruction will be retried.  All new programs should use the
+new convention;  it would be nice to flush the old one entirely.
+
+B. How Jobs Are Informed about Their Interrupts (Old Style)
+
+There are two ways for a program to receive interrupts from the 
+system: the old way, and the new way.  The old scheme always stores
+the PC in the same place, making recursive interrupts difficult.
+It also makes all interrupts have the same priority level.
+The new scheme pushes the interrupt information on a stack.  It also
+has the ability to decode the interrupts for the user, whereas with the
+old mechanism the program must decode the interrupts.  Nevertheless,
+the old mechanism is not considered obsolete, since it is easier to use.
+
+Both mechanisms have the user's interrupt handler information pointed
+to by location 42.  More generally, the address of the interrupt pointer
+is 2 plus the rh of the .40ADDR variable;  since .40ADDR usually holds
+40, the interrupt pointer usually lives in 42.
+
+The two mechanisms are selected by the %OPINT bit of the .OPTION
+variable:  the new mode is used if the bit is 1.
+
+In the old mode, 42 is expected to contain the address of the
+interrupt handler itself.  Let that address be called "TSINT"
+(every program should use that label, for the sake of humans).
+If TSINT is 0, or addresses nonexistent or pure storage,
+when the system attempts to interrupt the job, an always-fatal
+BADPI (%PIB42) interrupt is signaled and the program does not
+receive the original interrupts.  If the superior, handling the BADPI,
+fixes up 42 and restarts the job, it will then be properly interrupted.
+
+When an interrupt happens, all the
+pending enabled undeferred first word interrupts will be given to
+the user at once if there are any;  otherwise, all the pending
+enabled undeferred second word interrupts will be given.  The
+interrupts which are given will be cleared in the request word.
+Whichever interrupt request word is being given will be stored in TSINT.
+If the interrupts being handled are second-word interrupts, the sign
+of TSINT will be set.  The PC is stored in TSINT+1.  The job is then
+started at TSINT+2, with all PC flags except user and user-i/o zeroed.
+The job's .PICLR will be set to 0, preventing further interrupts while
+the interrupt handler is running.  Because more than one interrupt
+may be given to the user at once, the interrupt routine should check
+all of the interrupt bits, and after handling one interrupt should
+return to check the remaining bits.
+
+The normal way for the interrupt handler
+to exit is with the .DISMIS uuo, which should address a word containing
+the desired new PC.  .DISMIS jumps to that PC, restoring flags, and also
+sets .PICLR to -1 to allow interrupts again.  To restart the program
+where it was interrupted, .DISMIS TSINT+1 should be used.  The program
+may desire to restore the saved PC flags but a different PC;  in that
+case, it should probably clear the byte-interrupt flag (%PCFPD) before
+restoring the flags.
+
+C. An Example of an Old Style Interrupt Handler
+
+TSINT:
+LOC 42
+	TSINT		;this is the interrupt pointer. -> int handler.
+LOC TSINT
+	0		;first word of handler gets the bits for the interrupts
+	0 		;second gets the PC
+	EXCH A,TSINT
+	JUMPL A,TSINT2	;sign of int word set => second word interrupts;
+	TLNE A,%PJRLT	;otherwise, they are first word interrupts.
+	 PUSHJ P,TIMINT	;if we got an alarm clock int, handle that.
+	TRNE A,%PIMPV
+	 PUSHJ P,MPVINT	;if we got an MPV, handle that.
+	TRNE A,%PIIOC
+	 PUSHJ P,IOCINT	;if we got an IOCERR, handle that.
+TSINTX:	EXCH A,TSINT
+	.DISMIS TSINT+1	;then restore the saved PC and zero .PICLR.
+
+TSINT2:	TRNE A,1_TYIC
+	 PUSHJ P,INPUTI	;handle characters typed on the tty (assuming
+			;that tty input is open on channel TYIC)
+	TDNE A,INFBIT
+	 PUSHJ P,INFINT	;handle interrupts from one of our inferiors,
+			;assuming the inferior's .INTB variable was
+			;read into INFBIT.
+	JRST TSINTX
+
+;if the program can't recover from MPV's well, it might do this:
+MPVINT:	<TYPE ERROR MESSAGE SOMEHOW>
+	.DISMIS [RESTART]	;re-initialize the program.
+
+;if it wanted to create the referenced page, it might do this:
+MPVINT:	PUSH P,B
+	.SUSET [.RMPVA,,B]
+	LSH B,-10.	;get the referenced page's number.
+	.CALL [	SETZ ? 'CORBLK
+		MOVEI 400000 ? MOVEI -1 ? B ? SETZI 400001]
+	 .VALUE		; ^ get a fresh page into page w/ number in B.
+	POP P,B
+	POPJ P,
+
+D. How Jobs Are Informed about Their Interrupts (New Style)
+
+When using the newer interrupt mechanism, the program must divide
+the interrupts that it handles into some number of groups (there
+may be as few as one interrupt in a group, or all the interrupts
+may be in one group).  The interrupts in a group are all handled
+the same way;  they have the same relative priority to all other
+interrupts, and have the same handler address.  For each group,
+the user must specify to the system which interrupts are in it,
+which interrupts are considered to have a lower priority than
+those in the group, and where the handler for the group is located.
+This is done with the "interrupt table", which should be 5n+1 words
+long where n is the number of groups.  The interrupt table should
+be identified to the system by means of an AOBJN pointer in 42.
+
+The first word of the interrupt table should hold the address
+of the interrupt stack (which may be an accumulator - P will work!).
+The LH of this word specifies extra information to be pushed on
+the interrupt stack at each interrupt, beyond the necessary minimum:
+  bits 3.5-3.1	 # of ACs to push.  0 => don't push any ACs.
+  bits 3.7-4.1	 # of first AC to push.
+  bit 4.9	 1 => push the .JPC and .SUUOH variables, and the LSPCL
+			(an internal ITS variable), after the ACs if any.
+
+Then come five words for each interrupt group.  Their meanings are:
+  wd 1	The 1st word interrupts that are in this group.
+	If a bit is set in this word, the corresponding interrupt is
+	in this group.
+  wd 2	The 2nd word interrupts which are in this group.
+  wd 3	The 1st word interrupts that are of priority less than or equal to
+	this group's.  Give the bits for the appropriate interrupts.
+	When interrupts in this group happen, these bits will be
+	set in .DF1 to prevent the lower-priority interrupts from
+	happening.  Note that it is not obligatory to include the
+	interrupts of the group itself in this word;  if they are not
+	included, they will be able to interrupt recursively.  That is
+	sometimes desirable for recoverable synchronous conditions.
+  wd 4	The 2nd word interrupts that are ofthe same or lower priority.
+  wd 5	The address of the handler for this group.
+
+Note that the priority-relation between interrupts, specified by the
+second and third words of the groups in the interrupt table, need not
+be even a partial order:  it is permissible for interrupt A to defer
+only B, B to defer only C, and C to defer only A, although not very
+useful.  Often, a synchronous interrupt is left incomparable with all
+other interrupts - it defers only itself, or nothing.
+
+Synchronous interrupts should come before asynchronous ones
+in the table.  The only time an exception to that is safe is when
+the asynchronous interrupt defers the synchronous one.  The reason for
+this rule is that when a synchronous interrupt and an asynchronous one
+are signalled at the same time, if the asynchronous interrupt comes
+earlier in the table it will happen first;  if the synchronous one is
+not then deferred, it will interrupt saving a PC pointing at the first
+word of the asynchronous interrupt's handler - which is not the address
+of the instruction that actually caused the synchronous interrupt.  If
+the synchronous interrupt's handler looks at the PC, as many do, it will
+be confused.
+
+This is an example of an interrupt table (taken from DDT).
+
+TSINT:	LOC 42
+	-TSINTL,,TSINT
+LOC TSINT
+
+	P		;interrupt pdl pointer address.
+	%PIWRO ? 0 ? 0 ? 0 ? PURBR1
+			;pure-page violations don't inhibit anything.
+			;DDT wants to type out ":UNPURE", and doesn't
+			;like to type out with any interrupts inhibited.
+	%PITTY ? 0 ? %PITTY ? 0 ? TTYINT
+			;Don't-have-tty interrupts defer themselves
+			;so that they become fatal while one is being
+			;processed.  If DDT decides that the one
+			;that happened should have been fatal, it
+			;signals another by depositing in .IPIRQC, and
+			;that one IS fatal since it is deferred.
+	%PIIOC\%PIILO\%PIMPV\%PIOOB ? 0 ? #%PITTY ? -1 ? TSIN0
+			;Error interrupts inhibit asynchronous ints for
+			;safety's sake, and themselves so an error in
+			;the handler will be fatal.
+	#%PIIOC#%PIILO#%PIMPV#%PIOOB#%PIWRO#%PICLI#%PITTY ? #<1_TYOC>#1_TYOBC
+	  #%PIIOC#%PIILO#%PIMPV#%PIOOB#%PIWRO#%PICLI#%PITTY ? -1 ? TSIN0
+			;Miscellaneous interrupts have the same handler
+			;as the errors - for historical reasons - but
+			;don't defer the errors, so that DDT can recover
+			;if an error happens in a miscellaneous int.
+	0 ? 1_TYOC+1_TYOBC ? 0 ? 0 ? MORINT
+			;Bottom-of-screen-on-terminal interrupts defer nothing,
+			;so they can exit by simply jumping if they wish.
+	%PICLI ? 0 ? %PICLI ? 0 ? CLIBRK
+			;Core-link interrupts (someone is :SEND'ing to me).
+TSINTL==.-TSINT
+
+The algorithm for giving a set of interrupts is:
+Look through the interrupt block one group at a time.
+If a group is found that applies to any of the interupts that
+are to be given, all the interrupts that it applies to and that are
+to be given are pushed, together, onto the interrupt stack
+at once. The words pushed are:
+   First, two words containing the interrupts being pushed.
+	The first word interrupt bits are pushed first.
+   Next, two words containing the old settings of .DF1 and .DF2.
+	The old .DF1 is pushed first.
+   Next, a word containing the PC before the interrupt.
+   Last, any AC's or debugging variables specified by the LH of
+	the first word of the interrupt table.  These are pushed in the
+	order:  AC's first, then .JPC, then .SUUOH, and finally LSPCL.
+If pdl overflow is enabled, it will be detected properly when the
+interrupt data is pushed.
+After the necessary information has been saved and the interrupt pdl
+updated, the defer words and the PC will be set as specified
+in the the interrupt table.
+At this point, if there still remain any pending enabled undeferred
+interrupts, the whole process is repeated, scanning through all the
+groups from the beginning.  Note that giving one interrupt may cause
+other previously undeferred interrupts to be deferred.  It may also
+set the pdl overflow interrupt, in which case that interrupt will
+be given immediately if not deferred.
+
+If there are pending enabled undeferred interrupts not included
+in any group, and they do not become deferred by the giving of other
+interrupts, then they are considered immediately fatal.  Thus, the
+user can make a nonfatal interrupt be fatal by enabling it but not
+including it in any group.
+
+The interrupt routine may conveniently
+exit with the DISMIS Symbolic System Call.
+The first arg, if not immediate, should point at the interrupt stack:
+	.CALL [SETZ ? 'DISMIS ? SETZ P]
+The defer words and PC will be restored from the top 3
+words on the stack and 5 words will be popped.  Stack overflow
+will be detected.  You may specify that extra things should be popped
+using the control bit argument; bit 2.9 specifies that three words
+should be discarded, while <m>*100+<n> specifies that ACs <m> through
+<m>+<n>-1 should be popped.  Thus, it is a win to give, as the control
+bit argument (in the RH) whatever was put in the LH of the first word
+of the interrupt table - that will cause the DISMIS to pop exactly
+what interrupts push.
+
+If the first arg is immediate, clearly nothing can be popped:
+	.CALL [SETZ ? 'DISMIS ? SETZI 2+[DF1 ? DF2 ? PC] ]
+In this case the control-bit argument is ignored.
+If a second argument is given, it is used as the new PC
+instead of what is found on the interrupt stack.
+Similarly, optional third and fourth arguments specify the new
+contents of the defer words, overriding what was saved on the stack.
+Thus, if four arguments are given and the first is immediate,
+the first argument is effectively ignored.
+
+E. The Interrupt Bits in the First Interrupt Word.
+
+The interrupt classes  are:
+  [1] stops job and interrupts superior (fatal intr)
+  [2] stops job and interrupts superior unless enabled and undeferred
+  [3] does nothing unless enabled;  waits if deferred.
+Bits in the lh have two names: %PI... as a bit in the word,
+  and %PJ... shifted down by 18. bits.
+
+The following interrupts abort the instruction, and leave the PC pointing
+before the instruction if %OPOPC is 1 (as is winning), or after it if
+%OPOPC is 0:  %PIMPV, %PIOOB, %PIIOC, %PIILO, %PJTTY, %PJWRO, %PJFET, %PJTRP.
+
+"(S)" indicates a synchronous interrupt;  "(A)", an asynchronous one.
+An interrupt is synchronous if its occurrence is always directly related
+to the instruction that is being executed when it is signaled.
+
+;RH bits
+%PICLI==400000	;CLI interrupt				[3] (A)
+		;Some job opened the CLI device with filenames equal
+		;to the uname and jname of this job.
+%PIPDL==200000	;PDL overflow				[3] (S)
+%PILTP==100000	;340 or E&S light pen hit		[3] (A)
+%PIMAR==40000	;MAR hit.				[2] (S)
+		;The MAR is a hardware feature that allows
+		;references to a specific memory location to
+		;be trapped.  This is the interrupt that happens
+		;when such a reference is detected.  The guilty
+		;instuction is usually not aborted;  if it is, the
+		;PC is SOS'ed regardless of the setting of %OPOPC.
+		;See the .MARA and .MARPC variables.
+%PIMPV==20000	;MPV (memory protect violation)		[2] (S)
+		;The job referenced a non-existent memory location.
+		;The address of that location (roundd down to
+		;a page boundary on KA-10's) may be found in .MPVA.
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.
+%PICLK==10000	;Slow (1/2 sec) clock			[3] (A)
+%PI1PR==4000	;Single-instruction proceed		[1] (S)
+		;If a job is started with the one-proceed flag
+		;(%PC1PR on KA-10's) set, after one instruction
+		;is completed a %PI1PR interrupt will occur.
+		;DDT's ^N command uses this feature.
+%PIBRK==2000	;.BREAK instruction executed.		[1] (S)
+		;.BREAK is used for DDT breakpoints, and for explicit
+		;program requests to DDT.
+%PIOOB==1000	;Address out of bounds			[2] (S)
+		;This is an obscure condition that used to
+		;happen on USR device IOT's, when an attempt
+		;was made to refer to a nonexistent location in the
+		;other job.  Now this always causes an MPV.
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.
+%PIIOC==400	;IOCERR (I/O channel error)		[2] (S)
+		;This indicates the failure of an I/O system
+		;call.  The channel that was being operated on is
+		;in .BCHN, and its .IOS word should contain, in
+		;bits 4.5 - 4.1, an error code.
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.
+%PIVAL==200	;.VALUE instruction executed		[1] (S)
+%PIDWN==100	;System-going-down status change	[3] (A)
+		;If the system changes its mind about whether
+		;or when it is scheduled to go down, this interrupt
+		;is signaled.
+%PIILO==40	;ILOPR, ILUUO (illegal operation)	[2] (S)
+		;This can be caused by a returnable uuo when the
+		;program's 41 doesn't seem suitable for handling one
+		;(see ITS UUOS).  It can also be used to report
+		;the failure of certain more archaic system calls.
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.
+%PIDIS==20	;Display memory protect			[2] (A)
+		;The 340 or E&S display got an MPV.
+		;This is now obsolete since the 340 and E&S
+		;no longer work.
+%PIARO==10	;Arithmetic overflow			[3] (S)
+		;The PDP-10's built-in arithmetic overflow
+		;condition was detected by the hardware.
+		;In fact, overflow occurs so often
+		;that enabling this interrupt causes the
+		;machine to slow down considerably,
+		;and it should be avoided.
+%PIB42==4	;BADPI (Bad location 42)		[1] (S)
+		;If in attempting to interrupt a job it turns out
+		;to be necessary to refer to nonexistent memory
+		;or write in read-only memory, this interrupt
+		;is signaled, instead of MPV or WIRO.
+		;This is so that the program will return to DDT
+		;instead of mysteriously looping.
+%PIC.Z==2	;^Z or CALL typed on terminal		[1] (A)
+%PITYI==1	;TTY input (obsolete)			[3] (A)
+
+;LH bits
+%PJRLT==200000	;Real-time timer went off		[3] (A)
+		;These interrupts are controlled by the .REALT
+		;uuo.  See ITS UUOS.
+%PJRUN==100000	;Run-time timer went off		[3] (A)
+		;This interrupt is requested (in advance)
+		;by setting .RTMR.
+%PJNXI==40000	;Non-existent IO register		[2] (S)
+		;A Job in User IOT mode referenced a non-existent IO
+		;register on the KS10 Unibus.  The PC is left pointing
+		;before the guilty instruction.  The address of the
+		;non-existant register may be found in .MPVA.
+%PJJST==20000	;Job Status display request.            [3] (A)
+		;The sequence ^_J was typed on the
+		;console owned by this process or some inferior.
+%PJDCL==10000	;Deferred call.				[1] (S)
+		;An attempt was made to read TTY input
+		;and the next character was a deferred-call
+		;character (^_D or Control-CALL).
+		;This deferred-call character is never seen
+		;by the program; it just causes the interrupt.
+		;It differs from ordinary CALL or ^Z
+		;in that it takes effect when the program
+		;gets around to reading it, not immediately.
+%PJATY==4000	;TTY returned.				[3] (A)
+		;This interrupt happens when the TTY is
+		;returned by the superior, after having
+		;been taken away.  TECO uses this to know
+		;that it must redisplay the entire screen.
+%PJTTY==2000	;Don't have TTY				[2] (S)
+		;This results from an attempt to use the job's
+		;console tty when the job does not own it, if
+		;%TBINT is 1 and %TBWAT is 0.  See ITS TTY.
+		;The guilty instruction is aborted, and the PC is
+		;left set according to %OPOPC.
+%PJPAR==1000	;Memory parity error			[2] (A)
+		;Programs are not intended to try to recover
+		;from parity errors, on the assumption that they
+		;are probably permanently screwed up.
+		;This interrupt is asynchronous because it can
+		;be caused by a parity error in another job
+		;which destroys data in a page shared with this job.
+%PJFOV==400	;ARFOV (Floating overflow)		[3] (S)
+		;This is a non-aborting PDP-10 hardware condition.
+%PJWRO==200	;WIRO (Write in read-only page)		[2] (S)
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.  The address of read
+		;only location (rounded down to a page boundary on
+		;KA-10's) may be found in .MPVA.
+%PJFET==100	;Fetched insn from impure page		[2] (S)
+		;On KA-10's, if bit %PCPUR of the PC flags is 1,
+		;fetching an instruction from an impure page
+		;will cause this interrupt.  This is supposed to
+		;facilitate catching jumps to randomness.
+		;The guilty instruction is aborted, and the PC is
+		;left set according to %OPOPC.
+%PJTRP==40	;SYSUUO (System uuo in trap mode)	[2] (S)
+		;A job whose .UTRAP variable was nonzero either
+		;attempted to execute an instruction that trapped
+		;to the system, or was about to be interrupted.
+		;This feature is intended to be used by the superior
+		;to provide a non-ITS environment for the inferior.
+		;For that purpose, this interrupt should not be
+		;enabled for the inferior, so that it will be fatal.
+		;The guilty instruction was aborted, and the PC was
+		;left set according to %OPOPC.
+%PJDBG==2	;System being debugged state change	[3] (A)
+		;When the system enters or leaves "debugging mode",
+		;this interrupt is signaled.
+%PJLOS==1	;A .LOSE UUO or a LOSE system call	[2] (S)
+		;was executed.
+
+F. The Interrupt Bits in the Second Word
+
+The right half of the second word (.IFPIR) is used for I/O channel
+interrupts that signal the arrival of or need for data.
+They should not be confused with I/O channel error interrupts
+or IOCERRors.  Each channel has its own bit: 1.1 is for channel
+0;  1.2, for channel 1; ... 2.7, for channel 17 .
+They are all class 3, and their significance depends on the device
+open on the channel.
+
+The left half of the second word (.IFPIR) is used for
+"inferior got a fatal interrupt" interrupts.  Each of a job's
+inferiors is assigned its own interrupt bit from among the
+bottom 8 bits of the left half.  When an inferior job is created,
+its interrupt bit should be read and remembered by reading the
+.INTB variable with a .USET.  Every time that inferior gets a fatal
+interrupt, it will be stopped and the superior will receive an
+interrupt on that inferior's bit in .IFPIR.  The inferior may
+be restarted by zeroing its .USTP variable, but if the fatal
+interrupts remain and are still fatal the inferior will simply
+stop and interrupt the superior again.  "Inferior got a fatal
+interrupt" interrupts are all class 3.
+
+The reason that inferiors interrupt through a special set of bits
+instead of using I/O channel interrupts is that it makes it possible
+to receive interrupts from all one's inferiors without having them
+all open on I/O channels at all times.  DDT normally keeps only
+its current job open, and when it receives an interrupt from some
+other job it opens that job temporarily.
