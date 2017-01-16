@@ -1,0 +1,760 @@
+-*- Mode:Text -*-
+
+Description of the CHAOS FILE protocol designed by HIC.
+
+	The CHAOS FILE protocol is a protocol used to give access to the
+file systems of remote hosts on the CHAOS net.  Provided that the
+foreign host has a CHAOS FILE server, one can read and write files,
+delete, rename, etc.  The protocol was originally designed to give LISP
+machines access to the file systems of our PDP/10's, but is general
+enough to support file transfer between 10's, and other purposes.
+
+	We will describe the protocol from the point of view of the
+user, i.e., the implementor of a user program communicating to a foreign
+server.  Hence, terms such as "receive", "send", "input", and "output"
+are from a user's point of view, unless explicitly indicated.  The first
+step in using the protocol is to open what is called a CONTROL
+connection to the server on the foreign host.  A CONTROL connection is
+simply a standard CHAOS net connection to the contact name "FILE" on the
+foreign host.  The CONTROL connection is used to send commands, and
+receive responses and most error message.
+
+	When reading or writing files, actual data is sent over separate
+CHAOS net connections called DATA connections.  DATA connections are
+opened in conjunction with the foreign host, using commands on the
+CONTROL connection.  Hence, the CONTROL connection must be opened first.
+We will present the details below; but here are some preliminary facts
+about DATA connections.  Like CONTROL connections, DATA connections are
+bidirectional.  Each half (send and receive) of a DATA connection is
+used independently, so two file transfers may be active on a DATA
+connection at the same time (but they must be in opposite directions).
+There may be more than one DATA connection per CONTROL connection, but
+each DATA connection is associated with a particular CONTROL connection.
+This is because each CONTROL connection deals with a separate
+incarnation of the server at the foreign host.  We also note that DATA
+connections are re-usable, i.e., can be used for many file transfers.
+Simple programs might very well get by with a single DATA connection,
+but it is possible to have several (the actual limit depends on
+resources of the foreign host, and is 3 for ITS servers, and 8 for
+TOPS-20 servers).
+
+	The protocol is organized so that commands and responses have a
+fairly uniform syntax.  Further, each command (response) is sent
+(received) in a single packet.  Each command has a field for a unique
+identifier, called the transaction id, or "tid" for short, which
+identifies it.  This is because the protocol permits asynchronous
+processing of commands and responses, i.e., you can send a new command
+without waiting for the response to the previous one.  However, it is a
+good idea to read the responses as they come in, so the server will not
+block trying to send responses to you.  The server is coded so that it
+will not block if DATA connection packets back up.
+
+	Let us now discuss the details of command and response packets.
+We will discuss error processing later.  Each command must be sent in a
+separate packet on the CONTROL connection.  The packet must have the
+packet opcode for ASCII data (%CODAT = 200).  When you are done with the
+CONTROL connection and wish to disconnect from the foreign host, you
+should send an EOF packet (%COEOF = 014) on the CONTROL connection.
+This will cause the server to abort any transfers in progress, close all
+DATA connections pertaining to this CONTROL connection, and close the
+CONTROL connection.
+
+	Responses to commands, successful or not, will come as data
+packets (i.e., opcode %CODAT) on the CONTROL connection.  The only other
+kind of packet you should see on the CONTROL connection (unless there
+are network problems) and asynchronous mark packets, which will be
+discussed later.
+
+	The contents of a command or response packet is simply the
+sequence of ASCII bytes in the data portion of the packet.  Fields are
+generally separated by either spaces (040) or LISP machine newline
+characters (NL = 215).  We remark now that certain parts of the protocol
+are oriented towards the LISP machine character set, which consists of
+256 characters.  This is in contrast to the 128 character set standard
+on PDP/10's.  The printing characters generally have the same
+interpretation, though.  Later we will explain the character set
+translation features provided by the protocol in detail.
+
+	Here is the format of command and response packets:
+
+command:	tid <sp> [ fh ] <sp> cmd [ args ]
+response:	tid <sp> [ fh ] <sp> cmd [ <sp> results ]
+
+	<sp> means a space character (040), and brackets surround
+optional fields.  Each field is a sequence of printing characters.  Here
+is the interpretation and format of the common fields:
+
+tid:	Transaction identifier, used only to help the user program sort
+	out replies.  Only the first 5 characters are significant; the
+	rest are discarded, and will not appear in a response.  Tid's
+	may vary or be the same, as you wish.
+
+fh:	File handle, used to identify a DATA connection, and a direction
+	(in/out).  That is, each DATA connection has two file handles
+	associated with it, one for indicating input (transfer to you
+	from the foreign host), and one for output (transfer from you to
+	the foreign host).  Like tid's, file handles are also unique
+	only in the first 5 characters.
+
+cmd:	A command name.  Only the first 5 characters are actually read
+	at the current time, but this should not be depended upon.  The
+	full name of the command always appears in the response.
+	Command names must be presented in upper case.
+
+	The "args" and "results" fields vary depending on the command,
+and will be described with each command below.  The response to a
+particular command will have the same tid as the command, and also the
+same file-handle (if relevant), and the same command name.  The only
+differences are that the tid and file handle in the response will be
+truncated to 5 characters, and the command name will always appear in
+full.
+
+	Conventions used in the descriptions:
+
+	Numbers we write (e.g., packet opcodes, ASCII codes, etc.)  are
+in octal, unless followed by a decimal point, in which case they are
+decimal.  Byte sizes are an exception to this rule: they are always in
+decimal, even if not followed by a decimal point.
+	<none> means an empty field in a packet.
+	<num> means a sequence of ASCII characters that are all digits
+(codes 060 through 071, i.e., '0' through '9').  Such numbers are always
+expressed in decimal.  These numbers are unsigned, but may have leading
+zeroes.  (The server may possibly send a negative <num> to you, e.g.,
+the "-1" of the version field of an OPEN response, but you should never
+send a negative <num> to it.)
+	Some syntax was too long to be presented on a single line here;
+we note that there is no CRLF or newline in the packet when we continue
+syntax on a second line.  That is, all characters in every command or
+response are written down explicitly.
+	A reminder: the end of a command or response is not marked by a
+special character, because the length field of the CHAOS net packet
+determines where the data ends.
+
+------------------------------------------------------------------------
+
+	DATA-CONNECTION
+		args = <sp> ifh <sp> ofh
+		results = <none>
+
+	This is used to open a new DATA connection.  The "ifh" and "ofh"
+fields are the input and output file handles to associate with this data
+connection.  Each should be distinct from all other file handles of
+other DATA connections pertaining to the same CONTROL.  Since this
+command does not pertain to any existing file handles, the file handle
+field of the command must be omitted.  As would be expected, the input
+file handle is used to describe the receive half of the DATA connection
+and the output file handle is use to describe the send half.
+
+	When the server receives a valid (well-formed, etc.)
+DATA-CONNECTION packet, it will attempt to open a new CHAOS net
+connection to your host, using "ofh" (the output file handle you
+supplied in the command packet) as the contact name.  Hence, you should
+listen for such a connection.  The server will respond to the
+DATA-CONNECTION command immediately, even though the new DATA connection
+may not yet be open.  Of course, you cannot use the connection until it
+is open, but you will know that, because you had to open it.
+
+------------------------------------------------------------------------
+
+	UNDATA-CONNECTION
+		args = <none>
+		results = <none>
+
+	This command is used to close a DATA connection when you are
+finished with it.  There is probably little occasion to use this, since
+any DATA connections will be closed when the CONTROL connection is
+closed, and a DATA connection can be re-used for multiple file
+transfers.  The DATA connection closed is the one whose input or output
+file handle appears in the file handle field of the UNDATA-CONNECTION
+command.  UNDATA-CONNECTION implies a CLOSE on each file handle of the
+DATA connection for which there is a file transfer in progress.
+
+------------------------------------------------------------------------
+
+	OPEN
+		args = [ options ] <NL> filename <NL>
+		options = <sp> option1 <sp> option2 ... <sp> optionN
+		results = <sp> version <sp> date <sp> len <sp> qfasl
+			  <NL> realname <NL>
+
+	This command is used to open a file for reading or writing at
+the foreign host.  The "filename" part is the filename to use at the
+foreign host.  It is always expressed in the foreign host's file name
+syntax.  The "options" field will be explained momentarily.  If an input
+file handle is given in the file handle field of the command, then the
+file is to be opened for reading.  If an output file handle is given,
+then the file is to be opened for writing.  In either case the file
+handle serves to indicate not only the direction of transfer, but also
+the DATA connection to be used for the transfer.  A file handle must be
+supplied, unless a PROBE is being done.  PROBE will be explained below,
+but breifly, it permits you to find out information about a file (i.e.,
+the "results" information of an OPEN response) without actually opening
+it.
+
+	The "options" field of the OPEN command consists of a number of
+options (most of them are simple ASCII strings), always in upper case,
+each preceded by a space (to separate them from the "OPEN" and from each
+other).  The options permit you to specify whether the transfer is to be
+BINARY or CHARACTER, and a number of other things.  Some options apply
+only to BINARY transfers, and others (character set translations in
+particular) only to CHARACTER transfers.  Here is a list of the options
+and their meaning.
+
+	READ - Indicates that we will be reading a file.  This is
+	redundant, and is checked for consistency (i.e., we must have
+	given OPEN an input file handle).
+
+	WRITE - Analogous to READ.
+
+	CHARACTER - Specifies that we will be transferring character
+	data as opposed to binary.  This affects the mode in which the
+	server will open a file, as well as whether or not character set
+	translations are performed.  CHARACTER is the default, so it
+	need never be specified.  The check for QFASL files is not
+	performed (see below).
+
+	BINARY - Specifies that we will be transferring binary data.  A
+	check is made for QFASL files when reading (the result of the
+	test is supplied in the response to the OPEN; see below).  The
+	default byte size is 16 bits (see the discussion of byte sizes
+	below).
+
+	PROBE - This is used to check the existence of a file, and find
+	out information about it if it exists.  The file is not actually
+	opened.  This option is implied if no file handle is given in
+	the OPEN command.  You should not supply a file handle when
+	doing a PROBE.  The response packet will contain the same
+	information as a response to OPEN'ing the file for reading.
+	BINARY vs. CHARACTER makes a difference in a probe, as described
+	in the discussion of the response to OPEN.
+
+Options pertaining to BINARY transfers only:
+
+	BYTE-SIZE <sp> <num> - Specifies to use bytes with <num> bits
+	each.  The interpretation is explained below.
+
+Options pertaining to CHARACTER transfers only:
+
+	RAW - Suppresses character set translation (see below).
+
+	SUPER-IMAGE - Suppresses rubout quoting (this pertains to
+	character set translation, see below).
+
+Options specific to particular foriegn hosts:
+
+	At present there are only two kinds of servers: ITS servers
+(e.g., AI and MC) and TOPS-20 servers (e.g., XX, EE, and SPEECH).  There
+are two options that are specific to TOPS-20 servers (i.e., they do not
+work for ITS servers, and should not be presented to them):
+
+	TEMPORARY - TOPS-20 server only: says to use GJ%TMP in the
+	GTJFN.  This is useful mainly when writing files, and indicates
+	that the foreign operating system is to treat the file as
+	temporary.  See TOPS-20 documentation for more about the
+	implications of this option.
+
+	DELETED - TOPS-20 server only: says to set GJ%DEL in the GTJFN.
+	This is useful mainly for READ'ing or in PROBE's, and indicates
+	that deleted files should be considered when looking for a file.
+	See TOPS-20 documentation for information about this.
+
+Details for ITS servers:
+
+	A CHARACTER OPEN will be in .UAI (.UAO) mode when reading
+	(writing).  Similarly, a BINARY OPEN will be in .UII (.UIO)
+	mode.  An OPEN for writing always opens _LSPM_ OUTPUT in the
+	spcified directory, but does a RENMWO just before the CLOSE, to
+	the appropriate file names.  The server takes care of the
+	traditional screws associated with the last word of text files,
+	i.e., you don't have to worry about it -- you will never see the
+	extra characters.
+
+Details for TOPS-20 servers:
+
+	GTJFN's - When OPEN'ing for READ or PROBE, GJ%OLD is always set.
+	When OPEN'ing for WRITE, GJ%FOU and GJ%NEW will be set.  These
+	are independent of the setting of GJ%DEL and GJ%TMP (see the
+	TEMPORARY and DELETED options, above).
+
+	OPENF's - CHARACTER mode does a 7-bit OPENF, normal mode, with
+	line number checking off when reading.  BINARY mode does a
+	36-bit DUMP mode OPENF -- the server handles the packing and
+	unpacking of bytes within words.
+
+Open results:
+
+	results = <sp> version <sp> date <sp> len <sp> qfasl
+		  <NL> realname <NL>
+
+	version = a <num>, expressing the version number of the file.
+	On ITS server, this will be the numeric second name, or the
+	leading numeric characters of the second name.  If the name has
+	no numerics, the field will be "-1".  On TOPS-20 this will be
+	the generation number of the file.
+
+	date = The creation date of the file, expressed in the form
+	"mm/dd/yy hh:mm:ss".  (That is a real <sp> between the date and
+	the time.)
+
+	len = ASCII digits for the length of the file in the byte size
+	being read.  This will always be 0 when writing.
+
+	qfasl = "T" if we are doing a BINARY READ, and the first word
+	of the file is "QFASL" in sixbit.  "NIL" otherwise.  This is
+	clearly oriented towards LISP machines!
+
+	realname = the full name of the file, e.g., what RFNAME (on ITS)
+	or JFNS (on TOPS-20) will tell you, when asking for all the
+	usual fields (device, directory, first name, second name,
+	generation number).
+
+------------------------------------------------------------------------
+
+	CLOSE
+		args = <none>
+		results = <sp> version <sp> date <sp> len
+			  <NL> realname <NL>
+
+	A file handle must be given, and a transfer must be active on
+that handle.  A synchronous mark will be sent or awaited accordingly,
+and the file will be closed (but not the DATA connection).  See the
+discussion of data transfer protocol, below, for more details.
+
+	The results are mostly as for OPEN.  However, the "len" field is
+computed differently.  For ASCII input, it will be the number of
+characters, as returned by FILLEN on ITS.  On TOPS-20, it will be the
+number of bytes in the file, if it was written using 7-bit bytes,
+otherwise, 5 times the number of words.  For binary input, it is the
+number of words in the file times 2.  For ASCII output, "len" is the
+exact number of characters written, and for binary output, it is the
+number of words times the number of bytes per word for the current byte
+size.  [This stuff may be buggy anyway.]
+
+------------------------------------------------------------------------
+
+	FILEPOS, args = <sp> <num>
+
+	This must have a file handle, and it must be an input file
+handle.  It requests the foreign host to reset its file access pointer
+to byte <num> of the file currently open, according to the current byte
+size being used.  As explained below, this sends a synchronous mark
+before starting to send more data.  FILEPOS is ILLEGAL for files being
+written.
+
+------------------------------------------------------------------------
+
+	DELETE
+		args = <none>  or  <sp> filename <NL>
+		results = <none>
+
+	If a file handle is given the file being read or written on the
+specified DATA connection will be deleted after we close it (regardless
+of direction).  The file handle must refer to an open DATA connection,
+and the direction must be correspond to the current transfer.  This is
+called a "delete while open", or DELEWO.  In such a case, DELETE should
+have no argument.
+
+	If no file handle is given, then the optional argument must be
+present, and specifies a file to be deleted immediately.
+
+------------------------------------------------------------------------
+
+	RENAME
+		args = <NL> filename1 [ <NL> filename2 ] <NL>
+		results = <none>
+
+	If a file handle is given, only the first filename should be
+present, and the file will be renamed to filename1 sometime.  This is
+called a "rename while open", or RENMWO.  On ITS, a RENMWO call is done
+immediately.  On TOPS-20, a GTJFN is done to filename1, and when we do a
+CLOSE on the file handle, the CLOSF is done with CO%NRJ set, and then an
+RNAMF is done to the previously obtained jfn.
+
+	If no file handle is given, then both filenames must be present,
+and the effect is to rename filename1 to be filename2.  Don't forget
+that on ITS renaming can only be done within a directory.  The server
+simply ignores the device and directory parts of filename2, so be
+careful.  On TOPS-20, renaming from one pack to another will fail.
+
+------------------------------------------------------------------------
+
+	CONTINUE
+		args = <none>
+		results = <none>
+
+	This must have a file handle, and the indicated channel must be
+in the asynchronously marked state.  That is, an error of some kind
+occurred.  If the error might be recoverable, then CONTINUE will try to
+resume from it.  If the error is non-recoverable, you will get an error
+response.  See the discussion of marks below.
+
+------------------------------------------------------------------------
+
+	SET-BYTE-SIZE
+		args = <sp> nbs <sp> [ npos ]
+		results = <none>
+
+	This must have a file handle, which must refer to a file open in
+BINARY mode.  Both nbs and npos are <num>'s.  "nbs" is the new byte
+size, and must be in the range 1 to 16.  "npos" is the new position in
+the file IN TERMS OF THE OLD BYTE SIZE.  The npos part may be omitted
+for output files, and is ignored if present (but the second <sp> MUST be
+there).  If npos is omitted for input files, it defaults to 0.  This
+command sends or awaits a synchronous mark.
+
+------------------------------------------------------------------------
+
+	LOGIN
+		args = <NL> userid [ <NL> password [ <NL> account ]]
+		results from ITS = <sp> uname <sp> hsname
+				   <NL> persname <NL>
+		results from TOPS-20 = <none>
+
+	This command is for logging in at the foreign host.  You must
+log in before any OPEN commands will be accepted.  Logging in to ITS is
+simple: you just give the desired UNAME, which may even legally be
+blank.  On TOPS-20, the userid must correspond to a real directory
+(RCUSR is used), and the password and account are passed to a LOGIN
+jsys.  For most of our TOPS-20's, userid = ANONYMOUS and password =
+ANONYMOUS will give you a login of low privilege.  If the first character
+in the password is an asterisk, capabilities will be enabled.
+
+------------------------------------------------------------------------
+
+	DIRECTORY
+		args = options <NL> pathname
+		results = same as for OPEN
+
+The only option currently allowed is DELETED, which says to include deleted
+files (TOPS20) or "*" files (ITS).
+
+The DIRECTORY command is like opening an input file.  The possible responses
+are the same as for OPEN, except that the affirmative response says DIRECTORY
+rather than OPEN.
+
+The input file that you read consists of a series of records; first a
+header and then the name and properties of each file that matches the
+pathname, which may contain wildcards in system-dependent fashion.  Each
+record read consists of a pathname, <NL>, a set of properties separated by
+<NL>, and an extra <NL> to separate it from the next record.  Each property
+consists of the name of the property, optionally followed by a space and
+the value.  (If no value is present, the property is a yes/no property and
+the value is yes).  The header record is in the same format; it has a blank
+pathname and has the properties for the file system as a whole rather than
+for a particular file.
+
+The properties are not documented here; consult the Lisp machine manual for
+a list of the most useful ones.
+
+------------------------------------------------------------------------
+
+	COMPLETE
+		args = options <NL> default-pathname <NL> string
+		results = status <NL> new-string <NL>
+
+This does filename completion.  String is a filename typed in by the user
+amd default-pathname is the default name against which it is being typed.
+The filename is completed according to the files present in the file system
+and the possibly-expanded string is returned.
+
+Allowed options are DELETED, READ, WRITE, OLD, NEW-OK.  DELETED means not
+to ignore deleted files; this applies to Tenex and TOPS-20 only.  READ
+means the file is going to be read (this is the default).  WRITE means the
+file is going to be written, and affects version number defaulting.  OLD
+means an existent file is required (this is the default).  NEW-OK means that
+it is permissible for the string to complete to the name of a file that does
+not exist.
+
+The returned status is NIL, OLD, or NEW.  NIL means that an error occured,
+OLD means that the string completed to the name of an existent file, NEW
+means that the string completed to a legal filename which is not the name
+of an existent file.
+
+------------------------------------------------------------------------
+
+	CHANGE-PROPERTIES
+		args = filename <NL> property-name <SP> new-value <NL> ...
+		results = <none>
+
+This allows you to change one or more properties of a file.  The properties which
+are legal to change are those in the SETTABLE-PROPERTIES property of the header
+record returned by the DIRECTORY command.  The legal values for yes/no
+properties are T and NIL.
+
+------------------------------------------------------------------------
+
+About character set translations:
+
+	As mentioned somewhere above, the protocol was originally
+designed to provide access to PDP/10 file systems for LISP machines.
+LISP machines support 8-bit characters, and hence have 256 characters in
+their character set.  This results in minor difficulties when conversing
+with PDP/10's, which prefer 7-bit characters.  Translations apply ONLY
+to CHARACTER transfers, not BINARY transfers.  Below is a table showing
+the "normal" (i.e., default) correspondence between LISP machine and
+PDP/10 characters.  Some LISP machine characters expand to more than one
+PDP/10 character.  The notation "x in <c1, c2>" means "for all
+character codes x such that c1 <= x <= c2."
+
+	LISP machine character		PDP/10 character(s)
+
+	x in <000, 007>			x
+	x in <010, 012>			177 x
+	013				013
+	x in <014, 015>			177 x
+	x in <016, 176>			x
+	177				177 177
+	x in <200, 207>			177 <x - 200>
+	x in <210, 212>			<x - 200>
+	213				177 013
+	214				014
+	215				015 012
+	x in <216, 376>			177 <x - 200>
+	377				no corresponding code
+
+	This table may seem confusing at first, but there ARE some
+general rules about it that should make it appear more sensible.  First,
+LISP machine characters in the range <000, 177> are generally
+represented as themselves, and x in <200, 377> is generally represented
+as 177 followed by <x - 200>.  That is, 177 is used to quote LISP
+machine characters with the high bit on.  It was deemed that 177 is more
+important than 377, so 177 177 means 177, and there is no way to
+describe 377 with PDP/10 characters.  On the LISP machine, the
+formatting control characters appear shifted up by 200.  This explains
+why the preferred mode of expressing 210 (backspace) is 010, and 010
+turns into 177 010.  The same reasoning applies to 211 (tab), 212
+(linefeed), 214 (formfeed), and 215 (newline).  However, newline has an
+added twist -- it is supposed to start at the beginning of a new line,
+so it is deemed equivalent to 015 012 (CRLF) in PDP/10 characters.  When
+converting PDP/10 characters to LISP machine characters, an 015 always
+turns into a 215; however, if it is followed by an 012, the 012 is
+skipped.
+
+	The above table applies in the case of NORMAL translation, i.e.
+the default translation mode.  Note that the server ASSUMES the user is
+a LISP machine, and that all our servers are PDP/10's, so the labellings
+"LISP machine" and "PDP/10" can be thought of as "user" and "server".
+
+	The other translation modes available are:
+
+	RAW - perform no translation (PDP/10 characters simply discard
+	the high order bit of LISP machine characters, and LISP machine
+	characters supplied by a server will always be in the range
+	<000, 177>.
+
+	SUPER-IMAGE - This suppresses the use of rubout for quoting.
+	That is, each entry beginning with a 177 in the PDP/10 column of
+	the translation table presented above, has the 177 removed.  The
+	PDP/10 character 015 always maps to the LISP machine character
+	215, as in normal translation.  Here is the corrected table:
+
+	LISP machine character		PDP/10 character(s)
+
+	x in <000, 177>			x
+	x in <200, 214>			<x - 200>
+	215				015 012
+	x in <216, 376>			<x - 200>
+	377				no corresponding code
+
+	User programs written for PDP/10's probably do not wish to have
+any of the above translations performed, since they are using the PDP/10
+7-bit character set.  Hence, RAW is probably what you want.  It is also
+the most efficient method of transferring ASCII data using the protocol.
+
+----------------------------------------------------------------
+
+Data transfer and byte packing issues:
+
+	Once a DATA connection has been established, and an OPEN has
+succeeded, data transfer proceeds by sending/receiving packets on the
+appropriate DATA connection.  CHARACTER data is always in packets with
+opcode %CODAT (200), and BINARY data in packets with opcode 300 octal.
+Consider the data portion of a packet as a sequence of 8-bit bytes, in
+the fashion usual for the CHAOS net.  Then CHARACTER data is always
+packed one character per packet byte.  The organization is such that a
+standard PDP/10 byte pointer of size 8-bits can be used to load or store
+characters into a packet sequentially.  (As usual, the low 4 bits of
+each 36-bit word is ignored, and not even transmitted on the CHAOS net.)
+There are no particular restrictions on the minimum or maximum sizes of
+data packets, other than hardware or operating system limits.  The
+server will always send the largest packets it can.
+
+	The situation with BINARY data is slightly more complicated.  We
+must consider the data portion of a packet as a sequence of 16-bit
+bytes.  Each 16-bit byte consists of two 8-bit bytes, with the first of
+the two 8-bit bytes being the high-order half of the 16-bit byte.  (This
+corresponds to PDP/10 conventions, but is the opposite of PDP/11
+conventions regarding byte packing.)  Each byte of binary data sent is
+stored in one 16-bit byte in the packet.  If the byte size is less than
+16-bits, then the byte is right-justified within the 16-bits, with the
+remaining high order bits set to unpredictable values.  The organization
+is such that loading or storing sequential bytes in a packet can be done
+with a standard PDP/10 byte pointer of byte size 16 bits, and transfer
+of the bytes so obtained to or from words of files can be done with a
+byte pointer of the size in use for the transfer.
+
+	Each packet of BINARY data should contain an integral number of
+16-bit bytes, i.e., it should have an even nmber of 8-bit bytes.  If it
+does not, the odd byte is discarded.  The server always sends binary
+packets with an even number of 8-bit bytes.
+
+	For transferring all 36 bits of a PDP/10 word to another 36 bit
+machine, the byte size must divide 36.  The most efficient value is 12,
+since it is the largest divisor of 36 that is not greater than 16, which
+is the largest byte size supported by the protocol.
+
+----------------------------------------------------------------
+
+Protocol issues in data transfer:
+
+	In addition to just data packets, some other kinds of
+informative packets are sent or received on the DATA connection.
+
+	EOF packets (opcode 014) are used to mark end of file when
+reading or writing.  That is, when you are writing a file and come to
+the end of what you wish to write, you will send an EOF packet to tell
+the server it has reached the end.  Similarly, you will receive an EOF
+packet at the end of a file when reading.  EOF packets are always empty
+(i.e., contain no data).  There are additional details about closing a
+file, however; read on.
+
+	In addition to EOF packets, SYNCHRONOUS MARKS (opcode 201) are
+used to separate groups of packets in the transfer, mainly for purposes
+of matching up with FILEPOS and SET-BYTE-SIZE commands.  You will
+receive a synchronous mark on the DATA connection sometime after each
+successful FILEPOS and SET-BYTE-SIZE command.  These marks indicate the
+place in the data stream where the command actually occurred.  They are
+necessary because the server may be several packets ahead of you in
+sending data, and without the marks there would be no easy way to tell
+where the previous information ended and the new information starts.  A
+synchronous mark is also sent in response to a CLOSE command when
+reading, and expected after an EOF when writing.  The mark after a CLOSE
+when reading allows you to find the end of the data packets for that
+transfer, if you decide to stop the transfer in the middle.  The mark
+after EOF when writing performs a similar function for the server if you
+terminate the transfer in the middle.
+
+	When writing, you should send a synchronous mark on the DATA
+connection whenever you perform a successful SET-BYTE-SIZE command, and
+also as part of a CLOSE, as described above.  All other synchronous
+marks are ones that you will receive.
+
+Examples:
+
+1) Reading a file.  Assume you have a CONTROL connection and an idle
+DATA connection.  Send an OPEN command, and await the response.  Then
+start reading data packets from the data channel.  The transfer will
+continue unless you stop it.  Suppose you have read all the file.  Then
+you will see an EOF packet.  Send your CLOSE command, to order the file
+closed, and await a SYNC mark on the DATA connection, indicating that
+the close is in fact done, and the DATA connection can be re-used for
+some other purpose.  If you decide to quit in the middle, send a CLOSE
+command, and get the response, and read packets from the DATA connection
+until you see a SYNC mark.  (This assumes that there would be no other
+SYNC marks in transit because of, say, a previous FILEPOS command, etc.
+If there were any of those, you will have to wait through the
+appropriate number of SYNC marks.)
+
+2) Writing a file.  Again assume you have established a CONTROL and DATA
+connection.  Send the OPEN command and await the reponse.  Then start
+writing packets on the DATA connection.  Assuming there are no problems,
+send an EOF.  WAIT FOR THE EOF TO BE ACKNOWLEDGED BY THE SERVER.  (That
+is, a CHAOS net acknowledgement indicating that the server has actually
+read the EOF packet.)  Now send a SYNC mark on the DATA connection and a
+CLOSE on the CONTROL connection (in either order).  If you do not wait
+for the EOF to be acknowledged, and you send a CLOSE anyway, the file
+may be truncated because some data packets may not have been processed
+by the server.
+
+----------------------------------------------------------------
+
+Errors and Ansynchronous marks:
+
+	ASYNCHRONOUS MARK packets (opcode 202) indicate error conditions
+in the transfer, such as running out of disk space or allocation.  Some
+of these may be recoverable, some not.  When reading, an asynchronous
+mark will come in over the appropriate DATA connection.  When writing,
+it will come in on the CONTROL connection.  (The DATA connection is not
+used in this case because the receive half might be in use for another
+transfer).  Here is the format of an asynchronous mark packet:
+
+	tid <sp> fh <sp> ERROR <sp> erc <sp> c <sp> message
+
+That is, it looks like a regular error response packet, except that it
+has a different opcode (responses are data packets, opcode 200).  The
+tid should be ignored -- it will be somewhat random (whatever happens to
+to be lying around).  The file handle, fh, is useful when writing, to
+see which DATA connection the error happened to.  The "erc" part is a 3
+character error code (a table of them is presented below, subject to
+change without notice).  The single character "c" will be either "R"
+(for recoverable) or "F" (for fatal).  A recoverable error can be
+restarted from by sending an appropriate CONTINUE command.  A fatal
+error cannot be recovered from, and an appropriate CLOSE should be
+performed.  The "message" part is an ASCII error message, possibly
+obtained from the host operating system.
+
+Error codes:
+
+Flag codes:
+	C = command error (comes in data packet with cmd = "ERROR", on
+		the CONTROL connection).
+	F = fatal asynchronous error.
+	R = restartable asynchronous error.
+
+Flag	Code	Message, Causes, Possible Diagnosis
+
+C	CCC - CHANNEL CANNOT CONTINUE
+		CONTINUE not possible.
+C	CNO - CHANNEL NOT OPEN
+		CLOSE on non-open channel.
+C	CRF - CANNOT RENAME OUTPUT FILE TO REAL NAMES
+		Final RENMWO for CLOSE on ITS failed.
+F	CSP - CANNOT SET POINTER
+		Response to this failure in FILEPOS or SET-BYTE-SIZE.
+C	FNF - message varies, depending on reason (FILE NOT FOUND).
+		Failing OPEN.
+C	IBS - ILLEGAL BYTE SIZE
+		Response to byte size not in range 1 - 16.
+F	IDO - ILLEGAL DATA OPCODE
+		Bad packet opcode in the range 200 - 377 (you should use
+		200 for CHARACTER data, and 300 for BINARY)
+C	IFH - ILLEGAL FILE HANDLE FOR FILEPOS
+		Only input file handles are legal.
+R	IOC - message varies (INPUT OUTPUT CONDITION).
+		Generic code for possibly recoverable failures.  This
+		will be sent in an ASYNC mark packet.
+F	IPO - ILLEGAL PACKET OPCODE
+		Received a packet with an illegal opcode, or a SYNC or
+		ASYNC mark when not expected.
+C	IRF - ILLEGAL REQUEST FORMAT
+		Generic response to ill-formed command.
+C	ISC - ILLEGAL CHANNEL FOR SET-BYTE-SIZE
+		SET-BYTE-SIZE may only be done on BINARY channels.
+C	NCN - NULL COMMAND NAME
+		Particular case of a bad command.
+C	NER - NOT ENOUGH RESOURCES
+		Possible causes are: no more I/O channels/jfns available
+		for new DATA connections, system failure to open a new
+		CHAOSnet channel, and inability to lookup a user's info
+		in LOGIN.
+C	NLI - NOT LOGGED IN
+		OPEN cannot be done until you are logged in.
+C	TMI - TOO MUCH INFORMATION
+		This happens if a response or error packet overflows.
+C	UFH - UNKNOWN FILE HANDLE
+		Particular case of an ill-formed command.
+C	UKC - UNKNOWN COMMAND
+		Particular case of an ill-formed command.
+C	UNK - USER NOT KNOWN
+		Bad LOGIN (TOPS-20 only).
+C	UOO - UNKNOWN OPEN OPTION
+		Obvious problem.
+F	xxx - ???  When a file system or other operating system call
+	fails, which is not covered in the above, then another code is
+	used.  These are taken from a table for ITS, with the message
+	read from the ERR: device, and on TOPS-20, the letters are the
+	first letters of the first three words of the error message
+	returned by an ERSTR call.  The only exception is code FNF,
+	special cased if the error is GJFX24 ("file not found") or OPNX2
+	("file does not exist") on TOPS-20.  No other FNF's will come
+	from TOPS-20, even by "accidient" -- a special check is made.
