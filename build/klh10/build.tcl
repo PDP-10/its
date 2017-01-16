@@ -18,14 +18,12 @@ proc start_dskdmp {} {
     #respond "KLH10>" "zero\r"
     quit_emulator
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
-    expect "EOF"
-    respond "KLH10#" "go\r"
+    expect "Starting KN10"
 }
 
 proc start_its {} {
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
-    expect "EOF"
-    respond "KLH10#" "go\r"
+    expect "Starting KN10"
 }
 
 proc mount_tape {file} {
