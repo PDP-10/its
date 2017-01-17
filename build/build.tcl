@@ -723,6 +723,14 @@ expect ":KILL"
 respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
 expect ":KILL"
 
+# od
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc; od\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":lisp sysen3;od (dump)\r"
+expect ":KILL"
+
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 
 respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
