@@ -309,6 +309,14 @@ expect ":KILL"
 respond "*" ":link teach;ts emacs,emacs;tstch >\r"
 type ":vk\r"
 
+# magdmp
+respond "*" ":midas .;_syseng;magdmp\r"
+respond "PTRHRI=" "y\r"
+respond "KL10P=" "n\r"
+respond "TM10BP=" "n\r"
+respond "340P=" "n\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
