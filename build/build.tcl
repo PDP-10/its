@@ -317,6 +317,10 @@ respond "TM10BP=" "n\r"
 respond "340P=" "n\r"
 expect ":KILL"
 
+# magdmp
+respond "*" ":midas sys1;ts magfrm_syseng;magfrm\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_syseng;dump\r"
 respond "WHICH MACHINE?" "DB\r"
 expect ":KILL"
