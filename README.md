@@ -164,6 +164,7 @@ A list of [known ITS machines](doc/machines.md).
    - LSPEED, set tty line parameters.
    - LUSER, request help from registered list of logged-in users.
    - MAGDMP, standalone program loader/dumper for magtape.
+   - MAGFRM, create tapes for use with MAGDMP.
    - MAIL, Mail sending client.
    - MAILT, allows editing mail (from :MAIL) in EMACS.
    - METER, displays system metering information.
