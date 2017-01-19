@@ -1,0 +1,287 @@
+;;;   SRCTRN 						 -*-LISP-*-
+;;;   **************************************************************
+;;;   ***** MACLISP *****  (Initialization for COMPLR) *************
+;;;   **************************************************************
+;;;   ** (C) Copyright 1981 Massachusetts Institute of Technology **
+;;;   ****** This is a Read-Only file! (All writes reserved) *******
+;;;   **************************************************************
+
+
+(setq SRCTRNVERNO '#.(let* ((file (caddr (truename infile)))
+			   (x (readlist (exploden file))))
+			  (setq |verno| (cond ((fixp x) file)  ('/20)))))
+
+(eval-when (eval compile) 
+  (load '((lisp) subload)))
+
+
+(EVAL-WHEN (COMPILE) 
+     (AND (OR (NOT (GET 'COMPDECLARE 'MACRO))
+	      (NOT (GET 'OUTFS 'MACRO)))
+	  (LOAD `(,(cond ((status feature ITS) '(DSK COMLAP))
+			 ('(LISP)))
+		  CDMACS
+		  FASL)))
+)
+
+
+(EVAL-WHEN (COMPILE) (COMPDECLARE) (FASLDECLARE) (GENPREFIX |/|st|) )
+
+
+
+
+;;;; SOURCE-TRANS for LISTP, < and >
+
+
+(defun LISTP-FERROR-expander (x &aux (arg (cadr x)))
+  (setq x (cond ((eq (car x) 'FERROR) `(CERROR () () ,.(cdr x)))
+		((not (eq (car x) 'LISTP)) (barf x LISTP-FERROR-expander))
+		((|no-funp/|| (setq arg (macroexpand arg)))
+		  `(OR (NULL ,arg) (EQ (TYPEP ,arg) 'LIST)))
+		('T (|non-simple-x/|| (car x) arg))))
+  (values x 'T))
+
+
+(defun ML-<>-expander  (form &aux op ex?)
+  (cond 
+    ((setq op (assq (car form) '((<  . () ) 
+				 (>  . () )
+				 (>= . <) 
+				 (<= . >))))
+     (let ((nargs (length (cdr form))))
+       (declare (fixnum nargs))
+       (if (not (<= 2 nargs 510.)) (dbarf form WRNG-NO-ARGS))
+        ;; << is the name of the function -- >> is name of its inversion,
+        ;;  if an inversion must be used instead of the name directly.
+      (let (((<<  . >>) op)
+	    ((a b) (cdr form))
+	    c)
+	(cond ((= nargs 2)
+	         ;; Simple case -- 2 args only
+	        (if >> (setq form `(NOT (,>> ,a ,b)) ex? 'T)))	
+	      ((and (= nargs 3)
+		    (not (|side-effectsp/|| a)) 
+		    (not (|side-effectsp/|| b)) 
+		    (not (|side-effectsp/|| (setq c (cadddr form)))))
+	         ;; Remember |side-effectsp/|| may macroexpand. "between-p",
+	        (let* ((bb (if (+INTERNAL-DUP-P b) b (si:gen-local-var)))
+		       (body `(AND (,<< ,a ,bb) (,<< ,bb ,c))))
+		     ;; Maybe a 'lambda' wrapper?
+		   (if (not (eq bb b)) 
+		       (setq body `((LAMBDA (,bb) ,body) ,b)))
+		   (setq form body ex? 'T)))
+	      ('T ;; Must bind all args, even though each one appears only 
+		     ;; once; otherwise its code will not get run when a>b.  
+		     ;;  "a" must be EVAL'd first!
+	       (let ((arglist (cdr form)) ga gb letlist body)
+		    (si:gen-local-var ga)
+		    (setq letlist `((,ga ,(car arglist))))
+		    (mapc #'(lambda (ll) 
+			      (si:gen-local-var gb)
+			      (push `(,gb ,ll) letlist)
+			      (push (cond (>> `(NOT (,>> ,ga ,gb)))
+					  ('T `(,<< ,ga ,gb)))
+				    body)
+			      (setq ga gb))
+			  (cdr arglist))
+		    (setq form `(LET ,(nreverse letlist)
+				     (AND ,.(nreverse body)))
+			  ex? 'T))))))))
+   (values form ex?))
+
+
+;;;; LOAD-BYTE, LDB, etc
+
+(defmacro SI:PICK-A-MASK (size)  `(LSH -1 (- ,size 36.)))
+
+(defun SI:EVALUATE-NUMBER? (x)
+  (prog (cnst-fl) 
+    A   (if (atom (setq x (macroexpand x)))
+	    (return (if (numberp x) x))
+	    (if (eq (car x) 'QUOTE)
+		(progn (setq x (cadr x)) (go A))))
+	(cond ((memq (car x) '(+ - * // +$ -$ *$ //$ \ 1+ 1- 1+$ 1-$ ^ ^$ 
+			       PLUS DIFFERENCE TIMES QUOTIENT SUB1 ADD1 
+			       REMAINDER EXPT ASH LSH ROT BOOLE FIX IFIX 
+			       FLOAT FSC SQRT SIN COS LOG EXP ATAN 
+			       LDB LOAD-BYTE DEPOSIT-BYTE DPB HAULONG HAIPART))
+	        () )
+	      ((memq (car x) '(LENGTH GETCHARN FLATC FLATSIZE SXHASH))
+	        (setq cnst-fl 'T))
+	      ('T (return () )))
+	(if (do ((l (cdr x) (cdr l)) (y))
+		((null l) 'T)
+	      (setq y (macroexpand (car l)))
+	      (or (if cnst-fl 
+		      (|constant-p/|| y)
+		      (si:evaluate-number? y))
+		  (return () )))
+	    (return (eval x)))))
+
+
+;; LOAD-BYTE is similar to PDP-10 LDB, but "position" and "size" are separate
+
+(defun FOO-BYTE-EXPANDER  (l)
+  (let (((name word position size val) l)
+	(fl 'T)
+	byte-len byte-displ (byte-mask 0) ldbp nval)
+    (declare (fixnum byte-mask))
+    (setq word (macroexpand word)  
+	  position (macroexpand position)
+	  size (macroexpand size))
+    (if val (setq val (macroexpand val)))
+    (setq ldbp (eq name 'LOAD-BYTE))
+    (cond 
+      ((setq byte-len (si:evaluate-number? size))
+       (or (and (fixnump byte-len) 
+		(not (< byte-len 0))
+		(not (> byte-len 36.)))
+	   (dbarf l |Bad 'byte-length'|))
+       (setq byte-mask (si:pick-a-mask byte-len))
+       (setq l 
+	  (cond 
+	    ((= byte-len 0) (if ldbp ''0 `(PROG2 () ,word ,val)))
+	    ((= byte-len 36.) (if ldbp `,word `(PROG2 ,word ,val)))
+	    ((setq byte-displ (si:evaluate-number? position))
+	      (or (and (fixnump byte-displ)
+		       (not (< byte-displ 0)) 
+		       (not (> (+ byte-displ byte-len) 36.)))
+		  (dbarf l |Bad 'position'|))
+	      (let ((nword (si:evaluate-number? word))
+		    (shift-mask (lsh byte-mask position)))
+		(declare (fixnum shift-mask))
+		(cond 
+		   (ldbp 
+		     (cond (nword (load-byte nword position byte-len))
+			   ('T (and (not (= 0 position))
+				    (setq word `(LSH ,word ,(- position))))
+			       `(BOOLE 1 ,word ,byte-mask))))
+		   ('T (if (setq nval (si:evaluate-number? val))
+			   (setq nval (logand nval byte-mask)))
+		       (cond 
+			 ((and nword nval)
+			   (deposit-byte nword position byte-len nval))
+			 (nword 
+			   (let ((lsher `(LSH ,val ,position)))
+			     (if (= 0 (setq nword (boole 4 nword shift-mask)))
+				 lsher 
+				 `(BOOLE 7 ,nword ,lsher))))
+			 ((let ((masked-word `(BOOLE 4 ,word ,shift-mask)))
+			    (if (and nval (= nval 0))
+				masked-word 
+				`(BOOLE 7 ,masked-word 
+					  ,(if nval 
+					       (lsh nval position)
+					       `(BOOLE 1 ,val ,shift-mask)))))))))))
+	    (ldbp `(BOOLE 1 (LSH ,word (- ,position)) ,byte-mask))
+	    ('T (setq l () fl () )))))
+      ((not (+internal-permutible-p (list word position size val)))
+        (setq l () fl () ))
+      (ldbp 
+        (setq l `(BOOLE 1 (LSH ,word (- ,position)) (SI:PICK-A-MASK ,size))))
+      ((prog (byte-masker bindings more-decls 
+	      shifted-mask shifted-byte deposit-zero? action)
+	 (si:gen-local-var byte-masker)
+	 (setq byte-displ (si:evaluate-number? position) 
+	       nval (si:evaluate-number? val)
+	       deposit-zero? (and (fixnump nval) (= nval 0))
+	       bindings `((,byte-masker (SI:PICK-A-MASK ,size)))
+	       shifted-byte (if deposit-zero? 
+				0 
+				(progn (if nval (setq val nval))
+				       `(BOOLE 1 ,val ,byte-masker)))
+	       shifted-mask byte-masker )
+	 (cond ((null byte-displ)
+		 (si:gen-local-var byte-displ)
+		 (setq more-decls (list byte-displ))
+		 (push `(,BYTE-DISPL ,position) bindings)))
+	 (cond ((or (not (fixnump byte-displ)) 
+		    (not (= byte-displ 0)))
+		 (setq shifted-mask `(LSH ,shifted-mask ,BYTE-DISPL))
+		 (if (not deposit-zero?) 
+		     (setq shifted-byte `(LSH ,shifted-byte ,BYTE-DISPL)))))
+	 (setq action `(BOOLE 4 ,word ,shifted-mask))
+	 (if (not deposit-zero?) 
+	     (setq action `(BOOLE 7 ,action ,shifted-byte)))
+	 (setq l `(LET ,bindings  
+		    (DECLARE (FIXNUM ,BYTE-MASKER ,.more-decls))
+		    ,action)))))
+    (values l fl)))
+
+
+(defun LDB-expander (l)
+  (let ((ldbp (eq (car l) 'LDB))
+	(more? (cdr l))
+	(fl 'T)
+	word val nval bp num-bp? tem)
+    (if (not ldbp) (setq val (macroexpand (car more?)) more? (cdr more?)))
+    (setq bp (macroexpand (car more?)) word (macroexpand (cadr more?)))
+    (setq num-bp? (si:evaluate-number? bp))
+    (values 
+      (cond 
+        ((not num-bp?) 
+	   ;;Non-constant 'bp' case -- don't even try optimizations
+	  (setq fl () ))
+	((let ((pos (load-byte bp 6 6))
+	       (size (load-byte bp 0 6)))
+	   (declare (fixnum pos size))
+	   (cond (ldbp `(LOAD-BYTE ,word ,pos ,size))
+		 ((cond ((setq tem (si:evaluate-number? val))
+			 (setq nval tem)
+			 'T)
+			((setq tem (si:evaluate-number? word))
+			 (setq word tem)
+			 'T))
+		  `(DEPOSIT-BYTE ,word ,pos ,size ,val)) 
+		 ('T ;;When both the 'word' and 'newbyte' are computed up, then
+		     ;; must worry about order of evaluation and side-effects
+		  (let ((g (si:gen-local-var)))
+		    `(LET ((,g ,val))
+		       (DECLARE (FIXNUM ,g))
+		       (DEPOSIT-BYTE ,word ,pos ,size ,g))))))))
+      fl)))
+
+
+
+;;;; bitwise logical operations.
+
+(defun ML-trans-expander (form &aux (ex? 'T))
+   (let ((fun (car form)) 
+	 (nargs (length (cdr form)))
+	 (oform form)
+	 (interval '(1 . 1)) 
+	 op)
+     (declare (fixnum nargs))
+     (cond ((eq fun 'LOGNOT) 
+	    (setq form `(BOOLE 10. ,(cadr form) -1)))
+	   ((setq op (cdr (assq fun '((LOGAND . 1) 
+				      (LOGIOR . 7) 
+				      (LOGXOR . 6)))))
+	    (setq interval '(2 . 510.)
+		  form `(BOOLE ,op ,.(cdr form))))
+	   ((setq op (cdr (assq fun '((FLONUMP . (FLOATP X))
+				      (EVENP . (NOT (ODDP X)))))))
+	    (setq form (subst (cadr form) 'X op)))
+	   ('T (setq ex? () )))
+     (and ex? 
+	  (not (<= (car interval) nargs (cdr interval)))
+	   ;; (or (< nargs (car interval)) (> nargs (cdr interval)))
+	  (dbarf oform WRNG-NO-ARGS)))
+   (values form ex?))
+
+
+(mapc 
+  #'(lambda (y) 
+      (let (((fun . l) y) z)
+	(mapc #'(lambda (x)
+		  (or (memq fun (setq z (get x 'SOURCE-TRANS)))
+		      (putprop x (cons fun z) 'SOURCE-TRANS))
+		  (or (getl x '(SUBR LSUBR))
+		      (equal (get x 'AUTOLOAD) #%(autoload-filename MLSUB))
+		      (putprop x #%(autoload-filename MLSUB) 'AUTOLOAD)))
+	      l)))
+  '((ML-trans-expander LOGAND LOGIOR LOGXOR LOGNOT  FLONUMP EVENP)
+    (ML-<>-expander < > <= >= )
+    (LISTP-FERROR-expander LISTP FERROR)
+    (foo-byte-expander LOAD-BYTE DEPOSIT-BYTE)
+    (LDB-expander LDB DPB)))
