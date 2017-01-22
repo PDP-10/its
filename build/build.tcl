@@ -458,6 +458,10 @@ respond "System?" "ITS\r"
 expect ":KILL"
 respond "*" ":link sys2;tc dc,sys1;ts dcrock\r"
 
+# Zork
+respond "*" ":midas sys3;ts zork_sysen3;zork\r"
+expect ":KILL"
+
 respond "*" ":midas sys1;ts instal_sysen2;instal\r"
 expect ":KILL"
 
