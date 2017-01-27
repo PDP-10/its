@@ -67,8 +67,20 @@ proc shutdown {} {
     respond "NOW IN DDT" $emulator_escape
 }
 
+proc ip_address {string} {
+    set x 0
+    set octets [lreverse [split $string .]]
+    for {set i 0} {$i < 4} {incr i} {
+	incr x [expr {256 ** $i * [lindex $octets $i]}]
+    }
+    format "%o" $x
+}
+
 set timeout 100
 expect_before timeout abort
+
+set ip [ip_address [lindex $argv 0]]
+set gw [ip_address [lindex $argv 1]]
 
 start_nsalv
 
@@ -644,9 +656,9 @@ expect ":KILL"
 
 respond "*" "comsat\033j"
 respond "*" "\033l.mail.;comsat bin\r"
-respond "*" "bughst/<<192.\033_24.>+<168.\033_16.>+<1.\033_8.>+100.>\r"
-type "domgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
-type "tcpgat/<<192.\033_24.>+<168.\033_16.>+<0.\033_8.>+45.>\r"
+respond "*" "bughst/$ip\r"
+type "domgat/$gw\r"
+type "tcpgat/$gw\r"
 type "debug/0\r"
 type "xvers/0\r"
 type "purify\033g"
