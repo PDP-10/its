@@ -269,12 +269,6 @@ matches the address configured in SYSTEM; CONFIG > (as IMPUS3). Finally,
 the HOST table source (SYSHST; H3TEXT >) and binary (SYSBIN; HOSTS3 >)
 defined a host called DB-ITS.EXAMPLE.COM at the IP address 192.168.1.100.
 
-In order to change the IP address of the host, you must update multiple
-places and rebuild ITS and the host table. You will also have to modify
-dskdmp.ini.  Here are the places where the IP address is configured (and all
-of these must agree):
-
-dskdmp.ini (in build/klh10 directory on the host)  
-SYSTEM; CONFIG > (ITS configuration file)  
-SYSHST; H3TEXT > (host table source file)  
-SYSBIN; HOSTS3 > (binary file compiled from SYSHST; H3TEXT >)
+In order to change the IP address of the host, you can edit the
+top-level Makefile variables IP, GW, and NETMASK.  After that, a full
+rebuild (e.g. `make clean all`) is required.
