@@ -203,6 +203,7 @@ A list of [known ITS machines](doc/machines.md).
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.
+   - STINKR, new linker (binary only).
    - STY, pseudo-terminal for multiple sessions.
    - STYLOG, convert PTY output file into ascii file.
    - SUPDUP, Supdup client.
