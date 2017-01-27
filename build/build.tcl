@@ -1280,6 +1280,11 @@ expect ":KILL"
 respond "*" ":midas kcc;ts 20xcsv_20xcsv\r"
 expect ":KILL"
 
+# Run GETSYM to get all monitor symbols.
+respond "*" ":cwd kcc\r"
+respond "*" ":getsym\r"
+expect ":KILL"
+
 # UP
 respond "*" ":midas sys1;ts up_sysen1;up\r"
 expect ":KILL"
