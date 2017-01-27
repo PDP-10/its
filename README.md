@@ -97,6 +97,7 @@ A list of [known ITS machines](doc/machines.md).
 5. Remaining programs are rebuilt:
 
    - 11SIM, PDP-11 emulator.
+   - 20XCVT, convert TOPS-20 CSAVE file to PDUMP.
    - @, cross reference generation tool.
    - ACCLNK, sets com-link accept bit for specified TTY.
    - ACOUNT, dummy account program used for users from safe sites.
@@ -145,6 +146,7 @@ A list of [known ITS machines](doc/machines.md).
    - FRETTY, display list of free TTYs.
    - FTPS, FTP Server.
    - FTPU, FTP Client.
+   - GETSYM, copy all symbols from running ITS to a file.
    - GMSGS, copy system messages to mail file.
    - H3MAKE, a job that requests DRAGON to build host table.
    - HEXIFY, convert COM file into Intel HEX format.

@@ -1271,8 +1271,12 @@ respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
 respond "*" ":midas sys2;ts what_syseng;what\r"
 expect ":KILL"
 
-# EXECVT
-respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
+# Build KCC support programs: EXECVT, GETSYM, and 20XCSV.
+respond "*" ":midas sys2;ts execvt_sysen3;execvt\r" 
+expect ":KILL"
+respond "*" ":midas kcc;ts getsym_getsym\r"
+expect ":KILL"
+respond "*" ":midas kcc;ts 20xcsv_20xcsv\r"
 expect ":KILL"
 
 # UP
