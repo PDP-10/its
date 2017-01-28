@@ -134,6 +134,7 @@ A list of [known ITS machines](doc/machines.md).
    - EMACS, editor.
    - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
    - FAIL, assembler from SAIL.
+   - FCDEV, talk to LispM file server.
    - FDIR, fast directory listing.
    - FED, font editor.
    - FIND, search for files.
