@@ -190,6 +190,7 @@ A list of [known ITS machines](doc/machines.md).
    - PRINT, print long-named files.
    - PROBE, probe inside job and display various information about it.
    - PRUFD, list files on disk volume.
+   - PSEND, super sender.
    - PTY, pseudo-tty.
    - PWMAIL, a limited version of MAIL when not yet logged in under PWORD.
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
