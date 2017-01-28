@@ -1,0 +1,257 @@
+;;; -*-MIDAS-*-
+
+title Simple chaosnet file server
+
+.insrt syseng;$call macro
+.insrt eak;macros >
+.insrt system;chsdef >
+
+r=:e+1				; AC for LOSE
+call=:pushj p,
+return=:popj p,
+
+cnich==:1			; Chaosnet input channel
+cnoch==:2			; Chaosnet output channel
+hstch==:3			; HOSTS2 disk channel
+dskch==:4			; file channel
+errch==:5			; for ERR: device
+
+; The offical contact name is "FILExx".
+
+var debug			; nonzero if debugging
+var pktbuf(%cpmxw)		; packet buffer
+lpdl==100			; length of stack
+var pdl(lpdl)			; stack
+
+go:	move p,[-lpdl,,pdl-1]	; setup stack
+	move t,[jsr tsint]
+	movem t,42		; Any IOC error means we should go away,
+				; connection gone
+	.suset [.smask,,[%piioc]]
+	$call chaoso,[#cnich,#cnoch,#8] ; window size of 8
+	 jsp r,lose
+
+	;; zero packet for luck
+	setzm pktbuf+0
+	move t,[pktbuf,,pktbuf+1]
+	blt t,pktbuf+%cpmxw-1
+
+	;; Construct and send the LSN packet.
+
+	movei t,%colsn		; opcode = LSN
+	dpb t,[pktbuf+$cpkop]
+	move t,[.byte 8 ? "F ? "I ? "L ? "E ]
+	movem t,pktbuf+%cpkdt+0
+	move t,[.byte 8 ? "I ]
+	camn 0,[sixbit /fileo/]
+	 move t,[.byte 8 ? "O ]
+	movem t,pktbuf+%cpkdt+1
+	movei t,5
+	dpb t,[pktbuf+$cpknb]
+	.call pktiot
+	 jsp r,lose
+
+	;; Wait for the RFC to come.
+
+	movei a,5*30.		; 5 second timeout
+	skipe debug
+	 movsi a,177777		; or infinite if debug mode
+	$call netblk,[#cnoch,#%cslsn,a][b]	; wait for RFC
+	 jsp r,lose
+	caie b,%csrfc		; RFC received state
+	 jsp r,lose
+
+	;; Read RFC.
+
+	$call pktiot,[#cnich,#pktbuf]	; read RFC packet
+	 jsp r,lose
+ 	ldb e,[pktbuf+$cpknb]	; no. of data bytes
+	caig e,6		; if more than 6 then we have an argument
+	 jrst [	move a,[440700,,[asciz "No filename specified."]]
+		jrst cls2
+		]
+
+	;; Convert 8 bit argument to 7 bit ASCIZ
+
+var fname(8)
+	move a,[241000,,pktbuf+%cpkdt+1]
+	move b,[440700,,fname]
+	subi e,6
+l1:	ildb t1,a
+	idpb t1,b
+	sojg e,l1
+	movei t1,0
+	idpb t1,b
+
+	;; Parse argument as filename.
+
+var fsix(4)
+	move t,[sixbit /dsk/]
+	movem t,fsix+0
+	move t,[sixbit />/]
+	movem t,fsix+2
+	movei b,fsix
+	move d,[440700,,fname]
+	call rfn"rfn
+
+	camn 0,[sixbit /fileo/]
+	 jrst fileo
+
+filei:	;; Open file.
+
+	$call open,[#dskch,fsix+0,fsix+1,fsix+2,fsix+3][?a][#.uai]
+	 jrst cls
+
+	;; Open connection.
+
+	call opn
+
+	;; Copy data from file to connection.
+
+	movei t,%codat		; opcode = DAT
+	dpb t,[pktbuf+$cpkop]
+filei1:	move a,[441000,,pktbuf+%cpkdt]
+	movei b,%cpmxc
+	$call siot,[#dskch,a,b][?a]
+	 jrst cls
+	;; should convert to LM ascii here.
+	movei t,%cpmxc
+	sub t,b
+	jumpe t,filei2
+	dpb t,[pktbuf+$cpknb]
+	.call pktiot
+	 jsp r,lose
+	jumpe b,filei1
+filei2:
+
+	;; Transfer complete.  Close file, EOF connection.
+
+	.close dskch,
+	movei t,0
+	dpb t,[pktbuf+$cpknb]
+	movei t,%coeof
+	dpb t,[pktbuf+$cpkop]
+	.call pktiot
+	 jsp r,lose
+	$call finish,[#cnoch]	; wait for data and EOF to get sent
+	 jsp r,lose
+
+	;; Close connection.
+
+	movei t,%cocls
+	dpb t,[pktbuf+$cpkop]
+	.call pktiot
+	 jsp r,lose
+	jrst logout
+
+
+fileo:	;; Open file.
+
+	$call open,[#dskch,fsix+0,[sixbit/_FILE_/],[sixbit/OUTPUT/],fsix+3][?a][#.uao]
+	 jrst cls
+
+	;; Open connection.
+
+	call opn
+	
+	;; Copy chaosnet data to file.
+
+fileo1:	$call pktiot,[#cnich,#pktbuf]
+	 fileo3
+	ldb t,[pktbuf+$cpkop]
+	caie t,%codat
+	 jrst fileo2
+	move a,[441000,,pktbuf+%cpkdt]
+	ldb b,[pktbuf+$cpknb]
+	;; should convert to LM ascii here.
+	$call siot,[#dskch,a,b][?a]
+	 jrst cls
+	jrst fileo1
+fileo2:	caie t,%coeof
+	 jrst fileo3
+	$call renwo,[#dskch,fsix+1,fsix+2]
+	 jsp r,lose
+	.close dskch,
+
+fileo3:	;; Close connection.
+
+	movei t,%cocls
+	dpb t,[pktbuf+$cpkop]
+	.call pktiot
+	 jsp r,lose
+	jrst logout
+
+
+opn:	movei t,0
+	dpb t,[pktbuf+$cpknb]
+	movei t,%coopn		; opcode = OPN
+	dpb t,[pktbuf+$cpkop]
+	.call pktiot
+	 jsp r,lose
+	return
+
+;;; Here with error code in A.
+cls:	movei c,0
+	$call open,[#errch,[sixbit /err/],#4,a]
+	 jrst cls1
+	move a,[441000,,pktbuf+%cpkdt]
+	movei b,%cpmxc
+	$call siot,[#errch,a,b]
+	 jsp r,lose
+	movei c,%cpmxc-3	; -3 to remove for CRLF ^L
+	sub c,b
+	jumpge c,.+2
+	 movei c,0
+	.close errch,
+cls1:	dpb c,[pktbuf+$cpknb]
+	movei t,%cocls
+	dpb t,[pktbuf+$cpkop]
+	.call pktiot
+	 jsp r,lose
+	jrst logout
+
+;;; Here with B.P. to ASCIZ error in A.
+cls2:	move b,[441000,,pktbuf+%cpkdt]
+	movei c,0
+cls3:	ildb t,a
+	jumpe t,cls1
+	idpb t,b
+	aoja c,cls3
+
+
+; JSP R,LOSE to lose.
+lose:	skipn debug		; don't lose if not debugging
+	 .logout 1,		; just go away mad
+	$call lose,[#%lssys,#-2(r)]	; lose!
+
+
+; IOC error interrupts to here
+tsint:	0 ? 0
+	.logout
+	.value
+	jrst .-2
+
+; JRST LOGOUT when done.
+logout:	skipe debug		; don't go away if debugging
+	 .value
+	.logout 1,
+
+
+pktiot:	setz
+	sixbit /pktiot/
+	1000,,cnoch
+	401000,,pktbuf
+
+
+$$rfn==1
+.insrt syseng;rfn
+
+rsixtp:	return			; no filename terminators
+
+	constants
+	variables
+
+loc <.+1777>&776000
+hstpag==:./2000
+
+end go

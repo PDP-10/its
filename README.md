@@ -137,6 +137,7 @@ A list of [known ITS machines](doc/machines.md).
    - FCDEV, talk to LispM file server.
    - FDIR, fast directory listing.
    - FED, font editor.
+   - FILE, Chaosnet file server.
    - FIND, search for files.
    - FRETTY, display list of free TTYs.
    - FTPS, FTP Server.
