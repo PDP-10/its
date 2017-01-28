@@ -227,6 +227,7 @@ A list of [known ITS machines](doc/machines.md).
    - TTLOC, Advertises physical location of logged in users.
    - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
    - TYPE8, type 8-bit file.
+   - UFIND, find users.
    - UNTALK, split-screen comm-link program.
    - UPTIME, Chaosnet uptime server.
    - USQ, unsqueeze/uncram a file.
