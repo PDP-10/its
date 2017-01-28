@@ -570,6 +570,9 @@ expect ":KILL"
 
 respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
 
+respond "*" ":midas device;jobdev fc_sysen2;fcdev\r"
+expect ":KILL"
+
 respond "*" ":midas device;atsign dirdev_syseng;dirdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev dir,device;atsign dirdev\r"

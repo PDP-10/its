@@ -1,0 +1,2139 @@
+;-*-MIDAS-*-
+
+TITLE	Job device for talking to Lispm file server.
+
+VERSIO==.FNAM2
+
+
+A=1
+B=2
+C=3
+D=4
+E=5
+TT=6
+INT=7	;FLAG FOR INTERRUPT, -1 INT HAPPENED
+Q=10
+J=11
+K=12
+W=13
+H=14
+P=15
+T=16
+U=17	;CLOBBERED AT INTERRUPT LEVEL
+
+CH==,,-1	;BIT TYPEOUT MODE MASK FOR I/O CHANNEL NAMES.
+
+CHBOJ==1
+CHUSR==2
+CHNETI==4
+CHNETO==5
+IOCEOF==8	;IOCERROR CODE FOR EOF.
+
+
+ARGI==1000			;immediate argument  %climn
+VAL==2000			;value return        %clout
+ERRRET==3000			;error return        %clerr
+CNT==4000			;control             %clbtw
+CNTI==5000			;control immediate   %clbit
+
+CALL=PUSHJ P,
+RET=POPJ P,
+SAVE=PUSH P,
+REST=POP P,
+PJRST==JRST
+
+.INSRT SYSTEM;CHSDEF >
+
+DEFINE SYSCAL NAME,ARGS
+	.CALL [ SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+LOC	42
+	JSR TSINT		;Use Old Style interrupts
+LOC	77
+SIXBIT /FCDEV/
+RDEVN:	BLOCK 4
+ACCP:	0
+DIRCTN:	0
+CRUNAM:	0
+CRJNAM:	0
+FILLEN:	0	;FILE LENGTH, IN BYTES OF SIZE NOW OPEN IN,
+		;OR -1 => FILLEN, FILBLN AND FILBSZ NOT KNOWN.
+BYTSIZ:	0	;BYTE SIZE OPEN IN.  DETERMINED FROM THE OPEN MODE.
+FILBLN:	0	;FILE LENGTH, IN BYTES OF SIZE WRITTEN IN.
+FILBSZ:	0	;BYTE SIZE FILE WRITTEN IN.
+FILDTP:	0	;-1 => WE KNOW THE CREATION DATE OF THIS FILE.
+FILDAT:	0	;FILE CREATION DATE (IF KNOWN).
+
+REFDAT:	0	;FILE REFERENCE DATE.
+AUTHOR:	0	;AUTHOR'S NAME IN SIXBIT.
+PRSVDT:	0	;NONZERO => PRESERVE DATES OF FILE OPENED.
+INHLNK:	0	;NONZERO => OPEN A LINK ITSELF, NOT THE FILE IT POINTS TO.
+BLKMOD:	0
+IMGMOD:	0
+
+SPCDIR:	0	;SPECIFIED SIXBIT DIRECTORY NAME.
+
+DEBUG:	-1
+
+;Data format on network.
+;Nonzero means "pdp-10 format":
+;each word is represented as 4 7-bit bytes and 1 8-bit byte,
+;with the last bit of the word in the top of the 8-bit byte.
+;0 means "lispm format";
+;only 32 bits of each word exist, and they
+;are represented as 2 16-bit bytes.
+FPDP10:	0
+
+LMHADR:	3060			;CADR-27
+
+ITSFN:	BLOCK 3
+LOWVER:	0	;Nonzero => specify lowest version, if ITS filename has no version in it.
+TRU:	sixbit /T/
+NIL:	sixbit /NIL/
+
+PAT:
+PATCH:	BLOCK 100
+PATCHE:	-1
+
+;; Chaosnet Packet Opcodes
+
+%COMAND==201			;COMMAND
+%CORPL==202			;Reply to file command.
+%COALS==203			;Asynchronous lossage report.
+%COCTD==204			;Beginning of continued message
+%COFEOF==205			;FILE-EOF-OPCODE, not same as normal EOF.
+%COWIN==206			;Asynchronous lossage cleared up.
+%CONND==207			;Subnode data separator (we ignore it).
+;%CODAT for character data, %CODWD for 16-bit data.
+
+WDWSIZ==20			;Window size for input.
+
+NETWRK"$$CHAOS==1				;include chaosnet routines
+NETWRK"$$CONNECT==1				;include connection routine
+
+.INSRT SYSENG;NETWRK >
+
+DATIME"$$ABS==1
+.INSRT SYSENG;DATIME >
+
+
+;START HERE.
+
+GO:	MOVE P,[-LPDLL-1,,PDL-1]
+	.SUSET [.SMASK,,[%PIRLT+%PIIOC+%PIILO+%PIMPV+%PIPDL]]
+	.SUSET [.SMSK2,,[1_CHBOJ+1_CHNETI+1_CHNETO]]
+	.OPEN CHBOJ,[27,,'BOJ]
+	 .VALUE
+	SYSCAL RFNAME,[
+		1000,,CHBOJ
+		2000,,0
+		2000,,CRUNAM
+		2000,,CRJNAM]
+	 JFCL
+	.CALL JBGT	;GET INFO FOR ICP
+	 .VALUE
+	MOVE A,JBCOP
+	TLNE A,60000	;IF HE ALREADY PCLSR'D, GIVE UP, SINCE HE WILL GIVE UP ON US
+	 JRST DIE	;SINCE WE DID A JOBGET AND SAW THAT FACT.
+	ANDI A,-1	;NOW .VALUE IF OPCODE IS .IOT - SHOULDN'T HAPPEN, 
+	CAIN A,1	;BUT DID DUE TO A BUG.
+	 .VALUE
+	MOVE A,JBCDEV	;GET "DEVICE"
+	CAMN A,['FCDNRF]
+	 SETOM PRSVDT
+	CAMN A,['FCDNRF]
+	 MOVE A,[SIXBIT /FC/]
+	MOVEM A,RDEVN	;REMEMBER IT TO RETURN FOR .RCHST'S.
+GO1:	SETOM JBGTN'	;FLAG INITIAL JOBGET DONE
+	JRST REUSE1
+
+NOGO:	MOVSI A,%ENADV	;DEVICE NOT AVAILABLE.
+NOGO2:	MOVEM A,ERRCOD
+	MOVEI C,20.	;Number of times to Jobret before we think other side is gone.
+NOGO1:	.CALL JBGT
+	 .VALUE		;JOBGET ON INITIAL IS NOT SUPPOSED TO FAIL.
+	MOVE A,JBCOP
+	TLNE A,60000	;HE CLOSED US => WE CAN STOP NOW.
+	 JRST REUSE
+	.CALL JBRT3	;KEEP TRYING TO RETURN THIS ERROR, IN CASE HE PCLSR'S AND COMES BACK.
+	 SOJG C,[MOVEI B,1 ? .SLEEP B, ? JRST NOGO1]
+	JRST REUSE
+
+;COME HERE ON INITIAL CREATION, AND WHEN REUSED BY A SECOND CREATOR.
+REUSE1:	SETZM RPLSEQ
+	SETOM LASTOP
+	SETZM INHLNK
+	SETZM ACCP	;WE ARE AT THE BEGINNING OF THE FILE.
+	SETZM RETOOU	;WE AREN'T INSIDE AN IOT
+	SETZM RETOIN
+	SETZM FILOPN	;NO FILE OPEN.
+	SETOM JBINT	;DO ONE JOBGET NOW IN CASE ALREADY CLEARED THE INTERRUPT.
+	JRST GOLOOP
+
+GOL:	SKIPL INT	;THERE ARE NO INTERRUPTS => WAIT QUIETLY.
+	 .HANG
+GOLOOP:	SETZM INT	;HERE TO SERVICE ANY INTERRUPTS THERE ARE.
+	SKIPGE NTICIN	;NET INTS HAVE PRIORITY.
+	 JRST NTINT
+	SKIPGE NTOCIN
+	 JRST NTOINT	;Net output int => maybe transfer some data.
+	SKIPE RETOOU	;No replies => if we are inside an output IOT,
+	 JRST JIOT	;xfer another batch of stuff to the net.
+	SKIPL JBINT
+	 JRST GOL
+	SETZM JBINT
+TRYOV:	SETZM RETOIN
+	AOSG JBGTN	;-1 IF INITIAL, DONT DO AGAIN
+	 JRST TRYOV1
+	.CALL JBGT
+	 JRST GOLOOP
+TRYOV1:	MOVE B,JBCOP
+	TLNE B,60000
+	 JRST JCLS
+	LDB A,[000400,,JBCOP]
+	CAIN A,10
+	 MOVE A,JBCWD1
+	TLNE B,200	;IF THIS IS A RETRY OF A CALL THAT PCLSR'ED,
+	 JRST RETRY	;GIVE IT THE SAME JOBRET WE TRIED TO GIVE LAST TIME.
+RETRYR:	MOVEM A,LASTOP
+	SETZM PCLSRD	;WE CAN'T MANAGE TO NHANDLE A RETRY AFTER ANYTHING ELSE HAPPENS.
+	TDNE A,[-10]
+	 JRST JSYSCL	; HANDLE A .CALL
+	JRST @DISP(A)
+
+DISP:	JOPEN
+	JIOT
+	JMLINK
+	JRESET
+	JRCH
+	JACC
+	JFDELE
+	JRNMWO
+
+;HERE WHEN CREATOR GIVES US A SYSTEM CALL AND SAYS IT'S A RETRY.
+RETRY:	CAMN A,LASTOP		;Retrying the last thing done, and it hasn't replied,
+	 JRST GOLOOP		; => keep waiting for a reply.
+	AOSE PCLSRD		;If something PCLSR'd and was finished, give the jobret again.
+	 JRST RETRYR		;Otherwise treat this as a new invocation.
+	MOVE B,LJBRTA
+	JRST -2(B)
+
+PCLSR:	POP P,LJBRTA	;FOLLOW EVERY JOBRET WITH A PUSHJ P,PCLSR.
+PCLSR1:	SETOM PCLSRD	;A FAILING JOBRET INDICATES THAT CREATOR WAS PCLSRD AND WE SHOULD
+	SETOM LASTOP
+	SETOM JBINT	;EXPECT HIM TO RETRY HIS SYSTEM CALL.  WE MUST SET JBINT NOW
+	JRST GOLOOP	;BECAUSE COMING BACK IN MIGHT NOT SET THE INTERRUPT BIT.
+
+PCL==PUSHJ P,PCLSR
+
+LJBRTA:	0		;2 PLUS ADDRESS OF LAST FAILING JOBRET.
+PCLSRD:	0		;-1 => OUR LAST JOBRET FAILED, SO EXPECT A RESTARTED SYSTEM CALL.
+
+fnmstl==40
+fnblen==40
+
+fnmstr:	block fnmstl	;RDFNM returns filename string here.
+
+lmfstr:	block fnmstl	;RDFNM leaves filename to send to lispm here.
+
+;These are temps inside RDFNM.
+fnb:	block fnblen	;RDFNM makes filename block from original string here.
+
+temfnm:	block 3		;Filename string and block for the default directory
+temfnb:	block 4		;so we can merge it in.
+
+temfn2:	block fnmstl	;Final merged filename string and block constructed here.
+fnb2:	block fnblen
+
+trunam:	block fnmstl	;Truename as returned by server, for JOBSTS.
+
+;Fetch a string from our creator, from BP in A, merge in creator's default directory,
+;and return the resulting string in FNMSTR.  Clobbers A, B, C, D.
+RDFNM:	hrrzs (p)
+	caia
+;Fetch a string for rename while open.
+;Uses the file's real directory as a default rather than the user's .SNAME.
+RDFNR:	 hrros (p)
+	.uset chboj,[.ruindex,,b]
+	syscal open,[[.bai,,chusr] ? [sixbit/usr/] ? %climm,,400000(b) ? %climm,,0]
+	 jrst die
+	hrrz b,a
+	.access chusr,b
+	move b,[-fnmstl,,fnmstr]
+	.iot chusr,b
+	.close chusr,
+	hllz d,a
+	hrri d,fnmstr
+	move b,[-fnblen,,fnb]
+	pushj p,rfnl"rfn
+	 jfcl
+	push p,b
+	skipl (p)
+	 jrst rdfnr2
+	call rdfnrx
+	jrst rdfnr1
+
+;Get the creator's .SNAME and make a filename block from it.
+rdfnr2:	move d,[440700,,temfnm]	;First, make in asciz string from it.
+	.uset chboj,[.rsnam,,a]
+	movei b,";
+	pushj p,rfnl"sixstr
+	move a,[sixbit/@/]	;Put in "@" as a filename too, for randomness.
+	movei b,0
+	pushj p,rfnl"sixstr
+	move d,[440700,,temfnm]	;Now parse the string into a filename block, in B.
+	move b,[-4,,temfnb]
+	pushj p,rfnl"rfn
+	 jfcl
+;Filename block for the defaults is now in B.
+rdfnr1:	pop p,a			;Get back filename block of specified names, in A.
+	move c,[-fnblen,,fnb2]
+	setz d,
+	pushj p,rfnl"merge	;Produce filename block of merged names, in C.
+	 jfcl
+	move b,c
+	push p,b
+	move d,[440700,,temfn2]
+	pushj p,rfnl"pfn
+	pop p,b
+;Now make the filename string to send to the FC server.
+	add b,[4,,2]		;Discard the device name "FC:" or whatever.
+	move d,[440700,,lmfstr]
+	pushj p,rfnl"pfn
+	movei c,40
+	idpb c,d
+;Now see if the last "name" is really a version.
+	move a,(b)
+	ildb c,a
+	caie c,">		;If it starts with >, < or !,
+	 cain c,"<		;see what follows.
+	  jrst rdfnv6
+	cain c,"!
+	 jrst rdfnv6
+	caia
+rdfnv2:	 ildb c,a		;Otherwise, is it entirely digits up to a terminator?
+	caie c,0
+	 cain c,40
+	  jrst rdfnv9		;If so, it is a version.
+	cail c,"0
+	 caile c,"9
+	  jrst rdfnv8
+	jrst rdfnv2
+
+rdfnv6:	ibp a			;If name starts with >, < or !, it is a version
+	came a,1(b)		;iff the name is only one character plus a terminator.
+	 jrst rdfnv8
+rdfnv9:	movei c,"#		;If it is a version, put # in the output strung before it.
+	idpb c,d
+rdfnv8:	move a,(b)		;Whether we put in a "#" or not, now copy the name or version
+rdfnx1:	camn a,1(b)		;to the output.
+	 jrst rdfnx0
+	ildb c,a
+	idpb c,d
+	jrst rdfnx1
+
+rdfnx0:	setz c,			;Follow it with a zero.
+	idpb c,d
+	move a,[temfn2,,fnmstr]
+	blt a,fnmstr+fnmstl-1
+	popj p,
+
+;Extract the truename's directories in a filename block.
+;Return it in B.  Clobbers A, C, D.
+rdfnrx:	move d,[440700,,trunam]
+	move b,[-fnblen,,temfnb]
+	call rfnl"rfn		;Parse the whole truename.
+	 jfcl
+rdfnr4:	jumpge b,rdfnr3		;Discard everything up to the first directory.
+	ldb c,1(b)
+	cain c,";
+	 jrst rdfnr3		;Jump to rdfnr3 on first directory, or end of filename block.
+	add b,[2,,2]
+	jrst rdfnr4
+
+rdfnr3:	move d,b		;Save the aobjn pointer to the first directory,
+rdfnr5:	jumpl b,rdfnr6		;then advance B to first following non-directory.
+	ldb c,1(b)
+	caie c,";
+	 jrst rdfnr6
+	add b,[2,,2]
+	jrst rdfnr5
+
+rdfnr6:	sub d,b			;How far did we go, advancing over the directories?
+	movni b,(b)		;That becomes the length for the new aobjn pointer.
+	hrl d,b
+	move b,d		;Put it in B and return.
+	ret
+
+$$rfn==1
+$$pfn==1
+$$merge==1
+
+.insrt syseng;rfnl
+
+rfnl"rfnspc:
+rfnl"pfnspc:
+	popj p,
+
+JOPEN:	move a,jbcsnm
+	movem a,spcdir
+	skipn a,jbcwd8
+	 jrst jopsix		;Jump if names specified by user as sixbit.
+	pushj p,rdfnm
+	jrst jopstr
+
+jopsix:	move b,jbcfn1		;Check for special filenames
+	move c,jbcfn2		;that aren't really files.
+	came c,[sixbit /(DIR)/]
+	 camn c,[sixbit /(UDIR)/]
+	  came b,[sixbit /..NEW./]
+	   caia
+	    jrst jmdir
+	camn b,[sixbit /.EXPUN/]
+	 came c,[sixbit /(DIR)/]
+	  caia
+	   jrst jexpun
+jopstr:	ldb w,[410100,,jbcop]	;0 => input  1 => output
+	movem w,dirctn
+	move b,jbcwd6		;save open-mode.
+	movem b,opmode
+	andi b,7		;get just low 3 bits.
+	trc b,1			;flip direction (creator reading =>
+				  ;we must write to him).
+	tro b,20		;unhang our iots if he pclsrs.
+	syscal open,[ 1000,,chboj ? 4000,,b ? ['boj,,]]
+	 .value
+	ldb a,[010100,,opmode]
+	movem a,blkmod
+	ldb a,[020100,,opmode]			;Image mode bit.
+	movem a,imgmod
+	ldb a,[030100,,opmode]
+	skipe a
+	 setom prsvdt
+	ldb a,[040100,,opmode]
+	movem a,inhlnk
+	movei a,7
+	skipn blkmod		;Determine byte size of connection to user.
+	 skipe imgmod
+	  movei a,36.
+	movem a,bytsiz
+	move a,jbcsnm
+	movem a,itsfn+0
+	move a,jbcfn1
+	movem a,itsfn+1
+	move a,jbcfn2
+	movem a,itsfn+2
+	call mkopen				;Make the command string.
+	call getcon				;Send it in an RFC packet.
+	 jrst nogo
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst nogo
+	ldb a,[$cpkop+pktbuf]
+	caie a,%colos
+	 cain a,%cocls
+	  jrst die
+	caie a,%corpl
+	 .lose
+	move a,[441000,,%cpkdt+pktbuf]
+	call ropen
+	 jrst opnil
+jopjrt:	.call jbrt1	;now tell the creator that the open succeeded.
+	 call ijbrtf
+	setom filopn	;once he knows that, we are attached until he closes.
+	call bufini	;now that we know byte size, we can set up buffer ptrs.
+	move tt,bufsiz
+	skipn dirctn
+	 call sndalc	;Allocate the space for input.
+	jrst goloop
+
+opnil:	hrlzm a,errcod	;here for failure reply to open, error code in a.
+	.call jbrt3
+	 call ijbrtf
+	jrst reuse	;if we succeed in telling creator, we are finished.
+
+ijbrtf:	movei a,30.	;if initial jobret fails, wait a while before jobgeting,
+	.sleep a,	;since if we jobget before he retries we will read a close
+	jrst pclsr	;and give up, and he will do whatever it is twice.
+
+
+;;; Make the text of an RFC packet containing an OPEN command.
+
+;;; SEQNUM  ==> Sequence number
+;;; BUF  <== Command string, in 7-bit ASCII (which is what CHACON wants).
+;;; Clobbers A, B, J and K.
+
+define stostr &string
+	movei j,[asciz string]
+	call mkcstr
+termin
+
+MKOPEN:	movei w,[stostr " :FLAVOR :PDP10"
+		 ret]
+
+mkop00:	move a,[440700,,buf]			;8bit bp to the command string
+	movei j,[asciz /LMFILE /]
+	call mkcstr			;Include the contact name
+	.suset [.rxunam,,b]
+	call mkcsix
+	stostr " ("
+	aos j,seqnum
+	call mkcdec		;Use new Command Seq Number.
+	stostr " OPEN-FOR-PDP10 "
+	call its2lm
+	stostr " (:DIRECTION"
+	skipn dirctn
+	 jrst [ stostr " :INPUT"
+		jrst mkop02]
+	stostr " :OUTPUT"
+mkop02:	skipn prsvdt
+	 jrst mkop03
+	stostr " :PRESERVE-DATES T"
+MKOP03:	skipn inhlnk
+	 jrst mkop04
+	stostr " :INHIBIT-LINKS T"
+mkop04:	stostr " :PDP10-FORMAT T"
+	call (w)
+	stostr "))"
+	setz k,
+	idpb k,a
+	ret
+
+;Copy ASCIZ string <- J down BP in A.
+mkcstr:	hrli j,440700
+mkcst1:	ildb k,j
+	jumpe k,cpopj
+	idpb k,a
+	jrst mkcst1
+
+popj1:	aos (p)
+cpopj:	ret
+
+;Output sixbit word in B down bp in A.
+;Clobbers K.
+mkcsix:	jumpe b,cpopj
+	ldb k,[360600,,b]
+	addi k,40
+	idpb k,a
+	lsh b,6
+	jrst mkcsix
+
+
+;Output number in J in decimal down bp in A.
+;Clobbers K.
+mkcdec:	idivi j,10.		;figure first digit
+	push p,k		;push remainder
+	skipe j			;done?
+	  call mkcdec		;  no compute nett one
+	pop p,j			;yes, take out in opposite order
+	addi j,"0		;make ascii
+	idpb j,a		;put character digit into Number
+	ret			;and return for the next one.
+
+;Convert ITS filename in 3-word block in ITSFN
+;to LISPM format, and send down BP in A,
+;or else use what is in LMFSTR and send it instead.
+its2lm:	stostr /#P "FC" "/		;Which-file-system quoted string
+	jrst its2dr
+
+;Here to make just a string which is suitable for a :LINK-TO arg.
+its2st:	stostr /"FC:/
+its2dr:	movei b,itsfn
+	skipe lmfstr
+	 jrst [	move j,[440700,,lmfstr]
+		call mkcstr
+		jrst itsend]
+	move j,(b)
+	call mkcsxq
+	stostr ";"			;insert a node seperator
+	move j,1(b)
+	call mkcsxq
+	move j,2(b)
+	came j,[sixbit />/]
+	 camn j,[sixbit /</]
+	  jrst itsfvr
+	call digtsp		;If the FN2 is all digits, it's a version number.
+	 jrst [ stostr " "	;Otherwise, make both names into a single name
+		move j,2(b)	;by putting an equivalence-sign in between.
+		call mkcsxq
+		skipn lowver
+		 jrst itsend
+		stostr "#<"	;If we are doing a DELETE, default the version to <.
+		jrst itsend]
+itsfvr:	stostr "#"			;Else its a version number.
+	move j,2(b)
+	call mkcsxq
+itsend:	stostr /"/			;close quotes around pathname
+	ret
+
+;Skip if sixbit word in J is made up of digits.
+;Clobbers J.
+DIGTSP:	save A
+digts1:	ldb a,[360600,,j]
+	caige a,'0			;If smaller than zero
+	 jrst digts3			; fail
+	caile a,'9			;If bigger than nine
+	 jrst digts3			; fail
+	lsh j,6
+	jumpn j,digts1		;If end of word except for trailing spaces, succeed.
+digts2:	aos -1(p)
+digts3:	rest A
+	ret
+
+;Output sixbit word in J down bp in A
+;quoting certain characters with ^Q or slash.
+;Clobbers C and K.
+mkcsxq:	jumpe j,cpopj
+	ldb k,[360600,,j]
+	addi k,40
+	cain k,40		;Convert space to two-headed-arrow
+	 movei k,^W		;so that spaces inside the filenames on the FC
+	movei c,^Q		;can be reserved for separating the FN1 and FN2.
+	caie k,"/
+	 cain k,";
+	  idpb c,a
+	caie k,"\
+	 cain k,"#
+	  idpb c,a
+	cain k,"|
+	 idpb c,a
+	movei c,"/		;Slash and doublequote must be quoted with slash
+	caie k,""		;to appear in a Lispm string.
+	 cain k,"/
+	  idpb c,a
+	idpb k,a
+	lsh j,6
+	jrst mkcsxq
+
+;;; Get Connected to file server.
+;;; Skip if connection successfully opened.
+;;; The file server's reply is a data packet,
+;;; and it has not been read yet.
+
+GETCON:	movei a,chneti				;Channel to use.
+	move b,lmhadr				;file server's chaos address.
+	movei c,buf				;Pointer to Contact name,etc.
+	movei d,wdwsiz				;Window size
+	call netwrk"chacon			;Try to get connected
+	 ret
+	jrst popj1
+
+
+subttl Parse Reply from an OPEN-FOR-PDP10
+;;;
+;;; A is BP to the string to parse.
+;;; Skips if the reply was not an error.
+
+;The order is  'STREAM, stream-type, creation date (univ. time as number),
+;stream byte size, file-byte size, truename (a pathname), author (a string), 
+;qfaslp, length in bytes, reference date (universal time as number), 
+;backup-info (a string or NIL), ascii flag (T or NIL), 
+;pdp-10 format data flag (T or NIL).
+
+
+
+ROPEN:	ildb c,a	    		;get a character
+	caie c,"(
+	 .lose
+	call rdnas			;Check Reply Sequence number
+	 .value
+	came b,seqnum			;Is it what we expected?
+	 .lose
+	call rsxas		;Skip "OPEN-FOR-PDP10".
+	 jfcl
+	call rsxas			;Get a sixbit word.
+	 .value
+	camn b,[sixbit /ERROR/]		;Was it ERROR?
+	 jrst rerr			; go see what kind.
+	came b,[sixbit /STREAM/]	;Was it a STREAM?
+	 .lose			;Should be STREAM or ERROR.
+	call rsxas			;Lets see what kind of stream.
+	 .value
+	camn b,[sixbit /INPUT/]		;Could be an input stream.
+	 jrst [skipe dirctn		; Did we want an input stream?
+		.lose
+	       jrst ROPN01]
+	came b,[sixbit /OUTPUT/]	;Could be an output stream.
+	 .lose
+	skipn dirctn			;Did we an output stream?
+	 .lose
+;Now comes either the creation date or NIL.
+ropn01:	move c,a
+	ildb c,c
+	cain c,"N		;Peek at next char.  If N, must be NIL.
+	 jrst [	call rsxas
+		 .value
+		setzm fildtp
+		jrst ropn02]
+	call rdnas		;Else ought to be a number.
+	 .value
+	call cnvunv		;Convert universal date to ITS format date.
+	movem c,fildat
+	setom fildtp
+ropn02:	call rsxas			;Get stream byte size.
+	 .value			;For now, ignore it - not needed.
+	move c,a
+	ildb c,c		;Accept NIL in place of file byte size.
+	cain c,"N
+	 jrst [	call rsxas
+		 .value
+		jrst .+2]
+	call rdnas		;Read file byte size.  If unknown, use 8.
+	 movei b,8
+	movem b,filbsz
+;Next comes the truename, or NIL.
+	move c,a
+	ildb c,c		;If there is a real truename, it should start with #.
+	caie c,"#
+	 jrst [	call rsxas	;Otherwise, verify that we have NIL
+		 .value
+		came b,nil
+		 .value
+		jrst ropn03]	;and leave the specified names in ITSFN.
+	call unpars		;Read truename and convert to ITS format.
+	 .value
+ropn03:	move c,itsfn
+	movem c,rdevn+3
+	move c,itsfn+1
+	movem c,rdevn+1
+	move c,itsfn+2
+	movem c,rdevn+2
+	.call jbst	;give names to system for rchst/rfname
+	 .value
+	call rsxst			;Get the author name.
+	 .value
+	movem b,author
+	call rsxas			;Get the QFASLP word.
+	 .value
+;Now comes file length, or NIL.
+	move b,a
+	ildb b,b
+	cain b,"N		;Peek at next character; if N, it must be NIL.
+	 jrst [	call rsxas
+		 .value
+		came b,nil
+		 .lose
+		setom filbln
+		jrst ropn05]
+	call rdnas			;Get File length in bytes.
+	 .value
+	movem b,filbln
+;Now comes either the reference date or NIL.
+ropn05:	move b,a
+	ildb b,b
+	cain b,"N		;Peek at next character; if N, it must be NIL.
+	 jrst [	call rsxas
+		 .value
+		came b,nil
+		 .lose
+		jrst ropn04]
+	call rdnas		;Get Ref Date.
+	 .value
+	call cnvunv		;Convert universal date to ITS format date.
+	movem c,refdat
+ropn04:	call rsxas		;Get Backup info.
+	 .value
+	call rsxas		;Get the ASCIIP word.
+	 .value			;For now, ignore it.
+	call rsxas		;Get the transmission format: T for pdp10 format.
+	 .value
+	came b,nil
+	 camn b,tru
+	  caia
+	   .lose
+	xor b,nil
+	movem b,fpdp10
+	movei c,5		;For PDP-10 format files, 5 chars make one 10-word.
+	jumpn b,ropn06		;For Lispm binary files, one 32-bit word makes one 10-word
+	movei c,32.		;so figure out how many file bytes to the 10-word.
+	idiv c,filbsz		;Lispm character files are treated like PDP-10 files.
+				;Not really right, but can't do anything better.
+ropn06:	move d,filbln
+	idivm d,c		;Compute length in pdp10-words of file in C.
+	movei d,36.
+	idiv d,bytsiz
+	imul c,d		;Compute length of file in bytes we are using, and store.
+	skipge filbln
+	 seto c,
+	movem c,fillen
+	ildb b,a
+	caie b,")		;Malformed reply string?
+	 .lose
+	jrst popj1
+
+;; Needs to get second arg instead, first being a potetially long string:
+RERR:	call rsxst		;Ignore error string.
+	 .value
+	call rdnas		;Get the numeric error code instead.
+	 .value
+	move a,b		;return non-skip, error code in A.
+	ret
+
+
+subttl	Subroutine Read Decimal Number from Ascii String
+;;;
+;;; A ==> Byte Pointer into string
+;;; B <== Decimal value
+;;; A <== always updates byte pointer
+;;;
+;;; Skips if successful. Does not skip if couldn't parse string.
+;;; Leaves the byte pointer past the terminating character (space).
+
+RDNAS:	setz b,				;Start with nothing.
+rdnas1:	ildb c,a			;Get a character.
+	cain c,40			;If it is a Space
+	 jrst popj1			; then we are done.
+	cain c,")
+	 jrst rdnpar
+	caig c,71			;Too big?
+	 caige c,60			;Too small?
+	  ret				; lose,lose. Not a number.
+	subi c,60	    		;Get value
+	imuli b,10.			;in decimal.
+	add b,c				;Add to sum
+	jrst rdnas1			;Get another character.
+
+;If parsing something stops with a closeparen,
+;unread the closeparen so that the explicit test
+;for end of reply will find it where it is expected.
+rdnpar:	add a,[100000,,]
+	jrst popj1
+
+;Read sixbit word into B from bp in A.
+;Skips if the word fit in 6 characters.  Reads up to a space or paren
+;in any case, and leaves the BP pointing at it.
+
+RSXAS:	move tt,[440600,,b]		;6bit BP to word.
+	setz b,				;And the word was B.
+rsxas1:	ildb c,a			;Get a character from substring.
+	cain c,")
+	 jrst rdnpar
+	cain c,40			;End of substring?
+	 jrst rsxas2
+	cail c,140
+	 subi c,40
+	subi c,40	
+	tlnn tt,770000
+	 setz tt,		;If we overflow 6 chars, clear tt.
+	tlne tt,770000
+	 idpb c,tt			;Deposit into B.
+	jrst rsxas1
+
+rsxas2:	skipe tt
+	 aos (p)			;  skip if was six or fewer chars.
+	ret 				;return
+
+;Given universal time in B, return ITS format time in C.
+CNVUNV:	save A
+	move a,b
+	subi a,datime"estdif*60.*60.
+	call datime"sectim
+	move c,a
+	rest A
+	ret
+
+;Read a doublequoted Lisp string off bp in A
+;and turn the contents into sixbit in B.
+;Skip if we find a legitimate Lisp string.
+;Also skip if there was NIL instead of a string;
+;in that case return 0 in B.
+;Clobbers C and TT.
+RSXST:	setz b,
+	move tt,[440600,,b]
+	move c,a
+	ildb c,c
+	caie c,""
+	 jrst rsxst2
+	ibp a
+rsxst0:	ildb c,a
+	cain c,""
+	 jrst rsxst1
+	cain c,"/
+	 ildb c,a
+	cail c,140
+	 subi c,40
+	subi c,40
+	tlne tt,770000
+	 idpb c,tt
+	jrst rsxst0
+
+rsxst1:	ildb c,a
+	cain c,40
+	 aos (p)
+	ret
+
+rsxst2:	call rsxas
+	 ret
+	camn b,nil
+	 aos (p)
+	setz b,
+	ret
+
+subttl Unparse an 8bit LM Pathname into an ITS pathname
+;Will accept both: bare or #P"" syntax strings
+;Pathname is obtained from b.p. in A, which is updated.
+;ITSFN <== Resulting ITS pathname as SIXBIT.
+;TRUNAM <== ITSified ASCIZ pathname.
+;Clobbers TT and K.
+
+UNPARS:	save b
+	save c
+	save d
+	save e
+	setzm itsfn				;ITS Dir.
+	setzm itsfn+1				;Fn1.
+	setzm itsfn+2				;Fn2.
+	setz d,					;FN ctr: 0 - dir,1 - fn1,2 -fn2.
+	ildb k,a				;Get a character
+	caie k,"#				;If read macro encountered
+	 .value
+	movei tt,3				;skip past 3 quotes
+unpask:	ildb k,a
+	caie k,""
+	 jrst unpask
+	sojn tt,unpask
+
+	call unptnm		;Unparse now into TRUNAM.
+
+;Read another name in B and version in E.
+unpann:	setz tt,			;This is not a version number.
+	setzb b,e
+	skipa c,[440600,,b]
+;Having read the name in B, read the version into E.
+unpavr:	 move c,[440600,,e]			;Bp to the filename.
+unpain:	ildb k,a				;Get a character
+	cain k,40		;Ignore space
+	 skipe (c)		;if it is the first thing in the name.
+	  caia
+	   jrst unpain
+	cain k,""
+	 jrst unpafn
+	cain k,"\				;Is it a dir seperator?
+	 jrst unpadr
+	cain k,";
+	 jrst unpadr
+	caie k,"|
+	 cain k,40				;Is it a property seperator?
+	  jrst unpafn
+	cain k,"#				;Is it a version seperator?
+	 aoja tt,unpavr
+	caie k,"/
+	 cain k,^Q
+	  ildb k,a
+	cain k,^W		;Convert double-headed-arrow back to space.
+	 movei k,40
+	cail k,140		;Convert to LC and to sixbit.
+	 subi k,40
+	subi k,40
+	tlne c,770000
+	 idpb k,c		;Store it.
+	jrst unpain		;And go get another character.
+
+;Here if we find something followed by a ";" or "\".
+;It must be a directory name.  Question is, is this the first one?
+unpadr:	caie d,0
+	 jrst [ move e,[sixbit /.CANT./]	; Not the first => make a bogus name
+		movem e,itsfn+0	;since we cannot represent multiple ones.
+		jrst unpann]
+	movem b,itsfn+0	;Now we have got a dir.
+	aoja d,unpann		;Next, we need a FN1.
+
+;Here if we find a "|" or the end of the string.
+unpafn:	caie d,1		;Looking for an Fn1?
+	 jrst [	movem b,itsfn+2	;Already got fn1 => this is after a "|",
+		jrst unpaf1]	;and it must be the fn2.
+	movem b,itsfn+1		;Now we have got the Fn1.
+	skipe tt		;If we got a version number also, use it as FN2.
+	 movem e,itsfn+2	;If a property name follows, that will override this.
+unpaf1:	caie k,""
+	 aoja d,unpann
+	ildb k,a
+	rest e
+	rest d
+	rest c
+	rest b
+	cain k,")		;Skip if paren follows, and don't discard it.
+	 jrst rdnpar
+	cain k,40
+	 aos (p)		;Skip if space follows, as it should.
+	ret
+
+unptnm:	move b,[440700,,trunam]
+	save a
+unptn1:	ildb c,a
+	cain c,""
+	 jrst unptne		;" means end of truename in the reply.
+	caie c,"|
+	 cain c,"#
+	  movei c,40		;Change the syntax a little.
+	camn c,[100700,,trunam+fnmstl-1]
+	 jrst unptne		;Don't overflow the size of TRUNAM.
+	idpb c,b
+	caie c,"/
+	 cain c,^Q		;Check for quoting chars, so we don't mess with
+	  caia
+	   jrst unptn1		;|'s or #'s that are quoted.
+	ildb c,a		;Do check for overflow; aside from that, just store the char.
+	camn c,[100700,,trunam+fnmstl-1]
+	 jrst unptne
+	idpb c,b
+	jrst unptn1
+
+unptne:	setz c,			;Make TRUNAM asciz when done.
+	idpb c,b
+	rest a
+	ret
+
+JRESET:
+JSTS:	.CALL JBRTL
+	 PCL
+	JRST GOLOOP
+
+JCLS:	SKIPN DIRCTN
+	 JRST DIE	;Input => die right away.
+	CALL JFORCE	;Force out buffered output.
+JCLS1:	CALL STCMD
+	STOSTR " CLOSE)"
+	CALL SNDPKT
+	SETOM SNTCLS	;We mustn't die till we receive a reply.
+	MOVEI A,DIE
+	MOVEM A,XRPLAD
+	JRST REUSE
+
+;Send the packet in PKTBUF, assuming that A contains a bp
+;down which the text of the packet has been stuffed.
+;The packet opcode should be set up by the caller.
+SNDPKT:	LDB B,[410300,,A]	;Get P field of bp, divided by 8.
+	MOVNS B
+	ADDI B,4		;Get # of bytes included in word A points to.
+	ANDI A,-1
+	SUBI A,PKTBUF		;Get # of complete words included.
+	LSH A,2
+	ADD A,B
+	DPB A,[$CPKNB+PKTBUF]
+SNDPK1:	SYSCAL PKTIOT,[%CLIMM,,CHNETO ? %CLIMM,,PKTBUF]
+	 .LOSE %LSFIL
+	RET
+
+JSACC:	MOVE A,JBCA2	;ACCESS POINTER FOR SYMBOLIC CALL ACCESS
+	MOVEM A,JBCWD1
+	CALL JACC1
+	.CALL JBRT1
+	 PCL
+	JRST GOLOOP
+
+JACC:	CALL JACC1
+	JRST JSTS
+
+JACC1:	skipe dirctn
+	 call jforce		;If output, force it out now.
+	move a,jbcwd1
+	movem a,accp
+	idiv a,bytswd		;A gets desired pointer, in pdp10 words.
+	movem b,ignbyt		;B gets number of 7-bit bytes to ignore at front.
+	skipn fpdp10		;Convert A to units of bytes of size open on FC.
+	 imuli a,2
+	skipe fpdp10
+	 imuli a,5
+	save a
+	call stcmd
+	stostr " set-pointer "
+	rest j			;Get back desired pointer in Lispm bytes.
+	call mkcdec
+	stostr ")"
+	call sndpkt		;send the command.
+	call bufini		;Flush all the input we have already.
+	setom ignin		;Ignore input until the reply comes.
+	move tt,bufsiz		;Tell server to start sending input
+	save rplseq
+	skipn dirctn
+	 call sndalc		;as soon as it has changed the pointer.
+	rest rplseq
+	movei a,xacc
+	movem a,xrplad
+	ret
+
+XACC:	call rsxas		;Skip "rename-string".
+	 jfcl
+	setzm ignin		;Stop ignoring input.
+	jrst goloop
+
+JRCH:	SYSCAL JOBRET,[
+		1000,,CHBOJ
+		1000,,0
+		[-5,,RDEVN]]
+	 JRST TRYOV	;NO NEED FOR "PCL" SINCE WE HAVEN'T ALTERED ANYTHING.
+	JRST GOLOOP
+
+;Set up buffer pointers from BYTSIZ.
+bufini:	movei b,36.
+	idiv b,bytsiz
+	movem b,bytswd
+	imuli b,bufl
+	movem b,bufsiz
+	move b,opmode
+	move c,[440700,,buf]
+	skipn fpdp10
+	 move c,[442000,,buf]
+	movem c,bufi		;BUFI is a 7-bit or 16-bit byte ptr.
+	movei c,buf
+	move a,bytsiz
+	lsh a,6
+	iori a,440000		;in unit mode, bufo should be 44nn00,,addr.
+	trnn b,.bai		;in block mode, it should be just an addr.
+	 tlo c,(a)
+	movem c,bufo
+	setzm eofi		;eof not detected yet.
+	setzm inpall		;say that none of the buffer space is allocated.
+	move c,bufsiz
+	movem c,inreal		;Inreal and inpall are ignored on output.
+	movem c,avail		;For output, the whole buffer is available.
+	setzm oblock
+	setzm bufonm		;since we reset the addr forms of pntrs,
+	popj p,			;reset the byte-number form too.
+
+JIOT:	SKIPN FILOPN
+	 .VALUE
+	SKIPE LOSING		;If server is losing, report that to the creator,
+	 JRST [	CALL XLOS1	;and go back to main loop since his IOT is aborted.
+		JRST GOLOOP]
+	MOVE A,JBCOP
+	TLNN A,100000	;SKIP IF OUTPUT IOT
+	 JRST JIOTI
+	TLNN A,200000	;SKIP IF BLOCK IOT
+	 JRST JIOTO1
+	HLRE D,JBCWD1	;USER'S BLOCK IOT POINTER - GET WD COUNT.
+	MOVNS D
+JIOTO5:	SKIPN OBLOCK
+	 SKIPE RETOOU	;IF RESUMING PROCESSING OF AN IOT AFTER WE LOOKED AT NET FOR A WHILE,
+	  MOVE D,RETOCT	;GET # BYTES NOT SENT YET.  JBCWD1 HAS TOTAL INCLUDING THOSE SENT.
+	SETZM OBLOCK
+	SETZM RETOOU
+JIOTO2:	MOVEM D,RETOCT
+	SKIPN C,AVAIL	;Get # bytes avail in our buffer.
+	 JRST [	SETOM OBLOCK	;If none, data output is blocked.
+		JRST GOLOOP]	;Go to main loop and wait for output interrupt.
+	SKIPGE NTICIN	;If there are replies waiting for us, process them first.
+	 JRST [	SETOM RETOOU	;Set this flag so that we will come back.
+		JRST GOLOOP]
+	CAMLE C,D	;Get min(bytes to xfer, space available)
+	 MOVE C,D
+	MOVE A,BUFSIZ
+	SUB A,BUFONM	;How many bytes from this pointer to buffer end?
+	CAML C,A	;That is the most we can do at once, since IOT/SIOT will not wrap.
+	 MOVE C,A
+	SUB D,C		;# BYTES OF USER'S IOT THAT WILL BE LEFT.
+	MOVE B,BUFO
+	MOVE A,JBCOP
+	TLNE A,200000	;NOW READ THE BYTES FROM THE USER.
+	 JRST JIOTO4	;USING SIOT OR BLOCK IOT, WHICHEVER WE CAN.
+	MOVE A,C
+	SYSCAL SIOT,[ 1000,,CHBOJ ? B ? C]
+	 .VALUE
+	SUB A,C		;A GETS # BYTES WE GOT, C # WE WANTED BUT DIDN'T GET.
+;Here SIOT and block IOT lines recombine.
+;A has number of bytes gotten from creator.
+;B has updated BUFO pointer.
+;C has # bytes we tried to read but didn't get (will be 0 unless
+  ;the creator was pclsr'ed).
+;D has # of extra bytes creator was trying to send, that we haven't
+  ;even tried to read yet.
+JIOTO3:	MOVE TT,A
+	ADDB TT,BUFONM	;Update both forms of buffer pointer.
+	CAMN TT,BUFSIZ	;If we reach the end, wrap around.
+	 SUBI B,BUFL
+	CAMN TT,BUFSIZ
+	 SETZB TT,BUFONM
+	CAML TT,BUFSIZ
+	 .LOSE
+	MOVEM B,BUFO
+	MOVN TT,A
+	ADDM TT,AVAIL	;Update amount of empty space in buffer.
+	SKIPGE AVAIL
+	 .LOSE
+	CALL UPDACP	;UPDATE ACCP AND MAYBE FILLEN, FILBLN.
+	CALL JOUT	;Send data, if we can.
+	JUMPN C,GOLOOP	;NOW, IF THIS IOT WAS PCLSR'ED, DON'T TRY TO DO
+		;ANY MORE FOR IT.  IF IT COMES BACK IN WE WILL FIND OUT.
+	JUMPE D,GOLOOP	;IF THERE IS MORE STUFF TO OUTPUT,
+	JRST JIOTO2
+
+;HERE TO XFER FROM CREATOR IN BLOCK MODE.
+JIOTO4:	MOVN A,C
+	HRL B,A		;Make AOBJN ptr to the words we can read.
+	.IOT CHBOJ,B
+	HRRZS A,B
+	SUB A,BUFO
+	ANDI A,-1	;A GETS # BYTES WE READ.
+	SUB C,A		;C GETS # THAT WE EXPECTED BUT DIDN'T GET.
+	JRST JIOTO3	;MAKE B POINT AT LAST WORD FILLED.
+
+;HERE TO DECODE A UNIT MODE IOT OR SIOT.
+JIOTO1:	TLNE A,1000	;SKIP IF UNIT IOT
+	 SKIPA D,JBCWD1	;SIOT, GET BYTE COUNT
+	  MOVEI D,1	;IOT, TRANSFER ONE BYTE
+	JRST JIOTO5
+
+;UPDATE OUR ACCESS POINTER WHEN WE WRITE C(A) BYTES.
+UPDACP:	ADDB A,ACCP
+	SKIPL FILLEN	;IF FILE LENGTH KNOWN,
+	 CAMG A,FILLEN	;AND WRITING PAST END OF FILE
+	  POPJ P,
+	MOVEM A,FILLEN	;THEN UPDATE THE FILE LENGTH
+	MOVEM A,FILBLN	;SINCE WE'RE WRITING, BYTE SIZE WRITTEN AND CURRENT BYTE SIZE MUST BE SAME
+	POPJ P,
+
+;Output data from BUF to the server, as much as we can without hanging.
+;Clears NTOCIN, so that NTOCIN is only set at the main loop
+;if an output channel interrupt has happened since the last attempt
+;to stuff data down the network.
+;Clobbers A, B, E, TT, J.
+jout:	hrrzs (p)
+	jrst jout0
+
+;Like JOUT, but force out everything in the buffer.
+jforce:	hrros (p)
+	move a,bufo
+	setz b,
+jfrc0:	tlnn a,700000		;Fill up the last buffer word with zero bytes.
+	 jrst jout0
+	idpb b,a
+	jrst jfrc0
+
+jout0:	setzm ntocin
+	move e,bufsiz
+	sub e,avail	;E gets number of full bytes in buffer.
+	idiv e,bytswd	;Now number of complete words.
+	jumpe tt,jout3
+	skipge (p)	;If forcing the buffer, and there's an incomplete word,
+	 aos e		;send it (all).
+jout3:	move a,bufi	;A gets bp to next data to output.
+	syscal whyint,[%climm,,chneto ? %clout,,j ? %clout,,j ? %clout,,j]
+	 .lose %lsfil
+	andi j,-1	;Number of packets we can output.
+	skipge (p)	;If this is a FORCE, don't worry about how much we can output;
+	 movei j,77777	;Do all the data we have even if we block.
+	jumpe j,cpopj
+	save c
+	save d
+	save e
+jout1:	jumpe e,jout2	;Unless this is JFORCE, stop if less than
+	skipge -3(p)	;half the maximum size backet is left.
+	 jrst jout4
+	caig e,%cpmxw/2
+	 jrst jout2
+jout4:	call [	skipn fpdp10	;Output one packet, of appropriate format.
+		 jrst jdwd
+		jrst jdat]
+	skipe e			;Keep outputting until no more data
+	 sojg j,jout1		;or no room for more packets.
+jout2:	rest tt
+	sub tt,e	;TT gets number of words output.
+	skipge tt
+	 .lose
+	imul tt,bytswd
+	addm tt,avail
+	movem a,bufi
+	rest d
+	rest c
+	ret
+
+;Send server one packet of 8-bit data.
+;A has bp (7-bit) to fetch from BUF, and E has number of words to output.
+;Both are updated.
+jdat:	move d,[441000,,pktbuf+%cpkdt]
+	movei b,%cpmxc/5	;Number of words we have room for.
+jdat1:	ildb c,a		;get a char from BUF.
+	tlne a,760000		;The last in each word also has the word's low bit,
+	 jrst [	idpb c,d	;If not last in a word, just output the 7 bits of data.
+		jrst jdat1]
+	ldb tt,[000100,,@a]	;Merge the low bit in as top bit of a byte.
+	dpb tt,[070100,,c]
+	idpb c,d
+	camn a,[010700,,bufend-1]
+	 move a,[010700,,buf-1]
+	soj e,
+	sosle b
+	 jumpg e,jdat1
+	movns b
+	addi b,%cpmxc/5
+	imuli b,5		;Number of bytes that it took to do these words.
+	dpb b,[$cpknb+pktbuf]
+	movei b,%codat
+	dpb b,[$cpkop+pktbuf]
+	jrst sndpk1
+
+;Send server one packet of 16-bit data.
+;A has bp (16-bit) to fetch from BUF, and E has number of words to output.
+;Both are updated.
+jdwd:	move d,[442000,,pktbuf+%cpkdt]
+	movei b,%cpmxc/2
+jdwd1:	ildb c,a	    ;Transfer bytes one at a time.
+	idpb c,d
+	tlne a,700000	    ;After last byte of a word,
+	 jrst jdwd1
+	camn a,[010700,,bufend-1]	;check for wrap-around in BUF.
+	 move a,[010700,,buf-1]
+	soj e,
+	sosle b
+	 jumpg e,jdwd1
+	movns b
+	addi b,%cpmxc/2
+	lsh b,1
+	dpb b,[$cpknb+pktbuf]
+	movei b,%codwd
+	dpb b,[$cpkop+pktbuf]
+	jrst sndpk1
+
+;Come here for network output interrupt.
+;It implies there is room to output at least one packet
+;(though actually the code will work even if there is no room).
+NTOINT:	setzm ntocin
+	call jout	;Output whatever we can to the network.
+	skipe oblock	;If iot processing is waiting for room in BUF,
+	 jrst jiot	;we now have some, so resume it.
+	jrst goloop
+
+JIOTI:	SKIPN C,IGNBYT	;Should we skip the first few bytes because a .ACCESS was just done?
+	 JRST JIOTI0
+	SETZM IGNBYT
+	ADDM C,BUFONM	;If so, advance both pointers and increment
+	ADDM C,INREAL	;count of free bytes in buffer.
+	IBP BUFO
+	SOJG C,.-1
+JIOTI0:	TLNN A,200000	;SKIP IF BLOCK IOT
+	 JRST JIOTI3
+	HLRE C,JBCWD1	;USER'S BLOCK IOT POINTER - GET WD COUNT.
+	MOVNS C
+;C HAS # BYTES THE USER WANTS IN THIS IOT OR SIOT.
+;A HAS JBCOP, EVERYWHERE ON THIS PAGE.  DON'T CLOBBER IT!
+JIOTI1:	MOVE D,BUFSIZ
+	SUB D,INPALL
+	SUB D,INREAL	;D HAS # BYTES OF INPUT WE HAVE IN BUFFER.
+	JUMPE D,JIOTIS	;NONE => EITHER IT'S EOF OR WE MUST WAIT.
+	CAMLE D,C
+	 MOVE D,C	;ELSE GIVE USER AT MOST WHAT WE'VE GOT.
+	MOVE E,BUFSIZ	;NOW, WE CAN'T DO ONE IOT THAT WRAPS AROUND,
+	SUB E,BUFONM	;SO SEE HOW FAR IT IS TO WRAP AROUND FROM HERE.
+	CAMLE D,E
+	 MOVE D,E	;THAT'S THE MOST WE CAN GIVE IN ONE SHOT.
+	JUMPE D,LOSE5
+	SUB C,D		;C <=  # BYTES THAT WILL REMAIN.
+	TLNN A,200000
+	 JRST JIOTI4	;NOW IN UNIT MODE GO XFER THEM WITH SIOT.
+	MOVNS D
+	HRLZS D
+	HRR D,BUFO	;IN BLOCK MODE, MAKE AOBJN TO WHAT WE WILL GIVE
+	.IOT CHBOJ,D	;GIVE
+	SKIPGE D	;IF CREATOR DIDN'T TAKE ALL WE OFFERED, HE WAS
+	 SETZ C,	;PCLSRED, SO DON'T TRY TO OFFER ANY MORE.
+	MOVEI E,(D)
+	SUB E,BUFO	;NUMBER OF WORDS GIVEN TO CREATOR
+	HRRZS D		;WHAT IS 1ST BUFFER WORD WE HAVEN'T JUST SENT?
+	CAIN D,BUFEND
+	 MOVEI D,BUF
+	MOVEM D,BUFO	;THAT WILL BE NEXT TO SEND
+;HERE E HAS # BYTES WE JUST GAVE THE USER.  BUFO HAS BEEN UPDATED,
+;BUT NOT BUFONM.
+JIOTI5:	ADDM E,ACCP
+	MOVE D,E
+	ADDB D,BUFONM
+	CAMN D,BUFSIZ
+	 SETZM BUFONM
+	ADDB E,INREAL	;WHAT WE SENT IS NOW EMPTY.
+	JUMPL E,LOSE6
+	LSH E,1
+	CAMGE E,BUFSIZ	;MAYBE THERE'S A LOT EMPTY AND WE SHOULD REALLOCATE.
+	 JRST JIOTI2
+	MOVE TT,INREAL	;GET # BYTES WE CAN ALLOCATE.
+	SAVE A
+	CALL SNDALC
+	REST A
+JIOTI2:	JUMPN C,JIOTI1	;NOW, IF CREATOR'S IOT NOT ALL FILLED, GIVE HIM MORE.
+	JRST GOLOOP
+
+;Allocate all the empty space in BUF: tell the server it can send data
+;to fill them up.  TT has number of user-bytes of space we can allocate.
+;Clobbers A, B, E, TT, J, K
+SNDALC:	MOVE E,BYTSWD
+	IDIVM TT,E	;E GETS # OF COMPLETE WORDS THAT FIT IN THEM.
+	SUBI E,1	;LEAVE ONE EMPTY WORD SO STUFFING PTR
+			;NEVER REACHES THE FETCHING PTR.
+			;THIS IS SO THE SETZM OF THE NEXT WORD
+			;IN XDAT AND XDWD DOESN'T CLOBBER ANYTHING.
+	MOVE TT,BYTSWD
+	IMUL TT,E	;TT GETS # OF BYTES IN THOSE COMPLETE WORDS.
+	ADDM TT,INPALL	;MARK THEM AS ALLOCATED
+	MOVNS TT
+	ADDM TT,INREAL	;AND NOT WAITING TO BE ALLOCATED.
+	SKIPGE B,INPALL
+	 .VALUE
+	CAMLE B,BUFSIZ
+	 .VALUE
+	SKIPE FPDP10	;E GETS # BYTES ON CHAOSNET FOR THAT MANY WORDS.
+	 IMULI E,5	;THIS DEPENDS ON DATA TRANSMISSION FORMAT.
+	SKIPN FPDP10
+	 LSH E,1
+	CALL STCMD
+	STOSTR " START-DATA-TRANSMISSION "
+	MOVE J,E
+	CALL MKCDEC	;SUPPLY # BYTES WANTED AS ARG.
+	STOSTR ")"
+	JRST SNDPKT	;SEND THE COMMAND.  IT DOES NOT REPLY!
+
+;HERE TO GIVE THE CREATOR SOME DATA IN UNIT MODE.
+JIOTI4:	MOVE E,D
+	SYSCAL SIOT,[1000,,CHBOJ ? BUFO ? D]
+	 .VALUE
+	SUB E,D		;E GETS # BYTES HE TOOK.
+	SKIPE D		;IF HE DIDN'T TAKE ALL WE OFFERED, HE WAS PCLSRED,
+	 SETZ C,	;SO DON'T TRY TO GIVE HIM ANY MORE.
+	MOVNI B,BUFL
+	MOVE D,BUFO	;NOW, IF BUFO IS POINTING AT END OF BUFFER,
+	IBP D
+	ANDI D,-1
+	CAIN D,BUFEND
+	 ADDM B,BUFO	;MAKE IT POINT AT BEGINNING.
+	JRST JIOTI5
+
+;HERE IF CREATOR WANTS STUFF BUT OUR BUFFER IS EMPTY.
+JIOTIS:	SKIPGE EOFI
+	 JRST JIOTIE	;MAYBE IT'S EMPTY BECAUSE WE'RE AT EOF.
+	MOVEM C,RETOIN	;OTHERWISE, WAIT FOR DATA FROM SLAVE
+	JRST GOLOOP	;AND SAY TO GIVE IT TO CREATOR WHEN IT COMES.
+
+;HANDLE EOF RETURNED BY SLAVE
+JIOTIE:	MOVE A,JBCOP
+	TLNN A,201000	;SKIP IF BLOCK OR SIOT BIT ON
+	 JRST JIOTI6	;FOR UNIT-MODE IOTS, RETURN SOMETHING.
+	.CALL JBRTL	;JUST UNHANG A BLOCK IOT OR SIOT.
+	 PCL
+	JRST GOLOOP
+
+JIOTI6:	TLNE A,400000	;EOF, AND USER'S CHANNEL IS UNIT MODE.
+	 JRST JIOTI8
+	.IOT CHBOJ,[-1,,^C]	;IF ASCII, INDICATE EOF (CHBOJ IS UNIT MODE)
+	JRST GOLOOP
+
+JIOTI8:	SYSCAL JOBIOC,[MOVEI CHBOJ ? MOVEI 2]	;IOCERR FOR EOF
+	 JRST TRYOV
+	JRST GOLOOP	;ON UNIT IMAGE CHANNEL
+
+JIOTI3:	TLNE A,1000	;SKIP IF UNIT IOT
+	 SKIPA C,JBCWD1	;SIOT, GET BYTE COUNT
+	  MOVEI C,1	;IOT, TRANSFER ONE BYTE
+	JRST JIOTI1
+
+;Handle .FDELE - DELETE or RENAME a file.
+jfdele:	call mknoop		;Send an RFC with no command.
+	call getcon
+	 jrst nogo
+				;If we get a reply, the connection is open.
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst nogo
+	ldb a,[$cpkop+pktbuf]
+	caie a,%colos
+	 cain a,%cocls
+	  jrst die
+	caie a,%corpl
+	 .lose
+	move a,jbcsnm		;Move name of file to delete or rename into ITSFN.
+	movem a,itsfn+0
+	move a,jbcfn1
+	movem a,itsfn+1
+	move a,jbcfn2
+	movem a,itsfn+2
+	skipe a,jbcwd8		;If ASCIZ filename supplied, parse it.
+	 call rdfnm
+	call stcmd
+	skipe jbcwd1		;Delete or rename?
+	 jrst jrenam
+;Now send the DELETE command.
+;Do not put the DELETE command in the RFC packet
+;so that it will not be duplicated!
+	stostr " delete "
+	setom lowver		;Use the lowest version number if the FN2 isn't a version.
+	call its2lm		;Put in the filename as arg.
+jrena1:	stostr ")"
+	stostr ")"
+	call sndpkt		;Send the command.
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst die
+	call rdelet		;Parse the reply.
+	 jrst opnil		;If failure, report as for OPEN.
+	.call jbrt1		;If success, report, then suicide.
+	 call ijbrtf
+	jrst reuse
+
+;Make a RENAME command (rather than a delete command).
+jrenam:	stostr " rename "
+	call its2lm		;Put in the filename as arg.
+	move b,jbcwd1
+	movem b,itsfn+1
+	move b,jbcwd6		;and name to rename to.
+	movem b,itsfn+2
+	skipe a,jbcwd9		;If ASCIZ name supplied, parse it.
+	 call rdfnm
+	call its2lm
+	jrst jrena1
+
+;Parse a reply to a DELETE command.
+rdelet:	ldb a,[$cpkop+pktbuf]	;We should receive a reply.
+	caie a,%colos
+	 cain a,%cocls
+	  jrst die
+	caie a,%corpl
+	 .lose
+	move a,[441000,,%cpkdt+pktbuf]
+	ildb c,a		;Check 1st character.
+	caie c,"(
+	 .lose
+	call rdnas		;Check Reply Sequence number
+	 .value
+	came b,seqnum		;Is it what we expected?
+	 .lose
+	call rsxas		;Skip "DELETE"
+	 jfcl
+	call rsxas		;Get the success code.
+	 .value
+	camn b,[sixbit /ERROR/]		;Was it ERROR?
+	 jrst rerr			; go see what kind.
+	jrst popj1		;For DELETE, if successful, there is no other info.
+
+;Create in BUF the contents of an RFC packet with no command.
+mknoop:	move a,[440700,,buf]
+	movei j,[asciz /LMFILE /]
+	call mkcstr			;Include the contact name
+	.suset [.rxunam,,b]
+	call mkcsix
+	stostr " ("
+	aos j,seqnum
+	call mkcdec		;Use new Command Seq Number.
+	stostr " NIL)"
+	setz k,
+	idpb k,a
+	ret
+
+;Handle open of .NEW.. (UDIR) -- Create a directory.
+jmdir:	move a,[sixbit/~/]
+	movem a,itsfn		;Create dir under root node
+	move a,jbcsnm		;Use name taken from specified sname.
+	movem a,itsfn+1
+	move a,[sixbit />/]
+	movem a,itsfn+2
+	call mkdir
+	movei w,jbrt4
+	jrst jmdir1
+
+mkdir:	jsp w,mkop00
+	stostr " :FLAVOR :DIR :CREATE T"
+	ret
+
+;Handle MLINK: create a link.
+jmlink:	move a,jbcsnm		;Move name for the link into ITSFN.
+	movem a,itsfn+0
+	move a,jbcfn1
+	movem a,itsfn+1
+	move a,jbcfn2
+	movem a,itsfn+2
+	skipe a,jbcwd8		;Parse ASCIZ filename string if there is one.
+	 call rdfnm
+	call mklink		;Send an RFC with an open of a link.
+	movei w,jbrt1
+;Make a file and close it.  BUF should already contain the file command.
+;W should point at the JOBRET call block to use
+;(JBRT1 for success, JBRT4 for "File not found").
+jmdir1:	call getcon
+	 jrst nogo
+				;If we get a reply, the connection is open.
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst nogo
+	call rdelet		;See if the open succeeded.
+	 jrst opnil
+	call stcmd
+	stostr " CLOSE)"
+	call sndpkt		;Send a close command to make the dir or link appear.
+	setom sntcls		;We mustn't die till we receive a reply.
+	movei a,die
+	movem a,xrplad
+	.call (w)		;Report success to the user now; die when we get the reply.
+	 call ijbrtf
+	jrst goloop
+
+mklink:	jsp w,mkop00
+	stostr " :FLAVOR :LINK :CREATE T :LINK-TO "
+	move j,jbcwd7
+	movem j,itsfn
+	move j,jbcwd1
+	movem j,itsfn+1
+	move j,jbcwd6
+	movem j,itsfn+2
+	skipe a,jbcwd9
+	 call rdfnm
+	jrst its2st
+
+;Handle an open of .EXPUN (DIR) -- expunge the directory.
+jexpun:	move a,[sixbit/~/]
+	movem a,itsfn		;Create dir under root node
+	move a,jbcsnm		;Use name taken from specified sname.
+	movem a,itsfn+1
+	move a,[sixbit />/]
+	movem a,itsfn+2
+	call mkdir1		;Open the dir as a file.
+	call getcon
+	 jrst nogo
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst nogo
+	call rdelet		;See if the open succeeded.
+	 jrst opnil
+	call stcmd
+	stostr " stream-operation :file-operation :expunge)"
+	call sndpkt
+	movei a,die
+	movem a,xrplad
+	.call jbrt4		;If success, report "File not found", then suicide.
+	 call ijbrtf
+	jrst goloop
+
+mkdir1:	jsp w,mkop00
+	ret
+
+;Process a RENMWO system call.
+jrnmwo:	move a,spcdir
+	movem a,itsfn
+	move a,jbcwd1
+	movem a,itsfn+1
+	move a,jbcwd6
+	movem a,itsfn+2
+	skipe a,jbcwd9		;Parse ASCIZ names to rename to, if any.
+	 call rdfnm
+	movei a,%comand		;Produce the command packet.
+	dpb a,[$cpkop+pktbuf]
+	move a,[441000,,%cpkdt+pktbuf]
+	stostr "("
+	aos j,seqnum
+	movem j,rplseq
+	call mkcdec		;Use new command seq number.
+	stostr " rename-stream "
+	call its2lm
+	stostr ")"
+	call sndpkt		;send the command.
+	movei a,xrnmwo
+	movem a,xrplad
+	jrst goloop
+
+XRNMWO:	call rsxas		;Skip "rename-string".
+	 jfcl
+	call rsxas		;Get a sixbit word.
+	 .value
+	camn b,[sixbit/error/]
+	 jrst xrnmw1
+	came b,[sixbit/t/]
+	 .value
+	ildb b,a
+	caie b,"(
+	 .value
+	call unpars		;Convert pathname to ITS format.
+	 .value
+	move b,itsfn+1
+	movem b,rdevn+1
+	move b,itsfn+2
+	movem b,rdevn+2
+	.call jbst		;Tel ITS about our new names.
+	 .lose %lsfil
+	ildb b,a
+	caie b,")		;Malformed reply string?
+	 .lose
+	ildb b,a
+	caie b,")		;Malformed reply string?
+	 .lose
+	.call jbrt1		;No.  Report success.
+	 pcl
+	jrst goloop
+
+xrnmw1:	call rerr		;Get the error code in A from the reply.
+	movem a,errcod
+	.call jbrt3
+	 pcl
+	jrst goloop
+
+;Start creating a command packet in PKTBUF.
+;On return, A is a BP to store the rest.
+STCMD:	movei a,%comand		;Set up the packet opcode.
+	dpb a,[$cpkop+pktbuf]
+	move a,[441000,,%cpkdt+pktbuf]
+	stostr "("
+	aos j,seqnum
+	movem j,rplseq
+	jrst mkcdec		;Use new command seq number.
+
+;Process the reply to a file-command for a symbolic system call
+;which is not supposed to return any values to the user.
+XNOVAL:	call rsxas		;Skip the command name.
+	 jfcl
+	call rsxas		;Get a sixbit word.
+	 .value
+	camn b,[sixbit/error/]
+	 jrst xrnmw1		;If error, report it to the user.
+	came b,[sixbit/t/]
+	 .value
+	.call jbrt1		;If none, report success.
+	 pcl
+	jrst goloop
+
+;Send a command to the server,
+;and return success to the user without waiting for a reply.
+JNORPL:	call sndpkt		;send the command.
+	setzm rplseq
+	.call jbrt1		;If none, report success.
+	 pcl
+	jrst goloop
+
+;Process a DELEWO system call.
+JDELWO:	call stcmd
+	stostr " delete-stream)"
+	jrst jnorpl
+
+JSRDAT:	call stcmd
+	stostr " stream-operation :file-operation :putprop :reference-date "
+	jrst jsrda1
+
+;Process an SFDATE system call.
+JSFDAT:	call stcmd
+	stostr " stream-operation :file-operation :putprop :creation-date "
+jsrda1:	save a
+	move a,jbca2		;Get specified date and convert to net form.
+	movem a,fildat
+	call datime"timnet
+	move j,a
+	rest a
+	call mkcdec		;Print it into the command.
+	movei b,")
+	idpb b,a
+	jrst jnorpl		;Don't bother looking for the reply.
+
+JSAUTH:	call stcmd
+	stostr " stream-operation :file-operation :putprop :author "
+	move j,jbca2
+	movem j,author
+	call mkcsxa
+	movei b,")
+	idpb b,a
+	jrst jnorpl
+
+;Output sixbit word in J down bp in A as a Lispm string,
+;quoting slash and doublequote with slash.
+;Clobbers C and K.
+mkcsxa:	movei c,""
+	idpb c,a
+	call mkcsx1
+	movei c,""
+	idpb c,a
+	ret
+
+mkcsx1:	jumpe j,cpopj
+	ldb k,[360600,,j]
+	addi k,40
+	movei c,"/		;Slash and doublequote must be quoted with slash
+	caie k,""		;to appear in a Lispm string.
+	 cain k,"/
+	  idpb c,a
+	idpb k,a
+	lsh j,6
+	jrst mkcsx1
+
+JSYSCL:	MOVE A,JBCWD1	;HANDLE A .CALL.  WHAT IS ITS NAME?
+	CAME A,[SIXBIT/FORCE/]
+	 CAMN A,['FINISH]
+	  JRST JFINISH
+	CAMN A,['FILLEN]
+	 JRST JFILLEN	;FILLEN WE CAN HANDLE WITHOUT GOING OVER THE NET.
+	CAMN A,['SFDATE]
+	 JRST JSFDAT	;SFDATE WE PASS OVER BUT MUST UPDATE OUR DATE FIRST.
+	CAMN A,['SRDATE]
+	 JRST JSRDAT	;SRDATE WE PASS OVER BUT MUST UPDATE OUR DATE FIRST.
+	CAMN A,[SIXBIT/SAUTH/]
+	 JRST JSAUTH
+	CAMN A,['RFDATE]
+	 JRST JRFDAT	;RFDATE WE CAN ANSWER DIRECTLY.
+	CAMN A,['RRDATE]
+	 JRST JRRDAT	;RRDATE WE CAN ANSWER DIRECTLY.
+	CAMN A,[SIXBIT/RAUTH/]
+	 JRST JRAUTH
+	CAMN A,[SIXBIT/ACCESS/]
+	 JRST JSACC
+	JRST WTDERR
+
+JFINISH:
+	CALL JFORCE	;.CALL FINISH.
+	HRROI A,A
+	JRST JRAUT1
+
+JRAUTH:	SKIPN FILDTP	;.CALL RAUTH
+	 JRST WTDERR	;BARF "WRONG TYPE DEVICE" IF AUTHOR NOT DEFINED.
+	HRROI A,AUTHOR
+	JRST JRAUT1
+
+JRRDAT:	SKIPN FILDTP	;.CALL RRDATE
+	 JRST WTDERR	;BARF "WRONG TYPE DEVICE" IF AUTHOR NOT DEFINED.
+	HRROI A,REFDAT
+	JRST JRAUT1
+
+JFILLEN:		;HANDLE .CALL FILLEN
+	SKIPL FILLEN	;IF FILE'S LENGTH IS UNKNOWABLE,
+	 JRST JFILL1
+WTDERR:	MOVSI A,%EBDDV	;RETURN "WRONG TYPE DEVICE" ERROR.
+	MOVEM A,ERRCOD
+	.CALL JBRT3
+	 PCL
+	JRST GOLOOP
+
+JRFDAT:	SKIPN FILDTP	;.CALL RFDATE.
+	 JRST WTDERR	;BARF "WRONG TYPE DEVICE" IF DATE NOT DEFINED.
+	SKIPA A,[-1,,FILDAT]
+JFILL1:  MOVE A,[-4,,FILLEN]
+JRAUT1:	MOVEM A,JRFDAP	;ALL ARGS OF RFDATE MUST STAY AROUND IN CASE
+	SYSCAL JOBRET,[ 1000,,CHBOJ ? 1000,,1 ? JRFDAP]
+	 PCL		;THE SYSTEM CALL WAS PCLSR'ED AND COMES IN AGAIN.
+	JRST GOLOOP
+
+JRFDAP:	0
+
+;Here from GOLOOP to process input from net.
+ntint:	call ntchk		;Is there really any available?
+	 jrst goloop
+	syscal pktiot,[%climm,,chneti ? %climm,,pktbuf]
+	 jrst die
+	setom nticin		;Make sure we come back again from GOLOOP
+				;so that if there are more input packets we read them too.
+	move a,[441000,,%cpkdt+pktbuf]
+	ldb b,[$cpkop+pktbuf]
+	cain b,%corpl
+	 jrst xrpl
+	caie b,%colos
+	 cain b,%cocls
+	  jrst die
+	cain b,%codat
+	 jrst xdat
+	cain b,%codwd
+	 jrst xdwd
+	cain b,%cofeof
+	 jrst xeof
+	cain b,%coals
+	 jrst xlos
+	cain b,%cowin
+	 jrst xwin
+	cain b,%connd	;Ignore "next-node".
+	 jrst goloop
+	cain b,%coctd	;We theoretically ought to handle continued packets
+	 .lose		;in long replies, but we expect they will never be sent
+			;to us.  So let's not bother.  Die if we get one.
+	.value		;Those should be all the possibilities.
+
+
+;Server reports asynchronous lossage.  A has byte ptr to pkt data.
+xlos:	ildb c,a		;Verify that lossage packet data starts right.
+	caie c,"(
+	 .lose
+	call rsxas		;Skip type-of-lossage keyword
+	 jfcl
+	call rdnas		;Read PDP10 IOC error code
+	 .value
+	movem b,losing		;Remember that the server is losing.
+	call xlos1		;report it to the creator.
+	setzm retoin		;this flushes any .iot that was in progress.
+	setzm rplseq
+	jrst goloop
+
+xlos1:	syscal jobioc,[1000,,chboj ? losing]
+	 jfcl
+	ret
+
+;Server says lossage (such as disk full) has gone away.
+xwin:	setzm losing
+	jrst goloop
+
+;Server sends 8-bit data.  A has byte ptr to pkt data.
+xdat:	skipe ignin
+	 jrst goloop
+	ldb b,[$cpknb+pktbuf]	;Get # bytes of data sent.
+	jumpe b,goloop
+	movn e,bytswd		;E gets minus number of user bytes per word.
+	move d,bufi
+xdat1:	ildb c,a		;get a char from packet
+	idpb c,d		;stick it into BUF.  Most bytes have 7 bits so just idpb.
+	tlne d,760000		;The last in each word also has the word's low bit,
+	 jrst xdat2
+	lsh c,-7		;so get it into low bit of C and store in BUF.
+	dpb c,[000100,,@d]
+	camn d,[010700,,bufend-1]
+	 move d,[010700,,buf-1]	;Wrap around in the buffer.
+	addm e,inpall		;Record 1 word of data as present in buffer.
+	setzm 1(d)		;Clear out next word in case it is incomplete.
+xdat2:	sojg b,xdat1
+	jrst xdat3
+
+;Server sends 16-bit data.  A has byte ptr to pkt data, but it's 8-bit.
+xdwd:	skipe ignin
+	 jrst goloop
+	ldb b,[$cpknb+pktbuf]	;Get # of 8-bit bytes of data.
+	lsh b,-1
+	hrli a,442000	    ;Switch b.p. to 16-bit bytes.
+	movn e,bytswd	    ;E gets minus number of user bytes per word.
+	move d,bufi
+xdwd1:	ildb c,a	    ;Transfer bytes one at a time.
+	idpb c,d
+	tlne d,700000	    ;After last byte of a word,
+	 jrst xdwd2
+	addm e,inpall	    ;mark one word of data as present in buffer.
+	camn d,[010700,,bufend-1]
+	 move d,[010700,,buf-1]	;Wrap around in the buffer.
+	setzm 1(d)		;Clear following word in case it is incomplete.
+xdwd2:	sojg b,xdwd1
+xdat3:	movem d,bufi
+	skipn c,retoin	;is creator hanging in an iot waiting for this data?
+	 jrst goloop
+	setzm retoin	;if so, return to iot code and give it to him.
+	move a,jbcop
+	jrst jioti1
+
+;Server reports eof.
+xeof:
+;	skipe accack	;Don't report as EOF if we are skipping data
+;	 jrst goloop	;while handling a .ACCES
+	skipe eofi
+	 jrst xeof1
+	setom eofi
+	move a,bufi	;If our input has not completely filled the
+	movn b,bytswd	;last buffer word, mark that whole word
+	tlne a,700000	;now as available for input.
+	 addm b,inpall
+xeof1:	skipn retoin	;skip if creator waiting for more data
+	 jrst goloop
+	setzm retoin	;give eof instead
+	jrst jiotie
+
+;Server sends reply to a file command.  Is this a reply
+;we want to look at?  Check its sequence number.
+;If it is one we want to look at, then the command
+;which it is replying to has left the address of a continuation in XRPLAD.
+xrpl:	ildb c,a	    		;get a character
+	caie c,"(
+	 .lose
+	call rdnas	    ;Check Reply Sequence number
+	 .value
+	camn b,rplseq	    ;If this reply isn't interesting, ignore it.
+	 call @xrplad	    ;Otherwise process the reply.
+	jrst goloop
+
+;Test the input network channel status.
+;If it has input, skip.
+;If it has none, but is happy, don't skip.
+;If it is in an error state, suicide after giving user an ioc error.
+ntchk:	setzm nticin	;Tentatively clear interrupt, before reading status
+	syscal whyint,[%climm,,chneti ? %clout,,a ? %clout,,b ? %clout,,c]
+	 jrst ntioc
+	cain a,%wycha
+	 caie b,%csopn
+	  jrst ntioc
+	tlne c,-1
+	 aos (p)
+	ret
+
+;Give the user an IOC error because the connection is closed.
+NTIOC:	syscal jobioc,[%climm,,chboj ? %climm,,1]
+	 jfcl
+	jrst die	;Commit suicide.  Can't try to be reused since no longer have slave.
+
+TSINT:	0
+	0
+	SKIPL U,TSINT
+	 JRST TSFW
+	TRNN U,1_CHBOJ+1_CHNETI+1_CHNETO
+	 .VALUE
+	SETOM INT
+	TRZE U,1_CHBOJ
+	 SETOM JBINT
+	TRZE U,1_CHNETI
+	 SETOM NTICIN
+	TRZE U,1_CHNETO
+	 SETOM NTOCIN
+	CAME U,[SETZ]
+	 .VALUE
+	.DISMISS TSINT+1
+  
+TSFW:	TRNN U,%PIIOC
+	 .VALUE
+	.SUSET [.RBCHN,,U]
+;;;???
+;	CAIN U,CHICP
+;	 .DISMISS [NOGO]	;ERROR CONNECTING => DEV NOT AVAIL
+	.DISMISS [NTIOC]	;ERROR TRANSFERRING => IOC ERROR
+
+LOSE1:	.VALUE
+LOSE2:	.VALUE
+LOSE3:	.VALUE
+LOSE4:	.VALUE
+LOSE5:	.VALUE
+LOSE6:	.VALUE
+LOSE7:	.VALUE
+LOSE8:	.VALUE
+
+;COME HERE WHEN WE HAVE BEEN FINISHED WITH BY ONE CREATOR, TO OFFER OURSELVES TO OTHERS.
+REUSE:	JRST REUSL
+	MOVEI A,30.*5		;WAIT FIVE SECONDS FOR SOMEONE TO TRY TO REUSE US.
+	.SUSET [.SAMSK2,,[1_CHBOJ]]
+	SYSCAL JOBREU,[
+		RDEVN		;DEVICE NAME WE ARE HANDLING.
+		['JOBDEV]	;FILENAMES WE WERE LOADED FROM.
+		RDEVN
+		['DEVICE]
+		A]		;AMOUNT OF TIME TO WAIT (UPDATED, AS IN .SLEEP).
+	 JRST REUSL
+	.SUSET [.SIMSK2,,[1_CHBOJ]]
+	SYSCAL RFNAME,[		;SOMEBODY GOBBLED US.  FIND OUT WHO, FOR PEEK.
+		1000,,CHBOJ
+		2000,,0
+		2000,,CRUNAM
+		2000,,CRJNAM]
+	 JFCL
+	SETZM SNTCLS	;WE ARE NO LONGER WAITING FOR A CICLOS (WE IGNORED IT)
+	SETZM PRSVDT
+	JRST REUSE1
+
+;HERE IF WE SEE WE ARE NOT GOING TO BE REUSED.
+REUSL:	SKIPE SNTCLS	;IF WE SENT A CLOSE COMMAD, WE MUST WAIT FOR THE REPLY,
+	 JRST GOLOOP	;WHICH WILL MAKE US COME BACK TO DIE.
+;COME HERE TO REALLY GIVE UP THE GHOST.
+DIE:	.LOGOUT
+	.VALUE
+	JRST DIE
+
+JBGT:	SETZ
+	'JOBCAL
+	[CHBOJ]
+	2000,,JBCOP
+	SETZ [-11.,,JBCWD1]
+
+JBST:	SETZ
+	'JOBSTS
+	MOVEI CHBOJ
+	MOVEI 43	;SNDSK
+	RDEVN
+	RDEVN+1
+	RDEVN+2
+	RDEVN+3
+	OPMODE
+	SETZ [440700,,TRUNAM]
+
+JBRT1:	SETZ
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ [1]
+
+JBRTL:	SETZ
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ [0]
+
+JBRT4:	SETZ		;JOBRET error code 4 ("File not found").
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ [%ENSFL,,]
+
+JBRT3:	SETZ		;JOBRET AN ERROR CODE.
+	SIXBIT /JOBRET/
+	[CHBOJ]
+	SETZ ERRCOD
+
+ERRCOD:	0		;ERROR CODE PUT IN HL OF THIS WORD.
+
+;DATA RETURNED BY JOBCAL.
+JBCOP:	0	;OPCODE: 0-8 MEANING OPEN, IOT, MLINK, RESET, RCHST, ACCESS, DELETE/RENAME, RENMWO, .CALL.
+JBCWD1:	0	;BLOCK IOT PTR / ACCESS PTR / NEW FN1 IN RENAME&MLINK / 0 IN DELETE. / SYSTEM CALL NAME.
+JBCFN1:
+JBCWD2:: 0	;FN1
+JBCFN2:
+JBCWD3:: 0	;FN2
+
+JBCSNM:		;SNAME
+JBCA1::		;AND 1ST ARGUMENT OF .CALLS.
+JBCWD4:: 0
+JBCDEV:		;DEVICE NAME
+JBCA2::		;AND 2ND ARGUMENT OF .CALLS.
+JBCWD5:: 0
+JBCWD6:	0	;NEW FN2 IN RENAME&MLINK / OPEN MODE IN OPEN.
+JBCWD7:	0	;NEW SNAME IN MLINK.
+JBCWD8:	0
+JBCWD9:	0
+JBCW10:	0
+JBCW11:	0
+
+LASTOP:	-1		;CODE FOR LAST OPERATION, OR NAME OF SYSTEM CALL.
+			;-1 MEANS NO PREVIOUS OPERATION, OR ELSE AN OPERATION
+			;PCLSR'D AND WE DETECTED THAT WITH A FAILING JOBRET
+			;(SO IF IT IS RETRIED, IMMEDIATELY DO THE JOBRET AGAIN).
+FILOPN:	0		;-1 => OUR CREATOR "HAS A FILE OPEN".  WE AREN'T FREE OF HIM TILL HE CLOSES.
+SNTCLS:	0		;-1 WE HAVE SENT A CLOSE PKT, SO MUST NOT SUICIDE TILL THE REPLY.
+
+SEQNUM:	0		;Sequence num of last file command.
+RPLSEQ:	0		;Sequence num of reply that is significant.
+XRPLAD:	0		;Routine to call when we see a reply with that seqnum.
+
+OPMODE:	0	;MODE CREATOR OPENED US IN.
+EOFI:	0	;-1 => HAVE REACHED EOF ON INPUT
+LOSING:	0	;Nonzero => server reported an IOC error and condition has not cleared up.
+		;This word contains the IOC error code.
+		;Each new IOT attempt should get another IOC error.
+
+;Flags that say we stopped processing the creator's IOT in the middle, and why.
+RETOIN:	0	;Nonzero => creator hung in input IOT, this is # bytes wanted.
+RETOOU:	0	;-1 => creator hung in an output IOT while we examine replies from server.
+OBLOCK:	0	;-1 => output JOB IOT is waiting for space in BUF to appear.
+RETOCT:	0	;When RETOOU or OBLOCK is -1, this has # bytes left to xfer in that IOT.
+
+;Flags that say that interrupts happened
+;and are awaiting mp level processing.
+;INT:	0	;-1 => Some int of any kind.  This is an AC.
+JBINT:	0	;-1 => CHBOJ int
+NTICIN:	0	;-1 => CHNETI int
+NTOCIN:	0	;-1 => CHNETO int
+
+LPDLL==100
+PDL:	BLOCK LPDLL+4
+
+PKTBUF:	BLOCK %CPMXW			;Chaos packet buffer.
+
+CONSTANTS
+VARIABLES
+
+BUFI:	BUF	;POINTER FOR LOADING BUF FROM RDATA'S
+BUFO:	BUF	;POINTER FOR TAKING FROM BUF TO GIVE TO CREATOR.
+BUFSIZ:	0	;BUFFER SIZE IN BYTES OF SIZE WE'RE USING.
+BYTSWD:	0	;# BYTES IN A WORD.
+BUFONM:	0	;BUFO, IN FORM OF # BYTES FROM BEGINNING OF BFR.
+
+INPALL:	0	;INPUT ALLOCATION KNOW TO SLAVE, IN BYTES.
+INREAL:	0	;# BYTES EMPTY IN BUFFER BUT NOT REALLOCATED.
+
+AVAIL:	0	;# bytes available for filling, for output.
+
+IGNIN:	0	;-1 => ignore input packets while waiting for .ACCESS reply.
+IGNBYT:	0	;nonzero => number of bytes of input to skip before next IOT
+		;because we did a .ACCESS to a pointer not on a word boundary.
+
+CONSTANTS
+VARIABLES
+
+BUFL==10000-.	;TRY TO FIT IN 4K
+IFL BUFL-2000,BUFL==2000+<BUFL&1777>	;OH, WELL
+BUF:	BLOCK BUFL-1
+	-1			;Make sure enough core gets dumped.
+BUFEND::
+DEFINE INFORM A,B
+PRINTX/A=B
+/TERMIN
+IF1 INFORM BUFFER SIZE,\BUFL
+IF1 INFORM HIGHEST USED,\.
+
+END	GO
