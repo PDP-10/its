@@ -398,6 +398,9 @@ type ":vk\r"
 respond "*" ":midas sys2;ts talk_gren;untalk\r"
 expect ":KILL"
 
+respond "*" ":midas sys3;ts ufind_syseng;ufind\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_sysen2;find\r"
 expect ":KILL"
 respond "*" ":link sys;ts find,sysbin;find bin\r"
