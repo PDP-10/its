@@ -995,6 +995,15 @@ respond "*" ":midas sys1;ts charfc_sysen3;charfc\r"
 expect ":KILL"
 respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
 
+# file
+respond "*" ":midas device;chaos file_syseng;file\r"
+expect ":KILL"
+
+# filei, fileo
+respond "*" ":midas device;chaos filei_eak;file\r"
+expect ":KILL"
+respond "*" ":link device;chaos fileo,device;chaos filei\r"
+
 # 11sim
 respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
 respond "end input with ^C" "45p==0\r"
