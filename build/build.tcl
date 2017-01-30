@@ -709,6 +709,10 @@ respond "*" ":link info;complr 1,info;lispc >\r"
 respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
 expect ":KILL"
 
+# bitprt
+respond "*" ":midas sys3;ts bitprt_sysen2;bitprt\r"
+expect ":KILL"
+
 # inquir
 respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
 respond "*" ":link sys;.fasl defs,lisp;.fasl defs\r"
