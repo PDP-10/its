@@ -108,6 +108,7 @@ A list of [known ITS machines](doc/machines.md).
    - ATSIGN TARAKA, starts dragons.
    - ATSIGN TCP, TCP support.
    - BINPRT, display information about binary executable file.
+   - BITPRT, print JCL as bits.
    - BYE, say goodbye to user. Used in LOGOUT scripts.
    - CALPRT, decode a .CALL instructions CALL block.
    - CHARFC/CHARFS, Chaos RFC.
