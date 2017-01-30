@@ -367,6 +367,11 @@ respond "*" "purify\033g"
 respond "Idle" "q"
 expect ":KILL"
 
+respond "*" ":midas sys3;ts vv_sysen2;vv\r"
+expect ":KILL"
+respond "*" ":link sys3;ts vj,sys3;ts vv\r"
+respond "*" ":link sys3;ts detree,sys3;ts vv\r"
+
 respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
 expect ":KILL"
 
