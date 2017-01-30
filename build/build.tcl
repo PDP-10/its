@@ -454,12 +454,12 @@ respond "*" ":link sys; ts p,sys; ts peek\r"
 respond "*" ":midas sys1;ts crock_sysen1;crock\r"
 respond "System?" "ITS\r"
 expect ":KILL"
-respond "*" ":link sys2;tc c,sys1;ts crock\r"
+respond "*" ":link sys2;ts c,sys1;ts crock\r"
 
 respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
 respond "System?" "ITS\r"
 expect ":KILL"
-respond "*" ":link sys2;tc dc,sys1;ts dcrock\r"
+respond "*" ":link sys2;ts dc,sys1;ts dcrock\r"
 
 # Zork
 respond "*" ":midas sys3;ts zork_sysen3;zork\r"
