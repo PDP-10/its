@@ -508,6 +508,9 @@ expect ":KILL"
 
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
+respond "*" ":midas .;ts redrct_sysnet;redrct\r"
+expect ":KILL"
+
 # telnet server
 respond "*" ":midas sysbin;telser_sysnet;telser\r"
 expect ":KILL"
