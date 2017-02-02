@@ -1221,6 +1221,11 @@ expect ":KILL"
 respond "*" ":midas sys2;ts execvt_sysen3;execvt\r"
 expect ":KILL"
 
+# UP
+respond "*" ":midas sys1;ts up_sysen1;up\r"
+expect ":KILL"
+respond "*" ":link sys1;ts down, sys1;ts dup\r"
+
 # UPTIME
 respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
 expect ":KILL"

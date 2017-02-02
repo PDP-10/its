@@ -230,6 +230,7 @@ A list of [known ITS machines](doc/machines.md).
    - TYPE8, type 8-bit file.
    - UFIND, find users.
    - UNTALK, split-screen comm-link program.
+   - UP/DOWN, check if host is online.
    - UPTIME, Chaosnet uptime server.
    - USQ, unsqueeze/uncram a file.
    - VV/VJ/DETREE, list jobs.
