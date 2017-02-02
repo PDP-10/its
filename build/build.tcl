@@ -309,6 +309,11 @@ expect ":KILL"
 respond "*" ":link teach;ts emacs,emacs;tstch >\r"
 type ":vk\r"
 
+# nsalv, timesharing version
+respond "*" ":midas sys1;_kshack;nsalv\r"
+respond "machine?" "TS\r"
+expect "*"
+
 # magdmp
 respond "*" ":midas .;_syseng;magdmp\r"
 respond "PTRHRI=" "y\r"
