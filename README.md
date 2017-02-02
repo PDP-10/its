@@ -203,6 +203,7 @@ A list of [known ITS machines](doc/machines.md).
    - RIPDEV, replacement for MLDEV for no-longer-existing machines.
    - RMAIL, Mail reading client.
    - RMTDEV, MLDEV for non-ITS hosts.
+   - SALV, old file system tool for KA and KL.
    - SCANDL, TTY OUTPUT SPY.
    - SEND, REPLY, replacements for DDT :SEND.
    - SPELL, ESPELL spell checker.

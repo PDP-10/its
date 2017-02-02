@@ -314,6 +314,15 @@ respond "*" ":midas sys1;_kshack;nsalv\r"
 respond "machine?" "TS\r"
 expect "*"
 
+# salv, standalone and timesharing versions
+respond "*" ":midas .;_system;salv\r"
+respond "time-sharing?" "n\r"
+respond "machine?" "ML\r"
+expect ":KILL"
+respond "*" ":midas sys1;ts salv_system;salv\r"
+respond "time-sharing?" "y\r"
+expect ":KILL"
+
 # magdmp
 respond "*" ":midas .;_syseng;magdmp\r"
 respond "PTRHRI=" "y\r"
