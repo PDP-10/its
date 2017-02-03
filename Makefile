@@ -21,7 +21,7 @@ SIMH=${PWD}/tools/simh/BIN/pdp10
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
-all: out/rp0.dsk
+all: out/rp0.dsk tools/supdup/supdup
 
 out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
 	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl
@@ -78,6 +78,9 @@ $(ITSTAR):
 
 $(WRITETAPE):
 	cd tools/tapeutils; make
+
+tools/supdup/supdup:
+	cd tools/supdup; make
 
 clean:
 	rm -rf out start build/*/stamp
