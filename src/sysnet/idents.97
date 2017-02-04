@@ -1,0 +1,224 @@
+;-*- Mode: MIDAS -*-
+
+TITLE IDENTS	; Ident/Auth Server -- install as DEVICE;TCP SYN161
+
+PORT==113.	; Official TCP port for Indent/Auth Server
+
+A=1		; scratch
+B=2		; scratch
+C=3		; scratch
+D=4		; scratch
+
+T=10		; scratch for macros	
+TT=11		; scratch for macros
+
+P=17		; stack pointer
+
+NETI==1		; network input channel
+NETO==2		; network output channel
+
+PDLSIZ==10	; stack size
+CMDSIZ==100	; input buffer size
+
+LOC 42
+	JSR TSINT
+
+LOC 100				; Here we go
+
+DEBUG:	0			; Non-zero when debugging
+
+
+.INSRT KSC;MACROS
+
+DEFINE POINT (SIZ,ADR)		; As in MACRO-10
+	<440000\<<SIZ>_6>,,<ADR>>!TERMIN
+
+DEFINE SYS FUN,[ARGS]		; Success or death
+	SYSCALL FUN,ARGS
+	 JSR AUTPSY
+TERMIN
+
+DEFINE ASCIOT [ADR,LEN]		; Send ASCII to network
+	MOVE T,[POINT 7,ADR]
+	MOVE TT,LEN
+	SYS SIOT,[
+		MOVEI NETO
+		MOVE T
+		MOVE TT]
+TERMIN
+
+DEFINE STRIOT &TEXT&		; Send text to network
+	ASCIOT [ASCII TEXT],[.LENGTH TEXT]
+TERMIN
+
+DEFINE CRLF			; Send network EOL
+	.IOT NETO,[^M]
+	.IOT NETO,[^J]
+TERMIN
+
+TSINT:	0			; Interrupt handler - for fatal conditions
+	0			; Any interrupt is cause for death.
+	JSR AUTPSY
+
+AUTPSY:	0			; Remember where we came from
+	SKIPE DEBUG
+	 .VALUE
+	.LOGOUT
+
+PDL:	PDLSIZ,,PDL+1		; Push down stack
+	BLOCK PDLSIZ
+
+COMAND:	BLOCK <CMDSIZ/5>+1	; Input buffer
+CMDLEN:	0			; Actual size, excluding EOL
+
+LOCALP:	0			; Local port number
+CLIENP:	0			; Foreign port number
+CLIENT: 0			; Foreign host number
+XUNAME:	0			; Logged in user name, in SIXBIT
+USERID:	BLOCK 2			; Logged in user name, in ASCII
+UIDLEN: 0			; Length of USERID in bytes
+
+
+GO:	MOVE P,PDL		; Set up stack
+
+NETOPN:	SYS TCPOPN,[		; Listen for a connection
+		MOVEI NETI
+		MOVEI NETO
+		MOVEI PORT
+		MOVE [-1]
+		MOVE [-1]]
+	MOVEI B,3*30.		; Try for 30 sec
+NETOP2:	MOVEI A,10.
+	.SLEEP A,
+	SYSCAL WHYINT,[		; Get socket state
+		MOVEI NETO
+		MOVEM D
+		MOVEM A]
+	 .LOSE %LSSYS
+	CAIE A,%NSOPN		; If connection open
+	 CAIN A,%NSRFN		;  or RFNM wait on write link
+	  CAIA			;   then don't	
+	   SOJG B,NETOP2	;    try again		
+	CAIG B,
+	 JSR AUTPSY		; Timed out...
+
+GETCMD:	MOVE A,[POINT 7,COMAND]	; Point to COMAND buffer
+	HRLZI B,-CMDSIZ		; -Size,,Length
+GETCM1:	SYS IOT,[		; Get one character
+		MOVEI NETI
+		MOVEM C]
+	CAIGE C,0		; If the other end closed
+	 JSR NKNOWN		;  then barf
+	CAIE C,^M		; If it's CR
+	 CAIN C,^J		;  or LF
+	  JRST GETCM2		;   then we're done
+	IDPB C,A		; Save it
+	AOBJN B,GETCM1		; Next
+	JSR NKNOWN		; Buffer overflow
+GETCM2:	HLLI B,			; Drop remaining size
+	MOVEM B,CMDLEN		; Remember the length
+	CAIGE B,3		; If it's too short to make sense
+	 JSR NKNOWN		;  then barf
+
+PARSE:	MOVE A,[POINT 7,COMAND]	; Point to COMAND buffer
+	CALL NUMBER		; Scan first number
+	MOVEM B,LOCALP		;  into local port
+	CALL NUMBER		; Scan second number
+	MOVEM B,CLIENP		;  into client port
+
+LOOKUP:	SYS RFNAME,[		; Get client host number
+		MOVEI NETI
+		MOVEM D
+		MOVEM D
+		MOVEM D
+		MOVEM CLIENT]
+	 JFCL
+				;; DEBUG OUTPUT
+				MOVE A,CLIENT
+				LSH A,-30
+				CALL PROCT
+				.IOT NETO,[":]
+				MOVE A,CLIENT
+				LSH A,-20
+				ANDI A,377
+				CALL PROCT
+				.IOT NETO,[":]
+				MOVE A,CLIENT
+				LSH A,-10
+				ANDI A,377
+				CALL PROCT
+				.IOT NETO,[":]
+				MOVE A,CLIENT
+				ANDI A,377
+				CALL PROCT
+				CRLF
+
+RESULT:	CALL PORTS		; Send back result
+	STRIOT " : USERID : ITS : "
+	ASCIOT USERID,UIDLEN
+
+DONE:	CRLF
+	.NETS NETO,		; Force the output.
+	.CLOSE NETO,		; Disconnect.
+	.CLOSE NETI,		; Disconnect.
+	.LOGOUT
+
+NKNOWN:	0			; Remember where we came from
+	PUSHAE P,[A,B,C,D]	; Don't clobber the evidence
+	STRIOT "0, "
+	MOVE A,NKNOWN		; Where it blew
+	CALL PROCT		; Tell the loser
+	STRIOT " : ERROR : UNKNOWN-ERROR"
+	POPAE P,[D,B,C,A]	; Restore evidence
+	SKIPE DEBUG
+	 JSR AUTPSY		; Present it to the court
+	JRST DONE
+
+NVALID:	CALL PORTS
+	STRIOT " : ERROR : INVALID-PORT"
+	JRST DONE
+
+	;; Send COMAND back to client
+PORTS:	ASCIOT COMAND,CMDLEN
+	RETURN
+
+	;; Send positive number in right half of A to the net, in octal
+	;; Clobbers A, B and C
+PROCT:	HLLI A,			; Clear top half
+	JUMPE A,PROCT0		; Careful with zero
+	HRROI B,0		; The glass is half full
+PROCT1:	LSHC A,3		; Get the top digit from A, and take a sip
+	HLRZ C,A		; Move digit into C
+	JUMPE C,PROCT1		; Skip leading zeroes
+	ANDI C,7		; Strip old bits
+	ADDI C,"0		; Convert to octal
+	.IOT NETO,C		; Send it out
+	JUMPN B,PROCT1		; Until the glass is empty
+	RETURN
+PROCT0:	.IOT NETO,["0]		; Zero is special
+	RETURN
+
+	;; Skip leading non-digits, then
+	;; read decimal number from bp in A into B
+	;; Advances A, clobbers C
+NUMBER:	ILDB C,A		; Look at the next character
+	JUMPE C,NVALID		; Barf at end of string
+	CAIL C,"0		; If it's less than 0
+	 CAILE C,"9		;  or greater than 9
+	  JRST NUMBER		;   then skip it
+	SETZ B,			; Start from 0
+NUMLOP:	IMULI B,10.		; Move previous digits up
+	SUBI C,"0		; Convert to binary
+	IOR B,C			; Add to result
+	ILDB C,A		; Look at the next character
+	JUMPE C,NUMEND		; Bail at end of string
+	CAIL C,"0		; If it's less than 0
+	 CAILE C,"9		;  or greater than 9
+	  JRST NUMEND		;   then we're done
+	JRST NUMLOP		; Next
+NUMEND:	JUMPLE B,NVALID		; Barf on gubbage
+	RETURN
+
+LITS:				; Literals go here
+
+END GO
