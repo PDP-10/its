@@ -966,6 +966,11 @@ expect ":KILL"
 respond "*" ":midas sys;ts acount_sysen3;acount\r"
 expect ":KILL"
 
+# idents
+respond "*" ":midas sysbin;_sysnet;idents\r"
+expect ":KILL"
+respond "*" ":link device;tcp syn161,sysbin;idents bin\r"
+
 # timsrv
 respond "*" ":midas sysbin;timsrv bin_sysnet;timsrv\r"
 expect ":KILL"
