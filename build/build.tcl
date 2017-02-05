@@ -1,3 +1,9 @@
+proc abort {} {
+    puts ""
+    puts "The last command timed out."
+    exit 1
+}
+
 proc type s {
     sleep .1
     foreach c [split $s ""] {
