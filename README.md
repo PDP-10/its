@@ -121,6 +121,7 @@ A list of [known ITS machines](doc/machines.md).
    - CROCK, analog watch.
    - CROSS, cross assembler for micros.
    - CTIMES, Chaosnet time server.
+   - DATE, print date and time.
    - DATSRV, server for RFC 867 Daytime protocol.
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
