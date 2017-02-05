@@ -680,6 +680,10 @@ respond "*" ":link .info.;mail info,.info.;qmail info\r"
 respond "*" ":midas sys1;ts time_sysen2;time\r"
 expect ":KILL"
 
+# DATE
+respond "*" ":midas sys1;ts date_sysen3;date\r"
+expect ":KILL"
+
 # PWMAIL
 respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "Y\r"
