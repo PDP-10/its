@@ -201,7 +201,7 @@ A list of [known ITS machines](doc/machines.md).
    - PWORD, replacement for sys;atsign hactrn that requires registered logins.
    - QUOTE, prints out a random quote.
    - REATTA, reattaches disowned jobs to terminal.
-   - REDRCT, recirect IP routing.
+   - REDRCT, redirect IP routing.
    - RIPDEV, replacement for MLDEV for no-longer-existing machines.
    - RMAIL, Mail reading client.
    - RMTDEV, MLDEV for non-ITS hosts.
