@@ -512,9 +512,10 @@ respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
 respond "*" ":midas syshst;_syshst;h3make\r"
 expect ":KILL"
 
-# submit job to daemon to build binary host table
-respond "*" ":job h3make\r"
-respond "*" ":load syshst;h3make bin\r"
+# build binary host table
+respond "*" ":job hosts3\r"
+respond "*" ":load syshst; hosts3 bin\r"
+respond "*" ":jcl /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
 respond "*" "\033g"
 
 # basic TCP support
