@@ -163,6 +163,7 @@ A list of [known ITS machines](doc/machines.md).
    - INSTAL, install executables on other ITS machines.
    - ITSDEV, ITS device server.
    - JOBS, list jobs by category.
+   - KCC, C compiler (binary only).
    - LISP, lisp interpreter and runtime library (autoloads only).
    - LOADP, displays system load.
    - LOCK, shut down system.
