@@ -183,6 +183,7 @@ A list of [known ITS machines](doc/machines.md).
    - NAME, Shows logged in users and locations, aka FINGER.
    - NETIME, network time dragon.
    - NICNAM/NICWHO, look up someone in the ARPAnet directory.
+   - NUDIR, create user directory.
    - NWATCH, small watch display.
    - OBS, observe system activities.
    - OS, realtime TTY spy.

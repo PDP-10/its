@@ -1179,6 +1179,10 @@ respond "*" "nlinks+14/ A,,646471\r"
 type ":pdump sys1;ts prufd\r"
 respond "*" ":kill\r"
 
+# udir
+respond "*" ":midas sys3;ts nudir_sysen3; nudir\r"
+expect ":KILL"
+
 # STY
 respond "*" ":midas sys1;ts sty_sysen2;sty\r"
 expect ":KILL"
