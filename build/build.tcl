@@ -517,7 +517,7 @@ expect ":KILL"
 respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
 expect ":KILL"
 
-respond "*" ":midas syshst;_syshst;hosts3\r"
+respond "*" ":midas syshst;ts hosts3_syshst;hosts3\r"
 expect ":KILL"
 
 respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
@@ -526,10 +526,8 @@ respond "*" ":midas syshst;_syshst;h3make\r"
 expect ":KILL"
 
 # build binary host table
-respond "*" ":job hosts3\r"
-respond "*" ":load syshst; hosts3 bin\r"
-respond "*" ":jcl /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
-respond "*" "\033g"
+respond "*" ":syshst;hosts3 /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
+expect ":KILL"
 
 # basic TCP support
 respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
