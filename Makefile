@@ -7,6 +7,9 @@ IP=192.168.1.100
 GW=192.168.0.45
 NETMASK=255,255,255,248
 CHAOS=no #Or octal Chaosnet address
+CHAFRIENDS=chip=3150/no.nocrew.org \
+           chip=3143/up.update.uu.se \
+           chip=7100/sj.gewt.net
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
 SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
@@ -75,11 +78,11 @@ build/simh/stamp: $(SIMH) start
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
-	test $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS)'; \
+	test $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
 	sed -e 's/%IP%/$(IP)/' \
 	    -e 's/%GW%/$(GW)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
-	    -e "s/%CHAOSA%/$$ca/" < $< > $@
+	    -e "s|%CHAOSA%|$$ca|" < $< > $@
 
 src/syshst/$(H3TEXT): build/$(H3TEXT)
 	test $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
