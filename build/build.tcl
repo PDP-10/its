@@ -535,6 +535,11 @@ respond "*" "\033g"
 respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
 expect ":KILL"
 
+# Chaosnet support
+respond "*" ":midas sysbin;_syseng;@chaos\r"
+expect ":KILL"
+respond "*" ":link device;atsign chaos,sysbin;@chaos bin\r"
+
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
 respond "*" ":midas .;ts redrct_sysnet;redrct\r"
