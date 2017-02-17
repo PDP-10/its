@@ -24,6 +24,8 @@ SIMH=${PWD}/tools/simh/BIN/pdp10
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 
+H3TEXT=$(shell cd build; ls h3text.*)
+
 all: out/rp0.dsk tools/supdup/supdup
 
 out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
@@ -33,7 +35,7 @@ out/minsys.tape: $(ITSTAR)
 	mkdir -p out
 	cd bin; $(ITSTAR) -cf ../$@ $(MINSYS)
 
-out/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp src/syshst/h3text.2012
+out/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp src/syshst/$(H3TEXT)
 	mkdir -p out
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
@@ -63,7 +65,7 @@ build/simh/stamp: $(SIMH) start
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	sed -e 's/%IP%/$(IP)/' -e 's/%GW%/$(GW)/' < $< > $@
 
-src/syshst/h3text.2012: build/h3text.2012
+src/syshst/$(H3TEXT): build/$(H3TEXT)
 	sed -e 's/%IP%/$(IP)/' < $< > $@
 
 $(KLH10):
