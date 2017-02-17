@@ -1,4 +1,4 @@
-EMULATOR ?= simh
+EMULATOR ?= klh10
 
 include conf/network
 
