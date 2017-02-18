@@ -1,7 +1,12 @@
 EMULATOR ?= simh
+
+# Network configuration for ITS.  Note: for now, the two-letter ITS
+# name is hardcoded to DB, which is short for DistriBution.
+HOSTNAME=DB-ITS.EXAMPLE.COM
 IP=192.168.1.100
 GW=192.168.0.45
 NETMASK=255,255,255,248
+CHAOS=no #Or octal Chaosnet address
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
 SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
@@ -55,7 +60,13 @@ start: build/$(EMULATOR)/start
 	ln -s $< $*
 
 build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
-	x=`echo $(IP) | tr . ,`; sed -e "s/%IP%/$$x/" -e 's/%NETMASK%/$(NETMASK)/' < build/klh10/config.203 > src/system/config.203
+	cp=0; ca=0; \
+	test $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
+	x=`echo $(IP) | tr . ,`; \
+	sed -e "s/%IP%/$$x/" \
+	    -e 's/%NETMASK%/$(NETMASK)/' \
+	    -e "s/%CHAOSP%/$$cp/" \
+	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > src/system/config.203
 	touch $@
 
 build/simh/stamp: $(SIMH) start
@@ -63,10 +74,18 @@ build/simh/stamp: $(SIMH) start
 	touch $@
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
-	sed -e 's/%IP%/$(IP)/' -e 's/%GW%/$(GW)/' < $< > $@
+	cp=';'; ca=''; \
+	test $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS)'; \
+	sed -e 's/%IP%/$(IP)/' \
+	    -e 's/%GW%/$(GW)/' \
+	    -e "s/%CHAOSP%/$$cp/" \
+	    -e "s/%CHAOSA%/$$ca/" < $< > $@
 
 src/syshst/$(H3TEXT): build/$(H3TEXT)
-	sed -e 's/%IP%/$(IP)/' < $< > $@
+	test $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
+	sed -e 's/%IP%/$(IP)/' \
+	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
+	    -e "s/%CHAOS%/$$c/" < $< > $@
 
 $(KLH10):
 	cd tools/klh10; \
