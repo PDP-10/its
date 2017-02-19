@@ -1389,6 +1389,9 @@ type ":dump\r"
 respond "_" "dump links full\r"
 respond "TAPE NO=" "0\r"
 expect "REEL"
+respond "_" "rewind\r"
+respond "_" "icheck\r"
+respond "=" "\r"
 respond "_" "quit\r"
 
 shutdown
