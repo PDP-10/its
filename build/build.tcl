@@ -1145,6 +1145,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts os_sysen2;os\r"
 expect ":KILL"
 
+# ttyswp
+respond "*" ":midas sys;ts ttyswp_sysen3;ttyswp\r"
+expect ":KILL"
+
 # argus
 respond "*" ":midas sys2;ts argus_sysen2;argus\r"
 expect ":KILL"
