@@ -113,6 +113,7 @@ A list of [known ITS machines](doc/machines.md).
    - BITPRT, print JCL as bits.
    - BYE, say goodbye to user. Used in LOGOUT scripts.
    - CALPRT, decode a .CALL instructions CALL block.
+   - CHADEV, Chaosnet jobdev (binary only).
    - CHARFC/CHARFS, Chaos RFC.
    - CHATST, Chaos test.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
