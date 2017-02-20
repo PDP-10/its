@@ -579,6 +579,7 @@ expect ":KILL"
 
 respond "*" ":link device;tcp syn025,sysbin;ftps bin\r"
 respond "*" ":link device;tcp syn031,sysbin;ftps bin\r"
+respond "*" ":link device;chaos smtp,sysbin;ftps bin\r"
 
 respond "*" ":midas sysbin;ftpu_sysnet;ftpu\r"
 expect ":KILL"
@@ -607,6 +608,7 @@ respond "*" ":link sys1;ts finger,sys;ts name\r"
 respond "*" ":link sys;ts f,sys;ts name\r"
 respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
+respond "*" ":link device;chaos name,sys;ts name\r"
 
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"
@@ -617,6 +619,7 @@ respond "*" ":midas device;atsign mlslv_sysen2;mlslv\r"
 expect ":KILL"
 
 respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
+respond "*" ":link device;chaos mldev,device;atsign mlslv\r"
 
 respond "*" ":midas device;jobdev fc_sysen2;fcdev\r"
 expect ":KILL"
