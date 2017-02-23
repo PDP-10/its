@@ -1310,7 +1310,7 @@ expect ":KILL"
 # UP
 respond "*" ":midas sys1;ts up_sysen1;up\r"
 expect ":KILL"
-respond "*" ":link sys1;ts down, sys1;ts dup\r"
+respond "*" ":link sys1;ts down, sys1;ts up\r"
 
 # UPTIME
 respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
