@@ -57,6 +57,7 @@ six-character parts separated by a period.
 Here is an overview of the repository:
 - bin - PDP-10 binary files necessary to bootstrap the system.
 - build - build scripts.
+- conf - configuration for building ITS.
 - doc - documentation, most of which appear in the INFO system.
 - src - source code for ITS and all programs.
 - tools - build tools.
@@ -276,6 +277,6 @@ matches the address configured in SYSTEM; CONFIG > (as IMPUS3). Finally,
 the HOST table source (SYSHST; H3TEXT >) and binary (SYSBIN; HOSTS3 >)
 defined a host called DB-ITS.EXAMPLE.COM at the IP address 192.168.1.100.
 
-In order to change the IP address of the host, you can edit the
-top-level Makefile variables IP, GW, and NETMASK.  After that, a full
-rebuild (e.g. `make clean all`) is required.
+In order to change the IP address of the host, you can edit IP, GW,
+and NETMASK in the file conf/network.  You can also set a Chaosnet
+address.  After that, a full rebuild (e.g. `make clean all`) is required.
