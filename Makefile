@@ -8,7 +8,8 @@ GW=192.168.0.45
 NETMASK=255,255,255,248
 CHAOS=3150 #Or octal Chaosnet address
 CHAFRIENDS=chip=3150/no.nocrew.org \
-	   chip=3143/up.update.uu.se
+           chip=3143/up.update.uu.se \
+           chip=7100/sj.gewt.net
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
 SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
