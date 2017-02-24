@@ -849,6 +849,11 @@ respond "*" ":kill\r"
 respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
 respond "*" ":link sys;ts panda,sysbin;panda bin\r"
 
+# bday
+respond "*" ":midas sysbin;_sysen1;bday\r"
+expect ":KILL"
+respond "*" ":link dragon;bday daily,sysbin;bday bin\r"
+
 # sender
 respond "*" ":midas sysbin;sender_sysen1;sender\r"
 expect ":KILL"
