@@ -132,6 +132,7 @@ A list of [known ITS machines](doc/machines.md).
    - DCROCK, digital watch.
    - DDTDOC, interactive DDT documentation.
    - DECUUO, TOPS-10 and WAITS emulator.
+   - DIRCPY, copy directory.
    - DIRDEV, list directories, sorted or subsetted.
    - DIRED, directory editor (independent from EMACS DIRED).
    - DMPCPY, crach dump copy dragon.
