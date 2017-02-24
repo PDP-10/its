@@ -251,6 +251,7 @@ A list of [known ITS machines](doc/machines.md).
    - WHAT, humorous quips to various "what" questions.
    - WHO%, list index/uname/jname/%time in sorted list.
    - WHOLIN, mode line for display terminals (with date/time/job/etc info).
+   - WHOSEN, print author of last send.
    - X, Y, Z, remember DDT command and re-execute it.
 
 6. A brand new host table is built from the host table source and

@@ -865,6 +865,10 @@ respond "*" ":link sys3;ts sned,sys;ts send\r"
 respond "*" ":midas sys3;ts psend_sysen2;b\r"
 expect ":KILL"
 
+# whosen
+respond "*" ":midas sys2;ts whosen_syseng;wsent\r"
+expect ":KILL"
+
 # more lisp packages
 respond "*" ":link lisp;tty fasl,liblsp;tty fasl\r"
 respond "*" "complr\013"
