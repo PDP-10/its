@@ -1100,6 +1100,10 @@ respond "*" ":midas device;chaos filei_eak;file\r"
 expect ":KILL"
 respond "*" ":link device;chaos fileo,device;chaos filei\r"
 
+# ifile
+respond "*" ":midas device;chaos ifile_syseng;ifile\r"
+expect ":KILL"
+
 # 11sim
 respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
 respond "end input with ^C" "45p==0\r"

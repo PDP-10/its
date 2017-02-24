@@ -161,6 +161,7 @@ A list of [known ITS machines](doc/machines.md).
    - HSNAME, displays user's HSNAME.
    - HSNDEV, HSNAME device.
    - IDLE, list idle users.
+   - IFILE, Chaosnet file service.
    - INIT, a helper program for LOGIN, LOGOUT, and other script files.
    - INLINE, reads line from TTY and adds to JCL (for DDT init files).
    - INQUIR, user account database.
