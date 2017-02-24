@@ -1003,6 +1003,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts dired_sysen2;dired\r"
 expect ":KILL"
 
+# dircpy
+respond "*" ":midas sys3;ts dircpy_sysen3;dircop\r"
+expect ":KILL"
+
 # hsname
 respond "*" ":midas sys2;ts hsname_sysen1;hsname\r"
 expect ":KILL"
