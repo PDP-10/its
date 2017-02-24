@@ -517,13 +517,15 @@ expect ":KILL"
 respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
 expect ":KILL"
 
-respond "*" ":midas syshst;ts hosts3_syshst;hosts3\r"
+respond "*" ":midas syshst;_syshst;hosts3\r"
 expect ":KILL"
+respond "*" ":link syshst;ts hosts3,syshst;hosts3 bin\r"
 
 respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
 
 respond "*" ":midas syshst;_syshst;h3make\r"
 expect ":KILL"
+respond "*" ":link syshst;ts h3make,syshst;h3make bin\r"
 
 # build binary host table
 respond "*" ":syshst;hosts3 /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
