@@ -110,6 +110,7 @@ A list of [known ITS machines](doc/machines.md).
    - ATSIGN DEVICE, load device drivers.
    - ATSIGN TARAKA, starts dragons.
    - ATSIGN TCP, TCP support.
+   - BDAY, happy birthday demon.
    - BINPRT, display information about binary executable file.
    - BITPRT, print JCL as bits.
    - BYE, say goodbye to user. Used in LOGOUT scripts.
