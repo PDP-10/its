@@ -268,6 +268,7 @@ respond "*" ":teco\r"
 respond "&" "mmrun\033purify\033dump\033ts 126\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
+respond "*" ":link sys2;ts edit,sys2;ts emacs\r"
 
 # BABYL, BABYLM, CACHE, FIXLIB, IVORY, MKDUMP, OUTLINE-MODE, PL1,
 # TEACH-C100, TMACS and WORDAB are generated with IVORY.
@@ -653,6 +654,7 @@ respond "*" ":link sys2;ts chtn,sysbin;chtn bin\r"
 
 respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
 expect ":KILL"
+respond "*" ":link sys2;ts styloc,sys;ts ttloc\r"
 
 respond "*" ":midas device;jobdev dp_sysen3;dpdev\r"
 expect ":KILL"
@@ -1048,6 +1050,7 @@ respond "*" ":load decsys;decuuo bin\r"
 respond "*" "purify\033g"
 respond "TS DEC" "\r"
 respond "*" ":kill\r"
+respond "*" ":link sys;ts dec\021 *,must; be here\r"
 
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
@@ -1268,6 +1271,7 @@ expect ":KILL"
 # GMSGS
 respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
 expect ":KILL"
+respond "*" ":link sys2;ts expire, sys2;ts gmsgs\r"
 respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
 
 # X, Y, Z
