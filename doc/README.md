@@ -30,3 +30,4 @@
 - DUMP: [manual](_info_/dump.info), [format](sysdoc/dump.format)
 - DSKDMP: [commands](sysdoc/dskdmp.order)
 - NSALV: [commands](kshack/nsalv.order)
+- LOCK: [commands](_info_/lock.order)
