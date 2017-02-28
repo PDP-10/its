@@ -218,6 +218,7 @@ A list of [known ITS machines](doc/machines.md).
    - SALV, old file system tool for KA and KL.
    - SCANDL, TTY OUTPUT SPY.
    - SEND, REPLY, replacements for DDT :SEND.
+   - SN, snoop terminal.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.
