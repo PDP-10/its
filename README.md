@@ -227,6 +227,7 @@ A list of [known ITS machines](doc/machines.md).
    - STYLOG, convert PTY output file into ascii file.
    - SUPDUP, Supdup client.
    - SYSCHK, check up on system job.
+   - SYSLOD, system load histogram.
    - SYSMSG, displays system messages.
    - TAGS, generate tags table for sources.
    - TALK/WHO/WHOJ/WHOM/USERS, list users.
