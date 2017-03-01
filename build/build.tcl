@@ -393,6 +393,9 @@ respond " BIN" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys3;ts crtsty,sysbin;crtsty bin\r"
 
+respond "*" ":midas sys3;ts sst_sysen3;sst\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_sysen2;peek\r"
 expect ":KILL"
 respond "*" ":job peek\r"

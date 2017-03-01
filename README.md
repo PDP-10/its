@@ -221,6 +221,7 @@ A list of [known ITS machines](doc/machines.md).
    - SN, snoop terminal.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
+   - SST, system status.
    - STINK, linker.
    - STINKR, new linker (binary only).
    - STY, pseudo-terminal for multiple sessions.
