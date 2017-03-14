@@ -10,6 +10,10 @@ the PDP-10 computer family.  It was created by hackers at MIT in the
 1960s.  The MIT site was shut down in 1990, but enthusiasts continue
 to operate ITS systems to this day.
 
+There is a mailing list for discussion about ITS.  Go to
+http://its.victor.se/mailman/listinfo/its-hackers_its.victor.se
+for more information.
+
 ### About this project
 
 This repository contains source code, tools, and scripts to build an
