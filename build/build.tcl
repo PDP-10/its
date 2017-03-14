@@ -1403,6 +1403,11 @@ respond "*" ":move .temp.;maklap fasl,comlap;mk.fas 80\r"
 respond "*" ":move .temp.;phas1 fasl,comlap;ph.fas 86\r"
 respond "*" ":move .temp.;srctrn fasl,comlap;st.fas 20\r"
 
+# balanc
+respond "*" ":midas sys3;ts balanc_alan;balanc\r"
+expect ":KILL"
+respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
+
 # ndskdmp tape
 respond "*" ":link kshack;good ram,.;ram ram\r"
 respond "*" ":link kshack;ddt bin,.;@ ddt\r"
