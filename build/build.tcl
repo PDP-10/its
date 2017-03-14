@@ -1367,6 +1367,11 @@ expect ":KILL"
 respond "*" ":midas sys3;ts host_sysnet;host\r"
 expect ":KILL"
 
+# EXPN/VRFY
+respond "*" ":midas sys3;ts expn_sysnet;expn\r"
+expect ":KILL"
+respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
+
 # WHOLIN
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
