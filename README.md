@@ -145,6 +145,7 @@ A list of [known ITS machines](doc/machines.md).
    - DUMP/LOAD, tape backup and restore.
    - EMACS, editor.
    - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
+   - EXPN/VRFY - query remote SMTP server.
    - FAIL, assembler from SAIL.
    - FCDEV, talk to LispM file server.
    - FDIR, fast directory listing.
