@@ -1,7 +1,6 @@
 # Incompatible Timesharing System
 
-[![Build Status](https://travis-ci.org/PDP-10/its.svg?branch=master)]
-(https://travis-ci.org/PDP-10/its)
+[![Build Status](https://travis-ci.org/PDP-10/its.svg?branch=master)](https://travis-ci.org/PDP-10/its)
 
 ### About ITS
 
