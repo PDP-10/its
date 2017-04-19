@@ -9,6 +9,16 @@ the PDP-10 computer family.  It was created by hackers at MIT in the
 1960s.  The MIT site was shut down in 1990, but enthusiasts continue
 to operate ITS systems to this day.
 
+Some notable ITS features:
+
+- Hosted the first versions of Emacs, Zork, Macsyma, Maclisp, and Scheme
+- Virtual memory
+- User-space device drivers
+- Networking: TCP/IP, ARPAnet, Chaosnet
+- Transparent network file system
+- Terminal-independent text output
+- Graphical workstations
+
 There is a mailing list for discussion about ITS.  Go to
 http://its.victor.se/mailman/listinfo/its-hackers_its.victor.se
 for more information.
@@ -21,13 +31,12 @@ ITS system from scratch.
 The goals are:
 
 - To provide an automated build from start to end.  No user
-  invervention is necessary.
+  intervention is necessary.
 
 - To check which programs have source code, and [which programs are missing
   source code](https://github.com/PDP-10/its/issues/61).
 
-- To ensure that we know how to build all programs.  In many cases we
-  can just invoke MIDAS, but some require the use of DDT.
+- To ensure that we know how to build all programs.
 
 - To update programs with the latest bug fixes and enhancements.
 
