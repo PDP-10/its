@@ -13,6 +13,7 @@ proc type s {
 	} else {
 	    expect "?"
 	}
+	sleep .03
     }
 }
 
