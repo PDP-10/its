@@ -18,19 +18,38 @@ DSKDMP = bin/ks10/boot/dskdmp.rp06
 
 KLH10=${PWD}/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
 SIMH=${PWD}/tools/simh/BIN/pdp10
+KA10=${PWD}/tools/sims/BIN/ka10
 ITSTAR=${PWD}/tools/itstar/itstar
 WRITETAPE=${PWD}/tools/tapeutils/tapewrite
+MAGFRM=${PWD}/tools/dasm/magfrm
 
 H3TEXT=$(shell cd build; ls h3text.*)
 
-all: out/rp0.dsk tools/supdup/supdup
+all: out/$(EMULATOR).stamp tools/supdup/supdup
+
+out/klh10.stamp out/simh.stamp: out/rp0.dsk
+	touch $@
+
+out/sims.stamp: out/rp03.2 out/rp03.3
+	touch $@
 
 out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
 	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
+out/rp03.2 out/rp03.3: out/ka-minsys.tape out/magdmp.tap out/sources.tape
+	expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+
+out/magdmp.tap: $(MAGFRM)
+	cd bin/ka10/boot; $(MAGFRM) @.ddt @.salv > ../../../$@
+
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
 	cd bin/ks10; $(ITSTAR) -cf ../../$@ _ sys
+	cd bin; $(ITSTAR) -rf ../$@ sys
+
+out/ka-minsys.tape: $(ITSTAR)
+	mkdir -p out
+	cd bin/ka10; $(ITSTAR) -cf ../../$@ _ sys
 	cd bin; $(ITSTAR) -rf ../$@ sys
 
 out/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp src/syshst/$(H3TEXT)
@@ -66,6 +85,10 @@ build/simh/stamp: $(SIMH) start
 	cp build/simh/config.* src/system
 	touch $@
 
+build/sims/stamp: $(KA10) start
+	cp build/sims/config.* src/system
+	touch $@
+
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
 	test $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
@@ -94,11 +117,17 @@ $(KLH10):
 $(SIMH):
 	cd tools/simh; make pdp10
 
+$(KA10):
+	cd tools/sims; make ka10 TYPE340=y
+
 $(ITSTAR):
 	cd tools/itstar; make
 
 $(WRITETAPE):
 	cd tools/tapeutils; make
+
+$(MAGFRM):
+	cd tools/dasm; make
 
 tools/supdup/supdup:
 	cd tools/supdup; make

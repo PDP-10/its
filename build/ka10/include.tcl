@@ -1,0 +1,88 @@
+proc start_dskdmp_its {} {
+    start_dskdmp
+
+    respond "DSKDMP" "its\r"
+    expect "\n"; type "\033g"
+}
+
+proc mark_packs {} {
+    respond "\n" "mark\033g"
+    respond "UNIT #" "0"
+    respond "#0?" "y"
+    respond "NO =" "2\r"
+    expect -timeout 300 "VERIFICATION"
+    respond "ALLOC =" "3000\r"
+    respond "PACK # =" "2\r"
+    respond "PACK ID =" "2\r"
+
+    respond "DDT" "mark\033g"
+    respond "UNIT #" "1"
+    respond "#1?" "y"
+    respond "NO =" "3\r"
+    expect -timeout 300 "VERIFICATION"
+    respond "ALLOC =" "3000\r"
+    respond "PACK # =" "3\r"
+    respond "PACK ID =" "3\r"
+}
+
+proc prepare_frontend {} {
+}
+
+proc frontend_bootstrap {} {
+}
+
+proc its_switches {} {
+    respond "MACHINE NAME =" "KA\r"
+}
+
+proc make_ntsddt {} {
+    respond "*" ":midas .;@ ddt_system;ddt\r"
+    respond "cpusw=" "0\r"
+    respond "ndsk=" "0\r"
+    respond "dsksw=" "0\r"
+    expect ":KILL"
+}
+
+proc make_salv {} {
+    respond "*" ":midas .;@ salv_system;salv\r"
+    respond "time-sharing?" "n\r"
+    respond "machine?" "KA\r"
+    expect ":KILL"
+}
+
+proc make_dskdmp {} {
+    respond "*" ":midas .;@ dskdmp_system;dskdmp\r"
+    expect "Configuration"
+    respond "?" "ASK\r"
+    respond "HRIFLG=" "N\r"
+    respond "BOOTSW=" "N\r"
+    respond "RP06P=" "N\r"
+    respond "RP07P=" "N\r"
+    respond "RM03P=" "N\r"
+    respond "RM80P=" "N\r"
+    respond "RH10P=" "N\r"
+    respond "DC10P=" "N\r"
+    respond "NUDSL=" "250.\r"
+    respond "KS10P=" "N\r"
+    respond "KL10P=" "N\r"
+    expect ":KILL"
+}
+
+proc dump_switches {} {
+    respond "WHICH MACHINE?" "KA\r"
+}
+
+proc dump_nits {} {
+    respond "DSKDMP" "l\0331\033"
+    respond "\n" "l\033ddt\r"
+    expect "\n"; type "t\033@ dskdmp\r"
+    expect "\n"; type "\033g"
+    respond "DSKDMP" "l\0331\033"
+    respond "\n" "t\033its bin\r"
+    expect "\n"; type "\033u"
+    respond "DSKDMP" "m\033@ salv\r"
+    expect "\n"; type "d\033nits\r"
+}
+
+proc bootable_tapes {} {
+}

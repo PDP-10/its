@@ -23,6 +23,8 @@ proc respond { w r } {
 }
 
 proc pdset {} {
+    expect "SYSTEM JOB USING THIS CONSOLE"
+    sleep 1
     type "\032"
 
     respond "Fair" ":pdset\r"
@@ -77,7 +79,8 @@ mark_packs
 respond "DDT" "tran\033g"
 respond "#" "0"
 respond "OK" "y"
-expect "EOT"
+expect -timeout 300 EOT
+
 respond "DDT" $emulator_escape
 
 start_dskdmp_its
@@ -105,6 +108,7 @@ respond "*" ":job midas\r"
 respond "*" ":load sysbin;midas bin\r"
 respond "*" "purify\033g"
 respond "CR to dump" "\r"
+sleep 2
 respond "*" ":kill\r"
 
 respond "*" ":midas sysbin;_sysen1;ddt\r"
@@ -167,7 +171,7 @@ respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
-expect "EINIT"
+expect -timeout 2000 "EINIT"
 respond ":EJ" "\033xgenerate\033emacs;aux\033emacs1;aux\r"
 respond ":EJ" "\030\003"
 respond "*" ":kill\r"

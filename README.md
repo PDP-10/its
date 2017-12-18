@@ -49,10 +49,11 @@ we'd be delighted to test this on a real KS10.
 ### Usage
 
 To build ITS with this repository, you need some tools installed:
-make, C compiler, and expect.  Ensure all submodules are checked out,
-and then type `make EMULATOR=simh` or `make EMULATOR=klh10`.  This
-will leave built files in the `out` directory, one of which is a disk
-image with ITS installed.
+make, C compiler, and expect.  For KA10, you also need SDL or SDL2 for
+the Type 340 display.  Ensure all submodules are checked out, and then
+type `make EMULATOR=simh`, `make EMULATOR=sims`, or `make
+EMULATOR=klh10`.  This will leave built files in the `out` directory,
+one of which is a disk image with ITS installed.
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
 Enter.  When you see the `DSKDMP` prompt, type `its`, press Enter, and
