@@ -1240,6 +1240,13 @@ respond "*" ":midas sys3;ts create_syseng;create\r"
 expect ":KILL"
 respond "*" ":link sys1;ts plan,sys3;ts create\r"
 
+respond "*" ":midas /t .;@ pt_syseng;pt\r"
+respond "with ^C" "pi==4\r"
+respond "\n" "tty==120\r"
+respond "\n" "ptr==104\r"
+respond "\n" "\003"
+expect ":KILL"
+
 # PTY
 respond "*" ":midas sys1;ts pty_sysen1;pty\r"
 expect ":KILL"
