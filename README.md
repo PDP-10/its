@@ -80,7 +80,10 @@ Here is an overview of the repository:
 
 See the [`doc` subdirectory](doc) for documentation.
 
-There's a [DDT cheat sheet](doc/DDT.md) for Unix users.
+There are some short introductions for beginners:
+- [DDT cheat sheet for Unix users](doc/DDT.md)
+- [TECO survival guide](doc/TECO.md)
+- [DDT debugging newbie guide](doc/debugging.md)
 
 A list of [known ITS machines](doc/machines.md).
 
