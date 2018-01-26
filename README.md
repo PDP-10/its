@@ -84,6 +84,7 @@ There are some short introductions for beginners:
 - [DDT cheat sheet for Unix users](doc/DDT.md)
 - [TECO survival guide](doc/TECO.md)
 - [DDT debugging newbie guide](doc/debugging.md)
+- [Hello MIDAS](doc/hello-midas.md)
 
 A list of [known ITS machines](doc/machines.md).
 
