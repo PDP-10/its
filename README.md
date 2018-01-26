@@ -86,6 +86,7 @@ There are some short introductions for beginners:
 - [TECO survival guide](doc/TECO.md)
 - [DDT debugging newbie guide](doc/debugging.md)
 - [Hello MIDAS](doc/hello-midas.md)
+- [DUMP and itstar](doc/DUMP-itstar.md)
 
 A list of [known ITS machines](doc/machines.md).
 
