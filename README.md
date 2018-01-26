@@ -82,6 +82,7 @@ See the [`doc` subdirectory](doc) for documentation.
 
 There are some short introductions for beginners:
 - [DDT cheat sheet for Unix users](doc/DDT.md)
+- [Basic editing with EMACS](doc/EMACS.md)
 - [TECO survival guide](doc/TECO.md)
 - [DDT debugging newbie guide](doc/debugging.md)
 - [Hello MIDAS](doc/hello-midas.md)
