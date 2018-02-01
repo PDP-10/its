@@ -1058,6 +1058,34 @@ respond "*" ":link sys;ts dec\021 *,must; be here\r"
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
 
+# Need to login as user GAMES to build Fortran files in that directory.
+respond "*" ":logout\r"
+respond "SYSTEM JOB USING THIS CONSOLE" "\032"
+respond "Fair share" ":login games\r"
+sleep 1
+
+# Compile ADVENT and dump it out with DECUUO.
+type ":dec sys:f40\r"
+respond "*" "advent=advent\r"
+respond "CORE USED" "\032"
+type ":kill\r"
+respond "*" ":dec sys:loader\r"
+respond "*" "advent\r"
+respond "*" "/go\r"
+respond "EXIT" ":start\r"
+respond "(ALT)" "advent.dat\033"
+respond "*" "\032"
+type ":start 45\r"
+respond "Command:" "d"
+respond "*" ":pdump sys3; ts advent\r"
+respond "*" ":kill\r"
+
+respond "*" ":logout\r"
+respond "SYSTEM JOB USING THIS CONSOLE" "\032"
+respond "Fair share" ":login db\r"
+sleep 1
+type ":vk\r"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
