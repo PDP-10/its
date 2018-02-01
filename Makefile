@@ -8,7 +8,7 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       bawden _mail_ l lisp libdoc comlap lspsrc nilcom rwk	\
       inquir acount gz sys decsys ecc alan sail kcc kcc_sy c
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc
-BIN = sys2 device emacs _teco_ lisp liblsp alan inquir sail comlap c
+BIN = sys2 device emacs _teco_ lisp liblsp alan inquir sail comlap c decsys
 
 # These directories are put on the minsys tape.
 MINSYS = _ sys
