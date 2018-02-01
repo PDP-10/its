@@ -1,0 +1,25 @@
+@midas teco
+*2
+*11.
+*12.
+*
+*
+*
+*
+*
+*
+*
+*
+*13.
+*
+*10.
+*
+*
+*
+*
+*
+*17.
+@iddt
+*;yteco.sav
+*;wteco
+*purifygmmrunpurifydumpnemacs.savfsexit;h
