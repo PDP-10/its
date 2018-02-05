@@ -114,6 +114,7 @@ A list of [known ITS machines](doc/machines.md).
    - @, cross reference generation tool.
    - ACCLNK, sets com-link accept bit for specified TTY.
    - ACOUNT, dummy account program used for users from safe sites.
+   - ADVENT, (Colossal Cave) Adventyre by Will Crowther.
    - ARCCPY, copies and old-format archive, converting to new format.
    - ARCDEV, transparent file system access to archive files.
    - ARCSAL, archive salvager.
