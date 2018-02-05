@@ -1,0 +1,191 @@
+################################################################
+
+		DATA >
+
+   initial microplanner data base for the blocks world
+
+################################################################
+
+(THFLUSH THASSERTION)
+
+(SETQ ATABLE (QUOTE ((:B1 (110 100 0) (100 100 100))
+		     (:B2 (110 100 100) (100 100 100))
+		     (:B3 (400 0 0) (200 200 200))
+		     (:B4 (640 640 1) (200 200 200))
+		     (:B5 (500 100 200) (100 100 300))
+		     (:B6 (0 300 0) (200 300 300))
+		     (:B7 (0 240 300) (200 200 200))
+		     (:B10 (300 640 0) (200 100 400))
+		     (:BW1 (570 570 0) (10 400 300))
+		     (:BW2 (570 570 0) (400 10 300))
+		     (:BW3 (570 1200 0) (400 10 300))
+		     (:BW4 (1200 570 0) (10 400 300))
+		     (:BOX (600 600 0) (400 400 1)))))
+
+(SETQ DISPLAY-AS (QUOTE
+ ((:B1 #DISPLAY #BLOCK (110 100 0) (100 100 100) RED)
+(:B2 #DISPLAY #PYRAMID (110 100 100 ) (100 100 100) GREEN)
+(:B3 #DISPLAY #BLOCK (400 0 0) (200 200 200) GREEN)
+(:B4 #DISPLAY #PYRAMID (640 640 1) (200 200 200) BLUE)
+(:B5 #DISPLAY #PYRAMID (500 100 200) (100 100 300) RED)
+(:B6 #DISPLAY #BLOCK (0 300 0) (200 300 300) RED)
+(:B7 #DISPLAY #BLOCK (0 240 300) (200 200 200) GREEN)
+(:B10 #DISPLAY #BLOCK (300 640 0) (200 100 400) BLUE)
+(:HAND #DISPLAY #HAND (40 0 0) (0 0 0) WHITE)
+(:TABLE #DISPLAY #TABLE (0 0 0) (1000 1000 0) BLACK)
+(:BOX #DISPLAY #BOX (600 600 0) (376 376 300) WHITE)) ))
+
+(THDATA)
+
+((#IS :B1 #BLOCK))
+
+((#IS :B2 #PYRAMID))
+
+((#IS :B3 #BLOCK))
+
+((#IS :B4 #PYRAMID))
+
+((#IS :B5 #PYRAMID))
+
+((#IS :B6 #BLOCK))
+
+((#IS :B7 #BLOCK))
+
+((#IS :B10 #BLOCK))
+
+((#IS #RED #COLOR))
+
+((#IS #BLUE #COLOR))
+
+((#IS #GREEN #COLOR))
+
+((#IS #WHITE #COLOR))
+
+((#IS #BLACK #COLOR))
+
+((#IS #RECTANGULAR #SHAPE))
+
+((#IS #ROUND #SHAPE))
+
+((#IS #POINTED #SHAPE))
+
+((#IS :SHRDLU #ROBOT))
+((#IS :FRIEND #PERSON))
+((#IS :HAND #HAND))
+((#AT :B1 (100 100 0)))
+
+((#AT :B2 (100 100 100)))
+
+((#AT :B3 (400 0 0)))
+
+((#AT :B4 (640 640 1)))
+((#AT :B5 (500 100 200)))
+
+((#AT :B6 (0 300 0)))
+
+((#AT :B7 (0 240 300)))
+
+((#AT :B10 (300 640 0)))
+
+((#SUPPORT :B1 :B2))
+
+((#SUPPORT :B3 :B5))
+
+((#SUPPORT :B6 :B7))
+((#CLEARTOP :B2))
+((#CLEARTOP :B4))
+((#CLEARTOP :B5))
+((#CLEARTOP :B7))
+((#CLEARTOP :B10))
+
+((#MANIP :B1))
+
+((#MANIP :B2))
+
+((#MANIP :B3))
+
+((#MANIP :B4))
+
+((#MANIP :B5))
+
+((#MANIP :B6))
+
+((#MANIP :B7))
+
+((#MANIP :B10))
+
+((#SUPPORT :TABLE :B1))
+
+((#SUPPORT :TABLE :B3))
+
+((#SUPPORT :BOX :B4))
+
+((#SUPPORT :TABLE :B10))
+
+((#SUPPORT :TABLE :B6))
+
+((#SUPPORT :TABLE :BOX))
+
+((#AT :BOX (600 600 0)))
+
+((#IS :BOX #BOX))
+
+((#IS :TABLE #TABLE))
+
+((#CONTAIN :BOX :B4))
+
+((#SHAPE :B1 #RECTANGULAR))
+
+((#SHAPE :B3 #RECTANGULAR))
+
+((#SHAPE :B2 #POINTED))
+
+((#SHAPE :B4 #POINTED))
+
+((#SHAPE :B5 #POINTED))
+((#SHAPE :B6 #RECTANGULAR))
+
+((#SHAPE :B7 #RECTANGULAR))
+
+((#SHAPE :B10 #RECTANGULAR))
+
+((#COLOR :B1 #RED))
+
+((#COLOR :B2 #GREEN))
+
+((#COLOR :B3 #GREEN))
+
+((#COLOR :B4 #BLUE))
+
+((#COLOR :B5 #RED))
+
+((#COLOR :B6 #RED))
+
+((#COLOR :B7 #GREEN))
+
+((#COLOR :B10 #BLUE))
+
+((#COLOR :BOX #WHITE))
+
+((#COLOR :TABLE #BLACK))
+
+((#CALL :SHRDLU SHRDLU))
+((#CALL :FRIEND YOU))
+NIL
+
+(SETQ HANDAT (SETQ HANDAT2 (QUOTE (40 0 0))))
+
+(SETQ THTIME 0)
+
+(THFLUSH HISTORY)
+
+(ERRSET (STARTHISTORY))
+
+(SETQ PLAN NIL)
+
+(MAPC (QUOTE (LAMBDA (X Y) (PUTPROP X (LIST Y) (QUOTE COLOR))))
+      (QUOTE (:B1 :B2 :B3 :B4 :B5 :B6 :B7 :B10))
+      (QUOTE (CB1 CB2 CB3 CB4 CB5 CB6 CB7 CB10)))
+
+(IOC V)
+
