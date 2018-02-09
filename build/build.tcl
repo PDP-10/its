@@ -762,6 +762,12 @@ type ":kill\r"
 respond "*" ":lisp libdoc;od (dump)\r"
 expect ":KILL"
 
+# comred
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc; comred\r"
+respond "_" "\032"
+type ":kill\r"
+
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 
 respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
