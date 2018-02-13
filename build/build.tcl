@@ -343,6 +343,11 @@ respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
 
+# standalone midas
+respond "*" ":midas /t .;@ midas_midas;midas\r"
+respond "with ^C" "TS==0\r\003"
+expect ":KILL"
+
 # magdmp
 respond "*" ":midas .;_syseng;magdmp\r"
 respond "PTRHRI=" "y\r"
