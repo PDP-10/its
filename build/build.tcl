@@ -1465,13 +1465,14 @@ expect ":KILL"
 respond "*" $emulator_escape
 create_tape "out/output.tape"
 type ":dump\r"
-respond "_" "dump links full\r"
-respond "TAPE NO=" "0\r"
-expect "REEL"
+respond "_" "dump links full list\r"
+respond "LIST DEV =" "tty\r"
+respond "TAPE NO=" "1\r"
+expect -timeout 3000 "REEL"
 respond "_" "rewind\r"
 respond "_" "icheck\r"
-respond "=" "\r"
-respond "_" "quit\r"
+expect -timeout 3000 "_"
+type "quit\r"
 
 shutdown
 quit_emulator
