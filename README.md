@@ -191,6 +191,7 @@ A list of [known ITS machines](doc/machines.md).
    - INQUPD, processes INQUIR change requests.
    - INSTAL, install executables on other ITS machines.
    - ITSDEV, ITS device server.
+   - JEDGAR, counter spying tool.
    - JOBS, list jobs by category.
    - LISP, lisp interpreter and runtime library (autoloads only).
    - LOADP, displays system load.
