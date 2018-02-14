@@ -147,7 +147,7 @@ respond "_" "reload "
 respond "ARE YOU SURE" "y"
 respond "\n" "links crdir sorry\r"
 respond "FILE=" "*;* *\r"
-expect -timeout 220 "E-O-T"
+expect -timeout 3000 "E-O-T"
 respond "_" "quit\r"
 expect ":KILL"
 
