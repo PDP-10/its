@@ -1089,6 +1089,10 @@ expect ":KILL"
 respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
 respond "*" "\032:kill\r"
 
+# jobdat
+respond "*" ":fail sail;jobdat rel_sail;jobdat >\r"
+respond "*" "\032:kill\r"
+
 # fail
 respond "*" ":fail sail;fail rel_sail;fail >\r"
 respond "*" "\032:kill\r"
