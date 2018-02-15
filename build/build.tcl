@@ -743,6 +743,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts stty_archy;stty\r"
 expect ":KILL"
 
+# OCTPUS
+respond "*" ":midas sys2;ts octpus_gren;octpus\r"
+expect ":KILL"
+
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
 respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"

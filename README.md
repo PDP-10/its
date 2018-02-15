@@ -218,6 +218,7 @@ A list of [known ITS machines](doc/machines.md).
    - NWATCH, small watch display.
    - OBS, observe system activities.
    - OCM, chess program.
+   - OCTPUS, print character representations.
    - OS, realtime TTY spy.
    - PALX, PDP-11 cross assembler.
    - PANDA, user account management program.
