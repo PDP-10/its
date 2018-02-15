@@ -250,6 +250,7 @@ A list of [known ITS machines](doc/machines.md).
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.
    - STINKR, new linker (binary only).
+   - STTY, set terminal parameters.
    - STY, pseudo-terminal for multiple sessions.
    - STYLOG, convert PTY output file into ascii file.
    - SUPDUP, Supdup client.
