@@ -250,6 +250,7 @@ A list of [known ITS machines](doc/machines.md).
    - SENSOR, sends censor.
    - SENVER, Chaosnet SEND server.
    - SN, snoop terminal.
+   - SPCWAR, Spacewar game.
    - SPELL, ESPELL spell checker.
    - SRCCOM, Compares/merges source files, compares binary files.
    - STINK, linker.

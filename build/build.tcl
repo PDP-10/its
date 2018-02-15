@@ -1119,6 +1119,27 @@ respond "with ^C" "DSPLY==0\r"
 respond "\n" "CHEOPS==0\r\003"
 expect ":KILL"
 
+# Spacewar, standalone
+respond "*" ":midas /t .;@ spcwar_spcwar; newwar\r"
+respond "with ^C" "APR==0\r"
+respond "\n" "PI==4\r"
+respond "\n" "DIS==130\r\003"
+respond "ITS version" "NO\r"
+respond "interrupt" "NO\r"
+respond "ships" "\r"
+respond "designs" "\r"
+respond "suns" "\r"
+respond "recording" "\r"
+expect ":KILL"
+
+# Spacewar, timesharing
+respond "*" ":midas games;ts spcwar_spcwar; newwar\r"
+respond "ITS version" "YES\r"
+respond "ships" "\r"
+respond "designs" "\r"
+respond "suns" "\r"
+expect ":KILL"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
