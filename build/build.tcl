@@ -735,6 +735,10 @@ respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "Y\r"
 expect ":KILL"
 
+# FIDO
+respond "*" ":midas sys3;ts fido_ksc;fidox\r"
+expect ":KILL"
+
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
 respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
