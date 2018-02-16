@@ -1456,6 +1456,11 @@ respond "*" ":midas sysbin;_sysnet;senver\r"
 expect ":KILL"
 respond "*" ":link device;chaos send,sysbin;senver bin\r"
 
+# Alternate DEVICE; CHAOS SEND
+respond "*" ":midas sysbin;_sysnet;sends\r"
+expect ":KILL"
+#respond "*" ":link device;chaos send,sysbin;senver bin\r"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"
