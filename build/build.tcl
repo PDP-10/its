@@ -1084,6 +1084,18 @@ respond "Command:" "d"
 respond "*" ":pdump sys3; ts advent\r"
 respond "*" ":kill\r"
 
+# Chess: timesharing, no TV display
+respond "*" ":midas /t games;ts chess2_rg;chess2\r"
+respond "with ^C" "TV==0\r\003"
+expect ":KILL"
+
+# Chess: standalone
+respond "*" ":midas /t .;@ chess2_rg;chess2\r"
+respond "with ^C" "TS==0\r"
+respond "\n" "PI==4\r"
+respond "\n" "TTY==120\r\003"
+expect ":KILL"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
