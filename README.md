@@ -139,6 +139,7 @@ A list of [known ITS machines](doc/machines.md).
    - CHADEV, Chaosnet jobdev (binary only).
    - CHARFC/CHARFS, Chaos RFC.
    - CHATST, Chaos test.
+   - CHESS2, Greenblatt chess program.
    - CHTN, CFTP, Chaosnet TELNET and FTP support.
    - COMIFY, convert HEX to COM format.
    - COMPLR, lisp compiler.
