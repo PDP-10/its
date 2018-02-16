@@ -903,6 +903,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts whosen_syseng;wsent\r"
 expect ":KILL"
 
+# sensor
+respond "*" ":midas sys3;ts sensor_gren;sensor\r"
+expect ":KILL"
+
 # more lisp packages
 respond "*" ":link lisp;tty fasl,liblsp;tty fasl\r"
 respond "*" "complr\013"
