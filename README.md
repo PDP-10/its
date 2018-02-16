@@ -246,6 +246,7 @@ A list of [known ITS machines](doc/machines.md).
    - SALV, old file system tool for KA and KL.
    - SCANDL, TTY OUTPUT SPY.
    - SEND, REPLY, replacements for DDT :SEND.
+   - SENSOR, sends censor.
    - SENVER, Chaosnet SEND server.
    - SN, snoop terminal.
    - SPELL, ESPELL spell checker.
