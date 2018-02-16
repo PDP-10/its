@@ -1096,6 +1096,12 @@ respond "\n" "PI==4\r"
 respond "\n" "TTY==120\r\003"
 expect ":KILL"
 
+# Old chess?  Timesharing, no TV, no CHEOPS processor.
+respond "*" ":midas /t games;ts ocm_chprog;ocm\r"
+respond "with ^C" "DSPLY==0\r"
+respond "\n" "CHEOPS==0\r\003"
+expect ":KILL"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
