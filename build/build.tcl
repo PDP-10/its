@@ -1447,6 +1447,11 @@ expect ":KILL"
 respond "*" ":midas device;chaos time_syseng;ctimsr\r"
 expect ":KILL"
 
+# DEVICE; CHAOS SEND
+respond "*" ":midas sysbin;_sysnet;senver\r"
+expect ":KILL"
+respond "*" ":link device;chaos send,sysbin;senver bin\r"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"
