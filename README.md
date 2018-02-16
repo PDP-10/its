@@ -216,6 +216,7 @@ A list of [known ITS machines](doc/machines.md).
    - NUDIR, create user directory.
    - NWATCH, small watch display.
    - OBS, observe system activities.
+   - OCM, chess program.
    - OS, realtime TTY spy.
    - PALX, PDP-11 cross assembler.
    - PANDA, user account management program.
