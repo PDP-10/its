@@ -261,11 +261,6 @@ respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
 
-# standalone midas
-respond "*" ":midas /t .;@ midas_midas;midas\r"
-respond "with ^C" "TS==0\r\003"
-expect ":KILL"
-
 # magdmp
 respond "*" ":midas .;_syseng;magdmp\r"
 respond "PTRHRI=" "y\r"
@@ -1023,13 +1018,6 @@ respond "*" ":kill\r"
 # Chess: timesharing, no TV display
 respond "*" ":midas /t games;ts chess2_rg;chess2\r"
 respond "with ^C" "TV==0\r\003"
-expect ":KILL"
-
-# Chess: standalone
-respond "*" ":midas /t .;@ chess2_rg;chess2\r"
-respond "with ^C" "TS==0\r"
-respond "\n" "PI==4\r"
-respond "\n" "TTY==120\r\003"
 expect ":KILL"
 
 # Old chess?  Timesharing, no TV, no CHEOPS processor.
