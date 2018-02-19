@@ -1,6 +1,4 @@
 ;-*-MIDAS-*-
-;;; Copyright (c) 1999 Massachusetts Institute of Technology
-;;; See the COPYING file at the top-level directory of this project.
 
 .SBTTL MACROS AND CONDITIONAL ASSEMBLY
 
@@ -149,7 +147,7 @@ FNTORG, TO VARORG	;FONT DEFINITION
 VARORG, TO MISORG	;LINE EDITOR/PAGE PRINTER VARIABLES
 MISORG, TO PATCH	;MISCELLANEOUS TABLES AND VARIABLES
 PATCH, TO LEBUFS	;PATCH AREA
-LEBUFS, TO RUGSA	;FREE STORAGE
+LEBUFS, TO TVLO		;FREE STORAGE
 .ENDC
 
 .SBTTL HOW IT WORKS
@@ -531,6 +529,7 @@ CHRVSP==2		;BLANK RASTER LINES BETWEEN CHARACTER LINES
 LINHT==CHRHT+CHRVSP	;CHRACTER LINE HEIGHT
 CHRPL==BITPL/CHRWD	;CHARACTERS PER LINE
 CHRLN==NLINS/LINHT	;CHARACTER LINES ON SCREEN
+NLINS1==CHRLN*LINHT	;# ROWS OF DOTS NOT INCL. WHOLINE.
 
 ;MEMORY MAP
 
@@ -637,7 +636,8 @@ ERRLVL==7_5	;PROCESSOR ERRORS
 IOVER==3	;I/O VERSION FOR ITS
 PDL==400	;PUSH DOWN LIST SIZE
 MAXKBD==64.	;MAXIMUM # OF KEYBOARDS
-MAXTV==16.	;MAX NUMBER OF TV DISPLAYS
+MAXTV==14.	;MAX NUMBER OF CHANNELS; SIZE OF TABLES INDEXED BY CHANNEL.
+MAXCRG==20	;SIZE OF TABLES INDEXED BY CREG VALUE (BIT BUFFER NUMBER).
 MAXBLK==MAXTV	;MAXIMUM # OF BLINKERS
 MAXASI==20	;AUDIO SWITCH INPUTS
 MAXASO==100	;AUDIO SWITCH OUTPUTS
@@ -647,7 +647,7 @@ MAXVSO==40	;VIDEO SWITCH OUTPUTS
 VSWSEC==2	;# VIDEO SWITCH SECTIONS
 VSWINC==MAXVSO_10	;INCREMENTS VIDEO SWITCH SECTION NUMBER
 QPYVSW==27	;VIDEO SWITCH OUTPUT FOR TEKTRONIX VIDEO HARD COPY UNIT
-QPTIME==21.*60.	;21. SECONDS BETWEEN COPIES
+QPTIME==28.*60.	;28. SECONDS BETWEEN COPIES
 QPYKMS==20000	;GENERATE COPY FROM FIRST SOURCE (IN KEYBOARD STATUS, NATURALLY)
 QPYKM2==10000	;GENERATE COPY FROM SECOND SOURCE.
 BUZKMS==4000	;BUZZ DOOR (ALSO IN KEYBOARD STATUS)
@@ -820,19 +820,24 @@ INIT6:	MOV	U,TT
 	CLR	LHFS(U)			;END OF LIST
 
 	CLR	BLINK
+;SET UP TABLES INDEXED BY BIT-BUFFER NUMBER.
 	MOV	#BLINKS,A
 	MOV	#BELCNT,C
-	MOV	#-1,T			;SET UP BELL COUNTS
+	MOV	#MAXCRG-1,B
+1$:	CLR	(A)+
+	CLRB	BLKSWT(B)		;NO TV HAS BLINKING TEMPORARILY INHIBITED.
+	MOV	#-1,(C)+
+	DEC	B
+	BGE	1$
+
+;SET UP TABLES INDEXED BY TV NUMBER.
 	MOV	#MAXTV-1,B
 	CLR	ITSTDP
 INIT5:	CLRB	CHNUSE(B)		;EVERY CHANNEL IS FREE.
-	CLRB	BLKSWT(B)		;NO TV HAS BLINKING TEMPORARILY INHIBITED.
 	TSTB	CHCREG(B)		;HOW MANY CHANNELS ARE WORKING?
 	BLT	INIT5A
 	INC	ITSTDP
-INIT5A:	CLR	(A)+
-	MOV	T,(C)+
-	DEC	B
+INIT5A:	DEC	B
 	BGE	INIT5
 	MOV	ITSTDP,ITSFDP		;# FREE DPY'S
 
@@ -934,13 +939,22 @@ DPYDPY:	TSTB	CHNUSE(U)
 	JSR	PC,CLBLIN		;AND CLEAR THEM
 	PUSH	U			;SAVE PAGE PRINTER FOR DPYTVO+5
 	MOVB	#CIOR,CALU		;ALU FUNCTION FOR DRAWING CHARACTERS
-	MOV	LECPC(U),TT		;RESUMING COROUTINE?
-	BEQ	DPYDP1			;NO.
-	MOV	LESVB(U),B		;YES, RESTORE B AND PC FOR CORETURN FROM THE
-	CLR	LECPC(U)		;GETCHC THAT DIDN'T FIND ANY CHARS.
-	BIC	#-400,A			;CLEAR EXTRA BITS DUE TO SIGN-EXTENSION
-	PUSH	#DPYXIT			;GETCHC'S CALLER'S RETURN ADDR MUST BE DPYXIT.
-	JMP	(TT)			;GETCHC ENFORCES THAT.
+	MOV LESTKP(U),B		;JUMP IF NOT RESUMING A COROUTINE.
+	BEQ DPYDP1
+	PUSH #DPYXIT		;UNDER WHAT'S IN LESTK, PUT A RETURN TO DPYXIT.
+	MOV #LESTK,TT
+	ADD U,TT
+2$:	MOV -(B),T
+	PUSH T			;COPY USED PART OF LESTK BACK ONTO STACK.
+	CMP B,TT
+	BNE 2$
+	MOV LESVB(U),B		;RESTORE COROUTINED ACS.
+	MOV LESVC(U),C
+	MOV LESVT(U),T
+	MOV LESVTT(U),TT
+	CLR LESTKP(U)		;SAY WE ARE NOT STOPPED IN A COROUTINE NOW.
+	BIC #-400,A		;CLEAR EXTRA BITS DUE TO SIGN-EXTENSION
+	RTS PC			;RETURN TO THE CO-CALL
 
 ;FAST CHARACTER OUTPUT LOOP
 DPYDP1:	MOV	(SP),U			;GET PP POINTER
@@ -1017,7 +1031,6 @@ DPYFLS:	MOV	(SP),T
 
 ;HERE IF CONTROL CODE FOUND
 
-DPYCRF:	SUB	#5,A
 DPYCTL:	BIC	#177600,A	;DISPATCH ON CONTROL CODE
 	CMP	#ILLCTL,A
 	BLOS	DPYTVO		;BRANCH IF ILLEGAL CODE
@@ -1054,8 +1067,8 @@ CTLTAB:	SETCUR		;200	%TDMOV (FOLLOWED BY TWO IGNORED CHARS, THEN VPOS, HPOS).
 	CINS		;225	%TDICP (INSERT CHARACTER POSITION (FOLLOW BY # CHARS))
 	CDEL		;226	%TDDCP (DELETE CHARACTER POSITION (FOLLOW BY # CHARS))
 	RTSPC		;227	%TDBOW (IGNORED)
-	RTSPC		;230	%TDRST (IGNORED)
-	RTSPC		;231	%TDGPH (IGNORED)
+	GRFRST		;230	%TDRST (RESET MODES.  FOR NOW ONLY GRAPHICS MODES EXIST).
+	GRFLP		;231	%TDGPH (START GRAPHICS COMMANDS)
 	RGSCUP		;232	%TDRSU (REGION SCROLL UPWARDS)
 	RGSCDN		;233	%TDRSD (REGION SCROLL DOWN)
 ILLCTL==<.-CTLTAB>/2
@@ -1454,7 +1467,7 @@ RVSDF:	ASL	T		;MAKE IT BYTE INDEX
 	MOV	KBDLE(T),U
 	BEQ	RVSNL		;KBD NOT LOGGED IN, ITS THE DEFAULT
 RVSDF1:	MOVB	LECREG(U),TT	;THE REGISTER HE HACKS
-	CMP	#MAXTV,TT
+	CMP	#MAXCRG,TT
 	BLOS	TENCFL		;BRANCH IF ILLEGAL CONSOLE #
 	ASL	TT		;MAKE IT A BYTE INDEX
 	MOV	DPYVSW(TT),TT	;VIDEO SWITCH INPUT
@@ -1615,7 +1628,7 @@ CLKBR3:	PUSH	CLOCKQ		;CDR THE CLOCK QUEUE
 CLKBR2:	DEC	BLINK
 	BGE	.+10
 	MOV	#BLKTIM,BLINK
-	CMP	BLINK,#MAXTV
+	CMP	BLINK,#MAXCRG
 	BHIS	CLKR1
 	MOV	BLINK,T
 	TSTB	BLKSWT(T)
@@ -2126,20 +2139,30 @@ GETCH1: CLZ
 ;GET NEXT CHARACTER BUT IF NOT AVAILABLE DO A COROUTINE-RETURN
 ;FROM THE CHARACTER-READING LOOP, SO THAT WHEN THE NEXT CHARACTER
 ;IS READ THIS CALL WILL BE RETURNED FROM.  ASSUMES THAT U CONTAINS THE
-;ADDRESS OF THE CHANNEL VAR BLOCK, AND MAY RESET ALL ACS
-;BUT B TO WHAT THEY HOLD AT DPYCTL. B IS ALWAYS PRESERVED.
-GETCHC:	JSR	PC,GETCHR
+;ADDRESS OF THE CHANNEL VAR BLOCK.
+;PRESERVES B AND C AND T AND TT.
+GETCHC:	PUSH	TT
+	TST	TYMSHR		;IF OUR QUANTUM IS UP, LET OTHER LINES RUN FOR A WHILE.
+	BMI	GETCH2
+	JSR	PC,GETCHR
 	BEQ	GETCH2
+	POP	TT
 	BIC	#-400,A		;CLEAR EXTRA BITS DUE TO SIGN-EXTENSION
 	RTS	PC
 
-GETCH2:	MOV	B,LESVB(U)
-	POP	LECPC(U)
-	POP	B
-	CMP	B,#DPYXIT
-	BEQ	GETCH3
-	BPT			;CALLER OF GETCHC HAD WRONG RETURN ADDRESS
-GETCH3:	JMP	DPYDX2		;CEASE TYPING ON THIS TV FOR A WHILE
+GETCH2:	POP LESVTT(U)
+	MOV B,LESVB(U)
+	MOV C,LESVC(U)
+	MOV T,LESVT(U)
+	MOV #LESTK,A		;SAVE STACK CONTENTS, BACK TO CALL FROM DPYXIT.
+	ADD U,A
+1$:	POP B
+	MOV B,(A)+
+	CMP B,#DPYXIT
+	BNE 1$
+	TST -(A)		;DON'T INCLURE THE DPYXIT IN "USED PART OF LESTK".
+	MOV A,LESTKP(U)		;REMEMBER HOW MUCH WE USED OF LESTK.
+GETCH3:	JMP DPYDX2		;CEASE TYPING ON THIS TV FOR A WHILE
 
 .SBTTL DISPLAY FUNCTION (%TD, ETC) ROUTINES
 
@@ -2582,6 +2605,610 @@ SETXY0:	MOV	#MQ,T			;FOR THE MYRIAD MULTIPLIES AND DIVIDES
 	BPT
 SETXY1:	RTS	PC
 
+;Read a character into A.
+;If it is a %TD code, go process it.
+.macro grfchr
+	jsr pc,getchc
+	bit #200,a
+	beq .+6
+	jmp grfctl
+.endm
+
+;Come here on 200 code seen inside graphics input.
+grfctl:	pop t			;Discard all our stack,
+	cmp t,#dpyxit		;including the return to DPYXIT,
+	bne grfctl		;since DPYCTL will push it again.
+	jmp dpyctl
+
+grflp:	grfchr
+	mov a,b			;Save %GO command in B so we can test abs vs rel later.
+	bit #100,a
+	bne grfdrw
+	cmp a,#grfmax
+	bge grflp
+	asl a
+	jmp @grfd1(a)
+
+grfd1:	grflp
+	grfmov
+	grfxor
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grfclr
+	grfpsh
+	grfvir
+	grflp
+	grflp
+	grflmt
+	grflp
+	grflp
+
+	grflp
+	grfmov
+	grfior
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grfphy
+	grflp
+	grflp
+	grflmt
+	grflp
+	grflp
+grfmax=<.-grfd1>/2
+
+;Here for graphics drawing command (100 bit set)
+grfdrw:	mov a,t
+	bic #-20,t
+	asl t
+	jmp @grfd2(t)
+
+grfd2:	grflp
+	grflin
+	grfdpt
+	grfrec
+	grfstr
+	grfscn
+	grfrun
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+	grflp
+
+;Read in the coordinates of a point, either absolute or relative
+;depending on the 20 bit of the command we are processing (which should be in B).
+grfpnt:	bit #20,b
+	beq 1$
+	grfchr
+	mov a,c			;Save low byte
+	grfchr
+	swab a			;Read high byte.
+	asl a			;Sign extend it.
+	asr a
+	asr a			;Shift down - next byte is just 7 bits too.
+	add c,a
+	mov a,legx(u)		;Combine and set x position.
+	grfchr
+	mov a,c
+	grfchr
+	swab a
+	asl a
+	asr a
+	asr a
+	add c,a
+	mov a,legy(u)
+	br 2$
+
+;Read relative point address
+1$:	grfchr
+	asl a			;sign extend 7 bits to 16.
+	movb a,a
+	asr a
+	add a,legx(u)		;add to current position.
+	grfchr
+	asl a
+	movb a,a
+	asr a
+	add a,legy(u)
+2$:	rts pc
+
+;Get absolute coords (0,0 at top left) from current graphics cursorpos.
+grfgp1:	tstb legvir(u)
+	beq 1$
+	mov legx(u),mq		;scale virtual coords to physical.
+	clr ac
+	mov #nlins1,mul		;Use nlins1 for x and y coords
+	mov #-11.,ash		;since it is the smaller of the two dimensions.
+	mov mq,t
+	mov legy(u),mq
+	clr ac
+	mov #nlins1,mul
+	mov #-11.,ash
+	mov mq,tt
+;Get absolute coords from physical ones.
+1$:	mov legx(u),t
+	add #bitpl/2,t
+	mov #nlins1/2,tt
+	sub legy(u),tt
+	rts pc
+
+;Get the current graphics cursor pos in T and TT,
+;converted to physical coords with the origin at the top left,
+;and brought onto the screen if it was off.
+grfclp:	jsr pc,grfgp1
+	tst t
+	bge 1$
+	 clr t
+1$:	cmp t,#bitpl
+	blt 2$
+	 mov #bitpl-1,t
+2$:	tst tt
+	bge 3$
+	 clr tt
+3$:	cmp tt,#nlins1
+	blt 4$
+	 mov #nlins1-1,tt
+4$:	rts pc	
+
+;Get graphics cursor pos in t,tt and return
+;with carry flag set if it is off the screen.
+grfgtp:	jsr pc,grfgp1
+	tst t
+	blt 1$
+	tst tt
+	blt 1$
+	cmp t,#bitpl
+	bge 1$
+	cmp tt,#nlins1
+	bge 1$
+	clc
+	rts pc
+
+1$:	sec
+	rts pc
+
+;Convert TV coords in T, TT (such as grfclp and grfgpt return)
+;to word address in TT and bit within word in T.
+grfwrd:	mov #bitpl/8,mq
+	mov tt,mul
+	mov mq,tt
+	add #tvlo,tt		;tt has address of start of row.
+	push t
+	asr t			;Take xpos, divide by 8 for byte within row.
+	asr t
+	asr t
+	bic #1,t		;Clear low bit for index of word within row.
+	add t,tt
+	pop t
+	bic #-20,t
+	rts pc
+
+;Non-drawing commands.
+grfmov:	jsr pc,grfpnt
+	jmp grflp
+
+grfxor:	movb #-1,legxor(u)
+	jmp grflp
+
+grfior:	clrb legxor(u)
+	jmp grflp
+
+grfvir:	movb #-1,legvir(u)
+	jmp grflp
+
+grfphy:	clrb legvir(u)
+	jmp grflp
+
+grflmt:	jsr pc,grfpnt
+	jsr pc,grfclp
+	mov t,leglft(u)
+	mov tt,legtop(u)
+	jsr pc,grfpnt
+	jsr pc,grfclp
+	mov t,legrgt(u)
+	mov tt,legbot(u)
+	jmp grflp	
+
+;For now, %GOPSH is not implemented.
+grfpsh:	jmp grflp
+
+;Handle %TDRST.
+grfrst:	clrb legxor(u)
+	clrb legvir(u)
+	clr leglft(u)
+	clr legtop(u)
+	mov #bitpl,legrgt(u)
+	mov #nlins1,legbot(u)
+	rts pc
+
+;Select ALU function from current command (in B) and state of XOR mode.
+grfmod:	movb #cior,calu
+	tstb legxor(u)		;Set up to set, clear or flip bits.
+	bne 1$
+	bit #40,b
+	beq 3$
+	movb #candc,calu
+	rts pc
+
+1$:	movb #cxor,calu
+3$:	rts pc
+
+;%GODPA, etc.
+grfdpt:	jsr pc,grfpnt		;Read coords of point.
+	jsr pc,grfmod		;Select ALU function.
+	jsr pc,grfgtp		;Convert to TV coords in T, TT.
+	bcs 1$			;Don't display if off screen.
+	jsr pc,grfwrd		;Get word address in TT, bit within word in T.
+	asl t
+	mov bittbl(t),(tt)	;get bit within word, and store.
+1$:	jmp grflp
+
+;%GODLA, etc.
+grflin:	jsr pc,grfclp		;Get cursorpos to start from.
+	jsr pc,grfpnt		;read in ending point (clobbers a).
+	jsr pc,grfmod		;Select ALU function.
+	mov t,a			;Move starting point into a, b.
+	mov tt,b
+	jsr pc,grfclp		;Get endpoint cursorpos in t,tt.	
+	jsr pc,drwlin
+grfx1:	jmp grflp
+
+;Output text at the graphics cursor position.
+grfstr:	jsr pc,grfclp		;Get current cursor addr in T, TT and move on screen.
+	jsr pc,grfwrd		;Turn into word address in TT, bit within wd in T.
+	mov #20-chrwd,c
+	sub t,c			;C gets phase within word of right edge of char.
+;C has phase, TT has addr of word to start in.
+1$:	grfchr			;Read next arg char.
+	tst a
+	beq grfx1		;Zero means exit.
+	jsr pc,grfmod		;Select ALU function.
+	asl a			;copied from code at genchr
+	mov ctab(a),t
+	push u
+	push c
+	push tt
+	push b
+	jsr pc,gench1		;generate character, clobber all acs
+	pop b
+	pop tt
+	pop c
+	pop u
+	tst c			;Advance c, tt and legx to next char pos.
+	bgt 2$
+	add #20,c
+	tst (tt)+
+	cmp tt,#tvcfence
+	blos 2$
+	mov #tvlo,tt
+2$:	sub #chrwd,c
+	add #chrwd,legx(u)
+	br 1$
+
+grfscn:				;scan line interpreter
+	clr c			;C has bits to set
+	clr tt			;TT has # of bits we got.
+	grfchr
+	bit #300,a
+	bne 1$
+	swab a			;1st char, if not terminator, has 6 bits.
+	asl a			;Put in top of word in C.
+	asl a
+	mov a,c
+	add #6,tt
+
+	grfchr
+	bit #300,a		;Next char has 6 more bits.
+	bne 1$			;Put it in following bits of C.
+	asl a
+	asl a
+	asl a
+	asl a
+	bis a,c
+	add #6,tt
+
+	grfchr
+	bit #300,a		;Next char has 4 bits.  Finish filling up C.
+	bne 1$
+	bis a,c
+	add #4,tt
+
+;Now, B has original %GO command,
+;C has accumulated bits, TT has number of bits.
+1$:	jsr pc,grfmod		;Select ALU function.
+	push tt			;Save # of bits.
+	jsr pc,grfgtp		;Get TV coords in T, TT
+	bcs 2$			;Don't display if they are off screen.
+	push #0
+	cmp t,#bitpl-20
+	blt 3$
+	com (sp)		;Top of stack has -1 if within 1 word of right edge.
+3$:	jsr pc,grfwrd		;Compute word addr in TT, bit within word in T
+	mov c,mq
+	clr ac
+	mov t,lsh		;Divide word in B into bits for this wd and bits for next.
+	mov ac,(tt)+		;Store the bits into this word.
+	tst (sp)+
+	bne 2$
+	 mov mq,(tt)		;If there is a next word, store in it too.
+;Finished displaying the bits (or not).
+2$:	add (sp)+,legx(u)	;Advance cursor by # bits we got.
+	bit #300,a
+	beq grfscn		;Was terminator?  If not, read 3 more chars.
+	bit #200,a
+	beq grfx2			;%TD code => go process it.
+	 jmp dpyctl
+grfx2:	jmp grflp		;Code btw 100 and 200 => ignore it.
+
+;Draw run-length encoded data.
+grfrun:	grfchr
+	tst a
+	beq grfx2
+	bit #100,a		;If it's a skip command, no output.
+	beq 6$
+	bic #100,a
+	jsr pc,grfgtp		;If off screen, no output.
+	bcs 6$
+	push a
+	add t,a			;Draw a line of the desired width
+	dec a			;(subtract 1 from end coord, since it is inclusive)
+	cmp a,#bitpl
+	blt 1$			;Bring it onto the screen.
+	 mov #bitpl-1,a
+1$:	jsr pc,grfmod		;Select ALU function.
+	jsr pc,drwhln
+	pop a
+6$:	add a,legx(u)		;increment x coord of cursor.
+	br grfrun	
+
+grfclr:	mov leglft(u),a
+	mov legtop(u),b
+	mov legrgt(u),t
+	mov legbot(u),tt
+	movb #candc,calu
+	jsr pc,drwrec
+	jmp grflp
+
+grfrec:	jsr pc,grfclp		;Get cursorpos to start from.
+	jsr pc,grfpnt		;read in ending point (clobbers a).
+	jsr pc,grfmod		;select alu function
+	mov t,a			;Put starting cursorpos in a,b.
+	mov tt,b
+	jsr pc,grfclp		;Get endpoint cursorpos in t,tt.
+	jsr pc,drwrec
+	jmp grflp
+
+;Draw a line from point (a,b) to point (t,tt).
+;The coords are with origin at top left.
+;We assume they are valid and on the screen.
+drwlin:	cmp b,tt		;If VPOS's are the same, draw horiz line is faster.
+	beq drwhln
+	mov u,-(sp)
+	mov c,-(sp)
+	sub tt,b		;create dy
+	sub t,a			;create dx
+	bgt 100$		;branch if pos
+	 neg a			;dx=abs(dx)
+	 br 110$
+100$:	add b,tt		;get back the new values !!
+	add a,t
+	neg b			;flip dy
+110$:	mov #0,-(sp)		;dummy delinc
+	mov #bitpl/16.*2,-(sp)	;assume dy>=0 for ystep.
+	tst b			;test dy
+	bge 120$
+	 neg (sp)		;turn ystep around
+	 neg b
+120$:	mov #bitpl/10,mq
+	mov tt,mul
+	mov mq,u
+	mov t,c			;save c for the starting bit
+	asr t
+	asr t
+	asr t			;Compute word address offset.
+	bic #1,t
+	add t,u
+	add #tvlo,u		;Get word address of word ctning start of line.
+	bic #-20,c		;get ready to get starting bit
+	asl c			;indexable
+	mov bittbl(c),c		;get the starting bit in C.
+				;a,b is dx,dy; c=starting bit
+
+	cmp a,b			;compare dx,dy
+	bgt 150$
+	 mov b,t		;get greater (delinc) into t
+	 mov a,tt		;put deldec in tt
+	 br 200$ 
+150$:	mov a,t
+	mov b,tt	
+200$:	mov t,2(sp)		;put delinc on stack
+	sub a,b			;dy-dx, for comparison
+	mov t,a			;compute initial delta
+	asr a			;=delinc/2
+	inc t			;count=delinc+1
+; c = bit
+; u = pointer into memory
+; t = count
+; tt = deldec
+; a = delta
+; b = dy-dx
+drwln1:
+	tst b
+	bge 100$
+10$:	mov c,(u)		;x direction
+	sub tt,a		;delta = delta-deldec
+	bgt 20$
+	 add 2(sp),a		;up it by delinc
+	 add (sp),u		;and go up (down) the screen
+20$:	asl c
+	bne 30$
+	 sub #2,u		;go left
+	 inc c			;and put a bit in the reg
+30$:	dec t
+	bne 10$
+	br ktvvex
+
+100$:	mov c,(u)
+	sub tt,a
+	bgt 120$
+	 add 2(sp),a
+	 asl c
+	 bne 120$
+	  sub #2,u
+	  inc c
+120$:	add (sp),u
+	dec t
+	bne 100$
+	
+ktvvex:	tst (sp)+
+	tst (sp)+
+	mov (sp)+,c
+	mov (sp)+,u
+	rts pc
+
+bittbl:	100000,040000,020000,010000,004000,002000,001000,000400
+	000200,000100,000040,000020,000010,000004,000002,000001
+
+;Draw a horizontal line from (t,tt) to (a,tt), inclusive.
+;Does not refer to or set the graphics cursor position.
+;Clobbers A, B, T, TT.
+drwhln:	cmp a,t
+	bgt 1$			;Make sure that t is < a.  Swap if not so.
+	push a
+	mov t,a
+	pop t
+1$:	sub t,a
+	inc a			;A has # bits to draw.
+	jsr pc,grfwrd		;Get word addr in TT, bit within word in T.
+11$:	mov #-1,b
+	cmp #20,a
+	ble 12$
+	mov b,mq		;Get desired # bits in top of B.
+	mov #20,b
+	sub a,b
+	mov b,lsh
+	mov mq,b
+12$:	tst t			;If not starting at start of word,
+	beq 2$
+	mov b,ac		;shift the bits to where we are starting.
+	push t
+	neg (sp)
+	pop lsh
+	mov ac,b		;Handle only what's left in current word.
+2$:	mov b,(tt)+		;Process one word, and update # bits to be drawn.
+	sub #20,a		;Subtract 20-t, number of bits left in word,
+	add t,a			;from number of bits to be processed.
+	clr t			;We start at the top of the next word.
+	tst a
+	bgt 11$			;Want more bits?  Go do them.
+	rts pc
+
+.if z 0
+;Draw a rectangle with horizontal range a to t and vert range b to tt.
+;Coords have origin at top left corner.
+drwrec:	cmp b,tt
+	bgt 1$
+	 push b			;Make sure b is > tt.  Swap if not.
+	 mov tt,b
+	 pop tt
+1$:	push b
+	push tt			;Now draw a horiz line with desired endpoints
+	push a
+	push t
+	jsr pc,drwhln		;on each row within the vertical limits.
+	pop t
+	pop a
+	pop tt
+	pop b
+	inc tt
+	cmp tt,b
+	ble 1$
+	rts pc
+.iff
+msktbl: 177777,077777,037777,017777,007777,003777,001777,000777
+	000377,000177,000077,000037,000017,000007,000003,000001
+msktbe::
+
+;Draw a rectablge with horizontal range a to t and vert range b to tt.
+;Coords have origin at top left corner.
+drwrec:	cmp b,tt
+	bgt 10$
+	  push b
+	  mov tt,b		;make sure b > tt
+	  pop tt
+10$:	cmp a,t
+	bgt 20$
+	  push a
+	  mov t,a		;make sure a > t
+	  pop t
+20$:	sub tt,b		;vertical distance
+	inc b			;number of lines to hit
+	sub t,a			;horizontal distance
+	inc a			;number of columns to hit
+	push b			;vertical line count
+	push #<bitpl/8>-2	;initial wrap around increment
+	clr -(sp)		;extra bits on left
+	clr -(sp)		;words in the middle
+	clr -(sp)		;extra bits on right
+;;; ;;; 	vertical line count
+;;; ;;; 	wrap around increment
+;;; ;;; 	extra bits on left
+;;; ;;; 	number of words to hit in the middle
+;;; ;;; sp--*	extra bits on right
+	jsr pc,grfwrd		;convert tt,t to address
+	tst t			;0 bits extra?
+	beq 40$
+	  sub #16,a
+	  add t,a		;count bits as done
+	  asl t
+	  mov msktbl(t),4(sp)
+	  sub #2,6(sp)		;one less word to wrap around
+40$:	tst a
+	bpl 50$
+	  asl a
+	  bic msktbe(a),4(sp)	;line down middle of word
+	  br 200$		;finished, go draw
+50$:	com (sp)		;setup for extra bits on the right
+	mov a,t
+	bic #177760,t		;only 4 bits
+	asl t
+	bic msktbl(t),(sp)	;don't draw bits too many bits
+	bic #17,a
+	asr a
+	asr a
+	asr a
+	sub a,6(sp)		;fix wrap around increment
+	asr a			;number of words
+	mov a,2(sp)
+    
+200$:	mov 4(sp),t		;bits in first word
+	beq 210$
+	  mov t,(tt)+
+210$:	mov 2(sp),t		;number of middle words
+	beq 220$
+215$:	  mov #-1,(tt)+
+	  dec t
+	  bne 215$
+220$:	mov (sp),(tt)+		;bits in last word
+	add 6(sp),tt		;update to beginning of next scan line
+	dec 10(sp)		;one less scan line to do
+	bne 200$		;loop until finished
+	add #5*2,sp		;pop temps
+	rts pc
+.endc
+
 ;OUTSTR TAKES STRING TO PRINT IN B
 
 OUTSTR:
@@ -2748,7 +3375,7 @@ VSWSL1:	BIC	#-400,TT	;UNDO SIGN-EXTENSION AT VSWSL0
 	BR	VSWDE1
 
 VSWSL4:	SUB	#200,TT		;TT SUPPOSEDLY HAS 200 PLUS DPY BUFFER NUMBER.
-	CMP	TT,#MAXTV
+	CMP	TT,#MAXCRG
 	BLO	VSWDE1
 	BR	RTSPC4
 
@@ -5491,16 +6118,27 @@ LECHN::		-1		;DPY CHANNEL NUMBER, SET UP AT INIT TIME.
 LEKBD::		-1		;KEYBOARD DRIVING THIS LINE EDITOR
 LEY::		-NLINS		;Y COORDINATE OF LINE EDITOR DISPLAY
 LELCC::		TVLO		;ADDRESS OF START OF CURRENT CHARACTER LINE, IN VIDEO BUFFER.
-;LEFONT::	CTAB		;FONT FOR WRITING WITH IN THIS L.E. (NOT USED)
-LECPC::		0		;COROUTINE PC SAVED BY GETCHC.
-LESVB::		0		;VALUE OF B SAVED OVER CALL TO GETCHC.
+LESTK:		.BLKW 3		;SAVE STACK WHEN BLOCKING INSIDE GETCHC.
+LESTKP:		0		;POINTS AFTER LAST USED WORD IN LESTK,
+				;OR 0 IF NOT SAVING STATE FOR A GETCHC WHICH BLOCKED.
+LESVB:		0		;SAVE THESE ACS WHEN BLOCKING INSIDE GETCHC.
+LESVC:		0
+LESVT:		0
+LESVTT:		0
 LEFREE::	LBCHRS		;FREE CHARACTER COUNT
 LECHR::		0		;POINTS AT FREE CHARACTER IN BUFFER
-;LEBLNK::	0		;LINE EDITOR BLINKER (NOT USED, THERE IS NO LINE EDITOR)
 LERPT::		0		;0 NORMAL, -1 => INDEFINITE REPEAT, ELSE REPEAT COUNT.
 				;REPEAT REFERS TO REPEAT-ACTION ON AN INPUT CHARACTER.
 LELSTA::	0		;A AND B AT MOST RECENT CALL TO PUTCHR.
 LELSTB::	0		;FOR THE SAKE OF REPEAT-ACTION ON INPUT.
+LEGX:		0		;X-COORD FOR SUPDUP GRAPHICS.
+LEGY:		0		;Y-COORD FOR SUPDUP GRAPHICS.
+LEGXOR:		.BYTE 0		;-1 FOR GRAPHICS XOR MODE
+LEGVIR:		.BYTE 0		;-1 FOR VIRTUAL COORDS.
+LEGLFT:		0		;LEFT EDGE OF GRAPHICS REGION.
+LEGTOP:		0
+LEGRGT:		0
+LEGBOT:		0
 ...TEN
 LELEN::		.OFFSET 0
 
@@ -5757,7 +6395,8 @@ CHECK ELETAB,MAXKBD
 ;NON-WORKING TV BUFFERS SHOULD NOT BE IN THE LIST.
 ;IF THERE ARE MORE CHANNELS THAN BUFFERS, PUT -1 IN FOR SOME CHANNELS.
 
-CHCREG:	.BYTE 0,1,4,5,6,7,10,11,12,13,14,15,16,17,-1,-1
+CHCREG:	.BYTE 0,1,4,5,6,7,-1,11,12,13,14,-1,16,17
+					;15 is pretty broken
 
 
 ;VIDEO SWITCH INPUT INDEXED BY DPY #, HIGH ORDER BYTE GIVES SWITCH SECTION
@@ -5778,7 +6417,6 @@ DPYVSW:	1		; 0
 	12		;15
 	13		;16
 	14		;17
-CHECK DPYVSW,MAXTV*2
 
 ;AUDIO SWITCH TABLES (INDEXED BY KBD #, GIVES AUDIO SWITCH OUTPUT #)
 
@@ -5922,13 +6560,13 @@ CHNUSE:	.BLKB MAXTV	;BYTES INDEXED BY DPY CHANNEL #
 
 
 ;BLINKERS.  INDEXED BY TV-BUFFER # (CREG)
-BLINKS:	.BLKW MAXTV	;ADDRESS OF 1ST BLINKER OF THIS TV'S BLINKER LIST.
+BLINKS:	.BLKW MAXCRG	;ADDRESS OF 1ST BLINKER OF THIS TV'S BLINKER LIST.
 
-BLKSWT:	.BLKB MAXTV	;NONZERO => DON'T DO ANY BLINKING ON THIS TV NOW.
+BLKSWT:	.BLKB MAXCRG	;NONZERO => DON'T DO ANY BLINKING ON THIS TV NOW.
 	.EVEN
 
 ;BELLS PENDING COUNTS.  INDEXED BY TV-BUFFER #
-BELCNT:	.BLKW MAXTV
+BELCNT:	.BLKW MAXCRG
 
 
 ;PER-KEYBOARD INFORMATION.  INDEXED BY KBD#.
@@ -5985,13 +6623,11 @@ CKSSMG:	0	;GOOD CHECKSUM OF [FNTORG,FNTEND)
 ;LINE EDITOR BUFFER RINGS
 
 TENWRD
-NLBUFS==<RUGSA-.>/<LHLEN+LBLEN>
-
-.IIF LT NLBUFS-<MAXTV*2>, .ERROR NOT ENOUGH LEBUFS
-REPORT NLBUFS=,\NLBUFS
+NLBUFS==MAXTV*2-2
 
 LEBUFS:	.=.+<NLBUFS*<LHLEN+LBLEN>>
 
 REPORT HIGHEST USED=,\.
 
+.IIF LT TVLO-.-40, .ERROR PROGRAM TOO BIG.
 .END	GO
