@@ -238,6 +238,8 @@ respond "*" ":print cstacy;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":print teach;..new. (udir)\r"
 type ":vk\r"
+respond "*" ":print device;..new. (udir)\r"
+type ":vk\r"
 
 respond "*" ":midas sysbin;_.teco.;teco\r"
 expect ":KILL"
@@ -555,6 +557,11 @@ expect ":KILL"
 respond "*" ":midas sysbin;_syseng;@chaos\r"
 expect ":KILL"
 respond "*" ":link sys;atsign chaos,sysbin;@chaos bin\r"
+
+# CHA: and CHAOS: device
+respond "*" ":midas device;jobdev cha_dcp;chadev\r"
+expect ":KILL"
+respond "*" ":link device;jobdev chaos,device;jobdev cha\r"
 
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
