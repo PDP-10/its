@@ -3,7 +3,7 @@ cd build/klh10
 set emulator_prompt "KLH10"
 set emulator_escape "\034"
 
-proc start_nsalv {} {
+proc start_salv {} {
     uplevel #0 {spawn ./kn10-ks-its nsalv.ini}
     expect "EOF"
     respond "KLH10#" "go\r"
@@ -11,7 +11,7 @@ proc start_nsalv {} {
 
 proc restart_nsalv {} {
     quit_emulator
-    start_nsalv
+    start_salv
 }
 
 proc start_dskdmp {} {
@@ -51,4 +51,5 @@ proc initialize_comsat {} {
     respond "*" ":kill\r"
 }
 
+source ../ks10/include.tcl
 source ../build.tcl

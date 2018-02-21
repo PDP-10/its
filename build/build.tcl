@@ -70,66 +70,24 @@ expect_before timeout abort
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
-start_nsalv
+start_salv
 
-respond "\n" "mark\033g"
-respond "Format pack on unit #" "0"
-respond "Are you sure you want to format pack on drive" "y"
-respond "Pack no ?" "0\r"
-respond "Verify pack?" "n"
-respond "Alloc?" "3000\r"
-respond "ID?" "foobar\r"
+mark_packs
+
 respond "DDT" "tran\033g"
-respond "onto unit" "0"
+respond "#" "0"
 respond "OK" "y"
 expect "EOT"
 respond "DDT" $emulator_escape
 
-start_dskdmp
+start_dskdmp_its
 
-respond "DSKDMP" "l\033ddt\r"
-expect "\n"; type "t\033its rp06\r"
-expect "\n"; type "\033u"
-respond "DSKDMP" "m\033salv rp06\r"
-expect "\n"; type "d\033its\r"
-expect "\n"; type "its\r"
-expect "\n"; type "\033g"
 pdset
 respond "*" ":login db\r"
 sleep 1
-type ":ksfedr\r"
-respond "File not found" "create\r"
-expect -re {Directory address: ([0-7]*)\r\n}
-set dir $expect_out(1,string)
-type "write\r"
-respond "Are you sure" "yes\r"
-respond "Which file" "bt\r"
-expect "Input from"
-sleep 1
-respond ":" ".;bt rp06\r"
-respond "!" "quit\r"
-expect ":KILL"
-shutdown
 
-restart_nsalv
+prepare_frontend
 
-expect "\n"
-sleep 1
-type "feset\033g"
-respond "on unit #" "0"
-respond "address: " "$dir\r"
-respond "DDT" $emulator_escape
-quit_emulator
-
-start_its
-respond "DSKDMP" "its\r"
-type "\033g"
-pdset
-
-respond "*" ":login db\r"
-sleep 1
-type $emulator_escape
-mount_tape "out/sources.tape"
 type ":dump\r"
 respond "_" "reload "
 respond "ARE YOU SURE" "y"
@@ -158,55 +116,21 @@ respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
 respond "*" ":midas .;_system;its\r"
-respond "MACHINE NAME =" "DB\r"
-respond "Configuration?" "RP06\r"
+its_switches
 expect ":KILL"
 
-respond "*" ":midas .;@ ddt_system;ddt\r"
-respond "cpusw" "3\r"
-respond "New One Proceed" "1\r"
-expect ":KILL"
+make_ntsddt
 
-respond "*" ":midas .;_kshack;nsalv\r"
-respond "Which machine?" "KSRP06\r"
-expect ":KILL"
+make_salv
 
-respond "*" ":midas .;_system;dskdmp\r"
-expect "Configuration"
-respond "?" "ksrp06\r"
-respond "Assemble BOOT?" "no\r"
-expect ":KILL"
+make_dskdmp
 
-respond "*" ":midas .;bt_system;dskdmp\r"
-expect "Configuration"
-respond "?" "ksrp06\r"
-respond "Assemble BOOT?" "yes\r"
-expect ":KILL"
-
-respond "*" ":midas sysbin;_kshack;ksfedr\r"
-expect ":KILL"
-respond "*" ":delete sys;ts ksfedr\r"
-respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
-
-respond "*" ":ksfedr\r"
-respond "!" "write\r"
-respond "Are you sure" "yes\r"
-respond "Which file" "bt\r"
-expect "Input from"
-sleep 1
-respond ":" ".;bt bin\r"
-respond "!" "quit\r"
-expect ":KILL"
+frontend_bootstrap
 
 shutdown
 start_dskdmp
-respond "DSKDMP" "l\033ddt\r"
-expect "\n"; type "t\033dskdmp bin\r"
-expect "\n"; type "\033g"
-respond "DSKDMP" "t\033its bin\r"
-expect "\n"; type "\033u"
-respond "DSKDMP" "m\033nsalv bin\r"
-expect "\n"; type "d\033nits\r"
+
+dump_nits
 expect "\n"; type "nits\r"
 expect "\n"; type "\033g"
 pdset
@@ -328,11 +252,7 @@ respond "*" ":midas sys1;_kshack;nsalv\r"
 respond "machine?" "TS\r"
 expect "*"
 
-# salv, standalone and timesharing versions
-respond "*" ":midas .;_system;salv\r"
-respond "time-sharing?" "n\r"
-respond "machine?" "ML\r"
-expect ":KILL"
+# salv, timesharing versions
 respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
@@ -355,7 +275,7 @@ respond "*" ":midas sys1;ts magfrm_syseng;magfrm\r"
 expect ":KILL"
 
 respond "*" ":midas sysbin;_syseng;dump\r"
-respond "WHICH MACHINE?" "DB\r"
+dump_switches
 expect ":KILL"
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
@@ -1514,28 +1434,7 @@ respond "*" ":midas sys3;ts balanc_alan;balanc\r"
 expect ":KILL"
 respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
 
-# ndskdmp tape
-respond "*" ":link kshack;good ram,.;ram ram\r"
-respond "*" ":link kshack;ddt bin,.;@ ddt\r"
-respond "*" $emulator_escape
-create_tape "out/ndskdmp.tape"
-type ":kshack;mtboot\r"
-respond "Write a tape?" "y"
-respond "Rewind tape first?" "y"
-respond "Include DDT?" "y"
-respond "Input file" ".;dskdmp bin\r"
-expect ":KILL"
-
-# make nnsalv.tape
-
-respond "*" $emulator_escape
-create_tape "out/nnsalv.tape"
-type ":kshack;mtboot\r"
-respond "Write a tape?" "y"
-respond "Rewind tape first?" "y"
-respond "Include DDT?" "y"
-respond "Input file" ".;nsalv bin\r"
-expect ":KILL"
+bootable_tapes
 
 # make output.tape
 

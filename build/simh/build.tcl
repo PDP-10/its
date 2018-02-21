@@ -1,6 +1,6 @@
 set emulator_escape "\005"
 
-proc start_nsalv {} {
+proc start_salv {} {
     uplevel #0 {spawn pdp10 build/simh/init}
     respond "sim>" "show ver\r"
     respond "sim>" "b tu1\r"
@@ -45,4 +45,5 @@ proc initialize_comsat {} {
     #type "mfinit\033g"
 }
 
+source build/ks10/include.tcl
 source build/build.tcl
