@@ -451,7 +451,7 @@ type ":vk\r"
 respond "*" ":link sys2;ts u,sys2;ts users\r"
 type ":vk\r"
 
-respond "*" ":midas sys2;ts talk_gren;untalk\r"
+respond "*" ":midas sys2;ts untalk_gren;untalk\r"
 expect ":KILL"
 
 respond "*" ":midas sys3;ts ufind_syseng;ufind\r"
