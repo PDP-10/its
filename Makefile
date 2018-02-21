@@ -11,13 +11,10 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc chprog
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon
 
-# These directories are put on the minsys tape.
-MINSYS = _ sys
-
 # These files are used to create bootable tape images.
-RAM = bin/boot/ram.262
-NSALV = bin/boot/salv.rp06
-DSKDMP = bin/boot/dskdmp.rp06
+RAM = bin/ks10/boot/ram.262
+NSALV = bin/ks10/boot/salv.rp06
+DSKDMP = bin/ks10/boot/dskdmp.rp06
 
 KLH10=${PWD}/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
 SIMH=${PWD}/tools/simh/BIN/pdp10
@@ -33,7 +30,8 @@ out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build
 
 out/minsys.tape: $(ITSTAR)
 	mkdir -p out
-	cd bin; $(ITSTAR) -cf ../$@ $(MINSYS)
+	cd bin/ks10; $(ITSTAR) -cf ../../$@ _ sys
+	cd bin; $(ITSTAR) -rf ../$@ sys
 
 out/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp src/syshst/$(H3TEXT)
 	mkdir -p out
