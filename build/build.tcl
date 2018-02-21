@@ -42,18 +42,6 @@ proc pdset {} {
     expect ":KILL"
 }
 
-proc maybe_pdset {} {
-    expect "YOU MAY HAVE TO :PDSET" {
-	pdset
-    } "PDTIME OFFSET" {
-	pdset
-    } "IT IS NOW" {
-	type "\032"
-	expect "Fair"
-	type ":vk\r"
-    }
-}
-
 proc shutdown {} {
     global emulator_escape
     respond "*" ":lock\r"
@@ -136,7 +124,7 @@ quit_emulator
 start_its
 respond "DSKDMP" "its\r"
 type "\033g"
-maybe_pdset
+pdset
 
 respond "*" ":login db\r"
 sleep 1
@@ -221,7 +209,7 @@ respond "DSKDMP" "m\033nsalv bin\r"
 expect "\n"; type "d\033nits\r"
 expect "\n"; type "nits\r"
 expect "\n"; type "\033g"
-maybe_pdset
+pdset
 
 respond "*" ":login db\r"
 sleep 1
