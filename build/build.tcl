@@ -67,7 +67,7 @@ proc ip_address {string} {
 }
 
 set timeout 100
-expect_before timeout abort
+expect_after timeout abort
 
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]

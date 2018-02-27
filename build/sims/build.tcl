@@ -14,12 +14,21 @@ proc start_dskdmp {} {
 proc mount_tape {file} {
     respond "sim>" "at mta0 $file\r"
     respond "sim>" "c\r"
+    expect -timeout 2 "BUGPC/" {
+        type "\033P"
+    } timeout {
+	;
+    }
 }
 
 proc create_tape {file} {
     respond "sim>" "at mta0 $file\r"
     respond "sim>" "c\r"
-    respond "BUGPC/" "\033P"
+    expect -timeout 2 "BUGPC/" {
+        type "\033P"
+    } timeout {
+	;
+    }
 }
 
 proc quit_emulator {} {
