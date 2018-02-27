@@ -85,4 +85,30 @@ proc dump_nits {} {
 }
 
 proc bootable_tapes {} {
+    global emulator_escape
+
+    respond "*" ":midas .;magdmp bin.ka_syseng;magdmp\r"
+    respond "PTRHRI=" "n\r"
+    respond "KL10P=" "n\r"
+    respond "TM10BP=" "n\r"
+    respond "340P=" "n\r"
+    expect ":KILL"
+
+    respond "*" $emulator_escape
+    create_tape "out/magdmp.tape"
+
+    type ":magfrm\r"
+    respond "?" "KA\r"
+    respond "?" "Y"
+    respond "_" "W"
+    respond "FROM" ".; @ DDT\r"
+    respond "FILE" "@ DDT\r"
+    respond "_" "W"
+    respond "FROM" ".; @ SALV\r"
+    respond "FILE" "@ SALV\r"
+    respond "_" "W"
+    respond "FROM" ".; @ DSKDMP\r"
+    respond "FILE" "@ DSKDMP\r"
+    respond "_" "Q"
+    expect ":KILL"
 }
