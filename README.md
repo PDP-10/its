@@ -209,6 +209,7 @@ A list of [known ITS machines](doc/machines.md).
    - MAILT, allows editing mail (from :MAIL) in EMACS.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
+   - MLIFE, Bill Gosper's Conway Life.
    - MODEMS, modems gragon.
    - MSPLIT, split a file into smaller parts.
    - MTBOOT, make bootable tapes.
