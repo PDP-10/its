@@ -1059,6 +1059,22 @@ respond "designs" "\r"
 respond "suns" "\r"
 expect ":KILL"
 
+# MLIFE
+respond "*" ":midas /t games;ts mlife_rwg;mlife\r"
+respond "with ^C" "APR==0\r"
+respond "\n" "PI==4\r"
+respond "\n" "DIS==130\r\003"
+expect ":KILL"
+respond "*" ":midas /t .;@ mlife_rwg;mlife\r"
+respond "with ^C" "TS==0\r"
+respond "\n" "APR==0\r"
+respond "\n" "PI==4\r"
+respond "\n" "PTP==100\r"
+respond "\n" "PTR==104\r"
+respond "\n" "TTY==120\r"
+respond "\n" "DIS==130\r\003"
+expect ":KILL"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
