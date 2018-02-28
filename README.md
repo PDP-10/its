@@ -246,6 +246,7 @@ A list of [known ITS machines](doc/machines.md).
    - RMTDEV, MLDEV for non-ITS hosts.
    - SALV, old file system tool for KA and KL.
    - SCANDL, TTY OUTPUT SPY.
+   - SCRAM, encypt/decrypt file.
    - SEND, REPLY, replacements for DDT :SEND.
    - SENDS, Chaosnet SEND server.
    - SENSOR, sends censor.
