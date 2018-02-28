@@ -1374,6 +1374,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts usq_sysen3;usq\r"
 expect ":KILL"
 
+# SCRAM
+respond "*" ":midas sys2;ts scram_rwk;scram\r"
+expect ":KILL"
+
 # HOST
 respond "*" ":midas sys3;ts host_sysnet;host\r"
 expect ":KILL"

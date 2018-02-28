@@ -1,0 +1,416 @@
+
+.BEGIN RFN	;-*-MIDAS-*-
+
+SUBTTL Routines for parsing and printing filenames
+
+;Basic conventions:
+
+;We assume that there are accumulators A, B, C, D and E, not necessarily
+;consecutive, and that the stack is in P.
+;No routine clobbers ACs other than the
+;ones it is documented to clobber, and none touches even temporarily
+;any AC other than A, B, C, D, E and P.
+;All code generated is pure.
+;The main routines, RFN, PFN, PFNBRF and PFNMCH, never skip.
+
+;This file contains two routines, RFN to read filenames and PFN to print.
+;Both expect a b.p. for ILDB'ing or IDPB'ing the text, in D.
+;Both expect a pointer to a filename block in A.
+;A filename block consists of four words, which hold th
+;left-justified sixbit DEVICE, FN1, FN2 and SNAME in that order.
+
+;The RFN routine assumes that the user has defined the label RSIXTP
+;(RSIX-Terminator-P) which should expect a character in B
+;and skip if it should terminate a filename, or start a switch.
+;It will not be called with control characters.
+;Thus, you might want it to skip when given ",", "_" or "/".
+;PFN similarly assumes that there is a routine PSIXTP will will
+;skip for a character in B that needs a ^Q printed in front of it.
+;Normally, RSIXTP and PSIXTP can be the same routine.
+
+;If you want switches to be processed in filenames,
+;set $$SWITCH to 1 and define the label SWITCH as a routine to read a switch.
+;It will be called with the first character of the switch in B.
+;It can read more characters off D, or by calling RFN"RUC
+;If it skips, RFN assumes that the character in B should be reprocessed.
+;A slash is followed by a single switch, while parentheses enclose
+;any number of switches.  However, neither slash nor "(" will be
+;recognized unless RSIXTP skips for it.  This gives the caller
+;run-time control of whether switches are to be processed.
+
+;If $$MNAME is set, the user must define MNAME to point to
+;a word holding this machine's name in SIXBIT.  RFN"RMNAME initializes it.
+;If $$PFNBRF is set, the user must define MSNAME to point to
+;a word holding the "default" SNAME (the one not to be mentioned).
+
+;These symbols should be defined by the user to select parts of this file:
+IFNDEF $$RFN,$$RFN==0		;Include RFN, the routine for reading filenames.
+IFNDEF $$SWITCH,$$SWITCH==0	;Include routines for processing "/" and "(-)" switches.
+IFNDEF $$PFN,$$PFN==0		;Include PFN, the routine for printing filenames.
+IFNDEF $$PFNBRF,$$PFNBRF==0	;Include routine to print filenames briefly.
+IFNDEF $$RUC,$$RUC==0		;1 => don't define RUC;  use a user-supplied definition.
+IFNDEF $$MNAME,$$MNAME==0	;1 => assume MNAME is defined and holds this machine's name.
+
+IFN $$SWITCH,$$RFN==1
+IFN $$PFNBRF,$$PFNBRF==1
+
+ifndef $$sixp,$$sixp==0		;default to no special terminators
+ifndef $$altp,$$altp==0		;nonzero => altmode prints defaults
+ifn $$altp,$$pfn==1		;altmode requires that we be able to print
+
+ifndef p,p==sp			;alternate name for P
+.AUXIL				;Don't mention all our internal symbols in crefs.
+
+;PRINT VERSION NUMBER
+.TYO6 .IFNM1
+.TYO 40
+.TYO6 .IFNM2
+PRINTX/ INCLUDED IN THIS ASSEMBLY.
+/
+
+DEFINE SYSCAL NAME,ARGS
+.CALL [SETZ ? SIXBIT/NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+IFN $$RFN,[	;Routines for reading filenames.
+
+;Read a file spec off the b.p. in D into the file block that A points at.
+;A filename block has four words, which get the device name, sname, fn1 and fn2.
+;The terminating character is left in B.
+;In E's left half we return flags indicating which of the four names were
+;specified:  1,, for the device;  2,, for the FN1;  4,, for the FN2;  10,, for the SNAME.
+
+DEV==0		;Indices into the filename block.
+FN1==1
+FN2==2
+SNM==3
+
+ifn $$altp,[
+devloc:	0]
+
+RFN:	PUSH P,A
+	PUSH P,C
+	MOVE C,A	;Put the filename block addr in C since RSIXG returns in A.
+	PUSH P,FN1(C)	;Save default FN1, FN2 for ^X, ^Y.
+	PUSH P,FN2(C)
+ifn $$altp,[movem c,devloc]		;save location of file block for restarting
+restrt:	SETZ E,		;Number of names stored yet is 0.
+RFN0:	PUSHJ P,RUC
+
+ifn $$altp,[cain b,33		;altmode?
+	      jrst alttyp]	;yes, go print out our defaults
+
+RFN2:	PUSHJ P,RSIXG	;Read one filename.
+	 JRST RFN1
+	PUSHJ P,RFNN	;If it's not null, store it.
+
+RFN1:
+ifn $$altp,[cain b,33		;altmode?
+	      jrst alttyp]	;yes, go print out our defaults
+	CAIE B,72	;Check char that ended name, ":"
+	 CAIN B,"73		;or ";"
+	  JRST RFN0
+	CAIN B,40	;If was space, : or ;, read another name.
+	 JRST RFN0
+IFN $$SWITCH,[
+	CAIN B,57	;"/" -- If stopped on "/" or "(", call switch rtn.
+	 JRST RFNSL	;Read 1 switch.
+	CAIN B,50		;"("
+	 JRST RFNPAR	;Read many switches until ).
+];IFN $$SWITCH
+	CAIE B,^X
+	 CAIN B,^Y	;If was ^X or ^Y,
+	  JRST RFNX	;use the default FN1 or FN2 as next name.
+	SUB P,[2,,2]
+	POP P,C
+	POP P,A
+	POPJ P,
+
+;STORE THE NAME IN A.
+RFNN:	CAIN B,72		;":"
+	 JRST RFNC	;: => USE AS DEVICE.
+	CAIN B,73		;";"
+	 JRST RFNS	;; => USE AS SNAME.
+	AOJA E,RFNT(E)	;ELSE USE AS NEXT NAME IN NORMAL SEQUENCE.
+
+;Table for storing a name normally.
+;N'th entry used for N'th name.
+RFNT:	JRST RFNF1	;1st name, set FN1
+	JRST RFNF2	;Second, set FN2.
+	JRST RFNC	;Third, set device.
+	JRST RFNS	;Fourth, set sname.
+	SOS E		;Fifth one, ignore, and don't let count advance past 5.
+	POPJ P,		;So this word isn't part of the dispatch.
+
+
+ifn $$altp,[
+alttyp:	type /$
+/
+	push sp,d
+	move a,devloc		;restore saved filename block
+	move d,[tyo tyoc,b]	;type it out
+	call pfn
+	type /   /
+	pop sp,d
+	jrst restrt		;go back and try again with our new defaults
+]
+IFN $$SWITCH,[	;Code for processing switches, when a "/" or "(" is seen.
+
+RFNPAR:	PUSHJ P,RUC	;Get next char.  Is it a ")"?
+RFNPA1:	CAIN B,51		;")"
+	 JRST RFN0	;Paren ends switches.
+	CAIE B,0
+	CAIN B,^M
+	 JRST RFN1	;CR ends spec even in switch list.
+	PUSHJ P,SWITCH	;Try to gobble the switch.
+	 JRST RFNPAR	;Char in I used up, get another.
+	JRST RFNPA1	;Char in I not part of switch; is it ")"?
+
+RFNSL:	PUSHJ P,RUC
+	CAIE B,0
+	CAIN B,^M	;/<CR> ENDS SPEC.
+	 JRST RFN1
+	PUSHJ P,SWITCH	;Otherwise, process it as switch.
+	 JRST RFN0	;No skip => char in B was gobbled by switch.
+	JRST RFN2	;Skip => let next RSIXG gobble the char now in B.
+
+];IFN $$SWITCH
+
+;Here to store the word in A as the SNAME.
+RFNS:	MOVEM A,SNM(C)	;Set the sname.
+	TLO E,1_SNM	;Say the sname has been specified in this filespec.
+	MOVS A,DEV(C)	;Get the device,
+	TLNE E,1_DEV	;If dev was just spec'd, don't override the spec'd one.
+	 POPJ P,
+	LSH A,-6	;Else check 1st 2 chars,
+	CAIE A,'AI    '	;see if dev is one known to use the sname.
+	CAIN A,'ML    '
+	 POPJ P,		;If it is, nothing else to do.
+	CAIN A,'DM    '
+	 POPJ P,
+	CAIE A,'PK    '
+	CAIN A,'PK    '
+	 POPJ P,
+	CAIE A,'CL    '
+	CAIN A,'JO    '
+	 POPJ P,
+RFNS1:	MOVSI A,'DSK  '	;OTHERWISE SET THE DEVICE TO DSK:
+
+;Here to store the word in A as the device name.
+RFNC:	MOVEM A,DEV(C)	;Set the dev name,
+	TLO E,1_DEV	;and say the device name was explicitly specified.
+	POPJ P,
+
+;Here to store the word in A as the FN1.
+RFNF1:	MOVEM A,FN1(C)	;Set the FN1, say was spec'd.
+	TLO E,1_FN1
+	POPJ P,
+
+;Here to store the word in A as the FN2.
+RFNF2:	MOVEM A,FN2(C)	;Set the FN2, say was spec'd.
+	TLO E,1_FN2
+	POPJ P,
+
+;Here to process a ^X or ^Y, by taking the stacked default FN1 or FN2 and using it as input.
+RFNX:	ADDI B,(P)	;POINT TO THE STACKED DEFAULT FN1 OR FN2
+	MOVE A,-^Y(B)	;AND GET IT.
+	PUSHJ P,RFNN	;STORE IT NORMALLY.
+	JRST RFN0	;GET NEXT NAME.
+
+;Subroutines for filename reading.
+
+IFE $$RUC,[
+;Read char into B from b.p. in D and convert to upper case.
+;Filename reading does all its input via RUC.
+;If $$RUC is set, we assume that the user has defined RUC,
+;and call the user's definition.
+RUC:	xct d			;D has op to put char in b
+	CAIge B,140
+	  POPJ P,
+	caie b,177		;don't modify rubout
+	  SUBI B,40
+	popj p,
+];IFE $$RUC
+
+;Read SIXBIT word into A from source in D, leaving terminating char in B.
+;Expects first character in B already.
+;Terminates on a Space or control character or Rubout.
+;Skips if the word was non-null.
+RSIX:	PUSH P,C
+	MOVE C,[440640,,A]	;Extra bit in b.p. set says RSIX, not RSIXG.
+	JRST RSIXG1
+
+;Similar but stop on :, ;, and any characters which RSIXTP skips for.
+;We assume that the user has defined RSIXTP to accept a character in B
+;and skip or not, clobbering no ACs.
+RSIXG:	PUSH P,C
+	MOVE C,[440600,,A]	;BP FOR STORING THE SIXBIT.
+RSIXG1:	SETZ A,		;NO CHARS SO .
+RSIX0:	CAIn B,177
+	  jrst [setz b,		;no char
+		came c,[440600,,a]	;don't over-rubout
+		  jrst [dpb b,c		;clear out the old char
+			add c,[060000,,0]	;back up a char
+			jrst rsix4]	;and get another char to work with
+		jrst rsix4]
+
+	CAIN B,^Q
+	 JRST RSIX2	;^Q QUOTES A CHAR WHICH WOULD TERMINATE.
+
+	CAIG B,40
+	 JRST RSIX1	;SPACE OR CTL CHAR => STOP.
+	CAIGE B,100	;(IF THIS SKIPS, ALL LATER TESTS WOULD FAIL ANYWAY)
+	TLNE C,40
+	 JRST RSIX3	;RSIX WAS CALLED, ALL OTHER CHARS NORMAL.
+	CAIE B,72		;":"
+	CAIN B,73		;";" -- RSIXG, STOP ON : AND ;.
+	 JRST RSIX1
+ifn $$sixp,[PUSHJ P,RSIXTP]	;only if we want to bother
+	      JRST RSIX3
+RSIX1:	SKIPL C		;TERMINATE: SKIP IF GOT >= 1 CHAR.
+	 AOS -1(P)
+	POP P,C
+	POPJ P,
+
+RSIX2:	PUSHJ P,RUC	;^Q => READ THE QUOTED CHAR.
+RSIX3:	SUBI B,40	;INSERT NORMAL CHAR IN THE 6BIT.
+	TLNE C,77^4	;IGNORE CHARS AFTER THE FIRST 6.
+	 IDPB B,C
+rsix4:	PUSHJ P,RUC
+	JRST RSIX0
+
+
+];IFN $$RFN
+
+IFN $$PFN,[	;Routines for printing filenames.
+
+;Convert the filenames in the filename block which A points at
+;to ASCII, depositing it down the destination in D, followed by a ^@
+;which D is not advanced over.
+;A filename block is four words containing the device, fn1, fn2 and sname.
+
+;It is assumed that PSIXTP (PSIX-Terminator-P) is defined as a
+;routine which, given a character in B, skips if a ^Q should be
+;printed before that character.  Space, colon and semicolon get ^Q'd
+;in any case.  Thus, you can usually make PSIXTP and RSIXTP the same.
+
+;PFNMCH is the same as PFN except that if the device is DSK
+;it prints the name of this machine (from MNAME) instead.
+
+IFN $$MNAME,[
+
+PFNMCH:	PUSH P,B
+	PUSH P,C
+	MOVE C,DEV(A)
+	CAME C,[SIXBIT/DSK/]
+	 MOVE C,MNAME
+	JRST PFN1
+]
+
+PFN:	PUSH P,B
+	PUSH P,C
+	MOVE C,DEV(A)		;Print device name, colon, and space.
+PFN1:	PUSHJ P,PSIXF
+	MOVEI B,72		;":"
+	xct d
+	MOVEI B,40
+	xct d
+	MOVE C,SNM(A)		;Print sname, semicolon, and space.
+	PUSHJ P,PSIXF
+	MOVEI B,73		;";"
+	xct d
+	MOVEI B,40
+	xct d
+	MOVE C,FN1(A)		;Print fn1 and space.
+	PUSHJ P,PSIXF
+	MOVEI B,40
+	xct d
+	MOVE C,FN2(A)		;Print fn2.
+	PUSHJ P,PSIXF
+
+;;the next have been commented out because it isn't needed:  The user can do it
+;;  if he wants, since he gets his destination operation back again.  But if it
+;;  is a TYO it will lose to go putting out stray nulls
+
+;	SETZ B,			;Store terminating ^@ but don't advance D over it.
+;	MOVE C,D
+;	IDPB B,C
+	POP P,C
+	POP P,B
+	POPJ P,
+
+;Print SIXBIT word in C down destination in D,
+;putting ^Q's before appropriate characters.
+;Clobbers C.
+PSIXF:	LDB B,[360600,,C]	;Extract first character
+	LSH C,6			;and flush it.
+	ADDI B,40
+	CAIE B,72		;":"
+	 CAIN B,73		;";"
+	  JRST PSIXF1
+	CAIN B,40
+	 JRST PSIXF1
+ifn $$sixp,[PUSHJ P,PSIXTP]
+	       JRST PSIXF2
+PSIXF1:	PUSH P,B
+	MOVEI B,^Q
+	xct d
+	POP P,B
+PSIXF2:	xct d
+	JUMPN C,PSIXF	;ALL THE REST BLANK => DONE.
+	POPJ P,
+
+];IFN $$PFN
+
+IFN $$PFNBRF,[	;Routine to print filenames, as briefly as possible.
+
+;PFNBRF is called like PFN, but it omits names which have their default values.
+;It is assumed that MSNAME is defined to be the address of a word
+;holding the "default" SNAME.
+PFNBRF:	PUSH P,B
+	PUSH P,C
+	MOVE C,DEV(A)		;Print device name, colon, and space.
+IFN $$MNAME,CAME C,MNAME
+	 CAMN C,[SIXBIT /DSK/]
+	  JRST PFNBR1
+	JUMPE C,PFNBR1
+	PUSHJ P,PSIXF
+	MOVEI B,72		;":"
+	xct d
+	MOVEI B,40
+	xct d
+PFNBR1:	SKIPE C,SNM(A)		;Print sname, semicolon, and space.
+	 CAMN C,MSNAME
+	  JRST PFNBR2
+	PUSHJ P,PSIXF
+	MOVEI B,73		;";"
+	xct d
+	MOVEI B,40
+	xct d
+PFNBR2:	MOVE C,FN1(A)		;Print fn1 and space.
+	PUSHJ P,PSIXF
+	SKIPN FN2(A)
+	 JRST PFNBR3
+	MOVEI B,40
+	xct d
+	MOVE C,FN2(A)		;Print fn2.
+	PUSHJ P,PSIXF
+PFNBR3:
+;	SETZ B,			;Store terminating ^@ but don't advance D over it.
+;	MOVE C,D
+;	IDPB B,C
+	POP P,C
+	POP P,B
+	POPJ P,
+
+];IFN $$PFNBRF
+
+IFN $$MNAME,[	;Routine to initialize MNAME.
+
+RMNAME:	SYSCAL SSTATU,[REPEAT 6,[? %CLOUT,,MNAME]]
+	 .LOSE %LSSYS
+	POPJ P,
+
+];IFN $$MNAME
+
+.END RFN
