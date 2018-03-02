@@ -36,7 +36,7 @@ proc its_switches {} {
 }
 
 proc make_ntsddt {} {
-    respond "*" ":midas .;@ ddt_system;ddt\r"
+    respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
     respond "cpusw=" "0\r"
     respond "ndsk=" "0\r"
     respond "dsksw=" "0\r"
@@ -44,14 +44,14 @@ proc make_ntsddt {} {
 }
 
 proc make_salv {} {
-    respond "*" ":midas .;@ salv_system;salv\r"
+    respond "*" ":midas dsk0:.;@ salv_system;salv\r"
     respond "time-sharing?" "n\r"
     respond "machine?" "KA\r"
     expect ":KILL"
 }
 
 proc make_dskdmp {} {
-    respond "*" ":midas .;@ dskdmp_system;dskdmp\r"
+    respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
     expect "Configuration"
     respond "?" "ASK\r"
     respond "HRIFLG=" "N\r"
@@ -73,12 +73,10 @@ proc dump_switches {} {
 }
 
 proc dump_nits {} {
-    respond "DSKDMP" "l\0331\033"
-    respond "\n" "l\033ddt\r"
+    respond "DSKDMP" "l\033ddt\r"
     expect "\n"; type "t\033@ dskdmp\r"
     expect "\n"; type "\033g"
-    respond "DSKDMP" "l\0331\033"
-    respond "\n" "t\033its bin\r"
+    respond "DSKDMP" "t\033its bin\r"
     expect "\n"; type "\033u"
     respond "DSKDMP" "m\033@ salv\r"
     expect "\n"; type "d\033nits\r"
