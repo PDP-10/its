@@ -81,26 +81,26 @@ proc its_switches {} {
 }
 
 proc make_ntsddt {} {
-    respond "*" ":midas .;@ ddt_system;ddt\r"
+    respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
     respond "cpusw" "3\r"
     respond "New One Proceed" "1\r"
     expect ":KILL"
 }
 
 proc make_salv {} {
-    respond "*" ":midas .;_kshack;nsalv\r"
+    respond "*" ":midas dsk0:.;_kshack;nsalv\r"
     respond "Which machine?" "KSRP06\r"
     expect ":KILL"
 }
 
 proc make_dskdmp {} {
-    respond "*" ":midas .;_system;dskdmp\r"
+    respond "*" ":midas dsk0:.;_system;dskdmp\r"
     expect "Configuration"
     respond "?" "ksrp06\r"
     respond "Assemble BOOT?" "no\r"
     expect ":KILL"
 
-    respond "*" ":midas .;bt_system;dskdmp\r"
+    respond "*" ":midas dsk0:.;bt_system;dskdmp\r"
     expect "Configuration"
     respond "?" "ksrp06\r"
     respond "Assemble BOOT?" "yes\r"
