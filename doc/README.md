@@ -6,6 +6,7 @@
   [Getting Started Computing at the AI Lab](ai_wp_235.pdf)
 - DDT: [manual](info/ddt.33), [commands](_info_/ddtord.1462),
   [colon commands](_info_/ddt.:cmnds)
+- [Supported peripherals](peripherals.md)
 
 ### Tools
 
