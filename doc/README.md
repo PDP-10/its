@@ -7,6 +7,7 @@
 - DDT: [manual](info/ddt.33), [commands](_info_/ddtord.1462),
   [colon commands](_info_/ddt.:cmnds)
 - [Supported peripherals](peripherals.md)
+- [Version number history](versions.md)
 
 ### Tools
 
