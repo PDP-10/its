@@ -131,9 +131,10 @@ There is a [detailed list of all installed programs](doc/programs.md).
 
 ### Network Support
 
-Currently, networking is only supported under the KLH10 emulator. SIMH does
-not have the necessary support. As of this release, only the ITS monitor,
-host table tools, and binary host table are installed. 
+Currently, networking is only supported under the KLH10 and SIMH KA10
+emulators. The SIMH KS10 does not have the necessary support. As of
+this release, only the ITS monitor, host table tools, and binary host
+table are installed.
 
 Currently, basic TCP network support is in the build, in addition to
 both a TELNET/SUPDUP server, and both TELNET and SUPDUP clients.
