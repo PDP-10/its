@@ -1452,6 +1452,18 @@ respond "*" ":midas sys3;ts balanc_alan;balanc\r"
 expect ":KILL"
 respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
 
+# Additional LSPLIB packages
+respond "*" "complr\013"
+respond "_" "liblsp;iota_libdoc;iota kmp1\r"
+respond "_" "liblsp;time_libdoc;time kmp8\r"
+respond "_" "liblsp;letfex_libdoc;letfex gjc2\r"
+respond "_" "liblsp;lusets fasl_libdoc;lusets\r"
+respond "_" "liblsp;break fasl_libdoc;break\r"
+respond "_" "liblsp;smurf_libdoc;smurf rwk1\r"
+respond "_" "liblsp;fasdmp fasl_rlb%;fasdmp\r"
+respond "_" "\032"
+type ":kill\r"
+
 bootable_tapes
 
 # make output.tape
