@@ -1,0 +1,749 @@
+;;;;;;;;;;;;;;;;;;; -*- Lisp -*- ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;(macsyma-module meta macro)
+
+;;; GJC Some time in July 1980.
+;;; a very simple meta evaluator for lisp code.
+;;; the main use of this is for looking at functions
+;;; which are candidates for open compilation.
+;;; No. Also used to implement atomic macros in order to implement
+;;; lexical DEFCLOSURE. Also used in the macsyma->lisp translator
+;;; to gronk environments. Also used to implement lexicaly local macros...
+
+#-Lispm
+(herald meta-evaluator)
+
+(eval-when (eval)					;trivial utilities
+  (defun ldm () (load '|libmax;meta >|))
+  (defmacro defo (&rest form) `(def-subr-open ,@form))
+  (defun oexp (x) (open-subr-expander x)))
+
+(eval-when (compile eval)
+  (or (fboundp 'defstruct)
+      (load '((liblsp)struct))))
+
+(defstruct (meta-var conc-name #+maclisp (TYPE NAMED-HUNK) #+lispm named)
+  (eval-p 0)
+  (setq-p 0)
+  special-p
+  name
+  VALUE
+  IN-LOOP-P       ;; T if found free a PROG context.
+  IN-FUNARG-P
+  CERTAIN-EVAL-P  ;; T if certain to get evaluated.
+  ;; NIL if it might not get evaluated due to
+  ;; RETURN, GO, or THROW.
+  ORDER	;; the evaluation order of the first time evaluated.
+  )
+
+;;; (META-EVAL <FORM>  &OPTIONAL <INTERESTING-VARS> <VAR-SUBST-LIST>)
+;;; returns a list of meta-var structures of the interesting variables,
+;;; when the var-subst-list is given it meta-substitutes for corresponding
+;;; interesting variables.
+
+;;; this does no alpha conversion, it is a one-pass
+;;; tree walker with a method for each kind of node.
+;;; Furthermore, this is for lexical variables only.
+
+(defvar *meta-var-stack* nil)
+(defvar *meta-var-eval-order-index* 0)
+(DEFVAR *META-SUBST-P* NIL)
+;;; if non nil then meta-eval is doing substitution,
+;;; otherwise, the value returned by meta-eval is a list of
+;;; meta-vars.
+(DEFVAR *META-FREE-VARS* NIL)
+(DEFVAR *META-CHECKING-FOR-FREE-VARS-P* NIL)
+(DEFVAR *META-IN-LOOP-CONTEXT-P* nil)
+(DEFVAR *META-IN-FUNARG-CONTEXT-P* NIL)
+(DEFVAR *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)
+
+(defmacro bind-meta-eval-state (&rest body)
+  `(let ((*meta-var-stack* nil)
+	 (*meta-var-eval-order-index* 0)
+	 (*meta-subst-p* nil)
+	 (*meta-free-vars* nil)
+	 (*meta-checking-for-free-vars-p* nil)
+	 (*meta-in-loop-context-p* nil)
+	 (*META-IN-CERTAIN-EVAL-CONTEXT-P* T)
+	 (*META-IN-FUNARG-CONTEXT-P* NIL))
+     ,@body))
+
+(defmacro special-p (x) `(get ,x 'special))
+;;; this is a system-dependant macro. In maclisp it only
+;;; works in the compiler.
+;;; Assuming: that the special declarations of variables are
+;;; inherited in the local context. If this were not true then
+;;; it would save a lot of hair and confusion, but it is true.
+
+(defun meta-symeval (sym &aux (meta (get sym 'meta-var)))
+  (COND ((EQ META 'BOUND) SYM)
+	(META
+	 ;; not interested in this variable otherwise.
+	 (setq *meta-var-eval-order-index*
+	       (1+ *meta-var-eval-order-index*))
+	 (alter-meta-var meta
+			 IN-LOOP-P *META-IN-LOOP-CONTEXT-P*
+			 IN-FUNARG-P *META-IN-FUNARG-CONTEXT-P*
+			 special-p (special-p sym)
+			 eval-p (1+ (meta-var-eval-p meta))
+			 CERTAIN-EVAL-P (OR (META-VAR-CERTAIN-EVAL-P META)
+					    *META-IN-CERTAIN-EVAL-CONTEXT-P*)
+			 order (or (meta-var-order meta)
+				   *meta-var-eval-order-index*))
+	 
+	 (META-VAR-VALUE META))
+	(*META-CHECKING-FOR-FREE-VARS-P*
+							; in this state we a looking for all free variables.
+							; so create a new cell for this one.
+	 (setq *meta-var-eval-order-index* (1+ *meta-var-eval-order-index*))
+	 (let ((cell (make-meta-var
+		      IN-LOOP-P *meta-in-loop-context-p*
+		      IN-FUNARG-P *META-IN-FUNARG-CONTEXT-P*
+		      special-p (special-p sym)
+		      name sym
+		      eval-p 1
+		      CERTAIN-EVAL-P *META-IN-CERTAIN-EVAL-CONTEXT-P*
+		      order *meta-var-eval-order-index*)))
+	   (setf (get sym 'meta-var) cell)
+	   (push cell *meta-free-vars*)))
+	(T SYM)))
+
+(defun meta-set (sym)
+  (or (symbolp sym)
+      (meta-eval-error "Attempt to set non symbol" sym))
+  (let ((meta (get sym 'meta-var)))
+    (cond ((eq meta 'bound) sym)
+	  (meta
+	   (setf (meta-var-setq-p meta) (1+ (meta-var-setq-p meta)))
+	   (setf (meta-var-special-p meta) (special-p sym))
+	   (meta-var-value meta))
+	  (*meta-checking-for-free-vars-p*
+	   (let ((cell (make-meta-var setq-p 1
+				      value sym
+				      special-p (special-p sym)
+				      name sym)))
+	     (setf (get sym 'Meta-var) cell)
+	     (push cell *meta-free-vars*))
+	   sym))))
+
+(DEFMACRO META-BINDV (VARL &REST BODY
+			   &AUX (VARLG (GENSYM)))
+  `(LET ((,VARLG ,VARL))
+     (META-BINDPUSH ,VARLG)
+     (UNWIND-PROTECT (PROGN ,@BODY)
+		     (META-POPV ,VARLG))))
+
+(DEFUN META-BINDPUSH (VARL)
+  (MAPC #'(LAMBDA (V)
+	    (OR (SYMBOLP V)
+		(META-EVAL-ERROR "Attempt to bind non symbol" V))
+	    (PUSH (GET V 'META-VAR) *META-VAR-STACK*)
+	    (SETF (GET V 'META-VAR) 'BOUND))
+	VARL))
+
+(DEFUN META-POPV (VARL)
+  (MAPC #'(LAMBDA (V)
+	    (SETF (GET V 'META-VAR)
+		  (POP *META-VAR-STACK*)))
+	VARL))
+
+
+(DEFUN META-EVAL (FORM
+		  &OPTIONAL
+		  (VARS NIL VARS-p) (SUBST-LIST))
+  (bind-meta-eval-state
+   (or vars-p
+       (setq *META-CHECKING-FOR-FREE-VARS-P* t))
+   (and subst-list
+	(setq *meta-subst-p*
+	      (or (= (length vars) (length subst-list))
+		  (meta-eval-error
+		   "In compatible var and subst-var lengths"	
+		   (list vars subst-list)))))
+   
+   (META-BINDV
+    VARS
+    (UNWIND-PROTECT
+     (PROGN
+      (COND (*META-SUBST-P* 
+	     (MAPC #'(LAMBDA (VAR VAL)
+		       (SETF (GET VAR 'META-VAR)
+			     (MAKE-META-VAR VALUE VAL
+					    NAME VAR)))
+		   VARS subst-list))
+	    (*meta-checking-for-free-vars-p*)
+	    (T
+	     (MAPC #'(LAMBDA (V)
+		       (SETF (GET V 'META-VAR)
+			     (MAKE-META-VAR name v)))
+		   VARS)))
+      (LET ((RESULT (META-EVAL-SUB FORM)))
+	(COND (*META-SUBST-P* RESULT)
+	      (*meta-checking-for-free-vars-p*
+	       *meta-free-vars*)
+	      (t
+	       (MAPCAR #'(LAMBDA (V) (GET V 'META-VAR)) VARS)))))
+     (MAPC #'(LAMBDA (V)
+	       (SETF (GET (META-VAR-NAME V) 'META-VAR) NIL))
+	   *META-FREE-VARS*)))))
+
+(DEFVAR *META-SPECIAL-FORMS* NIL)
+;;; a self document.
+
+;;; DEFMETA-SPECIAL and METACALL are a team.
+
+(DEFMACRO DEFMETA-SPECIAL (NAME &REST BODY)
+  `(PROGN 'COMPILE
+	  (DEFUN (,NAME META-EVAL) (*META-FORM*)
+	    ,@BODY)
+	  (OR (MEMQ ',NAME *META-SPECIAL-FORMS*)
+	      (PUSH ',NAME *META-SPECIAL-FORMS*))))
+
+(DEFMACRO METACALL (&REST ARGS) `(FUNCALL ,@ARGS))
+
+(DEFMACRO DEFMETA-PROP-SPECIAL (NAME PROP)
+  `(PROGN 'COMPILE
+	  (PUTPROP ',NAME #',PROP 'META-EVAL)
+	  (OR (MEMQ ',NAME *META-SPECIAL-FORMS*)
+	      (PUSH ',NAME *META-SPECIAL-FORMS*))))
+
+(DEFUN META-EVAL-ERROR (A B)
+  (ERROR (FORMAT NIL "~A encountered during meta evaluation." A)
+	 B
+	 'fail-act))
+
+
+(DEFUN META-SPECIALP (OP &AUX (DISP (GET OP 'META-EVAL)))
+  #+Maclisp
+  (COND (DISP DISP)
+	((GET OP 'MACRO)
+	 #'(LAMBDA (FORM)
+	     (META-EVAL-SUB
+	      (FUNCALL (GET (CAR FORM) 'MACRO) FORM))))
+	((OR (GET OP 'SUBR)
+	     (GET OP 'LSUBR)
+	     (GET OP 'EXPR))
+	 #'META-EVAL-ARGS-AND-APPLY)
+	((GET OP 'FSUBR)
+	 (META-EVAL-ERROR "Uknown special form" OP))
+	(T
+	 #'META-EVAL-ARGS-AND-APPLY))
+  #+Lispm
+  (COND (DISP DISP)
+	((FBOUNDP OP)
+	 (LET ((BINDING (FSYMEVAL OP)))
+	   (COND ((FUNCTIONP OP)
+		  #'META-EVAL-ARGS-AND-APPLY)
+		 ((AND (LISTP BINDING) (EQ (CAR BINDING) 'MACRO))
+		  #'(LAMBDA (FORM)
+		      (META-EVAL-SUB
+		       (FUNCALL (CDR (FSYMEVAL (CAR FORM))) FORM))))
+		 ((FUNCTIONP OP T)
+		  (META-EVAL-ERROR "Uknown special form" OP))
+		 (T
+		  (META-EVAL-ERROR "BUG: strange function kind?")))))
+	(T
+	 #'META-EVAL-ARGS-AND-APPLY)))
+
+(DEFUN META-EVAL-ARGS-AND-APPLY (FORM)
+  (PROG1 (COND (*META-SUBST-P*
+		(CONS (CAR FORM) (META-EVAL-ARGS (CDR FORM))))
+	       (T (META-EVAL-ARGS (CDR FORM))))
+	 ;; here is where we need a real-live data base.
+	 ;; there are whole classes of side-effects to think about.
+	 (AND (FUNCTION-DOES-THROW-P (CAR FORM)) 
+	      (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL))))
+
+(DEFUN FUNCTION-DOES-THROW-P (NAME)
+       ; well, meta-eval the function body and see!
+       ; assume the worst about unknown functions.
+       ; That is the correct way to do it.
+       ; (I don't mention the assertion data-base one would need to
+       ; resolve circularities in unknown functions.)
+       ; for testing just assume no throwing around.
+       (GET NAME 'THROW-P))
+
+(DEFUN META-EVAL-ARGS (FORM)
+       (COND (*META-SUBST-P*
+	      (MAPCAR #'META-EVAL-SUB FORM))
+	     (T (MAPC #'META-EVAL-SUB  FORM))))
+
+(DEFUN META-EVAL-SUB (FORM)
+       (COND ((NULL FORM) FORM)
+	     ((ATOM FORM)
+	      (COND ((EQ T FORM) FORM)
+		    ((SYMBOLP FORM)
+		     (META-SYMEVAL FORM))
+		    (T FORM)))
+	     (T
+	      (LET ((OP (CAR FORM)))
+		   (COND ((ATOM OP)
+			  (COND ((SYMBOLP OP)
+				 (METACALL (META-SPECIALP OP) FORM))
+				(T
+				 (META-EVAL-ERROR
+				  "Non symbolic atom in operator position"
+				  OP))))
+			 ((EQ (CAR OP)'LAMBDA)
+			  (SETQ FORM (META-EVAL-ARGS (CDR FORM)))
+			  (SETQ OP (META-EVAL-FIXED-LAMBDA OP))
+			  (COND (*META-SUBST-P*
+				 (CONS OP FORM))))
+			 (T
+			  (META-EVAL-ERROR
+			   "Non-lambda expression in operator position"
+			   OP)))))))
+
+
+(DEFMETA-SPECIAL QUOTE *META-FORM*)
+
+(DEFUN META-FUNCTION-*FUNCTION (*META-FORM*)
+       (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)
+       (LET ((*META-IN-FUNARG-CONTEXT-P* T))
+	    (OR (= (LENGTH *META-FORM*) 2)
+		(META-EVAL-ERROR
+		 "Wrong number of args" *META-FORM*))
+	    (COND ((ATOM (CADR *META-FORM*)) *META-FORM*)
+		  ((EQ (CAR (CADR *META-FORM*)) 'LAMBDA)
+		   (LET ((RESULT (META-EVAL-SUB (CADR *META-FORM*))))
+			(COND (*META-SUBST-P*
+			       (LIST (CAR *META-FORM*) RESULT)))))
+		  (T
+		   (META-EVAL-ERROR
+		    "Non-lambda expression in FUNCTION construct"
+		    *META-FORM*)))))
+
+(DEFMETA-PROP-SPECIAL FUNCTION META-FUNCTION-*FUNCTION)
+(DEFMETA-PROP-SPECIAL *FUNCTION META-FUNCTION-*FUNCTION)
+
+(DEFUN META-EVAL-FIXED-LAMBDA (*META-FORM*)
+		 ; (LAMBDA ARGS . BODY)
+       (COND ((CDR *META-FORM*)
+	      (COND ((AND (CADR *META-FORM*) (ATOM (CADR *META-FORM*)))
+		     (META-EVAL-ERROR
+		      "Bad lambda list internally" (cadr *META-FORM*)))
+		    (T
+		     (LET ((BODY 
+			    (META-BINDV
+			     (CADR *META-FORM*)
+			     (META-EVAL-ARGS (CDDR *META-FORM*)))))
+			  (COND (*META-SUBST-P*
+				 (LIST* (CAR *META-FORM*)
+					(CADR *META-FORM*)
+					BODY)))))))
+	     (T
+	      (META-EVAL-ERROR
+	       "Bad lambda expression" *META-FORM*))))
+
+(DEFMETA-SPECIAL PROGN (META-EVAL-ARGS-AND-APPLY *META-FORM*))
+
+(DEFMETA-SPECIAL SETQ
+		 (DO ((ARGS (CDR *META-FORM*))
+		      (VAR)(VAL)
+		      (NEWBODY NIL))
+		     ((NULL ARGS)
+		      (COND (*META-SUBST-P*
+			     ; might as well turn it into a SETF
+			     ; this is a useful thing for atomic macros.
+			     (CONS 'SETF (NREVERSE NEWBODY)))))
+		     (SETQ VAR (META-SET (POP ARGS)))
+		     (AND *META-SUBST-P* (PUSH VAR NEWBODY))
+		     (OR ARGS
+			 (META-EVAL-ERROR "Setq with odd number of arguments"
+					  *META-FORM*))
+		     (SETQ VAL (META-EVAL-SUB (POP ARGS)))
+		     (AND *META-SUBST-P* (PUSH VAL NEWBODY))
+		     ))
+
+(DEFUN VAR-OF-LET-PAIR (LET-PAIR)
+       ;; LET-PAIR can be  FOO or (FOO) or (FOO BAR)
+       (COND ((ATOM LET-PAIR) LET-PAIR)
+	     (T (CAR LET-PAIR))))
+
+(DEFUN CODE-OF-LET-PAIR (LET-PAIR)
+       (COND ((ATOM LET-PAIR) NIL)
+	     ((NULL (CDR LET-PAIR)) NIL)
+	     (T (CADR LET-PAIR))))
+
+(DEFMETA-SPECIAL META-LET
+		 (DO ((LET-PAIRS (CADR *META-FORM*) (CDR LET-PAIRS))
+		      (BODY `(PROGN ,@(CDDR *META-FORM*)))
+		      (VARS NIL (CONS (VAR-OF-LET-PAIR (CAR LET-PAIRS)) VARS))
+		      (VALS NIL
+			    (CONS (EVAL (CODE-OF-LET-PAIR (CAR LET-PAIRS))) VALS)))
+		     ((NULL LET-PAIRS))
+		     (PROGV VARS
+			    VALS
+			    (META-EVAL-SUB BODY))))
+
+(DEFMETA-SPECIAL  PROG
+
+ (let ((*meta-in-loop-context-p* *meta-in-loop-context-p*))
+      ; We go along evaluating the forms in the prog.
+      ; Our state changes if we see a TAG, a GO, or a RETURN.
+      (COND ((CDR *META-FORM*)
+	     (COND ((AND (CADR *META-FORM*) (ATOM (CADR *META-FORM*)))
+		    (META-EVAL-ERROR
+		     "Bad PROG var list" (CADR *META-FORM*)))
+		   (T
+		    (META-BINDV
+		     (CADR *META-FORM*)
+		     (COND (*META-SUBST-P*
+			    `(PROG ,(CADR *META-FORM*)
+				   ,@(MAPCAR
+				      #'(LAMBDA
+					 (U)
+					 (COND ((ATOM U)
+						(SETQ *META-IN-LOOP-CONTEXT-P* T)
+						U)
+					       (T
+						(META-EVAL-SUB U))))
+				      (CDDR *META-FORM*))))
+			   (T
+			    (MAPC #'(LAMBDA (U)
+					    (COND ((ATOM U)
+						   (SETQ *META-IN-LOOP-CONTEXT-P* T))
+						  (T
+						   (META-EVAL-SUB U))))
+				  (CDDR *META-FORM*))))))
+		   (T
+		    (META-EVAL-ERROR "Bad PROG" *META-FORM*)))))))
+
+(DEFMETA-SPECIAL GO
+		 (PROG1
+		  (COND ((CDR *META-FORM*)
+			 (COND ((ATOM (CADR *META-FORM*)) *META-FORM*)
+			       (T
+				(META-EVAL-ARGS-AND-APPLY *META-FORM*))))
+			(T
+			 (META-EVAL-ERROR "Bad GO form" *META-FORM*)))
+		  (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)))
+
+(DEFMETA-SPECIAL RETURN
+		 (PROG1 (META-EVAL-ARGS-AND-APPLY *META-FORM*)
+			(SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)))
+
+(COMMENT |
+CATCH-BARRIER UWRITE SUBRCALL ARRAY UFILE DEFUN SETF STORE
+UKILL BREAK PROG UREAD UPROBE UAPPEND CRUNIT EVAL-WHEN ERRSET
+FUNCTION COND DECLARE CATCH *FUNCTION
+FASLOAD PROGV DO GCTWA GO THROW POP LSUBRCALL OR STATUS SIGNP
+ARRAYCALL INCLUDE  CATCHALL *CATCH ERR COMMENT SSTATUS AND
+QUOTE UCLOSE PUSH UNWIND-PROTECT CASEQ SETQ DEFPROP
+|)
+
+(DEFUN IDENTITY1 (X) X)
+(DEFMACRO DEFMETA-SPECIAL-IDENTITY (X) `(DEFMETA-PROP-SPECIAL ,X IDENTITY1))
+
+(DEFMETA-SPECIAL-IDENTITY UWRITE)
+(DEFMETA-SPECIAL-IDENTITY UFILE)
+(DEFMETA-SPECIAL-IDENTITY UKILL)
+(DEFMETA-SPECIAL-IDENTITY UREAD)
+(DEFMETA-SPECIAL-IDENTITY UPROBE)
+(DEFMETA-SPECIAL-IDENTITY UCLOSE)
+(DEFMETA-SPECIAL-IDENTITY UAPPEND)
+(DEFMETA-SPECIAL-IDENTITY CRUNIT)
+(DEFMETA-SPECIAL-IDENTITY FASLOAD)
+(DEFMETA-SPECIAL-IDENTITY DEFPROP)
+(DEFMETA-SPECIAL-IDENTITY COMMENT)
+(DEFMETA-SPECIAL-IDENTITY INCLUDE)
+
+(DEFUN META-EVAL-AND-OR-ARGS (ARGS)
+       (COND (*META-SUBST-P*
+	      (LIST* (PROG1 (META-EVAL-SUB (CAR ARGS))
+			    (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL))
+		     (META-EVAL-ARGS (CDR ARGS))))
+	     (T
+	      (META-EVAL-SUB (CAR ARGS))
+	      (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)
+	      (META-EVAL-ARGS (CDR ARGS)))))
+
+(DEFUN META-EVAL-AND-OR (*META-FORM*)
+       (COND (*META-SUBST-P*
+	      (CONS (CAR *META-FORM*) (META-EVAL-AND-OR-ARGS (CDR *META-FORM*))))
+	     (T (META-EVAL-AND-OR-ARGS (CDR *META-FORM*)))))
+
+(DEFMETA-PROP-SPECIAL AND META-EVAL-AND-OR)
+(DEFMETA-PROP-SPECIAL OR META-EVAL-AND-OR)
+
+(DEFMETA-SPECIAL COND
+		 (DO ((FORMS (CDR *META-FORM*) (CDR FORMS))
+		      (CLAUSE) (NEWBODY))
+		     ((NULL FORMS)
+		      (COND (*META-SUBST-P*
+			     `(COND ,@(NREVERSE NEWBODY)))))
+		     (AND (ATOM (CAR FORMS))
+			  (META-EVAL-ERROR "Bad COND clause" (CAR FORMS)))
+		     ; will side-effect *META-IN-CERTAIN-EVAL-CONTEXT-P*
+		     (SETQ CLAUSE (META-EVAL-AND-OR-ARGS (CAR FORMS)))
+		     (AND *META-SUBST-P*
+			  (PUSH CLAUSE NEWBODY))))
+
+
+(DEFUN META-CALL-SERIES (*META-FORM*
+			 &AUX
+			 (RESULT (META-EVAL-ARGS (CDDR *META-FORM*))))
+       (COND (*META-SUBST-P*
+	      (LIST* (CAR *META-FORM*)
+		     (CADR *META-FORM*)
+		     RESULT))))
+
+(DEFMETA-PROP-SPECIAL SUBRCALL META-CALL-SERIES)
+(DEFMETA-PROP-SPECIAL LSUBRCALL META-CALL-SERIES) 
+(DEFMETA-PROP-SPECIAL ARRAYCALL META-CALL-SERIES)
+(DEFMETA-PROP-SPECIAL ERRSET META-EVAL-ARGS-AND-APPLY)
+(DEFMETA-SPECIAL-IDENTITY ARRAY)
+(DEFMETA-SPECIAL BREAK ; (BREAK <TAG> <PRED>)
+		 (COND ((= (LENGTH *META-FORM*) 3)
+			(LET ((RESULT (META-EVAL-SUB (CADDR *META-FORM*))))
+			     (COND (*META-SUBST-P*
+				    (LIST (CAR *META-FORM*)
+					  (CADR *META-FORM*)
+					  RESULT)))))
+		       (T
+			(META-EVAL-ERROR "Bad BREAK form" *META-FORM*))))
+(DEFMETA-SPECIAL DEFUN
+		 (META-EVAL-ERROR "DEFUN in the middle of code" *META-FORM*))
+(DEFMETA-SPECIAL EVAL-WHEN
+		 (META-EVAL-ERROR "EVAL-WHEN inside code" *META-FORM*))
+
+(DEFMETA-SPECIAL
+ DECLARE
+ (COND (*META-SUBST-P*
+	(CONS 'DECLARE
+	      (MAPCAR #'META-EVAL-ARGS-AND-APPLY
+		      (CDR *META-FORM*))))
+       (t
+	; this part depends on meta-symeval
+	(mapc #'(lambda
+		 (dform)
+		 (cond ((atom dform))
+		       ((eq (car dform) 'special)
+			(mapc #'(lambda
+				 (var)
+				 (cond ((atom var)
+					(let ((meta
+					       (get var 'meta-var)))
+					     (cond ((eq meta 'bound))
+						   (meta
+						    (setf (meta-var-special-p meta)
+							  t))
+						   (*META-CHECKING-FOR-FREE-VARS-P*
+						    ; a local declaration for
+						    ; a global variable?
+						    ; poo-poo.
+						    nil)
+						   (t nil))))))
+			      (cdr dform)))))
+	      (cdr *meta-form*)))))
+
+(DEFMETA-SPECIAL STORE
+		 (OR (= (LENGTH *META-FORM*) 3)
+		     (META-EVAL-ERROR "Wrong number of args to STORE" *META-FORM*))
+		 (LET ((RES (META-EVAL-ARGS (CDR *META-FORM*))))
+		      (COND (*META-SUBST-P*
+			     (CONS 'STORE RES)))))
+
+;;; the obsolete catch and throw. second arg is the tag. un-evaluated.
+
+(DEFUN META-EVAL-CATCH-THROW (*META-FORM*)
+       (PROG1
+	(CASEQ (LENGTH *META-FORM*)
+	       (2 (META-EVAL-ARGS-AND-APPLY *META-FORM*))
+	       (3 (COND (*META-SUBST-P*
+			 (LIST* (CAR *META-FORM*)
+				(META-EVAL-SUB (CADR *META-FORM*))
+				(CDDR *META-FORM*)))
+			(T (META-EVAL-SUB (CADR *META-FORM*)))))
+	       (T
+		(META-EVAL-ERROR
+		 "Wrong number of args" *META-FORM*)))
+	(SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)))
+			       
+(DEFMETA-PROP-SPECIAL CATCH meta-eval-catch-throw)
+(DEFMETA-PROP-SPECIAL THROW meta-eval-catch-throw)
+
+
+(DEFMETA-PROP-SPECIAL *CATCH META-EVAL-ARGS-AND-APPLY)
+(DEFMETA-PROP-SPECIAL CATCHALL META-EVAL-ARGS-AND-APPLY)
+(DEFMETA-PROP-SPECIAL CATCH-BARRIER META-EVAL-ARGS-AND-APPLY)
+(DEFMETA-PROP-SPECIAL UNWIND-PROTECT META-EVAL-ARGS-AND-APPLY)
+
+(DEFMETA-SPECIAL ERR
+		 (COND ((> (LENGTH *META-FORM*) 1)
+			(LET ((RES (META-EVAL-SUB (CADR *META-FORM*))))
+			     (COND (*META-SUBST-P*
+				    (LIST* 'ERR RES (CDDR *META-FORM*))))))
+		       (T *META-FORM*)))
+
+(DEFMETA-PROP-SPECIAL PROGV META-EVAL-ARGS-AND-APPLY)
+
+#.(PROGN (SETQ DO-NULL-SLOT '%%%DO-NULL-SLOT%%%) NIL)
+
+(DEFUN DO-INIT-FORM-META-CHECK (U)
+       (COND ((OR (NULL U) (ATOM U))
+	 (META-EVAL-ERROR
+	 "Bad DO var iterate form" U))
+	 ((CDR U)
+	 (META-EVAL-SUB (CADR U)))
+	 (T
+	 '#.DO-NULL-SLOT)))
+
+(DEFUN DO-ITER-FORM-META-CHECK (U)
+       (COND ((NULL (CDDR U)) '#.DO-NULL-SLOT)
+	     (T (META-EVAL-SUB (CADDR U)))))
+
+(DEFMETA-SPECIAL  DO ; (DO (<FORML>) ...)
+    (let ((*meta-in-loop-context-p* *META-IN-LOOP-CONTEXT-P*))
+		 
+	 (OR (> (LENGTH *META-FORM*) 2)
+	     (META-EVAL-ERROR "Bad DO form" *META-FORM*))
+	 (AND (CADR *META-FORM*)
+	      (ATOM (CADR *META-FORM*))
+	      (META-EVAL-ERROR "Bad DO var list" (CADR *META-FORM*)))
+	 (LET (INIT-FORMS ITER-FORMS VARS ENDFORMS BODY)
+	      (COND (*META-SUBST-P*
+		     (SETQ INIT-FORMS
+			   (MAPCAR #'DO-INIT-FORM-META-CHECK
+				   (CADR *META-FORM*))))
+		    (T (MAPC #'DO-INIT-FORM-META-CHECK (CADR *META-FORM*))))
+	      (SETQ VARS (MAPCAR #'CAR (CADR *META-FORM*)))
+	      (META-BINDV
+	       VARS
+	       (SETQ *META-IN-LOOP-CONTEXT-P* T)
+	       (AND (OR (NULL (CADDR *META-FORM*))
+			(ATOM (CADDR *META-FORM*)))
+		    (META-EVAL-ERROR "Bad end clause in DO"
+				     (CADDR *META-FORM*)))
+	       (SETQ ENDFORMS (META-EVAL-AND-OR-ARGS (CADDR *META-FORM*)))
+	       (COND (*META-SUBST-P*
+		      (SETQ ITER-FORMS
+			    (MAPCAR #'DO-ITER-FORM-META-CHECK
+				    (CADR *META-FORM*))))
+		     (T (MAPC #'DO-ITER-FORM-META-CHECK
+			      (CADR *META-FORM*))))
+	       (SETQ BODY (META-EVAL-ARGS (CDDDR *META-FORM*))))
+	      (COND (*META-SUBST-P*
+		     `(DO ,(MAPCAR
+			    #'(LAMBDA (VAR INIT ITER)
+				      (COND ((EQ INIT
+						 '#.DO-NULL-SLOT)
+					     (LIST VAR))
+					    ((EQ ITER
+						 '#.DO-NULL-SLOT)
+					     (LIST VAR INIT))
+					    (T
+					     (LIST VAR INIT ITER))))
+			    VARS INIT-FORMS ITER-FORMS)
+			  ,ENDFORMS
+			  ,@BODY))))))
+
+(DEFMETA-SPECIAL-IDENTITY GCTWA)
+
+(DEFMETA-SPECIAL SIGNP ; (SIGNP C X)
+		 (OR (= (LENGTH *META-FORM*) 3)
+		     (ERROR "Wrong number of args to SIGNP" *META-FORM*))
+		 (LET ((RES (META-EVAL-SUB (CADDR *META-FORM*))))
+		      (COND (*META-SUBST-P*
+			     (LIST 'SIGNP (CADR *META-FORM*) RES)))))
+
+(DEFUN META-STATUS-SSTATUS-EVAL (*META-FORM*)
+       (COND ((< (LENGTH *META-FORM*) 3) *META-FORM*)
+	     (T
+	      (CASEQ (CADR *META-FORM*)
+		     ((FEATURE NOFEATURE) *META-FORM*)
+		     (T
+		      (LET ((RESULT (META-EVAL-ARGS (CDDR *META-FORM*))))
+			   (COND (*META-SUBST-P*
+				  (LIST* (CAR *META-FORM*)
+					 (CADR *META-FORM*)
+					 RESULT)))))))))
+
+
+(DEFMETA-PROP-SPECIAL STATUS META-STATUS-SSTATUS-EVAL)
+(DEFMETA-PROP-SPECIAL SSTATUS META-STATUS-SSTATUS-EVAL)
+
+
+; this next are new fsubrs. which have macro properties in the compiler.
+
+(DEFUN CASEQ-META-EVAL (CASE)
+       (COND ((ATOM CASE)
+	      (META-EVAL-ERROR "Bad CASEQ clause" CASE))
+	     (*META-SUBST-P*
+	      (CONS (CAR CASE) (META-EVAL-ARGS (CDR CASE))))
+	     (T (META-EVAL-ARGS (CDR CASE)))))
+
+(DEFMETA-SPECIAL CASEQ
+		 (OR (CDR *META-FORM*)
+		     (META-EVAL-ERROR "Bad CASEQ form" *META-FORM*))
+		 (LET ((CASEQ (META-EVAL-SUB (CADR *META-FORM*))))
+		      (SETQ *META-IN-CERTAIN-EVAL-CONTEXT-P* NIL)
+		      (COND (*META-SUBST-P*
+			     (LIST* 'CASEQ CASEQ
+				    (MAPCAR #'CASEQ-META-EVAL
+					    (CDDR *META-FORM*))))
+			    (T
+			     (MAPC #'CASEQ-META-EVAL
+				   (CDDR *META-FORM*))))))
+
+#+Maclisp
+(progn 'compile
+
+(DEFMETA-SPECIAL PUSH
+		 (META-EVAL-SUB (+INTERNAL-PUSH-X (CDR *META-FORM*) NIL)))
+(DEFMETA-SPECIAL POP
+		 (META-EVAL-SUB (+INTERNAL-POP-X (CDR *META-FORM*) NIL)))
+(DEFMETA-SPECIAL SETF
+		 (META-EVAL-SUB (+INTERNAL-SETF-X (CDR *META-FORM*) NIL)))
+
+(SETQ *META-EVAL-MISSING* NIL)
+(MAPATOMS #'(LAMBDA (U)
+		    (AND (GET U 'FSUBR)
+			 (NOT (OR (GET U 'MACRO)
+				  (GET U 'META-EVAL)))
+			 (PUSH U *META-EVAL-MISSING*))))
+)
+
+
+#+Maclisp
+(defmacro defopen (fname argl &rest body)
+  `(progn 'compile
+	  (eval-when (compile)
+	    (defprop ,fname (integrate-subr) source-trans)
+	    (defprop ,fname (,(preprocess-argl argl)
+			     ,(preprocess-body body))
+	      open-coding-info))
+	  (defun ,fname ,argl ,@body)))
+
+
+#+Maclisp
+(defun preprocess-argl (argl)
+  (mapcar #'(lambda (x)
+	      (if (memq x '(&rest &optional &aux))
+		  (error "not allowed in defopen, -sorry" x)
+		  x))
+	  argl))
+
+(defun preprocess-body (body)
+  (if (null (cdr body))
+      (car body)
+      `(Progn ,@body)))
+
+(defun integrate-subr (form)
+  (values (integrate-subr-1 form) t))
+
+(defun integrate-subr-1 (form)
+  (let ((info (get (car form) 'open-coding-info)))
+    (let ((argl (car info))
+	  (body (cadr info)))
+      (if (= (length (cdr form))
+	     (length argl))
+	  (let ((temps (mapcar #'(lambda (ignore) (gensym)) argl)))
+	    `((lambda ,temps
+		,(meta-eval body argl temps))
+	      ,@(cdr form)))
+	  (integrate-subr-1 (error "wrong number of arguments in form" form
+				   'wrng-no-args))))))
+

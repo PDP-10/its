@@ -1464,6 +1464,136 @@ respond "_" "liblsp;fasdmp fasl_rlb%;fasdmp\r"
 respond "_" "\032"
 type ":kill\r"
 
+# libmax
+
+# all libmax components (well almost all) require libmax;module fasl
+# at compile time.  Build it first.
+
+respond "*" "complr\013"
+respond "_" "libmax;module\r"
+respond "_" "\032"
+type ":kill\r"
+
+# libmax;maxmac can't be compiled unless libmax;mforma is (first) compiled.
+# However, libmax;mforma uses libmax;macmac.  Hence you end up having to
+# compile libmax;mforma first, then libmax;maxmac, and then compiling these
+# both a second time.  Otherwise, there are not incorrectly generated FASL
+# files for each, but anything that depends on these two packages will also
+# have errors during compilation.
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;mforma\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;maxmac\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;mforma\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;maxmac\r"
+respond "_" "\032"
+type ":kill\r"
+
+# the following are required to compile some of the libmax;
+# FASL files
+#
+respond "*" ":midas rwk;lfsdef fasl_rwk;lfsdef\r"
+expect ":KILL"
+respond "*" ":midas rat;ratlap fasl_rat;ratlap\r"
+expect ":KILL"
+respond "*" ":print maxdmp;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":link maxdmp;ratlap fasl,rat;ratlap fasl\r"
+respond "*" ":link libmax;lusets fasl,liblsp;\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;ermsgx\r"
+respond "_" "libmax;ermsgc\r"
+respond "_" "z;fildir\r"
+respond "_" "libmax;lmmac\r"
+respond "_" "libmax;meta\r"
+respond "_" "libmax;lmrund\r"
+respond "_" "libmax;lmrun\r"
+respond "_" "libmax;displm\r"
+respond "_" "libmax;defopt\r"
+respond "_" "libmax;mopers\r"
+respond "_" "libmax;mrgmac\r"
+respond "_" "libmax;nummac\r"
+respond "_" "libmax;opshin\r"
+respond "_" "libmax;edmac_emaxim;\r"
+respond "_" "libmax;procs\r"
+respond "_" "libmax;readm\r"
+respond "_" "libmax;strmac\r"
+respond "_" "libmax;transm\r"
+respond "_" "libmax;rzmac_rz;macros\r"
+respond "_" "libmax;transq\r"
+respond "_" "libmax;mdefun\r"
+respond "_" "\032"
+type ":kill\r"
+
+# build MAXTUL FASL files
+
+respond "*" ":print maxerr;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":print maxer1;..new. (udir)\r"
+type ":vk\r"
+
+respond "*" "complr\013"
+respond "_" "maxtul;strmrg\r"
+respond "_" "maxtul;defile\r"
+respond "_" "maxtul;docgen\r"
+respond "_" "maxtul;query\r"
+respond "_" "maxtul;maxtul\r"
+respond "_" "maxtul;toolm\r"
+respond "_" "maxtul;dclmak\r"
+respond "_" "maxtul;mailer\r"
+respond "_" "maxtul;mcl\r"
+respond "_" "maxtul;timepn\r"
+respond "_" "maxtul;expand\r"
+respond "_" "maxtul;fsubr!\r"
+respond "_" "maxtul;error!\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "maxtul;fasmap\r"
+respond "_" "\032"
+type ":kill\r"
+
+# define needs (for some reason) to be compiled separately.
+# not doing this results in errors compiling macsyma sources,
+# such as ELL; HYP >
+#
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;define\r"
+respond "_" "\032"
+type ":kill\r"
+
 bootable_tapes
 
 # make output.tape

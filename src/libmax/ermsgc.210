@@ -1,0 +1,435 @@
+; -*- LISP -*-
+
+;;; Functions for MACSYMA error messages, macro-expansion-time stuff
+
+(macsyma-module ermsgc macro)
+
+(eval-when (compile eval)
+   (or (get 'IOTA 'VERSION)
+       (load "LIBLSP;IOTA"))
+   (or (get 'ERMSGX 'VERSION)
+       (load "LIBMAX;ERMSGX"))
+   )
+
+(defstruct (message conc-name (constructor cons-a-message) list)
+  number
+  ;;Number of message in file
+  filepos
+  ;;Position of message in file
+  text)			   ;Body of message
+
+(declare (special file-number messages messages-initialized message-number
+		  eval-munged-p fun-doc-alist var-doc-alist split-number
+		  file-documentation chomphook toplevel-source-file
+		  toplevel-source-file-author toplevel-source-file-date
+		  string-file message-text-word-count onmls
+		  eof-compile-queue eoc-eval ttynotes squid splitfile-hook))
+
+(declare (ARRAY* (NOTYPE (err-file-array FIXNUM))))
+
+(eval-when (eval compile)
+  (setq ibase 10. base 10.))
+
+(cond ((not (boundp 'EOF-COMPILE-QUEUE))	   ;Be sure it's really there
+       (setq EOF-COMPILE-QUEUE ())))
+(cond ((not (boundp 'EOC-EVAL))
+       (setq EOC-EVAL nil)))
+(cond ((not (boundp 'SPLITFILE-HOOK))
+       (setq SPLITFILE-HOOK ())))
+(cond ((not (boundp 'CHOMPHOOK))   ;Be sure it's really there
+       (setq CHOMPHOOK nil)))
+
+(setq messages nil)		   ;No messages so far
+(setq messages-initialized nil)	   ;Not initialized yet
+(setq message-number 1)		   ;Messages are 1-origin
+(setq eval-munged-p nil)	   ;We haven't yet output the eval-mungible
+				   ;that we put at the end of the file
+(setq fun-doc-alist nil)	   ;No function documentation yet
+(setq var-doc-alist nil)	   ;No variable documentation yet
+(setq file-documentation nil)	   ;No file documentation yet
+
+(declare (unspecial ARGS))	   ;Not really special.  Losing BREAK should
+				   ;use something else
+
+
+(defmacro increment-s (loc)
+  `(setf ,loc (1+ ,loc)))
+
+
+;; USER-CALLED MACROS
+
+(defmacro MFERROR (handler format &REST data)
+  `(mferror1 ,handler (out-of-core-string ,format) ,@data))
+
+(defmacro MCERROR (handler format &REST data)
+  `(mcerror1 ,handler (out-of-core-string ,format) ,@data)))
+
+
+;; Self-Documentation stuff
+;; (file-documentation "string") documents the file
+
+(defmacro file-documentation (string)
+  (if (memq compiler-state '(maklap compile))
+      (setq file-documentation (create-message string)))
+  nil)
+
+(defvar *output-string-file-check* ()
+	"Set T to output the string-filename before the next form")
+
+(defun collect-documents (form)
+   (if *output-string-file-check*
+       (let (( (*car . *cdr) form))
+	 (rplaca form 'progn)
+	 (rplacd form `('compile (or (getl 'STRING-FILE-NAME '(EXPR FEXPR MACRO
+								    SUBR LSUBR
+								    FSUBR))
+				     (load '((MACSYM) ERMSGM)))
+				 (string-file-name ',string-file)
+				 (,*car . ,*cdr)))
+	 (setq *output-string-file-check* () )))
+   (cond ((atom form))					;Huh?
+	 ((memq (car form) '(DEFUN DEFMACRO DEFUN& MACRO DEFMFUN))
+	  (let (( ( () name vars doc . body) form))
+	     (cond ((and (symbolp doc)
+			 body				;Not return value
+			 (not (in-varlist doc vars)))
+		    (if (not (atom name)) (setq name (car name)))
+		    (push (cons name (create-message doc))
+			  fun-doc-alist)))))
+	 ((memq (car form) '(DEFVAR DEFMVAR))
+	  (let (( ( () name () doc) form))
+	    (if doc
+		(push (cons name (create-message doc))
+		      var-doc-alist))))))
+
+;; determine if a symbol is present in a DEFUN-style variable list as
+;; a lambda-variable.
+
+(defun in-varlist (symbol vars)
+   (do ((vars vars (cdr vars))
+	(opt-p))
+       ((null vars) ())
+     (if (eq symbol (car vars)) (return 't))
+     (if (eq (car vars) '&optional) (setq opt-p 't))
+     (if (not (atom (car vars)))
+	 (if opt-p (if (or (eq symbol (caar vars))
+			   (eq symbol (caddar vars)))
+		       (return 't))
+	     (if (in-pattern symbol vars) (return 't))))))
+
+;; determine if a symbol is present in a pattern destructuring
+
+(defun in-pattern (symbol vars)
+  (if (atom vars) (eq symbol vars)
+      (or (in-pattern symbol (car vars))
+	  (in-pattern symbol (cdr vars)))))
+
+(push 'collect-documents chomphook)
+
+;; FIND-TOPLEVEL-SOURCE-FILE looks up the instack for the deepest-pushed
+;; non-T input file.  It setq's TOPLEVEL-SOURCE-FILE to the result.
+
+(defun find-toplevel-source-file ()
+   (do ((files (reverse (cons infile instack)) (cdr files)))
+       ((null files)
+	(princ '|Can't find source file in instack -- ERMSGC| tyo)
+	(setq toplevel-source-file tyi))
+     (if (filep (car files))
+	 (return
+	  (prog1 (setq TOPLEVEL-SOURCE-FILE
+		       (truename (car files)))
+		 (setq TOPLEVEL-SOURCE-FILE-AUTHOR
+		       (sixbit-to-ascii
+			(car (syscall 1 'RAUTH (car files)))))
+		 (setq TOPLEVEL-SOURCE-FILE-DATE
+		       (car (syscall 1 'RFDATE (car files)))))))))
+
+;; MAKE-STRING-FILE-NAME figures out what filename to use for an out-of-core
+;; string file.
+
+(defun make-string-file-name ()
+  (let (( ( () fn1 fn2) toplevel-source-file)
+	(BASE 10.) (*NOPOINT T)
+	(dir))
+    (if (alphalessp fn1 'N) (setq dir 'MAXERR)
+	(setq dir 'MAXER1))
+    (setq STRING-FILE `((DSK ,dir) ,fn1 ,fn2))
+    (if (file-conflict-p string-file)
+	(do ((i 1 (1+ i))
+	     (efn2 (exploden fn2))
+	     (new-fn2))
+	    ((not (file-conflict-p string-file)))
+	    (declare (fixnum i))
+	  (setq efn2 (nreverse efn2))
+	  (if (> (length efn2)
+		 (- 5 (length (exploden i))))
+	      (rplacd (nthcdr (- 4 (length (exploden i))) efn2) () ))
+	  (setq efn2 (nreverse efn2))
+	  (setq new-fn2 (append efn2 '(/!) (exploden i)))
+	  (setq new-fn2 (maknam new-fn2))
+	  (setq string-file `((DSK ,dir) ,fn1 ,new-fn2))))
+    string-file))
+
+;; (FILE-CONFLICT-P filename) tests if the given string file conflicts
+;; with the current source file (i.e. if it's for a different source file)
+
+(defun file-conflict-p (filename)
+  (if (probef filename)
+      (phi ((file (open-message-file filename)))
+	 (or (not (equal toplevel-source-file
+			 (cdr (or (assq 'filename (message-file-alist file))
+				  (assq 'source-file-name
+					(message-file-alist file))))))
+	     (not (equal toplevel-source-file-date
+			 (cdr (assq 'source-file-creation-date
+				    (message-file-alist file)))))
+	     (not (eq (get 'ERMSGC 'VERSION)
+		      (cdr (assq 'ERMSGC-VERSION (message-file-alist file)))))
+	     ))))
+
+
+;; INITIALIZE-MESSAGES finds the toplevel source file, looks up it's number
+;; in the table, pushes a form onto EOC-EVAL to cause the database to be
+;; written out.
+
+(defun initialize-messages ()
+   (find-toplevel-source-file)
+   (make-string-file-name)
+   (format msgfiles "~&;initializing error messages.~%")
+   (push `(write-messages
+	     '((SOURCE-FILE-NAME . ,toplevel-source-file)
+	       (SOURCE-FILE-CREATION-DATE . ,toplevel-source-file-date)
+	       (SOURCE-FILE-AUTHOR . ,toplevel-source-file-author)
+	       (OUTPUT-FILE-NAME . ,(car ONMLS))))
+	 EOC-EVAL)
+   (push (subst () ()
+		'(or (getl 'STRING-FILE-NAME '(EXPR FEXPR MACRO
+						    SUBR LSUBR
+						    FSUBR))
+		     (load '((MACSYM) ERMSGM))))
+	 EOF-COMPILE-QUEUE)
+   (push `(STRING-FILE-NAME ',STRING-FILE) EOF-COMPILE-QUEUE)
+   (push `(ERMSGC-SPLITFILE-HOOK ,STRING-FILE) SPLITFILE-HOOK)
+   (setq *output-string-file-check* T)
+   (setq messages nil)		   ;No messages so far
+   (setq message-number 1)	   ;Messages are 1-origin
+   (setq eval-munged-p nil)	   ;We haven't yet output the eval-mungible
+				   ;that we put at the end of the file
+   (setq fun-doc-alist nil)	   ;No function documentation yet
+   (setq var-doc-alist nil)	   ;No variable documentation yet
+   (setq file-documentation nil)   ;No file documentation yet
+   (setq messages-initialized t))  ;So we can avoid doing it the next time
+
+
+(defmacro ermsgc-splitfile-hook (file)
+  (push `(ERMSGC-SPLITFILE-HOOK ,file) SPLITFILE-HOOK)
+  `(STRING-FILE-NAME ',file))
+
+;; The following is an SFA handler for writing ascii to a fixnum file
+;; It's fairly standard in its operation.
+
+;; First, some macros for the slots in the SFA
+
+(defmacro fixnum-ascii-fileobj (stream)
+   `(sfa-get ,stream 0))
+
+(defmacro fixnum-ascii-accumulator (stream)
+   `(sfa-get ,stream 1))
+
+(defmacro fixnum-ascii-charcnt (stream)
+   `(sfa-get ,stream 2))
+
+(defun fixnum-ascii-stream-handler (self operation data)
+   (caseq operation
+	  (WHICH-OPERATIONS '(OUT TYO FILEPOS FORCE-OUTPUT CLOSE
+				  OPEN-FILE TRUENAME RENAMEF))
+	  (OPEN-FILE (setf (fixnum-ascii-fileobj self)
+			   (open data '(fixnum out)))
+		     (setf (fixnum-ascii-accumulator self) 0)
+		     (setf (fixnum-ascii-charcnt self) 0)
+		     self)
+	  (TRUENAME (truename (fixnum-ascii-fileobj self)))
+	  (RENAMEF (sfa-call self 'FORCE-OUTPUT nil)
+		   (renamef (fixnum-ascii-fileobj self) data))
+	  (FORCE-OUTPUT
+	   (cond ((not (zerop (fixnum-ascii-charcnt self)))
+		  (out (fixnum-ascii-fileobj self)
+		       (fixnum-ascii-accumulator self))
+		  (increment-s message-text-word-count)
+		  (setf (fixnum-ascii-charcnt self) 0)
+		  (setf (fixnum-ascii-accumulator self) 0)
+		  nil)))
+	  (FILEPOS
+	   (cond ((null data) (filepos (fixnum-ascii-fileobj self)))
+		 (T (sfa-call self 'FORCE-OUTPUT nil)
+		    (filepos (fixnum-ascii-fileobj self) (car data)))))
+	  (TYO
+	   (cond ((minusp data))
+		 (T (setf (fixnum-ascii-accumulator self)
+			  (+ (fixnum-ascii-accumulator self)
+			     (lsh data (1+ (* (- 4 (fixnum-ascii-charcnt self))
+					      7)))))
+		    (cond ((= (fixnum-ascii-charcnt self) 4)
+			   (force-output self))
+			  (T (increment-s (fixnum-ascii-charcnt self))))))
+	   T)
+	  (OUT (sfa-call self 'FORCE-OUTPUT nil)
+	       (out (fixnum-ascii-fileobj self) data))
+	  (CLOSE (sfa-call self 'FORCE-OUTPUT nil)
+		 (close (fixnum-ascii-fileobj self)))
+	  (T (error '|Unknown operation for fixnum-ascii stream|
+		    operation 'wrng-type-arg))))
+
+;; The following creates an SFA which writes ascii or binary to the file with
+;; name supplied as an argument.
+
+(defun make-fixnum-ascii-stream (filename)
+ (sfa-call (sfa-create 'fixnum-ascii-stream-handler 3 'temp-stream)
+	   'open-file filename))
+
+;; Create a new message, and return its code number
+
+(defmacro out-of-core-string (string)
+  (if (memq compiler-state '(maklap compile))
+      (message-squid string)
+      string))
+
+;;; MESSAGE-SQUID takes a string, and returns a SQUID form to access it as
+;;; an out-of-core string
+
+(defun message-squid (format)
+  (if (not messages-initialized) (initialize-messages))
+  `(,squid (allocate-message-index ',STRING-FILE ,(create-message format))))
+
+;;; CREATE-MESSAGE causes an out-of-core string to exist, and returns
+;;; it's message-number in the file
+
+(defun create-message (format)
+  (if (not messages-initialized) (initialize-messages))
+  (push (cons-a-message TEXT format
+			NUMBER message-number)
+	messages)
+  (prog1 message-number
+	 (setq message-number (1+ message-number))))
+
+;; Write out all the messages to the specified filename
+
+(defun write-messages (file-info)
+  (cond ((not eval-munged-p)	   ;Can be called more than once
+	 (setq messages
+	       (sort (append messages nil)
+		     #'(lambda (x y)
+			       (< (message-number x)
+				  (message-number y)))))
+	 (phi ((out-stream
+		(make-fixnum-ascii-stream
+		 (mergef '(_ERMSG OUTPUT) string-file))))
+	   (do ((n (1+ (length messages)) (1- n)))
+	       ((zerop n))
+	     (declare (fixnum n))
+	     (out out-stream #.(car (pnget 'EMPTY 7))))
+	   (setq message-text-word-count 0)
+	   (mapc #'(lambda (message)
+		     (write-message message out-stream))
+		 messages)
+	   (let ((old-filepos (filepos out-stream))  ;Output miscellaneous
+		 (BASE 10.) (*NOPOINT () ))	     ;random info
+		(print `(MDOC (date . ,(status date))
+			      (time . ,(status daytim))  ;in ALIST format
+			      (creator . ,(status uname))
+			      (message-count ,(length messages))
+			      (message-text-word-count .
+				     ,message-text-word-count)
+			      (ERMSGC-VERSION . ,(get 'ERMSGC 'VERSION))
+			      ,@file-info
+			      (file-doc-index . ,file-documentation)
+			      (var-doc-alist . ,var-doc-alist)
+			      (fun-doc-alist . ,fun-doc-alist))
+		       out-stream)
+		(filepos out-stream 0)	;Record where it all went
+		(out out-stream old-filepos))
+
+	   (mapc #'(lambda (message) ;And do the same for the messages
+		     (out out-stream (message-filepos message)))
+		 messages)
+
+	   (renamef out-stream (cdr (namelist string-file)))
+
+	   (if ttynotes
+	       (format tyo "~&;Error file ~S written.~%"
+		       (namestring (truename out-stream))))
+	   (setq eval-munged-p T))))
+  (setq messages-initialized ()))
+
+;; The function WRITE-MESSAGE writes a message to the message file.
+;; It also records the FILEPOS in the object
+
+(defun write-message (message out-stream)
+   (setf (message-filepos message) (filepos out-stream))
+   (let ((text (message-text message)))
+     (cond ((atom text) (princ text out-stream))
+	   (T (mapc #'(lambda (x)
+			 (princ x out-stream))
+		    text)))
+     (force-output out-stream)
+     (out out-stream 0)))		       ;mark the end
+
+
+;; Take a fixnum of sixbit and produce a symbol with the appropriate PNAME
+
+(defun sixbit-to-ascii (number)
+   (do ((number number (lsh number 6))
+	(characters nil))
+       ((zerop number) (implode (nreverse characters)))
+     (push (+ (lsh (boole 1 number #.(LSH #o77 30.)) -30.) #o40)
+	   characters)))
+
+(defvar consable-number 259259.)	;A number big enough to be consed
+
+; OPEN-MESSAGE-FILE returns a stream which supports TYI, FILEPOS, and CLOSE.
+; The TYI returns -1 to mark the end of the string.
+
+(defun open-message-file (filename)
+  (let* ((namelist (mergef '((DNRF *) * *) filename))
+	 (message-file
+	  (open (mergef namelist
+			(if (alphalessp (cadr namelist) 'N) "DSK:MAXERR;* >"
+			    '"DSK:MAXER1;* >"))
+		'(IN FIXNUM)))
+	 (sfa (sfa-create 'message-file-handler #.message-file-size
+			  (namestring (truename message-file))))
+	 (IBASE 10.))
+    (filepos message-file (in message-file))  ;Position to read dir
+    (setf (message-file-file sfa) message-file)
+    (setf (message-file-charno sfa) 5)
+    (setf (message-file-buffer-pointer sfa) (+ consable-number 1))
+    (setf (message-file-alist sfa) (cdr (read sfa)))
+    (setf (message-file-header-count sfa)
+	  (1+ (cadr (assq 'message-count (message-file-alist sfa)))))
+    (filepos message-file 0)
+    sfa))
+
+
+; MESSAGE-FILE-HANDLER supports TYI, IN, FILEPOS, TRUENAME, and CLOSE.
+
+(defun message-file-handler (self operation data)
+  (caseq operation
+	 (WHICH-OPERATIONS '(TYI FILEPOS OPEN CLOSE IN TRUENAME))
+	 (TYI (if (= (message-file-charno self) 5)
+		  (progn (setf (message-file-buffer self)
+			       (in (message-file-file self)))
+			 (setf (message-file-charno self) 1))
+		  (setf (message-file-charno self)
+			(1+ (message-file-charno self))))
+	       (logand #o177
+		       (lsh (message-file-buffer self)
+			    (+ -36. (* 7 (message-file-charno self))))))
+	 (IN (in (message-file-file self)))
+	 (FILEPOS
+	  (if (null data) (filepos (message-file-file self))
+	      (filepos (message-file-file self) (car data))))
+	 (TRUENAME (truename (message-file-file self)))
+	 (CLOSE (close (message-file-file self)))
+	 (OPEN (open (message-file-file self)))))
+
+

@@ -1,0 +1,152 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1982 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module displm macro)
+
+(LOAD-MACSYMA-MACROS maxmac)
+
+(for-declarations
+ ;; evaluate for declarations
+ (SPECIAL
+   ^W			   ;If T, then no output goes to the console.
+   ^R			   ;If T, then output also goes to any
+			   ;file opened by UWRITE.  People learning
+			   ;Lisp: there are better ways of doing IO
+			   ;than this -- don't copy this scheme.
+   SMART-TTY		   ;LOADER sets this flag.  If T, then
+			   ;then this console can do cursor movement
+			   ;and equations can be drawn in two dimensions.
+   RUBOUT-TTY		   ;If T, then console either selectively erasable
+			   ;or is a glass tty.  Characters can be rubbed
+			   ;out in either case.
+   SCROLLP		   ;If T, then the console is scrolling.
+			   ;This should almost always be equal to
+			   ;(NOT SMART-TTY) except when somebody has
+			   ;done :TCTYP SCROLL on a display console.
+			   ;This is the %TSROL bit of the TTYSTS word.
+
+   LINEL		   ;Width of screen.
+   TTYHEIGHT		   ;Height of screen.
+
+   WIDTH HEIGHT DEPTH MAXHT MAXDP LEVEL SIZE LOP ROP BREAK RIGHT
+   BKPT BKPTWD BKPTHT BKPTDP BKPTLEVEL BKPTOUT LINES 
+   OLDROW OLDCOL DISPLAY-FILE IN-P
+   MOREMSG MOREFLUSH MORE-^W MRATP $ALIASES ALIASLIST)
+
+(FIXNUM WIDTH HEIGHT DEPTH MAXHT MAXDP LEVEL SIZE RIGHT 
+	BKPTWD BKPTHT BKPTDP BKPTLEVEL BKPTOUT
+	LINEL TTYHEIGHT OLDROW OLDCOL)
+
+(NOTYPE (TYO* FIXNUM) (SETCURSORPOS FIXNUM FIXNUM))
+
+(*EXPR +TYO SETCURSORPOS MTERPRI FORCE-OUTPUT LINEAR-DISPLA
+       TTYINTSON TTYINTSOFF MORE-FUN GETOP
+       LBP RBP NFORMAT FULLSTRIP1 MAKSTRING $LISTP)
+
+;; stuff other packages might want to reference selectively.
+(*expr displa dimension checkrat checkbreak)
+;; looks like missplaced declarations to me.
+;; does DISPLA really call $integrate?
+(*lexpr $box $diff $expand $factor $integrate $multthru $ratsimp)
+)
+
+;;; macros for the DISPLA package.
+
+(DEFMACRO TABLEN () #-(or Franz LISPM) (STATUS TABSIZE) #+(or Franz LISPM) 8)
+
+;; macros to handle systemic array differences.
+;; NIL has various types of arrays, and supports *ARRAY in compatibility,
+;; but might as well use the natural thing here, a vector.
+
+(DEFMACRO MAKE-LINEARRAY (SIZE)
+  #+LISPM `(MAKE-ARRAY ,SIZE ':TYPE 'ART-Q)
+  #+(or Maclisp Franz) `(*ARRAY NIL T ,SIZE)
+  #+NIL `(make-vector ,size)
+  )
+
+(DEFMACRO SET-LINEARRAY (I X)
+  #+LISPM `(ASET ,X LINEARRAY ,I)
+  #+(or Maclisp Franz) `(STORE (ARRAYCALL T LINEARRAY ,I) ,X)
+  #+NIL `(VSET LINEARRAY ,I ,X)
+  )
+
+(DEFMACRO LINEARRAY (J)
+  #+LISPM `(AREF LINEARRAY ,J)
+  #+(or Maclisp Franz) `(ARRAYCALL T LINEARRAY ,J)
+  #+NIL `(VREF LINEARRAY ,J)
+  )
+
+(DEFMACRO LINEARRAY-DIM ()
+  #+(OR LISPM MACLISP FRANZ) '(ARRAY-DIMENSION-N 1 LINEARRAY)
+  #+NIL '(VECTOR-LENGTH LINEARRAY))
+
+(DEFMACRO CLEAR-LINEARRAY ()
+  #+(OR LISPM MACLISP FRANZ) '(FILLARRAY LINEARRAY '(NIL))
+  #+NIL '(DO ((J 0 (1+ J))
+	      (N (VECTOR-LENGTH LINEARRAY))
+	      (V LINEARRAY))
+	     ((= J N))
+	   (VSET V J ())))
+
+;; (PUSH-STRING "foo" RESULT) --> (SETQ RESULT (APPEND '(#/o #/o #/f) RESULT))
+;; CHECK-ARG temporarily missing from Multics.
+
+(DEFMACRO PUSH-STRING (STRING SYMBOL)
+  #-(or Franz Multics) (CHECK-ARG STRING STRINGP "a string")
+  #-(or Franz Multics) (CHECK-ARG SYMBOL SYMBOLP "a symbol")
+  `(SETQ ,SYMBOL (APPEND ',(NREVERSE (EXPLODEN STRING)) ,SYMBOL)))
+
+;; Macros for setting up dispatch table.
+;; Don't call this DEF-DISPLA, since it shouldn't be annotated by
+;; TAGS and @.  Syntax is:
+;; (DISPLA-DEF [<operator>] [<dissym> | <l-dissym> <r-dissym>] [<lbp>] [<rbp>])
+;; If only one integer appears in the form, then it is taken to be an RBP.
+
+;; This should be modified to use GJC's dispatch scheme where the subr
+;; object is placed directly on the symbol's property list and subrcall
+;; is used when dispatching.
+
+(DEFMACRO DISPLA-DEF (OPERATOR DIM-FUNCTION &REST REST
+			       &AUX L-DISSYM R-DISSYM LBP RBP)
+  (DOLIST (X REST)
+    (COND ((STRINGP X)
+	   (IF L-DISSYM (SETQ R-DISSYM X) (SETQ L-DISSYM X)))
+	  ((FIXP X)
+	   (IF RBP (SETQ LBP RBP))
+	   (SETQ RBP X))
+	  (T (ERROR "Random object in DISPLA-DEF form" X))))
+  (IF L-DISSYM
+      (SETQ L-DISSYM
+	    (IF R-DISSYM
+		(CONS (EXPLODEN L-DISSYM) (EXPLODEN R-DISSYM))
+		(EXPLODEN L-DISSYM))))
+  `(PROGN 'COMPILE
+	  (DEFPROP ,OPERATOR ,DIM-FUNCTION DIMENSION)
+	  ,(IF L-DISSYM  `(DEFPROP ,OPERATOR ,L-DISSYM DISSYM))
+	  ,(IF LBP       `(DEFPROP ,OPERATOR ,LBP LBP))
+	  ,(IF RBP       `(DEFPROP ,OPERATOR ,RBP RBP))))
+
+;; Why must interrupts be turned off?  Is there some problem with keeping
+;; internal state consistent?  If this is the case, then scheduling should be
+;; inhibited on the Lispm as well.
+;; Who's comment? It is obvious that there is this global array LINEARRAY,
+;; which gets bashed during DISPLA. Seems like the best thing to do is
+;; to use AREF and ASET on a special variable bound to an array pointer.
+;; If a reentrant call to DISPLA is made, then just bind this variable
+;; to a new array. -GJC
+;; So it was written, so it shall be done, eventually.
+;; Ah, got around to it... 9:32pm  Wednesday, 2 December 1981
+
+(DEFMACRO SAFE-PRINT (PRINT-FORM)
+  ;;`(WITHOUT-INTERRUPTS (LET ((^W T)) ,PRINT-FORM))
+  ;; Still can't figure out what the ^W is bound for. - GJC
+  ;;	Answer: SAFE-PRINT is used when the user types <RETURN> to 
+  ;;	--More Display?-- but has a WRITEFILE open.  In that case,
+  ;;	you want to write out to the file but not to the TTY. - JPG
+  #+PDP10 `(LET ((^W T)) ,PRINT-FORM)
+  #-PDP10  PRINT-FORM)
+
+(DEFMACRO LG-END-VECTOR (X Y) `(LG-DRAW-VECTOR ,X ,Y))
+
+

@@ -1,0 +1,523 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module define macro)
+
+(DECLARE (SPECIAL EOF-COMPILE-QUEUE))
+
+;; Special form for declaring variables to be global throughout all
+;; of Macsyma.  Simulates Lisp Machine special variable annotation.
+;; Syntax is:
+
+;; (DEFMVAR <name> &OPTIONAL <initial-value> <documentation> &REST <flags>)
+
+;; The accepted flags are:
+;; FIXNUM            -- declares the variable to be a fixnum globally.
+;;			Automatically sets the SETTING-PREDICATE to be #'FIXP
+;; FLONUM            -- declares the variable to be a flonum globally.
+;;			Automatically sets the SETTING-PREDICATE to be #'FLOATP
+;; NO-RESET          -- prevents the switch from being reset to its initial
+;;                      value when RESET() is done.
+;; IN-CORE	     -- marks a variable defined in an out-of-core file
+;;			as being needed by in-core code.  This makes sure
+;;			the variable is initialized in the in-core system.
+;; MODIFIED-COMMANDS -- the next token is taken to be the name of a command
+;;                      or a list of commands which this switch modifies.
+;;                      Presumably, reverse pointers will also exist when
+;;                      DEFMFUN is extended.
+;; SETTING-PREDICATE -- the next token is a function which is called on the
+;;                      variable and the value being assigned to it to make
+;;                      sure that it is a valid setting.
+;; SETTING-LIST      -- the next token is a list of valid settings for switch.
+
+;; Some Examples:
+
+;; (DEFMVAR $LOADPRINT T 
+;;          "Governs the printing of messages accompanying loading of files.
+;; The following options are available: TRUE means always print the message;
+;; 'LOADFILE means print only when the LOADFILE command is used; 'AUTOLOAD
+;; means print only when a file is automatically loaded in (e.g. the
+;; integration file SIN FASL); FALSE means never print the loading message."
+;;           MODIFIED-COMMANDS '($LOADFILE $BATCH)
+;;           SETTING-LIST      '(T $AUTOLOAD $LOADFILE NIL)
+;;	     NO-RESET)
+
+;; (DEFMVAR $CALCOMPNUM 20.
+;;          "The number of points plotted when the variable range
+;; is specified as a closed interval.  The default value is sufficient
+;; for trying things out.  100 is a suitable value for final hard copy."
+;;	    FIXNUM
+;;          MODIFIED-COMMANDS '($PLOT2 $PARAMPLOT2))
+;;
+;;
+;; DESCRIBE(CALCOMPNUM); will then print out:
+;;
+;; CALCOMPNUM [Default = 20, Currently = 20] - The number of points plotted
+;; when the variable range is specified as a closed interval.  The default
+;; value is sufficient for trying things out.  100 is a suitable value for
+;; final hard copy. This variable modifies the behavior of the PLOT2 and
+;; PARAMPLOT2 commands.
+;; 
+;; DESCRIBE(CALCOMPNUM,VERBOSE); might print out the above information and
+;; then the documentation on the PLOT2 and PARAMPLOT2 commands.  Likewise,
+;; DESCRIBE(PLOT2); could describe PLOT2, and DESCRIBE(PLOT2,VERBOSE) could
+;; describe all the switches which affect PLOT2 as well.
+
+;; This definition of DEFMVAR, and the code in this file, is for ITS only.
+;; Other systems use the definition in LIBMAX;MAXMAC or hack their own.  When
+;; compiling for installation, send special variable declarations and
+;; initializations to files on ALJABR.  Initializations are kept there so that
+;; Macsyma user level variables will be set even if the appropriate out-of-core
+;; file isn't loaded and for the benefit of the RESET function.
+
+;; Note: If *you* are into hacking this, maybe think about having
+;; work through the info in the STRING-FILE's on MAXERR.
+;; This would keep compilations from doing a LOT of I/O. When CWH
+;; first hacked this the DCL files where small. -GJC
+
+(DEFVAR DEFMVAR-RESET-INITS NIL
+ "List of symbol and initial value pairs for variables which can be reset.")
+(DEFVAR DEFMVAR-NO-RESET-INITS NIL
+ "List of symbol and initial value pairs for variables which cannot be reset.")
+(DEFVAR DEFMVAR-SPECIAL-DCLS NIL
+ "List of all symbols declared as global variables in the current file.")
+(DEFVAR DEFMVAR-FIXNUM-DCLS NIL
+ "List of all global variables declared to be fixnums in the current file.")
+(DEFVAR DEFMVAR-FLONUM-DCLS NIL
+ "List of all global variables declared to be flonums in the current file.")
+
+(DEFVAR PUNT-IN-SET-CAREFULLY NIL)
+
+(DEFVAR UPDATE-REMIND-LUSERS '("[DSK:MAXDOC;MDOC MAIL]"))
+
+(defun macsyma-compilation-p ()
+       ;; a bit DWIM'ish to handle all existing instalation
+       ;; mechanisms.
+       (and (status feature complr)
+	    (memq compiler-state '(maklap compile))
+	    (COND ((BOUNDP 'TEST-COMPILATION-P)
+		   (NOT (EVAL 'TEST-COMPILATION-P)))
+		  (T
+		   (STATUS FEATURE MACSYMA-COMPLR)))))
+
+(DEFUN UPDATE-REMIND (TYPE OBJECT &REST STUFF)
+       (COND ((AND (macsyma-compilation-p)
+		   (FBOUNDP 'FORMAT-MAIL)
+		   (IF (ATOM OBJECT)
+		       (= #/$ (GETCHARN OBJECT 1))
+		       T))
+	      (FORMAT-MAIL (CONS (STATUS UNAME)
+				 UPDATE-REMIND-LUSERS)
+			   "~
+			   ~&Hi, I just compiled the file ~A and it defines~
+			   ~%a new ~S called ~S. Here's some info on it,
+			   ~%~S.~
+			   ~%
+			   ~%                   yours truly,
+			   ~%                     ~S.~
+			   ~%"
+			   (namestring (truename infile))
+			   type object stuff
+			   (status userid)))))
+
+(DEFMACRO DEFMVAR (VARIABLE &OPTIONAL (INITIAL-VALUE NIL IV-P) DOCUMENTATION
+                            &REST FLAGS &AUX TYPE NO-RESET IN-CORE)
+  
+  (OR (GET VARIABLE 'SPECIAL)
+      (UPDATE-REMIND 'DEFMVAR VARIABLE
+		     "INITIAL-VALUE="
+		     (IF (> (FLATC INITIAL-VALUE) 500.)
+			 "too big to print, so see the source"
+			 INITIAL-VALUE)
+		     "DOCUMENTATION=" DOCUMENTATION
+		     "MODES=" FLAGS))
+  ;; Parse keywords.  Do this in a more sophisticated way later.
+  (SETQ TYPE (COND ((MEMQ 'FIXNUM FLAGS) 'FIXNUM)
+		   ((MEMQ 'FLONUM FLAGS) 'FLONUM)
+		   (T NIL)))
+  (SETQ NO-RESET (MEMQ 'NO-RESET FLAGS))
+  (SETQ IN-CORE  (MEMQ 'IN-CORE FLAGS))
+  ;; When compiling for installation, update various data bases.
+  (WHEN (macsyma-compilation-p)
+	(DEFINE-ASSURE-SETUP)
+	(PUSH VARIABLE DEFMVAR-SPECIAL-DCLS)
+	(CASEQ TYPE
+	       (FIXNUM (PUSH VARIABLE DEFMVAR-FIXNUM-DCLS))
+	       (FLONUM (PUSH VARIABLE DEFMVAR-FLONUM-DCLS)))
+	;; An initialization for the variable is always placed in the fasl
+	;; file so that it can be used outside of Macsyma.  For the benefit
+	;; of the Macsyma user, all user-level variables are initialized
+	;; when the Macsyma is created so that they may be examined before the
+	;; out-of-core file is loaded.  By default, user-level variables can
+	;; be reset via the RESET command and get stuck on the RESET
+	;; list.  Those which are unaffected by this command are placed on
+	;; the NO-RESET list.  Lisp level variables defined in out-of-core
+	;; files but referenced by in-core files also get placed on the
+	;; NO-RESET list.
+	(WHEN (AND IV-P (OR (= (GETCHARN VARIABLE 1) #/$) IN-CORE))
+	      (IF (OR NO-RESET IN-CORE)
+		  (PUSH (CONS VARIABLE INITIAL-VALUE) DEFMVAR-NO-RESET-INITS)
+		  (PUSH (CONS VARIABLE INITIAL-VALUE) DEFMVAR-RESET-INITS))))
+  ;; Only turn into DEFVAR when compiling.
+  (COND ((STATUS FEATURE COMPLR)
+	 `(PROGN 'COMPILE
+		 ,(IF IV-P
+		      `(DEFVAR ,VARIABLE ,INITIAL-VALUE)
+		      `(DEFVAR ,VARIABLE))
+		 ,@(IF TYPE `((DECLARE (,TYPE ,VARIABLE))))))
+	(IV-P `(SET-CAREFULLY ',VARIABLE ,INITIAL-VALUE))
+	;; For the benefit of UREAD.
+	(T `',VARIABLE)))
+
+;; When running interpreted code, check to see if the variable already has
+;; a value.  If it does, and the value is different, then query the user
+;; about changing its value.  Be careful about circular structure.
+
+(DECLARE (*LEXPR Y-OR-N-P) (SPECIAL $LOADPRINT))
+
+(DEFUN SET-CAREFULLY (SYMBOL NEW-VALUE &AUX OLD-VALUE ($LOADPRINT NIL))
+  (COND ((NOT (BOUNDP SYMBOL)) (SET SYMBOL NEW-VALUE))
+	(PUNT-IN-SET-CAREFULLY (SYMEVAL SYMBOL))
+	(T (SETQ OLD-VALUE (SYMEVAL SYMBOL))
+	   (UNLESS (OR (EQUAL OLD-VALUE NEW-VALUE)
+		       ;; For MacLisp pseudo-strings.
+		       (AND (SYMBOLP OLD-VALUE) (SYMBOLP NEW-VALUE)
+			    (SAMEPNAMEP OLD-VALUE NEW-VALUE)))
+	    (LET ((PRINLEVEL 4) (PRINLENGTH 5))
+	      (FORMAT T "~&The symbol ~S already has value ~S.~%" SYMBOL OLD-VALUE)
+	      (FORMAT T "Do you want to change it to ~S? " NEW-VALUE) 
+	      (IF (Y-OR-N-P "Do you?") (SET SYMBOL NEW-VALUE)))))))
+
+;; Special form for declaring functions known throughout all of Macsyma.
+;; Simulates Lisp Machine global compilation environment.
+;; Syntax is:
+
+;; (DEFMFUN <name> [FEXPR] <arglist> . body)
+
+;; Items in square brackets are optional.
+;; Documentation and additional flags will be added later.
+
+(DEFVAR DEFMFUN-EXPR-DCLS NIL
+  "List of all symbols declared as EXPRs in the current file.")
+(DEFVAR DEFMFUN-LEXPR-DCLS NIL
+  "List of all symbols declared as EXPRs in the current file.")
+(DEFVAR DEFMFUN-FEXPR-DCLS NIL
+  "List of all symbols declared as EXPRs in the current file.")
+
+;; Next, we want to make this thing generate autoload properties.
+;; Should determine if the file is in-core or out of core, though.
+
+(DEFMACRO DEFMFUN (FUNCTION BVL . BODY)
+	  (OR (GETL (IF (ATOM FUNCTION) FUNCTION (CAR FUNCTION))
+		    '(*EXPR *LEXPR *FEXPR))
+	      (UPDATE-REMIND 'DEFMFUN  FUNCTION
+			     "ARGUMENT LIST=" BVL
+			     "DOCUMENTATION STRINGS="
+			     (DO ((L BODY (CDR L))
+				  (DOC NIL))
+				 ((NULL (cdr l)) doc)
+				 (IF (ATOM (CAR L)) (PUSH (CAR L) DOC)))))
+  (WHEN (STATUS FEATURE MACSYMA-COMPLR)
+	(DEFINE-ASSURE-SETUP)
+	(COND ((EQ BVL 'FEXPR)
+	       (PUSH FUNCTION DEFMFUN-FEXPR-DCLS))
+	      ((OR (AND BVL (SYMBOLP BVL))
+		   (MEMQ '&OPTIONAL BVL)
+		   (MEMQ '&REST BVL))
+	       (PUSH FUNCTION DEFMFUN-LEXPR-DCLS))
+	      (T (PUSH FUNCTION DEFMFUN-EXPR-DCLS))))
+  `(DEFUN ,FUNCTION ,BVL . ,BODY))
+
+
+
+(DEFMACRO DEFMSPEC (NAME BVL . BODY)
+	  `(DEFUN (,NAME MFEXPR*
+			 #+MACLISP MFEXPR*S
+			 ) ,BVL . ,BODY))
+
+(DEFMACRO DEFMSPEC-1 (NAME BVL . BODY)
+	  ;; (DEFMSPEC-1 FOO (X) ...) is an exact replacement
+	  ;; for (DEFMFUN FOO FEXPR (X) ...)
+	  `(PROGN 'COMPILE
+		  (DEFMFUN ,NAME FEXPR ,BVL . ,BODY)
+		  (LET ((P (OR (GETL 'MSPEC-HOOK '(MFEXPR* MFEXPR*S))
+			       (ERROR 'MSPEC-HOOK NIL 'FAIL-ACT))))
+		       (REMPROP ',NAME (CAR P))
+		       (PUTPROP ',NAME (CADR P) (CAR P)))))
+
+(DEFVAR DEFINE-MODULE-NAME NIL
+  "A namelist which describes the module being compiled.  For vanilla
+  files, it is simply the value of INFILE.  For splitfiles, the FN1
+  shows the name of the splitfile.  We have to save the value of INFILE so
+  we can look at it later when the EOF-COMPILE-QUEUE is run.  The input file
+  is closed at that point.")
+
+(DEFVAR DEFINE-SPLITFILE-NAME NIL
+  "If non-NIL, then we are processing a splitfile and this is a symbol which
+  is the name of the file which is split.")
+
+;; This function gets run whenever an DEFMFUN or DEFMVAR is encountered.
+;; The first time it is entered for a given file being compiled, it
+;; resets all the global variables.  This is done at the beginning rather
+;; than the end of a compilation since we may have to quit in the middle.
+;; These variables must be reset in a function and not specified in DEFVAR's
+;; since several files may get compiled for one loading of this file.
+
+;; This procedure modified 12/2/80 by CWH.  Replace (TRUENAME INFILE)
+;; with a namelist which is computed from both the INFILE and ONMLS
+;; in order to work for splitfiles.  ONMLS stands for output namelists.
+;; Apparently, EOF-COMPILE-QUEUE gets run as each splitfile is finished.
+
+(DEFUN DEFINE-ASSURE-SETUP ()
+  (UNLESS (MEMBER '(DECLARE (DEFINE-PROCESS-EOF)) EOF-COMPILE-QUEUE)
+	  (PUSH '(DECLARE (DEFINE-PROCESS-EOF)) EOF-COMPILE-QUEUE)
+	  ;; Get the directory and version number from the INFILE
+	  ;; and the module name from (CAR ONMLS).
+	  (LET ((I (TRUENAME INFILE))
+		(O (CAR ONMLS)))
+	    (UNLESS (EQ (CADR I) (CADR O))
+		    (SETQ DEFINE-SPLITFILE-NAME (CADR I)))
+	    (SETQ DEFINE-MODULE-NAME (LIST (CDAR I) (CADR O) (CADDR I))))
+	  (SETQ DEFMVAR-SPECIAL-DCLS NIL)
+	  (SETQ DEFMVAR-RESET-INITS NIL)
+	  (SETQ DEFMVAR-NO-RESET-INITS NIL)
+	  (SETQ DEFMFUN-EXPR-DCLS NIL)
+	  (SETQ DEFMFUN-LEXPR-DCLS NIL)
+	  (SETQ DEFMFUN-FEXPR-DCLS NIL)))
+
+
+;; Set up filenames.
+
+(DEFVAR DEFINE-VAR-FILE            #+ITS "MAXDOC;DCL VARS")
+(DEFVAR DEFINE-FUNCTION-FILE	   #+ITS "MAXDOC;DCL FCTNS")
+(DEFVAR DEFINE-RESET-INITS-FILE    #+ITS "MAXDOC;INIT RESET")
+(DEFVAR DEFINE-NO-RESET-INITS-FILE #+ITS "MAXDOC;INIT NORESE")
+(DEFVAR DEFINE-TEMP-FILE	   #+ITS "MAXDOC;_DEFI_ OUTPUT")
+
+;; All the nice header hair etc. is *very* very slow, so I've put in the option
+;; to punt all this, since it is only needed when a new variable or function
+;; entry point is being introduced into the system, I.E. RARELY. This single
+;; crude-switch allows be to punt entirely for now in files which I know are
+;; ok. Later on, redo this whole thing, but right now I have to recompile LOTS
+;; of files simply to test changes in the macro environment. -GJC
+;; ITS needs keyed vfiles.  -cwh
+
+(DEFVAR DEFINE-UPDATE-FILE T
+  "Switch which controls updating of DEFINE files.  Set this to T, NIL, or
+  ASK in your MCOMPL init file.")
+
+;; This function gets run at the end of the file compilation.  Processes global
+;; variable declarations, external function declarations, initializations which
+;; can be reset, and initializations which cannot be reset.
+
+(DEFUN DEFINE-PROCESS-EOF ()
+  (WHEN (OR (EQ DEFINE-UPDATE-FILE T)
+	    (AND (EQ DEFINE-UPDATE-FILE 'ASK)
+		 (Y-OR-N-P "~&Update the DECLARE files?")))
+   (DEFINE-UPDATE-FILE
+     DEFMVAR-SPECIAL-DCLS
+     DEFINE-VAR-FILE "Declarations"
+     ";; Declaration file for global variables known throughout Macsyma."
+     #'UPDATE-VAR-DCLS)
+   (DEFINE-UPDATE-FILE
+     (OR DEFMFUN-EXPR-DCLS DEFMFUN-LEXPR-DCLS DEFMFUN-FEXPR-DCLS)
+     DEFINE-FUNCTION-FILE "Declarations"
+     ";; Declaration file for external functions known throughout Macsyma."
+     #'UPDATE-FUNCTION-DCLS)
+   (DEFINE-UPDATE-FILE
+     DEFMVAR-RESET-INITS
+     DEFINE-RESET-INITS-FILE "Initializations"
+     ";; This is the initialization file for variables which can be reset."
+     #'UPDATE-RESET-INITS)
+   (DEFINE-UPDATE-FILE
+     DEFMVAR-NO-RESET-INITS
+     DEFINE-NO-RESET-INITS-FILE "Initializations"
+     ";; This is the initialization file for variables which cannot be reset."
+     #'UPDATE-NO-RESET-INITS)))
+
+;; General purpose function which goes through the hair of printing nice
+;; headers, unwind-protects opening of the files, and flushes the old entry for
+;; the file being compiled.  Creating a specific entry is done by calling a
+;; function specified above.  We always pass through the file, even if we have
+;; no entries to enter, so as to flush the old entry.
+
+(DEFUN DEFINE-UPDATE-FILE (DO-IT? FILE ENTRY-HEADER FILE-HEADER ENTRY-FUNCTION
+				  &AUX LINE LINE-2)
+ (PHI ((IN-FILE  (IF (PROBEF FILE) (OPEN FILE 'IN)))
+       (OUT-FILE (OPEN DEFINE-TEMP-FILE 'OUT)))
+   ;; Generate a new header and throw away the old one.
+   (FORMAT OUT-FILE ";; -*- Mode: Lisp; Package: Macsyma -*-~%")
+   (FORMAT OUT-FILE "~A~%" FILE-HEADER)
+   ;; THIS-FILE is set up by LIBMAX;MPRELU.
+   (FORMAT OUT-FILE ";; This file was generated by DEFINE version ~A.~%"
+	   (GET 'DEFINE 'VERSION))
+   (IF IN-FILE (DOTIMES (I 3) (READLINE IN-FILE)))
+   ;; Read and pass through everything in the file up to the end of
+   ;; the file.  Throw away any entries dealing with our file.
+   (IF IN-FILE
+       (*CATCH 'EOF
+	 (DO () (NIL)
+	   (SETQ LINE (READLINE IN-FILE))
+	   (IF (NULL LINE) (*THROW 'EOF T))
+	   ;; An entry is assumed to begin with a blank line, a single
+	   ;; line comment, and then a (DECLARE (COMMENT <module>)) form.
+	   (COND ((STRING-EQUAL LINE "")
+		  (SETQ LINE (READLINE IN-FILE))
+		  (SETQ LINE-2 (READLINE IN-FILE))
+		  (LET ((FORM (READLIST (EXPLODEN LINE-2))))
+		       (COND ((AND (EQ (CAR FORM) 'DECLARE)
+				   (EQ (CAADR FORM) 'COMMENT)
+				   (EQ (CADADR FORM) (CADR DEFINE-MODULE-NAME)))
+			      ;; Throw away all lines which follow
+			      ;; until the next blank line.
+			      (DO () (NIL)
+				  (SETQ LINE (READLINE IN-FILE))
+				  (IF (NULL LINE) (*THROW 'EOF T))
+				  (WHEN (STRING-EQUAL LINE "")
+					(TERPRI OUT-FILE)
+					(RETURN T))))
+			     (T (FORMAT OUT-FILE "~%~A~%~A~%" LINE LINE-2)))))
+		 (T (FORMAT OUT-FILE "~A~%" LINE))))))
+   ;; Now spit ours out at the end of the file, if we have something
+   ;; to print.  This orders the file chronologically -- last entry
+   ;; is the most recent.  (STATUS USERID) is set to MACSYM in :MCL,
+   ;; so use (STATUS UNAME) instead.
+   (WHEN DO-IT?
+     (FORMAT OUT-FILE "~%;; ~A for ~A~@[~2G (~A split)~], compiled ~A by ~A.~%"
+	     ENTRY-HEADER (NAMESTRING DEFINE-MODULE-NAME)
+	     DEFINE-SPLITFILE-NAME (DEFINE-TIME-AND-DATE) (STATUS UNAME))
+     (FORMAT OUT-FILE "(DECLARE (COMMENT ~A))~%" (CADR DEFINE-MODULE-NAME))
+     (FUNCALL ENTRY-FUNCTION OUT-FILE)))
+ ;; This must be done after both files have been closed.
+ (IF (PROBEF FILE) (DELETEF FILE))
+ (RENAMEF DEFINE-TEMP-FILE FILE))
+
+(DEFUN DEFINE-TIME-AND-DATE ()
+  (FORMAT NIL "~D//~D//~D ~D:~2,'0D"
+	  (CADR (STATUS DATE)) (CADDR (STATUS DATE)) (CAR (STATUS DATE))
+	  (CAR (STATUS DAYTIME)) (CADR (STATUS DAYTIME))))
+
+
+;; Functions for specific types of entries in specific files.
+
+(DEFUN UPDATE-SYMBOL-LIST (FILE HEADER LIST &AUX (LENGTH (STRING-LENGTH HEADER)))
+  (WHEN LIST
+	(PRINC HEADER FILE)
+	(DOLIST (SYMBOL LIST)
+		;; Format for 78 character screen width
+		(WHEN (> (+ (CHARPOS FILE) (FLATSIZE SYMBOL) 1) 78.)
+		      (TERPRI FILE)
+		      (DOTIMES (I LENGTH) (TYO #\SP FILE)))
+		(FORMAT FILE " ~S" SYMBOL))
+	(FORMAT FILE "))~%")))
+    
+(DEFUN UPDATE-VAR-DCLS (FILE)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (SPECIAL" DEFMVAR-SPECIAL-DCLS)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (FIXNUM"  DEFMVAR-FIXNUM-DCLS)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (FLONUM"  DEFMVAR-FLONUM-DCLS))
+
+(DEFUN UPDATE-FUNCTION-DCLS (FILE)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (*EXPR"  DEFMFUN-EXPR-DCLS)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (*LEXPR" DEFMFUN-LEXPR-DCLS)
+  (UPDATE-SYMBOL-LIST FILE "(DECLARE (*FEXPR" DEFMFUN-FEXPR-DCLS))
+
+(DEFUN UPDATE-INIT-LIST (FILE LIST &AUX VAR INIT)
+       (FORMAT FILE "(SETQ")
+       (DOLIST (PAIR LIST)
+	       (DESETQ (VAR . INIT) PAIR)
+	       ;; Format for 78 character screen width
+	       (IF (> (+ (CHARPOS FILE) (FLATSIZE VAR) (FLATSIZE INIT) 2) 78.)
+		   (FORMAT FILE "~%~5X"))
+	       ;; Print the variable name and the initialization to the file.
+	       ;; Be careful for pseudo-strings.
+	       (FORMAT FILE " ~S ~:[~;'~]~S" VAR (STRINGP INIT) INIT))
+       (FORMAT FILE ")~%"))
+
+;; NREVERSE init lists so that the initializations get done in the order
+;; they appear in the file.
+
+(DEFUN UPDATE-RESET-INITS (FILE)
+  (UPDATE-INIT-LIST FILE (NREVERSE DEFMVAR-RESET-INITS)))
+(DEFUN UPDATE-NO-RESET-INITS (FILE)
+  (UPDATE-INIT-LIST FILE (NREVERSE DEFMVAR-NO-RESET-INITS)))
+
+(DEFVAR DEF-SUBR-ENTRY-POINTS T
+	"If NIL it just declares them, not actually defines them")
+
+(DEFVAR SUBR-ARGLIST-ALIST
+	;; these also happen to be the symbolic names of the
+	;; accumulators through which the arguments will be passed.
+	'((0 . ())
+	  (1 . (A))
+	  (2 . (A B))
+	  (3 . (A B C))
+	  (4 . (A B C D))
+	  (5 . (A B C D E))))
+
+;;; Example:
+;;; (DEF-SUBR-ENTRY-POINTS BAZ 3  (4 . QPRZN))
+;;; sets up optimization for (BAZ A B C D) => (QPRZN A B C D)
+
+(DEFUN PUT-TRANS (NAME FUNCTION FIRSTP)
+       (LET ((SOURCE-TRANS (DELQ FUNCTION (GET NAME 'SOURCE-TRANS))))
+	    (PUTPROP NAME
+		     (IF FIRSTP
+			 (CONS FUNCTION SOURCE-TRANS)
+			 (NCONC SOURCE-TRANS (LIST FUNCTION)))
+		     'SOURCE-TRANS)))
+
+(DEFUN SUBR-ENTRY-OPTIMIZER (FORM)
+       (LET ((ENTRY (ASSOC (LENGTH (CDR FORM))
+			   (GET (CAR FORM) 'SUBR-ENTRY-ALIST))))
+	    (IF ENTRY
+		(VALUES (CONS (CDR ENTRY) (CDR FORM)) T)
+		(VALUES FORM NIL))))
+
+
+(comment 
+(DEFMACRO DEF-SUBR-ENTRY-POINTS (NAME &REST ARGUMENT-NUMBERS)
+	  ;; This was found to be needed before the
+	  ;; MERROR function really won on the PDP-10.
+	  ;; -GJC
+	  (LET ((SUBR-ENTRY-ALIST
+		 (MAPCAR #'(LAMBDA (N)
+				   (COND ((NUMBERP N)
+					  (CONS N (SYMBOLCONC N NAME)))
+					 ((AND (EQ (TYPEP N 'LIST))
+					       (SYMBOLP (CDR N)))
+					  N)
+					 (T
+					  (ERROR "Cannot be defined as SUBR"
+						 N
+						 'FAIL-ACT))))
+			 ARGUMENT-NUMBERS)))
+	       (PUTPROP NAME SUBR-ENTRY-ALIST 'SUBR-ENTRY-ALIST)
+	       (PUTPROP NAME 'SUBR-ENRY
+	       `(PROGN
+		     'COMPILE
+		     ,@(MAPCAR 
+			#'(LAMBDA (NARGS-DOT-NAME)
+				  (LET ((CELL (ASSOC (CAR NARGS-DOT-NAME)
+						     SUBR-ARGLIST-ALIST)))
+				       (OR CELL
+					   (ERROR "Cannot be defined as SUBR"
+						  NARGS-DOT-NAME
+						  'FAIL-ACT))
+				       `(DEFUN ,(CDR NARGS-DOT-NAME)
+					       ,(CDR CELL)
+
+)))))))))
+
+
+
+;; To do:
+;; Autoload properties
+;; FIXNUM and FLONUM declarations for functions -- parameters and return values.
+;; LOAD-TIME-INIT keyword for symbols like TTYHEIGHT, LINEL, etc.
+;; Update MANUAL;MACSYM DOC automatically.
+;; Implement SETTING-PREDICATE.  Also ASSIGN properties.
+;; (FORMAT X "~80,1,0,';<~; -*- Mode: Lisp; Package: Macsyma -*- ~;~>~%")
+;; SYMBOL, BOOLEAN, etc. keywords for variables like FIXNUM, FLONUM
+;;  Automatically do the setting predicate.
+
