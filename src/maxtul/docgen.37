@@ -1,0 +1,335 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; To generate TAGS file, CODESIZE file, and files used by the macsyma
+;;; loader. -GJC 11:41pm  Saturday, 25 October 1980
+;;; See end of file for function to call.
+
+(INCLUDEF "LIBMAX;GPRELUDE >")
+
+(EVAL-WHEN (EVAL COMPILE LOAD)
+	   (OR (GET 'DEFMFILE 'VERSION)
+	       (LOAD '((MAXTUL) DEFILE)))
+	   (OR (FBOUNDP 'FASDUMP)
+	       (DEFPROP FASDUMP ((DSK LIBLSP) FASDMP) AUTOLOAD)))
+
+(DECLARE (*EXPR FASDUMP))
+
+(DEFVAR INFO-LOADED NIL)
+
+(DEFUN LOAD-INFO ()
+       (COND ((NOT INFO-LOADED)
+	      (IF (OR (NOT (BOUNDP 'MACSYMA-SOURCE-FILES))
+		      (NULL MACSYMA-SOURCE-FILES))
+		  (LOAD '((MAXDOC) FILES)))
+	      (MAPC #'SET-PRESENT-VERSION MACSYMA-SOURCE-FILES)
+	      (SETQ INFO-LOADED T))))
+
+
+(DEFUN GEN-NTAGS (&AUX OUTSTREAM WINP (NAME "DSK:MACSYM;MACSYM NTAGS"))
+       (LOAD-INFO)
+       (UNWIND-PROTECT
+	(PROGN
+	 (SETQ OUTSTREAM (OPEN (TEMP-FILENAME NAME) 'OUT))
+	 (DO ((L (SORT (APPEND MACSYMA-SOURCE-FILES NIL)
+		       #'(LAMBDA
+			  (A B)
+			  (< (MACSYMA-SOURCE-FILE-TAGS-PRECEDENCE A)
+			     (MACSYMA-SOURCE-FILE-TAGS-PRECEDENCE B))))
+		 (CDR L)))
+	     ((NULL L))
+	     (FORMAT OUTSTREAM
+		     "DSK:~A;~A >~%0,~A~%~%"
+		     (MACSYMA-SOURCE-FILE-DIR (CAR L))
+		     (MACSYMA-SOURCE-FILE-NAME (CAR L))
+		     (MACSYMA-SOURCE-FILE-LANGUAGE (CAR L))))
+	     
+	 (SETQ WINP T))
+
+	;; unwind protected.
+	(IF WINP (RENAMEF OUTSTREAM NAME) (IF OUTSTREAM (CLOSE OUTSTREAM)))))
+
+
+;;; Moby assed function to gronk UNFASL files.
+
+(DEFUN SET-CODESIZE (S OB EOF &AUX (FILE `((,(MACSYMA-SOURCE-FILE-UNFASL-DIR S))
+					   ,(MACSYMA-SOURCE-FILE-NAME S)
+					   UNFASL)))
+       (COND ((MACRO-FILE-P S))
+	     ((PROBEF FILE)
+	      (CNAMEF OB FILE)
+	      ;; a file object is an argument so that
+	      ;; GCing of file objects can be avoided.
+	      (UNWIND-PROTECT
+	       (PROGN
+		(OPEN OB 'IN)
+		(DO ((FORM (LET ((F (READ OB EOF)))
+				(READ OB EOF)
+				;; To get '(ASSEMBLED BY ...)
+				(SETF (MACSYMA-SOURCE-FILE-UNFASL-HEADER S)
+				      (NAMELIST (CAR (LAST (CADR F)))))
+				F)
+			   (READ OB EOF))
+		     (SPLITS NIL)
+		     (PREVIOUS-POSSIBLE-SPLIT NIL)
+		     ;; Only enter a name into SPLITS if there
+		     ;; are forms after the '(THIS IS THE UNFASL FOR *)
+		     ;; which indicate that the FASL file is actually
+		     ;; produced.
+		     (FORMS-IN-SPLIT? NIL)
+		     (CODESIZE 0))
+		    ((EQ FORM EOF)
+		     (SETF (MACSYMA-SOURCE-FILE-CODESIZE S) CODESIZE)
+		     (IF FORMS-IN-SPLIT?
+			 (PUSH PREVIOUS-POSSIBLE-SPLIT SPLITS))
+		     (IF SPLITS
+			 (SETF (MACSYMA-SOURCE-FILE-SPLIT S) SPLITS))
+		     S)
+			  
+		    ;; Pick up the comments in the fasl file,
+		    ;; split-files will have multiple such comments.
+		    ;; HAND-COMPILED pattern MATCHQ
+		    (COND ((ATOM FORM))
+			  ((EQ (CAR FORM) 'QUOTE)
+			   (SETQ FORM (CADR FORM))	
+			   (COND ((ATOM FORM)
+				  (SETQ FORMS-IN-SPLIT? T))
+				 ((EQ (CAR FORM) 'THIS)
+				  ;; (THIS IS THE UNFASL FOR *)
+				  (READ OB EOF)
+				  ;; (ASSEMBLED BY *)
+				  (IF FORMS-IN-SPLIT?
+				      (PUSH PREVIOUS-POSSIBLE-SPLIT SPLITS))
+				  (SETQ FORMS-IN-SPLIT? NIL)
+				  (SETQ PREVIOUS-POSSIBLE-SPLIT
+					(CADR (NAMELIST
+					       (CAR (LAST FORM))))))
+				 (T
+				  (SETQ FORMS-IN-SPLIT? T))))
+			  ((EQ (CAR FORM) 'COMMENT)
+			   (SETQ FORMS-IN-SPLIT? T)
+			   ;;`(COMMENT **FASL** TOTAL = ,X WORDS)
+			   ;;`(COMMENT **FASL** ,X TOTAL)
+			   (SETQ FORM (CDR FORM))
+			   (COND ((EQ (CAR FORM) '**FASL**)
+				  (SETQ FORM (CDR FORM))
+				  (COND ((EQ (CAR FORM) 'TOTAL)
+					 (SETQ CODESIZE
+					       (+ CODESIZE
+						  (CADDR FORM))))
+					((EQ (CADR FORM) 'TOTAL)
+					 ;; For old UNFASL files.
+					 (IF (FIXP (CAR FORM))
+					     (SETQ CODESIZE
+						   (+ CODESIZE
+						      (CAR FORM)))))))))
+			  (T
+			   (SETQ FORMS-IN-SPLIT? T)))))
+	       ;; unwind protected
+	       (CLOSE OB)))
+	     (T
+	      (FORMAT MSGFILES
+		      "~&; Can't find UNFASL file for ~A~%"
+		      (NAMESTRING FILE)))))
+
+(DEFUN CODESIZE-SUB (OUTSTREAM L WHERE COUNT)
+       (FORMAT OUTSTREAM
+	       "~2%The following are statistics for ~A-core files:~%" WHERE)
+       (DO ((SUM 0))
+	   ((NULL L)
+	    (FORMAT OUTSTREAM
+		    "~%The total is: ~D." SUM)
+	    (CONS COUNT SUM))
+	   (SETQ COUNT (1+ COUNT)
+		 SUM (+ SUM (OR (MACSYMA-SOURCE-FILE-CODESIZE (CAR L)) 0)))
+	   (FORMAT OUTSTREAM
+		   "~%~3D.  ~28S~5D.~%"
+		   COUNT
+		   (OR (MACSYMA-SOURCE-FILE-UNFASL-HEADER (CAR L))
+		       `((DSK ,(MACSYMA-SOURCE-FILE-DIR (CAR L)))
+			 ,(MACSYMA-SOURCE-FILE-NAME (CAR L))))
+		   (MACSYMA-SOURCE-FILE-CODESIZE (CAR L)))
+	   (SETQ L (CDR L))))
+
+(DEFUN IN-CORE-FILES (L)
+       (SORT (DEL #'(LAMBDA (IGNORE S) (NOT (MACSYMA-SOURCE-FILE-IN-CORE S)))
+		  NIL
+		  (APPEND L NIL))
+	     #'(LAMBDA (A B)
+		       (< (MACSYMA-SOURCE-FILE-IN-CORE A)
+			  (MACSYMA-SOURCE-FILE-IN-CORE B)))))
+
+(DEFUN INTERSECTIONP (X1 X2)
+       (DO ()
+	   ((NULL X1) NIL)
+	   (IF (MEMQ (POP X1) X2) (RETURN T))))
+
+(DEFUN OUT-OF-CORE-FILES (L)
+       (SORT (DEL #'(LAMBDA (IGNORE S)
+			    (OR (MACSYMA-SOURCE-FILE-IN-CORE S)
+				(MACRO-FILE-P S)
+				(NOT (EQ (MACSYMA-SOURCE-FILE-LANGUAGE S)
+					 'LISP))
+				(INTERSECTIONP
+				 '(PDP10 ITS)
+				 (MACSYMA-SOURCE-FILE-SYSTEMS-NOT-FOR S))
+				(NOT (INTERSECTIONP
+				      '(PDP10 ITS)
+				      (MACSYMA-SOURCE-FILE-SYSTEMS-FOR S)))))
+		  NIL
+		  (APPEND L NIL))
+	     #'(LAMBDA (A B)
+		       (< (MACSYMA-SOURCE-FILE-GOEDEL-NUMBER A)
+			  (MACSYMA-SOURCE-FILE-GOEDEL-NUMBER B)))))
+
+(DEFUN GEN-CODEL (&AUX INSTREAM OUTSTREAM WINP (NAME "MAXDOC;CODEL >")
+		       (EOF (LIST NIL)) TEMP GRAND-SUM)
+       (LOAD-INFO)
+       (UNWIND-PROTECT
+	(PROGN
+	 (SETQ INSTREAM (OPEN '((NUL)) 'IN))
+	 (CLOSE INSTREAM)
+	 (CNAMEF INSTREAM '((DSK))) ; get rid of NUL device atribute.
+	 ;; going to be reading in LOTS of symbols then throwing them out.
+	 (GCTWA T)
+	 (DO ((L MACSYMA-SOURCE-FILES (CDR L)))
+	     ((NULL L))
+	     (SET-CODESIZE (CAR L) INSTREAM EOF))
+	 (SETQ OUTSTREAM (OPEN (TEMP-FILENAME NAME) 'OUT))
+	 (FORMAT-TIMEDATE OUTSTREAM)
+	 (FORMAT OUTSTREAM
+		 "~2%The Macsyma system code-size in PDP-10 words.~
+		 ~%Macsyma-source-files version ~A."
+		 (Get 'macsyma-source-files 'version))
+	 (SETQ TEMP (CODESIZE-SUB  OUTSTREAM
+				   (IN-CORE-FILES MACSYMA-SOURCE-FILES)
+				   "in"
+				   0)
+	       GRAND-SUM (CDR TEMP))
+	 (SETQ TEMP (CODESIZE-SUB OUTSTREAM
+				  (OUT-OF-CORE-FILES MACSYMA-SOURCE-FILES)
+				  "out-of"
+				  (CAR TEMP))
+	       GRAND-SUM (+ GRAND-SUM (CDR TEMP)))
+	 (FORMAT OUTSTREAM
+		 "~3%The grand total is: ~D.~%" GRAND-SUM)
+	 (SETQ WINP T))
+	;; unwind protected
+	(IF WINP (RENAMEF OUTSTREAM NAME) (IF OUTSTREAM (CLOSE OUTSTREAM)))))
+
+(DEFUN SET-MACSYMA-SOURCE-FILE-CODESIZE (OB &AUX INSTREAM)
+       ;; one-time call entry point.
+       (SETQ INSTREAM (OPEN '((NUL)) 'IN))
+       (CLOSE INSTREAM)
+       (CNAMEF INSTREAM '((DSK)))
+       (SET-CODESIZE OB INSTREAM (LIST NIL)))
+
+(DEFUN GEN-COMPLR-CHECK (&AUX OUTSTREAM WINP (NAME "MAXDOC;MCLDAT >"))
+       (LOAD-INFO)
+       ;; used by :MCL
+       (UNWIND-PROTECT
+	(PROGN
+	 (SETQ OUTSTREAM (OPEN (TEMP-FILENAME NAME) 'OUT))
+	 (FORMAT OUTSTREAM "; Compiler source file database.~%; ")
+	 (FORMAT-TIMEDATE OUTSTREAM)
+	 (FORMAT OUTSTREAM "~%(SETQ MACSYMA-FILE-NAMES NIL)")
+	 (DO ((L MACSYMA-SOURCE-FILES (CDR L)))
+	     ((NULL L))
+	     (LET* ((F (CAR L))
+		    (NAME (MACSYMA-SOURCE-FILE-NAME F)))
+		   (FORMAT OUTSTREAM
+			   "~
+			   ~%(PUSH '~S MACSYMA-FILE-NAMES)~
+			   ~%(DEFPROP ~S ~S DIR)~
+			   ~%(DEFPROP ~S ~S GENPREFIX)"
+			   NAME
+			   NAME
+			   (MACSYMA-SOURCE-FILE-DIR F)
+			   NAME
+			   (MACSYMA-SOURCE-FILE-GENPREFIX F)
+			   )
+		  (IF (MACRO-FILE-P (CAR L))
+		      (FORMAT OUTSTREAM
+			      "~%(DEFPROP ~S T MACRO-FILE)"
+			      NAME)
+		      (FORMAT OUTSTREAM
+			      "~
+			      ~%(DEFPROP ~S ~S UNFASL-DIR)~
+			      ~%(DEFPROP ~S ~S FASL-DIR)~
+			      ~%(DEFPROP ~S ~S ERRMSG-DIR)~
+			      ~%(DEFPROP ~S ~S IN-CORE)"
+			      NAME
+			      (MACSYMA-SOURCE-FILE-UNFASL-DIR F)
+			      NAME
+			      (MACSYMA-SOURCE-FILE-FASL-DIR F)
+			      NAME
+			      (MACSYMA-SOURCE-FILE-ERRMSG-DIR F)
+			      NAME
+			      (MACSYMA-SOURCE-FILE-IN-CORE F)))))
+	 (TERPRI OUTSTREAM)
+	 (SETQ WINP T))
+	;; unwind protected.
+	(IF WINP (RENAMEF OUTSTREAM NAME) (IF OUTSTREAM (CLOSE OUTSTREAM))))
+
+       (FASL-IZE NAME))
+
+(DEFUN DOWNCASE-s (THING &OPTIONAL (N 0))
+       (SETQ THING (EXPLODEN THING))
+       (DO ((L (NTHCDR N THING) (CDR L)))
+	   ((NULL L) (MAKNAM THING))
+	   (LET ((C (CAR L)))
+		(IF (NOT (OR (> C #/Z) (< C #/A)))
+		    (SETF (CAR L)
+			  (+ C (- #/a #/A)))))))
+
+(DEFUN FORMAT-TIMEDATE (STREAM)
+       (LET (((YEAR MONTH DAY)(STATUS DATE))
+	     ((HOUR MINUTE) (STATUS DAYTIME))
+	     (DOW (STATUS DOW))
+	     (AM NIL))
+	    (COND ((< HOUR 12.)
+		   (SETQ AM T)
+		   (IF (= HOUR 0) (SETQ HOUR 12.)))
+		  ((> HOUR 12.)
+		   (SETQ HOUR (- HOUR 12.))))
+	    (FORMAT STREAM
+		    "~A, ~
+		    ~[January~;Februrary~;March~;April~;May~;June~;July~
+		    ~;August~;September~;October~;November~;December~:;FOO~] ~
+		    ~D, 19~2,'0D  ~D:~2,'0D~:[pm~;am~]"
+		    (DOWNCASE-S DOW 1)
+		    (1- MONTH) DAY YEAR HOUR MINUTE AM)))
+
+
+
+(DEFUN FASL-IZE (FILE &AUX (NAME (MERGEF '((* *) * FASL) FILE))
+		      INSTREAM (EOF (LIST NIL)))
+       (UNWIND-PROTECT
+	(PROGN
+	 (SETQ INSTREAM (OPEN FILE 'IN))
+	 (DO ((L (LIST `(COMMENT ,(TRUENAME INSTREAM)))
+		 (CONS FORM L))
+	      (FORM `(COMMENT ,(FORMAT-TIMEDATE NIL))
+		    (READ INSTREAM EOF)))
+	     ((EQ FORM EOF)
+	      (SETQ L (NREVERSE L))
+	      (FASDUMP NAME ; FASDUMP has its own WINP settup.
+		       L    ; non-hashed stuff.
+		       NIL  ; hashed stuff.
+		       NIL  ; Alist for substructures.
+		       ))))
+	(IF INSTREAM (CLOSE INSTREAM))))
+
+(DEFUN SET-PRESENT-VERSION (X)
+       (LET* ((FILE-NAME `((DSK ,(MACSYMA-SOURCE-FILE-DIR X))
+			   ,(MACSYMA-SOURCE-FILE-NAME X)
+			   >))
+	      (TRUE-FILE-NAME (PROBEF FILE-NAME)))
+	     (COND (TRUE-FILE-NAME
+		    (SETF (MACSYMA-SOURCE-FILE-VERSION X)
+			  (CADDR TRUE-FILE-NAME)))
+		   (T
+		    (FORMAT MSGFILES
+			    "~&; Hey, I can't find the macsyma source file ~A.~%"
+			    (NAMESTRING FILE-NAME))))))
