@@ -1,0 +1,599 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module gram)
+
+
+;(includef (cond ((status feature ITS)     "libmax;prelud >")
+;		((status feature TOPS-20) "<libmax>prelude.lisp")
+;		((status feature Multics) "prelude")
+;		((status feature Unix)    "libmax//prelud.l")
+;		(t (error "Unknown system -- see MC:LIBMAX;INCLUD >"))))
+
+(DECLARE (GENPREFIX GRM)
+	 (SPECIAL ST1 STRING MOPL $PROPS ALIASLIST)
+	 (*EXPR MEVAL MEVAL1 GETOP ADD2LNC REMCHK
+		FULLSTRIP1 STRING* WNA-ERR GETOPR REMPROPCHK $LISTP))
+
+;; "First character" and "Pop character"
+
+(DEFMACRO FIRST-C () `(FIRST STRING))
+(DEFMACRO POP-C   () `(POP STRING))
+
+(DEFMACRO MATCH (X) `(GET ,X 'MATCH))
+
+(DEFMVAR $PARSEWINDOW 10.
+	 "The maximum number of 'lexical tokens' that are printed out on
+each side of the error-point when a syntax (parsing) error occurs.  This
+option is especially useful on slow terminals.  Setting it to -1 causes the
+entire input string to be printed out when an error occurs."
+	 FIXNUM)
+
+;; This function isn't called directly from anyplace in Macsyma, but some of
+;; MRG's macros expand into calls to it.  The function makes a symbol's
+;; property list look like a structure.  If the value to be stored is NIL, then
+;; flush the property.  Otherwise, store the value under the appropriate
+;; property.
+
+(DEFMFUN A-ATOM (BAS SEL VAL)
+  (COND ((NULL VAL) (REMPROP BAS SEL) NIL)
+	(T (PUTPROP BAS VAL SEL))))
+
+;; This does the identical thing with args reversed.  Flush one of these
+;; at some point.
+
+(DEFMFUN CPUT (BAS VAL SEL)
+  (COND ((NULL VAL) (REMPROP BAS SEL) NIL)
+	(T (PUTPROP BAS VAL SEL))))
+
+;; Like ASSOC, but uses ALIKE1 as the comparison predicate rather than
+;; EQUAL.  (ASSOL ITEM ALIST) = (ASS #'ALIKE1 ITEM ALIST)
+
+(DEFMFUN ASSOL (ITEM ALIST)
+  (DOLIST (PAIR ALIST)
+	  (IF (ALIKE1 ITEM (CAR PAIR)) (RETURN PAIR))))
+
+
+ ;; KMP: Note that my SUPRV no longer binds LINELABLE -- this should be fixed
+(DEFUN GRAM (ST1) (DECLARE (SPECIAL ST1)) (PARSE '$ANY 0))
+
+(DEFUN PARSE (MODE RBP) 
+  (DO ((LEFT (IF (OPERATORP (FIRST-C)) (NUD (POP-C)) (CONS '$ANY (POP-C)))
+	     (LED (POP-C) LEFT)))
+      ((>= RBP (LBP (FIRST-C))) (CONVERT LEFT MODE))))
+
+(DEFUN PARSE-PREFIX (OP)
+  (LIST (POS OP) (LIST OP) (PARSE (RPOS OP) (RBP OP))))
+
+(DEFUN PARSE-POSTFIX (OP L)
+  (LIST (POS OP) (LIST OP) (CONVERT L (LPOS OP))))
+
+(DEFUN PARSE-INFIX (OP L)
+  (LIST (POS OP) (LIST OP) (CONVERT L (LPOS OP)) (PARSE (RPOS OP) (RBP OP))))
+
+(DEFUN PARSE-NARY (OP L)
+  (CONS (POS OP) (CONS (LIST OP) (CONS (CONVERT L (LPOS OP)) (PRSNARY OP (LPOS OP) (LBP OP))))))
+
+(DEFUN PARSE-MATCHFIX (OP)
+  (CONS (POS OP) (CONS (LIST OP) (PRSMATCH (MATCH OP) (LPOS OP)))))
+
+(DEFUN PARSE-NOFIX (OP) (LIST (POS OP) (LIST OP)))
+
+(DEFUN PRSNARY (OP MODE RBP) 
+  (DO ((NL (LIST (PARSE MODE RBP)) (CONS (PARSE MODE RBP) NL)))
+      ((NOT (EQ OP (FIRST-C))) (NREVERSE NL))
+      (POP-C)))
+
+(DEFUN PRSMATCH (MATCH MODE) 
+  (COND ((EQ MATCH (FIRST-C)) (POP-C) NIL)
+	(T (DO ((NL (LIST (PARSE MODE 10.)) (CONS (PARSE MODE 10.) NL)))
+	       ((EQ MATCH (FIRST-C)) (POP-C) (NREVERSE NL))
+	       (IF (EQ '$/, (FIRST-C)) (POP-C) (MRP-ERR MATCH))))))
+
+
+(DEFUN CONVERT (ITEM MODE) 
+  (IF (OR (EQ MODE (CAR ITEM)) (EQ '$ANY MODE) (EQ '$ANY (CAR ITEM)))
+      (CDR ITEM)
+      (PARSE-ERR)))
+
+(DEFUN OPERATORP (LEX) (OR (GET LEX 'LED) (GET LEX 'NUD)))
+(DEFUN OPERATORP1 (LEX) (OR (GET LEX 'LED) (GET LEX 'NUD)
+			    (GET LEX 'LBP) (GET LEX 'RBP)))
+(DEFUN NUD (OP) (IF (GET OP 'NUD) (FUNCALL (GET OP 'NUD) OP) (UDN-ERR OP)))
+(DEFUN LED (OP L) (IF (GET OP 'LED) (FUNCALL (GET OP 'LED) OP L) (UDL-ERR OP)))
+
+(DEFMFUN LBP (LEX) (COND ((GET LEX 'LBP)) (T 200.)))
+(DEFMFUN RBP (LEX) (COND ((GET LEX 'RBP)) (T 200.)))
+
+(DEFUN LPOS (OP) (COND ((GET OP 'LPOS)) (T '$ANY)))
+(DEFUN RPOS (OP) (COND ((GET OP 'RPOS)) (T '$ANY)))
+(DEFUN POS (OP) (COND ((GET OP 'POS)) (T '$ANY)))
+
+;; This is all going to have to be made to signal if it is to work thorough
+;; ZWEI or a display front end.  We can't pass format strings in MacLisp, and
+;; we can't pass symbols either (address space).  So I guess we use a
+;; PARSE-ERROR macro which becomes PRINC on ITS.  This doesn't solve the
+;; problem for the ITS display front end, unless separate fasl files are used.
+
+(DEFUN PARSE-ERR ()
+  (MTELL "~%Syntax err")
+  (PRSYNERR))
+
+(DEFUN MO-ERR (OP) OP ;Ignored
+  (MTELL "~%Missing operand")
+  (PRSYNERR))
+
+(DEFUN MRP-ERR (MATCH)
+  (TERPRI)
+  (PRINC '|Missing "|) (PRINC (FULLSTRIP1 MATCH)) (PRINC '|"|)
+  (PRSYNERR))
+
+(DEFUN ERP-ERR (OP L) OP L ;Ignored
+  (MTELL "~%Too many )")
+  (PRSYNERR))
+
+(DEFUN ERB-ERR (OP L) OP L ;Ignored
+  (MTELL "~%Too many ]")
+  (PRSYNERR))
+
+(DEFUN UDN-ERR (OP)
+  (TERPRI)
+  (PRINC '/") (PRINC (FULLSTRIP1 OP)) (PRINC '|" is not a prefix operator|)
+  (PRSYNERR))
+
+(DEFUN UDL-ERR (OP)
+  (TERPRI)
+  (PRINC '/") (PRINC (FULLSTRIP1 OP)) (PRINC '|" is not an infix operator|)
+  (PRSYNERR))
+
+(DEFUN DELIM-ERR (OP) OP ;Ignored
+  (MTELL "~%Illegal use of delimiter")
+  (PRSYNERR))
+
+(DEFUN PRSYNERR ()
+  (IF (NULL STRING) (RPLACA (LAST ST1) '**$**)
+      (RPLACD STRING (CONS (CAR STRING) (CDR STRING)))
+      (RPLACA STRING '**$**)
+      (RPLACA (LAST ST1) '/ ))
+  (TERPRI)
+  (COND ((NOT (= $PARSEWINDOW 0))
+	 (COND ((NOT (= $PARSEWINDOW -1))
+		(COND ((NOT (NULL STRING))
+		       (DO ((STR (LIST NIL) (CONS (CAR S) STR))
+			    (S (CDR STRING) (CDR S)))
+		     	   ((OR (NULL S) (> (LENGTH STR) $PARSEWINDOW))
+		      	    (RPLACD STRING (CDR (NREVERSE STR)))))))
+		(DO ((STR ST1 (CDR STR)))
+		    ((NOT (> (- (LENGTH STR) (LENGTH (MEMBER '**$** STR)))
+			     $PARSEWINDOW))
+		     (SETQ ST1 STR)))))
+	 (MAPC '(LAMBDA (L) (PRINC (FULLSTRIP1 L)) (PRINC '/ )) ST1)
+	 (TERPRI)))
+  (PRINC "Please rephrase or edit")
+  (COND ((NOT (= $PARSEWINDOW 0)) (TERPRI)))
+  (ERR))
+
+
+(DEFMFUN DEFINE-SYMBOL (SYM)
+       (PROG (DUMMY LEN X Y)
+	     (SETQ DUMMY (CDR (EXPLODEC SYM)) SYM (IMPLODE (CONS '$ DUMMY))
+		   LEN (LENGTH DUMMY))
+	    (COND ((= 2 LEN)
+		   (COND ((NOT (AND (SETQ X (GET (CAR DUMMY) 'OP2C))
+				    (ASSOC (GETCHARN (CADR DUMMY) 1) X)))
+			  (PUTPROP (CAR DUMMY)
+				   (CONS (CONS (GETCHARN (CADR DUMMY) 1) SYM)
+					 (GET (CAR DUMMY) 'OP2C))
+				   'OP2C))))
+		  ((= 3 LEN)
+		   (COND ((NOT (AND (SETQ X (GET (CAR DUMMY) 'OP3C))
+				    (ASSOC (SETQ Y (MAPCAR #'(LAMBDA (X) (GETCHARN X 1))
+							   (CDR DUMMY)))
+					   X)))
+			  (PUTPROP (CAR DUMMY)
+				   (CONS (CONS Y SYM) (GET (CAR DUMMY) 'OP3C))
+				   'OP3C)))))
+	     (RETURN SYM)))
+
+(DEFUN KILL-OPERATOR (OP)
+  (REMPROP OP 'NUD) (REMPROP OP 'LED)
+  (REMPROP OP 'LBP) (REMPROP OP 'RBP)
+  (REMPROP OP 'LPOS) (REMPROP OP 'RPOS) (REMPROP OP 'POS)
+  (REMPROP OP 'GRIND)
+  (REMPROP OP 'DIMENSION) (REMPROP OP 'DISSYM)
+  (LET ((OPR (GET OP 'OP))) (REMPROP OP 'OP) (REMPROP OPR 'OPR) (REMPROPCHK OPR))
+  (SETQ OP ($NOUNIFY OP))
+  (REMPROP OP 'DIMENSION) (REMPROP OP 'DISSYM)
+  (REMPROP OP 'LBP) (REMPROP OP 'RBP))
+
+(DEFPROP $[ NUD-$[ NUD)
+(DEFPROP $[ LED-$[ LED)
+(DEFPROP $[ 200. LBP)
+(DEFPROP $] DELIM-ERR NUD)
+(DEFPROP $] ERB-ERR LED)
+(DEFPROP $] 5. LBP)
+
+(DEFUN NUD-$[ (OP) OP ;Ignored
+       (CONS '$ANY (CONS '(MLIST) (PRSMATCH '$] '$ANY))))
+
+(DEFUN LED-$[ (OP LEFT) OP ;Ignored
+  (PROG (RIGHT)
+    (IF (NUMBERP (CDR LEFT)) (PARSE-ERR))
+    (SETQ RIGHT (PRSMATCH '$] '$ANY))
+    (COND ((NULL RIGHT) (NSUB-ERR))
+	  ((ATOM (CDR LEFT))
+	   (SETQ RIGHT (CONS (LIST (CONVERT LEFT '$ANY) 'ARRAY) RIGHT))
+	   (RETURN (CONS '$ANY (COND ((CDR (ASSOL RIGHT ALIASLIST)))
+				     (T RIGHT)))))
+	  (T (RETURN (CONS '$ANY (CONS '(MQAPPLY ARRAY) (CONS  (CONVERT LEFT '$ANY) RIGHT))))))))
+
+(DEFUN NSUB-ERR ()
+  (MTELL "~%No subscripts given")
+  (PRSYNERR))
+
+
+(DEFPROP $/( NUD-$/( NUD)
+(DEFPROP $/( LED-$/( LED)
+(DEFPROP $/( 200. LBP)
+(DEFPROP $/) DELIM-ERR NUD)
+(DEFPROP $/) ERP-ERR LED)
+(DEFPROP $/) 5. LBP)
+
+(DEFUN NUD-$/( (OP) OP ;Ignored
+  (LET ((RIGHT))
+    (COND ((EQ '$/) (FIRST-C)) (PARSE-ERR))
+	  ((OR (NULL (SETQ RIGHT (PRSMATCH '$/) '$ANY))) (CDR RIGHT))
+	   (CONS '$ANY (CONS '(MPROGN) RIGHT)))
+	  (T (CONS '$ANY (CAR RIGHT))))))
+
+(DEFUN LED-$/( (OP LEFT) OP ;Ignored
+  (LET ((R))
+    (IF (NUMBERP (CDR LEFT)) (PARSE-ERR))
+    (SETQ R (PRSMATCH '$/) '$ANY) LEFT (CDR LEFT))
+    (CONS '$ANY
+	  (COND ((NOT (ATOM LEFT)) (CONS '(MQAPPLY) (CONS LEFT R)))
+		((AND (EQ '$DIFF LEFT) (CDR R) (NULL (CDDR R)))
+		 (CONS '($DIFF) R))
+		((EQ '& (GETCHAR LEFT 1))
+		 (CONS (LIST (COND ((GET LEFT 'OPR))
+				   (T ((LAMBDA (DUMMY)
+					     (PUTPROP DUMMY LEFT 'OP)
+					     (PUTPROP LEFT DUMMY 'OPR)
+					     (ADD2LNC LEFT $PROPS)
+					     DUMMY)
+					    (IMPLODE (CONS '$ (CDR (EXPLODEN LEFT))))))))
+		       R))
+		(T (CONS (LIST LEFT) R))))))
+
+
+(DEFPROP $/' NUD-$/' NUD)
+
+(DEFUN NUD-$/' (OP) OP ;Ignored
+  (PROG (RIGHT)
+	(RETURN (COND ((EQ '$/( (FIRST-C))
+		       (LIST '$ANY '(MQUOTE) (PARSE '$ANY 190.)))
+		      ((OR (ATOM (SETQ RIGHT (PARSE '$ANY 190.)))
+			   (MEMQ (CAAR RIGHT) '(MQUOTE MLIST MPROG MPROGN LAMBDA)))
+		       (LIST '$ANY '(MQUOTE) RIGHT))
+		      ((EQ 'MQAPPLY (CAAR RIGHT))
+		       (COND ((EQ (CAAADR RIGHT) 'LAMBDA)
+			      (LIST '$ANY '(MQUOTE) RIGHT))
+			     (T (RPLACA (CDR RIGHT)
+					(CONS (CONS ($NOUNIFY (CAAADR RIGHT)) (CDAADR RIGHT))
+					      (CDADR RIGHT)))
+			        (CONS '$ANY RIGHT))))
+		      (T (CONS '$ANY (CONS (CONS ($NOUNIFY (CAAR RIGHT)) (CDAR RIGHT))
+					   (CDR RIGHT))))))))
+
+
+(DEFPROP $/'/' NUD-$/'/' NUD)
+
+(DEFUN NUD-$/'/' (OP) OP ;Ignored
+  (PROG (RIGHT)
+	(RETURN
+	 (CONS '$ANY (COND ((EQ '$/( (FIRST-C))  (MEVAL (PARSE '$ANY 190.)))
+			   ((ATOM (SETQ RIGHT (PARSE '$ANY 190.))) (MEVAL1 RIGHT))
+		      ((EQ 'MQAPPLY (CAAR RIGHT))
+		       (RPLACA (CDR RIGHT) (CONS (CONS ($VERBIFY (CAAADR RIGHT)) (CDAADR RIGHT)) (CDADR RIGHT)))
+		       RIGHT)
+			   (T (CONS (CONS ($VERBIFY (CAAR RIGHT)) (CDAR RIGHT)) (CDR RIGHT))))))))
+
+
+(DEFPROP $/: LED-$/: LED)
+(DEFPROP $/: 180. LBP)
+
+(DEFUN LED-$/: (OP LEFT) OP ;Ignored
+       (LIST '$ANY '(MSETQ) (CONVERT LEFT '$ANY) (PARSE '$ANY 20.)))
+
+
+(DEFPROP $/:/: LED-$/:/: LED)
+(DEFPROP $/:/: 180. LBP)
+
+(DEFUN LED-$/:/: (OP LEFT) OP ;Ignored
+       (LIST '$ANY '(MSET) (CONVERT LEFT '$ANY) (PARSE '$ANY 20.)))
+
+
+(DEFPROP $/:= LED-$/:= LED)
+(DEFPROP $/:= 180. LBP)
+
+(DEFUN LED-$/:= (OP LEFT) OP ;Ignored
+  (COND ((ATOM (CDR LEFT)) (ATM-ERR))
+	(T (LIST '$ANY '(MDEFINE) (CONVERT LEFT '$ANY) (PARSE '$ANY 20.)))))
+
+(DEFPROP $/:/:= LED-$/:/:= LED)
+(DEFPROP $/:/:= 180. LBP)
+
+(DEFUN LED-$/:/:= (OP LEFT) OP ;Ignored
+  (LIST '$ANY '(MDEFMACRO) (CONVERT LEFT '$ANY) (PARSE '$ANY 20.)))
+
+(DEFUN ATM-ERR ()
+  (TERPRI)
+  (PRINC '|Atom passed to ":=" or "::="; try ":"|)
+  (PRSYNERR))
+
+
+(DEFPROP $/! LED-$/! LED)
+(DEFPROP $/! 160. LBP)
+
+(DEFUN LED-$/! (OP LEFT) OP ;Ignored
+       (LIST '$EXPR '(MFACTORIAL) (CONVERT LEFT '$EXPR)))
+
+
+(DEFPROP $/!/! LED-$/!/! LED)
+(DEFPROP $/!/! 160. LBP)
+
+(DEFUN LED-$/!/! (OP LEFT) OP ;Ignored
+       (LIST '$EXPR '($GENFACT) (CONVERT LEFT '$EXPR)
+	     (LIST '(MQUOTIENT) (CONVERT LEFT '$EXPR) 2) 2))
+
+
+(DEFPROP $^ LED-$^ LED) 
+(DEFPROP $^ 140. LBP) 
+(DEFPROP $** LED-$^ LED)
+(DEFPROP $** 140. LBP)
+
+(DEFUN LED-$^ (OP LEFT) OP ;Ignored
+  (SETQ LEFT (LIST '(MEXPT) (CONVERT LEFT '$EXPR)
+		   (COND ((EQ '$- (FIRST-C)) (POP-C) (LIST '(MMINUS) (PARSE '$EXPR 139.)))
+			 (T (PARSE '$EXPR 139.)))))
+  (CONS '$EXPR (COND ((CDR (ASSOL LEFT ALIASLIST))) (T LEFT))))
+
+
+(DEFPROP $^^ LED-$^^ LED)
+(DEFPROP $^^ 135. LBP)
+
+(DEFUN LED-$^^ (OP LEFT) OP ;Ignored
+  (SETQ LEFT (LIST '(MNCEXPT) (CONVERT LEFT '$EXPR)
+		   (IFN (EQ '$- (FIRST-C)) (PARSE '$EXPR 134.)
+			(POP-C) (LIST '(MMINUS) (PARSE '$EXPR 134.)))))
+  (CONS '$EXPR (COND ((CDR (ASSOL LEFT ALIASLIST))) (T LEFT))))
+
+
+(DEFPROP $/. LED-$/. LED) 
+(DEFPROP $/. 130. LBP) 
+
+(DEFUN LED-$/. (OP LEFT) OP ;Ignored
+  (LIST '$EXPR '(MNCTIMES) (CONVERT LEFT '$EXPR) (PARSE '$EXPR 129.)))
+
+(DEFPROP $* LED-$* LED) 
+(DEFPROP $* 120. LBP) 
+
+(DEFUN LED-$* (OP LEFT) OP ;Ignored
+       (LIST* '$EXPR '(MTIMES) (CONVERT LEFT '$EXPR) (PRSNARY '$*  '$EXPR 120.)))
+
+
+(DEFPROP $// LED-$// LED) 
+(DEFPROP $// 120. LBP) 
+
+(DEFUN LED-$// (OP LEFT) OP ;Ignored
+       (LIST '$EXPR '(MQUOTIENT) (CONVERT LEFT '$EXPR) (PARSE '$EXPR 120.)))
+
+
+(DEFPROP $+ NUD-$+ NUD)
+(DEFPROP $+ LED-$+ LED)
+(DEFPROP $+ 100. LBP)
+
+(DEFUN NUD-$+ (OP) OP ;Ignored
+       (COND ((MEMQ (FIRST-C) '($+ $-)) (PARSE-ERR))
+	     (T (LIST '$EXPR '(MPLUS) (PARSE '$EXPR 100.)))))
+
+(DEFUN LED-$+ (OP LEFT) OP ;Ignored
+       (DO ((NL (LIST (PARSE '$EXPR 100.) (CONVERT LEFT '$EXPR))))
+	   (NIL)
+	   (COND ((EQ '$+ (FIRST-C)) (POP-C) (SETQ NL (CONS (PARSE '$EXPR 100.) NL)))
+		 ((EQ '$- (FIRST-C)) (POP-C)
+		  (SETQ NL (CONS (LIST '(MMINUS) (PARSE '$EXPR 100.)) NL)))
+		 (T (RETURN (CONS '$EXPR (CONS '(MPLUS) (NREVERSE NL))))))))
+
+
+(DEFPROP $- NUD-$- NUD)
+(DEFPROP $- LED-$- LED)
+(DEFPROP $- 100. LBP)
+
+(DEFUN NUD-$- (OP) OP ;Ignored
+  (IF (EQ '$+ (FIRST-C)) (PARSE-ERR)
+      (LIST '$EXPR '(MMINUS) (PARSE '$EXPR 100.))))
+
+(DEFUN LED-$- (OP LEFT) OP ;Ignored
+  (DO ((NL (LIST (LIST '(MMINUS) (PARSE '$EXPR 100.)) (CONVERT LEFT '$EXPR)))) (NIL)
+      (COND ((EQ '$+ (FIRST-C)) (POP-C)
+				(SETQ NL (CONS (PARSE '$EXPR 100.) NL)))
+	    ((EQ '$- (FIRST-C)) (POP-C)
+				(SETQ NL (CONS (LIST '(MMINUS) (PARSE '$EXPR 100.)) NL)))
+	    (T (RETURN (CONS '$EXPR (CONS '(MPLUS) (NREVERSE NL))))))))
+
+
+(DEFPROP $= LED-$= LED)
+(DEFPROP $= 80. LBP)
+
+(DEFUN LED-$= (OP LEFT) OP ;Ignored
+       `($CLAUSE (MEQUAL) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+(DEFPROP $/# LED-$/# LED)
+(DEFPROP $/# 80. LBP)
+
+(DEFUN LED-$/# (OP LEFT) OP ;Ignored
+       `($CLAUSE (MNOTEQUAL) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+(DEFPROP $/> NUD-$/> NUD)
+
+(DEFUN NUD-$/> (OP)  OP ;Ignored
+       '($ANY . $/>))
+
+
+(DEFPROP $/> LED-$/> LED)
+(DEFPROP $/> 80. LBP)
+
+(DEFUN LED-$/> (OP LEFT) OP ;Ignored
+       `($CLAUSE (MGREATERP) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+
+(DEFPROP $/>= LED-$/>= LED)
+(DEFPROP $/>= 80. LBP)
+
+(DEFUN LED-$/>= (OP LEFT) OP ;Ignored
+       `($CLAUSE (MGEQP) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+
+(DEFPROP $/< LED-$/< LED)
+(DEFPROP $/< 80. LBP)
+
+(DEFUN LED-$/< (OP LEFT) OP ;Ignored
+       `($CLAUSE (MLESSP) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+(DEFPROP $/<= LED-$/<= LED)
+(DEFPROP $/<= 80. LBP)
+
+(DEFUN LED-$/<= (OP LEFT) OP ;Ignored
+       `($CLAUSE (MLEQP) ,(CONVERT LEFT '$EXPR) ,(PARSE '$EXPR 80.)))
+
+(DEFPROP $NOT NUD-$NOT NUD)
+(DEFUN NUD-$NOT (OP) OP ;Ignored
+       `($CLAUSE (MNOT) ,(PARSE '$CLAUSE 70.)))
+
+
+(DEFPROP $AND LED-$AND LED)
+(DEFPROP $AND 60. LBP)
+
+(DEFUN LED-$AND (OP LEFT) OP ;Ignored
+       `($CLAUSE (MAND) ,(CONVERT LEFT '$CLAUSE) . ,(PRSNARY '$AND '$CLAUSE 60.)))
+
+(DEFPROP $OR LED-$OR LED)
+(DEFPROP $OR 50. LBP)
+
+(DEFUN LED-$OR (OP LEFT) OP ;Ignored
+       `($CLAUSE (MOR) ,(CONVERT LEFT '$CLAUSE) . ,(PRSNARY '$OR '$CLAUSE 50.)))
+
+(DEFPROP $/, LED-$/, LED)
+(DEFPROP $/, 10. LBP)
+
+(DEFUN LED-$/, (OP LEFT) OP ;Ignored
+       `($ANY ($EV) ,(CONVERT LEFT '$ANY) . ,(PRSNARY '$/, '$ANY 10.)))
+
+(DEFPROP $IF NUD-$IF NUD)
+(DEFPROP $THEN DELIM-ERR NUD)
+(DEFPROP $THEN 5. LBP)
+(DEFPROP $ELSE DELIM-ERR NUD)
+(DEFPROP $ELSE 5. LBP)
+
+(DEFUN NUD-$IF (OP) OP ;Ignored
+  (LIST '$ANY '(MCOND)
+	(PARSE '$CLAUSE 45.)
+	(COND ((EQ '$THEN (FIRST-C)) (POP-C) (PARSE '$ANY 25.)) (T (MTHEN-ERR)))
+	T
+	(COND ((EQ '$ELSE (FIRST-C)) (POP-C) (PARSE '$ANY 25.)) (T '$FALSE))))
+
+(DEFUN MTHEN-ERR ()
+  (TERPRI)
+  (PRINC '|Missing "THEN"|)
+  (PRSYNERR))
+
+
+(DEFPROP $FOR NUD-$DO NUD)
+(DEFPROP $FOR 30. LBP)
+
+(DEFPROP $FROM NUD-$DO NUD)
+(DEFPROP $FROM 30. LBP)
+
+(DEFPROP $STEP NUD-$DO NUD)
+(DEFPROP $STEP 30. LBP)
+
+(DEFPROP $NEXT NUD-$DO NUD)
+(DEFPROP $NEXT 30. LBP)
+
+(DEFPROP $THRU NUD-$DO NUD)
+(DEFPROP $THRU 30. LBP)
+
+(DEFPROP $UNLESS NUD-$DO NUD)
+(DEFPROP $UNLESS 30. LBP)
+
+(DEFPROP $WHILE NUD-$DO NUD)
+(DEFPROP $WHILE 30. LBP)
+
+(DEFPROP $DO NUD-$DO NUD)
+(DEFPROP $DO 30. LBP)
+
+;; A hand-made DEFSTRUCT for dealing with the Macsyma MDO structure.
+;; The new opers package will provide these macros.
+
+(DEFMACRO MAKE-MDO () '(LIST '$ANY (LIST 'MDO) NIL NIL NIL NIL NIL NIL NIL))
+
+(DEFMACRO MDO-OP (X)     `(CAR (CADR ,X)))
+
+(DEFMACRO MDO-FOR (X)    `(CAR (CDDR ,X)))
+(DEFMACRO MDO-FROM (X)   `(CAR (CDDDR ,X)))
+(DEFMACRO MDO-STEP (X)   `(CAR (CDDDDR ,X)))
+(DEFMACRO MDO-NEXT (X)   `(CAR (CDR (CDDDDR ,X))))
+(DEFMACRO MDO-THRU (X)   `(CAR (CDDR (CDDDDR ,X))))
+(DEFMACRO MDO-UNLESS (X) `(CAR (CDDDR (CDDDDR ,X))))
+(DEFMACRO MDO-BODY (X)	 `(CAR (CDDDDR (CDDDDR ,X))))
+
+(DEFUN NUD-$DO (LEX)
+  (DO ((OP LEX (POP-C)) (LEFT (MAKE-MDO)))
+      ((EQ '$DO OP) (SETF (MDO-BODY LEFT) (PARSE '$ANY 25.)) LEFT)
+      (COND ((AND (EQ '$FOR OP) (NULL (MDO-FOR LEFT)))
+	     (SETF (MDO-FOR LEFT) (PARSE '$ANY 200.)))
+	    ((AND (OR (EQ '$FROM OP) (EQ '$/: OP))
+		  (NULL (MDO-FROM LEFT))
+		  (EQ 'MDO (MDO-OP LEFT)))
+	     (SETF (MDO-FROM LEFT) (PARSE '$ANY 95.)))
+	    ((AND (EQ '$IN OP) (NULL (MDO-STEP LEFT)) (NULL (MDO-NEXT LEFT)))
+	     (SETF (MDO-OP LEFT) 'MDOIN)
+	     (SETF (MDO-FROM LEFT) (PARSE '$ANY 95.)))
+	    ((AND (EQ '$STEP OP) (NULL (MDO-STEP LEFT)) (NULL (MDO-NEXT LEFT))
+		  (EQ 'MDO (MDO-OP LEFT)))
+	     (SETF (MDO-STEP LEFT) (PARSE '$EXPR 95.)))
+	    ((AND (EQ '$NEXT OP) (NULL (MDO-NEXT LEFT)) (NULL (MDO-STEP LEFT))
+		  (EQ 'MDO (MDO-OP LEFT)))
+	     (SETF (MDO-NEXT LEFT) (PARSE '$ANY 45.)))
+	    ((AND (EQ '$THRU OP) (NULL (MDO-THRU LEFT)))
+	     (SETF (MDO-THRU LEFT) (PARSE '$EXPR 95.)))
+	    ((EQ '$WHILE OP)
+	     (SETF (MDO-UNLESS LEFT)
+		(COND ((NULL (MDO-UNLESS LEFT)) (LIST '(MNOT) (PARSE '$CLAUSE 45.)))
+		      (T (LIST '(MOR) (LIST '(MNOT) (PARSE '$CLAUSE 45.))
+			       (MDO-UNLESS LEFT))))))
+	    ((EQ '$UNLESS OP)
+	     (SETF (MDO-UNLESS LEFT)
+		(COND ((NULL (MDO-UNLESS LEFT)) (PARSE '$CLAUSE 45.))
+		      (T (LIST '(MOR) (PARSE '$CLAUSE 45.) (MDO-UNLESS LEFT))))))
+	    (T (PARSE-ERR)))))
+
+
+(DEFPROP $/; NUD-$/; NUD)
+(DEFPROP $/; LED-$/; LED)
+(DEFPROP $/; -1 LBP)
+
+(DEFUN NUD-$/; (OP) OP ;Ignored
+  (MTELL "Premature termination of input.")
+  (PRSYNERR))
+
+(DEFUN LED-$/; (OP LEFT) OP ;Ignored
+       (CONVERT LEFT '$ANY))
+
+
+;; Local Modes:
+;; Mode: LISP
+;; Comment Col: 40
+;; END:

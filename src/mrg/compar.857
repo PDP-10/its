@@ -1,0 +1,1320 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1982 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module compar)
+
+(LOAD-MACSYMA-MACROS MRGMAC)
+
+(DECLARE (SPECIAL $FLOAT2BF $RADEXPAND $RATPRINT $RATSIMPEXPONS $LISTCONSTVARS
+		  SUCCESS %INITIALLEARNFLAG $PROPS *X*)
+	 ;; Variables defined in DB
+	 (SPECIAL CONTEXT CURRENT DOBJECTS DBTRACE +LABS)
+	 (*EXPR $BFLOAT SIGN RETRIEVE WNA-ERR $LISTOFVARS))
+
+(DEFMVAR $CONTEXT '$INITIAL
+	 "Whenever a user assumes a new fact, it is placed in the context
+named as the current value of the variable CONTEXT.  Similarly, FORGET
+references the current value of CONTEXT.  To add or delete a fact from a
+different context, one must bind CONTEXT to the intended context and then
+perform the desired additions or deletions.  The context specified by the
+value of CONTEXT is automatically activated.  All of MACSYMA's built-in
+relational knowledge is contained in the default context GLOBAL."
+	 NO-RESET)
+
+(DEFMVAR $CONTEXTS '((MLIST) $INITIAL $GLOBAL)
+	 "A list of the currently active contexts."
+	 NO-RESET)
+
+(DEFMVAR $ACTIVECONTEXTS '((MLIST))
+	 "A list of the currently activated contexts"
+	 NO-RESET)
+
+(DEFMVAR SIGN-IMAG-ERRP T
+	 "If T errors out in case COMPAR meets up with an imaginary quantity.
+	  If NIL THROWs in that case."
+	 NO-RESET)
+
+(DEFMVAR $PREDERROR T)
+(DEFMVAR $SIGNBFLOAT T)
+(DEFMVAR $ASKEXP)
+(DEFMVAR LIMITP)
+(DEFMVAR $ASSUME_POS NIL)
+(DEFMVAR $ASSUME_POS_PRED NIL)
+
+(DEFVAR FACTORED NIL)
+(DEFVAR LOCALS NIL)
+(DEFVAR PATEVALLED NIL)
+(DEFVAR SIGN NIL)
+(DEFVAR MINUS NIL)
+(DEFVAR ODDS NIL)
+(DEFVAR EVENS NIL)
+(DEFVAR LHS NIL)
+(DEFVAR RHS NIL)
+
+;; This variable is also initialized in DB for its own purposes.  
+;; COMPAR is loaded after DB.
+(setq context '$global)
+
+;; Load-time environment for COMPAR.  $CONTEXT and $CONTEXTS will be 
+;; reset at the end of the file via a call to ($newcontext '$initial).
+(setq $context '$global $contexts '((mlist) $global))
+
+(defun ask macro (x) `(retrieve (list '(mtext) . ,(cdr x)) nil))
+(defun pow macro (x) `(power . ,(cdr x)))
+
+(defun lmul (l) (simplify (cons '(mtimes) l)))
+
+(defun conssize (x)
+       (if (atom x) 0
+	   (setq x (cdr x))
+	   (do ((sz 1))
+	       ((null x) sz)
+	       (setq sz (+ 1 (conssize (car x)) sz) x (cdr x)))))
+
+;;;  Functions for creating, activating, manipulating, and killing contexts
+
+(DEFMFUN $context flush
+       flush ;Ignored
+       (merror "The CONTEXT function no longer exists."))
+
+;;; This "turns on" a context, making its facts visible.
+
+(DEFMFUN $activate n 
+  (do i 1 (1+ i) (> i n)
+      (cond ((not (atom (arg i))) (nc-err))
+	    ((memq (arg i) (cdr $activecontexts)))
+	    ((memq (arg i) (cdr $contexts))
+	     (setq $activecontexts (mcons (arg i) $activecontexts))
+	       (activate (arg i)))))
+  '$DONE)
+
+;;; This "turns off" a context, keeping the facts, but making them 
+;;; invisible
+
+(DEFMFUN $deactivate n 
+  (do i 1 (1+ i) (> i n)
+      (cond ((not (atom (arg i))) (nc-err))
+	    ((memq (arg i) (cdr $contexts))
+	     (setq $activecontexts ($delete (arg i) $activecontexts))
+	     (deactivate (arg i)))))
+  '$DONE)
+
+;;; This function of 0 or 1 argument prints out a list of the facts
+;;; in the specified context.  No argument implies the current context.
+
+(DEFMFUN $facts n
+       (cond ((equal n 0) (facts1 $context))
+	     ((equal n 1) (facts1 (arg n)))
+	     (t (merror "FACTS takes zero or one argument only."))))
+       
+(defun facts1 (con)
+       (contextmark)
+       (do ((l (get con 'data) (cdr l)) (nl))
+	   ((null l) (cons '(mlist) nl))
+	   (cond ((visiblep (car l))
+		  (setq nl (cons (intext (caaar l) (cdaar l)) nl))))))
+
+(defun intext (rel body)
+  (setq body (mapcar #'doutern body))
+  (cond ((eq 'kind rel) (cons '($kind) body))
+	((eq 'par rel) (cons '($par) body))
+	((eq 'mgrp rel) (cons '(mgreaterp) body))
+	((eq 'mgqp rel) (cons '(mgeqp) body))
+	((eq 'meqp rel) (cons '($equal) body))
+	((eq 'mnqp rel) (list '(mnot) (cons '($equal) body)))))
+
+(defprop $context asscontext assign)
+
+;;; This function switches contexts, creating one if necessary.
+
+(defun asscontext (x y) x ;Ignored
+       (cond ((not (symbolp y)) (nc-err))
+	     ((memq y $contexts) (setq context y $context y))
+	     (t ($newcontext y))))
+
+;;; This function actually creates a context whose subcontext is $GLOBAL.
+;;; It also switches contexts to the newly created one.
+
+(DEFMFUN $newcontext (x)
+       (cond ((not (symbolp x)) (nc-err))
+	     ((memq x $contexts)
+	      (mtell "Context ~M already exists." x) nil)
+	     (t (setq $contexts (mcons x $contexts))
+		(putprop x '($global) 'subc)
+		(setq context x $context x))))
+
+;;; This function creates a supercontext.  If given one argument, it
+;;; makes the current context be the subcontext of the argument.  If
+;;; given more than one argument, the first is assumed the name of the
+;;; supercontext and the rest are the subcontexts. 
+
+(DEFMSPEC $supcontext (x) (SETQ x (CDR x))
+   (cond ((null x) (merror "You must supply a name for the context."))
+	 ((caddr x) (merror "SUPCONTEXT takes either one or two arguments."))
+	 ((not (symbolp (car x))) (nc-err))
+	 ((memq (car x) $contexts)
+	  (merror "Context ~M already exists." (car x)))
+	 ((and (cadr x) (not (memq (cadr x) $contexts)))
+	  (merror "Nonexistent context ~M." (cadr x)))
+	 (t (setq $contexts (mcons (car x) $contexts))
+	    (putprop (car x) (ncons (or (cadr x) $context)) 'subc)
+	    (setq context (car x) $context (car x)))))
+   
+;;; This function kills a context or a list of contexts
+   
+(DEFMFUN $killcontext (x)
+       (cond ((atom x) (killcontext x))
+	     (t (mapcar #'killcontext (cdr x)) x)))
+
+(defun killallcontexts ()
+       (mapcar #'killcontext (cdr $contexts))
+       (setq $context '$initial context '$initial current '$initial  
+	     $contexts '((mlist) $initial $global) dobjects ())
+		    ;The DB variables
+		    ;conmark, conunmrk, conindex, connumber, and contexts
+		    ;concern garbage-collectible contexts, and so we're
+		    ;better off not resetting them.
+       (defprop $global 1 cmark) (defprop $initial 1 cmark)	 
+       (defprop $initial ($global) subc))
+
+(defun killcontext (x)
+       (cond ((not (memq x $contexts))
+	      (mtell "The context ~M doesn't exist." x))
+	     ((eq x '$global) '$global)
+	     ((eq x '$initial)
+	      (mapc 'remov (get '$initial 'data))
+	      (remprop '$initial 'data)
+	      '$initial)
+	     ((and (not (eq $context x)) (contextmark) (< 0 (get x 'cmark)))
+	      (mtell "The context ~M is currently active." x))
+	     (t (setq $contexts ($delete x $contexts))
+		(cond ((and (eq x $context)
+			    (eq (get x 'subc) '($global)))
+		       (setq $context '$initial)
+		       (setq context '$initial))
+		      ((eq x $context)
+		       (setq $context (car (get x 'subc)))
+		       (setq context (car (get x 'subc)))))
+		(killc x)
+		x)))
+	     
+(defun nc-err () (merror "Contexts must be symbolic atoms."))
+
+(defmspec $is (form) (mevalp (fexprcheck form)))
+
+(defmfun is (pred) (let (($prederror t)) (mevalp pred)))
+
+;; =>* N.B. *<=
+;; The function IS-BOOLE-CHECK, used by the translator, depends
+;; on some stuff in here.  Check it out in the transl module
+;; ACALL before proceeding.
+
+(defmfun mevalp (pat)
+  (let (patevalled ans)
+    (setq ans (mevalp1 pat))
+    (cond ((memq ans '(#.(NOT ()) ()))
+	   ans)
+	  ($prederror (pre-err patevalled))
+	  (t '$unknown))))
+
+(defun mevalp1 (pat)
+  (cond ((and (not (atom pat)) (memq (caar pat) '(mnot mand mor)))
+	 (cond ((eq 'mnot (caar pat)) (is-mnot (cadr pat)))
+	       ((eq 'mand (caar pat)) (is-mand (cdr pat)))
+	       (t (is-mor (cdr pat)))))
+	((atom (setq patevalled (meval pat))) patevalled)
+	((memq (caar patevalled) '(mnot mand mor)) (mevalp1 patevalled))
+	(t (mevalp2 (caar patevalled) (cadr patevalled) (caddr patevalled)))))
+
+(defmfun mevalp2 (pred arg1 arg2)
+  (cond ((eq 'mequal pred) (like arg1 arg2))
+	((eq '$equal pred) (meqp arg1 arg2))
+	((eq 'mnotequal pred) (not (like arg1 arg2)))
+	((eq '$notequal pred) (mnqp arg1 arg2))
+	((eq 'mgreaterp pred) (mgrp arg1 arg2))
+	((eq 'mlessp pred) (mgrp arg2 arg1))
+	((eq 'mgeqp pred) (mgqp arg1 arg2))
+	((eq 'mleqp pred) (mgqp arg2 arg1))
+	(t (isp (munformat patevalled)))))
+
+(defmfun pre-err (pat)
+  (merror "MACSYMA was unable to evaluate the predicate:~%~M" pat))
+
+(defun is-mnot (pred)
+  (setq pred (mevalp pred))
+  (cond ((eq t pred) nil)
+	((not pred))
+	(t (pred-reverse pred))))
+
+(defmfun pred-reverse (pred)
+  (cond ((atom pred) (list '(mnot) pred))
+	((eq 'mnot (caar pred)) (cadr pred))
+	((eq 'mgreaterp (caar pred)) (cons '(mleqp) (cdr pred)))
+	((eq 'mgeqp (caar pred)) (cons '(mlessp) (cdr pred)))
+	((eq 'mequal (caar pred)) (cons '(mnotequal) (cdr pred)))
+	((eq '$equal (caar pred)) (cons '($notequal) (cdr pred)))
+	((eq '$notequal (caar pred)) (cons '($equal) (cdr pred)))
+	((eq 'mnotequal (caar pred)) (cons '(mequal) (cdr pred)))
+	((eq 'mleqp (caar pred)) (cons '(mgreaterp) (cdr pred)))
+	((eq 'mlessp (caar pred)) (cons '(mgeqp) (cdr pred)))
+	(t (list '(mnot) pred))))
+
+(defun is-mand (pl)
+  (do ((dummy) (npl))
+      ((null pl) (cond ((null npl))
+		       ((null (cdr npl)) (car npl))
+		       (t (cons '(mand) (nreverse npl)))))
+      (setq dummy (mevalp (car pl)) pl (cdr pl))
+      (cond ((eq t dummy))
+	    ((null dummy) (return nil))
+	    (t (setq npl (cons dummy npl))))))
+
+(defun is-mor (pl)
+  (do ((dummy) (npl))
+      ((null pl) (cond ((null npl) nil)
+		       ((null (cdr npl)) (car npl))
+		       (t (cons '(mor) (nreverse npl)))))
+      (setq dummy (mevalp (car pl)) pl (cdr pl))
+      (cond ((eq t dummy) (return t))
+	    ((null dummy))
+	    (t (setq npl (cons dummy npl))))))
+
+(DEFMSPEC $assume (x) (SETQ x (CDR x))
+  (do ((nl)) ((null x) (cons '(mlist) (nreverse nl)))
+      (cond ((atom (car x)) (setq nl (cons (assume (meval (car x))) nl)))
+	    ((eq 'mand (caaar x))
+	     (mapc #'(lambda (l) (setq nl (cons (assume (meval l)) nl)))
+		   (cdar x)))
+	    ((eq 'mnot (caaar x))
+	     (setq nl (cons (assume (meval (pred-reverse (cadar x)))) nl)))
+	    ((eq 'mor (caaar x))
+	     (merror "ASSUME: Macsyma is unable to handle assertions involving 'OR'."))
+	    ((eq (caaar x) 'mequal)
+	     (merror "ASSUME: = means syntactic equality in Macsyma.
+Maybe you want to use EQUAL."))
+	    ((eq (caaar x) 'mnotequal)
+	     (merror "ASSUME: # means syntactic unequality in Macsyma.
+Maybe you want to use NOT EQUAL."))
+	    (t (setq nl (cons (assume (meval (car x))) nl))))
+      (setq x (cdr x))))
+
+(defmfun assume (pat)
+  (if (and (not (atom pat))
+	   (eq (caar pat) 'mnot)
+	   (eq (caaadr pat) '$equal))
+      (setq pat `(($notequal) ,@(cdadr pat))))
+  (let ((dummy (let (patevalled $assume_pos) (mevalp1 pat))))
+       (cond ((eq dummy t) '$redundant)
+	     ((null dummy) '$inconsistent)
+	     ((atom dummy) '$meaningless)
+	     (t (learn pat t)))))
+
+(defmfun learn (pat flag)
+  (cond ((atom pat))
+	((get (caar pat) (if flag 'learn 'unlearn))
+	 (funcall (get (caar pat) (if flag 'learn 'unlearn)) pat))
+	((eq (caar pat) 'mgreaterp) (daddgr flag (sub (cadr pat) (caddr pat))))
+	((eq (caar pat) 'mgeqp) (daddgq flag (sub (cadr pat) (caddr pat))))
+	((memq (caar pat) '(mequal $equal))
+	 (daddeq flag (sub (cadr pat) (caddr pat))))
+	((memq (caar pat) '(mnotequal $notequal))
+	 (daddnq flag (sub (cadr pat) (caddr pat))))
+	((eq (caar pat) 'mleqp) (daddgq flag (sub (caddr pat) (cadr pat))))
+	((eq (caar pat) 'mlessp) (daddgr flag (sub (caddr pat) (cadr pat))))
+	(flag (true* (munformat pat)))
+	(t (untrue (munformat pat)))))
+
+(DEFMSPEC $forget (x) (SETQ x (CDR x))
+  (do ((nl)) ((null x) (cons '(mlist) (nreverse nl)))
+      (cond ((atom (car x)) (setq nl (cons (forget (meval (car x))) nl)))
+	    ((eq 'mand (caaar x))
+	     (mapc #'(lambda (l) (setq nl (cons (forget (meval l)) nl)))
+		   (cdar x)))
+	    ((eq 'mnot (caaar x))
+	     (setq nl (cons (forget (meval (pred-reverse (cadar x)))) nl)))
+	    ((eq 'mor (caaar x))
+	     (merror "MACSYMA is unable to handle assertions involving 'OR'."))
+	    (t (setq nl (cons (forget (meval (car x))) nl))))
+      (setq x (cdr x))))
+
+(defmfun forget (pat)
+ (cond (($listp pat) 
+	(cons '(mlist simp) (mapcar #'forget1 (cdr pat))))
+       (t (forget1 pat))))
+
+(defun forget1 (pat)
+  (cond ((and (not (atom pat))
+	      (eq (caar pat) 'mnot)
+	      (eq (caaadr pat) '$equal))
+	 (setq pat `(($notequal) ,@(cdadr pat)))))
+  (learn pat nil))
+
+(defmfun restore-facts (factl)  ; used by SAVE
+ (dolist (fact factl)
+	 (cond ((eq (caar fact) '$kind)
+		(declarekind (cadr fact) (caddr fact))
+		(add2lnc (getop (cadr fact)) $props))
+	       ((eq (caar fact) '$par))
+	       (t (assume fact)))))
+
+
+(defun compare macro (x) `(sign1 (sub* ,(cadr x) ,(caddr x))))
+
+(defmfun $compare (x y) (compare x y) sign)
+
+(defmfun $max n (if (= n 0) (wna-err '$max) (maximin (listify n) '$max)))
+
+(defmfun $min n (if (= n 0) (wna-err '$min) (maximin (listify n) '$min)))
+
+(defmfun maximum (l) (maximin l '$max))
+
+(defmfun minimum (l) (maximin l '$min))
+
+(defmfun maximin (l sw)
+  (if (dolist (x l) (if (not (atom x)) (return t)))
+      (setq l (total-nary (cons (ncons sw) l))))
+  (do ((ll nil nil) (reject nil nil) (nl) (arg) (xarg))
+      ((null l) (if (null (cdr nl)) (car nl) (cons (ncons sw) (sort nl 'great))))
+      (dolist (x (cdr l))
+	      (compare (car l) x)
+	      (cond ((eq sign '$zero)
+		     (setq arg (specrepcheck (car l)) xarg (specrepcheck x))
+		     (if (and (not (alike1 arg xarg)) (great xarg arg))
+			 (setq reject t ll (cons x ll))))
+		    ((memq sign '($pos $pz))
+		     (if (eq sw '$min) (setq reject t ll (cons x ll))))
+		    ((memq sign '($neg $nz))
+		     (if (eq sw '$max) (setq reject t ll (cons x ll))))
+		    (t (setq ll (cons x ll)))))
+      (if (not reject) (setq nl (cons (car l) nl)))
+      (setq l (nreverse ll))))
+
+(defmspec mnot (form) (setq form (cdr form))
+ (let ((x (mevalp (car form))))
+      (if (eq x '$unknown) x (not x))))
+
+(defmspec mand (form) (setq form (cdr form))
+  (do ((l form (cdr l)) (x)) ((null l) t)
+      (cond ((not (setq x (mevalp (car l)))) (return nil))
+	    ((eq x '$unknown) (return x)))))
+
+(defmspec mor (form) (setq form (cdr form))
+  (do ((l form (cdr l)) (x)) ((null l) nil)
+      (cond ((eq (setq x (mevalp (car l))) '$unknown) (return x))
+	    (x (return t)))))
+
+;;;Toplevel functions- $ASKSIGN, $SIGN.
+;;;Switches- LIMITP If TRUE $ASKSIGN and $SIGN will look for special
+;;;		     symbols such as EPSILON, $INF, $MINF and attempt
+;;;		     to do the correct thing. In addition calls to
+;;;		     $REALPART and $IMAGPART are made to assure that	
+;;;		     the expression is real.
+;;;
+;;;		  if NIL $ASKSIGN and $SIGN assume the expression
+;;;		     given is real unless it contains an $%I, in which
+;;;		     case they call $RECTFORM.
+
+(setq limitp nil)
+
+(defmfun $asksign (exp)
+  (let (sign minus odds evens factored)
+       (asksign01 (cond (limitp (restorelim exp))
+			((among '$%i exp) ($rectform exp))
+			(t exp)))))
+
+(defmfun asksign-p-or-n (e)
+ (unwind-protect (prog2 (assume `(($notequal) ,e 0)) 
+			($asksign e))
+		 (forget `(($notequal) ,e 0))))
+
+(defun asksign01 (a)
+       (let ((e (sign-prep a)))
+	    (cond ((eq e '$pnz) '$pnz)
+		  ((memq (setq e (asksign1 e)) '($pos $neg)) e)
+		  (limitp (eps-sign a))
+		  (t '$zero))))
+
+(defmfun csign (x)  ;; csign returns t if x appears to be complex.
+		    ;; Else, it returns the sign.
+  (or (not (free x '$%i))
+      (let (sign-imag-errp) (*catch 'sign-imag-err ($sign x)))))
+
+(defmfun $sign (x)
+  (let (sign minus odds evens factored)
+       (sign01 (cond (limitp (restorelim x))
+		     ((not (free x '$%i)) ($rectform x))
+		     (t x)))))
+
+(defun sign01 (a)
+  (let ((e (sign-prep a)))
+       (cond ((eq e '$pnz) '$pnz)
+	     (t (setq e (sign1 e))
+		(if (and limitp (eq e '$zero)) (eps-sign a) e)))))
+
+;;; Preparation for asking questions from DEFINT or LIMIT.
+(defun sign-prep (x)
+       (if limitp
+	   (let (((rpart . ipart) (trisplit x)))
+		(cond ((and (equal (sratsimp ipart) 0)
+			    (free rpart '$infinity))
+		       (setq x (nmr (sratsimp rpart)))
+		       (if (free x 'prin-inf)
+			   x
+			   ($limit x 'prin-inf '$inf '$minus)))
+		      (t '$PNZ)))  ; Confess ignorance if COMPLEX.
+	   x))
+
+;;; Do substitutions for special symbols.
+(defun nmr (a) 
+  (if (not (free a '$zeroa)) (setq a ($limit a '$zeroa 0 '$plus)))
+  (if (not (free a '$zerob)) (setq a ($limit a '$zerob 0 '$minus)))
+  (if (not (free a 'z**)) (setq a ($limit a 'z** 0 '$plus)))
+  (if (not (free a '*z*)) (setq a ($limit a '*z* 0 '$plus)))
+  (if (not (free a 'epsilon)) (setq a ($limit a 'epsilon 0 '$plus)))
+  a)  ;;; Give A back.
+
+;;; Get the sign of EPSILON-like terms.  Could be made MUCH hairier.
+(defun eps-sign (b)
+  (let (temp1 temp2 temp3 free1 free2 free3)
+       (cond ((not (free b '$zeroa))
+	      (setq temp1 (eps-coef-sign b '$zeroa)))
+	     (t (setq free1 t)))
+       (cond ((not (free b '$zerob))
+	      (setq temp2 (eps-coef-sign b '$zerob)))
+	     (t (setq free2 t)))
+       (cond ((not (free b 'epsilon))
+	      (setq temp3 (eps-coef-sign b 'epsilon)))
+	     (t (setq free3 t)))
+       (cond ((and free1 free2 free3) '$zero)
+	     ((or (not (null temp1)) (not (null temp2)) (not (null temp3)))
+	      (cond ((and (null temp1) (null temp2)) temp3)
+		    ((and (null temp2) (null temp3)) temp1)
+		    ((and (null temp1) (null temp3)) temp2)
+		    (t (merror 
+			"~%ASKSIGN: Internal error. See Maintainers.")))))))
+
+(defun eps-coef-sign (exp epskind)
+  (let ((eps-power ($lopow exp epskind)) eps-coef)
+    (cond ((and (not (equal eps-power 0))
+		(not (equal (setq eps-coef (ratcoeff exp epskind eps-power))
+			    0))
+		(eq (ask-integer eps-power '$integer) '$yes))
+	   (cond ((eq (ask-integer eps-power '$even) '$yes)
+		  ($asksign eps-coef))
+		 ((eq (ask-integer eps-power '$odd) '$yes)
+		  (setq eps-coef ($asksign eps-coef))
+		  (cond ((or (and (eq eps-coef '$pos)
+				  (or (eq epskind 'epsilon)
+				      (eq epskind '$zeroa)))
+			     (and (eq eps-coef '$neg)
+				  (or (alike epskind (mul2* -1 'epsilon))
+				      (eq epskind '$zerob))))
+			 '$pos)
+			(t '$neg)))
+		 (t (merror "~%ASKSIGN or SIGN: Insufficient information.~%"))))
+	  (t (let ((deriv (sdiff exp epskind)) deriv-sign)
+		  (cond ((not (eq (setq deriv-sign ($asksign deriv)) '$zero))
+			 (total-sign epskind deriv-sign))
+			((not 
+			  (eq (let ((deriv (sdiff deriv epskind)))
+				   (setq deriv-sign ($asksign deriv)))
+			      '$zero))
+			 deriv-sign)
+			(t (merror "~%ASKSIGN or SIGN: Insufficient data.~%"))))))))
+
+;;; The above code does a partial Taylor series analysis of something 
+;;; that isn't a polynomial.
+
+(defun total-sign (epskind factor-sign)
+       (cond ((or (eq epskind '$zeroa) (eq epskind 'epsilon))
+	      (cond ((eq factor-sign '$pos) '$pos)
+		    ((eq factor-sign '$neg) '$neg)
+		    ((eq factor-sign '$zero) '$zero)))
+	     ((eq epskind '$zerob)
+	      (cond ((eq factor-sign '$pos) '$neg)
+		    ((eq factor-sign '$neg) '$pos)
+		    ((eq factor-sign '$zero) '$zero)))))
+
+(defun asksign (x)
+  (setq x ($asksign x))
+  (cond ((eq '$pos x) '$positive)
+	((eq '$neg x) '$negative)
+	((eq '$PNZ x) '$pnz) ;COMPLEX expression encountered here.
+	(t '$zero)))
+
+(defun asksign1 ($askexp)
+  (let ($radexpand) (sign1 $askexp))
+  (cond ((memq sign '($pos $neg $zero)) sign)
+	((null odds)
+	 (setq $askexp (lmul evens)
+	       sign (cdr (assol $askexp locals)))
+	 (do () (nil)
+	     (cond ((member sign '($zero $z 0 0.0))
+		    (tdzero $askexp) (setq sign '$zero) (return t))
+		   ((memq sign '($pn $nonzero $n $nz $nonz $non0))
+		    (tdpn $askexp) (setq sign '$pos) (return t))
+		   ((memq sign '($pos $p $positive))
+		    (tdpos $askexp) (setq sign '$pos) (return t))
+		   ((memq sign '($neg $n $negative))
+		    (tdneg $askexp) (setq sign '$pos) (return t)))
+	     (setq sign (ask "Is  " $askexp "  zero or nonzero?")))
+	 (if minus (flip sign) sign))
+	(t (if minus (setq sign (flip sign)))
+	   (setq $askexp (lmul (nconc odds (mapcar #'(lambda (l) (pow l 2))
+						   evens))))
+	   (do ((dom (cond ((eq '$pz sign) "  positive or zero?")
+			   ((eq '$nz sign) "  negative or zero?")
+			   ((eq '$pn sign) "  positive or negative?")
+			   (t "  positive, negative, or zero?")))
+		(ans (cdr (assol $askexp locals)))) (nil)
+	       (cond ((and (memq ans '($pos $p $positive))
+			   (memq sign '($pz $pn $pnz)))
+		      (tdpos $askexp) (setq sign '$pos) (return t))
+		     ((and (memq ans '($neg $n $negative))
+			   (memq sign '($nz $pn $pnz)))
+		      (tdneg $askexp) (setq sign '$neg) (return t))
+		     ((and (member ans '($zero $z 0 0.0))
+			   (memq sign '($pz $nz $pnz)))
+		      (tdzero $askexp) (setq sign '$zero) (return t)))
+	       (setq ans (ask "Is  " $askexp dom)))
+	   (if minus (flip sign) sign))))
+
+(defun clearsign ()
+  (do () ((null locals))
+      (cond ((eq '$pos (cdar locals)) (daddgr nil (caar locals)))
+	    ((eq '$neg (cdar locals)) (daddgr nil (neg (caar locals))))
+	    ((eq '$zero (cdar locals)) (daddeq nil (caar locals)))
+	    ((eq '$pn (cdar locals)) (daddnq nil (caar locals)))
+	    ((eq '$pz (cdar locals)) (daddgq nil (caar locals)))
+	    ((eq '$nz (cdar locals)) (daddgq nil (neg (caar locals)))))
+      (setq locals (cdr locals))))
+
+(defmfun like (x y) (alike1 (specrepcheck x) (specrepcheck y)))
+
+(defmfun meqp (x y)
+  (cond ((like x y))
+	(t (compare x y)
+	   (cond ((eq '$zero sign))
+		 ((memq sign '($pos $neg $pn)) nil)
+		 (t (c-$zero odds evens))))))
+
+(defmfun mgrp (x y)
+  (compare x y)
+  (cond ((eq '$pos sign))
+	((memq sign '($neg $zero $nz)) nil)
+	(t (c-$pos odds evens))))
+
+(defun mlsp (x y) (mgrp y x))
+
+(defmfun mgqp (x y)
+  (compare x y)
+  (cond ((memq sign '($pos $zero $pz)) t)
+	((eq '$neg sign) nil)
+	((eq '$nz sign) (c-$zero odds evens))
+	((eq '$pn sign) (c-$pos odds evens))
+	(t (c-$pz odds evens))))
+
+(defmfun mnqp (x y)
+  (cond ((like x y) nil)
+	(t (compare x y)
+	   (cond ((memq sign '($pos $neg $pn)) t)
+		 ((eq sign '$zero) nil)
+		 ((eq sign '$pz) (c-$pos odds evens))
+		 ((eq sign '$nz)
+		  (c-$pos (mapcar #'neg odds) (mapcar #'neg evens)))
+		 (t (c-$pn odds evens))))))
+
+(defun c-$pn (o e) (list '(mnot) (c-$zero o e)))
+
+(defun c-$zero (o e) (list '($equal) (lmul (nconc o e)) 0))
+
+(defun c-$pos (o e)
+  (cond ((null o) (list '(mnot) (list '($equal) (lmul e) 0)))
+	((null e) (list '(mgreaterp) (lmul o) 0))
+	(t (setq e (mapcar #'(lambda (l) (pow l 2)) e))
+	   (list '(mgreaterp) (lmul (nconc o e)) 0))))
+
+(defun c-$pz (o e)
+  (cond ((null o) (list '(mnot) (list '($equal) (lmul e) 0)))
+	((null e) (list '(mgeqp) (lmul o) 0))
+	(t (setq e (mapcar #'(lambda (l) (pow l 2)) e))
+	   (list '(mgeqp) (lmul (nconc o e)) 0))))
+
+;;; These functions are for old translated files to work 6/4/76.
+; (defprop greater mgrp expr)
+; (defprop geq mgqp expr)
+; (defprop equals meqp expr)
+
+(defun sign* (x) (let (sign minus odds evens) (sign1 x)))
+
+(defun sign1 (x)
+  (if (not (free x '$inf))
+      (let (($listconstvars t) l)
+	   (setq l ($listofvars x))
+	   (if (and (null (cddr l)) (eq (cadr l) '$inf))
+	       (setq x (infsimp x)))))
+  (prog (dum exp)
+	(setq dum (constp x) exp x)
+	(cond ((or (numberp x) (ratnump x)))
+	      ((eq dum 'bigfloat)
+	       (if (and (setq dum ($bfloat x)) ($bfloatp dum)) (setq exp dum)))
+	      ((eq dum 'float)
+	       (if (and (setq dum (numer x)) (numberp dum)) (setq exp dum)))
+	      ((and (memq dum '(numer symbol))
+		    (prog2 (setq dum (numer x))
+			   (or (null dum)
+			       (and (numberp dum)
+				    (prog2 (setq exp dum)
+					   (lessp (abs dum) 1.0e-6))))))
+	       (cond ($signbfloat
+		      (and (setq dum ($bfloat x)) ($bfloatp dum) (setq exp dum)))
+		     (t (setq sign '$pnz evens nil odds (ncons x) minus nil)
+			(return sign)))))
+	(or (and (not (atom x)) (not (mnump x)) (equal x exp)
+		 (let (s o e m)
+		      (compsplt x)
+		      (dcompare lhs rhs)
+		      (cond ((memq sign '($pos $neg $zero)))
+			    ((eq sign '$pnz) nil)
+			    (t (setq s sign o odds e evens m minus)
+			       (sign x)
+			       (if (not (strongp sign s))
+				   (if (and (eq sign '$pnz) (eq s '$pn))
+				       (setq sign s)
+				       (setq sign s odds o evens e minus m)))
+			       t))))
+	    (sign exp))
+	(return sign)))
+
+(defun numer (x)
+  (let ($ratsimpexpons)
+       (car (errset (meval `(($ev) ,x $numer $%enumer)) nil))))
+
+(defun constp (x)
+   (cond ((floatp x) 'float)
+	 ((numberp x) 'numer)
+	 ((symbolp x) (if (memq x '($%pi $%e $%phi $%gamma)) 'symbol))
+	 ((eq (caar x) 'rat) 'numer)
+	 ((eq (caar x) 'bigfloat) 'bigfloat)
+	 ((specrepp x) (constp (specdisrep x)))
+	 (t (do ((l (cdr x) (cdr l)) (dum) (ans 'numer))
+		((null l) ans)
+		(setq dum (constp (car l)))
+		(cond ((eq dum 'float) (return 'float))
+		      ((eq dum 'numer))
+		      ((eq dum 'bigfloat) (setq ans 'bigfloat))
+		      ((eq dum 'symbol)
+		       (if (eq ans 'numer) (setq ans 'symbol)))
+		      (t (return nil)))))))
+
+(defmfun sign (x)
+  (cond ((mnump x) (setq sign (rgrp x 0) minus nil odds nil evens nil))
+	((atom x) (if (eq x '$%i) (imag-err x)) (sign-any x))
+	((eq (caar x) 'mtimes) (sign-mtimes x))
+	((eq (caar x) 'mplus) (sign-mplus x))
+	((eq (caar x) 'mexpt) (sign-mexpt x))
+	((eq (caar x) '%log) (compare (cadr x) 1))
+	((eq (caar x) 'mabs) (sign-mabs x))
+	((memq (caar x) '(%csc %csch))
+	 (sign (inv* (cons (ncons (get (caar x) 'recip)) (cdr x)))))
+	((specrepp x) (sign (specdisrep x)))
+	((kindp (caar x) '$posfun) (sign-posfun x))
+	((or (memq (caar x) '(%signum %erf))
+	     (and (kindp (caar x) '$oddfun) (kindp (caar x) '$increasing)))
+	 (sign-oddinc x))
+	(t (sign-any x))))
+
+(defun sign-any (x)
+  (dcompare x 0)
+  (if (and $assume_pos
+	   (memq sign '($pnz $pz $pn))
+	   (if $assume_pos_pred (let ((*x* x)) (is '(($assume_pos_pred) *x*)))
+				(mapatom x)))
+      (setq sign '$pos))
+  (setq minus nil evens nil 
+	odds (if (not (memq sign '($pos $neg $zero))) (ncons x))))
+
+(defun sign-mtimes (x)
+  (setq x (cdr x))
+  (do ((s '$pos) (m) (o) (e)) ((null x) (setq sign s minus m odds o evens e))
+      (sign1 (car x))
+      (cond ((eq sign '$zero) (return t))
+	    ((eq sign '$pos))
+	    ((eq sign '$neg) (setq s (flip s) m (not m)))
+	    ((prog2 (setq m (not (eq m minus)) o (nconc odds o) e (nconc evens e))
+		    nil))
+	    ((eq s sign))
+	    ((eq s '$pos) (setq s sign))
+	    ((eq s '$neg) (setq s (flip sign)))
+	    ((or (and (eq s '$pz) (eq sign '$nz))
+		 (and (eq s '$nz) (eq sign '$pz)))
+	     (setq s '$nz))
+	    (t (setq s '$pnz)))
+      (setq x (cdr x))))
+
+(defun sign-mplus (x &aux s o e m)
+  (cond ((signdiff x))
+	((prog2 (setq s sign e evens o odds m minus) nil))
+	((signsum x))
+	((prog2 (cond ((strongp s sign))    
+		      (t (setq s sign e evens o odds m minus)))
+		nil))
+	((and (not factored) (signfactor x)))
+	((strongp sign s))
+	(t (setq sign s evens e odds o minus m))))
+
+(defun signdiff (x)
+  (setq sign '$pnz)
+  (compsplt x)
+  (let (dum)
+       (cond ((or (equal rhs 0) (mplusp lhs)) nil)
+	     ((and (memq (constp rhs) '(numer symbol))
+		   (numberp (setq dum (numer rhs)))
+		   (prog2 (setq rhs dum) nil)))
+	     ((mplusp rhs) nil)
+	     ((and (dcompare lhs rhs) (memq sign '($pos $neg $zero))))
+	     ((and (not (atom lhs)) (not (atom rhs))
+		   (eq (caar lhs) (caar rhs))
+		   (kindp (caar lhs) '$increasing))
+	      (sign (sub (cadr lhs) (cadr rhs)))
+	      t)
+	     ((signdiff-special lhs rhs)))))
+
+(defun signdiff-special (xlhs xrhs)
+  (when (or (and (numberp xrhs) (minusp xrhs)
+		 (not (atom xlhs)) (eq (sign* xlhs) '$pos))
+			  ; e.g. sign(a^3+%pi-1) where a>0
+	    (and (mexptp xlhs)  ; e.g. sign(%e^x-1) where x>0
+		 (memq (sign* (sub 1 xrhs)) '($pos $zero $pz))
+		 (eq (sign* (caddr xlhs)) '$pos)
+		 (eq (sign* (sub (cadr xlhs) 1)) '$pos))
+	    (and (mexptp xlhs) (mexptp xrhs)  ; e.g. sign(2^x-2^y) where x>y
+		 (alike1 (cadr xlhs) (cadr xrhs))
+		 (eq (sign* (sub (cadr xlhs) 1)) '$pos)
+		 (eq (sign* (sub (caddr xlhs) (caddr xrhs))) '$pos)))
+	(setq sign '$pos minus nil odds nil evens nil) t))
+
+(defun signsum (x)
+  (do ((l (cdr x) (cdr l)) (s '$zero))
+      ((null l) (setq sign s minus nil odds (list x) evens nil) t)
+      (sign (car l))
+      (cond ((or (and (eq sign '$zero)
+		      (setq x (sub x (car l))))			
+		 (and (eq s sign) (not (eq s '$pn))) ; $PN + $PN = $PNZ
+		 (and (eq s '$pos) (eq sign '$pz))
+		 (and (eq s '$neg) (eq sign '$nz))))
+	    ((or (and (memq sign '($pz $pos)) (memq s '($zero $pz)))
+		 (and (memq sign '($nz $neg)) (memq s '($zero $nz)))
+		 (and (eq sign '$pn) (eq s '$zero)))	     
+	     (setq s sign))
+	    (t (setq sign '$pnz odds (list x) evens nil minus nil)
+	       (return nil)))))
+
+(defun signfactor (x)
+  (let (y (factored t))
+       (setq y (factor-if-small x))
+       (cond ((or (mplusp y) (> (conssize y) 50.))
+	      (prog2 (setq sign '$pnz) nil))
+	     (t (sign y)))))
+
+(defun factor-if-small (x)
+  (if (< (conssize x) 51.) (let ($ratprint) (factor x)) x))
+
+(defun sign-mexpt (x)
+ (let* ((expt (caddr x)) (base1 (cadr x))
+	(sign-expt (sign1 expt)) (sign-base (sign1 base1))
+	(evod (evod expt)))
+       (cond ((and (eq sign-base '$zero)
+		   (memq sign-expt '($zero $neg)))
+	      (dbzs-err x))
+	     ((eq sign-expt '$zero) (setq sign '$pos) (tdzero (sub x 1)))
+	     ((eq sign-base '$pos))
+	     ((eq sign-base '$zero) (tdpos expt))
+	     ((eq evod '$even)
+	      (cond ((eq sign-expt '$neg)
+		     (setq sign '$pos minus nil evens (ncons base1) odds nil)
+		     (tdpn base1))
+		    ((memq sign-base '($pn $neg))
+		     (setq sign '$pos minus nil
+			   evens (nconc odds evens)
+			   odds nil))
+		    (t (setq sign '$pz minus nil
+			     evens (nconc odds evens)
+			     odds nil))))
+	     ((and (memq sign-expt '($neg $nz))
+		   (memq sign-base '($nz $pz $pnz)))
+	      (tdpn base1)
+	      (setq sign (cond ((eq sign-base '$pnz) '$pn)
+			       ((eq sign-base '$pz) '$pos)
+			       ((eq sign-expt '$neg) '$neg)
+			       (t '$pn))))  
+	     ((memq sign-expt '($pz $nz $pnz))
+	      (cond ((eq sign-base '$neg)
+		     (setq odds (ncons x) sign '$pn))))
+	     ((eq sign-expt '$pn))
+	     (t (cond ((ratnump expt)
+		       (cond ((mevenp (cadr expt))
+			      (cond ((memq sign-base '($pn $neg))
+				     (setq sign-base '$pos))
+				    ((memq sign-base '($pnz $nz))
+				     (setq sign-base '$pz)))
+			      (setq evens (nconc odds evens)
+				    odds nil minus nil))
+			     ((mevenp (caddr expt))
+			      (cond ((eq sign-base '$neg)
+				     (imag-err x))
+				    ((eq sign-base '$pn)
+				     (setq sign-base '$pos)
+				     (tdpos base1))
+				    ((eq sign-base '$nz)
+				     (setq sign-base '$zero)
+				     (tdzero base1))
+				    (t (setq sign-base '$pz)
+				       (tdpz base1)))))))
+		(cond ((eq sign-expt '$neg)
+		       (cond ((eq sign-base '$zero) (dbzs-err x))
+			     ((eq sign-base '$pz)
+			      (setq sign-base '$pos)
+			      (tdpos base1))
+			     ((eq sign-base '$nz)
+			      (setq sign-base '$neg)
+			      (tdneg base1))
+			     ((eq sign-base '$pnz)
+			      (setq sign-base '$pn)
+			      (tdpn base1)))))
+		(setq sign sign-base)))))
+	
+(defun sign-mabs (x)
+  (sign (cadr x))
+  (cond ((memq sign '($pos $zero)))
+	((memq sign '($neg $pn)) (setq sign '$pos))
+	(t (setq sign '$pz minus nil evens (nconc odds evens) odds nil))))
+
+(defun sign-posfun (x) x ;Ignored
+       (setq sign '$pos minus nil odds nil evens nil))
+
+(defun sign-oddinc (x) (sign (cadr x)))
+
+(defun imag-err (x)
+ (if sign-imag-errp (merror "SIGN called on an imaginary argument:~%~M" x)
+		    (*throw 'sign-imag-err t)))
+
+(defun dbzs-err (x) (merror "Division by zero detected in SIGN:~%~M" x))
+
+
+(DEFMFUN $featurep (x y)
+  (cond ((not (atom y)) (mtell "~M is not an atom - FEATUREP." y))
+	((eq '$integer y) (integerp x))
+	((eq '$even y) (mevenp x))
+	((eq '$odd y) (moddp x))
+	((eq '$real y)
+	 (cond ((atom x)
+		(or (numberp x) (kindp x '$real) (numberp (numer x))))
+	       (t (free ($rectform x) '$%i))))
+	((eq '$complex y) t)
+	((symbolp x) (kindp x y))))
+
+(defun integerp (x)
+  (cond ((fixp x))
+	((mnump x) nil)
+	((atom x) (kindp x '$integer))
+	((eq 'mrat (caar x)) (and (fixp (cadr x)) (equal 1 (cddr x))))
+	((memq (caar x) '(mtimes mplus)) (intp x))
+	((eq 'mexpt (caar x)) (intp-mexpt x))))
+
+(defun intp (x)
+  (setq x (cdr x))
+  (do () ((null x) t)
+      (cond ((integerp (car x)) (setq x (cdr x))) (t (return nil)))))
+
+(defun intp-mexpt (x) (and (fixp (caddr x)) (not (minusp (caddr x))) (integerp (cadr x))))
+
+
+(defun mevenp (x)
+  (cond ((fixp x) (not (oddp x)))
+	((mnump x) nil)
+	(t (eq '$even (evod x)))))
+
+(defun moddp (x)
+  (cond ((fixp x) (oddp x))
+	((mnump x) nil)
+	(t (eq '$odd (evod x)))))
+
+(defun evod (x)
+  (cond ((fixp x) (cond ((oddp x) '$odd) (t '$even)))
+	((mnump x) nil)
+	((atom x) (cond ((kindp x '$odd) '$odd) ((kindp x '$even) '$even)))
+	((eq 'mtimes (caar x)) (evod-mtimes x))
+	((eq 'mplus (caar x)) (evod-mplus x))
+	((eq 'mexpt (caar x)) (evod-mexpt x))))
+
+(defun evod-mtimes (x)
+  (do ((l (cdr x) (cdr l)) (flag '$odd))
+      ((null l) flag)
+      (setq x (evod (car l)))
+      (cond ((eq '$odd x))
+	    ((eq '$even x) (setq flag '$even))
+	    ((integerp (car l)) (cond ((eq '$odd flag) (setq flag nil))))
+	    (t (return nil)))))
+
+(defun evod-mplus (x)
+  (do ((l (cdr x) (cdr l)) (flag))
+      ((null l) (cond (flag '$odd) (t '$even)))
+      (setq x (evod (car l)))
+      (cond ((eq '$odd x) (setq flag (not flag)))
+	    ((eq '$even x))
+	    (t (return nil)))))
+
+(defun evod-mexpt (x)
+  (cond ((and (fixp (caddr x)) (not (minusp (caddr x)))) (evod (cadr x)))))
+
+
+(declare (special mgqp mlqp))
+
+(defmode cl () (atom (selector +labs) (selector -labs) (selector data)))
+(defun c-dobj macro (x) `(list . ,(cdr x)))
+
+(defun dcompare (x y)
+  (setq odds (list (sub x y)) evens nil minus nil
+	sign (cond ((eq x y) '$zero)
+		   ((or (eq '$inf x) (eq '$minf y)) '$pos)
+		   ((or (eq '$minf x) (eq '$inf y)) '$neg)
+		   (t (dcomp x y)))))
+
+(defun dcomp (x y) 
+  (let (mgqp mlqp)
+    (setq x (dinternp x) y (dinternp y))
+    (cond ((or (null x) (null y)) '$pnz)
+	  ((progn (clear) (deq x y) (sel y +labs)))
+	  (t '$pnz))))
+
+
+(defun deq (x y)
+  (cond ((dmark x '$zero) nil)
+	((eq x y))
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (and (visiblep (car l)) (deqf x y (car l))) (return t))))))
+
+(defun deqf (x y f)
+  (cond ((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (deq (caddar f) y) (deq (cadar f) y)))
+	((eq 'mgrp (caar f))
+	 (if (eq x (cadar f)) (dgr (caddar f) y) (dls (cadar f) y)))
+	((eq 'mgqp (caar f))
+	 (if (eq x (cadar f)) (dgq (caddar f) y) (dlq (cadar f) y)))
+	((eq 'mnqp (caar f))
+	 (if (eq x (cadar f)) (dnq (caddar f) y) (dnq (cadar f) y)))))
+
+(defun dgr (x y)
+  (cond ((dmark x '$pos) nil)
+	((eq x y))
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (or mlqp (and (visiblep (car l)) (dgrf x y (car l)))) (return t))))))
+
+(defun dgrf (x y f)
+  (cond ((eq 'mgrp (caar f)) (if (eq x (cadar f)) (dgr (caddar f) y)))
+	((eq 'mgqp (caar f)) (if (eq x (cadar f)) (dgr (caddar f) y)))
+	((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (dgr (caddar f) y) (dgr (cadar f) y)))))
+
+(defun dls (x y)
+  (cond ((dmark x '$neg) nil)
+	((eq x y))
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (or mgqp (and (visiblep (car l)) (dlsf x y (car l)))) (return t))))))
+
+(defun dlsf (x y f)
+  (cond ((eq 'mgrp (caar f)) (if (eq x (caddar f)) (dls (cadar f) y)))
+	((eq 'mgqp (caar f)) (if (eq x (caddar f)) (dls (cadar f) y)))
+	((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (dls (caddar f) y) (dls (cadar f) y)))))
+
+(defun dgq (x y)
+  (cond ((memq (sel x +labs) '($pos $zero)) nil)
+	((eq '$nz (sel x +labs)) (deq x y))
+	((eq '$pn (sel x +labs)) (dgr x y))
+	((dmark x '$pz) nil)
+	((eq x y) (setq mgqp t) nil)
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (and (visiblep (car l)) (dgqf x y (car l))) (return t))))))
+
+(defun dgqf (x y f)
+  (cond ((eq 'mgrp (caar f)) (if (eq x (cadar f)) (dgr (caddar f) y)))
+	((eq 'mgqp (caar f)) (if (eq x (cadar f)) (dgq (caddar f) y)))
+	((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (dgq (caddar f) y) (dgq (cadar f) y)))))
+
+(defun dlq (x y)
+  (cond ((memq (sel x +labs) '($neg $zero)) nil)
+	((eq '$pz (sel x +labs)) (deq x y))
+	((eq '$pn (sel x +labs)) (dgr x y))
+	((dmark x '$nz) nil)
+	((eq x y) (setq mlqp t) nil)
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (and (visiblep (car l)) (dlqf x y (car l))) (return t))))))
+
+(defun dlqf (x y f)
+  (cond ((eq 'mgrp (caar f)) (if (eq x (caddar f)) (dls (cadar f) y)))
+	((eq 'mgqp (caar f)) (if (eq x (caddar f)) (dlq (cadar f) y)))
+	((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (dlq (caddar f) y) (dlq (cadar f) y)))))
+
+(defun dnq (x y)
+  (cond ((memq (sel x +labs) '($pos $neg)) nil)
+	((eq '$pz (sel x +labs)) (dgr x y))
+	((eq '$nz (sel x +labs)) (dls x y))
+	((dmark x '$pn) nil)
+	((eq x y) nil)
+	(t (do l (sel x data) (cdr l) (null l)
+	       (if (and (visiblep (car l)) (dnqf x y (car l))) (return t))))))
+
+(defun dnqf (x y f)
+  (cond ((eq 'meqp (caar f))
+	 (if (eq x (cadar f)) (dnq (caddar f) y) (dnq (cadar f) y)))))
+
+
+(defun dmark (x m)
+  (cond ((eq m (sel x +labs)))
+	((and dbtrace (PROG1 t (mtell "marking ~M ~M"
+				      (if (atom x) x (car x))
+				      m))
+	      nil))
+	(t (setq +labs (cons x +labs)) (_ (sel x +labs) m) nil)))
+
+(defun daddgr (flag x)
+   (let (lhs rhs)
+	(compsplt x)
+	(mdata flag 'mgrp (dintern lhs) (dintern rhs))
+	(if (or (mnump lhs) (constant lhs))
+	    (list '(mlessp) rhs lhs)
+	    (list '(mgreaterp) lhs rhs))))
+
+(defun daddgq (flag x)
+   (let (lhs rhs)
+	(compsplt x)
+	(mdata flag 'mgqp (dintern lhs) (dintern rhs))
+	(if (or (mnump lhs) (constant lhs))
+	    (list '(mleqp) rhs lhs)
+	    (list '(mgeqp) lhs rhs))))
+
+(defun daddeq (flag x)
+   (let (lhs rhs)
+	(compsplt-eq x)
+	(mdata flag 'meqp (dintern lhs) (dintern rhs))
+	(list '($equal) lhs rhs)))
+
+(defun daddnq (flag x)
+   (let (lhs rhs)
+	(compsplt-eq x)
+	(cond ((and (mtimesp lhs) (equal rhs 0))
+	       (dolist (term (cdr lhs)) (daddnq flag term)))
+	      ((and (mexptp lhs) (mexptp rhs)
+		    (fixp (caddr lhs)) (fixp (caddr rhs))
+		    (equal (caddr lhs) (caddr rhs)))
+	       (mdata flag 'mnqp (dintern (cadr lhs)) (dintern (cadr rhs)))
+	       (cond ((not (oddp (caddr lhs)))
+		      (mdata flag 'mnqp (dintern (cadr lhs))
+					(dintern (neg (cadr rhs)))))))
+	      (t (mdata flag 'mnqp (dintern lhs) (dintern rhs))))
+	(list '(mnot) (list '($equal) lhs rhs))))
+
+(defun tdpos (x) (daddgr t x) (setq locals (cons (cons x '$pos) locals)))
+
+(defun tdneg (x) (daddgr t (neg x)) (setq locals (cons (cons x '$neg) locals)))
+
+(defun tdzero (x) (daddeq t x) (setq locals (cons (cons x '$zero) locals)))
+
+(defun tdpn (x) (daddnq t x) (setq locals (cons (cons x '$pn) locals)))
+
+(defun tdpz (x) (daddgq t x) (setq locals (cons (cons x '$pz) locals)))
+
+(defun compsplt-eq (x)
+  (compsplt x)
+  (if (equal lhs 0) (setq lhs rhs rhs 0))
+  (if (and (equal rhs 0)
+	   (or (mexptp lhs)
+	       (and (not (atom lhs))
+		    (kindp (caar lhs) '$oddfun)
+		    (kindp (caar lhs) '$increasing))))
+      (setq lhs (cadr lhs))))
+
+(defun mdata (flag r x y) (if flag (mfact r x y) (mkill r x y)))
+
+(defun mfact (r x y)
+  (let ((f (datum (list r x y))))
+       (cntxt f context)
+       (addf f x)
+       (addf f y)))
+
+(defun mkill (r x y)
+  (let ((f (car (datum (list r x y)))))
+       (kcntxt f context)
+       (remf f x)
+       (remf f y)))
+
+(defun mkind (x y) (kind (dintern x) (dintern y)))
+
+(defmfun rgrp (x y)
+  (cond ((or ($bfloatp x) ($bfloatp y))
+	 (setq x (let (($float2bf t)) (cadr ($bfloat (sub x y)))) y 0))
+	((numberp x)
+	 (cond ((numberp y))
+	       (t (setq x (times x (caddr y)) y (cadr y)))))
+	((numberp y) (setq y (times (caddr x) y) x (cadr x)))
+	(t (let ((dummy x))
+	    (setq x (times (cadr x) (caddr y)))
+	    (setq y (times (caddr dummy) (cadr y))))))
+  (cond ((greaterp x y) '$pos)
+	((greaterp y x) '$neg)
+	(t '$zero)))
+
+(defun mcons (x l) (cons (car l) (cons x (cdr l))))
+
+(defun flip (s) 
+  (cond ((eq '$pos s) '$neg)
+	((eq '$neg s) '$pos)
+	((eq '$pz s) '$nz)
+	((eq '$nz s) '$pz)
+	(t s)))
+
+(defun strongp (x y)
+  (cond ((eq '$pnz y))
+	((eq '$pnz x) nil)
+	((memq y '($pz $nz $pn)))))
+
+(defun munformat (form)
+  (if (atom form) form (cons (caar form) (mapcar #'munformat (cdr form)))))
+
+(defmfun declarekind (var prop)  ; This function is for $DECLARE to use.
+  (let (prop2)
+       (cond ((truep (list 'kind var prop)) t)
+	     ((or (falsep (list 'kind var prop))
+		  (and (setq prop2 (assq prop '(($integer . $noninteger)
+						($noninteger . $integer)
+						($increasing . $decreasing)
+						($decreasing . $increasing)
+						($symmetric . $antisymmetric)
+						($antisymmetric . $symmetric)
+						($oddfun . $evenfun)
+						($evenfun . $oddfun))))
+		       (truep (list 'kind var (cdr prop2)))))
+	      (merror "Inconsistent Declaration: ~:M" `(($DECLARE) ,var ,prop)))
+	     (t (mkind var prop) t))))
+
+;;;  These functions reformat expressions to be stored in the data base.
+
+(defun compsplt (x)
+  (cond ((atom x) (setq lhs x rhs 0))
+	((atom (car x)) (setq lhs x rhs 0))
+	((not (null (cdr (symbols x)))) (compsplt2 x))
+	(t (compsplt1 x))))
+
+(defun compsplt1 (x)
+   (do ((exp (list x 0)) (success nil))
+       ((or success (symbols (cadr exp))) (setq lhs (car exp) rhs (cadr exp)))
+       (cond ((atom (car exp)) (setq success t))
+	     ((eq (caaar exp) 'mplus)  (setq exp (splitsum exp)))
+	     ((eq (caaar exp) 'mtimes) (setq exp (splitprod exp)))
+	     (t (setq success t)))))
+
+(defun compsplt2 (x)
+   (cond ((or (atom x)		       ;if x is an atom or a single level list,
+	      (atom (car x)))		    ;then we won't change it any.
+	  (setq lhs x rhs 0))
+	 ((and (not (eq 'mplus (caar x)))	;if x is a negative expression
+	       (negp x))			;but not a sum, then get rid of
+	  (setq lhs 0 rhs (neg x)))			 ;the negative sign.
+	 ((or (cdddr x)				;if x is not a sum, or is a sum
+	      (not (eq 'mplus (caar x)))	 ;with more than 2 terms or has
+	      (common-symbols (cadr x) (caddr x)))      ;some symbols common to
+	  (setq lhs x rhs 0))	     ;both summands then do nothing again.
+	 ((and (or (negp (cadr x)) (mnump (cadr x)))
+	       (not (negp (caddr x))))
+	  (setq lhs (caddr x) rhs (neg (cadr x))))
+	 ((and (not (negp (cadr x)))
+	       (or (negp (caddr x)) (mnump (cadr x))))
+	  (setq lhs (cadr x) rhs (neg (caddr x))))
+	 ((and (negp (cadr x))
+	       (negp (caddr x)))
+	  (setq lhs 0 rhs (neg x)))
+	 (t (setq lhs x rhs 0))))
+
+(defun negp (x) (and (mtimesp x) (mnegp (cadr x))))
+		     
+(defun common-symbols (x y)
+  (prog2 (cond ((symbolp x) (mark x))
+	       ((not (atom x))
+		(mapc '(lambda (exp) (cond ((symbolp exp) (mark exp)))) x)))
+	 (cond ((symbolp x) (markp y))
+	       ((not (atom x))
+		(cond ((not (atom y)) 
+		       (do y y (cdr y) (null y)
+			   (cond ((markp (car y)) (return t))))))))
+	 (cond ((symbolp x) (unmrk x))
+	       ((not (atom x))
+		(mapc '(lambda (exp) (cond ((symbolp exp) (unmrk exp)))) x)))))
+
+(defun splitsum (exp)
+   (do ((list (cdar exp) (cdr list)) (lhs (car exp)) (rhs (cadr exp)))
+       ((null list) (cond ((mplusp lhs) (setq success t)))
+		    (list lhs rhs))
+       (cond ((memq '$inf list) (setq rhs (add2 '$inf (sub* rhs (addn list t)))
+				      lhs (add2 '$inf (sub* lhs (addn list t)))
+				      list nil))
+	     ((memq '$minf list) (setq rhs
+				       (add2 '$minf (sub* rhs (addn list t)))
+				       lhs
+				       (add2 '$minf (sub* lhs (addn list t)))
+				       list nil))
+	     ((null (symbols (car list))) (setq lhs (sub lhs (car list))
+						rhs (sub rhs (car list)))))))
+
+(defun splitprod (exp)
+  (do ((flipsign) (lhs (car exp)) (rhs (cadr exp)) (list (cdar exp) (cdr list))
+		  (sign) (minus) (evens) (odds))
+      ((null list) (if (mtimesp lhs) (setq success t))
+		   (cond (flipsign (compsplt (sub lhs rhs))
+				   (setq success t)
+				   (list rhs lhs))
+			 (t (list lhs rhs))))
+      (when (null (symbols (car list)))
+	    (sign (car list))
+	    (if (eq sign '$neg) (setq flipsign (not flipsign)))
+	    (if (memq sign '($pos $neg))
+		(setq lhs (div lhs (car list)) rhs (div rhs (car list)))))))
+
+(defun symbols (x)
+   (let (($listconstvars %initiallearnflag))
+	(cdr ($listofvars x))))
+
+;; %initiallearnflag is only necessary so that %PI, %E, and %PHI can be LEARNed
+
+(setq %initiallearnflag t)   ; See the previous page for an explanation of 
+(learn `((mequal) $%e ,(mget '$%e '$numer)) t)
+(learn `((mequal) $%pi ,(mget '$%pi '$numer)) t)
+(learn `((mequal) $%phi ,(mget '$%phi '$numer)) t)
+(learn `((mequal) $%gamma ,(mget '$%gamma '$numer)) t)
+(setq %initiallearnflag nil) ;     the purpose of %initiallearnflag.
+
+(mapc #'TRUE*
+      '((par ($even $odd) $integer)
+	(kind $integer $rational)
+	(par ($rational $irrational) $real)
+	(par ($real $imaginary) $complex)
+	
+	(kind %log $increasing)
+	(kind %atan $increasing) (kind %atan $oddfun)
+	(kind $delta $evenfun)
+	(kind %sinh $increasing) (kind %sinh $oddfun)
+	(kind %cosh $posfun)
+	(kind %tanh $increasing) (kind %tanh $oddfun)
+	(kind %coth $oddfun)
+	(kind %csch $oddfun)
+	(kind %sech $posfun)
+	(kind $li $complex)
+	(kind %cabs $complex)
+	(kind $zeta $posfun)))
+
+($newcontext '$initial)  ; Create an initial context for the user
+		 	 ; which is a subcontext of $global.

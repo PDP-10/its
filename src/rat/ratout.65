@@ -1,0 +1,745 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;  (c) Copyright 1976, 1983 Massachusetts Institute of Technology      ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module ratout)
+
+;; THIS IS THE OUT-OF-CORE SEGMENT OF THE RATIONAL FUNCTION PACKAGE. 
+
+(DECLARE
+ (SPECIAL $ALGEBRAIC ERRRJFFLAG VARLIST SS *Y* F $FACTORFLAG MODULUS HMODULUS
+	  GENVAR *A* *ALPHA *VAR* *X* *P *MAX *VAR *RES *CHK *L $INTFACLIM
+	  $RATFAC U* $RATWTLVL *RATWEIGHTS $RATWEIGHTS $KEEPFLOAT)
+ (*LEXPR $RAT)
+ (GENPREFIX A_O))
+
+(LOAD-MACSYMA-MACROS RATMAC)
+
+;; This splitfile contains Brown's Modular gcd algorithm
+(DECLARE (SPLITFILE MODGCD))
+
+(DECLARE (SPECIAL $GCD XV BIGF1 BIGF2 NONLINDEG $LINHACK
+		  $INTFACLIM BIGF1TILDE BIGF2TILDE
+		  GCD $FACTORFLAG *GCDL* LAST-GOOD-PRIME))
+
+;	NEWGCD (X,Y) RETURNS A LIST OF THREE ITEMS,
+;	(GCD, X/GCD, Y/GCD)
+
+(DEFUN NEWGCD (X Y MODULUS &AUX HMODULUS)
+  (SETQMODULUS MODULUS)
+  (LET ((A (COND ((PCOEFP X)
+		  (COND ((ZEROP X) Y)
+			((PCOEFP Y) (CGCD X Y))
+			(T (PCONTENT1 (CDR Y) X))))
+		 ((PCOEFP Y) (COND ((ZEROP Y) X) (T (PCONTENT1 (CDR X) Y))))
+		 ((POINTERGP (P-VAR X) (P-VAR Y)) (OLDCONTENT1 (CDR X) Y))
+		 ((POINTERGP (P-VAR Y) (P-VAR X)) (OLDCONTENT1 (CDR Y) X))
+		 (T NIL))))
+    (COND (A (LIST A (PQUOTIENT X A) (PQUOTIENT Y A)))
+	  (MODULUS (PGCDP X Y MODULUS))
+	  (T (PGCDM X Y)))))
+
+;;;***	PMODCONTENT COMPUTES CONTENT OF
+;;;	P IN 
+;;	Z [X ] [X , X , ..., X   ] 
+;;        P  V    1   2        V-1
+
+;;	PMODCONTENT OF 3*A*X IS A, IF MAINVAR IS X (=X )
+;;						      V
+
+(DEFUN PMODCONTENT (P)
+       (PROG (*VAR *CHK *RES *MAX GCD)
+	     (SETQ *CHK (CAR P))
+	     (SETQ *MAX 0)
+	     (SETQ *VAR (PNEXT (CDR P) NIL))
+	     (COND ((POINTERGP XV *CHK) (GO RET1))
+		   ((NULL *VAR) (RETURN (LIST P 1))))
+	     (PGATH1 (CDR P))
+        A    (SETQ *RES 0)
+	     (PGATH3 (CDR P))
+	A2   (COND ((PCOEFP *RES) (COND ((PZEROP *RES) NIL)(T(GO RET1))))
+		   ((NOT (EQ (CAR *RES) *CHK)) (GO RET1))
+		   ((NOT (UNIVAR (CDR *RES)))
+		    (SETQ *RES (CAR (PMODCONTENT *RES)))
+		    (GO A2))
+		   (GCD (SETQ GCD (PGCDU GCD *RES)))
+		   (T (SETQ GCD *RES)))
+	     (COND ((PCOEFP GCD) (GO RET1))
+		   ((MINUSP (SETQ *MAX (SUB1 *MAX)))
+		    (RETURN (LIST GCD (PQUOTIENT P GCD)))))
+	     (GO A)
+	RET1 (RETURN (LIST 1 P))))
+
+(DEFUN PGATHERCOEF (P *CHK *RES)
+  (IF (NOT (EQ (CAR P) *CHK)) 1 (PGATH2 (CDR P) NIL)))
+
+(DEFUN PGATH1 (P)
+  (PROG NIL
+	(COND ((NULL P) (RETURN *MAX))
+	      ((PCOEFP (CADR P)) NIL)
+	      ((EQ (CAADR P) *VAR) (SETQ *MAX (MAX *MAX (CADADR P)))))
+	(RETURN (PGATH1 (CDDR P)))))
+
+(DEFUN PGATH2 (P VMAX)
+       (PROG (V2)
+	     (COND ((NULL P) (RETURN *RES))
+		   ((PCOEFP (CADR P)) NIL)
+		   ((VGREAT (SETQ V2 (PDEGREER (CADR P))) VMAX)
+			(SETQ *RES (PSIMP *CHK
+				(LIST (CAR P) (LEADCOEFFICIENT (CADR P)))))
+			(SETQ VMAX V2))
+		   ((EQUAL VMAX V2)
+		    (SETQ *RES
+			  (PPLUS *RES
+				 (PSIMP *CHK
+					(LIST (CAR P) (LEADCOEFFICIENT (CADR P))))))))
+	     (RETURN (PGATH2 (CDDR P) VMAX))))
+
+(DEFUN PGATH3 (P)
+       (PROG (ZZ)
+	     (COND ((NULL P) (RETURN *RES))
+		   ((PCOEFP (CADR P))
+		    (COND ((EQN *MAX 0) (SETQ ZZ (CADR P)) (GO ADD)) (T (GO RET))))
+		   ((EQ (CAADR P) *VAR) (SETQ ZZ (PTERM (CDADR P) *MAX)) (GO ADD)))
+	     (COND ((EQN *MAX 0) (SETQ ZZ (CADR P))) (T (GO RET)))
+	ADD  (COND ((EQN ZZ 0) (GO RET)))
+	     (SETQ *RES (PPLUS *RES (PSIMP *CHK (LIST (CAR P) ZZ))))
+	RET  (RETURN (PGATH3 (CDDR P)))))
+
+
+(DEFUN PNEXT (X *L) (PNEXT1 X) (COND ((NULL *L) NIL)
+				     (T (CAR (SORT *L #'POINTERGP)))))
+
+(DEFUN PNEXT1 (X) (PROG NIL
+			(COND ((NULL X) (RETURN *L))
+			      ((OR (PCOEFP (CADR X)) (MEMQ (CAADR X) *L)) NIL)
+			      (T (SETQ *L (CONS (CAADR X) *L))))
+			(RETURN (PNEXT1 (CDDR X)))))
+
+(DEFUN VGREAT (X Y) (COND ((NULL X) NIL)
+			  ((NULL Y) T)
+			  ((POINTERGP (CAR X)(CAR Y))T)
+			  ((NOT (EQ (CAR X)(CAR Y)))NIL)
+			  ((GREATERP (CADR X)(CADR Y)) T)
+			  ((EQN (CADR X)(CADR Y))(VGREAT (CDDR X)(CDDR Y)))
+			  (T NIL)))
+
+(DEFUN PDEGREER (X)
+  (IF (PCOEFP X) () (CONS (CAR X) (CONS (CADR X) (PDEGREER (CADDR X))))))
+
+
+;;***	PGCDP CORRESPONDS TO BROWN'S ALGORITHM P
+
+(DEFUN PGCDP (BIGF1 BIGF2 MODULUS)
+       (PROG (C C1		C2		N		Q
+		H1TILDE		H2TILDE		GSTAR		H1STAR
+		H2STAR		XV		E		B
+		GBAR		NUBAR		NU1BAR		NU2BAR
+		GTILDE		F1TILDE		F2TILDE		BIGGTILDE
+		DEGREE		F1		F1F2		HMODULUS)
+	     (SETQMODULUS MODULUS)
+	     (COND ((AND (UNIVAR (CDR BIGF1)) (UNIVAR (CDR BIGF2)))
+		    (SETQ Q (PGCDU BIGF1 BIGF2))
+		    (RETURN (LIST Q (PQUOTIENT BIGF1 Q) (PQUOTIENT BIGF2 Q)))))
+	     (SETQ XV (CAR BIGF1))
+	     (SETQ BIGF1 (PMODCONTENT BIGF1))
+	     (SETQ BIGF2 (PMODCONTENT BIGF2))
+	     (SETQ C (PGCDU (SETQ C1 (CAR BIGF1)) (SETQ C2 (CAR BIGF2))))
+	     (SETQ BIGF1 (CADR BIGF1))
+	     (SETQ BIGF2 (CADR BIGF2))
+	     (SETQ N 0)
+	     (SETQ E (PDEGREER BIGF2))
+	     (SETQ DEGREE (PDEGREER BIGF1))
+	     (COND ((VGREAT E DEGREE) (SETQ E DEGREE)))
+	     (SETQ B (LSH MODULUS -1))
+	     (SETQ GBAR
+		   (PGCDU (SETQ F1 (PGATHERCOEF BIGF1 XV 0))
+			  (SETQ F1F2
+				(PGATHERCOEF BIGF2 XV 0))))
+	     (COND ((EQUAL 0 F1F2) (GO STEP15A)))
+	     (SETQ NUBAR (PDEGREE GBAR XV))
+	     (SETQ NU1BAR (+ NUBAR (PDEGREE BIGF1 XV)))
+	     (SETQ NU2BAR (+ NUBAR (PDEGREE BIGF2 XV)))
+	     (SETQ F1F2 (PTIMES F1 F1F2))
+	     (SETQ NUBAR (MAX NU1BAR NU2BAR))
+	STEP6(SETQ B (CPLUS B 1))
+	     (COND ((EQUAL (pcsubst F1F2 B XV) 0) (GO STEP6)))
+	     ;; Step 7
+	     (SETQ GTILDE (pcsubst GBAR B XV))
+	     (SETQ F1TILDE (pcsubst BIGF1 B XV))
+	     (SETQ F2TILDE (pcsubst BIGF2 B XV))
+	     (SETQ BIGGTILDE
+		   (PTIMESCHK GTILDE
+			      (CAR (SETQ H2TILDE (NEWGCD F1TILDE F2TILDE MODULUS)))))
+	     (COND ((PCOEFP BIGGTILDE) (GO STEP15A)))
+ 	     (SETQ H1TILDE (CADR H2TILDE))
+             (SETQ H2TILDE (CADDR H2TILDE))
+	     (SETQ DEGREE (PDEGREER BIGGTILDE))
+	     (COND ((VGREAT DEGREE E) (GO STEP6))
+		   ((VGREAT E DEGREE) (SETQ N 0) (SETQ E DEGREE)))
+	     (SETQ N (ADD1 N))
+	     (COND ((EQUAL N 1) (SETQ Q (LIST XV 1 1 0 (CMINUS B)))
+				(SETQ GSTAR BIGGTILDE)
+				(SETQ H1STAR H1TILDE)
+				(SETQ H2STAR H2TILDE))
+		   (T (SETQ GSTAR (LAGRANGE33 GSTAR BIGGTILDE Q B))
+		      (SETQ H1STAR (LAGRANGE33 H1STAR H1TILDE Q B))
+		      (SETQ H2STAR (LAGRANGE33 H2STAR H2TILDE Q B))
+		      (SETQ Q (PTIMES Q (LIST XV 1 1 0 (CMINUS B))))))
+	     ;; Step 12
+	     (COND ((NOT (> N NUBAR)) (GO STEP6)))
+	     ;; Step 13
+	     (COND ((OR (NOT (= NU1BAR (+ (SETQ DEGREE (PDEGREE GSTAR XV))
+						 (PDEGREE H1STAR XV))))
+			(NOT (= NU2BAR (+ DEGREE (PDEGREE H2STAR XV)))))
+		    (SETQ N 0)
+		    (GO STEP6)))
+	     (SETQ GSTAR (CADR (PMODCONTENT GSTAR)))
+	     ;; Step 15
+	     (SETQ Q (PGATHERCOEF GSTAR XV 0))
+	     (RETURN (MONICGCD  (PTIMESCHK C GSTAR)
+				(PTIMESCHK (PQUOTIENT C1 C) (PQUOTIENTCHK H1STAR Q))
+				(PTIMESCHK (PQUOTIENT C2 C) (PQUOTIENTCHK H2STAR Q))
+				(LEADCOEFFICIENT GSTAR)))
+	STEP15A
+	     (RETURN (LIST C
+			(PTIMESCHK (PQUOTIENT C1 C) BIGF1)
+			(PTIMESCHK (PQUOTIENT C2 C) BIGF2))) ))
+
+
+(DEFUN MONICGCD (GCD X Y LCF)
+	(COND ((EQN LCF 1) (LIST GCD X Y))
+	      (T (LIST	(PTIMES (CRECIP LCF) GCD)
+			(PTIMES LCF X)
+			(PTIMES LCF Y) )) ))
+
+
+;***	PGCDM CORRESPONDS TO BROWN'S ALGORITHM M
+
+
+(DEFUN PGCDM
+       (BIGF1 BIGF2)
+       (PROG (C C1		C2		F1		F2	N
+		E		DEGREE		MUBAR		P
+		NONLINDEG	GTILDE		H1TILDE		H2TILDE
+		MODULUS		HMODULUS	BIGF1TILDE	BIGF2TILDE
+		BIGGTILDE	Q		H1STAR		H2STAR
+		GSTAR		XV              GBAR)
+	     (SETQ P *ALPHA)
+	     (SETQ XV (CAR BIGF1))
+	     ;; Step 1
+	     (SETQ F1 (PCONTENT BIGF1))
+	     (SETQ F2 (PCONTENT BIGF2))
+	     (SETQ C (CGCD (SETQ C1 (CAR F1)) (SETQ C2 (CAR F2))))
+	     (SETQ BIGF1 (CADR F1))
+	     (SETQ BIGF2 (CADR F2))
+	     ;; Step 3
+	     (SETQ F1 (LEADCOEFFICIENT BIGF1))
+	     (SETQ F2 (LEADCOEFFICIENT BIGF2))
+	     (SETQ GBAR (CGCD F1 F2))
+	     ;; Step 4
+	     (SETQ N 0)
+	     (SETQ DEGREE (PDEGREER BIGF1))
+	     (SETQ E (PDEGREER BIGF2))
+	     (COND ((VGREAT E DEGREE) (SETQ E DEGREE)))
+	     ;; Step 5
+	     (SETQ MUBAR
+		   (TIMES 2 GBAR (MAX (MAXCOEFFICIENT BIGF1)
+				      (MAXCOEFFICIENT BIGF2))))
+	     (GO STEP6A)
+	STEP6(SETQ P (NEWPRIME P))
+	STEP6A
+	     (COND ((OR (EQUAL 0 (REMAINDER F1 P)) (EQUAL 0 (REMAINDER F2 P)))
+		    (GO STEP6)))
+	     (SETQMODULUS P)
+	     ;; Step 7
+	     (SETQ GTILDE (PMOD GBAR))
+	     ;; Step 8
+	     (SETQ BIGGTILDE
+		   (PTIMESCHK GTILDE
+			      (CAR (SETQ H2TILDE
+					 (NEWGCD (PMOD BIGF1) (PMOD BIGF2)
+						 MODULUS)))))
+	     (COND ((PCOEFP BIGGTILDE) (SETQ MODULUS NIL)
+				       (SETQ GSTAR 1)
+				       (SETQ H1STAR BIGF1)
+				       (SETQ H2STAR BIGF2)
+				       (GO STEP15)))
+	     (COND ((NULL (CDR H2TILDE))
+		    (SETQ H1TILDE (PQUOTIENT (PMOD BIGF1) (CAR H2TILDE)))
+		    (SETQ H2TILDE (PQUOTIENT (PMOD BIGF2) (CAR H2TILDE))))
+		   (T (SETQ H1TILDE (CADR H2TILDE))
+		      (SETQ H2TILDE (CADDR H2TILDE))))
+	     (SETQ DEGREE (PDEGREER BIGGTILDE))
+	     (COND ((VGREAT DEGREE E) (GO STEP6))
+		   ((VGREAT E DEGREE) (SETQ N 0) (SETQ E DEGREE)))
+	     (SETQ N (ADD1 N))
+	     ;; Step 11
+	     (SETQMODULUS NIL)
+	     (COND ((EQUAL N 1) (SETQ Q P)
+				(SETQ GSTAR BIGGTILDE)
+				(SETQ H1STAR H1TILDE)
+				(SETQ H2STAR H2TILDE))
+		   (T (SETQ GSTAR (LAGRANGE3 GSTAR BIGGTILDE P Q))
+		      (SETQ H1STAR (LAGRANGE3 H1STAR H1TILDE P Q))
+		      (SETQ H2STAR (LAGRANGE3 H2STAR H2TILDE P Q))
+		      (SETQ Q (TIMES P Q))))
+	     ;; Step 12
+	     (COND ((GREATERP MUBAR Q) (GO STEP6)))
+	     (COND ((GREATERP (TIMES 2 (MAX
+	(TIMES (SETQ GTILDE (NORM GSTAR)) (MAXCOEFFICIENT H1STAR))
+	(TIMES GTILDE (MAXCOEFFICIENT H2STAR)) ))
+			      Q)
+		    (GO STEP6)))
+	     (SETQMODULUS NIL)
+	     (SETQ GSTAR (CADR (PCONTENT GSTAR)))
+	STEP15
+	     (SETQ LAST-GOOD-PRIME P)
+             (SETQ Q (LEADCOEFFICIENT GSTAR))
+	     (RETURN (LIST (PTIMESCHK C GSTAR)
+			   (PTIMESCHK (CQUOTIENT C1 C) (PQUOTIENTCHK H1STAR Q))
+			   (PTIMESCHK (CQUOTIENT C2 C) (PQUOTIENTCHK H2STAR Q))))))
+
+;	THE FUNCTIONS ON THIS PAGE ARE USED BY KRONECKER FACTORING
+
+(DECLARE (SPLITFILE KRONEC))
+
+(DEFUN PKRONECK (P) (PROG (MAXEXP I L *P FACTORS FACTOR ERRRJFFLAG)
+		       (SETQ MAXEXP (QUOTIENT (CADR P) 2))
+		       (SETQ I 1)
+		  A    (COND ((GREATERP I MAXEXP) (RETURN (CONS P FACTORS))))
+		       (SETQ L (P1 (REVERSE ((LAMBDA (P I $FACTORFLAG)
+						     (PFACTOR2 P I))
+					     P
+					     I
+					     T))))
+		  B    (COND ((NULL L) (GO D)))
+		       (SETQ *L (CAR L))
+		       (SETQ *P (CAR P))
+		       (SETQ ERRRJFFLAG T)
+		       (SETQ FACTOR (ERRSET (PINTERPOLATE *L *P) NIL))
+		       (SETQ ERRRJFFLAG NIL)
+		       (SETQ L (CDR L))
+		       (COND ((ATOM FACTOR) (GO B))
+			     (T (SETQ FACTOR (CAR FACTOR))))
+		       (COND ((OR (PCOEFP FACTOR)
+				  (NOT (EQN (CAR P) (CAR FACTOR)))
+				  (NOT (PZEROP (PREM P FACTOR))))
+			      (GO B)))
+		       (COND (MODULUS (PMONICIZE (CDR FACTOR)))
+			     ((PMINUSP FACTOR) (SETQ FACTOR (PMINUS FACTOR))))
+		       (SETQ P (PQUOTIENT P FACTOR))
+		       (SETQ MAXEXP (QUOTIENT (CADR P) 2))
+		       (SETQ FACTORS (CONS FACTOR FACTORS))
+		       (COND ((OR (EQN P 1) (EQN P -1)) (RETURN FACTORS)))
+		       (GO A)
+		  D    (SETQ I (ADD1 I))
+		       (GO A)
+	 ))
+
+(DEFUN PFACTOR2 (P I) (COND ((LESSP I 0.) NIL)
+				   (T (CONS (PFACTOR (PCSUBST P I (CAR P)))
+					    (PFACTOR2 P (SUB1 I))))))
+
+(DEFUN POWERSET (X N) (COND ((NULL X) (QUOTE (1 NIL)))
+			     ((EQUAL X 1) (QUOTE (1)))
+			     (T (CONS 1 (PTTS1 X N X)))))
+	 
+
+(DEFUN ALLPRODS (X Y) (COND ((NULL X) NIL)
+			     ((NULL Y) NIL)
+			     (T (NCONC (AP1 (CAR X) Y) (ALLPRODS (CDR X) Y)))))
+	 
+(DEFUN AL1 (F R LEN)
+  (PROG (SS)
+	(COND
+	 ((EQUAL LEN 1)
+	  (RETURN (MAPCAR #'(LAMBDA (*Y*) (CONS *Y* NIL)) F)))
+	 ((NULL R) (RETURN NIL))
+	 (T
+	  (MAPC #'(LAMBDA (*Y*)
+			  (SETQ SS
+				(NCONC SS
+				       (MAPCAR #'(LAMBDA (Z) (CONS Z *Y*))
+					       F))))
+		(AL1 (CAR R) (CDR R) (SUB1 LEN)))
+	  (RETURN SS)))))
+ 
+
+(DEFUN AP1 (X L) (COND ((NULL L) NIL)
+		       (T (CONS (PTIMES X (CAR L)) (AP1 X (CDR L))))))
+
+(DEFUN PTTS1 (X N Y) (COND ((EQN N 1) (LIST Y))
+			   (T (CONS Y (PTTS1 X (SUB1 N) (PTIMES X Y))))))
+
+(DEFUN P1 (L) (PROG (A)
+		    (SETQ A (MAPCAR #'P11 L))
+		    (RETURN (COND ((NULL L) NIL)
+				  (T (CDR (AL1 (CAR A)
+					       (CDR A)
+					       (LENGTH A))))))))
+	 
+(DEFUN P11 (ELE) (COND ((NULL (CDDR ELE)) (POWERSET (CAR ELE) (CADR ELE)))
+		       (T (ALLPRODS (POWERSET (CAR ELE) (CADR ELE))
+				    (P11 (CDDR ELE))))))
+
+(DEFUN PINTERPOLATE (L VAR)
+       (PSIMP VAR (PINTERPOLATE1 (PINTERPOLATE2 L 1)
+				 (DIFFERENCE (LENGTH L) 2))))
+
+(DEFUN PINTERPOLATE1 (X N)
+       (PINTERPOLATE4 (PINTERPOLATE5 (REVERSE X) 1 N N) (ADD1 N)))
+	 
+(DEFUN PINTERPOLATE2 (X N)
+       (COND ((NULL (CDR X)) X)
+	     (T (CONS (CAR X)
+		      (PINTERPOLATE2 (PINTERPOLATE3 X N) (ADD1 N))))))
+
+(DEFUN PINTERPOLATE3 (X N)
+       (COND ((NULL (CDR X)) NIL)
+	     (T (CONS (PQUOTIENT (PDIFFERENCE (CADR X) (CAR X)) N)
+		      (PINTERPOLATE3 (CDR X) N)))))
+	 
+(DEFUN PINTERPOLATE4 (X N)
+       (COND ((NULL X) NIL)
+	     ((PZEROP (CAR X)) (PINTERPOLATE4 (CDR X) (SUB1 N)))
+	     (T (CONS N (CONS (CAR X)
+			      (PINTERPOLATE4 (CDR X) (SUB1 N)))))))
+
+(DEFUN PINTERPOLATE5 (X I J N)
+       (COND ((GREATERP I N) X)
+	     (T (PINTERPOLATE5 (CONS (CAR X) (PINTERPOLATE6 X I J))
+			       (ADD1 I)
+			       (SUB1 J)
+			       N))))
+	 
+(DEFUN PINTERPOLATE6 (X I J)
+       (COND ((ZEROP I) (CDR X))
+	     (T (CONS (PDIFFERENCE (CADR X) (PCTIMES J (CAR X)))
+		      (PINTERPOLATE6 (CDR X) (SUB1 I) J)))))
+
+
+(DECLARE (SPLITFILE FASTT))
+
+;; THE N**(1.585) MULTIPLICATION SCHEME
+;;FOLLOWS.  IT SHOULD BE USED ONLY WHEN BOTH INPUTS ARE MULTIVARIATE,
+;;DENSE, AND OF NEARLY THE SAME SIZE.  OR ABSOLUTELY TREMENDOUS.
+;;(THE CLASSICAL MULTIPLICATION SCHEME IS N**2 WHERE N IS SIZE OF
+;;POLYNOMIAL   (OR N*M FOR DIFFERENT SIZES).  FOR THIS
+;;CASE, N IS APPX. THE SIZE OF LARGER.
+
+(DEFMFUN $FASTTIMES (X Y)
+  (COND ((AND (NOT (ATOM X)) (NOT (ATOM Y))
+	      (EQUAL (CAR X) (CAR Y)) (EQUAL (CAAR X) 'MRAT)
+	      (EQUAL (CDDR X) 1) (EQUAL (CDDR Y) 1))
+	 (CONS (CAR X)(CONS (FPTIMES (CADR X)(CADR Y))1)))
+	(T (merror "Use FASTTIMES only on CRE polynomials with same varlists"))))
+
+(DEFUN FPTIMES (X Y) (COND ((OR (PZEROP X) (PZEROP Y)) (PZERO))
+			   ((PCOEFP X) (PCTIMES X Y))
+			   ((PCOEFP Y) (PCTIMES Y X))
+			   ((EQ (CAR X) (CAR Y))
+			    (COND((OR(UNIVAR(CDR X))(UNIVAR(CDR Y)))
+				  (CONS (CAR X) (PTIMES1 (CDR X) (CDR Y))))
+				 (T(CONS (CAR X) (FPTIMES1 (CDR X)(CDR Y))))))
+			   ((POINTERGP (CAR X) (CAR Y))
+			    (CONS (CAR X) (PCTIMES1 Y (CDR X))))
+			   (T (CONS (CAR Y) (PCTIMES1 X (CDR Y))))))
+	 
+(DEFUN FPTIMES1 (F G)
+       (PROG (A B C D)
+	     (COND ((OR (NULL F) (NULL G)) (RETURN NIL))
+		   ((NULL (CDDR F))
+		    (RETURN (LSFT (PCTIMES1 (CADR F) G) (CAR F))))
+		   ((NULL (CDDR G))
+		    (RETURN (LSFT (PCTIMES1 (CADR G) F) (CAR G)))))
+	     (SETQ D (LSH (ADD1 (MAX (CAR F) (CAR G))) -1))
+	     (SETQ F (HALFSPLIT F D) G (HALFSPLIT G D))
+	     (SETQ A (FPTIMES1 (CAR F) (CAR G)))
+	     (SETQ B
+		   (FPTIMES1 (PPLUS1 (CAR F) (CDR F)) (PPLUS1 (CAR G) (CDR G))))
+	     (SETQ C (FPTIMES1 (CDR F) (CDR G)))
+	     (SETQ B (PDIFFER1 (PDIFFER1 B A) C))
+	     (RETURN (PPLUS1 (LSFT A (LSH D 1)) (PPLUS1 (LSFT B D) C)))))
+
+(DEFUN HALFSPLIT (P D)
+       (DO ((A) (P P (CDDR P)))
+	   ((OR (NULL P) (< (CAR P) D)) (CONS (NREVERSE A) P))
+	   (SETQ A (CONS (CADR P) (CONS (- (CAR P) D) A)))))
+
+(DEFUN LSFT (P N)
+       (DO Q P (CDDR (RPLACA Q (+ (CAR Q) N))) (NULL Q))
+       P)
+
+
+(DECLARE (SPLITFILE RATWT)
+	 (SPECIAL WTSOFAR XWEIGHT $RATWTLVL V *X* *I*)
+	 (FIXNUM *I* XWEIGHT WTSOFAR XWT (PWEIGHT NOTYPE))) 
+
+;;; TO TRUNCATE ON E, DO RATWEIGHT(E,1);
+;;;THEN DO RATWTLVL:N.  ALL POWERS >N GO TO 0.
+
+(DEFMFUN $RATWEIGHT N 
+ (COND ((ODDP N) (MERROR "RATWEIGHT takes an even number of arguments.")))
+ (DO *I* 1 (+ *I* 2) (> *I* N)
+     (RPLACD (SASSOC (ARG *I*) *RATWEIGHTS
+		     '(LAMBDA NIL
+		       (CAR (SETQ *RATWEIGHTS (CONS (LIST (ARG *I*)) *RATWEIGHTS)))))
+	     (ARG (1+ *I*)))) 
+ (SETQ $RATWEIGHTS (CONS '(MLIST SIMP) (DOT2L *RATWEIGHTS)))
+ (COND ((= N 0) $RATWEIGHTS) (T (CONS '(MLIST) (LISTIFY N)))))
+
+(DEFUN PWEIGHT (X) (OR (GET X '$RATWEIGHT) 0.)) 
+
+(DEFUN WTPTIMES (X Y WTSOFAR) 
+       (COND ((OR (PZEROP X) (PZEROP Y) (> WTSOFAR $RATWTLVL))
+	      (PZERO))
+	     ((PCOEFP X) (WTPCTIMES X Y))
+	     ((PCOEFP Y) (WTPCTIMES Y X))
+	     ((EQ (CAR X) (CAR Y))
+	      (PALGSIMP (CAR X)
+		     (WTPTIMES1 (CDR X)
+				(CDR Y)
+				(PWEIGHT (CAR X)))
+			(ALG X)))
+	     ((POINTERGP (CAR X) (CAR Y))
+	      (PSIMP (CAR X)
+		     (WTPCTIMES1 Y (CDR X) (PWEIGHT (CAR X)))))
+	     (T (PSIMP (CAR Y)
+		       (WTPCTIMES1 X (CDR Y) (PWEIGHT (CAR Y))))))) 
+
+(DEFUN WTPTIMES1 (*X* Y XWEIGHT) 
+       (PROG (U* V) 
+	     (SETQ V (SETQ U* (WTPTIMES2 Y)))
+	A    (SETQ *X* (CDDR *X*))
+	     (COND ((NULL *X*) (RETURN U*)))
+	     (WTPTIMES3 Y)
+	     (GO A)))
+
+
+(DEFUN WTPTIMES2 (Y) 
+       (COND ((NULL Y) NIL)
+	     (T ((LAMBDA (II) (DECLARE (FIXNUM II))
+			     (COND ((> II $RATWTLVL) (WTPTIMES2 (CDDR Y)))
+				   (T (PCOEFADD (+ (CAR *X*) (CAR Y))
+						(WTPTIMES (CADR *X*) (CADR Y) II)
+						(WTPTIMES2 (CDDR Y))))))
+		 (+ (* XWEIGHT (+ (CAR *X*) (CAR Y))) WTSOFAR))))) 
+
+(DEFUN WTPTIMES3 (Y) 
+       (PROG (E U C)
+	(DECLARE (FIXNUM E))
+ 
+	A1   (COND ((NULL Y) (RETURN NIL)))
+	     (SETQ E (+ (CAR *X*) (CAR Y)))
+	     (SETQ C (WTPTIMES (CADR Y) (CADR *X*) (+ WTSOFAR (* XWEIGHT E))))
+	     (COND ((PZEROP C) (SETQ Y (CDDR Y)) (GO A1))
+		   ((OR (NULL V) (> E (CAR V))) (SETQ U* (SETQ V (PPLUS1 U* (LIST E C)))) (SETQ Y (CDDR Y)) (GO A1))
+		   ((EQN E (CAR V))
+		    (SETQ C (PPLUS C (CADR V)))
+		    (COND ((PZEROP C) (SETQ U* (SETQ V (PDIFFER1 U* (LIST (CAR V) (CADR V)))))) (T (RPLACA (CDR V) C)))
+		    (SETQ Y (CDDR Y))
+		    (GO A1)))
+	A    (COND ((AND (CDDR V) (> (CADDR V) E)) (SETQ V (CDDR V)) (GO A)))
+	     (SETQ U (CDR V))
+	B    (COND ((OR (NULL (CDR U)) (< (CADR U) E)) (RPLACD U (CONS E (CONS C (CDR U)))) (GO E)))
+	     (COND ((PZEROP (SETQ C (PPLUS (CADDR U) C))) (RPLACD U (CDDDR U)) (GO D)) (T (RPLACA (CDDR U) C)))
+	E    (SETQ U (CDDR U))
+	D    (SETQ Y (CDDR Y))
+	     (COND ((NULL Y) (RETURN NIL))
+	           ((PZEROP
+		     (SETQ C (WTPTIMES (CADR *X*) (CADR Y)
+				       (+ WTSOFAR (* XWEIGHT
+						     (SETQ E (+ (CAR *X*) (CAR Y))))))))
+		    (GO D)))
+	C    (COND ((AND (CDR U) (> (CADR U) E)) (SETQ U (CDDR U)) (GO C)))
+	     (GO B))) 
+ 
+
+(DEFUN WTPCTIMES (C P) 
+		 (COND ((PCOEFP P) (CTIMES C P))
+		       (T (PSIMP (CAR P) (WTPCTIMES1 C (CDR P) (PWEIGHT (CAR P)))))))
+
+(DEFUN
+ WTPCTIMES1
+ (C X XWT) 
+  (PROG (CC) 
+	(RETURN
+	 (COND ((NULL X) NIL)
+	       (T (SETQ CC (WTPTIMES C
+				     (CADR X)
+				     (+ WTSOFAR (* XWT (CAR X)))))
+		  (COND ((PZEROP CC) (WTPCTIMES1 C (CDDR X) XWT))
+			(T (CONS (CAR X)
+				 (CONS CC
+				       (WTPCTIMES1 C
+						   (CDDR X)
+						   XWT))))))))))
+
+(DEFUN WTPEXPT (X N) (COND ((= N 0) 1) ((= N 1) X) (T (WTPTIMES X (WTPEXPT X (1- N)) 0))))
+
+
+(DECLARE (SPLITFILE HORNER))
+
+(DEFMFUN $HORNER NARGS
+ (DECLARE (FIXNUM NARGS))
+ (IF (= NARGS 0) (WNA-ERR '$HORNER))
+ (LET (($RATFAC NIL) (VARLIST (CDR $RATVARS)) GENVAR (X NIL)
+       (ARG1 (TAYCHK2RAT (ARG 1)))
+       (L (CDR (LISTIFY NARGS))))
+      (COND ((MBAGP ARG1)
+	     (CONS (CAR ARG1)
+		   (MAPCAR #'(LAMBDA (U) (APPLY '$HORNER (CONS U L)))
+			   (CDR ARG1))))
+	    (T (SETQ X (APPLY '$RAT (CONS ARG1 L)))
+	       (MAPC #'(LAMBDA (Y Z) (PUTPROP Y Z 'DISREP))
+		     (CADDDR (CAR X))
+		     (CADDAR X))
+	       (DIV* (HORNREP (CADR X)) (HORNREP (CDDR X)))))))
+
+(DEFUN HORNREP (P) (IF (PCOEFP P) P (HORN+ (CDR P) (GET (CAR P) 'DISREP))))
+
+(DEFUN HORN+ (L VAR)
+       (PROG (ANS LAST)
+	     (SETQ ANS (HORNREP (CADR L)))
+	   A (SETQ LAST (CAR L) L (CDDR L))
+	     (COND ((NULL L)
+		    (RETURN (COND ((EQUAL LAST 0) ANS)
+				  (T (LIST '(MTIMES)
+					   (LIST '(MEXPT) VAR LAST) ANS)))))
+		   (T (SETQ ANS (LIST '(MPLUS)
+				      (HORNREP (CADR L))
+				      (LIST '(MTIMES) 
+					    (LIST '(MEXPT) VAR (DIFFERENCE LAST (CAR L)))
+					    ANS)))))
+	     (GO A)))
+
+
+(DECLARE (SPLITFILE PFRAC)
+	 (SPECIAL Y RISCHPF GENVAR $SAVEFACTORS CHECKFACTORS W
+		  EXP VAR X $FACTORFLAG $RATFAC
+		  $KEEPFLOAT RATFORM ROOTFACTOR 
+		  WHOLEPART PARNUMER VARLIST N))
+
+(declare (*lexpr partfrac))
+
+(DEFMFUN $PARTFRAC (EXP VAR) 
+       (COND ((AND (NOT (ATOM EXP)) (MEMQ (CAAR EXP) '(MEQUAL MLIST $MATRIX)))
+	      (CONS (CAR EXP) (MAPCAR (FN (U) ($PARTFRAC U VAR)) (CDR EXP))))
+	     ((AND (ATOM VAR) (NOT (AMONG VAR EXP))) EXP)
+	     (T (LET (($SAVEFACTORS T) (CHECKFACTORS ()) (VARLIST (LIST VAR))
+		      $RATFAC $ALGEBRAIC RATFORM GENVAR)
+		     (DESETQ (RATFORM . EXP) (TAYCHK2RAT EXP))
+		     (SETQ VAR (CAADR (RATF VAR)))
+		     (SETQ EXP (PARTFRAC EXP VAR))
+		     (SETQ EXP (CONS (CAR EXP)		;FULL DECOMP?
+				     (MAPCAN #'PARTFRACA (CDR EXP))))
+		     (ADD2* (DISREP (CAR EXP))
+			    (CONS '(MPLUS) 
+				  (MAPCAR
+				   (FN (L)
+				       (LET (((COEF POLY EXP) L))
+					    (LIST '(MTIMES)
+						  (DISREP  COEF)
+						  (LIST '(MEXPT)
+							(DISREP POLY)
+							(MINUS EXP)))))
+				   (CDR EXP))))))))
+
+(defun partfraca (list)
+       (let (((coef poly exp) list))
+	    (do ((nc (ratdivide coef poly) (ratdivide (car nc) poly))
+		 (n exp (1- n))
+		 (ans))
+		((rzerop (car nc)) (cons (list (cdr nc) poly n) ans))
+		(push (list (cdr nc) poly n) ans))))
+
+(defun partfrac (rat var &OPTIONAL facdenom)		
+   (let* (((wholepart frpart) (pdivide (car rat) (cdr rat)))
+	  ((num . denom) (ratqu frpart (cdr rat))))
+      (cond ((pzerop num) (cons wholepart nil))
+	    ((or (pcoefp denom) (pointergp var (car denom))) (cons rat nil))
+	    (t (let (((content bpart) (oldcontent denom)))
+		    (do ((factor (or facdenom (pfactor bpart)) (cddr factor))
+			 (apart) (y) (parnumer))
+			((null factor) (cons wholepart parnumer))
+			(cond
+			 ((zerop (pdegree (car factor) var)))
+			 (t (setq apart (pexpt (car factor) (cadr factor))
+				  bpart (pquotient bpart apart)
+				  y (bprog apart bpart)
+				  frpart (cdr (ratdivide (ratti num (cdr y) t)
+							 apart)))
+			    (push (list (ratqu frpart content)
+					(car factor)
+					(cadr factor))
+				  parnumer)
+			    (desetq (num . content)
+				    (cdr (ratdivide (ratqu (ratti num (car y) t)
+							   content)
+						    bpart)))))))))))
+
+(declare (unspecial exp f n ss v var w xv y
+		    *a* *chk *l *max *p
+		    *res u* *var* *x* *y*))
+
+;; $RATDIFF TAKES DERIVATIVES FAST.  IT ASSUMES THAT THE
+;; ONLY ENTITY WHICH DEPENDS ON X IS X ITSELF.
+;; THAT IS, DEPENDENCIES DECLARED EXPLICITLY OR IMPLICITLY ARE
+;; TOTALLY IGNORED.  RATDIFF(F(X),X) IS 0.  RATDIFF(Y,X) IS 0.
+;; ANY OTHER USAGE MUST GO THROUGH $DIFF.
+;; FURTHERMORE, X IS ASSUMED TO BE AN ATOM OR A SINGLE ITEM ON
+;; VARLIST.  E.G. X MIGHT BE SIN(U), BUT NOT 2*SIN(U).
+
+(DECLARE (SPLITFILE RATDIF) (SPECIAL VARLIST GENVAR X))
+
+(DEFMFUN $RATDIFF (P X)
+       (IF ($RATP P)
+	   (SETQ P (MINIMIZE-VARLIST
+		    (IF (MEMQ 'TRUNC (CDAR P)) ($TAYTORAT P) P))))
+       (LET ((FORMFLAG ($RATP P)) (VARLIST) (GENVAR))
+	    (NEWVAR X) (NEWVAR P)
+	    (OR (ANDMAPC #'(LAMBDA (EXP)
+			     (OR (ALIKE1 X EXP) (FREE EXP X)))
+			 VARLIST)
+		(MERROR "RATDIFF variable is embedded in kernel"))
+	    (SETQ P (RATF P))
+	    (SETQ X (CAADR (RATF X)))
+	    (SETQ P (CONS (CAR P) (RATDERIVATIVE (CDR P) X)))
+	    (IF FORMFLAG P ($RATDISREP P))))
+
+(DECLARE (UNSPECIAL X))
+
+(DECLARE (SPLITFILE PFET) (SPECIAL $PFEFORMAT VARLIST $FACTORFLAG M V DOSIMP))
+
+(DEFMFUN $PFET (M) 
+       (PROG (LISTOV $PFEFORMAT VARLIST $FACTORFLAG) 
+	     (SETQ $PFEFORMAT T)
+	     (NEWVAR M)
+	     (SETQ LISTOV VARLIST)
+	     (MAPC #'(LAMBDA (R) (SETQ M (PFET1 M R)))
+		   LISTOV)
+	     (SETQ M (SIMPLIFY M))
+	     (SETQ M (COND ((ATOM M) M)
+			   ((EQ (CAAR M) 'MPLUS)
+			    (CONS '(MPLUS)
+				  (MAPCAR #'$RATEXPAND (CDR M))))
+			   (T ($RATEXPAND M))))
+	     (RETURN (COND ((ATOM M) M)
+			   ((EQ (CAAR M) 'MPLUS)
+			    (CONS '(MPLUS)
+				  (MAPCAR #'SSSQFR (CDR M))))
+			   (T (SSSQFR M))))))
+
+(DEFUN SSSQFR (X) (LET ((DOSIMP T)) (SIMPLIFY ($SQFR X))))
+
+(DEFUN PFET1 (M V) 
+       (COND ((ATOM M) M)
+	     ((EQ (CAAR M) 'MPLUS)
+	      (CONS '(MPLUS)
+		    (MAPCAR #'(LAMBDA (S) ($PARTFRAC S V))
+			    (CDR M))))
+	     (T ($PARTFRAC M V))))
+
+(DECLARE (UNSPECIAL M V))
+

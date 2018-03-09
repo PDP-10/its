@@ -1,0 +1,194 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module mmacro)
+
+; Exported functions are MDEFMACRO, $MACROEXPAND, $MACROEXPAND1, MMACRO-APPLY
+;                        MMACROEXPANDED, MMACROEXPAND and MMACROEXPAND1
+
+
+(DECLARE (SPECIAL $MACROS $FUNCTIONS $TRANSRUN $TRANSLATE))
+
+ 
+;; $MACROS declared in jpg;mlisp >
+
+
+(DEFMVAR $MACROEXPANSION ()
+	 "Governs the expansion of Macsyma Macros.  The following settings are
+available:  FALSE means to re-expand the macro every time it gets called.
+EXPAND means to remember the expansion for each individual call do that it 
+won't have to be re-expanded every time the form is evaluated.  The form will 
+still grind and display as if the expansion had not taken place.  DISPLACE
+means to completely replace the form with the expansion.  This is more space
+efficient than EXPAND but grinds and displays the expansion instead of the
+call."
+         MODIFIED-COMMANDS '($MACROEXPAND)
+         SETTING-LIST      '( () $EXPAND $DISPLACE ) )
+
+
+
+
+
+;;; LOCAL MACRO ;;;
+
+(DEFMACRO COPY1CONS (NAME) `(CONS (CAR ,NAME) (CDR ,NAME)))
+
+
+
+
+;;; DEFINING A MACRO ;;;
+
+
+(DEFMSPEC MDEFMACRO (FORM) (SETQ FORM (CDR FORM))
+  (COND ((OR (NULL (CDR FORM)) (CDDDR FORM))
+	 (MERROR "Wrong number of args to ::= ~%~M"
+		 `((MDEFMACRO) ,@FORM))
+	 )
+	(T (MDEFMACRO1 (CAR FORM) (CADR FORM)))))
+
+
+(DEFUN MDEFMACRO1 (FUN BODY)
+  (LET ((NAME) (ARGS))
+     (COND ((OR (ATOM FUN)
+		(NOT (ATOM (CAAR FUN)))                
+		(MEMQ 'ARRAY (CDAR FUN))              
+		(MOPP (SETQ NAME ($VERBIFY (CAAR FUN))))
+		(MEMQ NAME '($ALL $% $%% MQAPPLY)))
+	    (MERROR "Illegal macro definition: ~M"	;ferret out all the
+		    FUN))				;  illegal forms
+	   ((NOT (EQ NAME (CAAR FUN)))                 ;efficiency hack I guess
+	    (RPLACA (CAR FUN) NAME)))                  ;  done in jpg;mlisp
+     (SETQ ARGS (CDR FUN))                             ;  (in MDEFINE).
+     (MREDEF-CHECK NAME)
+     (DO ((A ARGS (CDR A)) (MLEXPRP))
+	 ((NULL A)
+	  (REMOVE1 (NCONS NAME) 'MEXPR T $FUNCTIONS T) ;do all arg checking,
+	  (COND (MLEXPRP (MPUTPROP NAME T 'MLEXPRP))   ; then remove MEXPR defn
+		(T (ARGS NAME (CONS () (LENGTH ARGS))))))
+	 (COND ((MDEFPARAM (CAR A)))
+	       ((AND (MDEFLISTP A)
+		     (MDEFPARAM (CADR (CAR A))))
+		(SETQ MLEXPRP T))
+	       (T 
+		  (MERROR "Illegal parameter in macro definition: ~M"
+			  (CAR A)))))
+     (REMOVE-TRANSL-FUN-PROPS NAME)
+     (ADD2LNC `((,NAME) ,@ARGS) $MACROS)
+     (MPUTPROP NAME (MDEFINE1 ARGS BODY) 'MMACRO)
+     
+     (COND ($TRANSLATE (TRANSLATE-AND-EVAL-MACSYMA-EXPRESSION
+			`((MDEFMACRO) ,FUN ,BODY))))
+     `((MDEFMACRO SIMP) ,FUN ,BODY)))
+
+
+
+
+;;; EVALUATING A MACRO CALL ;;;
+
+
+(DEFMFUN MMACRO-APPLY (DEFN FORM)
+  (MMACROEXPANSION-CHECK FORM (MAPPLY DEFN (CDR FORM) (CAAR FORM))))
+
+
+
+
+;;; MACROEXPANSION HACKERY ;;;
+
+
+; does any reformatting necessary according to the current setting of
+; $MACROEXPANSION.  Note that it always returns the expansion returned
+; by displace, for future displacing.
+
+(DEFUN MMACROEXPANSION-CHECK (FORM EXPANSION)
+  (CASEQ $MACROEXPANSION
+	 (( () )
+	  (COND ((EQ (CAAR FORM) 'MMACROEXPANDED)
+		 (MMACRO-DISPLACE FORM EXPANSION))
+		(T EXPANSION)))
+	 (($EXPAND)
+	  (COND ((NOT (EQ (CAAR FORM) 'MMACROEXPANDED))
+		 (DISPLACE FORM `((MMACROEXPANDED) 
+				  ,EXPANSION
+				  ,(COPY1CONS FORM)))))
+	  EXPANSION)
+	 (($DISPLACE)
+	  (MMACRO-DISPLACE FORM EXPANSION))
+	 (T (MTELL "Warning:  MACROEXPANSION set to unrecognized value."))))
+
+
+(DEFUN MMACRO-DISPLACE (FORM EXPANSION)
+       (DISPLACE FORM (COND ((ATOM EXPANSION) `((MPROGN) ,EXPANSION))
+			    (T EXPANSION))))
+
+
+; Handles memo-ized forms.  Reformats them if $MACROEXPANSION has changed.
+; Format is ((MMACROEXPANDED) <expansion> <original form>)
+
+(DEFMSPEC MMACROEXPANDED (FORM)
+  (MEVAL (MMACROEXPANSION-CHECK FORM (CADR FORM))))
+
+
+;;; MACROEXPANDING FUNCTIONS ;;;
+
+
+(DEFMSPEC $MACROEXPAND (FORM) (SETQ FORM (CDR FORM))
+  (COND ((OR (NULL FORM) (CDR FORM))
+	 (MERROR "MACROEXPAND only takes one argument:~%~M"
+		 `(($MACROEXPAND) ,@FORM)))
+	(T (MMACROEXPAND (CAR FORM)))))
+
+(DEFMSPEC $MACROEXPAND1 (FORM) (SETQ FORM (CDR FORM))
+  (COND ((OR (NULL FORM) (CDR FORM))
+	 (MERROR "MACROEXPAND only takes one argument: ~%~M"
+		 `(($MACROEXPAND1) ,@FORM)))
+	(T (MMACROEXPAND1 (CAR FORM)))))
+
+
+; Expands the top-level form repeatedly until it is no longer a macro
+; form.  Has to copy the form each time because if macros are displacing
+; the form given to mmacroexpand1 will get bashed each time.  Recursion
+; is used instead of iteration so the user gets a pdl overflow error
+; if he tries to expand recursive macro definitions that never terminate.
+
+(DEFUN MMACROEXPAND (FORM)
+  (LET ((TEST-FORM (IF (ATOM FORM) FORM (COPY1CONS FORM)))
+	(EXPANSION (MMACROEXPAND1 FORM)))
+       (COND ((EQUAL EXPANSION TEST-FORM)
+	      EXPANSION)
+	     (T (MMACROEXPAND EXPANSION)))))
+
+
+; only expands the form once.  If the form is not a valid macro
+; form it just gets returned (eq'ness is preserved).  Note that if the
+; macros are displacing, the returned form is also eq to the given
+; form (which has been bashed).
+
+(DEFUN MMACROEXPAND1 (FORM)
+ (LET ((FUNNAME) (MACRO-DEFN))
+  (COND ((OR (ATOM FORM)
+	     (ATOM (CAR FORM))
+	     (MEMQ 'ARRAY (CDAR FORM))
+	     (NOT (SYMBOLP (SETQ FUNNAME (MOP FORM)))))
+	 FORM)
+	((EQ FUNNAME 'MMACROEXPANDED)
+	 (MMACROEXPANSION-CHECK FORM (CADR FORM)))
+	((SETQ MACRO-DEFN
+	       (OR (AND $TRANSRUN 
+			(GET (CAAR FORM) 'TRANSLATED-MMACRO))
+		   (MGET (CAAR FORM) 'MMACRO)))
+	 (MMACRO-APPLY MACRO-DEFN FORM))
+	(T FORM))))
+
+
+
+;;; SIMPLIFICATION ;;;
+
+(DEFPROP MDEFMACRO SIMPMDEFMACRO OPERATORS)
+
+; emulating simpmdef (for mdefine) in jm;simp
+(DEFMFUN SIMPMDEFMACRO (X *IGNORED* SIMP-FLAG)
+	 *IGNORED* ;Ignored.
+	 SIMP-FLAG ;No interesting sub-expressions.
+	 (CONS '(MDEFMACRO SIMP) (CDR X)))
+

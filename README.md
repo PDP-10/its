@@ -203,10 +203,13 @@ A list of [known ITS machines](doc/machines.md).
    - LOSS (device).
    - LSPEED, set tty line parameters.
    - LUSER, request help from registered list of logged-in users.
+   - MACSYMA, symboling manipulation system.
+   - MAXTUL, tools for managing Macsyma.
    - MAGDMP, standalone program loader/dumper for magtape.
    - MAGFRM, create tapes for use with MAGDMP.
    - MAIL, Mail sending client.
    - MAILT, allows editing mail (from :MAIL) in EMACS.
+   - MCL, subsystem for compiling individual Macsyma files.
    - METER, displays system metering information.
    - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
    - MLIFE, Bill Gosper's Conway Life.

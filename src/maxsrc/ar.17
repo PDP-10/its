@@ -1,0 +1,165 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;  (c) Copyright 1976, 1983 Massachusetts Institute of Technology      ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module ar)
+
+(DECLARE (SPECIAL EVARRP MUNBOUND FLOUNBOUND FIXUNBOUND))
+
+;;; This code needs to be checked carefully for the 3600.
+(defstruct (mgenarray conc-name array)
+  aref
+  aset
+  type
+  NULL
+  GENERATOR
+  CONTENT)
+
+(DEFUN MARRAY-TYPE (X)
+  (OR (CDR (ASSQ (ARRAY-TYPE X)
+		 '((FLONUM . $FLOAT)
+		   (FIXNUM . $FIXNUM))))
+      (MGENARRAY-TYPE X)))
+
+(DEFMFUN $MAKE_ARRAY (TYPE &REST DIML)
+  (LET ((LTYPE (ASSQ TYPE '(($FLOAT . FLONUM) ($FLONUM . FLONUM)
+					      ($FIXNUM . FIXNUM)))))
+    (COND ((NOT LTYPE)
+	   (COND ((EQ TYPE '$ANY)
+		  (MAKE-MGENARRAY TYPE '$ANY
+				  CONTENT (LEXPR-FUNCALL '*ARRAY NIL T DIML)))
+		 ((EQ TYPE '$HASHED)
+		  (LET ((KLUDGE (GENSYM)))
+		    (OR (FIXP (CAR DIML))
+			(MERROR "non-integer number of dimensions: ~M"
+				(CAR DIML)))
+		    (INSURE-ARRAY-PROPS KLUDGE () (CAR DIML))
+		    (MAKE-MGENARRAY TYPE '$HASHED
+				    CONTENT KLUDGE)))
+		 ((EQ TYPE '$FUNCTIONAL)
+		  ;; MAKE_ARRAY('FUNCTIONAL,LAMBDA(...),'ARRAY_TYPE,...)
+		  (OR (> (LENGTH DIML) 1)
+		      (MERROR "not enough arguments for functional array specification"))
+		  (LET ((AR (APPLY #'$MAKE_ARRAY (CDR DIML)))
+			(THE-NULL))
+		    (CASEQ (MARRAY-TYPE AR)
+		      (($FIXNUM)
+		       (FILLARRAY AR (LIST (SETQ THE-NULL FIXUNBOUND))))
+		      (($FLOAT)
+		       (FILLARRAY AR (LIST (SETQ THE-NULL FLOUNBOUND))))
+		      (($ANY)
+		       (FILLARRAY (MGENARRAY-CONTENT AR) (LIST (SETQ THE-NULL MUNBOUND))))
+		      (T
+		       ;; Nothing to do for hashed arrays. Is FUNCTIONAL here
+		       ;; an error?
+		       (SETQ THE-NULL 'NOTEXIST)))
+		    (MAKE-MGENARRAY TYPE '$FUNCTIONAL
+				    CONTENT AR
+				    GENERATOR (CAR DIML)
+				    NULL THE-NULL)))
+		 ('ELSE
+		  (MERROR "Array type of ~M is not recognized by MAKE_ARRAY" TYPE))))
+	  ('ELSE
+	   (LEXPR-FUNCALL '*ARRAY NIL (CDR LTYPE) DIML)))))
+
+(DEFMFUN DIMENSION-ARRAY-OBJECT (FORM RESULT &AUX (MTYPE (MARRAY-TYPE FORM)))
+  (DIMENSION-STRING
+   (NCONC (EXPLODEN "{Array: ")
+	  (CDR (EXPLODEN MTYPE))
+	  (EXPLODEN " ")
+	  (EXPLODEN (MAKNUM FORM))
+	  (IF (MEMQ MTYPE '($FLOAT $FIXNUM $ANY))
+	      (NCONC (EXPLODEN "[")
+		     (DO ((L (CDR (ARRAYDIMS (IF (MEMQ MTYPE '($FLOAT $FIXNUM))
+						 FORM
+						 (MGENARRAY-CONTENT FORM))))
+			     (CDR L))
+			  (V NIL
+			     (NCONC (NREVERSE (EXPLODEN (CAR L))) V)))
+			 ((NULL L) (NREVERSE V))
+		       (IF V (PUSH #/, V)))
+		     (EXPLODEN "]")))
+	  (EXPLODEN "}"))
+   RESULT))
+
+(DEFUN MARRAY-CHECK (A)
+  (IF (EQ (TYPEP A) 'ARRAY)
+      (CASEQ (MARRAY-TYPE A)
+	(($FIXNUM $FLOAT) A)
+	(($ANY) (MGENARRAY-CONTENT A))
+	(($HASHED $FUNCTIONAL)
+	 ;; BUG: It does have a number of dimensions! Gosh. -GJC
+	 (MERROR "Hashed array has no dimension info: ~M" A))
+	(T
+	 (MARRAY-TYPE-UNKNOWN A)))
+      (MERROR "Not an array: ~M" A)))
+
+(DEFMFUN $ARRAY_NUMBER_OF_DIMENSIONS (A)
+  (ARRAY-/#-DIMS (MARRAY-CHECK A)))
+
+(DEFMFUN $ARRAY_DIMENSION_N (N A)
+  (ARRAY-DIMENSION-N N (MARRAY-CHECK A)))
+
+(DEFUN MARRAY-TYPE-UNKNOWN (X)
+  (MERROR "BUG: Array of unhandled type: ~S" X))
+
+(DEFUN MARRAYREF-GENSUB (ARRAY IND1 INDS)
+  (CASEQ (MARRAY-TYPE ARRAY)
+    ;; We are using a CASEQ on the TYPE instead of a FUNCALL, (or SUBRCALL)
+    ;; because we are losers. All this stuff uses too many functions from
+    ;; the "MLISP" modual, which are not really suitable for the kind of
+    ;; speed and simplicity we want anyway. Ah me. Also, passing the single
+    ;; unconsed index IND1 around is a dubious optimization, which causes
+    ;; extra consing in the case of hashed arrays.
+    (($HASHED)
+     (LEXPR-FUNCALL #'MARRAYREF (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (($FLOAT $FIXNUM)
+     (LEXPR-FUNCALL ARRAY IND1 INDS))
+    (($ANY)
+     (LEXPR-FUNCALL (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (($FUNCTIONAL)
+     (LET ((VALUE (LET ((EVARRP T))
+		    ;; special variable changes behavior of hashed-array
+		    ;; referencing functions in case of not finding an element.
+		    (*CATCH 'EVARRP (MARRAYREF-GENSUB
+				      (MGENARRAY-CONTENT ARRAY) IND1 INDS)))))
+       (IF (EQUAL VALUE (MGENARRAY-NULL ARRAY))
+	   (MARRAYSET-GENSUB  (LEXPR-FUNCALL #'MFUNCALL
+					     (MGENARRAY-GENERATOR ARRAY)
+					     ;; the first argument we pass the
+					     ;; function is a SELF variable.
+					     ARRAY
+					     ;; extra consing here! LEXPR madness.
+					     IND1
+					     INDS)
+			      (MGENARRAY-CONTENT ARRAY) IND1 INDS)
+	   VALUE)))
+    (T
+     (MARRAY-TYPE-UNKNOWN ARRAY))))
+	  
+
+(DEFUN MARRAYSET-GENSUB (VAL ARRAY IND1 INDS)
+  (CASEQ (MARRAY-TYPE ARRAY)
+    (($HASHED)
+     (LEXPR-FUNCALL #'MARRAYSET VAL (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (($ANY)
+     #-3600(STORE (LEXPR-FUNCALL (MGENARRAY-CONTENT ARRAY) IND1 INDS) VAL)
+     #+3600(LEXPR-FUNCALL #'ASET VAL (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (($FLOAT $FIXNUM)
+     #-3600(STORE (LEXPR-FUNCALL ARRAY IND1 INDS) VAL)
+     #+3600(LEXPR-FUNCALL #'ASET VAL (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (($FUNCTIONAL)
+     (MARRAYSET-GENSUB VAL (MGENARRAY-CONTENT ARRAY) IND1 INDS))
+    (T
+     (MARRAY-TYPE-UNKNOWN ARRAY))))
+
+
+;; Extensions to MEVAL.
+
+(DEFMFUN MEVAL1-EXTEND (FORM)
+  (LET ((L (MEVALARGS (CDR FORM))))
+    (MARRAYREF-GENSUB (CAAR FORM) (CAR L) (CDR L))))
+
+(DEFMFUN ARRSTORE-EXTEND (A L R)
+  (MARRAYSET-GENSUB R A (CAR L) (CDR L)))
+

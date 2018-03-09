@@ -1,0 +1,145 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module ards)
+
+;; Package for drawing lines on terminals supporting the Advanced Remote
+;; Display Station (ARDS) protocol.  See .INFO.;ARDS > for a description of
+;; this crock.  The screen is addressed as -512. <= X, Y <= 511.  Note that
+;; drawing from (-511, 0) to (512, 0) on plasma consoles will work for some
+;; random reason.  Keep ibase set at 8 since Macsyma has it at 10.
+
+(EVAL-WHEN (EVAL COMPILE) (SETQ OLD-IBASE IBASE IBASE 8))
+
+;; Read-time parameters.  These aren't real TD codes.
+
+#.(SETQ %TDCHR #+ITS 234 #-ITS 34)
+#.(SETQ %TDSET #+ITS 235 #-ITS 35)
+#.(SETQ %TDLNG #+ITS 236 #-ITS 36)
+#.(SETQ %TDSHR #+ITS 237 #-ITS 37)
+
+;; The ARDS-X and ARDS-Y variables are only valid when inside one of the
+;; graphics modes.  When entering a graphics mode, we always move the cursor to
+;; where we want it without looking to see where it is already.  This may want
+;; to be fixed later.
+
+(DEFVAR ARDS-X)
+(DEFVAR ARDS-Y)
+(DEFVAR ARDS-STATE #.%TDCHR)
+
+;; I can think of few things less optimal.
+
+(DEFUN ARDS-SEND-X-Y (S X Y INVISIBLE DOTTED 4-CHARS &AUX (SIGN-X 0) (SIGN-Y 0))
+       (DECLARE (FIXNUM X Y SIGN-X SIGN-Y))
+       (SETQ SIGN-X (IF (< X 0) 1 0))
+       (SETQ SIGN-Y (IF (< Y 0) 1 0))
+       (SETQ X (ABS X) Y (ABS Y))
+       (+TYO (+ (LSH (LOGAND X 37) 1) SIGN-X 100) S)
+       (IF 4-CHARS
+	   (+TYO (+ (LOGAND (LSH X -5) 37) 100 (IF INVISIBLE 40 0)) S))
+       (+TYO (+ (LSH (LOGAND Y 37) 1) SIGN-Y 100) S)
+       (IF 4-CHARS
+	   (+TYO (+ (LOGAND (LSH Y -5) 37) 100 (IF DOTTED 40 0)) S)))
+
+(DEFUN ARDS-SET-POINT (S X Y)
+       (DECLARE (FIXNUM X Y))
+       (COND ((AND (NOT (= ARDS-STATE #.%TDCHR))
+		   (= ARDS-X X)
+		   (= ARDS-Y Y)))
+	     (T (UNLESS (= ARDS-STATE #.%TDSET)
+			(+TYO #.%TDSET S)
+			(SETQ ARDS-STATE #.%TDSET))
+		(SETQ ARDS-X X ARDS-Y Y)
+		(ARDS-SEND-X-Y S X Y NIL NIL T))))
+
+;; Updates global state and figures out if we can draw a short vector.  Even if
+;; in long vector mode already, it still wins to go into short vector mode.  If
+;; only one short vector is drawn, we break even.
+
+(DEFUN ARDS-DRAW-VECTOR (S X Y INVISIBLE DOTTED)
+       (DECLARE (FIXNUM X Y))
+       (PSETQ X (- X ARDS-X) ARDS-X X)
+       (PSETQ Y (- Y ARDS-Y) ARDS-Y Y)
+       (IF (AND (< (ABS X) 40) (< (ABS Y) 40) (NOT INVISIBLE) (NOT DOTTED))
+	   (ARDS-DRAW-SHORT-VECTOR S X Y)
+	   (ARDS-DRAW-LONG-VECTOR S X Y INVISIBLE DOTTED)))
+
+(DEFUN ARDS-DRAW-SHORT-VECTOR (S X Y)
+       (DECLARE (FIXNUM X Y))
+       (UNLESS (= ARDS-STATE #.%TDSHR)
+	       (+TYO #.%TDSHR S)
+	       (SETQ ARDS-STATE #.%TDSHR))
+       (ARDS-SEND-X-Y S X Y NIL NIL NIL))
+
+(DEFUN ARDS-DRAW-LONG-VECTOR (S X Y INVISIBLE DOTTED)
+       (DECLARE (FIXNUM X Y))
+       (UNLESS (= ARDS-STATE #.%TDLNG)
+	       (+TYO #.%TDLNG S)
+	       (SETQ ARDS-STATE #.%TDLNG))
+       (ARDS-SEND-X-Y S X Y INVISIBLE DOTTED T))
+
+(DEFUN ARDS-EXIT-GRAPHICS (S)
+       (UNLESS (= ARDS-STATE #.%TDCHR)
+	       (+TYO #.%TDCHR S)
+	       (SETQ ARDS-STATE #.%TDCHR)))
+
+;; For convenience.  If you are drawing a lot of lines, you
+;; should call the procedures defined above.
+
+#+DEBUG
+(DEFUN ARDS-DRAW-POINT (S X Y)
+       (ARDS-SET-POINT S X Y)
+       (ARDS-DRAW-VECTOR S X Y NIL NIL)
+       (ARDS-EXIT-GRAPHICS S))
+
+(DEFUN ARDS-DRAW-LINE (S X1 Y1 X2 Y2)
+       (ARDS-SET-POINT S X1 Y1)
+       (ARDS-DRAW-VECTOR S X2 Y2 NIL NIL)
+       (ARDS-EXIT-GRAPHICS S))
+
+
+;; This file gets loaded when Macsyma is started up and it is determined
+;; that an ARDS console is being used.  Communication with Macsyma
+;; is through the functions and specials defined after this point.
+;; Everything above this point is independent of Macsyma.
+
+(DECLARE (SPECIAL DISPLAY-FILE))
+
+;; These define the size of the character cell in pixels.
+
+(SETQ LG-CHARACTER-X    6.)
+(SETQ LG-CHARACTER-Y   10.)
+(SETQ LG-CHARACTER-X-2 (// LG-CHARACTER-X 2))
+(SETQ LG-CHARACTER-Y-2 (// LG-CHARACTER-Y 2))
+
+;; Coordinate translation from 0 <= X, Y <= 511 to -512 <= X, Y <= 511.  Also,
+;; exchange directtion of Y coordinates.  Normally, both constants below would
+;; be 512., but there is a one pixel border around the edge of the Plasma TVs.
+
+(DEFMACRO LG-TRANSL-X (X) `(- (LSH ,X 1) 510.))
+(DEFMACRO LG-TRANSL-Y (Y) `(- 510. (LSH ,Y 1)))
+
+(DEFUN LG-DRAW-LINE (X1 Y1 X2 Y2)
+       (DECLARE (FIXNUM X1 Y1 X2 Y2))
+       (LG-SET-POINT X1 Y1)
+       (LG-END-VECTOR X2 Y2))
+
+(DEFUN LG-SET-POINT (X Y)
+       (ARDS-SET-POINT DISPLAY-FILE (LG-TRANSL-X X) (LG-TRANSL-Y Y)))
+
+(DEFUN LG-DRAW-VECTOR (X Y)
+       (ARDS-DRAW-VECTOR DISPLAY-FILE
+			 (LG-TRANSL-X X) (LG-TRANSL-Y Y) NIL NIL))
+
+(DEFUN LG-END-VECTOR (X Y)
+       (LG-DRAW-VECTOR X Y)
+       (ARDS-EXIT-GRAPHICS DISPLAY-FILE))
+
+(EVAL-WHEN (EVAL COMPILE) (SETQ IBASE OLD-IBASE))
+
+;; This should really be set in ALJABR;LOADER and not here, but we're not
+;; always able to recognize the terminal type.  So we want things to turn on
+;; when the file is loaded by hand.
+
+(SETQ LINE-GRAPHICS-TTY T)

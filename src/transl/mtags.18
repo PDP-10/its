@@ -1,0 +1,161 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module mtags)
+
+(TRANSL-MODULE MTAGS)
+
+;; Methods for generating tags files for macsyma source code
+;; as it is run through the Macsyma->Lisp translator.
+;; I thought this was a rather obvious time to do such a thing.
+
+;; Thing to consider:
+;; [1] Running without translation.
+;; [2] efficiency of the macsyma reader?
+;; [3] Coroutining with the macsyma reader?
+;; [4] Recursive indexing features:
+;;   (a) See forms syntacticaly?
+;;   (b) See forms semantically, but before OPTIMIZE-TOPLEVEL?
+;;       e.g. Style warnings.
+;;   (c) See output of the OPTIMIZE-TOPLEVEL?
+;;   (d) See calls to TRANSLATE?
+
+(DEFTRVAR TAGS-OUTPUT-STREAM NIL
+	  "If non-nil a stream to output to in raw, system-dependant,
+	  tags format. This is presumably bound by the translator/indexer,
+	  or whatever else wants to be Funcalling Tags properties.")
+
+(DEFTRVAR TAGS-OUTPUT-STREAM-STATE NIL
+	  "This must be bound to NIL by people who bind the TAGS-OUTPUT-STREAM,
+	  and is reserved for random hacks by the module, now its the
+	  filepos before printing the tags filesize.")
+
+
+(DEFTRFUN TAGS-START//END (&OPTIONAL (FILE-NAME NIL START-P))
+	  ;; filename should be just as user called it,
+	  ;; (plus defaults). Should not be TRUENAMEd.
+	  (WHEN TAGS-OUTPUT-STREAM
+		(COND (START-P
+		       (LET ((((DEV DIR) FN1 FN2) (NAMELIST FILE-NAME)))
+			    (MFORMAT-OPEN TAGS-OUTPUT-STREAM
+					  "~A: ~A; ~A ~A~%"
+					  DEV DIR FN1 FN2))
+		       (SETQ TAGS-OUTPUT-STREAM-STATE
+			     (FILEPOS TAGS-OUTPUT-STREAM))
+		       ;; the five digit number is the length of the
+		       ;; entry until the ending #^_ TERPRI sequence.
+		       (MFORMAT-OPEN TAGS-OUTPUT-STREAM
+				     "00000,MACSYMA~%"))
+		      (T
+		       (LET ((P (FILEPOS TAGS-OUTPUT-STREAM)))
+			    (FILEPOS TAGS-OUTPUT-STREAM
+				     TAGS-OUTPUT-STREAM-STATE)
+			    (PRINC-RJUST (+ P 3)
+					 ;; +3 for the #^_ and TERPRI to do later.
+					 #/0
+					 5
+					 TAGS-OUTPUT-STREAM)
+			    (FILEPOS TAGS-OUTPUT-STREAM P)
+			    ;; here is where the +3 comes from.
+			    (MFORMAT-OPEN TAGS-OUTPUT-STREAM "~%")
+			    )))))
+
+(DEFTRFUN $TAG_FILE_INSERT (FILE-TO-INSERT-INTO FILE-TO-INSERT)
+	 "Inserts a file created by transl into a multiple entry tags file"
+	 (SETQ FILE-TO-INSERT-INTO (MERGEF ($FILENAME_MERGE FILE-TO-INSERT-INTO)
+					  "* TAGS"))
+	 (SETQ FILE-TO-INSERT (MERGEF ($FILENAME_MERGE FILE-TO-INSERT)
+				      FILE-TO-INSERT-INTO))
+	 (IOTA ((INI FILE-TO-INSERT '(IN DSK ASCII BLOCK))
+		(OUT (MERGEF "* _TAGS_" FILE-TO-INSERT-INTO) '(OUT DSK ASCII BLOCK))
+		(IN FILE-TO-INSERT-INTO '(IN DSK ASCII BLOCK)))
+	       (DO ((S-KEY (PROG1 (NAMELIST (READLINE INI))
+				  (CLOSE INI))) ; save channels while we search.
+		    (P) (A-KEY-LINE) (POS-INC) (A-TYPE-LINE))
+		   (NIL)
+		   (SETQ P (FILEPOS IN))
+		   (SETQ A-KEY-LINE (READLINE IN NIL))
+		   (COND ((NULL A-KEY-LINE) ; i.e. EOF
+			  (pump-stream (open ini) out)
+			  (return nil)))
+		   (SETQ A-TYPE-LINE (READLINE IN))
+		   (SETQ POS-INC 0)
+		   (DO ((J 1 (1+ J))
+			(C #/0 (GETCHARN A-TYPE-LINE J)))
+		       ((= C #/,))
+		       (SETQ POS-INC (+ (- C #/0) (* POS-INC 10.))))
+		   (COND ((TAG-FILENAMELIST-EQUAL (NAMELIST A-KEY-LINE) S-KEY)
+			  (PUMP-STREAM (OPEN INI) OUT)
+ 			  (FILEPOS IN (+ P POS-INC))
+			  (PUMP-STREAM IN OUT)
+			  (RETURN NIL))
+			 (T
+			  (FILEPOS IN P)
+			  (PUMP-STREAM IN OUT POS-INC))))
+	       (TO-MACSYMA-NAMESTRING (RENAMEF OUT FILE-TO-INSERT-INTO))))
+
+       
+
+(DEFUN Princ-rjust (ob sp size s) ; move to MFORMAT.
+       (do ((nsp (flatc ob) (1+ nsp)))
+	   ((>= nsp size) (princ ob s))
+	   (tyo sp s)))
+
+
+;; An Emacs-style TAG is
+;; <string of characters><rubout><file-position><terpri>
+;; the file-position is that of the next TYI, it need only
+;; be approximately correct.
+
+;; A TAGS property gets arguments (<expression> <file-position>)
+;; where <file-position> that of the first non-whitespace
+;; TYI in the reading of the <expression>.
+
+
+(DEFUN TAG-HANDLER (EXP POS)
+       (WHEN TAGS-OUTPUT-STREAM
+	     (LET ((TPOS (FILEPOS TAGS-OUTPUT-STREAM)))
+		  (FUNCALL (GET (CAAR EXP) 'TAG-PRINTER)
+			   EXP TAGS-OUTPUT-STREAM)
+		  (SETQ POS (+ POS (- (FILEPOS TAGS-OUTPUT-STREAM) TPOS)))
+		  (MFORMAT-OPEN TAGS-OUTPUT-STREAM
+				"ï~S~%"
+				POS))))
+
+(DEFMACRO DEFTAGS (NAME ARGL &REST L)
+	  ;; could do WNA checking on the ARGL right now!
+	  `(PROGN 'COMPILE
+		  (DEFUN (,NAME TAG-PRINTER) ,ARGL ,@L)
+		  (PUTPROP ',NAME #'TAG-HANDLER 'TAGS)))
+
+(DEFTAGS MDEFINE (EXP S)
+	 (MFORMAT-OPEN S "~:M:=" (CADR EXP)))
+
+(DEFTAGS $DEFINE_VARIABLE (EXP S)
+	 (MFORMAT-OPEN S
+		       "DEFINE_VARIABLE(~:M,"
+		       (CADR EXP)))
+
+(DEFTAGS MDEFMACRO (EXP S)
+	 (MFORMAT-OPEN S "~:M::=" (CADR EXP)))
+
+
+
+(DEFUN TAG-FILENAMELIST-EQUAL (A B)
+       (AND (EQUAL (CAR A) (CAR B))
+	    (EQUAL (CADR A) (CADR B))
+	    (OR (EQUAL (CADDR A) (CADDR B))
+		(AND (GVERSION-PNAMEP (CADDR A))
+		     (GVERSION-PNAMEP (CADDR B))))))
+	    
+(DEFUN GVERSION-PNAMEP (X)
+       (IF (EQ X '>) T
+	   (DO ((J 1 (1+ J))
+		(N (FLATC X))
+		(C))
+	       ((> J N) T)
+	       (DECLARE (FIXNUM J N C))
+	       (SETQ C (GETCHARN X J))
+	       (IF (OR (> C #/9) (< C #/0))
+		   (RETURN NIL)))))

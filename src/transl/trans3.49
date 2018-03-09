@@ -1,0 +1,337 @@
+;;; -*- Mode: Lisp; Package: Macsyma -*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;       (c) Copyright 1980 Massachusetts Institute of Technology       ;;;
+;;;       Maintained by GJC                                              ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(TRANSL-MODULE TRANS3)
+
+(declare (*lexpr sum-var-sets)
+	 (genprefix trans3_))
+
+;;; The translation of macsyma LAMBDA into lexicaly scoped closures.
+;;; Two cases [1] the downward transmission of variable binding environment,
+;;; e.g. MAP(LAMBDA([U],F(U,X)),EXP)
+;;; [2] downward and upward, requiring a full closure, e.g.
+;;; MAP(LAMBDA([U],SUM:SUM+U),EXP);
+
+;;; LAMBDA([U],F(U,X)) =>
+;;; (DOWN-CLOSE (LAMBDA (U) (F U X)) (X))
+
+;;; TBIND, TBOUNDP, and TUNBIND and TUNBINDS hack lexical scoping.
+
+;;; A function to determine free vars from a lisp expression.
+;;; It returns a <var-set> which is a list of pairs
+;;; (<var> . <side-effectp>)
+
+;;; N.B. This code does a veritable storm of consing, it need not
+;;; do any if it used the lambda-bound plist scheme of GJC;UTRANS >
+;;; a compiler is allowed to cons though, isn't it?
+
+(DEFTRFUN FREE-LISP-VARS (EXP &AUX PROP)
+       (COND ((ATOM EXP)
+	      (COND ((OR (NULL EXP)(EQ T EXP)) NIL)
+		    ((SYMBOLP EXP) `((,EXP . NIL)))
+		    (T NIL)))
+	     ((ATOM (CAR EXP))
+	      (COND ((SETQ PROP (GET (CAR EXP) 'FREE-LISP-VARS))
+		     (FUNCALL PROP EXP))
+		    ((setq prop (get (car exp) 'free-lisp-vars-macro))
+		     (free-lisp-vars (funcall prop exp)))
+		    ((SETQ PROP (GET (CAR EXP) 'MACRO))
+		     (FREE-LISP-VARS (FUNCALL PROP EXP)))
+		    ((GETL (CAR EXP) '(FSUBR FEXPR))
+		     (WARN-FEXPR (CAR EXP)
+				 "environment may fail to be correct.")
+		     (FREE-LISP-VARS-OF-ARGL (CDR EXP)))
+		    (T
+		     (FREE-LISP-VARS-OF-ARGL (CDR EXP)))))
+	     ((EQ (CAAR EXP) 'LAMBDA)
+	      (SUM-VAR-SETS (FREE-LISP-VARS (CAR EXP))
+			    (FREE-LISP-VARS-OF-ARGL (CDR EXP))))
+	     (T
+	      (BARFO "Bad lisp expression generated."))))
+
+
+(DEFUN FREE-LISP-VARS-OF-ARGL (ARGL)
+       (UNION-VAR-SET (MAPCAR #'FREE-LISP-VARS ARGL)))
+
+;;; (REDUCE-VAR-SET '((A . NIL) NIL (B . T) (B . NIL))) => ((A . NIL) (B . T))
+;;;  mult-set reduction.
+
+(DEFUN REDUCE-VAR-SET&OP (VAR-SET OP)
+       (DO ((VAR-SET VAR-SET (CDR VAR-SET))
+	    (REDUCED-VAR-SET NIL)
+	    (VAR1)
+	    (VAR2))
+	   ((NULL VAR-SET) REDUCED-VAR-SET)
+	   (SETQ VAR1 (CAR VAR-SET))
+	   (COND ((NULL VAR1))
+		 ((SETQ VAR2 (ASSQ (CAR VAR1) REDUCED-VAR-SET))
+		  (RPLACD VAR2 (FUNCALL OP (CDR VAR1) (CDR VAR2))))
+		 (T
+		  (PUSH VAR1 REDUCED-VAR-SET)))))
+
+
+(DEFUN REDUCE-VAR-SET (VAR-SET)
+       (REDUCE-VAR-SET&OP VAR-SET #'(LAMBDA (P1 P2)(OR P1 P2))))
+
+;;; S1 - S2. S1 reduced, minus any vars that are in S2.
+
+(DEFUN DIFFERENCE-VAR-SETS (S1 S2)
+       (SETQ S1 (REDUCE-VAR-SET S1))
+       (DO ((S NIL))
+	   ((NULL S1) S)
+	   (COND ((ASSQ (CAAR S1) S2)) ;;; is the first elem of S1 a member of S2?
+		 (T
+		  (PUSH (CAR S1) S)))  ;;; yes. shove it in.
+	   (POP S1)))
+
+;;; N.B. union of var sets is defined classicaly ala G.F.
+
+(DEFUN UNION-VAR-SET (SET-OF-VAR-SETS)
+       (REDUCE-VAR-SET (APPLY #'APPEND SET-OF-VAR-SETS)))
+
+;;; SUM-VAR-SETS is the usual convention.
+
+(DEFUN SUM-VAR-SETS (&REST L)
+       (REDUCE-VAR-SET (APPLY #'APPEND L))) ; consing up a storm aren't we?
+
+(DEFUN MAKE-VAR-SET (VARS)
+       (MAPCAR #'NCONS VARS))
+
+;;; (LAMBDA <BVL> . <BODY>)
+
+(DEFUN (LAMBDA FREE-LISP-VARS) (FORM)
+       (DIFFERENCE-VAR-SETS (FREE-LISP-VARS-OF-ARGL (CDDR FORM))
+			    (COND ((NULL (CADR FORM))
+				   NIL)
+				  ((ATOM (CADR FORM))
+				   (MAKE-VAR-SET (LIST (CADR FORM))))
+				  (T
+				   (MAKE-VAR-SET (CADR FORM))))))
+
+;;; (PROG <BVL> . <BODY>)
+
+(DEFUN (PROG FREE-LISP-VARS) (FORM)
+       (DIFFERENCE-VAR-SETS (UNION-VAR-SET
+			     (MAPCAR #'(LAMBDA (U)
+					       (COND ((ATOM U) NIL) ;; go tag.
+						     (T
+						      (FREE-LISP-VARS U))))
+				     (CDDR FORM)))
+			    (MAKE-VAR-SET (CADR FORM))))
+
+(DEFUN (GO FREE-LISP-VARS) (IGNORED) NIL) ;;; no computed gos please.
+
+
+;;; (DO ((<V> <V> <V>) ...) ((<in-scope>) ..) ...)
+
+(DEFUN (DO FREE-LISP-VARS) (FORM)
+       (DIFFERENCE-VAR-SETS
+	(SUM-VAR-SETS (FREE-LISP-VARS-OF-ARGL (CDDDR FORM))
+		      (FREE-LISP-VARS-OF-ARGL (CADDR FORM))
+		      (UNION-VAR-SET (MAPCAR #'(LAMBDA (DO-ITER)
+						       (FREE-LISP-VARS-OF-ARGL 
+							(CDR DO-ITER)))
+					     (CADR FORM))))
+	(MAKE-VAR-SET (MAPCAR #'CAR (CADR FORM)))))
+
+
+;;; (COND (<I> ..) (<J> ..) ...)
+
+(DEFUN (COND FREE-LISP-VARS) (FORM)
+       (UNION-VAR-SET (MAPCAR #'FREE-LISP-VARS-OF-ARGL (CDR FORM))))
+			      
+
+(DEFUN (QUOTE FREE-LISP-VARS) (IGNORED) NIL)
+(DEFUN (FUNCTION FREE-LISP-VARS) (IGNORED) NIL)
+
+;;; (SETQ ... ODD AND EVENS...)
+
+(DEFUN (SETQ FREE-LISP-VARS) (FORM)
+       (DO ((FREE-VARS NIL (SUM-VAR-SETS `((,(CAR FORM) . T))
+					 (FREE-LISP-VARS (CADR FORM))
+					 FREE-VARS))
+	    (FORM (CDR FORM) (CDDR FORM)))
+	   ((NULL FORM) FREE-VARS)))
+
+;;; uhm. LAMBDA, PROG, GO, DO, COND, QUOTE, SETQ.
+
+(DEFUN (AND FREE-LISP-VARS)(FORM)(FREE-LISP-VARS-OF-ARGL (CDR FORM)))
+(DEFUN (OR FREE-LISP-VARS)(FORM)(FREE-LISP-VARS-OF-ARGL (CDR FORM)))
+
+(DEFUN (COMMENT FREE-LISP-VARS) (IGNORED) NIL)
+(DEFUN (DECLARE FREE-LISP-VARS) (IGNORED) NIL)
+
+;;; these next forms are generated by TRANSLATE.
+
+(DEFPROP $PIECE T SORT-OF-LEXICAL)
+
+(defun (trd-msymeval free-lisp-vars) (FORM)
+  (IF (GET (CADR FORM) 'SORT-OF-LEXICAL)
+      ;; acts like a lexical variable because of the $SUBSTPART translator.
+      (LIST (LIST (CADR FORM)))
+      ()))
+
+(DEFUN (MFUNCTION-CALL FREE-LISP-VARS) (FORM)
+       ; it is not strictly known if the name of the function being called
+       ; is a variable or not. lets say its not.
+       (FREE-LISP-VARS-OF-ARGL (CDDR FORM)))
+
+;;; (FUNGEN&ENV-FOR-MEVAL () () EXP)
+(DEFUN (FUNGEN&ENV-FOR-MEVAL FREE-LISP-VARS) (FORM)
+       (FREE-LISP-VARS (CAR (CDDDr form))))
+;;; (FUNGEN&ENV-FOR-MEVALSUMARG () () EXP MACSYMA-EXP)
+(DEFUN (FUNGEN&ENV-FOR-MEVALSUMARG FREE-LISP-VARS) (FORM)
+       (FREE-LISP-VARS (CAR (CDDR form))))
+;;; the various augmented lambda forms.
+
+(DEFUN free-lisp-vars-m-tlambda (FORM)
+       (DIFFERENCE-VAR-SETS (FREE-LISP-VARS-OF-ARGL (CDDR FORM))
+			    (FREE-LISP-VARS-OF-ARGL (CADR FORM))))
+(MAPC '(LAMBDA (U)(PUTPROP U 'FREE-LISP-VARS-m-tLAMBDA 'FREE-LISP-VARS))
+      '(M-TLAMBDA M-TLAMBDA&))
+(defun free-lisp-vars-m-tlambda&env (form)
+       (difference-var-sets (free-lisp-vars-of-argl (cddr form))
+			    (free-lisp-vars-of-argl (car (cadr form)))))
+(defprop m-tlambda&env free-lisp-vars-m-tlambda&env free-lisp-vars)
+(defprop m-tlambda&env& free-lisp-vars-m-tlambda&env free-lisp-vars)
+; (m-tlambda-i mode env ...)
+(defun (m-tlambda-i free-lisp-vars-macro) (form)
+       `(lambda ,@(cdddr form)))
+
+
+;;; Other entry points: 
+
+(DEFUN TBOUND-FREE-VARS (FREE-VARL)
+       ; Takes a FREE-VAR list and returns a list of two lists.
+       ; the tbound free vars and the tbound free vars that are
+       ; side effected also.
+       (DO ((FREE NIL)
+	    (FREE&S NIL))
+	   ((NULL FREE-VARL) (LIST FREE FREE&S))
+	   (LET ((V (POP FREE-VARL)))
+		(COND ((AND (TBOUNDP (CAR V))
+			    (NOT (GET (CAR V) 'SPECIAL)))
+		       (PUSH (CAR V) FREE)
+		       (COND ((CDR V)
+			      (PUSH (CAR V) FREE&S))))))))
+
+(DEFUN SIDE-EFFECT-FREE-CHECK (VARL FORM)
+       (COND ((NULL VARL) T)
+	     (T
+	      (TR-TELL "This form:" FORM
+			      "has side effects on these variables:"
+			      `((MLIST) ,@VARL)
+			      "which cannot be supported in the translated code."
+			      "(at this time)")
+	     NIL)))
+
+
+;;; O.K. here is the translate property for LAMBDA.
+;;; given catch and throw we don't know where a funarg lambda
+;;; may end up.
+
+;;; Cases:
+;;; I. No side effects on free variables.
+;;;    A. one funarg only, not reconsed. e.g.
+;;;       F(N,L):=MAP(LAMBDA([U],Q(N,U)),L)$
+;;;       (PROGN (SET-ENV <*LINK*> N)
+;;;              (FUNCTION (LAMBDA (U) (LET ((N (GET-ENV *LINK*))) (* U N)))))
+;;;    B. need new instance of the environment each time,
+;;;       F(N):=LAMBDA([U],N*U);
+;;;       `(LAMBDA (U) (gen-func U 'N)) without extend loaded.
+;;; II. side effects.
+;;;    A. Those since effects need to be propogated to the environment
+;;;       where the LAMBDA was made. This is difficult to do in the
+;;;       present translator. e.g.
+;;;       F(L):=BLOCK([SUM:0],FULLMAP(LAMBDA([U],SUM:SUM+U),L),SUM);
+;;;       every function which guarantees the order of argument evalation
+;;;       (MPROG and MPROGN), must translate and expression and get information
+;;;       about environment propagation. 
+;;;       (PROGN (FULLMAP (PROGN (SET-ENV) '(LAMBDA ...)) L)
+;;;              (GET-ENV)), uhm. this is pretty tricky anyway.
+;;;    B. side effects only have to be maintained inside the LAMBDA.
+;;;       this is easier, and if you have it, you really don't need II.A.
+;;;       since you can always ask the LAMBDA for its environment by
+;;;       calling it on the proper message {If the LAMBDA is written that way}.
+
+;;; LAMBDA-I is used by ROMBERG, PLOT2 and INTERPOLATE, and it could be used
+;;; by the mapping functions. We have a single instance of the LAMBDA
+;;; and its environment.
+
+
+;;; ((LAMBDA) ((MLIST) X Y ((MLIST Z))) . <BODY>)
+;;; must also handle the &REST arguments. N.B. MAPPLY correctly handles
+;;; the application of a lisp lambda form.
+
+
+;;; Some forms know that the lambda is not going to
+;;; be an upward funarg, that it is not possible (wanted)
+;;; have two different lambda's generated from the same
+;;; place. e.g. INTERPOLATE(SIN(X^2)=A,X,0,N) (implied lambda
+;;; which is contructed by the translation property for
+;;; interpolate. MAP(LAMBDA([U],...),L) is another example)
+;;; these forms will be called I-LAMBDA's, and will be generated
+;;; from LAMBDA's by the functions that want to. All this
+;;; is meaningless in the present macsyma evaluator of course, since
+;;; it uses dynamic binding and just hopes for the best.
+
+(DEF%TR $LAMBDA_I (FORM)
+	(GEN-TR-LAMBDA FORM))
+(def%tr lambda-I (form) (gen-tr-lambda form))
+(DEF%TR LAMBDA (FORM)
+	(GEN-TR-LAMBDA FORM))
+
+;;; we keep a pointer to the original FORM so that we can
+;;; generate messages with it if need be.
+
+(DEFUN GEN-TR-LAMBDA (FORM &AUX ARG-INFO MODE FREES T-FORM)
+	(SETQ ARG-INFO (MAPCAR #'(LAMBDA (V)
+					 (COND ((ATOM V) NIL)
+					       ((AND (EQ (CAAR V) 'MLIST)
+						     (ATOM (CADR V)))
+						T)
+					       (T '*BAD*)))
+			       (CDR (CADR FORM))))
+	(COND ((OR (MEMQ '*BAD* ARG-INFO)
+		   (AND (MEMQ T ARG-INFO) 
+			(CDR (MEMQ T ARG-INFO)))) ;;; the &REST is not the last one.
+	       (TR-TELL (CADR FORM) " bad LAMBDA list. -TRANSLATE")
+	       (SETQ TR-ABORT T)
+	       NIL)
+	      (T
+	       (SETQ ARG-INFO (MEMQ T ARG-INFO) ;; &RESTP
+		     T-FORM
+		     (TR-LAMBDA `((LAMBDA)
+				  ((MLIST) ,@(MAPCAR #'(LAMBDA (V)
+							       (COND ((ATOM V) V)
+								     (T (CADR V))))
+						     (CDR (CADR FORM))))
+				  ,@(CDDR FORM)))
+		     MODE (CAR T-FORM)   ; not much to do with the mode now,
+		     T-FORM (CDR T-FORM) ; could be use by a global optimizer.
+		     FREES (TBOUND-FREE-VARS (FREE-LISP-VARS T-FORM)))))
+	; with this info we now dispatch to the various macros forms.
+	; (cadr t-form) is a lambda list. (cddr t-form) is a progn body.
+	(COND ((NULL (CAR FREES)) ; woopie.
+	       (COND ((NULL ARG-INFO)
+		      `($ANY . (M-TLAMBDA ,@(CDR T-FORM))))
+		     (T
+		     `($ANY . (M-TLAMBDA& ,@(CDR T-FORM))))))
+	      ((NULL (CADR FREES))
+	       (COND ((EQ (CAAR FORM) 'LAMBDA-I)
+		      `($ANY . (M-TLAMBDA-I ,MODE ,(CAR FREES) ,@(CDR T-FORM))))
+		     (T
+		      `($ANY . (,(COND ((NULL ARG-INFO) 'M-TLAMBDA&ENV)
+				       (T               'M-TLAMBDA&ENV&))
+				(,(CADR T-FORM) ,(CAR FREES))
+				,@(CDDR T-FORM))))))
+	      (T
+	       (WARN-MEVAL FORM)
+	       (side-EFFECT-FREE-CHECK (CADR FREES) FORM)
+	       `($ANY . (MEVAL ',FORM)))))
+
+	       
+

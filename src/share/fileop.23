@@ -1,0 +1,149 @@
+;;; -*- Mode:LISP; Package:MACSYMA -*-
+
+;	** (c) Copyright 1980 Massachusetts Institute of Technology **
+
+(macsyma-module fileop)
+
+;;; Some simple primitives for looking at files and directories from
+;;; Macsyma.  Printf prints a file; Listf lists a user's files; 
+;;; Qlistf lists only the names of the files.
+
+(comment Macsyma user functions)
+
+(DEFMSPEC $printfile (file) (SETQ file (CDR file))
+       (setq file (open (filestrip file)))
+       (princ "Printing file ")
+       (fileprint (truename file))
+       (terpri)
+       (do ((in (tyi file -1) (tyi file -1)))
+	   ((= in -1) (close file) '$done)
+	   (declare (fixnum in))
+	   (cond ((= in 12.) (princ "^L"))	;Otherwise Lisp does randomness.
+		 ((= in 3))			;Don't confuse lusers.
+		 (t (tyo in)))))
+
+(DEFMSPEC $listfiles (dir) (SETQ dir (CDR dir))
+       (princ "/
+File directory listing./
+")
+       (mapc 'fileline
+	     (dirsorted dir '(credate link characters undumped pack)))
+       (terpri))
+
+(DEFMSPEC $qlistfiles (dir) (SETQ dir (CDR dir))
+       (princ "Quick listing./
+")
+       (mapc '(lambda (x) (princ (cadar x))
+		      (princ '/ )
+		      (princ (caddar x))
+		      (terpri))
+	     (dirsorted dir nil))
+       '$done)
+
+(DEFMSPEC $filelist (dir) (SETQ dir (CDR dir))
+  (cons '(mlist simp)
+	(mapcar '(lambda (x) (dollarify (list (cadar x) (caddar x))))
+		(dirsorted dir nil))))
+
+(DEFMSPEC $filelength (file) (SETQ file (CDR file))
+  (filelength (filestrip file)))
+
+(comment The internal functions)
+
+;; Tries to find the user's files: if he uses a multiple-user directory,
+;; his login name is assumed to be the first filename.
+(defun real-directory (dir)
+       (setq dir (car (mergef (list (fullstrip dir)) ())))
+       (list (cond ((and (eq (car dir) 'dsk)
+			 (memq (cadr dir) '(users users1 sdrc jonpoe plasma
+					    kad ucb lrc lrc1 bellab ball)))
+		    (list dir (status userid) '*))
+		   (t (list dir '* '*)))))
+
+;; Fileline prints the line for each file.
+(defun fileline (spec)
+       ;; spec: (((dsk macrak) rpart 345) credate (...) characters 234235)
+       (fileprint (car spec))
+       (cond ((get spec 'link) (linkprint (get spec 'link)))
+	     (t (tabover 30.)
+		(dateprint (get spec 'credate))
+		(princ " L=")
+		(princ (get spec 'characters))
+		(princ " chars.")
+		(and (get spec 'undumped) (princ '/!))
+		(and (equal 13. (get spec 'pack)) (princ " (secondary)"))))
+       (terpri))
+
+;; Linkprint handles links:
+;; [MYFILE,1,DSK,LUSER] --saved on tape #177
+;; [MYFILE,34,DSK,LUSER] --linked to file [HISFLE,BIG,DSK,SHARE]
+(defun linkprint (linkname)
+       (cond ((and (eq (cadar linkname) 'backup)  ;((dsk backup) tape ...)
+		   (eq (cadr linkname) 'tape))
+	      (princ "--saved on tape #")
+	      (princ (caddr linkname)))
+	     (t (princ "--linked to file ")
+		(fileprint linkname))))
+
+;; Prints date as 7/23/80
+(defun dateprint (date)			  ;(year month day)
+       (princ (cadr date))
+       (princ '//)
+       (princ (caddr date))
+       (princ '//)
+       (princ (car date)))
+
+;; Returns a Directory in the standard order.
+(defun dirsorted (dir specs)
+       (cond ((sort (sort (directory (real-directory dir) specs)
+			  '(lambda (x y) (alphalessp (caddar x) (caddar y))))  ;fn2
+		    '(lambda (x y) (alphalessp (cadar x) (cadar y))))) ;fn1
+	     (t (merror "No files found")
+		)))
+
+;; Tabs to column n
+(defun tabover (n) (do ((i (- n (charpos t) 1) (1- i)))
+		       ((< i 0))
+		       (tyo 32.)))
+
+;;; FILES: A library for doing fancier file manipulation from Macsyma
+
+(DECLARE (*EXPR FILESTRIP DOLLARIFY))
+
+;;; (FILEFORM <file> <function-name>)
+;;;  <file> should be either ((MLIST ...) <fn1> <fn2> ...)
+;;;	    or |& ... filename ... | or it will be an error
+;;;  <function-name> is the name of the function to cite if an error
+;;;	    is signalled.
+;;; If the function does not err out, it will return a lisp filespec.
+;;; in Macsyma FILESTRIP form.
+
+(DEFUN FILEFORM (X FUN)
+       (COND ((AND ($LISTP X)
+		   (APPLY 'AND (MAPCAR 'ATOM (CDR X))))
+	      (FILESTRIP (CDR X)))
+	     (T
+	      (MERROR "~M got a bad file specification. Try [fn1,fn2,dev,dir]."
+		     FUN))))
+
+;;; RENAMEFILE(oldname,newname);
+;;; A Macsyma FSUBR - works only renaming files in the same directory.
+;;; Accepts exactly 2 Macsyma-style filespecs.
+
+(DEFMSPEC $RENAMEFILE (ARG-LIST)
+  (SETQ ARG-LIST (CDR ARG-LIST))
+  (COND ((NOT (= (LENGTH ARG-LIST) 2.))
+	 (MERROR
+	  "Syntax is RENAMEFILE(oldname,newname); - Wrong number of args")))
+  (LET ((FILE1 (FILEFORM (CAR ARG-LIST)  'RENAMEFILE))
+	(FILE2 (FILEFORM (CADR ARG-LIST) 'RENAMEFILE)))
+    (SETQ FILE2 (MERGEF (NCONS (CDDR FILE1)) FILE2))
+    (COND ((NOT (PROBEF FILE1))
+	   (MERROR "~M Can't rename a non-existent file!" FILE1)))
+    (COND ((PROBEF FILE2)
+	   (MERROR "~M Can't rename to an already existing file!"
+		   (APPEND (CDR FILE2) (CAR FILE2)))))
+    (LET ((NEWFILE (RENAMEF FILE1 FILE2)))
+      (DEFAULTF NEWFILE)
+      ($FILEDEFAULTS))))
+

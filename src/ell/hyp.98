@@ -1,0 +1,1234 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;;;;
+;;;									    ;;;
+;;;   (c) Copyright 1976, 1983 Massachusetts Institute of Technology        ;;;
+;;;									    ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module hyp)
+
+;******************************************************************************
+;********************					 **********************
+;******************** Hypergeometric Function Simplifier **********************
+;********************                                    **********************
+;******************************************************************************
+
+;; This is a modified version of the original package written by Yannis.
+;; There are still many bugs and kludges in the code; the algorithms
+;; used are not very general, in short, this package needs to be 
+;; rewritten with a fresh approach to the problem. This version is the
+;; result of ELL's extensions, followed by fixes, extensions, and
+;; cleaning up by WGD.					--wgd
+
+
+;; Keep this in lowercase because Franz strings are case sensitive
+
+(load-macsyma-macros rzmac)
+
+(DECLARE (SPECIAL VAR PAR ZEROSIGNTEST PRODUCTCASE 1//2 -1//2 3//2
+		  FLDEG FLGKUM CHECKCOEFSIGNLIST SERIESLIST
+		  $EXPONENTIALIZE $BESTRIGLIM $RADEXPAND FAIL-SYM)
+	 (*LEXPR $DIFF ADD MUL)
+	 (MUZZLED T))
+
+(SETQ 3//2 (M//T 3 2) FLGKUM T FLDEG T FL1F1 T CHECKCOEFSIGNLIST ()
+      $BESTRIGLIM 3 FAIL-SYM (GENSYM))
+
+(DEFMACRO CDRASS (A L) `(CDR (ASSOC ,A ,L))) 
+
+(DEFMACRO NON-INTP (N) `(NOT (INTEGERP ,N)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::::::::;
+;;									     ;;
+;;   Symbolic Arithmetic Macros (to be flushed when nopers supports them)    ;;
+;;									     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFMACRO SIMP (X) `(SIMPLIFYA ,X ()))
+
+(DEFMACRO SIMP-LIST (L) `(MAPCAR #'(LAMBDA (X) (SIMP X)) ,L))
+
+(DEFMACRO MABS (X) `(SIMP `((MABS) ,,X)))
+
+(DEFMACRO MSQRT (X) `(M^T ,X 1//2))
+
+(DEFMACRO MEXPT (X) `(M^T '$%E ,X))
+
+(DEFMACRO MLOG (X) `(SIMP `((%LOG) ,,X)))
+
+(DEFMACRO MSIN (X) `(SIMP `((%SIN) ,,X)))
+
+(DEFMACRO MCOS (X) `(SIMP `((%COS) ,,X)))
+
+(DEFMACRO MASIN (X) `(SIMP `((%ASIN) ,,X)))
+
+(DEFMACRO MATAN (X) `(SIMP `((%ATAN) ,,X)))
+
+(DEFMACRO MGAMMA (X) `(SIMP `((%GAMMA) ,,X)))
+
+(DEFMACRO MBINOM (X Y) `(SIMP `((%BINOMIAL) ,,X ,,Y)))
+
+(DEFMACRO MERF (X) `(SIMP `((%ERF) ,,X)))
+
+(DEFMACRO =1//2 (X) `(ALIKE1 ,X 1//2))
+
+(DEFMACRO =3//2 (X) `(ALIKE1 ,X 3//2))
+
+(DEFMACRO =-1//2 (X) `(ALIKE1 ,X -1//2))
+
+(DEFMFUN $HGFRED (L1 L2 ARG)
+  (LET ((VAR ARG) (PAR ARG))
+    (HGFSIMP-EXEC (CDR L1) (CDR L2) ARG)))
+
+(DEFMFUN HGFSIMP-EXEC (L1 L2 ARG)
+  ;; Copy lists here so that we may do destructive things later
+  (SETQ L1 (COPY-TOP-LEVEL L1) L2 (COPY-TOP-LEVEL L2))
+  (LET ($EXPONENTIALIZE ($RADEXPAND '$ALL) (RESULT (HGFSIMP L1 L2 ARG)))
+    (IF (OR (NUMBERP RESULT) (NOT (ATOM RESULT)))
+	RESULT
+	(FPQFORM L1 L2 ARG))))
+
+(DEFUN HGFSIMP (L1 L2 VAR)
+  (SETQ L1 (SIMP-LIST L1) L2 (SIMP-LIST L2))
+  (LET ((RESULT (SIMPG L1 L2)) (LISTCMDIFF))
+       (IF (OR (ATOM RESULT) (NOT (EQ (CAAR RESULT) FAIL-SYM)))
+	   RESULT
+	   (IF (SETQ LISTCMDIFF (INTDIFF (CDAR RESULT) (CDR RESULT)))
+	       (SPLITPFQ LISTCMDIFF (CDAR RESULT) (CDR RESULT))
+	       (DISPATCH-SPEC-SIMP (CDAR RESULT) (CDR RESULT))))))
+
+(DEFUN SIMPG (L1 L2) 
+  (LET ((IL (INTERSECTION L1 L2)))
+       (IFN IL (SIMPG-EXEC L1 L2) (SIMPG-EXEC (DEL** IL L1) (DEL** IL L2)))))
+
+(DEFUN DEL** (A B) 
+  (IFN A B (DEL** (CDR A) (DELETE (CAR A) B 1.))))
+
+(DEFUN INTERSECTION (L1 L2) 
+  (COND ((NULL L1) ())
+	((MEMBER (CAR L1) L2)
+	 (CONS (CAR L1)
+	       (INTERSECTION (CDR L1) (DELETE (CAR L1) L2 1.))))
+	(T (INTERSECTION (CDR L1) L2))))
+
+(DEFUN SIMPG-EXEC (L1 L2) 
+  (LET (N)
+       (COND ((MEM-ZERO L1) 1.)
+	     ((SETQ N (MEM-NEG L1)) (MAKE-POLY L1 L2 (- N)))
+	     ((OR (MEM-ZERO L2) (MEM-NEG L2))
+	      (MERROR "Hypergeometric-series is undefined~%"))
+	     (T (CONS (CONS FAIL-SYM L1) L2)))))		   
+
+(DEFUN INTDIFF (L1 L2)
+  (IFN L1 ()
+       (DO ((L L2 (CDR L)) (A (CAR L1)) (DIF))
+	   ((NULL L) (INTDIFF (CDR L1) L2))
+	   (IF (NON-NEG-INTP (SETQ DIF (M-T A (CAR L))))
+	       (RETURN (LIST A DIF))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;:::::::::;
+;;									     ;;
+;;            Macros for constructing Macsyma Special Functions		     ;;
+;;									     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFMACRO HERMPOL (N ARG) ``((MQAPPLY) (($%HE ARRAY) ,,N) ,,ARG)) 
+
+(DEFMACRO LAGPOL (N A ARG) ``((MQAPPLY) (($%L ARRAY) ,,N ,,A) ,,ARG)) 
+
+(DEFMACRO JACOBPOL (N A B X) ``((MQAPPLY) (($%P ARRAY) ,,N ,,A ,,B) ,,X))
+
+(DEFMACRO LEGENPOL (N X) ``((MQAPPLY) (($%P ARRAY) ,,N) ,,X))
+
+(DEFMACRO TCHEBYPOL (N X) ``((MQAPPLY) (($%T ARRAY) ,,N) ,,X))
+
+(DEFUN GEGENPOL (N V X) 
+  (IF (=0 V) (TCHEBYPOL N X) `((MQAPPLY) (($%C ARRAY) ,N ,V) ,X))) 
+
+(DEFMACRO WHITFUN (K M VAR) ``((MQAPPLY) (($%M ARRAY) ,,K ,,M) ,,VAR))
+
+(DEFMACRO BES (A X FLG) 
+  ``((MQAPPLY) (,(IF (EQ ,FLG 'J) '($%J ARRAY) '($%IBES ARRAY)) ,,A)
+	       ,(M*T 2. (MSQRT X))))
+
+(DEFMACRO LEGEN (N M X PQ)
+  ``((MQAPPLY) (,(IF (EQ ,PQ 'Q) '($%Q ARRAY) '($%P ARRAY)) ,,N ,,M) ,,X))
+
+(DEFUN MAKE-POLY (L1 L2 N) 
+  (LET ((VECT (CONS (LENGTH L1) (LENGTH L2))))
+       (COND ((EQUAL VECT '(2. . 1.))
+	      (2F1POLYS (CAR L1) (CADR L1) (CAR L2) (- N)))
+	     ((EQUAL VECT '(1. . 1.)) (1F1POLYS (CAR L2) N))
+	     ((EQUAL VECT '(2. . 0.)) (2F0POLYS (CAR L1) (CADR L1) (- N)))
+	     (T (MAKE-GENL-POLY L1 L2 N)))))
+ 
+;; Numbered comment N indicates that a formula similar to N in the 
+;; mathematical handbook by Abramowitz and Stegun is being applied.
+;; If no such formula is in this work then the equation will be explicitly
+;; stated in the code. This greatly facilitates error-checking.
+
+(DEFUN 1F1POLYS (C N) 
+  (LET ((FACT1 (TIMES (EXPT -2. N) (FACTORIAL N)))
+	(FACT2 (MSQRT (M*T 2. VAR))))
+       (COND ((=1//2 C)
+	      (M*T (M//T FACT1 (FACTORIAL (TIMES 2. N)))	;; 13.6.17
+		   (HERMPOL (TIMES 2. N) FACT2)))
+	     ((=3//2 C)
+	      (M*T (M//T FACT1 (FACTORIAL (ADD1 (TIMES 2. N))))	;; 13.6.18
+		   (M//T FACT2) 
+		   (HERMPOL (ADD1 (TIMES 2. N)) FACT2)))
+	     (T (M*T (FACTORIAL N) (MGAMMA C) (MGAMMA (M+T C N))      ;; 13.6.9
+		     (LAGPOL N (M1-T C) VAR))))))
+
+(DEFUN 2F0POLYS (A B N)
+  (IF (=1//2 (MABS (M-T B A)))
+      
+      ;; %F([-N/2,1/2-N/2],[],Z) = (-2/Z)^(-N/2) %HE[N](SQRT(-2/Z))
+      
+      (M*T (M^T (M//T -2. VAR) (SETQ N ($MIN A B)))
+	   (HERMPOL (M*T -2. N) (MSQRT (M//T -2. VAR))))
+      (IF (EQUAL B (- N)) (EXCH A B))
+	   (M*T (FACTORIAL N) (M^T VAR N)	;; 13.6.27
+		(LAGPOL N (M-T A B) (M//T -1. VAR)))))
+
+(DEFUN 2F1POLYS (A B C N)
+  (LET (V)
+       (IFN (EQUAL A N) (EXCH A B))	;; CANONICALIZE
+       (IF (SETQ V (LEGPOL A B C)) V
+	   (SETQ V (CDRASS 'V (VFVP (M//T (M+T B N) 2.))) N (- N))
+	   (IF (=1//2 (M-T C V))
+	       (M*T (IF (=0 V) 1. (M*T (FACTORIAL N)
+				       (M//T (APPELL (M*T 2. V) N))))
+		    (GEGENPOL N V (M-T 1. (M*T 2. PAR))))
+	       (M*T (FACTORIAL N) (M//T (APPELL (M1+T V) N))
+		    (JACOBPOL N (M1-T C) (M-T (M*T 2. V) C)
+			      (M-T 1. (M*T 2. PAR))))))))
+
+(DEFMACRO LIST-INCR (L) `(MAP (FN (LL) (RPLACA LL (M1+T (CAR LL)))) ,L))
+
+(DEFUN MAKE-GENL-POLY (L1 L2 N) 
+  (DO ((RESULT 1.) (EXP 1. (1+ EXP)) (PRODNUM 1.) (PRODEN 1.) (N N (1- N)))
+      ((ZEROP N) RESULT)
+      (SETQ PRODNUM (M*T PRODNUM (M*LT L1)) PRODEN (M*T PRODEN (M*LT L2))
+	    RESULT (M+T RESULT (M*T PRODNUM (M^T VAR EXP) (M//T PRODEN)
+				    (M//T (FACTORIAL EXP)))))
+      (LIST-INCR L1)
+      (LIST-INCR L2)))
+
+(DEFUN DISPATCH-SPEC-SIMP (L1 L2) 
+  (LET ((LEN1 (LENGTH L1)) (LEN2 (LENGTH L2)))
+       (COND ((AND (LESSP LEN1 2.) (LESSP LEN2 2.))
+	      (SIMP2>F<2 L1 L2 (CONS LEN1 LEN2)))
+	     ((AND (EQUAL LEN1 2.) (EQUAL LEN2 1.))
+	      (SIMP2F1 (FIRST L1) (SECOND L1) (FIRST L2)))
+	     (T (FPQFORM L1 L2 VAR)))))
+
+(DEFUN SIMP2>F<2 (L1 L2 F-VECT)
+  (COND ((EQUAL F-VECT '(0. . 0.)) (MEXPT VAR))
+	((EQUAL F-VECT '(0. . 1.)) (BES->TRIG (FIRST L2) VAR))
+	((NULL L2) (M^T (M-T 1. VAR) (M-T (FIRST L1))))
+	(T (CONFLUENT (FIRST L1) (FIRST L2) VAR))))
+
+(DEFUN BES->TRIG (A X) 
+  (LET (N)
+       (IF (AND (FIXP (SETQ N (M-T A 1//2)))
+		(LESSP (ABS N) $BESTRIGLIM))
+	   (M*T (MGAMMA A) (M^T (MSQRT (M//T -1. X)) (M-T A 1//2))
+		(M^T '$%PI -1//2)
+		(SIMP (BES->TRIG-SUM (1- N) (M*T 2. (MSQRT (M-T X))))))
+	   (IF (EQ (CHECKSIGNTM X) '$NEGATIVE)
+	       (M*T (MGAMMA A) (M^T (M//T -1. X) (M//T (M1-T A) 2.))
+		    (BES (M1-T A) (M-T X) 'J))
+	       (M*T (MGAMMA A) (M^T (M//T X) (M//T (M1-T A) 2.))
+		    (BES (M1-T A) X 'I))))))
+
+(DEFUN BES->TRIG-SUM (N Z)
+  (LET (FAC)
+    (IF (MINUSP
+	 (PROG1 N (SETQ FAC (M*T '$%PI (IF (MINUSP N) (SETQ N (1- (- N))) N)
+				 1//2))))
+	(M-T (M* `((%COS) ,(M+T Z FAC)) (TRIG-SUM N Z T))
+	     (M* `((%SIN) ,(M+T Z FAC)) (TRIG-SUM N Z ())))
+	(M+T (M* `((%SIN) ,(M-T Z FAC)) (TRIG-SUM N Z T))
+	     (M* `((%COS) ,(M-T Z FAC)) (TRIG-SUM N Z ()))))))
+
+(DEFUN TRIG-SUM (N Z FLG)
+  (COND ((AND FLG (< N 2.)) 1.)
+	((AND (NOT FLG) (ZEROP N)) 0.)
+	(T (DO ((END (IF FLG (1+ (// N 2.)) (// (1+ N) 2.))) (K 1. (1+ K))
+		(2K (IF FLG 2. 3.) (+ 2K 2.)) (RESULT (IF FLG 1. (M//T Z))))
+	       ((= K END) RESULT)
+	       (SETQ RESULT (M+T RESULT
+				 (M//T (M*T (^ -1. K)
+					    (FACTORIAL (+ N 2K)))
+				       (M*T (FACTORIAL 2K)
+					    (FACTORIAL (- N 2K))
+					    (M^T (M*T 2. Z) 2K)))))))))
+
+(DEFUN NEGCOEF (X)
+  (LET ((D (CDRASS 'D (D*U X))))
+       (COND ((NULL D) T)
+	     ((EQ (ASKSIGN (M//T D)) '$POSITIVE) ())
+	     (T T))))
+
+(DEFUN KUMMER (A C)
+  (M*T (MEXPT VAR) (CONFLUENT (M-T C A) C (M-T VAR))))
+
+(DEFUN MEM-ZERO (L)
+       (DO ((LL L (CDR LL)))
+	   ((NULL LL) ())
+	   (IF (=0 (CAR LL)) (RETURN 'T))))
+
+(DEFUN MEM-NEG (L)
+       (DO ((LL L (CDR LL)))
+	   ((NULL LL) ())
+	   (IF (AND (FIXP (CAR LL)) (MINUSP (CAR LL))) (RETURN (CAR LL)))))
+
+(DEFUN SIMP2F1 (A B C)
+  (COND ((AND (EQUAL A 1.) (EQUAL B 1.) (EQUAL C 2.))
+	 (M*T (M//T (M-T VAR)) (MLOG (M1+T (M-T VAR)))))
+	((AND (OR (=3//2 C) (=1//2 C))
+	      (TRIG-LOG A B C)))
+	((AND (OR (=1//2 (M-T A B)) (=1//2 (M-T B A)))
+	      (HYP-COS A B C)))
+	((AND (INTEGERP A) (INTEGERP B) (INTEGERP C))
+	 (SIMPR2F1 A B C))
+	((AND (INTEGERP (M+T C 1//2)) (INTEGERP (M+T A B)))
+	 (STEP4 A B C))
+	((AND (INTEGERP (M+T (M-T A B) 1//2)) (STEP7 A B C)))
+	((LEGFUN A B C))
+	;; Should be extended here.
+	(T (FPQFORM (LIST A B) (NCONS C) VAR))))
+
+(DEFUN STEP7 (A B C) 
+  (PROG (L M N K MN KL SYM SYM1 R) 
+	(SETQ L (S+C A) 
+	      SYM (CDRASS 'F L) 
+	      MN (CDRASS 'C L) 
+	      L (S+C C) 
+	      SYM1 (CDRASS 'F L))
+	(COND ((NOT (EQUAL (M*T SYM 2.) SYM1)) (RETURN ())))
+	(SETQ KL (CDRASS 'C L) 
+	      L (S+C B) 
+	      R (M-T (M+T 1//2 (CDRASS 'C L)) MN) 
+	      M ($NUM MN) 
+	      N ($DENOM MN) 
+	      K ($NUM KL) 
+	      L ($DENOM KL))
+	(COND ((EQUAL (* 2. L) N)
+	       (COND ((INTEGERP (// (- K M) N))
+		      (RETURN (ALGVH K L M N A B C))))))
+	(COND ((INTEGERP (// K (* 2. L)))
+	       (COND ((INTEGERP (// M N)) (RETURN (ALGVH K L M N A B C)))
+		     (T (RETURN ()))))
+	      ((INTEGERP (// M N)) (RETURN ()))
+	      ((INTEGERP (// (- (* K N) (* 2. L M)) (* 2. L N)))
+	       (RETURN (ALGVH K L M N A B C))))
+	(RETURN ()))) 
+
+(DEFUN GETXY (K L M N) 
+  (PROG (X Y) 
+	(SETQ Y 0.)
+   LOOP	(COND ((INTEGERP (SETQ X
+			       (// (+ Y (// K L) (* -2. (// M N)))
+				   2.)))
+	       (RETURN (LIST X Y))))
+	(SETQ Y (+ 2. Y))
+	(GO LOOP))) 
+
+(DECLARE (SPECIAL FUN B))
+
+(DEFUN ALGVH (K L M N A B C) 
+  (PROG (X Y XY A-B W)
+	(SETQ A-B (- A B))
+	(SETQ XY (GETXY K L M N) X (CAR XY) Y (CDR XY))
+	(COND ((< X 0.) (GO OUT)))
+	(COND ((< X Y)
+	       (COND ((< (M+T A-B X 1//2) 0.)
+		      (RETURN (F88 X Y A C FUN)))
+		     (T (RETURN (F87 X Y A C FUN)))))
+	      (T (COND ((< (M+T A-B X 1//2) 0.)
+			(RETURN (F90 X Y A C FUN)))
+		       (T (RETURN (F89 X Y A C FUN))))))
+   OUT	(SETQ W (* X -1.))
+	(COND ((< (- (M+T A-B 1//2) W) 0.)
+	       (RETURN (F92 X Y A C FUN)))
+	      (T (RETURN (F91 X Y A C FUN)))))) 
+
+(DEFUN F87 (X Y A C FUN) 
+  (M*T (M//T (M*T (APPELL C Y)
+		 (APPELL (M-T (M+T C Y) (M+T A X)) (- X Y))
+		 (APPELL (M-T (M+T C Y) (M+T A X 1//2))
+			(M-T (M+T A X 1//2) (M+T A 1//2)))))
+       (M^T 'ELL (M-T 1. C))
+       (M^T (M-T 1. 'ELL) (M-T (M+T Y C) (M+T A 1//2)))
+       ($DIFF (M*T (M^T 'ELL (M+T A X))
+		   (M^T (M-T 1. 'ELL) (M-T A))
+		   ($DIFF (M*T (M^T 'ELL
+				      (M-T (M+T 1//2 X) Y))
+			       ($DIFF (M*T (M^T 'ELL
+						  (M-T (M+T C Y) 1.))
+					   (M^T (M-T 1. 'ELL)
+						  (M-T (M+T 1//2
+							    (M*T 2. A)
+							    (* 2. X))
+						       (M+T C Y)))
+					   FUN)
+				      'ELL
+				      X))
+			  'ELL
+			  (- X Y)))
+	      'ELL
+	      Y))) 
+
+(DEFUN F88 (X Y A C FUN) 
+  (M*T (M//T (M*T (APPELL C Y)
+		 (APPELL (M-T (M+T C Y) (M+T A X)) (- X Y))
+		 (APPELL (M+T A 1//2 X)
+			(M-T B (M-T X (M-T A 1//2))))))
+       (M^T 'ELL (M-T 1. C))
+       (M^T (M-T 1. 'ELL) (M-T (M+T Y C) (M+T A 1//2)))
+       ($DIFF (M*T (M^T 'ELL (M+T A X))
+		   (M^T (M-T 1. 'ELL) (M-T A))
+		   ($DIFF (M*T (M^T 'ELL
+				      (M-T C
+					   (M-T X
+						(M-T 1//2
+						     (M*T A 2.)))))
+			       (M^T (M-T 1. 'ELL)
+				      (M-T (M+T A X B) (M-T C Y)))
+			       ($DIFF (M*T (M^T 'ELL (M-T B 1.))
+					   FUN)
+				      'ELL
+				      (M-T B (M-T A (M-T X 1//2)))))
+			  'ELL
+			  (- X Y)))
+	      'ELL
+	      Y)))
+
+(DEFUN SIMPR2F1 (A B C)
+  (LET ((INTA? (FIXP A)) (INTB? (FIXP B)))
+       (COND ((FIXP C)
+	      (COND ((AND INTA? INTB?)
+		     (DERIVINT (- A 1.) (- B A) (1- (- C B))))
+		    (INTA? (GEREDNO2 B A C))
+		    (INTB? (GEREDNO2 A B C))
+		    (T 'FAIL1)))
+	     (INTA? (IF INTB? 'D 'C))
+	     ((EQ (CAAR A) 'RAT) (IF INTB? 'C 'D))
+	     (T 'FAILG))))
+
+(DEFUN GEREDNO2 (A B C) 
+  (COND ((GREATERP C B) (GEREDF B A C)) (T (GERED2 A B C)))) 
+
+(DEFUN DERIVINT (N M L) 
+  (SUBST VAR
+	 'PSEY
+	 (M*T (M^T -1. M)
+	      (FACTORIAL (+ N M L 1.))
+	      (M//T (FACTORIAL N))
+	      (M//T (FACTORIAL L))
+	      (M//T (FACTORIAL (+ N M)))
+	      (M//T (FACTORIAL (+ M L)))
+	      ($DIFF (M*T (M^T (M-T 1. 'PSEY) (+ M L))
+			  ($DIFF (M*T (M^T 'PSEY -1.)
+				      -1.
+				      (MLOG (M-T 1. 'PSEY)))
+				 'PSEY
+				 L))
+		     'PSEY
+		     (+ N M))))) 
+
+(DEFUN HYP-COS (A B C) 
+  (PROG (A2 A1 Z1) 
+	(SETQ A1 (M//T (M-T (M+T A B) 1//2) 2.))
+	(SETQ Z1 (M-T 1. VAR))
+	(SETQ A2 (M//T C 2.))
+	(COND ((EQUAL (M-T (M+T A B) 1//2) C)
+	       (RETURN (M*T (M^T 2. (M-T (M*T A1 2.) 1.))
+			    (M//T (MSQRT Z1))
+			    (M^T (M1+T (MSQRT Z1))
+				 (M-T 1. (M*T 2. A1)))))))
+	(COND ((EQUAL (M1+T (M*T 2. A1)) C)
+	       (RETURN (M*T (M^T 2. (M-T C 1.))
+			    (M^T (M1+T (MSQRT Z1))
+				 (M-T (M-T C 1.))))))))) 
+
+(DEFUN DEGEN2F1 (A B C) 
+  (COND ((EQ (QUEST (M-T C B)) '$NEGATIVE)
+	 (COND ((EQ (QUEST (M-T C A)) '$NEGATIVE)
+		(GERED1 (LIST A B) (LIST C) 'HGFSIMP))
+	       (T (GERED2 A B C))))
+	((EQ (QUEST (M-T C A)) '$NEGATIVE) (GERED2 B A C))
+	(T (REST-DEGEN A B C)))) 
+
+(DEFUN REST-DEGEN (A B C) 
+  (PROG (M N L) 
+	(COND ((NON-NEG-INTP (SETQ M (M-T A 1.)))
+	       (RETURN (REST-DEGEN-1 A B C M))))
+	(COND ((NON-INTP B) (RETURN (REST-DEGEN-2 A B C))))
+	(COND ((AND (NON-NEG-INTP (SETQ N (M-T C 1.)))
+		    (NON-NEG-INTP (SETQ M (M-T (M-T A N) 1.)))
+		    (NON-NEG-INTP (SETQ L (M-T B A)))
+		    (EQ (M-T (M-T C A) B) (M-T (M+T M M N L 1.))))
+	       (RETURN (GERED1 (LIST A B) (LIST C) 'HGFSIMP))))
+	(RETURN (HYP-DEG B A C)))) 
+
+(DEFUN REST-DEGEN-1 (A B C M) 
+  (PROG (N L) 
+	(COND ((AND (NON-INTP B)
+		    (NON-INTP (M-T (M-T C A) B))
+		    (NON-NEG-INTP (M-T (M-T C A) 1.)))
+	       (RETURN (DEG299 A B C))))
+	(COND ((AND (NON-NEG-INTP (SETQ N (M-T (M-T C M) 2.)))
+		    (NON-NEG-INTP (SETQ L (M-T B C)))
+		    (EQUAL (M-T (M-T C A) B) (M-T (M+T L M 1.))))
+	       (RETURN (GERED1 (LIST A B) (LIST C) 'HGFSIMP))))
+	(COND ((NON-NEG-INTP (SETQ L (M-T (M-T B M) 1.)))
+	       (RETURN (REST-DEGEN-1A A B C M L))))
+	(RETURN (HYP-DEG B A C)))) 
+
+(DEFUN REST-DEGEN-1A (A B C M L) 
+  (PROG (N) 
+	(COND ((AND (NON-NEG-INTP (SETQ N (M-T (M-T (M-T C M) L) 2.)))
+		    (EQUAL (M-T N M) (M-T (M-T C A) B)))
+	       (RETURN (DEG2913 A B C))))
+	(COND ((AND (EQUAL C (M-T N))
+		    (EQUAL (M-T (M-T C A) B)
+			   (M-T (M+T M M L N 2.))))
+	       (RETURN (DEG2918 A B C))))
+	(RETURN (HYP-DEG B A C)))) 
+
+(DEFUN REST-DEGEN-2 (A B C) 
+  (PROG (M L) 
+	(COND ((AND (NON-INTP C) (NON-INTP (M-T (M-T C A) B)))
+	       (RETURN (REST-DEGEN-2A A B C))))
+	(COND ((AND (NON-NEG-INTP (SETQ M (M-T C 1.)))
+		    (NON-NEG-INTP (SETQ L (M-T A C)))
+		    (NON-INTP (M-T (M-T C A) B)))
+	       (RETURN (DEG292 A B C))))
+	(RETURN (HYP-DEG B A C)))) 
+
+(DEFUN REST-DEGEN-2A (A B C) 
+  (PROG () 
+	(COND ((NON-NEG-INTP (M-T A C))
+	       (RETURN (GERED1 (LIST A B) (LIST C) 'HGFSIMP))))
+	(COND ((NON-NEG-INTP (M-T (M-T C A) 1.)) (RETURN (DEG2917 A B C))))
+	(RETURN (HYP-DEG B A C)))) 
+
+(DEFUN QUEST (A) 
+  (COND ((NUMBERP A) (CHECKSIGNTM A))
+	((EQUAL (CAAR A) 'RAT) (CHECKSIGNTM A))
+	(T ()))) 
+
+(DEFUN NON-NEG-INTP (N) (IF (INTEGERP N) (NOT (EQ ($SIGN N) '$NEG))))
+
+(DEFUN HYP-DEG (A B C) 
+  (PROG () 
+	(COND (FLDEG (SETQ FLDEG ())
+		     (RETURN (HGFSIMP (LIST A B) (LIST C) VAR))))
+	(SETQ FLDEG T)
+	(RETURN (FPQFORM (LIST A B) (LIST C) VAR)))) 
+
+(DEFUN DEG2913 (A B C) 
+  (M*T (M^T (M-T VAR) (M-T B))
+       (HGFSIMP (LIST (M+T B 1. (M-T C)) B)
+		(LIST (M+T B 1. (M-T A)))
+		(M//T VAR)))) 
+
+(DEFUN DEG2918 (A B C) 
+  (M*T (M^T VAR (M-T 1. C))
+       (M^T (M-T 1. VAR) (M+T C (M-T A) (M-T B)))
+       (HGFSIMP (LIST (M-T 1. A) (M-T 1. B)) (LIST (M-T 2. C)) VAR))) 
+
+(DEFUN DEG2917 (A B C) 
+  (M*T (M^T VAR (M-T 1. C))
+       (HGFSIMP (LIST (M+T A 1. (M-T C)) (M+T B 1. (M-T C)))
+		(LIST (M-T 2. C))
+		VAR))) 
+
+(DEFUN DEG299 (A B C) 
+  (M*T (M^T (M-T VAR) (M-T A))
+       (HGFSIMP (LIST A (M+T A 1. (M-T C)))
+		(LIST (M+T A 1. (M-T B)))
+		(M//T VAR)))) 
+
+(DEFUN LEGFUN (A B C) 
+  (LET ((1-C (M-T 1. C)) (A-B (M-T A B)) (C-A-B (M-T (M-T C A) B)))
+       (COND ((=1//2 A-B) (GERED1 (LIST A B) (LIST C) 'LEGF24))
+	     ((=-1//2 A-B) (LEGF24 (LIST A B) (LIST C) VAR))
+	     ((=1//2 C-A-B) (LEGF20 (LIST A B) (LIST C) VAR))
+	     ((=-1//2 C-A-B) (GERED1 (LIST A B) (LIST C) 'LEGF20))
+	     ((ALIKE1 1-C A-B) (LEGF16 (LIST A B) (LIST C) VAR))
+	     ((ALIKE1 1-C (M-T A-B)) (GERED1 (LIST A B) (LIST C) 'LEGF16))
+	     ((ALIKE1 1-C C-A-B) (GERED1 (LIST A B) (LIST C) 'LEGF14))
+	     ((ALIKE1 1-C (M-T C-A-B)) (LEGF14 (LIST A B) (LIST C) VAR))
+	     ((ALIKE1 A-B (M-T C-A-B)) (LEGF36 (LIST A B) (LIST C) VAR))
+	     ((OR (=1//2 1-C) (=-1//2 1-C)) (LEGPOL A B C))
+	     ((ALIKE1 A-B C-A-B) 'LEGENDRE-FUNCT-TO-BE-DISCOVERED)
+	     (T ()))))
+
+(DEFUN LEGF20 (L1 L2 VAR) 
+  (PROG (M N B C) 
+	(SETQ B (CADR L1) C (CAR L2))
+	(SETQ M (M-T 1. C) N (M-T (M+T B B M)))
+	(RETURN (M*T (LF N M)
+		     (LEGEN N M (MSQRT (M-T 1. VAR)) 'P))))) 
+
+(DEFUN LEGF24 (L1 L2 VAR) 
+  (PROG (M N A C) 
+	(SETQ A (CAR L1) 
+	      C (CAR L2) 
+	      M (M-T 1. C) 
+	      N (M-T (M+T A A M)))
+	(RETURN (M*T (LF N M)
+		     (M^T VAR (M+T N M))
+		     (LEGEN N M (M^T (M-T 1. VAR) -1//2) 'P))))) 
+
+(DEFUN LEGF16 (L1 L2 VAR) 
+  (PROG (M N A C) 
+	(SETQ A (CAR L1) C (CAR L2) M (M-T 1. C) N (M-T A))
+	(RETURN (M*T (M^T 2. (M-T N))
+		     (M^T (M-T VAR 1.) (M//T M -2.))
+		     (M//T (MGAMMA (M-T 1. M)))
+		     (M^T (M+T VAR 1.) (M+T (M//T M 2.) N))
+		     (LEGEN N M (M//T (M1+T VAR) (M-T 1. VAR)) 'P))))) 
+
+(DEFUN LF (N M) 
+  (M*T (M^T 2. M)
+       (M//T (M^T (M-T (M^T VAR 2.) 1.) (M//T M 2.)))
+       (M//T (MGAMMA (M-T 1. M))))) 
+
+(DEFUN LEGF14 (L1 L2 VAR) 
+  (PROG (M N A C B L) 
+	(SETQ L (S+C (CAR L1)) 
+	      A (COND ((EQUAL (CDRASS 'C L) 0.)
+		       (CDRASS 'F L))
+		      (T (M-T (CDRASS 'F L)))) 
+	      C (CAR L2) 
+	      M (M-T 1. C) 
+	      N (M-T A))
+	(RETURN (M*T (M^T (M+T VAR 1.) (M//T M 2.))
+		     (M^T (M-T VAR 1.) (M//T M -2.))
+		     (M//T (MGAMMA (M-T 1. M)))
+		     (LEGEN N M (M-T 1. (M*T 2. VAR)) 'P))))) 
+
+(DEFUN LEGF36 (L1 L2 VAR) 
+  (PROG (N M A B) 
+	(SETQ A (CAR L1) B (CADR L1) N (M-T B 1.) M (M-T B A))
+	(RETURN (M*T (M^T 2. N)
+		     (MGAMMA (M1+T N))
+		     (MGAMMA (M1+T (M+T N M)))
+		     (M^T (M+T VAR 1.)
+			    (M+T (M//T M 2.) (M-T N) -1.))
+		     (M^T (M-T VAR 1.) (M//T M -2.))
+		     (M//T (MGAMMA (M+T 2. N N)))
+		     (MEXPT (M*T -1 '$%I '$%PI M))
+		     (LEGEN N M (M//T (M-T 2. VAR) VAR) 'Q))))) 
+
+(DEFUN LEGPOL (A B C) 
+  (PROG (L V) 
+	(COND ((NOT (MEM-NEG (LIST A)))
+	       (RETURN 'FAIL-1-IN-C-1-CASE)))
+	(SETQ L (VFVP (M//T (M+T B A) 2.)))
+	(SETQ V (CDR (ASSOC 'V L)))
+	(COND ((AND (=1//2 V) (EQUAL C 1.))
+	       (RETURN (LEGENPOL (M-T A) (M-T 1. (M*T 2. VAR))))))
+	(COND ((AND (=1//2 C) (=1//2 (M-T B A)))
+	       (RETURN (M*T (FACTORIAL (M-T A))
+			    (M^T 2. A)
+			    (MULTAUG 1//2 (M-T A))
+			    (LEGENPOL (M-T A)
+				      (M^T VAR -1//2))))))
+	(RETURN ()))) 
+
+(DEFUN MULTAUG (A N) 
+  (IF (=0 N) 1. (M*T A (MULTAUG (M1+T A) (1- N)))))
+
+(DEFUN GERED1 (L1 L2 SIMPFLG) 
+  (M*T (M^T (M-T 1. VAR)
+	      (M+T (CAR L2) (M-T (CAR L1)) (M-T (CADR L1))))
+       (FUNCALL SIMPFLG
+		(LIST (M-T (CAR L2) (CAR L1))
+		      (M-T (CAR L2) (CADR L1)))
+		L2
+		VAR))) 
+
+(DEFUN GERED2 (A B C) 
+  (M*T (M^T (M-T 1. VAR) (M-T A))
+       (HGFSIMP (LIST A (M-T C B)) (LIST C) (M//T VAR (M-T VAR 1.))))) 
+
+(DEFUN GEREDF (A B C) 
+  (LET (X)
+       (M+T (M//T (M*T (MGAMMA C)
+		       (MGAMMA (M-T C (M+T A B)))
+		       (M^T VAR (M-T A))
+		       (HGFSIMP (LIST A (SETQ X (M+T A 1. (M-T C))))
+				(LIST (M+T X B))
+				(M-T 1. (M//T VAR))))
+		  (M*T (MGAMMA (M-T C A)) (MGAMMA (M-T C B))))
+	    (M//T (M*T (MGAMMA C)
+		       (MGAMMA (M+T A B (M-T C)))
+		       (M^T (M-T 1. VAR) (M+T C (M-T A) (M-T B)))
+		       (M^T VAR (M-T A C))
+		       (HGFSIMP (LIST (M-T C A) (M-T 1. A))
+				(LIST (M-T (M1+T C) (M+T A B)))
+				(M-T 1. (M//T VAR))))
+		  (M*T (MGAMMA A) (MGAMMA B))))))
+
+(DEFUN TRIG-LOG (A B C)
+  (COND ((=3//2 C) (TRIG-LOG-3 A B))
+	((=1//2 C) (TRIG-LOG-1 A B))
+	(T ())))
+
+(DEFUN TRIG-LOG-3 (A B)			;; 2F1's with C = 3/2
+  (COND ((AND (OR (EQUAL A 1.) (EQUAL B 1.))
+	      (OR (=1//2 A) (=1//2 B)))
+	 (TRIG-LOG-3-EXEC))
+	((AND (EQUAL A B) (OR (EQUAL A 1.) (=1//2 A)))
+	 (TRIG-LOG-3A-EXEC A))
+	((LET ((TEMP (M+T A B))) (OR (EQUAL TEMP 1.) (EQUAL TEMP 2.)))
+	 (TRIG-SIN A B))
+	((=1//2 (MABS (M-T B A))) (TRIG-3 A B))
+	(T ())))
+
+(DEFUN TRIG-3 (A B)			;; 15.1.10
+  (LET ((Z (MSQRT VAR)))
+       (M//T (M-T (M^T (M1+T Z) (SETQ A (M-T 3//2 (M+T A B))))
+		  (M^T (M-T 1. Z) A))
+	     (M*T 2. A Z))))
+
+(DEFUN TRIG-SIN (A B)			;; 15.1.15 and 15.1.16
+  (LET (Z)
+       (COND ((EQUAL (M+T A B) 1.)
+	      (M//T (MSIN (M*T (SETQ B (M-T A B))
+			       (MASIN (SETQ Z (MSQRT VAR)))))
+		    (M*T B Z)))
+	     ((EQUAL (M+T A B) 2.)
+	      (M//T (MSIN (M*T (SETQ B (M1-T A))
+			       (SETQ Z (M*T 2. (MASIN (MSQRT VAR))))))
+		    (M*T B (MSIN Z))))
+	     (T ()))))
+
+(DEFUN TRIG-LOG-3-EXEC ()		;; 15.1.4 and 15.1.5
+  (LET (Z) 
+       (COND ((EQUAL (CHECKSIGNTM VAR) '$POSITIVE)
+	      (M//T (MLOG (M//T (M1+T (SETQ Z (MSQRT VAR))) (M-T 1. Z)))
+		    (M*T 2. Z)))
+	     ((EQUAL (CHECKSIGNTM VAR) '$NEGATIVE)
+	      (M//T (MATAN (SETQ Z (MSQRT (M-T VAR)))) Z))
+	     (T ()))))
+
+(DEFUN TRIG-LOG-3A-EXEC (A)		;; 15.1.6 and 15.1.7
+  (LET (Z)
+       (COND ((EQUAL (CHECKSIGNTM VAR) '$POSITIVE)
+	      (M*T (IF (EQUAL A 1.) (M^T (M-T 1 VAR) -1//2) 1.)
+		   (MASIN (SETQ Z (MSQRT VAR)))
+		   (M//T Z)))
+	     ((EQUAL (CHECKSIGNTM VAR) '$NEGATIVE)
+	      (M*T (M^T (SETQ Z (M-T VAR)) -1//2)
+		   (MLOG (M+T (MSQRT Z) (MSQRT (SETQ Z (M-T 1. VAR)))))
+		   (IF (EQUAL A 1.) (M^T Z -1//2) 1.)))
+	     (T ()))))
+
+(DEFUN TRIG-LOG-1 (A B)			;; 2F1's with C = 1/2
+  (LET (X Z $EXPONENTIALIZE)		;; 15.1.17, 11, 18, 12, 9, and 19
+       (COND ((=0 (M+T A B))
+	      (COND ((EQUAL (CHECKSIGNTM VAR) '$POSITIVE)
+		     (MCOS (M*T 2. A (MASIN (MSQRT VAR)))))
+		    ((EQUAL (CHECKSIGNTM VAR) '$NEGATIVE)
+		     (M*T 1//2
+			  (M+T (M^T (M+T (SETQ X (MSQRT (M-T 1. VAR)))
+					 (SETQ Z (MSQRT (M-T VAR))))
+				    (SETQ B (M*T 2. B)))
+			       (M^T (M-T X Z) B))))
+		    (T ())))
+	     ((EQUAL (M+T A B) 1.)
+	      (COND ((EQUAL (CHECKSIGNTM VAR) '$POSITIVE)
+		     (M//T (MCOS (M*T (M-T A B) (SETQ Z (MASIN (MSQRT VAR)))))
+			   (MCOS Z)))
+		    ((EQUAL (CHECKSIGNTM VAR) '$NEGATIVE)
+		     (M*T 1//2 (M//T (SETQ X (MSQRT (M-T 1. VAR))))
+			  (M+T (M^T (M+T X (SETQ Z (MSQRT (M-T VAR))))
+				    (SETQ B (M-T A B)))
+			       (M^T (M-T X Z) B))))
+		    (T ())))
+	     ((=1//2 (MABS (M-T B A)))
+	      (COND ((EQUAL (CHECKSIGNTM VAR) '$POSITIVE)
+		     (M*T 1//2
+			  (M+T (M^T (M1+T (SETQ Z (MSQRT VAR)))
+				    (SETQ B (M-T 1//2 (M+T A B))))
+			       (M^T (M-T 1. Z) B))))
+		    ((EQUAL (CHECKSIGNTM VAR) '$NEGATIVE)
+		     (M*T (M^T (MCOS (SETQ Z (MATAN (MSQRT (M-T VAR)))))
+			       (SETQ B (M+T A B -1//2)))
+			  (MCOS (M*T B Z))))
+		    (T ())))
+	     (T ()))))
+
+;; List L contains two elements first the numerator parameter that
+;; exceeds the denumerator one and is called "C", second the difference of
+;; the two parameters which is called "M". 
+
+(DEFUN DIFFINTPROP-GEN-EXEC (L L1 L2) 
+  (PROG (C M POLY CONSTFACT) 
+	(SETQ C (CAR L) 
+	      M (CADR L) 
+	      L1 (DELETE C L1 1.) 
+	      C (M-T C M) 
+	      L2 (DELETE C L2 1.) 
+	      POLY ($EXPAND (APPELL (M+T C 'AVGOUSTIS) M)) 
+	      CONSTFACT (CREATECONSTFACT C M))
+	(RETURN (YANMULT CONSTFACT (DIFFINTPROP-EXEC POLY L1 L2))))) 
+
+(DEFUN CREATECONSTFACT (C M) 
+  (COND ((ZEROP M) 1.)
+	(T (M*T (M//T (M+T C (SUB1 M)))
+		(CREATECONSTFACT C (SUB1 M)))))) 
+
+(DEFUN DIFFINTPROP-EXEC (POLY L1 L2) 
+  (DISTRDIFFINTPROP (CREATECOEFPOWLIST-EXEC POLY) L1 L2)) 
+
+(DEFUN DISTRDIFFINTPROP (L L1 L2) 
+  (COND ((NULL L) 0.)
+	(T (M+T (YANMULT ($FACTOR (CADAR L))
+			 (DIFFINTPROP (CAAR L) L1 L2))
+		(DISTRDIFFINTPROP (CDR L) L1 L2)))))
+
+(DEFUN DIFFINTPROP (POW L1 L2) 
+  (COND ((ZEROP POW) (HGFSIMP L1 L2 VAR))
+	((EQUAL POW 1.)
+	 (YANMULT (M*T (M//T (M*LT L1) (M*LT L2)) VAR)
+		  (HGFSIMP (LIST-INCR L1) (LIST-INCR L2) VAR)))
+	(T (SEARCHADDSERIESLIST POW L1 L2)))) 
+
+(DEFUN SEARCHADDSERIESLIST (POW L1 L2) 
+  (PROG (SERIES RES) 
+	(COND ((SETQ SERIES (SEARCHSERIESLISTP SERIESLIST POW))
+	       (RETURN (EVAL SERIES))))
+	(SETQ 
+	 SERIESLIST
+	 (APPEND
+	  SERIESLIST
+	  (LIST
+	   (LIST
+	    POW
+	    (SETQ RES
+		  '(YANMULT (M*T (M//T (M*LT L1) (M*LT L2)) VAR)
+			    (DIFFINTPROPRECURSE (SUB1 POW)
+						(LIST-INCR L1)
+						(LIST-INCR L2))))))))
+	(RETURN (EVAL RES))))
+
+(DEFUN DIFFINTPROPRECURSE (POW L1 L2) 
+  (PROG (POLY) 
+	(SETQ POLY ($EXPAND (M^T (M+T 'AVGOUSTIS 1.) POW)))
+	(RETURN (DIFFINTPROP-EXEC POLY L1 L2)))) 
+
+(DEFUN CREATECOEFPOWLIST-EXEC (POLY) 
+  (PROG (HP CONSTER) 
+	(SETQ CONSTER (CONSTERMINIT POLY 'AVGOUSTIS) 
+	      HP ($HIPOW POLY 'AVGOUSTIS))
+	(RETURN (APPEND (LIST (LIST 0. CONSTER))
+			(CREATECOEFPOWLIST POLY HP))))) 
+
+(DEFUN CREATECOEFPOWLIST (POLY HP) 
+  (COND ((EQUAL HP 1.)
+	 (LIST (LIST 1. ($COEFF POLY 'AVGOUSTIS))))
+	(T (APPEND (CREATECOEFPOWLIST POLY (SUB1 HP))
+		   (LIST (LIST HP
+			       ($COEFF POLY
+				       (M^T 'AVGOUSTIS
+					      HP)))))))) 
+
+(DEFUN CONSTERMINIT (FUN VAR) 
+  (COND ((EQ (CAAR FUN) 'MPLUS) (CONSTERM (CDR FUN) VAR))
+	(T (COND ((HYP-FREEVAR FUN) FUN) (T 0.))))) 
+
+(DEFUN CONSTERM (FUN VAR) 
+  (COND ((NULL FUN) 0.)
+	((HYP-FREEVAR (CAR FUN)) (M+T (CAR FUN) (CONSTERM (CDR FUN) VAR)))
+	(T (CONSTERM (CDR FUN) VAR)))) 
+
+(DEFUN SEARCHSERIESLISTP (SERIESLIST POW) 
+  (COND ((NULL SERIESLIST) ())
+	((EQUAL (CAAR SERIESLIST) POW) (CADAR SERIESLIST))
+	(T (SEARCHSERIESLISTP (CDR SERIESLIST) POW)))) 
+
+(DEFUN YANMULT (A B) 
+  (IF (EQ (CAAR B) 'MPLUS) (YANMUL A (CDR B)) (M*T A B)))
+
+(DEFUN YANMUL (A B) 
+  (IFN B 0 (M+T (M*T A (CAR B)) (YANMUL A (CDR B)))))
+
+(DEFUN FREEVARPAR (EXP) (COND ((HYP-FREEVAR EXP) (FREEPAR EXP)) (T ()))) 
+
+(DECLARE (SPECIAL SERIESLIST VAR PAR ZEROSIGNTEST PRODUCTCASE)) 
+
+(SETQ PAR '$P) 
+
+(DEFUN HYP-FREEVAR (A) 
+  (COND
+   ((ATOM A) (NOT (EQ A VAR)))
+   ((ALIKE1 A VAR) ())
+   ((AND (NOT (ATOM (CAR A))) (MEMQ 'ARRAY (CDAR A)))
+    (COND
+     ((HYP-FREEVAR (CDR A)) T)
+     (T (MERROR "VARIABLE-OF-INTEGRATION-APPEARED-IN-SUBSCRIPT")
+	)))
+   (T (AND (HYP-FREEVAR (CAR A)) (HYP-FREEVAR (CDR A)))))) 
+
+(DEFUN FREEPAR (EXP) 
+  (COND ((ATOM EXP) (NOT (EQ EXP PAR)))
+	(T (AND (FREEPAR (CAR EXP)) (FREEPAR (CDR EXP)))))) 
+
+(DEFUN HASPAR (EXP) (COND ((FREEPAR EXP) ()) (T T))) 
+
+(DEFUN CONFLUENT (A C VAR)
+  (LET (TEMP)
+    (COND ((ALIKE1 C (M*T 2. A))
+	   (M*T (MEXPT (M//T VAR 2.))
+		(BES->TRIG (M+T A 1//2) (M//T (M^T VAR 2.) 16.))))
+	  ((FIXP (SETQ TEMP (M-T A C)))
+	   (IF (MINUSP TEMP) (ERFGAMMARED A C VAR) (KUMMER A C)))
+	  ((FIXP A) (KUMMER A C))
+	  (T (SETQ TEMP (M//T (M1-T C) 2.))
+	     (M*T (M^T VAR (M-T -1//2 TEMP)) (MEXPT (M//T VAR 2.))
+		  (WHITFUN (M+T 1//2 TEMP (M-T A)) TEMP VAR))))))
+
+(DEFUN HYPREDERF (X) 
+  (M//T (M*T (MSQRT '$%PI) (MERF (SETQ X (MSQRT (M-T X)))))
+	(M*T 2 X)))
+
+(DEFUN ERFGAMMARED (A C Z) 
+  (COND ((AND (MNUMP A) (MNUMP C)) (ERFGAMNUMRED A C Z))
+	(T (GAMMAREDS A C Z)))) 
+
+(DEFUN GAMMAREDS (A C Z) 
+  (PROG (M NUMPROD RESULT COUNT ATEMP) 
+	(SETQ M (M-T C A))
+	(COND ((= M 1.) (RETURN (HYPREDINCGM A Z))))
+	(SETQ NUMPROD (APPELL A M) 
+	      COUNT 2. 
+	      ATEMP A 
+	      RESULT (M-T (M*T 2.
+			       NUMPROD
+			       (M//T ATEMP)
+			       (HYPREDINCGM ATEMP Z))
+			  (M*T 2.
+			       NUMPROD
+			       (M//T (SETQ ATEMP (M+T ATEMP 1.)))
+			       (HYPREDINCGM ATEMP Z))))
+   LOOP	(COND ((= COUNT M) (RETURN RESULT)))
+	(SETQ COUNT
+	      (1+ COUNT)
+	      ATEMP
+	      (M+T ATEMP 1.)
+	      RESULT
+	      (M+T RESULT
+		   (M*T (^ -1. COUNT)
+			(M//T (FACTORIAL (M-T M (1- COUNT))))
+			NUMPROD
+			(M//T ATEMP)
+			(HYPREDINCGM ATEMP Z))))
+	(GO LOOP))) 
+
+(DEFUN HYPREDINCGM (A Z) 
+  (M*T A (M^T (SETQ Z (M-T Z)) (M-T A)) `(($%GAMMAGREEK) ,A ,Z)))
+
+(DEFUN ERFGAMNUMRED (A C Z) 
+  (IF (FIXP (M-T C 1//2)) (ERFRED A C Z) (GAMMAREDS A C Z)))
+
+(DEFUN ERFRED (A C Z) 
+  (LET ((N (M-T A 1//2)) (M (M-T C 3//2)))
+       (COND ((NOT (OR (> N M) (MINUSP N))) (THNO33 N M Z))
+	     ((AND (MINUSP N) (MINUSP M)) (THNO35 (- N) (- M) Z))
+	     ((AND (MINUSP N) (PLUSP M)) (THNO34 (- N) M Z))
+	     (T (GAMMAREDS A C Z)))))
+
+;; This computes what is uaually known as Pochammer's or Apell's symbol.
+
+(DEFUN APPELL (A N) 
+  (IF (=0 N) 1
+      (DO ((ANS A) (K 1. (1+ K)))
+	  ((EQUAL K N) ANS)
+	  (SETQ ANS (M*T (M+T A K) ANS)))))
+
+(DEFUN THNO33 (N M X) 
+  (LET ((M-N (- M N)))
+    (MEVAL (M*T (M//T (M*T (^ -1. M-N) (APPELL 3//2 M-N)
+			   (APPELL (M+T M-N 3//2) N))
+		      (M*T (APPELL 1. M-N) (APPELL 1//2 N)))
+		(SUBSTITUTE X 'X
+		   ($DIFF (M*T (MEXPT 'X)
+			       ($DIFF (M*T (MEXPT (M-T 'X)) (HYPREDERF 'X))
+				      'X
+				      M-N))
+			  'X N))))))
+
+
+
+(DEFUN THNO34 (N M X) 
+  (MEVAL (substitute x 'x
+   (M*T (^ -1. M)	(M//T (M*T (APPELL 3//2 M) (MEXPT 'X))
+			      (M*T (APPELL 1. M) (APPELL (1+ M) N)
+				   (M^T 'X M)))
+	      ($DIFF (M*T (M^T 'X (+ M N))
+			  ($DIFF (M*T (MEXPT (M-T 'X)) (HYPREDERF 'X))
+				 'X M))
+		     'X N)))))
+
+(DEFUN THNO35 (N M X) 
+  (MEVAL (substitute x 'x 
+   (M*T (M//T (M^T 'X (M-T M 1//2)) (M*T (M^T -1. (TIMES -1. M))
+					       (APPELL 1. N) (APPELL -1//2 M)))
+	      ($DIFF (M*T (MSQRT 'X) (MEXPT 'X)
+			  ($DIFF (M*T (MEXPT (M-T 'X)) (M^T 'X N)
+				      (HYPREDERF 'X))
+				 'X N))
+		     'X M)))))
+
+(DEFUN CHECKSIGNTM (EXPR) 
+  (PROG (ASLIST QUEST ZEROSIGNTEST PRODUCTCASE) 
+	(SETQ ASLIST CHECKCOEFSIGNLIST)
+	(COND ((ATOM EXPR) (GO LOOP)))
+	(COND ((EQ (CAAR EXPR) 'MTIMES) (SETQ PRODUCTCASE T)))
+   LOOP	(COND
+	 ((NULL ASLIST)
+	  (SETQ 
+	   CHECKCOEFSIGNLIST
+	   (APPEND
+	    CHECKCOEFSIGNLIST
+	    (LIST (CONS EXPR
+			(LIST (SETQ QUEST (CHECKFLAGANDACT EXPR)))))))
+	  (RETURN QUEST)))
+	(COND ((EQUAL (CAAR ASLIST) EXPR) (RETURN (CADAR ASLIST))))
+	(SETQ ASLIST (CDR ASLIST))
+	(GO LOOP))) 
+
+(DEFUN CHECKFLAGANDACT (EXPR) 
+  (COND
+   (PRODUCTCASE
+    (SETQ PRODUCTCASE ())
+    (FINDSIGNOFTHEIRPRODUCT (FINDSIGNOFACTORS (CDR EXPR))))
+   (T (ASKSIGN ($REALPART EXPR))))) 
+
+(DEFUN FINDSIGNOFACTORS (LISTOFACTORS) 
+  (COND ((NULL LISTOFACTORS) ())
+	((EQ ZEROSIGNTEST '$ZERO) '$ZERO)
+	(T (APPEND (LIST (SETQ ZEROSIGNTEST
+			       (CHECKSIGNTM (CAR LISTOFACTORS))))
+		   (FINDSIGNOFACTORS (CDR LISTOFACTORS)))))) 
+
+(DEFUN FINDSIGNOFTHEIRPRODUCT (LIST) 
+  (PROG (SIGN) 
+	(COND ((EQ LIST '$ZERO) (RETURN '$ZERO)))
+	(SETQ SIGN '$POSITIVE)
+   LOOP	(COND ((NULL LIST) (RETURN SIGN)))
+	(COND ((EQ (CAR LIST) '$POSITIVE)
+	       (SETQ LIST (CDR LIST))
+	       (GO LOOP)))
+	(COND ((EQ (CAR LIST) '$NEGATIVE)
+	       (SETQ SIGN (CHANGESIGN SIGN) LIST (CDR LIST))
+	       (GO LOOP)))
+	(RETURN '$ZERO))) 
+
+(DEFUN CHANGESIGN (SIGN) 
+  (COND ((EQ SIGN '$POSITIVE) '$NEGATIVE)
+	(T '$POSITIVE))) 
+
+(SETQ PAR '$P) 
+
+(DEFUN VFVP (EXP) (M2 EXP '(V FREEVARPAR) ()))
+
+(DEFUN D*U (EXP) 
+  (M2 EXP
+      '((MTIMES) ((COEFFTT) (D FREEPAR)) ((COEFFTT) (U HASPAR)))
+      ())) 
+
+(DEFUN FPQFORM (L1 L2 ARG) 
+  `((MQAPPLY) (($%F ARRAY) ,(LENGTH L1) ,(LENGTH L2))
+	      ,(CONS '(MLIST) L1)
+	      ,(CONS '(MLIST) L2)
+	      ,ARG))
+
+(DEFUN SPLITPFQ (L L1 L2) 
+  (PROG (RESULT PRODNUM PRODEN COUNT K A1 B1) 
+	(SETQ RESULT 0. PRODNUM 1. PRODEN 1. COUNT 0. 
+	      K (CADR L) A1 (CAR L) B1 (M-T A1 K) L1 (DELETE A1 L1 1.) 
+	      L2 (DELETE B1 L2 1.) RESULT (HGFSIMP L1 L2 VAR))
+   LOOP	(COND ((= COUNT K) (RETURN RESULT)))
+	(SETQ COUNT (1+ COUNT) 
+	      PRODNUM (M*T PRODNUM (M*LT L1)) 
+	      PRODEN (M*T PRODEN (M*LT L2)) 
+	      RESULT (M+T RESULT
+			  (M*T (MBINOM K COUNT)
+			       (M//T PRODNUM PRODEN)
+			       (M^T VAR COUNT)
+			       (HGFSIMP (SETQ L1 (LIST-INCR L1))
+					(SETQ L2 (LIST-INCR L2))
+					VAR))))
+	(GO LOOP)))
+
+;; Algor. II from thesis:minimizes differentiations
+
+(DEFUN ALGII (A B C) 
+  (PROG (M N AP CON SYM M+N) 
+	(COND ((NOT (SETQ SYM (CDRASS 'F (S+C A))))
+	       (SETQ SYM 0.)))
+	(SETQ CON (M-T A SYM))
+	(SETQ AP SYM)
+	(SETQ M+N (M+T A B))
+	(SETQ M ($ENTIER CON))
+	(IF (MINUSP M) (SETQ M (ADD1 M)))
+	(SETQ AP (M+T (M-T CON M) AP))
+	(SETQ N (M+T B AP))
+	(COND ((AND (MINUSP (M*T N M)) (GREATERP (ABS M) (ABS N)))
+	       (RETURN (LIST AP (M-T AP N) M+N))))
+	(RETURN (LIST AP (M+T AP M) M+N)))) 			       
+
+;; Algor. 2F1-RL from thesis:step 4:dispatch on a+m,-a+n,1/2+l cases
+
+(DEFUN STEP4 (A B C) 
+  (PROG (APRIME M N $RATSIMPEXPONENS $RATPRINT NEWF ALGLIST) 
+	(SETQ ALGLIST (ALGII A B C) 
+	      APRIME (CADR ALGLIST) 
+	      M (CADDR ALGLIST) 
+	      N (M-T C 1//2))
+	(SETQ $RATSIMPEXPONENS T $RATPRINT NIL)
+	(SETQ NEWF
+	      ($RATSIMP (SUBST APRIME
+			       'PSA
+			       (M^T (M+T 1//2
+					   (M*T (M^T (M-T 1. VAR)
+						       1//2)
+						1//2))
+				      (M-T 1.
+					   (M*T 2. 'PSA))))))
+	(RETURN (SUBST VAR
+		       'ELL
+		       (ALGIII (SUBST 'ELL VAR NEWF)
+			       M
+			       N
+			       APRIME))))) 			       
+
+;; Pattern match for s(ymbolic) + c(onstant) in parameter
+
+(DEFUN S+C (EXP) 
+  (M2 EXP
+      '((MPLUS) ((COEFFPT) (F NONNUMP)) ((COEFFPP) (C $NUMBERP)))
+      ())) 
+
+(DEFUN NONNUMP (Z) (COND ((NOT ($NUMBERP Z)) T) (T ()))) 	       
+
+;; Algor. III from thesis:determines which Differ. Formula to use
+
+(DEFUN ALGIII (FUN M N APRIME) 
+  (PROG (MM NN) 
+	(SETQ MM (ABS M) NN (ABS N))
+	(COND ((AND (NON-NEG-INTP M) (NON-NEG-INTP N))
+	       (COND ((LESSP M N) (RETURN (F81 FUN M N APRIME)))
+		     (T (RETURN (F85 FUN MM NN APRIME)))))
+	      ((AND (HYP-NEGP N) (HYP-NEGP M))
+	       (COND ((GREATERP (ABS N) (ABS M))
+		      (RETURN (F86 FUN MM NN APRIME)))
+		     (T (RETURN (F82 FUN MM NN APRIME)))))
+	      ((AND (HYP-NEGP M) (NON-NEG-INTP N)) (RETURN (F83 FUN MM NN APRIME)))
+	      (T (RETURN (F84 FUN MM NN APRIME)))))) 		       
+
+;; Formula  #85 from Yannis thesis:finds by differentiating F[2,1](a,b,c,z)
+;; given F[2,1](a+m,b,c+n,z) where b=-a and c=1/2, n,m integers
+
+(DEFUN F85 (FUN M N A) 
+  (M*T (APPELL 1//2 N)
+       (M//T (M^T -1. N))
+       (M//T (APPELL (M-T (M+T A M) N) N))
+       (M//T (APPELL (M-T 1//2 (M*T A -1.)) N))
+       (M//T (APPELL A (- M N)))
+       (M^T (M-T 1. 'ELL) (M-T (M-T (M1+T N) M) A))
+       ($DIFF (M*T (M^T (M-T 1. 'ELL) (M-T (M+T A M) 1.))
+		   (M^T 'ELL (M-T 1. A))
+		   ($DIFF (M*T (M^T 'ELL
+				      (M-T (M+T A M -1.) N))
+			       FUN)
+			  'ELL
+			  (- M N)))
+	      'ELL
+	      N))) 						       
+;Used to find negative things that are not integers,eg RAT's	
+
+(DEFUN HYP-NEGP (X) 
+  (COND ((EQUAL (ASKSIGN X) '$NEGATIVE) T) (T ())))
+
+(DEFUN F81 (FUN M N A) 
+  (M*T (APPELL (M+T 1//2 (- N M)) M)
+       (APPELL 1//2 (- N M))
+       (M//T (M^T -1. M))
+       (M//T (APPELL A M))
+       (M//T (APPELL (M+T 1//2 N (M-T A M)) M))
+       (M//T (APPELL (M-T 1//2 A) (- N M)))
+       (M//T (APPELL (M+T 1//2 A) (- N M)))
+       (M^T (M-T 1. 'ELL) (M-T 1. A))
+       ($DIFF (M*T (M^T (M-T 1. 'ELL) (M+T A N -1//2))
+		   ($DIFF (M*T (M^T (M-T 1. 'ELL) -1//2)
+			       FUN)
+			  'ELL
+			  (- N M)))
+	      'ELL
+	      M)))
+
+(DEFUN F82 (FUN M N A) 
+  (M*T (M//T (APPELL (M-T 1//2 N) M))
+       (M//T (APPELL (M-T (M+T 1//2 M) N) (- N M)))
+       (M^T 'ELL (M+T N 1//2))
+       (M^T (M-T 1. 'ELL) (M-T (M+T M 1//2 A) N))
+       ($DIFF (M*T (M^T (M-T 1. 'ELL)
+			  (M-T (M-T N A) 1//2))
+		   ($DIFF (M*T (M^T 'ELL -1//2) FUN)
+			  'ELL
+			  (- N M)))
+	      'ELL
+	      M)))
+
+(DEFUN F83 (FUN M N A) 
+  (M*T (APPELL 1//2 N)
+       (M//T (APPELL (M-T 1//2 A) N))
+       (M//T (APPELL (M+T (M-T 1//2 A) N) M))
+       (M//T (APPELL (M+T 1//2 A) N))
+       (M^T (M-T 1. 'ELL) (M+T M N 1//2))
+       (M^T 'ELL (M-T (M+T 1//2 A) N))
+       ($DIFF (M*T (M^T 'ELL (M-T (M-T (+ M N) A) 1//2))
+		   ($DIFF (M*T (M^T (M-T 1. 'ELL) -1//2)
+			       FUN)
+			  'ELL
+			  N))
+	      'ELL
+	      M)))
+
+(DEFUN F84 (FUN M N A) 
+  (M*T (M//T (M*T (APPELL A M) (APPELL (M-T 1//2 N) N)))
+       (M^T 'ELL (M-T 1. A))
+       ($DIFF (M*T (M^T 'ELL (M-T (M+T A M N) 1//2))
+		   ($DIFF (M*T (M^T 'ELL -1//2) FUN)
+			  'ELL
+			  N))
+	      'ELL
+	      M))) 
+
+(DEFUN F86 (FUN M N A) 
+  (M*T (M//T (M*T (APPELL (M-T 1//2 N) N)
+		  (APPELL (M-T 1//2 A) (- M N))))
+       (M^T 'ELL (M+T N 1//2))
+       (M^T (M-T 1. 'ELL) (M+T 1//2 A))
+       ($DIFF (M*T (M^T 'ELL A)
+		   (M^T (M-T 1. 'ELL) (M-T M A))
+		   ($DIFF (M*T (M^T 'ELL
+				      (M-T (M-T (M-T M N) 1//2)
+					   A))
+			       (M^T (M-T 1. 'ELL) -1//2)
+			       FUN)
+			  'ELL
+			  (- M N)))
+	      'ELL
+	      N)))
+
+
