@@ -1,0 +1,99 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module suspen)
+
+;;; For ASB so that he can suspend macsyma at the point of
+;;; a BUG. 12:53am  Wednesday, 4 February 1981 -gjc
+
+;;; I've changed this so that SUSPEND should be able to be
+;;; used in the middle of a BATCH/WRITEFILE and save the correct
+;;; state for a re-start. 4:35pm  Sunday, 15 March 1981
+
+;;; This still needs a lot of work in the way of systemic design if
+;;; it is going to really win. (Reseting of terminal types etc).
+
+(defmvar $suspend nil
+	"If not FALSE then this is the name of the file to which the
+	macsyma in question was last SUSPEND'ed. SUSPEND(); will
+	then suspend the macsyma back into that file again.")
+
+(defmfun $suspend (&optional
+		   (filename (or $suspend
+				 (merror "No filename given to suspend to."))))
+	 (or (symbolp filename)
+	     (merror "filename must be string~%~M" filename))
+	 (setq filename (namestring
+			 (mergef (stripdollar filename)
+				 `((DSK ,(STATUS UDIR)) TS ,(STATUS UNAME)))))
+	 (setq $suspend (concat '|&| filename))
+	 (let ((file-object-state (close-files))
+	       (TTY-RETURN NIL))
+	      (print file-object-state t)
+	      (terpri t)
+	      (suspend (concat '|: Suspended to "|
+			     filename
+			     '|" î:KILLî|)
+		       filename)
+	      (open-files file-object-state)
+	      $suspend))
+
+(eval-when (eval compile)
+	   (defstruct (filestate conc-name list default-pointer)
+		      object
+		      mode
+		      operations
+		      alist))
+
+(defun close-files ()
+       ;; "files" should include all state connected with the
+       ;; outside world. When we re-open the TTY stream for example
+       ;; it would be nice if all the state-variables associated with
+       ;; it got reset. Fat chance though without restructuring all
+       ;; macsyma I/O.
+       (do ((gcmkl (munkam (examine (getddtsym 'GCMKL)))
+		   ;; a list kept by the garbage collector.
+		   ;; we really want a list kept by the macsyma system.
+		   (cddr gcmkl))
+	    (dedsar (getddtsym 'DEDSAR))
+	    (filestates))
+	   ((null gcmkl) filestates)
+	   (if (and (not (eq (car gcmkl) dedsar))            ; not dead.
+		    (memq (car (arraydims (car gcmkl)))
+			  '(file sfa))                       ; is a file.
+		    (status filemode (car gcmkl)))           ; is open.
+	       (let ((filestate
+		      (make-filestate
+		       mode (car (status filemode (car gcmkl)))
+		       operations (cdr (status filemode (car gcmkl)))
+		       object (car gcmkl))))
+		    (if (memq 'filepos (filestate-operations))
+			(push `(filepos . ,(filepos (filestate-object)))
+			      (filestate-alist)))
+		    (close (filestate-object))
+		    (push filestate filestates)))))
+
+(defun open-files (l &aux
+		     (io-lossage
+		      #'(lambda (args)
+				(declare (special args))
+				(mformat-open
+				 t
+				 "~%Error in trying to ~A the object ~A.~
+				 ~%~A. Cannot restore state without help.~%"
+				 (car args) (cadr args)
+				 (caaddr (errframe nil)))
+				(*break t 'io-lossage))))
+       (mapc #'(lambda (filestate)
+		       (cond ((memq 'out (filestate-mode))
+			      (open (filestate-object) 'append))
+			     ((memq 'in (filestate-mode))
+			      (open (filestate-object))
+			      (if (memq 'filepos (filestate-operations))
+				  (filepos (filestate-object)
+					   (cdr (assq 'filepos
+						      (filestate-alist))))))
+			     (t
+			      (open (filestate-object)))))
+	     l))

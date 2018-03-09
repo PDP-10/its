@@ -1,0 +1,294 @@
+;;;-*-lisp-*-
+
+;;; Modified from ALAN's version by GJC, to hack inferiors for macsyma.
+;;; All manner of strange things can happen when one hacks ITS and LISP
+;;; at this level. Many thanks to ALAN and ED for help and advice.
+
+(macsyma-module ljob)
+(load-macsyma-macros lusets)
+
+(herald ljob)
+
+(DEFVAR LJOB:*STOP-JOB-TELL* T "FOR DEBUGGING")
+(DEFVAR LJOB:*RUN-TTY-RETURN* T "should be NIL when in use.")
+(DEFVAR LJOB:*KILL-IF-RETURN* NIL "Some jobs we want to kill")
+(DEFVAR LJOB:*LOAD-SYMS?* NIL "Load symbols to get start address, using
+valret to DDT. Too messy to use most of the time")
+
+(eval-when (eval compile load)
+(defun convert-flonum-to-bit (f)
+       (or (floatp f) (error "-- non flonum argument to BIT or BITS." f))
+       (do ((x (-$ f .05))
+	    (y 1.1 (+$ y .1))
+	    (n 1 (1+ n))
+	    (i 1 (lsh i 1)))
+	   ((zerop i) (error "-- bad flonum to BIT or BITS." f))
+	   (and (zerop (\ n 10.))
+		(setq y (+$ y .1))
+		(setq n (1+ n)))
+	   (and (< x y) (return i)))))
+
+(defmacro bit (x)
+	  `',(convert-flonum-to-bit x))
+
+(defmacro bits l
+	  `',(do ((l l (cdr l))
+		  (x 0 (logior x (convert-flonum-to-bit (car l)))))
+		 ((null l) x)))
+
+;;; The variable CURRENT-JOB is from HUMBLE.
+
+(declare (special current-job ljob:job-start-addr-addr
+		  ljob:*value-handler ljob:*break-handler
+		  ljob:job-job-jcl ljob:hanger)
+	 (*lexpr create-job))
+
+(OR (BOUNDP 'LJOB:JOB-START-ADDR-ADDR)
+    (LET ((TTY-RETURN NIL))
+	 (and (eq (status hactrn) 'ddt) LJOB:*LOAD-SYMS?*
+	      (valret '|:sl/
+p|))
+	 (setq ljob:*value-handler 'ljob:*value-handler)
+	 (setq ljob:*break-handler 'ljob:*break-handler)
+	 (setq ljob:job-job-jcl 0)
+	 (setq ljob:hanger 'finished)
+	 (setq ljob:job-start-addr-addr 
+	       (or (getddtsym 'j/.stadr) 71))))	;educated guess!
+
+(defun ljob-interrupt-handler (job)
+       (*dtty)
+       (select-job job)
+       (let ((pirqc (*uset *rpirqc)))
+	    (cond ((= pirqc (bit 1.2))
+		   (*uset *spirqc 0)
+		   (stop-job "^Z"))
+		  ((= pirqc (bit 4.4))
+		   (*uset *spirqc 0)
+		   (stop-job "^_D"))
+		  ((= pirqc (bit 1.8))
+		   (*uset *spirqc 0)
+		   (funcall ljob:*value-handler
+			    (logand 777777 (*uset *rsv40))))
+		  ((= pirqc (bit 2.2))
+		   (*uset *spirqc 0)
+		   (let ((x (*uset *rsv40)))
+			(funcall ljob:*break-handler
+				 (lsh x -27.)		;not necessarily .break!
+				 (logand 17 (lsh x -23.))
+				 (logand 777777 x))))
+		  ((= pirqc (bit 3.1))
+		   (*uset *spirqc 0)
+		   (error-job ".lose"))
+		  (t
+		   (error-job "???")))))
+
+(defun ljob-channel-interrupt-handler n
+       (*dtty)
+       (error-job "channel interrupt"))
+
+(defun J (name)
+       (let ((v (create-job #'ljob-interrupt-handler
+			    #'ljob-channel-interrupt-handler
+			    name)))
+	    (ljob-set-jcl 0)
+	    v))
+
+(defun L (file)
+       (let ((v (load-job file)))
+	    (and (symbolp ljob:job-job-jcl)
+		 (*uset *soption (logior (bit 4.6) (*uset *roption))))
+	    v))
+
+(defun LJOB:GZP ()
+       (*uset *supc (+ (boole 2 777777 (*uset *rupc))
+		       (logand 777777 (arraycall fixnum current-job
+						 ljob:job-start-addr-addr))))
+       (^P))
+
+(defun ^P ()
+       (*uset *spirqc 0)
+       (*uset *sustp 0))
+
+(defun P ()
+       (^P)
+       (pass-tty))
+
+(defun G ()
+       (LJOB:GZP)
+       (pass-tty))
+
+;;; we make sure that TTY-RETURN does not get run at the wrong time
+;;; by disabling it. TTY-RETURN gets run when the inferior does (STATUS JCL)
+;;; and there is JCL. Why is not clear. The macsyma TTY-RETURN does things
+;;; which wedge us entirely (cursorpos) if it gets run.
+
+(defun pass-tty ()
+       (LET ((TTY-RETURN NIL))       
+	    (setq ljob:hanger nil)
+	    (OR (NOT LJOB:*STOP-JOB-TELL*) (terpri TYO))
+	    (*atty)
+	    (ljob-hang))
+       (OR (NOT LJOB:*RUN-TTY-RETURN*) (NULL TTY-RETURN)
+	   (FUNCALL TTY-RETURN NIL))
+       '*)
+
+;;; To pass JCL to the JOB. should have a version that doesn't use
+;;; symbols. instead, use a SFA.
+
+(DEFUN LJOB-SET-JCL (JCL)
+       (AND (symbolp jcl)
+	    (SETQ JCL (implode (nconc (explodec jcl) '(#\cr)))))
+       (LJOB-SET-JCL-BARE JCL (SYMBOLP JCL)))
+       
+(defun ljob-set-jcl-bare (jcl JCL?)
+       (cond (JCL?
+	      (setq ljob:job-job-jcl JCL)
+	      (*uset *soption (logior (bit 4.6) (*uset *roption))))
+	     (t
+	      (setq ljob:job-job-jcl 0)
+	      (*uset *soption (boole 2 (bit 4.6) (*uset *roption))))))
+
+(defun ljob:*value-handler (loc)
+       (cond ((zerop loc)
+	      (finish-job ".value"))
+	     (t
+	      (stop-job ".value"))))
+
+(DEFUN GET-VALRET-STRING ()
+       (implode (GET-VALRET-STRING-LIST)))
+
+;;; Should have a version that uses an SFA to allow a READ valret string
+;;; efficiently.
+
+(defun get-valret-string-LIST ()
+       (let ((loc (logand 777777 (*uset *rsv40)))
+	     l)
+	    (do ((loc (1+ loc) (1+ loc))
+		 (cs (examine-job loc) (examine-job loc))
+		 (c)
+		 (i 5 5))
+		(())
+	      L (setq cs (rot cs 7))
+		(and (zerop (setq c (logand 177 cs)))
+		     (return t))
+		(push c l)
+		(or (zerop (setq i (1- i)))
+		    (go L)))
+	    (NREVERSE L)))
+
+(DEFMACRO LJOB:TELL (ST)
+	  `(COND (LJOB:*STOP-JOB-TELL*
+		  (terpri TYO)
+		  (princ ,ST TYO)
+		  (PRINC " (" TYO)
+		  (princ why TYO)
+		  (princ "): " TYO)
+		  (prin1 current-job TYO))))
+
+(DEFMACRO TERP ()
+	  `(OR (NOT LJOB:*STOP-JOB-TELL*) (terpri TYO)))
+
+(defun finish-job (why)
+  (LJOB:TELL ";finished")
+  (kill-job)
+  (TERP)
+  (setq ljob:hanger 'finished))
+
+(defun error-job (why)
+       (LJOB:TELL ";error")
+       (TERP)
+       (COND (LJOB:*KILL-IF-RETURN*
+	      (FINISH-JOB WHY))
+	     (T
+	      (setq ljob:hanger 'error))))
+
+(defun stop-job (why)
+       (LJOB:TELL ";stopped")
+       (TERP)
+       (COND (LJOB:*KILL-IF-RETURN*
+	      (FINISH-JOB WHY))
+	     (T
+	      (setq ljob:hanger 'stopped))))
+
+(defun ljob:*break-handler (op ac loc)
+       (cond ((not (= op 45))				;.break
+	      (cond ((and (= op 42) (= loc 33))		;.logout
+		     (finish-job ".logout"))
+		    (t
+		     (error-job ".break???"))))
+	     ((= ac 16)
+	      (if (zerop (logand (bits 2.5 2.6) loc))
+		  (stop-job ".break")
+		  (finish-job ".break")))
+	     ((= ac 12)
+	      (let ((req (examine-job loc))
+		    type)
+		   (cond ((not (zerop (logand req (bit 4.8))))
+			  (do ((aobjn (examine-job (logand 777777 req))
+				      (+ (bits 1.1 3.1) aobjn)))
+			      ((> aobjn 0))
+			      (ljob:*break-handler op ac (logand 777777 aobjn))))
+			 ((or (not (zerop (logand req (bit 4.9))))
+			      (not (= (setq type (logand 177777
+							 (lsh req -18.))) 5)))
+			  (error-job ".break 12,??"))
+			 (t
+			  (do ((l (pnget ljob:job-job-jcl 7) (cdr l))
+			       (loc (logand 777777 req) (1+ loc)))
+			      ((not (zerop (examine-job loc))))
+			      (and (null l)
+				   (return (deposit-job loc 0)))
+			      (deposit-job loc (car l)))
+			  (^P)
+			  (*atty)))))
+	     (t
+	      (error-job ".break ??,"))))
+
+;;;(ljob-hang) hangs untill the value of ljob:hanger is non-null.
+
+(lap ljob-hang subr)
+(args ljob-hang (nil . 0))
+	(skipn 0 (special ljob:hanger))
+	(*hang)
+	(move a (special ljob:hanger))
+	(popj p)
+() ;end of ljob-hang
+
+(defun ljob-run-job (xname file jcl)
+       (do ((name xname)
+	    (x (J xname) (J name)))
+	   ((cond ((null x) (error "-- couldn't create job." xname))
+		  ((eq (car x) 'inferior)
+		   (cond ((null (L file))
+			  (ljob-set-jcl jcl)
+			  (G)
+			  t)
+			 (t (error "-- can't load file." file))))
+		  ((eq (car x) 'reowned)
+		   (P)
+		   t)))
+	   (let ((l (exploden name)))
+		(cond ((> (length l) 5)
+		       (setf (caddr (cdddr l))
+			     (1+ (caddr (cdddr l)))))
+		      (t (rplacd (last l) (list #/'))))
+		(setq name (implode l))))
+       '*)
+
+(defun ljob-expand-run-macro (x)
+       (let ((name (car x))
+	     (jcl 0)
+	     file)
+	    (setq file (get name 'ljob-filename))
+	    (and (cdr x) (setq jcl (cadr x)))
+	    `(ljob-run-job ',name ',file ,jcl)))
+
+(defmacro defjob (name file)
+	  `(progn (putprop ',name ',file 'ljob-filename)
+		  (putprop ',name 'ljob-expand-run-macro 'macro)))
+
+
+(defjob p |dsk:sys;ts peek|)
+(defjob l |dsk:sys;ts lisp|)
+(DEFJOB A |DSK:SYS;TS A|)
+(defjob cl |dsk:sys;ts cl|)

@@ -1,0 +1,1221 @@
+;;;-*-Lisp-*-
+
+; (c) Copyright 1976, 1983 Massachusetts Institute of Technology. 
+; All Rights Reserved. Enhancements (c) Copyright 1983 Symbolics Inc.
+; All Rights Reserved. 
+; 
+;  The data and information in the Enhancements is proprietary to, and a
+; valuable trade secret of, SYMBOLICS, INC., a Delaware corporation. It is
+; given in confidence by SYMBOLICS, and may not be used as the basis of
+; manufacture, or be reproduced or copied, or distributed to any other
+; party, in whole or in part, without the prior written consent of SYMBOLICS.
+
+
+(macsyma-module tekplt)
+
+(declare (special tek-last-hi-y tek-last-lo-y tek-last-hi-x ards-status
+		  tek-mode unix-mode
+		  ards-mode tv-mode print-mode $loadprint $padded tty-graphics
+		  dsk-graphics pds4 ards-short-vector $values $myoptions
+		  tekplt-opts
+		  tekplt-vals char-type $charratio $plotmode $tek4025 $teks1
+		  $hardcopy)
+	 (notype (unix-cmd fixnum) (unix-coord fixnum)
+		 (unix-coords fixnum fixnum))
+	 (fixnum tek-last-hi-y tek-last-lo-y tek-last-hi-x ards-status a1 b1
+		 x y x1 y1 n (tek-pnt fixnum fixnum) (ards-status fixnum)
+		 (ards-mak1 fixnum notype) (ards-mak2 fixnum)
+		 (ards-mak0 fixnum)
+		 (tek-tyo fixnum) (ards-tyo fixnum))
+	 (flonum xf yf xf1 yf1)
+	 (setq nfunvars t)) 
+
+;; Define where files are kept
+#+franz
+(defmacro fasl-file (name) `(concat vaxima-main-dir '|//share//| ',name '|.o|))
+#-franz
+(defmacro fasl-file (name) `'((dsk share) ,name fasl))
+
+
+(setq tekplt-opts '($clear $wait $plotbell)
+      tekplt-vals '(t t t))
+
+;;; this returns t if the terminal output speed is >= 4800, this determines
+;;; if padding is necessary. this returns t if the speed code is >= 10
+
+(defun tek-padded ()
+  (COND ((STATUS FEATURE TOPS-20)
+	 T)
+	('ELSE
+	 (> (status ospeed) 2400.))))
+
+;;; initialize variables
+
+(mapcar #'(lambda (plotvar plotval) 
+	    (cond ((boundp plotvar)
+		   (and (memq plotvar $values)
+			(set plotvar (prog2 nil (eval plotvar)
+					    (remvalue plotvar)
+					    (add2lnc plotvar $myoptions)))))
+		  (t (set plotvar plotval))))
+;; these guys aren't reset by PLOTRESET
+	(append tekplt-opts '($plotthick $plotscale $charratio
+			      $plotlftmar $plotbotmar $hardcopy $tek4662 $tek4025 $teks1
+			      #+franz $plotheight))
+	(append tekplt-vals '(2. 1.0 2.5 150. 150. nil nil nil nil #+franz 24.)))
+
+;;;various primitives
+
+(setq tek-last-hi-y 0. tek-last-lo-y 0. tek-last-hi-x 0.) 
+
+(defun tek-pnt (x y) 
+       (let ((a1 (boole 7. 32. (boole 1. 31. (lsh y -5.))))
+	     (b1 (boole 7. 96. (boole 1. 31. y))))
+	    (cond ((not (= a1 tek-last-hi-y))
+		   (tek-tyo a1) 
+		   (setq tek-last-hi-y a1)))
+	    (setq a1 (boole 7. 32. (boole 1. 31. (lsh x -5.))))
+	    (cond ((not (and (= b1 tek-last-lo-y) (= a1 tek-last-hi-x)))
+		   (tek-tyo b1) 
+		   (setq tek-last-lo-y b1)))
+	    (cond ((not (= a1 tek-last-hi-x))
+		   (tek-tyo a1) 
+		   (or $padded (setq tek-last-hi-x a1))))
+	    (tek-tyo (boole 7. 64. (boole 1. 31. x)))))
+
+(setq ards-status 28.) 
+
+(defun ards-status (x)
+       (or (= ards-status x)
+	   (ards-tyo (boole 7. (cond (pds4 128.) (t 0.)) (setq ards-status x))))) 
+
+(defun ards-mak1 (x 40bit) (ards-mak0 x)
+       (ards-tyo 
+	       (boole 7. 64. (lsh (boole 1. 992. (abs x)) -5.)
+		      (cond (40bit 32.) (t 0.)))))
+
+(defun ards-mak0 (x) (ards-tyo 
+			     (boole 7. 64. (lsh (boole 1. 31. (abs x)) 1.)
+				    (cond ((minusp x) 1.) (t 0.))))) 
+
+#+franz
+(defun unix-coord (x)
+  (unix-tyo (boole 1 x #o377)) (unix-tyo (boole 1 (lsh x -8) #o377)) nil)
+#+franz
+(defun unix-coords (x y) (unix-coord x) (unix-coord y))
+#+franz
+(defun unix-cmd (n) (unix-tyo n) nil)
+
+;;; setpoint
+
+(declare (special min-x max-x min-y max-y last-x last-y size-x size-y pnt-status
+		  ards-abs-setpoint screen-last-x screen-last-y)
+	 (notype (checkpnt fixnum fixnum) (setpointi fixnum fixnum)
+		 (setpoint fixnum fixnum) ($setpoint flonum flonum)
+		 (pointi fixnum fixnum) (point fixnum fixnum) ($point flonum flonum)
+		 (ards-vect fixnum fixnum notype) (ards-setpoint fixnum fixnum)
+		 (print-point fixnum fixnum fixnum fixnum))
+	 (fixnum min-x max-x min-y max-y last-x last-y size-x size-y screen-last-x
+		 screen-last-y (tek-x flonum) (tek-y flonum))) 
+
+(defun checkpnt (x y) (not (or (< x min-x) (> x max-x) (< y min-y) (> y max-y)))) 
+
+(defun setpointi (x y)
+(cond ((and pnt-status (= screen-last-x x) (= screen-last-y y)))
+      (t
+       (cond (tek-mode (tek-tyo 29.) (tek-pnt x y)))
+       (cond (ards-mode (ards-setpoint x y)))
+#+franz(cond (unix-mode (unix-cmd #/m) (unix-coords x y)))
+       ))
+(setq pnt-status t last-x x last-y y screen-last-x x screen-last-y y)
+nil)
+
+(defun setpoint (x y) 
+       (cond ((checkpnt x y) (setpointi x y))
+	     ((setq pnt-status nil last-x x last-y y)))
+       nil) 
+
+(DEFMFUN $setpoint (xf yf) (setpoint (tek-x xf) (tek-y yf))) 
+
+(defun ards-setpoint (x y)
+       (cond (ards-abs-setpoint (ards-status 29.)
+				(ards-mak1 (- x 512.) nil)
+				(ards-mak1 (- y 512.) nil)
+				(setq ards-abs-setpoint nil))
+	     (t (ards-vect (- x screen-last-x) (- y screen-last-y) nil)))
+       nil)
+
+;;; points
+
+(defun pointi (x y)
+       (cond (tek-mode (tek-tyo 29.) (cond ($padded (tek-pnt x y) (tek-pnt x y))
+					   (t (tek-tyo (tek-pnt x y))))))
+       (cond (ards-mode (ards-setpoint x y)
+			(cond (ards-short-vector
+			       (ards-status 31.)
+			       (progn (ards-tyo 64.) (ards-tyo 64.)))
+			      (t (ards-status 30.)
+				 (progn (ards-tyo 64.) (ards-tyo 64.)
+					(ards-tyo 64.) (ards-tyo 64.))))))
+       (cond (tv-mode (tv-point x y)))
+       (cond (print-mode (print-point x y)))
+#+franz(cond (unix-mode (unix-cmd #/p) (unix-coords x y)))
+       (setq pnt-status t last-x x last-y y screen-last-x x screen-last-y y)
+       nil)
+
+(defun point (x y) 
+       (cond ((checkpnt x y) (pointi x y))
+	     ((setq pnt-status nil last-x x last-y y)))
+       nil) 
+
+(DEFMFUN $point (xf yf) (point (tek-x xf) (tek-y yf))) 
+
+;;; vectors
+
+(declare (array* (notype dasharray 1.) (fixnum print-dasharray 1.))
+	 (special dashl odashl beamon drawn print-line1)
+	 (notype (vectord fixnum fixnum)
+		 ($definedash notype notype) ($changedash fixnum)
+		 (vectori fixnum fixnum) (ards-vect fixnum fixnum notype)
+		 (vector fixnum fixnum) ($vector flonum flonum)
+		 (print-point fixnum fixnum fixnum fixnum)
+		 (line fixnum fixnum fixnum fixnum) ($line flonum flonum flonum flonum))
+	 (fixnum del-x del-y save-x save-y drawn len runl targ-x targ-y drawn n
+		 (intercept fixnum fixnum fixnum fixnum fixnum))
+	 (flonum del-xf del-yf lenf)) 
+
+(defun vectori (x y) 
+       (cond (tek-mode (tek-pnt x y)))
+       (cond (ards-mode (ards-vect (- x last-x) (- y last-y) t)))
+       (cond (tv-mode (tv-line last-x last-y x y)))
+       (cond (print-mode (print-line1 last-x last-y x y)))
+;#+franz(cond (unix-mode (unix-cmd #/n) (unix-coords x y)))
+#+franz(cond (unix-mode (unix-cmd #/l)
+			(unix-coords last-x last-y)
+			(unix-coords x y)))
+       (setq pnt-status t last-x x last-y y screen-last-x x screen-last-y y)
+       nil) 
+
+(setq ards-short-vector nil)
+
+(defun ards-vect (x y visible) 
+       (cond ((and ards-short-vector visible (< (abs x) 32.) (< (abs y) 32.))
+	      (ards-status 31.) (ards-mak0 x) (ards-mak0 y))
+	     (t (ards-status 30.)
+		(cond ((and (< (abs x) 1024.) (< (abs y) 1024.))
+		       (ards-mak1 x (not visible))
+		       (ards-mak1 y nil))
+		      (t (ards-mak1 (// x 2.) (not visible))
+			 (ards-mak1 (// y 2.) nil)
+			 (ards-mak1 (- x (// x 2.)) (not visible))
+			 (ards-mak1 (- y (// y 2.)) nil)))))
+       nil)
+
+(progn (setq dashl nil odashl nil beamon t drawn 0.) (array dasharray t 10.)
+       (array print-dasharray fixnum 10.)) 
+
+;;; dashed vectors
+
+(defun vectord (x y) 
+     (let ((print-mode print-mode))
+	  (cond (print-mode (print-line1 last-x last-y x y)
+			    (setq print-mode nil)))
+	  (cond
+	   ((null dashl) (vectori x y))
+	   ((not (eq (typep dashl) 'list)) (setpoint x y))
+	   (t (let ((save-x last-x) (save-y last-y) (del-xf (float (- x last-x)))
+		    (del-yf (float (- y last-y))) (lenf 0.0) (len 0.))
+		   (setq lenf (sqrt (+$ (*$ del-xf del-xf) (*$ del-yf del-yf))) 
+			 len (fix (+$ lenf 0.5)) 
+			 del-xf (//$ del-xf lenf) del-yf (//$ del-yf lenf))
+		   (do ((runl (- (car dashl) drawn) (+ runl (car dashl)))
+			(targ-x) (targ-y))
+		       (nil)
+		       (setq targ-x (+ save-x (fix (+$ (*$ (float runl) del-xf) 0.5))) 
+			     targ-y (+ save-y (fix (+$ (*$ (float runl) del-yf) 0.5))))
+		       (cond (beamon (cond ((< runl len)
+					    (vectori targ-x targ-y)
+					    (setq drawn 0. dashl (cdr dashl)
+						  beamon nil))
+					   (t (vectori x y)
+					      (cond ((= runl len)
+						     (setq drawn 0. dashl (cdr dashl)
+							   beamon nil))
+						    (t (setq drawn
+							     (- (car dashl)
+								(- runl len)))))
+					      (return nil))))
+			     (t (cond ((< runl len)
+				       (setpoint targ-x targ-y)
+				       (setq drawn 0. dashl (cdr dashl) beamon t))
+				      (t (setpoint x y)
+					 (cond ((= runl len)
+						(setq drawn 0. dashl (cdr dashl) 
+						      beamon t))
+					       (t (setq drawn (- (car dashl)
+								 (- runl len)))))
+					 (return nil)))))))))))
+
+(DEFMFUN $definedash (l1 l) 
+       (or (and (fixp l1) (< l1 10.) (> l1 -1.))
+	   (merror "First arg to DEFINEDASH must lie between 0 and 9"))
+       (prog2 nil
+	      (list '(mlist simp) l1 l)
+	      (cond ((or (null l) (eq l t) (eq (typep l) 'list))
+		     (and (eq (typep l) 'list) (eq (caar l) 'mlist) (setq l (cdr l)))
+		     (or (eq l t) (setq l (mapcar 'fix l)))
+		     (store (dasharray l1) l))
+		    (t (or (fixp l) (setq l (car (exploden (stripdollar l)))))
+		       (store (print-dasharray l1) l)))))
+
+(DEFMFUN $changedash (x) 
+       (cond (print-mode (setq print-line1 (print-dasharray x))))
+       (setq dashl (dasharray x) odashl nil drawn 0. beamon t)
+       (cond ((eq (typep dashl) 'list)
+	      (setq dashl (append dashl nil))
+	      (rplacd (last dashl) dashl)))
+       nil) 
+
+(DEFMFUN $pushdash nil (setq odashl dashl dashl nil)) 
+
+(DEFMFUN $popdash nil (setq dashl odashl odashl nil)) 
+
+(progn ($definedash 1. '(40. 8.)) ($definedash 2. '(15. 8.)) ($definedash 3. '(1. 7.))
+       ($definedash 4. '(30. 8. 1. 8.)) ($definedash 5. '(30. 8. 1. 8. 1. 8.))
+       ($definedash 6. '(40. 8. 1. 8. 5. 8. 1. 8.)) ($definedash 7. '(8. 30.))
+       ($definedash 8. '(1. 20.)) ($definedash 9. t) 
+       (fillarray 'print-dasharray '(46. 42. 35. 36. 37. 38. 43. 64. 45. 0.))
+       (setq print-line1 (print-dasharray 0.)))
+
+;;; vectors with clipping
+
+(defun vector (x y) 
+ (cond ((and pnt-status (checkpnt x y)) (vectord x y))
+       (t (prog (del-x del-y save-x save-y) 
+		(setq save-x x save-y y del-x (- x last-x) del-y (- y last-y))
+		(cond ((> last-y max-y)
+		       (cond ((> y max-y) (go no-vector))
+			     (t (setq last-x (intercept last-x last-y del-x del-y max-y)
+				      last-y max-y)
+				(cond ((< y min-y)
+				       (setq x (intercept x y del-x del-y min-y)
+					     y min-y))))))
+		      ((< last-y min-y)
+		       (cond ((< y min-y) (go no-vector))
+			     (t (setq last-x (intercept last-x last-y del-x del-y min-y)
+				      last-y min-y)
+				(cond ((> y max-y)
+				       (setq x (intercept x y del-x del-y max-y)
+					     y max-y))))))
+		      ((> y max-y)
+		       (setq x (intercept x y del-x del-y max-y) y max-y))
+		      ((< y min-y)
+		       (setq x (intercept x y del-x del-y min-y) y min-y)))
+		(cond ((> last-x max-x)
+		       (cond ((> x max-x) (go no-vector))
+			     (t (setq last-y (intercept last-y last-x del-y del-x max-x)
+				      last-x max-x)
+				(cond ((< x min-x)
+				       (setq y (intercept y x del-y del-x min-x)
+					     x min-x))))))
+		      ((< last-x min-x)
+		       (cond ((< x min-x) (go no-vector))
+			     (t (setq last-y (intercept last-y last-x del-y del-x min-x)
+				      last-x min-x)
+				(cond ((> x max-x)
+				       (setq y (intercept y x del-y del-x max-x)
+					     x max-x))))))
+		      ((> x max-x)
+		       (setq y (intercept y x del-y del-x max-x) x max-x))
+		      ((< x min-x)
+		       (setq y (intercept y x del-y del-x min-x) x min-x)))
+		(cond ((not pnt-status) (setpoint last-x last-y)))
+		(vectord x y)
+		no-vector
+		(cond ((not (checkpnt save-x save-y))
+		       (setq pnt-status nil last-x save-x last-y save-y))))))
+ nil) 
+
+(defun intercept (x y del-x del-y max-y) (- x (// (* del-x (- y max-y)) del-y))) 
+
+(DEFMFUN $vector (xf yf) (vector (tek-x xf) (tek-y yf))) 
+
+;;; lines
+
+(defun line (x1 y1 x y) (setpoint x1 y1) (vector x y)) 
+
+(DEFMFUN $line (xf1 yf1 xf yf) 
+       (setpoint (tek-x xf1) (tek-y yf1)) (vector (tek-x xf) (tek-y yf))) 
+
+;;; symbols
+
+(declare (array* (notype symbolarray 1.) (fixnum print-symbolarray 1.))
+	 (notype (drawsymbol fixnum fixnum fixnum) ($drawsymbol flonum flonum fixnum)
+		 ($definesymbol notype notype))) 
+
+(progn (array symbolarray t 10.) (array print-symbolarray fixnum 10.))
+
+(defun drawsymbol (x y x1) 
+       (let ((print-mode print-mode))
+	    (cond (print-mode
+		   (let ((print-line1 (print-symbolarray x1)))
+			(print-point x y))
+		   (setq print-mode nil)))
+	    ($pushdash)
+	    (do ((symbl0 (symbolarray x1) (cdr symbl0)) (draw nil (not draw)))
+		((cond ((null symbl0)) ((eq symbl0 t) (point x y) t)))
+		(do ((symbl1 (car symbl0) (cddr symbl1))) ((null (cdr symbl1)))
+		    (cond (draw (vector (+ x (car symbl1)) (+ y (cadr symbl1))))
+			  (t (setpoint (+ x (car symbl1)) (+ y (cadr symbl1)))))))
+	    ($popdash)))
+
+(DEFMFUN $drawsymbol (xf yf x1) (drawsymbol (tek-x xf) (tek-y yf) x1)) 
+
+(DEFMFUN $definesymbol (l1 l) 
+       (or (and (fixp l1) (< l1 10.) (> l1 -1.))
+	   (merror "First arg to DEFINESYMBOL must lie between 0 and 9"))
+       (prog2 nil
+	      (list '(mlist simp) l1 l)
+	      (cond ((or (null l) (eq l t) (eq (typep l) 'list))
+		     (and (eq (typep l) 'list) (eq (caar l) 'mlist) (setq l (cdr l)))
+		     (or (eq l t)
+			 (setq l (mapcar #'(lambda (l2) (and (eq (caar l2) 'mlist)
+							     (setq l2 (cdr l2)))
+						   (mapcar 'fix l2))
+					 l)))
+		     (store (symbolarray l1) l))
+		    (t (or (fixp l) (setq l (car (exploden (stripdollar l)))))
+		       (store (print-symbolarray l1) l))))) 
+
+(progn ($definesymbol 0. nil)
+       ($definesymbol 1. '((0. 6.) (0. -6.) (-6. 0.) (6. 0.) (0. 0.)))
+       ($definesymbol 2. '((4. 4.) (-4. -4.) (4. -4.) (-4. 4.) (0. 0.)))
+       ($definesymbol 3. '((6. 6.) (6. -6. -6. -6. -6. 6. 6. 6.) (0. 0.) (0. 0.)))
+       ($definesymbol 4. '((8. 0.) (0. -8. -8. 0. 0. 8. 8. 0.) (0. 0.) (0. 0.)))
+       ($definesymbol 5. '((0. 8.) (6. -4. -6. -4. 0. 8.) (0. 0.) (0. 0.)))
+       ($definesymbol 6. '((0. -8.) (6. 4. -6. 4. 0. -8.) (0. 0.) (0. 0.)))
+       ($definesymbol 7. '((8. 0.) (-4. 6. -4. -6. 8. 0.) (0. 0.) (0. 0.)))
+       ($definesymbol 8. '((-8. 0.) (4. 6. 4. -6. -8. 0.) (0. 0.) (0. 0.)))
+;      ($definesymbol 9. '((0. 9.) (4. -6. -7. 2. 7. 2. -4. -6. 0. 9.) (0. 0.)))
+       ($definesymbol 9. t)
+       (fillarray 'print-symbolarray '(0. 65. 66. 67. 68. 69. 70. 71. 72. 73.))) 
+
+;;; scaling functions
+
+(declare (special min-xf max-xf min-yf max-yf size-xf size-yf scale-x scale-y)
+	 (flonum min-xf max-xf min-yf max-yf size-xf size-yf scale-x scale-y)
+	 (notype ($screensize fixnum fixnum fixnum fixnum)
+		 ($size flonum flonum flonum flonum))) 
+
+(setq min-xf 0.0 min-yf 0.0 max-xf 1023.0 max-yf 1023.0 size-xf 1023.0 size-yf 1023.0) 
+
+(DEFMFUN $screensize (x1 y1 x y) 
+       (setq min-x x1 min-y y1 max-x x max-y y
+	     size-x (- max-x min-x) size-y (- max-y min-y) 
+	     scale-x (//$ size-xf (float size-x)) scale-y (//$ size-yf (float size-y)) 
+	     pnt-status nil last-x min-x last-y min-y)
+       nil) 
+
+($screensize 0. 0. 1023. 1023.) 
+
+(DEFMFUN $screensize1 (x1 y1 x y) 
+       ($size (tek-xf x1) (tek-yf y1) (tek-xf x) (tek-yf y))
+       ($screensize x1 y1 x y))  
+
+(DEFMFUN $size (xf1 yf1 xf yf) 
+       (setq min-xf xf1 min-yf yf1 max-xf xf max-yf yf 
+	     size-xf (-$ max-xf min-xf) size-yf (-$ max-yf min-yf) 
+	     scale-x (//$ size-xf (float size-x)) scale-y (//$ size-yf (float size-y)))
+       nil) 
+
+(defun tek-x (xf) (+ min-x (fix (+$ 0.5 (//$ (-$ xf min-xf) scale-x))))) 
+
+(defun tek-y (yf) (+ min-y (fix (+$ 0.5 (//$ (-$ yf min-yf) scale-y))))) 
+
+(defun tek-xf (x) (+$ min-xf (*$ (float (- x min-x)) scale-x))) 
+
+(defun tek-yf (y) (+$ min-yf (*$ (float (- y min-y)) scale-y))) 
+
+(declare (special txfun-x txfun-y call-x0 call-xe1 call-xe2 call-xe3 call-xs1 call-xs2
+		  call-xs3 call-y0 call-ye1 call-ye2 call-ye3 call-ys1 call-ys2 call-ys3
+		  call-x call-y ^w ^r tty)
+	 (flonum xf yf zf xf1 yf1 zf1
+		 (call-x flonum flonum flonum) (call-x0 flonum flonum flonum)
+		 (call-xe1 flonum flonum flonum) (call-xe2 flonum flonum flonum)
+		 (call-xe3 flonum flonum flonum) (call-xs1 flonum flonum flonum)
+		 (call-xs2 flonum flonum flonum) (call-xs3 flonum flonum flonum)
+		 (call-y flonum flonum flonum) (call-y0 flonum flonum flonum)
+		 (call-ye1 flonum flonum flonum) (call-ye2 flonum flonum flonum)
+		 (call-ye3 flonum flonum flonum) (call-ys1 flonum flonum flonum)
+		 (call-ys2 flonum flonum flonum) (call-ys3 flonum flonum flonum))
+	 (fixnum n))
+
+(defun call-x0 (xf yf zf) xf)
+(defun call-xe1 (xf yf zf) (funcall txfun-x xf))
+(defun call-xe2 (xf yf zf) (funcall txfun-x xf yf))
+(defun call-xe3 (xf yf zf) (funcall txfun-x xf yf zf))
+(defun call-xs1 (xf yf zf) #-franz (subrcall flonum txfun-x xf)
+  #+franz (funcall txfun-x xf))
+(defun call-xs2 (xf yf zf) #-franz (subrcall flonum txfun-x xf yf)
+  #+franz (funcall txfun-x xf yf))
+(defun call-xs3 (xf yf zf) #-franz (subrcall flonum txfun-x xf yf zf)
+  #+franz (funcall txfun-x xf yf zf))
+(defun call-y0 (xf yf zf) yf)
+(defun call-ye1 (xf yf zf) (funcall txfun-y yf))
+(defun call-ye2 (xf yf zf) (funcall txfun-y xf yf))
+(defun call-ye3 (xf yf zf) (funcall txfun-y xf yf zf))
+(defun call-ys1 (xf yf zf) #-franz (subrcall flonum txfun-y yf)
+  #+franz (funcall txfun-y yf))
+(defun call-ys2 (xf yf zf) #-franz (subrcall flonum txfun-y xf yf)
+  #+franz (funcall txfun-y xf yf))
+(defun call-ys3 (xf yf zf) #-franz (subrcall flonum txfun-y xf yf zf)
+  #+franz (funcall txfun-y xf yf zf))
+
+(setq call-x0 #-franz (get 'call-x0 'subr) #+franz (getd 'call-x0)
+      call-xe1 #-franz (get 'call-xe1 'subr) #+franz (getd 'call-xe1)
+      call-xe2 #-franz (get 'call-xe2 'subr) #+franz (getd 'call-xe2)
+      call-xe3 #-franz (get 'call-xe3 'subr) #+franz (getd 'call-xe3)
+      call-xs1 #-franz (get 'call-xs1 'subr) #+franz (getd 'call-xs1)
+      call-xs2 #-franz (get 'call-xs2 'subr) #+franz (getd 'call-xs2)
+      call-xs3 #-franz (get 'call-xs3 'subr) #+franz (getd 'call-xs3)
+      call-y0 #-franz (get 'call-y0 'subr) #+franz (getd 'call-y0)
+      call-ye1 #-franz (get 'call-ye1 'subr) #+franz (getd 'call-ye1)
+      call-ye2 #-franz (get 'call-ye2 'subr) #+franz (getd 'call-ye2)
+      call-ye3 #-franz (get 'call-ye3 'subr) #+franz (getd 'call-ye3)
+      call-ys1 #-franz (get 'call-ys1 'subr) #+franz (getd 'call-ys1)
+      call-ys2 #-franz (get 'call-ys2 'subr) #+franz (getd 'call-ys2)
+      call-ys3 #-franz (get 'call-ys3 'subr) #+franz (getd 'call-ys3)
+      call-x call-x0 call-y call-y0)
+
+(defun call-x (xf yf zf) #-franz (subrcall flonum call-x xf yf zf)
+  #+franz (funcall call-x xf yf zf))
+(defun call-y (xf yf zf) #-franz (subrcall flonum call-y xf yf zf)
+  #+franz (funcall call-y xf yf zf))
+
+(defun call-init (xfun yfun)
+       (setq call-x call-x0 txfun-x nil)
+       (cond ((or (null xfun) (not #-franz (or (get xfun 'expr)
+					       (get xfun 'subr))
+				   #+franz (getd xfun))))
+	     (#-franz (not (> (length (memq 'subr (plist xfun)))
+			      (length (memq 'expr (plist xfun)))))
+	      #+franz (eq (car (let ((l (getd xfun))) (and (listp l) l))) 'lambda)
+	      (let ((n (length (cadr #-franz (get xfun 'expr)
+				     #+franz (getd xfun)))))
+		     (setq txfun-x xfun)
+		     (cond ((= n 1.) (setq call-x call-xe1))
+			   ((= n 2.) (setq call-x call-xe2))
+			   ((= n 3.) (setq call-x call-xe3))
+			   (t (setq txfun-x nil)))))
+	     (t
+	#-franz (cond ((or (null (args xfun)) (> (cdr (args xfun)) 3.)))
+			     (t (setq txfun-x (get xfun 'subr))
+				(cond ((= (cdr (args xfun)) 1.)
+				       (setq call-x call-xs1))
+				      ((= (cdr (args xfun)) 2.)
+				       (setq call-x call-xs2))
+				      (t (setq call-x call-xs3)))))
+	#+franz (let ((l (get xfun 'fcn-info)))
+		  (setq txfun-x (getd xfun))
+		  (cond (l (let ((n (caar l)))
+			     (cond ((= n 1) (setq call-x call-xs1))
+				   ((= n 2) (setq call-x call-xs2))
+				   ((= n 3) (setq call-x call-xs3))
+				   (t (setq txfun-x nil)))))
+			(t
+			 (let ((^w t) (^r nil))
+			   (cond ((errset (funcall xfun 1.23))
+				  (setq  call-x call-xs1))
+				 ((errset (funcall xfun 1.23 2.34))
+				  (setq  call-x call-xs2))
+				 ((errset (funcall xfun 1.23 2.34 3.45))
+				  (setq  call-x call-xs3))
+				 (t (setq txfun-x nil)))))))))
+       (setq call-y call-y0 txfun-y nil)
+       (cond ((or (null yfun) (not #-franz (or (get yfun 'expr)
+					       (get yfun 'subr))
+				   #+franz (getd yfun))))
+	     (#-franz (not (> (length (memq 'subr (plist yfun)))
+			      (length (memq 'expr (plist yfun)))))
+	      #+franz (eq (car (let ((l (getd yfun))) (and (listp l) l))) 'lambda)
+	      (let ((n (length (cadr #-franz (get yfun 'expr)
+				     #+franz (getd yfun)))))
+		     (setq txfun-y yfun)
+		     (cond ((= n 1.) (setq call-y call-ye1))
+			   ((= n 2.) (setq call-y call-ye2))
+			   ((= n 3.) (setq call-y call-ye3))
+			   (t (setq txfun-y nil)))))
+	     (t
+       #-franz (cond ((or (null (args yfun)) (> (cdr (args yfun)) 3.)))
+		    (t (setq txfun-y (get yfun 'subr))
+		       (cond ((= (cdr (args yfun)) 1.) (setq call-y call-ys1))
+			     ((= (cdr (args yfun)) 2.) (setq call-y call-ys2))
+			     (t (setq call-y call-ys3)))))
+       	#+franz (let ((l (get yfun 'fcn-info)))
+		  (setq txfun-y (getd yfun))
+		  (cond (l (let ((n (caar l)))
+			     (cond ((= n 1) (setq call-y call-ys1))
+				   ((= n 2) (setq call-y call-ys2))
+				   ((= n 3) (setq call-y call-ys3))
+				   (t (setq txfun-y nil)))))
+			(t
+			 (let ((^w t) (^r nil))
+			   (cond ((errset (funcall yfun 1.23))
+				  (setq  call-y call-ys1))
+				 ((errset (funcall yfun 1.23 2.34))
+				  (setq  call-y call-ys2))
+				 ((errset (funcall yfun 1.23 2.34 3.45))
+				  (setq  call-y call-ys3))
+				 (t (setq txfun-y nil))))))))))
+
+(declare (notype ($setpoint3 flonum flonum flonum) ($point3 flonum flonum flonum)
+		 ($vector3 flonum flonum flonum) ($line3 flonum flonum flonum flonum)
+		 ($drawsymbol3 flonum flonum flonum fixnum)))
+
+(DEFMFUN $setpoint3 (xf yf zf) ($setpoint (call-x xf yf zf) (call-y xf yf zf)))
+
+(DEFMFUN $point3 (xf yf zf) ($point (call-x xf yf zf) (call-y xf yf zf)))
+
+(DEFMFUN $vector3 (xf yf zf) ($vector (call-x xf yf zf) (call-y xf yf zf)))
+
+(DEFMFUN $line3 (xf1 yf1 zf1 xf yf zf)
+       ($line (call-x xf1 yf1 zf) (call-y xf1 yf1 zf1)
+	      (call-x xf yf zf) (call-y xf yf zf)))
+
+(DEFMFUN $drawsymbol3 (xf yf zf x1) ($drawsymbol (call-x xf yf zf) (call-y xf yf zf) x1))
+
+;;; tops and tails
+
+(declare (special graphic-mode linel plot2-error ^w ^r tty piport poport
+		  oerrorfun $clear $wait $crclear
+		  $errorfun o14int old-tty-return tty-return $plotbell
+		  plot2-file plot2-file-name $plotthick $plotscale
+		  $plotheight print-x print-y plot2-tty ttyheight tyo
+		  $tek4662 $plotlftmar $plotbotmar)
+  	 (fixnum i $plotheight print-x print-y ttyheight linel tty-1
+		 tty-2 tty-3 ($exitgraph))
+  	 (notype ($clear) ($entergraph) (leavegraph)
+		 ($hardcopy) (start-graphics-to-dsk) (stop-graphics-to-dsk))
+	 (array* (fixnum screen-array 2.)))
+
+(setq graphic-mode nil plot2-error nil)
+
+#+franz (setq tty 0)
+
+(array screen-array fixnum 1. 1.)
+
+(DEFMFUN $clear nil
+(cond ($tek4025
+       (tek-tyo #/`) (tek-tyo #/e) (tek-tyo #/r) (tek-tyo #/a)
+       (tek-tyo #\space) (tek-tyo #/g) (tek-tyo #\cr) (forceout*))	      
+      (t (let ((^w) (^r)) (cursorpos 'c))
+       (cond ((and (= tty 0.) (eq tty-graphics 'tek))
+	      (tek-tyo 27.) (tek-tyo 12.)
+	      ; if speed is known output 1 secs worth of ^Vs
+	      ; else sleep for 1 sec.
+	      (cond ((= (status ospeed) 0) (forceout*) (sleep 1.))
+		    (t (do ((i (// (status ospeed) 10.) (1- i)))
+			   ((not (> i 0)))
+			   (tek-tyo #^V)))))
+	     (nil ;t (ards-tyo 12.)
+		(forceout*))))))
+
+(setq plot2-file-name
+#-franz (cond ((status feature its)
+      (list (list 'dsk ".temp."
+;			 (cond ((probef (list (list 'dsk (status udir))
+;						   '|.file.| '|(dir)|))
+;				     (status udir))
+;				    (t 'users))
+			 )
+		   (status uname) ".plot."))
+	    (t (list (list (status homedir)) (status uname) 'plot)))
+#+franz '|~//plot2.pl|)
+
+(defun start-graphics-to-dsk nil
+       (cond ((or $clear (null (probef plot2-file-name)))
+	      (setq plot2-file (open plot2-file-name '(out image dsk)))
+	      #+franz (progn (unix-cmd #/e) (unix-cmd #/s)
+			     (unix-coords 0 0) (unix-coords 1023. 790.)))
+	     (t (setq plot2-file
+		      #-franz (open plot2-file-name '(append image dsk))
+		      #+franz (outfile plot2-file-name 'append)))))
+		
+(DEFMFUN $entergraph nil 
+       (and graphic-mode (let (($wait) ($hardcopy)) ($exitgraph)))
+       (cond (print-mode
+	      (or #-franz (get 'print-line1 'subr) #+franz (getd 'print-line1)
+		  (loadfile (fasl-file print) t $loadprint))))
+       (and tty-graphics $wait 
+;; Clear input buffer of innocuous characters.
+     #+its (and (status feature its)
+		(let ((l1 (or (status tty)
+			  (syscall 3 'ttyget tyi)))
+		  (tty-1 0.) (tty-2 0.) (oint (nointerrupt 'tty)))
+		 (setq tty-1 (car l1)
+		       tty-2 (cadr l1))
+		 (sstatus tty
+			  ;;;activate all chars
+			  (boole 7. tty-1 2181570690.)
+			  ;;;020202020202 octal
+			  (boole 7. tty-2 2181570690.))
+		 (do ((a1))
+		     ((= (listen tyi) 0.))
+		     (setq a1 (tyipeek #-franz nil #-franz tyi #+franz piport))
+		     (cond ((or (> a1 31.) (= a1 9.)
+				(= a1 10.) (= a1 27.)
+				(and $crclear (= a1 13.)))
+			    (return nil)))
+		     (tyi tyi))
+		 (sstatus tty tty-1 tty-2)
+		 (nointerrupt oint)))
+; Take away first newline.
+     #+franz (cond ((= (tyipeek piport) 10.) (tyi))))
+       (setq graphic-mode t plot2-error nil oerrorfun $errorfun
+	     $errorfun #'(lambda nil (setq $clear t $wait t plot2-error t)
+				 (let (($wait) ($hardcopy))
+				   ($exitgraph))
+				 (and oerrorfun (meval (list oerrorfun))))
+	     screen-last-x 0 screen-last-y 0)
+       (and print-mode (cond ((eq tty-graphics 'print)
+			      (*rearray 'screen-array 'fixnum $plotheight linel))
+			     ((eq tty-graphics 'disp)
+			      (setq print-x 0. print-y 0.))))
+       (and tek-mode (setq tek-last-hi-y 0. tek-last-lo-y 0. tek-last-hi-x 0.))
+       (and ards-mode (setq ards-abs-setpoint t))
+       (cond (tty-graphics 
+	#+its (and (status feature its)
+		   (let ((l1 (or (status tty)       ; defers echoing
+			    (syscall 3 'ttyget tyi)))
+		    (tty-3 0.))
+		   (setq tty-3 (boole 7. (caddr l1) 1._21.))
+		   (sstatus tty (car l1) (cadr l1) tty-3)))
+	 #-franz (setq o14int
+		    #'(lambda (arg1 arg2)
+			(forceout*)
+			(and (= (tyipeek nil tyi) 28.)
+			     (tyi tyi)))
+				 o14int (prog2 nil
+					       (status ttyint 28.)
+					       (sstatus ttyint 28. o14int)))
+	      (setq old-tty-return tty-return tty-return nil)
+	      (cond ($clear ($clear)
+			    (cond ((eq tty-graphics 'print)
+				   (fillarray 'screen-array '(32.)))))
+		    (t (let ((^w)) (cursorpos 'top))))
+	      (cond ((and $teks1 (eq tty-graphics 'tek))
+		     (tek-tyo 5) (tek-tyo #o124)))
+	      (cond ((and $tek4662 (eq tty-graphics 'tek))
+		     (tek-tyo 32.) (tek-tyo 32.)
+		     (tek-tyo 27.) (tek-tyo 65.) (tek-tyo 69.)))))
+       (cond (dsk-graphics (start-graphics-to-dsk)))
+       (cond (tv-mode (and $clear (tv-clear))))
+       nil)
+
+(defun stop-graphics-to-dsk nil
+       (cond (#-franz (and (filep plot2-file) (status filemode plot2-file))
+	      #+franz (portp plot2-file)
+	      (close plot2-file)))
+       nil)
+
+(defun leavegraph nil
+       (cond (tek-mode (tek-tyo 31.)))
+       (cond (ards-mode (ards-status 28.)))
+       (setq pnt-status nil))
+
+(DEFMFUN $exitgraph nil
+       (let ((a1 0.))
+	 (cond
+	  (graphic-mode
+	   (let ((plot2-file (cond (plot2-error
+					   (open #-franz '((nul))
+						 #+franz '|//dev//null|
+						 '(out)))
+					  (t plot2-file))))
+		(cond ((eq tty-graphics 'imlac) (setpointi 33. 986.))
+		      ((eq tty-graphics 'grinnell) (setpointi 0. 1002.))
+		      ((eq tty-graphics 'tek) (setpointi 0. (- 790. 22.))))
+		(leavegraph)
+		(cond ((and $teks1 (eq tty-graphics 'tek))
+		       (tek-tyo 5) (tek-tyo #o164)))
+		(cond ((and $tek4662 (eq tty-graphics 'tek))
+		       (tek-tyo 27.) (tek-tyo 65.) (tek-tyo 70.)))
+		(and plot2-error (close plot2-file)))
+	   (cond (dsk-graphics (stop-graphics-to-dsk)))
+	   (and $wait (eq tty-graphics 'print) (screen-output))
+#+franz	   (and $wait (eq tty-graphics 'unix)
+		(apply #'exec (list 'plot plot2-file-name)))
+	   (cond (tty-graphics 
+		  (cond ((eq tty-graphics 'disp)
+			 (prin-tyo 143.) (prin-tyo 0.) (prin-tyo 0.)))
+		  (forceout*)
+		  (and (eq tty-graphics 'disp) (let ((^w)) (cursorpos 'top)))
+	#-franz	  (sstatus ttyint 28. o14int)
+		  (setq tty-return old-tty-return)
+	    #+its (and (status feature its)
+		       (let ((l1 (or (status tty) (syscall 3 'ttyget tyi)))
+			(tty-3 0.))
+		       (setq tty-3 (boole 4. (caddr l1) 1._21.))
+		       (sstatus tty (car l1) (cadr l1) tty-3)))))
+    	   (setq graphic-mode nil $errorfun oerrorfun)
+	   (and $wait $hardcopy (meval '(($hardcopy))))
+	   (and tty-graphics
+		(cond ((and $wait (not (and (eq tty-graphics 'print) ^w)))
+		       (and $plotbell (#-franz +tyo #+franz tyo 7.
+					       #-franz tyo #+franz poport))
+		       (setq a1 (tyipeek #-franz nil #-franz tyi #+franz piport))
+		#+franz(setq a1 -1)
+		       (cond ((or (= a1 9.) (= a1 10.)
+				  (= a1 13.) (= a1 32.) (= a1 127.))
+			      (tyi #-franz tyi #+franz piport)))
+		       (and (= a1 10.) (or $hardcopy (meval '(($hardcopy))))))))))
+	 (setq plot2-error nil)
+	 a1))
+
+
+(defun copy-file (from to)
+#-franz(let ((in-file (open from '(in ascii)))
+	     (ascii-length)
+	     (pad-chars)
+	     (out-file (open to '(out fixnum))))
+	    (setq ascii-length (lengthf in-file)
+		  ; (car (syscall 1 'fillen in-file)) the old syscall
+		  )
+	    (setq pad-chars (\ ascii-length 5))
+	    (cond ((zerop pad-chars)(setq pad-chars nil))
+		  (t (filepos in-file (- ascii-length pad-chars))
+		     (do ((i pad-chars (1- i))
+			  (l nil))
+			 ((zerop i)(setq pad-chars (nreverse l)))
+			 (setq l (cons (tyi in-file) l)))))
+	    (close in-file)
+	    (open in-file '(in fixnum))
+	    (do ((i (// (- ascii-length (length pad-chars)) 5) (- i 500))
+		 (buffer (array nil fixnum 500)))
+		((not (> i 0)))
+		(cond ((< i 500) (*rearray buffer 'fixnum i)))
+		(fillarray buffer in-file)
+		(fillarray out-file buffer))
+	    (close out-file)
+	    (close in-file)
+	    (open out-file '(ascii append))
+	    (do ((l pad-chars (cdr l)))
+		((null l))
+		(tyo (car l) out-file))
+	    (prog2 nil (truename out-file) (close out-file)))
+  #+franz(progn (apply #'exec (list 'cp from to)) to))
+
+(DEFMSPEC $hardcopy (l) (setq l (cdr l))
+  (let ((plot-spec (car l))
+	(mode-spec (cadr l))
+	(n (length l)))
+    (cond ((> n 2)(merror "Too many arguments to hardcopy"))
+	  ((= n 0)(hardcopy1))
+	  ((= n 1)
+	   (hardcopy-plot plot-spec))
+	  ((= n 2)
+	   (let ((old-plotmode $plotmode)
+		 ($plotmode $plotmode))
+	     (cond ((not (memq mode-spec
+			       '($x $g $v $versy $versatec 
+				    $xgp $gould)))
+		    (merror "Bad plotmode in hardcopy")))
+	     (plotmode1 '$plotmode mode-spec)
+	     (hardcopy-plot plot-spec)
+	     (plotmode1 '$plotmode old-plotmode))))
+    '$done))
+
+(defun hardcopy1 ()
+#-franz (cond (dsk-graphics
+	  (let ((file) (device dsk-graphics))
+	       (do ((i 1. (1+ i))) (nil)
+		   (setq file (list '(dsk ".temp.") ".plot." i))
+		   (or (probef file) 
+		       (return nil)))
+	       (copy-file plot2-file-name file)
+	       (queue-plot-file file device t)
+	       '$done))
+	 ((eq tty-graphics 'tek)
+	  (tek-tyo 27.) (tek-tyo 23.) (forceout*) (sleep 8.) '$done)
+	 (t (princ '|HARDCOPY failed|) nil))
+#+franz (cond (unix-mode (apply #'exec
+				(list 'mklgp '-ig plot2-file-name '/| 'wlgp)))))
+
+(defun hardcopy-plot (plot-spec)
+   (errset
+    (cond (($listp plot-spec)
+	   (let ((plot2-file-name
+		  #-franz(mergef (filestrip (cdr plot-spec)) defaultf)
+		  #+franz(filestrip (cdr plot-spec))))
+		(cond ((and (not dsk-graphics)
+			    (eq tty-graphics 'tek))
+		       (merror "Hardcopies of files to TEK's dont work yet,/
+Sorry")))
+		(hardcopy1)))
+	  (t (meval `(($replot) ,plot-spec))
+	     (hardcopy1)))))
+
+#-franz
+(defun queue-plot-file (file device deletep)
+   (let* ((qfile (open '((dsk /.glpr/.) |    Q1| >) '(out dsk ascii)))
+	  (crlf '|/
+|)
+	  (file-name (namestring (mergef file defaultf)))
+	  (file-length (prog2 (setq file (open file))
+			      (// (lengthf file) 5)
+			      (close file)))
+	  (flag-list
+	   (list '|;Status |
+		 (status uname)
+		 '|	MC U |
+		 (time-string)
+		 '| |
+		 (date-string)
+		 '|	|
+		 file-length
+		 '|	|
+		 file-name
+		 crlf
+		 '|;Notify MC,|
+		 (status uname)
+		 '| The hardcopy of your MACSYMA plot has started.|
+		 crlf
+		 '|;Default MC:.TEMP.;|
+		 crlf
+		 '|;scale |
+		 $plotscale
+		 crlf
+		 '|;thick |
+		 (fix $plotthick)
+		 crlf
+		 '|;lftmar |
+		 (fix $plotlftmar)
+		 crlf
+		 '|;botmar |
+		 (fix $plotbotmar)
+		 crlf)))
+	 (mapc #'(lambda (w) (princ w qfile))  flag-list)
+	 (cond ((not (eq device 'gould))
+		(cond ((eq device 'versatec)
+		       (princ '|;output VERSATEC| qfile))
+		      (t (princ '|;output XGP| qfile)))
+		(princ crlf qfile)))
+	 (cond (deletep (princ '|;delete | qfile)
+			(princ crlf qfile)))
+	 (princ crlf qfile)
+	 (princ file-name qfile)
+	 (princ crlf qfile)
+	 (close qfile))
+'|Plot file queued for printing|)
+#-franz
+(defun time-string ()
+   (let ((time (status daytime)) (base 10.) (*nopoint t))
+	(implode (apply 'append
+			(mapcar 'explode (list (car time)  '/:
+					       (cadr time) '/:
+					       (caddr time)))))))
+
+#-franz
+(defun date-string ()
+   (let ((date (status date)) (base 10.) (*nopoint t))
+	(implode (apply 'append
+			(mapcar 'explodec (list (cadr date)  '//
+						(caddr date) '//
+						(car date)))))))
+
+(DEFMSPEC $namefile (l) (setq l (cdr l))
+  (setq l (filestrip l))
+#-franz  (setq l (defaultf l))
+  (setq l (copy-file plot2-file-name l))
+#-franz
+  (cons '(mlist) (append (cdr l) (car l)))
+  #+franz l)
+
+(declare (special char-width char-height slow-print) (fixnum char-width char-height)) 
+
+(defun gterpri nil (setpoint min-x (- last-y char-height))) 
+
+(DEFMFUN $gterpri nil (gterpri)) 
+
+(defun ghprint (l x y a1) 
+       (cond ((atom l) (setq l (exploden l)))
+	     (t (setq l (apply 'append (mapcar 'exploden l)))))
+       (let ((b1 (* char-width (length l)))
+	     (uline (> a1 9.)))
+	    (and uline (setq a1 (- a1 10.)))
+	    (cond ((= a1 0.))
+		  ((= a1 1.) (setq x (- x (// b1 2.))))
+		  ((= a1 2.) (setq x (- x b1))))
+	    (and (> (+ x b1) max-x) (setq x (- max-x b1)))
+	    (and (< x min-x) (setq x min-x))
+	    (and (> (+ y char-height) max-y) (setq y (- max-y char-height)))
+	    (and (< y min-y) (setq y min-y))
+	    (do ((l l (cdr l)) (x x (+ x char-width)) (flg t slow-print))
+		((or (null l) (> x (- max-x char-width))))
+		(cond (flg (cond (ards-mode (setq ards-abs-setpoint t)))
+			   (setpoint x y) (leavegraph)
+#+franz	 		   (cond (unix-mode (unix-cmd #/t)))))
+		(cond (tek-mode (tek-tyo (car l))))
+		(cond (ards-mode (ards-tyo (car l))))
+		(cond (print-mode (print-char x y (car l))))
+		(cond (tv-mode (tv-char-print x y (car l))))
+#+franz		(cond (unix-mode (unix-tyo (car l)))))
+	    (cond (ards-mode (setq ards-abs-setpoint t)))
+#-franz	    (cond (uline (let ((print-mode))
+			      (line x (- y 2.) (+ x b1) (- y 2.)))))
+#+franz     (cond (unix-mode (unix-cmd #\newline)))
+	    (setpoint (+ x b1) y))) 
+
+(DEFMFUN $ghprint (l x y a1) 
+       (setq l (cond (($listp l) (cdr l)) (t l)))
+       (ghprint (cond ((atom l) (stripdollar l)) (t (mapcar 'stripdollar l)))
+		x y a1)) 
+
+(defun gvprint (l x y a1) 
+       (cond ((atom l) (setq l (exploden l)))
+	     (t (setq l (apply 'append (mapcar 'exploden l)))))
+       (let ((b1 (* char-height (length l))))
+	    (cond ((= a1 0.))
+		  ((= a1 1.) (setq y (+ y (// b1 2.))))
+		  ((= a1 2.) (setq y (+ y b1))))
+	    (and (< (- y b1) min-y) (setq y (+ min-y b1)))
+	    (and (> y max-y) (setq y max-y))
+	    (and (> (+ x char-width) max-x) (setq x (- max-x char-width)))
+	    (and (< x min-x) (setq x min-x))
+	    (do ((l l (cdr l)) (y (- y char-height) (- y char-height)))
+		((or (null l) (< y min-y)))
+		(cond (ards-mode (setq ards-abs-setpoint t)))
+		(setpoint x y) (leavegraph)
+		(cond (tek-mode (tek-tyo (car l))))
+		(cond (ards-mode (ards-tyo (car l))))
+		(cond (print-mode (print-char x y (car l))))
+		(cond (tv-mode (tv-char-print x y (car l))))
+#+franz		(cond (unix-mode (unix-cmd #/t) (unix-tyo (car l))
+				 (unix-cmd #\newline))))
+	    (cond (ards-mode (setq ards-abs-setpoint t)))
+	    (setpoint y (- y b1)))) 
+
+(DEFMFUN $gvprint (l x y a1) 
+       (setq l (cond ((equal (caar l) 'mlist) (cdr l)) (t l)))
+       (gvprint (cond ((atom l) (stripdollar l)) (t (mapcar 'stripdollar l)))
+		x y a1)) 
+
+(defun gmark (x y x1) 
+       (setpoint (- x (// char-width 2.)) (- y (// char-height 2.)))
+       (and pnt-status
+	    (cond ((checkpnt (+ last-x char-width) (+ last-y char-height))
+		   (leavegraph)
+		   (cond (tek-mode (tek-tyo x1)))
+		   (cond (ards-mode (ards-tyo x1)))
+		   (cond (tv-mode (tv-char-print last-x last-y x1)))
+#+franz		(cond (unix-mode (unix-cmd #/t) (unix-tyo x1)
+				 (unix-cmd #\newline))))))
+       (cond (ards-mode (setq ards-abs-setpoint t)))
+       (setpoint x y)) 
+
+(DEFMFUN $gmark (xf yf x1) (gmark (tek-x xf) (tek-y yf) x1))  
+
+(declare (special plot2-tty)
+  	 (fixnum (tyob0 fixnum)  byte)
+  	 (notype (forceout*)))
+
+(defun tyob0 (byte) (#-franz +tyo #+franz tyo byte plot2-tty) byte)
+
+(defun forceout* nil
+  #-franz (and tty-graphics (not (eq tty-graphics 'print))
+	       (force-output plot2-tty))
+  nil)
+
+(declare (special dsk-tyo both-tyo tyob0 tek-tyo ards-tyo)
+  	 (fixnum (dsk-tyo fixnum) (both-tyo fixnum)
+		 (unix-tyo fixnum)))
+
+(defun dsk-tyo (x) (#-franz +tyo #+franz tyo x plot2-file) x)
+
+(defun both-tyo (x) (#-franz +tyo #+franz tyo x plot2-file) (tyob0 x))
+
+(setq dsk-tyo #-franz (get 'dsk-tyo 'subr) #+franz (getd 'dsk-tyo)
+      both-tyo #-franz (get 'both-tyo 'subr) #+franz (getd 'both-tyo)
+      tyob0 #-franz (get 'tyob0 'subr) #+franz (getd 'tyob0))
+
+(defun tek-tyo (x) (and $tek4025 #-franz (subrcall fixnum tek-tyo 141.)
+			#+franz (funcall tek-tyo 141.))
+		   #-franz (subrcall fixnum tek-tyo x)
+		   #+franz (funcall tek-tyo x))
+
+(defun ards-tyo (x) #-franz (subrcall fixnum ards-tyo x)
+  #+franz (funcall ards-tyo x)) 
+
+#+franz (defun unix-tyo (x) (tyo x plot2-file))
+
+(DEFMSPEC $plotmode (form) (I-$plotmode (cdr form)))
+
+#+franz (eval-when (compile)           ;so that the #, code doesn't blow up
+	  (defun getddtsym (x) #o2000)
+	  (defun pnget (x y) (list 0)))
+(DEFUN I-$PLOTMODE (l) 
+  (setq tv-mode nil)
+  (cond ((not (null l))
+	 (setq l (sublis '(($tek . $t)
+			   ($tektronix . $t) ($tektonics . $t)
+			   ($iml . $i) ($imlac . $i) ($xgp . $x) ($gould . $g)
+			   ($disp . $d) ($display . $d) ($print . $p)
+			   ($printing . $p)
+			   ($grinnell . $gr)
+			   ($versy . $v) ($versatec . $v) #+franz ($unix . $u))
+			 l))
+	 (do ((i 0.) (ll '($t $i $d $p $gr #+franz $u) (cdr ll)))
+	     ((null ll)
+	      (cond ((or (> i 1.)
+			 (and (memq '$g l) (memq '$x l)))
+		     (merror "Incompatible args to PLOTMODE"))))
+	   (and (memq (car ll) l) (setq i (1+ i))))
+	 (setq char-type (car l))
+	 (or (memq char-type '($t $i $d $p $x $g $gr $v #+franz $u))
+	     (merror "Invalid first arg to PLOTMODE"))
+	 (setq tek-mode (memq '$t l)
+	       ards-mode (or (memq '$i l) (memq '$gr l) (memq '$x l)
+			     (memq '$g l) (memq '$v l))
+	       print-mode (or (memq '$d l) (memq '$p l))
+	       unix-mode (memq '$u l)
+	       tty-graphics (cond ((memq '$i l) 'imlac)
+				  ((memq '$gr l) 'grinnell)
+				  ((memq '$t l) 'tek)
+				  ((memq '$d l) 'disp)
+				  ((memq '$p l) 'print)
+#+franz				  ((memq '$u l) 'unix))
+	       dsk-graphics (cond ((memq '$g l) 'gould)
+				  ((memq '$x l) 'xgp)
+				  ((memq '$v l) 'versatec)
+#+franz				  ((memq '$u l) 'unix)))))
+  (setq $padded (and tek-mode (tek-padded)))
+  (setq pds4 (or (eq tty-graphics 'grinnell)
+		 ;;; decides whether intelligent terminal
+		 (and (eq tty-graphics 'imlac)
+		#+its (and (status feature its) (not (= (boole 1. 32.
+				     (car (cddddr (syscall 6. 'cnsget
+							   tyo))))
+			      0.))))))
+  (cond (ards-mode (setq ards-short-vector
+			 (and				;(not (eq 'xgp dsk-graphics))
+			  tty-graphics pds4))))
+  (cond (ards-mode (cond ((and dsk-graphics
+			       (or (eq tty-graphics 'imlac) (eq tty-graphics 'grinnell)))
+			  (setq ards-tyo both-tyo))
+			 ((null dsk-graphics)
+			  (setq ards-tyo tyob0))
+			 (t (setq ards-tyo dsk-tyo)))))
+  (cond (tek-mode (setq tek-tyo tyob0)))
+  (cond ((and tty-graphics (not (eq tty-graphics 'print)))
+	 (setq plot2-tty
+	       (open '|tty:| (list 'tty 'out 'image (cond (pds4 'single) (t 'block)))))
+   #+its (and (status feature its)
+	      (syscall #.(lsh (boole 7. (getddtsym '%tjsio) 1.) 18.)
+		  'open
+		  plot2-tty
+		  #.(car (pnget 'tty 6))))))
+  (cond ((eq char-type '$t) (setq char-height 22. char-width 14.))
+	((eq char-type '$i) (setq char-height 20. char-width 11.))
+	((eq char-type '$gr) (setq char-height 20. char-width 12.))
+;       ((eq char-type '$x) (setq char-height 18. char-width 10.))
+	((eq char-type '$u) (setq char-height 22. char-width 14.))
+	((memq char-type '($x $g $v))
+	 (setq char-height (fix (+$ 0.5 (//$ 25.0 1.75
+					     (float $plotscale))))
+	       char-width (fix (+$ 0.5 (//$ 16.0 1.75
+					    (float $plotscale)))))))
+  (cond ((or (eq char-type '$d) (eq char-type '$p))
+	 (setq char-width (1+ (// 1023. linel))
+	       char-height (fix (+$ 0.5 (*$ (float $charratio) (float char-width)))))))
+  (setq slow-print (not (null dsk-graphics)))
+  (and unix-mode (setq slow-print nil))
+  (setq l (cond ((eq dsk-graphics 'xgp) '($xgp))
+		((eq dsk-graphics 'gould) '($gould))
+		((eq dsk-graphics 'versatec) '($versatec))))
+  (setq l (append l
+		  (cond ((eq tty-graphics 'tek) '($tektronix))
+			((eq tty-graphics 'imlac) '($imlac))
+			((eq tty-graphics 'grinnell) '($grinnell))
+			((eq tty-graphics 'print) '($printing))
+			((eq tty-graphics 'disp) '($display)))))
+  (let ((l1 
+	 (cond ((eq char-type '$t) '$tektronix)
+	       ((eq char-type '$i) '$imlac)
+	       ((eq char-type '$gr) '$grinnell)
+	       ((eq char-type '$x) '$xgp)
+	       ((eq char-type '$g) '$gould)
+	       ((eq char-type '$v) '$versatec)
+	       ((eq char-type '$d) '$display)
+	       ((eq char-type '$p) '$printing)
+	       ((eq char-type '$u) '$unix))))
+    (setq l1 (cons l1 (delq l1 l)))
+    (setq $plotmode (cond ((= (length l1) 1.) (car l1))
+			  (t (cons '(mlist simp) l1))))))
+
+(defun plotmode1 (l1 l2)
+  (cond ((eq l1 '$plotmode)
+	 (cond ((atom l2) (i-$plotmode (list l2)))
+	       ((eq (caar l2) 'mlist) (i-$plotmode (cdr l2)))
+	       (t (i-$plotmode '($t))
+		  (merror "Invalid arg to PLOTMODE"))))
+	((eq l1 '$charratio)
+	 (let (($charratio l2))
+	   (i-$plotmode nil)))
+	((eq l1 '$plotscale)
+	 (let (($plotscale l2))
+	   (i-$plotmode nil)))))
+
+(defprop $plotmode plotmode1 assign)
+(defprop $charratio plotmode1 assign)
+(defprop $plotscale plotmode1 assign)
+
+(cond ((boundp '$plotmode)
+       (plotmode1 '$plotmode $plotmode)
+       (delq '$plotmode $values))
+      ('else
+#-franz  (cond ((or (= tty 0.) (= tty 6.) (= tty 8.))
+		(i-$plotmode '($p)))
+	       ((or (= tty 1.) (= tty 2.) (= tty 5.) (= tty 9.))
+		(i-$plotmode '($d)))
+	       ((= tty 3.) (i-$plotmode '($i)))
+	       ((= tty 4.) (i-$plotmode '($t)))
+	       (t (cond ((status feature its)
+			 #+its (let ((l1 (syscall 6. 'cnsget tyo) ) (a1 0.))
+				 (setq a1 (car (cddddr l1)))
+				 (cond ((= (boole 1. 1._26. a1) 0.)
+					(i-$plotmode '($p)))
+				       ((= (boole 1. 1._32. a1) 0.)
+					(i-$plotmode '($t)))
+				       ((= (boole 1. 1._27. a1) 0.)
+					(i-$plotmode '($d)))
+				       ((not (= (boole 1. 1._20. a1) 0.))
+					(i-$plotmode '($i)))
+				       ((= (boole 1. 1._4. a1) 0.)
+					(i-$plotmode '($gr)))
+				       (t (i-$plotmode '($d))))))
+			(t (i-$plotmode '($d))))))
+#+franz (i-$plotmode '($u))))
+
+
+;;;record usage
+(comment
+(let ((file '((dsk cffk) plot2 users) )
+      users user name (base 10. ) (ibase 10. ) (*nopoint t))
+  (cond ((and (probef file)
+	      (errset (progn
+		       (setq file (open file '(in dsk))
+			     users (read file)
+			     name (cond ((memq 'xunam (status status))
+					 (status xuname))
+					(t (status userid)))
+			     user (assq name users))
+		       (cond (user (rplacd user (1+ (cdr user))))
+			     (t (rplacd users (cons (cons name 1)
+						    (cdr users))))))
+		      nil))
+	 (close file)
+	 (setq file (open file '(out dsk)))
+	 (linel file 72.)
+	 (print users file)
+	 (close file)))))
+

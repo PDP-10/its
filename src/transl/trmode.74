@@ -1,0 +1,267 @@
+;;; -*- mode: lisp; package: macsyma -*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; gjc: 6:27pm  sunday, 20 july 1980
+;;;       (c) copyright 1979 massachusetts institute of technology       ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+
+(macsyma-module trmode)
+
+
+(transl-module trmode)
+(defmvar $mode_checkp t "if true, modedeclare checks the modes of bound variables.")
+(defmvar $mode_check_warnp t "if true, mode errors are described.")
+(defmvar $mode_check_errorp nil "if true, modedeclare calls error.")
+
+(defun mseemingly-unbound (x)
+  (or (not (boundp x)) (eq (symeval x) x)))
+
+(DEFMFUN CHEKVALUE (V MODE
+		      &optional
+		      (val (meval1 v) val-givenp))
+       (COND ((or val-givenp (not (eq v val)))
+	      ; hack because macsyma PROG binds variable
+	      ; to itself. 
+	      (let ((CHECKER (ASSQ MODE '(($FLOAT . FLOATP)
+					  ($FIXNUM . FIXP)
+					  ($NUMBER . NUMBERP)
+					  ($LIST . $LISTP)
+					  ($BOOLEAN . (LAMBDA (U)
+							      (MEMQ U '(T NIL))))))))
+		   (COND ((AND CHECKER (NOT (FUNCALL (CDR CHECKER) VAL)))
+			  (SIGNAL-MODE-ERROR V MODE VAL)))))))
+
+(defmfun assign-mode-check (var value)
+  (let ((mode (get var 'mode))
+	(user-level ($get var '$value_check)))
+    (if mode
+	(let (($mode_check_warnp t)
+	      ($mode_check_errorp t))
+	  (chekvalue var mode value)))
+    (if user-level
+	(mcall user-level value)))
+  value)
+
+(DEFTRVAR DEFINED_VARIABLES ())
+
+(DEFTRVAR $DEFINE_VARIABLE ())
+
+(DEF%TR $DEFINE_VARIABLE (FORM) ;;VAR INIT MODE.
+  (COND ((> (LENGTH FORM) 3)
+	 (LET (((VAR VAL MODE) (CDR FORM)))
+	   (LET ((SPEC-FORM `(($DECLARE) ,VAR $SPECIAL))
+		 (MODE-FORM `(($MODEDECLARE) ,VAR ,MODE)))
+	     (translate spec-form)
+	     (translate mode-form)
+	     (PUSH-PRE-TRANSL-FORM
+	      ;; POSSIBLE OVERKILL HERE
+	      `(declare (special ,VAR)))
+	     (PUSH VAR DEFINED_VARIABLES)
+	     ;; Get rid of previous definitions put on by
+	     ;; the translator.
+	     (DO ((L *PRE-TRANSL-FORMS* (CDR L)))
+		 ((NULL L))
+	       ;; REMOVE SOME OVERKILL
+	       (COND ((AND (EQ (CAAR L) 'DEF-MTRVAR)
+			   (EQ (CADAR L) VAR))
+		      (SETQ *PRE-TRANSL-FORMS*
+			    (DELQ (CAR L) *PRE-TRANSL-FORMS*)))))
+	     (if (not (eq mode '$any))
+		 ;; so that the rest of the translation gronks this.
+		 (putprop var 'assign-mode-check 'assign))
+	     `($any . (progn 'compile
+			     (meval* ',mode-form)
+			     (meval* ',spec-form)
+			     ,(if (not (eq mode '$any))
+				  `(defprop ,var
+				     assign-mode-check
+				     assign))
+			     (def-mtrvar ,(cadr form)
+			       ,(dtranslate (caddr form))
+			       )))
+	     )))
+	(t
+	 (TR-TELL "Wrong number of arguments" form)
+	 nil)))
+
+#-LISPM
+;; Not needed on LISPM because the MACRO definition is in effect.
+;; For NIL we must do some fexpr abstraction anyway.
+(defun def-mtrvar fexpr (l)
+  (LET (((V A . IGNORE-CRUFTY) L))
+    ;; priority of setting is obsolete, but must be around for
+    ;; old translated files. i.e. TRMODE version < 69.
+    (if (mseemingly-unbound v)
+	(set v (eval a))
+	(SYMEVAL v))))
+
+;; the priority fails when a DEF-MTRVAR is done, then the user
+;; sets the variable, because the set-priority stays the same.
+;; This causes some Define_Variable's to over-ride the user setting,
+;; but only in the case of re-loading, what we were worried about
+;; is pre-setting of variables of autoloading files.
+
+(defmspec $define_variable  (l) (setq l (cdr l))
+  (or (> (length l) 2)
+      (merror "Wrong number of arguments to DEFINE_VARIABLE"))
+  (or (symbolp (car l))
+      (merror "First arg to DEFINE_VARIABLE not a SYMBOL."))
+  (meval `(($modedeclare) ,(car l) ,(caddr l)))
+  (meval `(($declare) ,(car l) $special))
+  (if (not (eq (caddr l) '$any))
+      (putprop (car l) 'assign-mode-check 'assign))
+  (if (mseemingly-unbound (car l))
+      (meval `((msetq) ,(car l) ,(cadr l)))
+      (meval (car l))))
+
+
+(DEFMSPEC $MODE_IDENTITY (L) (SETQ L (CDR L))
+  (OR (= (LENGTH L) 2) (MERROR "MODE_IDENTITY takes 2 arguments."))
+  (LET ((V (MEVAL (CADR L))))
+    (CHEKVALUE (CADR L) (IR (CAR L)) V)
+    V))
+
+(DEF%TR $MODE_IDENTITY (FORM)
+	`(,(IR (CADR FORM)) . ,(DTRANSLATE (CADDR FORM))))
+
+(DEF%TR $MODEDECLARE (FORM)
+       (DO L (CDR FORM) (CDDR L) (NULL L) (DECLMODE (CAR L) (IR (CADR L)) T)))
+
+(DEFMFUN ASS-EQ-REF N
+	 (LET ((VAL (ASSQ (ARG 2) (ARG 1))))
+	      (IF VAL (CDR VAL)
+		  (IF (= N 3) (ARG 3) NIL))))
+
+(DEFMFUN ASS-EQ-SET (VAL TABLE KEY)
+	 (LET ((CELL (ASSQ KEY TABLE)))
+	      (IF CELL (SETF (CDR CELL) VAL)
+		  (PUSH (CONS KEY VAL) TABLE)))
+	 TABLE)
+
+
+;;; Possible calls to MODEDECLARE.
+;;; MODEDECLARE(<oblist>,<mode>,<oblist>,<mode>,...)
+;;; where <oblist> is:
+;;; an ATOM, signifying a VARIABLE.
+;;; a LIST, giving a list of objects of <mode>
+;;;
+
+(DEFMSPEC $MODEDECLARE (X) (SETQ X (CDR X))
+	(IF (ODDP (LENGTH X))
+	    (MERROR "MODE_DECLARE takes an even number of arguments."))
+	(DO ((L X (CDDR L)) (NL))
+	    ((NULL L) (CONS '(MLIST) (NREVERSE NL)))
+	    (DECLMODE (CAR L) (IR (CADR L)) NIL)
+	     (SETQ NL (CONS (CAR L) NL))))
+
+(DEFUN TR-DECLARE-VARMODE (VARIABLE MODE)
+  (DECLVALUE VARIABLE (IR MODE) T))
+
+;;; If TRFLAG is TRUE, we are in the translator, if NIL, we are in the
+;;; interpreter.
+(DECLARE (SPECIAL TRFLAG MODE FORM))
+(DEFUN DECLMODE (FORM MODE TRFLAG)
+  (COND ((ATOM FORM)
+	 (DECLVALUE FORM MODE TRFLAG)
+	 (AND (NOT TRFLAG) $MODE_CHECKP (CHEKVALUE FORM MODE)))
+	((EQ 'MLIST (CAAR FORM))
+	 (MAPC '(LAMBDA (L)
+			(DECLMODE L MODE TRFLAG))
+	       (CDR FORM)))
+	((MEMQ 'ARRAY (CDAR FORM))
+	 (DECLARRAY (CAAR FORM) MODE))
+	((EQ '$FUNCTION (CAAR FORM))
+	 (MAPC '(LAMBDA (L)
+			(DECLFUN L MODE))
+	       (CDR FORM)))
+	((MEMQ (CAAR FORM) '($FIXED_NUM_ARGS_FUNCTION
+			     $VARIABLE_NUM_ARGS_FUNCTION))
+	 (MAPC '(LAMBDA (F)
+			(DECLFUN F MODE)
+			(MPUTPROP F T (CAAR FORM)))
+	       (CDR FORM)))
+	((EQ '$COMPLETEARRAY (CAAR FORM))
+	 (MAPC '(LAMBDA (L)
+			(PUTPROP (COND ((ATOM L) L)
+				       (T (CAAR L)))
+				 MODE 'ARRAY-MODE))
+	       (CDR FORM)))
+	((EQ '$ARRAY (CAAR FORM))
+	 (MAPC '(LAMBDA (L) (MPUTPROP L MODE 'ARRAY-MODE)) (CDR FORM)))
+	((EQ '$ARRAYFUN (CAAR FORM))
+	 (MAPC '(LAMBDA (L) (MPUTPROP L MODE 'ARRAYFUN-MODE)) (CDR FORM)))
+	(T
+	 (DECLFUN (CAAR FORM) MODE))))
+(DECLARE (UNSPECIAL TRFLAG MODE FORM))
+
+(DEFTRFUN DECLVALUE (V MODE TRFLAG)
+  (IF TRFLAG (SETQ V (TEVAL V)))
+  (ADD2LNC V $PROPS)
+  (PUTPROP V MODE 'MODE))
+
+
+(DEFUN SIGNAL-MODE-ERROR (OBJECT MODE VALUE)
+       (COND ((AND $MODE_CHECK_WARNP
+		   (NOT $MODE_CHECK_ERRORP))
+	      (MTELL "Warning: ~:M was declared mode ~:M, has value: ~M"
+		     OBJECT MODE VALUE))
+	     ($MODE_CHECK_ERRORP
+	      (MERROR "Error: ~:M was declared mode ~:M, has value: ~M"
+		      OBJECT MODE VALUE))))
+			  
+(DEFUN PUT-MODE (NAME MODE TYPE)
+       (IF (GET NAME 'TBIND)
+	   (SETF (GET NAME 'VAL-MODES)
+		 (ASS-EQ-SET MODE (GET NAME 'VAL-MODES) TYPE))
+	   (SETF (GET NAME TYPE) MODE)))
+
+(DEFUN DECLARRAY (AR MODE)
+       (PUT-MODE AR MODE 'ARRAY-MODE))
+
+(DEFUN DECLFUN (F MODE) (PUT-MODE F MODE 'FUNCTION-MODE))
+
+;;; 1/2 is not $RATIONAL. bad name. it means CRE form.
+
+(DEFUN IR (X)
+       (CASEQ X
+	      (($FLOAT $REAL $FLOATP $FLONUM $FLOATNUM) '$FLOAT)
+	      (($FIXP $FIXNUM) '$FIXNUM)
+	      (($RATIONAL $RAT) '$RATIONAL)
+	      (($NUMBER $BIGNUM $BIG) '$NUMBER)
+	      (($BOOLEAN $BOOL) '$BOOLEAN)
+	      (($LIST $LISTP) '$LIST)
+	      (($ANY $NONE $ANY_CHECK) '$ANY)
+	      (T (UDM-ERR X) X)))
+
+(DEFUN UDM-ERR (MODE)
+       (MTELL "Warning:  ~:M is not a known mode declaration ~
+	      maybe you want ~:M mode.~%"
+	      MODE
+	      (CASEQ MODE
+		     (($INTEGER $INTEGERP) '$FIXNUM)
+		     (($COMPLEX) "&to ask about this")
+		     (($FUCKED $SHITTY) "&to watch your language")
+		     (T "&to see the documentation on"))))
+
+
+(DEFMFUN FLUIDIZE (VARIABLE)
+  (MAPC #'(LAMBDA (V) (OR (BOUNDP V) (SET V ())))
+	;; what a sorry crock to have all these switches.
+      '(*IN-COMPILE*
+	*IN-COMPFILE*
+	*IN-TRANSLATE*
+	*IN-TRANSLATE-FILE*))
+
+  (PUTPROP VARIABLE T 'SPECIAL)
+  (IF (AND $TRANSCOMPILE
+	   (OR *IN-COMPILE*
+	       *IN-COMPFILE*
+	       *IN-TRANSLATE*
+	       *IN-TRANSLATE-FILE*))
+      (ADDL VARIABLE SPECIALS)))
+
+(DEFMSPEC $BIND_DURING_TRANSLATION (FORM)
+  (MEVALN (CDDR FORM)))
+
+

@@ -66,6 +66,32 @@ proc ip_address {string} {
     format "%o" $x
 }
 
+proc build_macsyma_portion {} {
+    respond "*" "complr\013"
+    respond "_" "\007"
+    respond "*" "(load \"liblsp;iota\")"
+    respond "274630" "(load \"maxtul;docgen\")"
+    respond "300052" "(load \"maxtul;mcl\")"
+    respond "302615" "(load \"maxdoc;mcldat\")"
+    respond "302615" "(load \"libmax;module\")"
+    respond "303351" "(load \"libmax;maxmac\")"
+    respond "307161" "(todo)"
+    sleep 10
+    type "(todoi)"
+    sleep 10
+    type "(mapcan #'(lambda (x) (cond ((not (memq x\r"
+    type "'(SETS TRANSS MTREE TRHOOK EDLM)\r"
+    type ")) (doit x)))) (append todo todoi))"
+    expect {
+	";BKPT" {
+	    type "(quit)"
+	}
+        "NIL" {
+	    type "(quit)"
+	}
+    }
+}
+
 set timeout 100
 expect_after timeout abort
 
@@ -861,10 +887,12 @@ respond "_" "\032"
 type ":kill\r"
 
 respond "*" "complr\013"
-respond "_" "lisp;_libdoc;sharab\r"
+respond "_" "liblsp;_libdoc;sharab\r"
 respond "_" "lisp;_libdoc;bs\r"
 respond "_" "\032"
 type ":kill\r"
+
+respond "*" ":link lisp;sharab fasl,liblsp;\r"
 
 respond "*" "complr\013"
 respond "_" "\007"
@@ -1593,6 +1621,160 @@ respond "274534" "(maklap)"
 respond "_" "libmax;define\r"
 respond "_" "\032"
 type ":kill\r"
+
+# build macsyma
+
+respond "*" ":print macsym;..new. (udir)\r"
+type ":vk\r"
+
+respond "*" ":link macsym;mdefun fasl,libmax;\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "macsym;ermsgm_maxsrc;ermsgm\r"
+respond "_" "maxdoc;tdcl\r"
+respond "_" "rlb;bitmac\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "rlb;faslre\r"
+respond "_" "rlb;faslro\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" ":link rlb%;faslre fasl,rlb;\r"
+
+respond "*" "l\013"
+respond "Alloc?" "n"
+respond "*" "(setq pure t)"
+type "(load \"liblsp;sharab\")"
+type "(load \"liblsp;comrd\")"
+type "(load \"liblsp;time\")"
+type "(load \"alan;ljob\")"
+type "(load \"libmax;define\")"
+type "(sstatus gcmax 'fixnum 30000)"
+type "(sstatus gcmax 'list 60000)"
+type "(load \"maxtul;strmrg\")"
+type "(load \"maxtul;docgen\")"
+type "(load \"maxtul;query\")"
+type "(load \"maxtul;maxtul\")"
+type "(load \"maxtul;dclmak\")"
+type "(sstatus gcmax 'hunk32 6000)"
+respond "T" "(sstatus gcmax 'symbol 12000)"
+respond "T" "(sstatus gcmax 'list 60000)"
+respond "T" "(sstatus gcmax 'fixnum 20000)"
+respond "T" "(dump-it)"
+respond "MAXIMUM TOOLAGE>" "load-info\r"
+respond "MAXIMUM TOOLAGE>" "gen-mcl-check\r"
+respond "MAXIMUM TOOLAGE>" "declare-file-make\r"
+respond "MAXIMUM TOOLAGE>" "quit\r"
+respond "*" "(quit)"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;mhayat_rat;mhayat\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;ratmac_rat;ratmac\r"
+respond "_" "\032"
+type ":kill\r"
+
+# mforma needs to get recompiled (not sure exactly which
+# dependency yet causes the version we've built so far
+# not to work, but if recompiled at this point, we're
+# able to build macsyma
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond "274534" "(maklap)"
+respond "_" "libmax;mforma\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(setq pure t)"
+respond "T" "(load \"liblsp;sharab\")"
+respond "276437" "(load \"maxtul;mcldmp (init)\")"
+respond "T" "\007"
+respond "*" "(dump-mcl 32. t)"
+respond "File name->" "\002"
+respond ";BKPT" "(quit)"
+
+respond "*" ":midas maxtul;ts mcl_mcldmp midas\r"
+respond "*" ":link maxtul;.good. complr,sys;ts complr\r"
+respond "*" ":link liblsp;gcdemn fasl,lisp;\r"
+
+respond "*" "complr\013"
+respond "_" "mrg;macros\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" ":print maxout;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":print share2;..new. (udir)\r"
+type ":vk\r"
+
+# Here we actually perform the compilation of Macsyma sources
+# For some unknown reason, compilation fails in the same place
+# every time (as though COMPLR gets corrupted or its state is
+# inconsistent with the ability to compile the next source).  
+# A random error is raised and a break level entered.  Simply
+# quitting and restarting the process causes it to pick up 
+# where it left off and the previously failing source compiles
+# fine. The only way I've been able to get past this is by 
+# exiting COMPLR and restarting it.  The number of invocations,
+# below, appears to get through the whole list of sources. The
+# failures appear at the same places each time, so the number
+# of COMPLR invocations needed to make it through all the 
+# compilations appears to be constant.
+# 
+# We should investigate whether there is a better way to do this,
+# but I (EJS) have not found one that works so far.
+#
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+build_macsyma_portion
+
+respond "*" ":maxtul;maxtul\r"
+respond "MAXIMUM TOOLAGE>" "load-info\r"
+respond "MAXIMUM TOOLAGE>" "merge-incore-system\r"
+respond "MAXIMUM TOOLAGE>" "gen-tags\r"
+respond "MAXIMUM TOOLAGE>" "quit\r"
+respond "*" "(quit)"
+
+respond "*" "aljabr\033\023"
+respond "*" ":lisp\r"
+type "(load \"libmax;module\")"
+respond "132170" "(load \"libmax;define\")"
+respond "134541" "(load \"libmax;maxmac\")"
+respond "140351" "(load \"libmax;displm\")"
+respond "141162" "(load \"aljabr;loader\")"
+respond "T" "(loader 999)"
+respond "(C1)" "quit();"
+
+respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
 
 bootable_tapes
 

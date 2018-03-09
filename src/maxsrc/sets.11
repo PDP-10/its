@@ -1,0 +1,439 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module sets)
+
+;;; 3:09am  Tuesday, 7 October 1980 -George Carrette.
+
+(eval-when (eval)
+	   (setq macro-expansion-use 'displace
+		 punt-in-set-carefully t))
+
+;;; Finite sets, which are subsets of a finite UNIVERSE set,
+;;; represented as bit vectors. 0 in the J'th position says
+;;; that the J'th universe element is not a member of the set
+;;; 1 in that position says it is an element.
+;;; (After Pratt).
+
+
+;;; Interface functions to the macsyma system.
+
+(DEFMVAR $DISPLAYSET '$SORTED
+	 "If set to SORTED then the sets are displayed using ORDERGREAT.
+	 Otherwise they are displayed in reverse Goedel order.")
+
+(declare (special LOP ROP RIGHT))
+
+(DEFUN (M-SET DIMENSION) (FORM RESULT)
+       ; interface the the macsyma DISPLA function.
+       (SETQ FORM (CDR ($ELEMENTS FORM)))
+       (IF (EQ $DISPLAYSET '$SORTED)
+	   (SETQ FORM (SORTGREAT FORM)))
+       (DIMENSION (CONS '(|${|) FORM)
+		  RESULT LOP ROP 0 RIGHT))
+
+(declare (unspecial LOP ROP RIGHT))
+
+(WHEN
+ (STATUS FEATURE MACSYMA)
+ ; interface to the macsyma parser. MATCHFIX("{","}")
+ (DEFPROP ${ %{ VERB) 
+ (DEFPROP ${ &{ OP) 
+ (DEFPROP &{ ${ OPR) 
+ (DEFINE-SYMBOL (QUOTE &{)) 
+ (DEFPROP ${ DIMENSION-MATCH DIMENSION) 
+ (DEFPROP ${ ((123.) 125.) DISSYM) 
+ (DEFPROP ${ MSIZE-MATCHFIX GRIND) 
+ (DEFPROP ${ PARSE-MATCHFIX NUD) 
+ (DEFPROP %{ DIMENSION-MATCH DIMENSION) 
+ (DEFPROP %{ ((123.) 125.) DISSYM) 
+ (DEFPROP ${ $} MATCH) 
+ (DEFPROP $} &} OP) 
+ (DEFPROP &} $} OPR) 
+ (DEFINE-SYMBOL (QUOTE &})) 
+ (DEFPROP $} 5. LBP) 
+ (DEFPROP %{ ${ NOUN)
+ )
+
+(DEFUN (M-SET OPERATORS) (X IGNORE-VESTIGIAL IGNORE-SIMP-FLAG)
+       ; interface to the simplifier.
+       ; If SIMP-FLAG is T I think I should $MAPSET SIMPLIFY.
+       (LIST* '(M-SET SIMP) (CDR X)))
+
+;;; A hook for meval. If somebody wants to do 
+;;; X:{A,B,C}; and then  EV(X,A=33) might as well support it.
+;;; Too bad it is not that easy to support SUBST(X,Y,{A,B,Y})
+;;; or any other of a sundry tree-walking beasts.
+
+(DEFUN (M-SET MFEXPR*) (ME)
+       ($MAPSET 'MEVAL ME))
+
+(eval-when (load) ; can't afford to have all the macros loaded while debugging.
+(DEF-PROCEDURE-PROPERTY
+ M-SET
+ ; interface to the macsyma to lisp translator.
+ (LAMBDA (FORM) (TRANSLATE `((${) ,@(CDR ($ELEMENTS FORM)))))
+ ; just in case an M-SET gets macro-expanded into user code.
+ TRANSLATE))
+
+;;; TO DO: Interface to SAVE/GRIND
+
+;;; hashed array, UNIVERSE primitives.
+
+(EVAL-WHEN (EVAL COMPILE)
+
+(DEFSTRUCT (UNIVERSE ARRAY CONC-NAME)
+	   (HASH-ARRAY (*ARRAY NIL T 100.))
+	   (HASH-ARRAY-SIZE 100.)
+	   (HASH-ARRAY-OPTIMAL-ELEMENTS 150.)
+	   (HASH-ARRAY-SIZE-INC 100.)
+	   (OBJECT-ARRAY (*ARRAY NIL T 100.))
+	   (OBJECT-ARRAY-SIZE 100.)
+	   (OBJECT-ARRAY-SIZE-INC 100.)
+	   (CARDINALITY 0))  )
+
+
+(DEFMFUN $MAKE_UNIVERSE ()
+	 (LET ((SYM (IMPLODE (NCONC (EXPLODEN '|$UNIVERSE-|) (EXPLODEN (GENSYM))))))
+	      ; a SYMBOL is the only compound object which is safe from
+	      ; being messed up by all the macsyma code, given that
+	      ; you can't add new data types very easily.
+	      ; I can't just return a type T array to the macsyma user.
+	      (PUTPROP SYM (MAKE-UNIVERSE) 'UNIVERSE)
+	      SYM))
+
+(DEFMVAR $UNIVERSE NIL
+	 "The default universe for the set functions.")
+
+(IF (NULL $UNIVERSE) (SETQ $UNIVERSE ($MAKE_UNIVERSE)))
+
+(PROGN 'COMPILE
+       ; avoid consing to call the macsyma hashing function.
+       (DEFVAR HASH-CELL (LIST NIL))
+       (DEFUN HASH (X) (SETF (CAR HASH-CELL) X) (HASHER HASH-CELL)))
+
+       
+(DEFUN INTERN-ELEM (E UNIVERSE)
+       ; I.E. Goedelize E, return the Goedel number it will have
+       ; for the rest of its lifetime.
+       ; Do something about garbage collecting objects and Goedel numbers
+       ; at some later date.
+       (LET* ((H (HASH E))
+	      (ADDRESS   (\ H (UNIVERSE-HASH-ARRAY-SIZE UNIVERSE)))
+	      (HAR (UNIVERSE-HASH-ARRAY UNIVERSE))
+	      (CELL (AREF HAR ADDRESS)))
+	     (OR (CDR (ASSOL E CELL)) ; (ASS #'ALIKE1 E CELL)
+		 (LET ((CARD (1+ (UNIVERSE-CARDINALITY UNIVERSE))))
+		      (SETF (UNIVERSE-CARDINALITY UNIVERSE) CARD)
+		      (COND ((> CARD (UNIVERSE-HASH-ARRAY-OPTIMAL-ELEMENTS UNIVERSE))
+			     (HASH-RESIZE-UNIVERSE UNIVERSE)
+			     (SETQ ADDRESS (\ H (UNIVERSE-HASH-ARRAY-SIZE UNIVERSE))
+				   CELL (AREF HAR ADDRESS))))
+		      (COND ((= CARD (UNIVERSE-OBJECT-ARRAY-SIZE UNIVERSE))
+			     (LET ((N (+ CARD
+					 (UNIVERSE-OBJECT-ARRAY-SIZE-INC UNIVERSE))))
+				  (SETF (UNIVERSE-OBJECT-ARRAY-SIZE UNIVERSE) N)
+				  (*REARRAY (UNIVERSE-OBJECT-ARRAY UNIVERSE)
+					    T N))))
+		      (SETF (AREF HAR ADDRESS)
+			    (CONS (CONS E (1- CARD)) CELL))
+		      (SETF (AREF (UNIVERSE-OBJECT-ARRAY UNIVERSE) (1- CARD))
+			    E)
+		      (1- CARD)))))
+
+(DEFUN HASH-RESIZE-UNIVERSE (IGNORE-FOR-NOW)
+       NIL)
+
+(DEFUN OBJECT-P (E UNIVERSE)
+       (CDR (ASSOL E (AREF (UNIVERSE-HASH-ARRAY UNIVERSE)
+			   (\ (HASH E) (UNIVERSE-HASH-ARRAY-SIZE UNIVERSE))))))
+
+;;; The macsyma set datatype.
+
+;;; ((M-SET) universe . <list of fixnums or vector>)
+;;; accessor functions, some with error checking.
+
+(DEFMACRO M-SET-$UNIVERSE (X) `(CADR ,X))
+(DEFMACRO M-SET-VECTOR-1 (X) `(CDDR ,X))
+(DEFUN M-SETP (X) (AND (NOT (ATOM X)) (EQ (CAAR X) 'M-SET)))
+(DEFUN M-SET-VECTOR (X USER-LEVEL-UNIVERSE)
+       (COND ((M-SETP X)
+	      (COND ((EQ (M-SET-$UNIVERSE X) USER-LEVEL-UNIVERSE)
+		     (M-SET-VECTOR-1 X))
+		    (t
+		     (MERROR "Set in wrong universe:~%~M" X))))
+	     (t
+	      (MERROR "Not a set:~%~M" X))))
+
+(DEFMFUN $UNIVERSE (X)
+	 (COND ((M-SETP X)
+		(OR (GET (M-SET-$UNIVERSE X) 'UNIVERSE)
+		    (MERROR "Set in dead universe: ~:M" (M-SET-$UNIVERSE X)))
+		(M-SET-$UNIVERSE X))
+	       (T
+		(MERROR "Not a set:~%~M" X))))
+
+;;; some macros. these might be usefull in other files too.
+
+(DEFMACRO PARAM (PARAM-EVAL-FORM &AUX FORM)
+	  (DECLARE (SPECIAL PARAM-EVAL-FORM))
+	  (LET ((ERRSET
+		 #'(LAMBDA (VAL)
+			   (FORMAT MSGFILES
+				   "~&; Some error in PARAM macro eval of:~%~S"
+				   PARAM-EVAL-FORM)
+			   (*BREAK T VAL))))
+	       (SETQ FORM (ERRSET (EVAL PARAM-EVAL-FORM))))
+	  (IF FORM (CAR FORM)
+	      (ERROR "PARAM evaluation got error."
+		     PARAM-EVAL-FORM)))
+
+(DEFMACRO BIT-MASK (N) `(1- (LSH 1 ,N)))
+
+(DEFMACRO USEABLE-FIXNUM-SIZE ()
+	  (cond ((status feature pdp10)
+		 35.)
+		((status feature lispm) 23.)
+		(t
+		 ; actually this works for the above two machines.
+		 ; but why be obscure? It assumes TWOs complement.
+		 (haulong (lsh -1 -1)))))
+
+(DEFMACRO LOGDIFF (&REST L) `(BOOLE 4 ,@L))
+
+
+;;; Functions for hacking the bit vector.
+
+(DEFUN M-SET-CONS (UNIVERSE VECTOR)
+       ; remove trailing zeros so that EQUAL will work.
+       ; This function is supposed to bash its argument.
+       ; it is only to be called on a vector produced by the
+       ; vector making functions. MAKE-M-SET-VECTOR and
+       ; MAKE-M-SET-UVECTOR.
+
+       ; Also, if this is a CDR-CODED list do something else.
+       ; Uhm, or does NREVERSE do a good thing to CDR-coded lists?
+       (SETQ VECTOR (NREVERSE VECTOR))
+       (DO ()
+	   ((OR (NULL VECTOR)
+		(NOT (ZEROP (CAR VECTOR))))
+	    (LIST* '(M-SET SIMP) UNIVERSE (NREVERSE VECTOR)))
+	   (SETQ VECTOR (CDR VECTOR))))
+
+(defun MAKE-M-SET-VECTOR (UNIVERSE)
+       ; make a fresh vector representing zero in the universe.
+       ;i.e. this vector is big enough to accept any accumulations.
+       (do ((l nil (cons 0 l))
+	    (j (// (UNIVERSE-CARDINALITY UNIVERSE)
+		   (useable-fixnum-size))
+	       (1- j)))
+	   ((< j 0) l)))
+
+(DEFUN MAKE-M-SET-UVECTOR (UNIVERSE)
+       ; make a vector representing everything in the universe.
+       (DO ((L (LIST (BIT-MASK (\ (UNIVERSE-CARDINALITY UNIVERSE)
+				  (USEABLE-FIXNUM-SIZE))))
+	       (CONS (PARAM (BIT-MASK (USEABLE-FIXNUM-SIZE))) L))
+	    (J (// (UNIVERSE-CARDINALITY UNIVERSE)
+		   (USEABLE-FIXNUM-SIZE))
+	       (1- J)))
+	   ((ZEROP J) L)))
+
+(defmacro copy-m-set-vector (x) `(append ,x nil))
+
+;;; accesor functions for the bit vector. On most machines I am using
+;;; a list of FIXNUMS. On the lisp machine it should be trivial to use
+;;; arrays, with the bit-blit. 
+
+(defun set-vbit (V n)
+       (setq v (nthcdr (// n (useable-fixnum-size)) v))
+       (if v
+	   (setf (car v) (logior (car v) (lsh 1 (\ n (useable-fixnum-size)))))
+	   (error 'BARF n 'wrng-type-arg)))
+
+(defun ref-vbitp (v n)
+       (setq v (nthcdr (// n (useable-fixnum-size)) v))
+       (if v
+	   (oddp (lsh (car v) (minus (\ n (useable-fixnum-size)))))
+	   nil))
+
+(defmacro do-vbit (v j code-if-set &OPTIONAL END-CODE
+		     &aux (temp-v (GENSYM)) (temp-f (GENSYM))
+		     (k (GENSYM)))
+	  ; can't use two do loops because then RETURN won't work
+	  ; in the IF-SET-CODE I'll punt and use a prog.
+	  `(PROG (,TEMP-V ,J ,TEMP-F ,K)
+		 (DECLARE (FIXNUM ,TEMP-F ,K))
+		 (SETQ ,TEMP-V ,V ,J 0)
+		 LOOP-V
+		 (IF (NULL ,TEMP-V) (RETURN ,END-CODE))
+		 (SETQ ,TEMP-F (CAR ,TEMP-V) ,K (USEABLE-FIXNUM-SIZE))
+		 LOOP-K
+		 (WHEN (ZEROP ,K)
+		       (SETQ ,TEMP-V (CDR ,TEMP-V))
+		       (GO LOOP-V))
+		 (IF (ODDP ,TEMP-F) ,CODE-IF-SET)
+		 (SETQ ,TEMP-F (LSH ,TEMP-F -1) ,K (1- ,K) ,J (1+ ,J))
+		 (GO LOOP-K)))
+
+(DEFMACRO ACCUMULATE-VECTOR
+	  (OP BASH L
+	      &AUX
+	      (TEMP-BASH (GENSYM))
+	      (TEMP-L (GENSYM)))
+	  `(DO ((,TEMP-BASH ,BASH (CDR ,TEMP-BASH))
+		(,TEMP-L ,L (CDR ,TEMP-L)))
+	       ((NULL ,TEMP-L)
+		(DO ()
+		    ((NULL ,TEMP-BASH))
+		    (SETF (CAR ,TEMP-BASH) (,OP (CAR ,TEMP-BASH) 0))
+		    (SETQ ,TEMP-BASH (CDR ,TEMP-BASH))))
+	       (SETF (CAR ,TEMP-BASH) (,OP (CAR ,TEMP-BASH) (CAR ,TEMP-L)))))
+
+
+;;; The user primitives
+
+
+(DEFMFUN $EMPTYP (X)
+	 ($UNIVERSE X)
+	 (NULL (M-SET-VECTOR-1 X)))
+
+(DEFMFUN |${| N
+	 (DO ((U (OR (GET $UNIVERSE 'UNIVERSE)
+		     (MERROR "The universe is dead!~%~:M" $UNIVERSE)))
+	      (J 1 (1+ J)))
+	     ((> J N)
+	      (SETQ J 1)
+	      (DO ((V (MAKE-M-SET-VECTOR U)))
+		  ((> J N) (M-SET-CONS $UNIVERSE V))
+		  (SET-VBIT V (ARG J))
+		  (SETQ J (1+ J))))
+	     (SETF (ARG J) (INTERN-ELEM (ARG J) U))))
+
+
+(DEFMFUN $ELEMENTS (X)
+	 (LET ((A (UNIVERSE-OBJECT-ARRAY (GET ($UNIVERSE X) 'UNIVERSE)))
+	       (L NIL))
+	      (DO-VBIT (M-SET-VECTOR-1 X) J
+		       (PUSH (AREF A J) L))
+	      (CONS '(MLIST) L)))
+
+(DEFUN MTRAMP (F WHERE)
+       ; this function should be in MLISP.
+       (IF (IF (SYMBOLP F) (FBOUNDP F) (EQ (CAR F) 'LAMBDA))
+	   F
+	   `(LAMBDA N (MAPPLY ',F (LISTIFY N)
+			      ',(CONCAT "The argument to " (STRIPDOLLAR WHERE))))))
+
+(DEFMFUN $PREDSET (F X &AUX (U (UNIVERSE-CHECK ($UNIVERSE X))))
+	 (SETQ F (MTRAMP F '$PREDSET))
+	 ; When the hair is implemented we must make sure that
+	 ; Goedel numbering compactification garbage collections
+	 ; communicate with use here if they go off.
+	 (LET ((A (UNIVERSE-OBJECT-ARRAY U))
+	       (NV (make-m-set-vector u)))
+	      (do-VBIT (M-SET-VECTOR-1 X) J
+		       (IF (EQ T (FUNCALL F (AREF A J)))
+			   ; the primitives I have defined aren't efficient
+			   ; enough for list-representation.
+			   ; however, this is swamped out by the MAPPLY.
+			   (SET-VBIT NV J)))
+	      (M-SET-CONS ($UNIVERSE X) NV)))
+
+(DEFMFUN $MAPSET (F X &AUX (U (UNIVERSE-CHECK ($UNIVERSE X))))
+	 (SETQ F (MTRAMP F '$MAPSET))
+	 (LET ((A (UNIVERSE-OBJECT-ARRAY U))
+	       (STACK NIL))
+	      (DO-VBIT (M-SET-VECTOR-1 X) J
+		       (PUSH (INTERN-ELEM (FUNCALL F (AREF A J)) U) STACK))
+	      (DO ((V (MAKE-M-SET-VECTOR U))
+		   (L STACK (CDR L)))
+		  ((NULL L)
+		   (RECLAIM STACK NIL) ; maclisp sucks!
+		   (M-SET-CONS ($UNIVERSE X) V))
+		  (SET-VBIT V (CAR L)))))
+
+(DEFMFUN $CARDINAL (X)
+	 ($UNIVERSE X) ; error check.
+	 (LET ((C 0))
+	      (DO-VBIT (M-SET-VECTOR-1 X) IGNORE-J
+		       (SETQ C (1+ C)))
+	      C))
+
+(DEFUN UNIVERSE-CHECK (X)
+       (COND ((ATOM X)
+	      (OR (GET X 'UNIVERSE)
+		  (MERROR "Dead universe: ~:M" X)))
+	     (T
+	      (MERROR "Not a universe~%~M" X))))
+
+(DEFMFUN $ORDINAL (OBJECT &OPTIONAL (UNIVERSE $UNIVERSE))
+	 ; users may have an application for the fact that this
+	 ; interns objects in a hash table.
+	 (OBJECT-P OBJECT (UNIVERSE-CHECK UNIVERSE)))
+
+(DEFMFUN $ELEMENTP (E X &AUX (I (OBJECT-P E (GET ($UNIVERSE X) 'UNIVERSE))))
+	 (IF I (REF-VBITP (M-SET-VECTOR-1 X) I) NIL))
+
+(DEFMFUN $ELEMENTOF (X)
+	 (LET ((A (UNIVERSE-OBJECT-ARRAY (GET ($UNIVERSE X) 'UNIVERSE))))
+	      (DO-VBIT (M-SET-VECTOR-1 X) J
+		       (RETURN (AREF A J))
+		       (MERROR "ELEMENTOF called on empty set.~M" X))))
+
+;;; below: functions defined only on sets. These only operate
+;;; on the bit vector, and are fast.
+
+			
+(DEFMACRO DEFSETOP (NAME LOGICAL &OPTIONAL (MAKER 'MAKE-M-SET-VECTOR)
+			 (JS 1))
+	  `(DEFMFUN ,NAME N
+		    (LET* ((UU (IF (ZEROP N) $UNIVERSE ($UNIVERSE (ARG 1))))
+			   (V (,MAKER (UNIVERSE-CHECK UU))))
+			  (DO ((J ,JS (1+ J)))
+			      ((> J N)
+			       (M-SET-CONS UU V))
+			      (ACCUMULATE-VECTOR
+			       ,LOGICAL V (M-SET-VECTOR (ARG J) UU))))))
+
+(DEFSETOP $UNION LOGIOR)
+
+(DEFSETOP $INTERSECTION LOGAND MAKE-M-SET-UVECTOR)
+
+(DEFSETOP $SYMDIFF LOGXOR)
+
+;;; why do I want to cludge COMPLEMENT as part of SETDIFF?
+;;; it sure makes this look ugly.
+
+(DEFSETOP $SETDIFF LOGDIFF
+  (LAMBDA (Q)
+    (IF (> N 1)
+	(COPY-M-SET-VECTOR (M-SET-VECTOR-1 (ARG 1)))
+	(MAKE-M-SET-UVECTOR Q)))
+  (IF (> N 1) 2 1))
+
+(DEFMFUN $SUBSETP (A B)
+	 ; Try to arrange the vector macros so that I don't violate
+	 ; data abstraction here in order to make SUBSETP fast and
+	 ; cons-free.
+	 (DO ((VA (M-SET-VECTOR A ($UNIVERSE B)) (CDR VA))
+	      ; error check on A and B.
+	      (VB (M-SET-VECTOR-1 B)))
+	     ((NULL VA)
+	      ; SUBSETP({A},{A}) is true.
+	      T)
+	     (IF (NOT (ZEROP (LOGDIFF (CAR VA) (CAR VB))))
+		 (RETURN NIL))))
+
+
+;;; Little interface to run this outside of macsyma.
+
+(WHEN (NOT (STATUS FEATURE MACSYMA))
+      (PUTPROP 'HASH (GET 'SXHASH 'SUBR) 'SUBR)
+      (ARGS 'HASH (ARGS 'SXHASH))
+      (PUTPROP 'ASSOL (GET 'ASSOC 'SUBR) 'SUBR)
+      (ARGS 'ASSOL (ARGS 'ASSOC))
+      (DEFUN DISPLA (X)(PRINT X))
+      (DEFUN MGRIND (X Y)(PRINT X Y))
+      )

@@ -1,0 +1,140 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module trutil)
+
+
+(TRANSL-MODULE TRUTIL)
+
+;;; takes a list, and returns a cons of an a-list of (gensym . exp)
+;;; and the origonal list with gensyms substututed for non-atom elements
+;;; of the list. This could be used to define subr-like makros.
+
+(declare (special tr-gensym-kounter))
+(setq tr-gensym-kounter 0)
+(DEFTRFUN TR-GENSYM (&OPTIONAL k)
+	  (and k (setq tr-gensym-kounter k))
+	  (prog2 nil
+		 (implode (nconc (explodec '|tr-gensym~|)
+				 (explodec tr-gensym-kounter)))
+		 (setq tr-gensym-kounter (1+ tr-gensym-kounter))))
+(declare (unspecial tr-gensym-kounter))
+
+(DEFTRFUN CONSERVE-EVAL-ARGS-DATA (L)
+       (DO ((SUBLIS NIL)
+	    (L L (CDR L))
+	    (NL NIL))
+	   ((NULL L) (CONS SUBLIS (NREVERSE NL)))
+	   (COND ((ATOM (CAR L))
+		  (PUSH (CAR L) NL))
+		 (T
+		  (LET ((SYM (TR-GENSYM)))
+		       (PUSH (CONS SYM (CAR L)) SUBLIS)
+		       (PUSH SYM NL))))))
+
+
+(DEFUN TR-TRACE-HANDLE (FORM)
+       (LET* ((LEVEL-SYM (GET (CAAR FORM) 'TR-TRACE-LEVEL))
+	      (LEVEL (1+ (SYMEVAL LEVEL-SYM)))
+	      (OP (CAAR FORM)))
+	     (PROGV (LIST LEVEL-SYM)
+		    (LIST LEVEL)
+		    (MTELL-OPEN "~%~S Enter ~:@M~%" level op)
+		    (mgrind form nil)
+		    (setq form (subrcall nil (get op 'otranslate) form))
+		    (mtell-OPEN "~%~S Exit  ~:@M" level op)
+		    (sprinter form)
+		    form)))
+#+(or PDP10 Franz)
+(defprop get! (mtrace fasl dsk macsym) autoload)
+
+(defun tr-trace (op)
+       (if (get op 'otranslate) (tr-untrace op))
+       (let ((sym (gensym)))
+	 (set sym 0)
+	    (putprop op sym 'TR-TRACE-LEVEL))
+       (putprop op (get! op 'translate) 'otranslate)
+       (putprop op (get! 'tr-trace-handle 'subr) 'translate))
+
+(defun tr-untrace (op)
+       (remprop op 'tr-trace-level)
+       (putprop op (get! op 'otranslate) 'translate)
+       (remprop op 'otranslate))
+
+(DEFTRFUN PUSH-DEFVAR (VAR VAL)
+  ;; makes sure there is a form in the beginning of the
+  ;; file that insures the special variable is declared and bound.
+  (OR (MEMQ VAR DEFINED_VARIABLES)
+      ;; $NO_DEFAULT says that the user takes responsibility for binding.
+      (EQ $DEFINE_VARIABLE '$NO_DEFAULT)
+      ;; $MODE is same, but double-checks with the declarations available.
+      (AND (EQ $DEFINE_VARIABLE '$MODE)
+	   (GET VAR 'MODE))
+      (DO ((L *PRE-TRANSL-FORMS* (CDR L)))
+	  ((NULL L)
+	   ;; push one with a priority of 1, which will be over-rided
+	   ;; by any user-specified settings.
+	   (IF (EQ $DEFINE_VARIABLE '$MODE)
+	       (TR-FORMAT "~%Note: ~:M being given a default setting of ~:M"
+			  var (IF (atom val) val
+				  ;; strip off the quote
+				  (cadr val))))
+	   (PUSH-PRE-TRANSL-FORM `(DEF-mtrVAR ,VAR ,VAL 1)))
+	(LET ((FORM (CAR L)))
+	  (AND (EQ (CAR FORM) 'DEF-mtrVAR)
+	       (EQ (CADR FORM) VAR)
+	       (RETURN ()))))))
+
+(DEFTRFUN PUSH-PRE-TRANSL-FORM (FORM)
+	  (COND ((MEMBER FORM *PRE-TRANSL-FORMS*))
+		(T
+		 (PUSH FORM *PRE-TRANSL-FORMS*)
+		 (AND *IN-TRANSLATE*
+		      (LET ((WINP NIL))
+			   (UNWIND-PROTECT (PROGN (EVAL FORM) (SETQ WINP T))
+					   (OR WINP
+					       (BARFO "Bad *PRE-TRANSL-FORM*"))))))))
+
+(DEFTRFUN PUSH-AUTOLOAD-DEF (OLD-ENTRY NEW-ENTRIES)
+	       (AND (GET OLD-ENTRY 'AUTOLOAD)
+		    ; don't need this if it is IN-CORE.
+		    ; this automaticaly punts this shit for systems
+		    ; that don't need it.
+		    (DO ((ENTRY))
+			((NULL NEW-ENTRIES))
+			(SETQ ENTRY (POP NEW-ENTRIES))
+			(OR (MEMQ ENTRY *NEW-AUTOLOAD-ENTRIES*)
+			    (PUSH-PRE-TRANSL-FORM
+			     `(PUTPROP ',ENTRY
+				       ; this ensures that the autoload definition
+				       ; will not get out of date.
+				       (OR (GET ',OLD-ENTRY 'AUTOLOAD)
+					   T)
+				       'AUTOLOAD))))))
+
+
+
+(DEFTRFUN TR-NARGS-CHECK (FORM &OPTIONAL
+			       (ARGS-P (ARGS (CAAR FORM)))
+			       (NARGS (LENGTH (CDR FORM))))
+	   ; the maclisp args info format is NIL meaning no info,
+	   ; probably a lexpr. or cons (min . max)
+	   (AND
+	    ARGS-P
+	    (LET ((NARGS (LENGTH (CDR FORM)))
+		  (MIN (OR (CAR ARGS-P) (CDR ARGS-P)))
+		  (MAX (CDR ARGS-P)))
+		 (COND ((AND MIN (< NARGS MIN))
+			(MFORMAT 
+			 *TRANSLATION-MSGS-FILES*
+			 "~%ERROR: Too few arguments supplied to ~:@M~%"
+			 (CAAR FORM))
+			(MGRIND FORM *TRANSLATION-MSGS-FILES*))
+		       ((AND MAX (> NARGS MAX))
+			(TR-FORMAT 
+			 "~%ERROR: Too many arguments supplied to ~:@M~%"
+			 (caar form))
+			(MGRIND FORM *TRANSLATION-MSGS-FILES*)))))
+	   ; return the number of arguments.
+	   NARGS)

@@ -1,0 +1,918 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;
+;;;  (c) Copyright 1976, 1983 Massachusetts Institute of Technology     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module laplac)
+
+(DECLARE (SPECIAL DVAR VAR-LIST VAR-PARM-LIST VAR PARM $SAVEFACTORS
+		  CHECKFACTORS $RATFAC $KEEPFLOAT NOUNL NOUNSFLAG)
+	 (*EXPR SUBFUNMAKE)
+	 (*LEXPR $DIFF $EXPAND $MULTTHRU $RATSIMP)) 
+
+(DEFUN EXPONENTIATE (POW) 
+       ;;;COMPUTES %E**Z WHERE Z IS AN ARBITRARY EXPRESSION TAKING SOME OF THE WORK AWAY FROM SIMPEXPT
+       (COND ((ZEROP1 POW) 1)
+	     ((EQUAL POW 1) '$%E)
+	     (T (POWER '$%E POW)))) 
+
+(DEFUN FIXUPREST (REST) 
+       ;;;REST IS A PRODUCT WITHOUT THE MTIMES.FIXUPREST PUTS BACK THE MTIMES
+       (COND ((NULL REST) 1)
+	     ((CDR REST) (CONS '(MTIMES SIMP) REST))
+	     (T (CAR REST)))) 
+
+(DEFUN POSINT MACRO (X) (SUBST (CADR X) 'Y '(AND (FIXP Y) (> Y 0))))
+
+(DEFUN NEGINT MACRO (X) (SUBST (CADR X) 'Y '(AND (FIXP Y) (< Y 0))))
+
+(DEFUN ISQUADRATICP (E X)
+    ((LAMBDA (B)
+	(COND ((ZEROP1 B) (LIST 0 0 E))
+	      ((FREEOF X B) (LIST 0 B (SUBSTITUTE 0 X E)))
+	      ((SETQ B (ISLINEAR B X))
+		(LIST (DIV* (CAR B) 2) (CDR B) (SUBSTITUTE 0 X E)))))
+	(SDIFF E X)))
+ 
+
+;;;INITIALIZES SOME GLOBAL VARIABLES THEN CALLS THE DISPATCHING FUNCTION
+
+(DEFMFUN $LAPLACE (E VAR PARM) 
+  (IF (OR NOUNSFLAG (MEMQ '%LAPLACE NOUNL))
+      (SETQ E (REMLAPLACE (SPECREPCHECK E))))
+  (LAPLACE E)) 
+
+(DEFUN REMLAPLACE (E)
+  (IF (ATOM E) E (CONS (DELQ 'LAPLACE (APPEND (CAR E) NIL) 1)
+		       (MAPCAR #'REMLAPLACE (CDR E)))))
+
+(DEFUN LAPLACE (FUN) 
+       ((LAMBDA (DVAR VAR-LIST VAR-PARM-LIST) 
+	    ;;; Handles easy cases and calls appropriate function on others.
+	  (COND ((EQUAL FUN 0) 0)
+	        ((EQUAL FUN 1)
+	         (COND ((ZEROP1 PARM) (SIMPLIFY (LIST '($DELTA) 0)))
+		       (T (POWER PARM -1))))
+		((MBAGP FUN) (CONS (CAR FUN) (MAPCAR #'LAPLACE (CDR FUN))))
+		((SPECREPP FUN) (LAPLACE (SPECDISREP FUN)))
+		      ((ALIKE1 FUN VAR) (POWER PARM -2))
+		      ((OR (ATOM FUN) (FREEOF VAR FUN))
+		       (COND ((ZEROP1 PARM) (MUL2 FUN (SIMPLIFY (LIST '($DELTA) 0))))
+			     (T (MUL2 FUN (POWER PARM -1)))))
+		      (T ((LAMBDA (OP) 
+				  (COND ((EQ OP 'MPLUS)
+					 (ADDN (MAPCAR #'LAPLACE (CDR FUN)) T))
+					((EQ OP 'MTIMES)
+					 (LAPTIMES (CDR FUN)))
+					((EQ OP 'MEXPT)
+					 (LAPEXPT FUN NIL))
+					((EQ OP '%SIN)
+					 (LAPSIN FUN NIL NIL))
+					((EQ OP '%COS)
+					 (LAPSIN FUN NIL T))
+					((EQ OP '%SINH)
+					 (LAPSINH FUN NIL NIL))
+					((EQ OP '%COSH)
+					 (LAPSINH FUN NIL T))
+					((EQ OP '%LOG)
+					 (LAPLOG FUN))
+					((EQ OP '%DERIVATIVE)
+					 (LAPDIFF FUN))
+					((EQ OP '%INTEGRATE)
+					 (LAPINT FUN))
+					((EQ OP '%SUM)
+					 (LIST '(%SUM SIMP)
+					       (LAPLACE (CADR FUN))
+					       (CADDR FUN)
+					       (CADDDR FUN)
+					       (CAR (CDDDDR FUN))))
+					((EQ OP '%ERF)
+					 (LAPERF FUN))
+				((AND (EQ OP '%ILT)(EQ (CADDDR FUN) VAR))
+			(COND ((EQ PARM (CADDR FUN))(CADR FUN))
+				(T (SUBST PARM (CADDR FUN)(CADR FUN))))
+)					((EQ OP '$DELTA)
+					 (LAPDELTA FUN NIL))
+					((SETQ OP ($GET OP '$LAPLACE))
+					 (MCALL OP FUN VAR PARM))
+					(T (LAPDEFINT FUN))))
+			  (CAAR FUN)))))
+	NIL
+	NIL
+	NIL)) 
+
+(DEFUN LAPLUS (FUN) (ADDN (MAPCAR #'LAPLACE (CDR FUN)) T))
+
+(DEFUN LAPTIMES (FUN)
+       ;;;EXPECTS A LIST (PERHAPS EMPTY) OF FUNCTIONS MULTIPLIED TOGETHER WITHOUT THE MTIMES
+       ;;;SEES IF IT CAN APPLY THE FIRST AS A TRANSFORMATION ON THE REST OF THE FUNCTIONS
+       (COND ((NULL FUN) (LIST '(MEXPT SIMP) PARM -1))
+	     ((NULL (CDR FUN)) (LAPLACE (CAR FUN)))
+	     ((FREEOF VAR (CAR FUN))
+	      (SIMPTIMES (LIST '(MTIMES)
+			       (CAR FUN)
+			       (LAPTIMES (CDR FUN)))
+			 1 T))
+	     ((EQ (CAR FUN) VAR)
+	      (SIMPTIMES (LIST '(MTIMES)
+			       -1
+			       (SDIFF (LAPTIMES (CDR FUN)) PARM))
+			 1 T))
+	     (T ((LAMBDA (OP) 
+			 (COND ((EQ OP 'MEXPT)
+				(LAPEXPT (CAR FUN) (CDR FUN)))
+			       ((EQ OP 'MPLUS)
+				(LAPLUS ($MULTTHRU (FIXUPREST (CDR FUN)) (CAR FUN))))
+			       ((EQ OP '%SIN)
+				(LAPSIN (CAR FUN) (CDR FUN) NIL))
+			       ((EQ OP '%COS)
+				(LAPSIN (CAR FUN) (CDR FUN) T))
+			       ((EQ OP '%SINH)
+				(LAPSINH (CAR FUN) (CDR FUN) NIL))
+			       ((EQ OP '%COSH)
+				(LAPSINH (CAR FUN) (CDR FUN) T))
+			       ((EQ OP '$DELTA)
+				(LAPDELTA (CAR FUN) (CDR FUN)))
+
+			       (T (LAPSHIFT (CAR FUN) (CDR FUN)))))
+		 (CAAAR FUN))))) 
+
+(DEFUN LAPEXPT (FUN REST) 
+       ;;;HANDLES %E**(A*T+B)*REST(T), %E**(A*T**2+B*T+C),
+       ;;; 1/SQRT(A*T+B), OR T**K*REST(T)
+       (PROG (AB BASE-OF-FUN POWER RESULT) 
+	     (SETQ BASE-OF-FUN (CADR FUN) POWER (CADDR FUN))
+	     (COND
+	      ((AND
+		(FREEOF VAR BASE-OF-FUN)
+		(SETQ 
+		 AB
+		 (ISQUADRATICP
+		  (COND ((EQ BASE-OF-FUN '$%E) POWER)
+			(T (SIMPTIMES (LIST '(MTIMES)
+					    POWER
+					    (LIST '(%LOG)
+						  BASE-OF-FUN))
+				      1.
+				      NIL)))
+		  VAR)))
+	       (COND ((EQUAL (CAR AB) 0.) (GO %E-CASE-LIN))
+		     ((NULL REST) (GO %E-CASE-QUAD))
+		     (T (GO NOLUCK))))
+	      ((AND (EQ BASE-OF-FUN VAR) (FREEOF VAR POWER))
+	       (GO VAR-CASE))
+	      ((AND (ALIKE1 '((RAT) -1. 2.) POWER) (NULL REST)
+		    (SETQ AB (ISLINEAR BASE-OF-FUN VAR)))
+	       (SETQ RESULT (DIV* (CDR AB) (CAR AB)))
+	       (RETURN (SIMPTIMES
+		(LIST '(MTIMES)
+		      (LIST '(MEXPT)
+			    (DIV* '$%PI
+				  (LIST '(MTIMES)
+					(CAR AB)
+					PARM))
+			    '((RAT) 1. 2.))
+		      (EXPONENTIATE (LIST '(MTIMES) RESULT PARM))
+		      (LIST '(MPLUS)
+			    1.
+			    (LIST '(MTIMES)
+				  -1.
+				   (LIST '(%ERF)
+						 (LIST '(MEXPT)
+						       (LIST '(MTIMES)
+							     RESULT
+							     PARM)
+						       '((RAT)
+							 1.
+							 2.)))
+					   ))) 1 NIL)))
+	      (T (GO NOLUCK)))
+	%E-CASE-LIN
+	     (SETQ 
+	      RESULT
+	      (COND
+	       (REST ($RATSIMP ($AT (LAPTIMES REST)
+				    (LIST '(MEQUAL SIMP)
+					  PARM
+					  (LIST '(MPLUS SIMP)
+						PARM
+						(AFIXSIGN (CADR AB)
+							  NIL))))))
+	       (T (LIST '(MEXPT)
+			(LIST '(MPLUS)
+			      PARM
+			      (AFIXSIGN (CADR AB) NIL))
+			-1.))))
+	     (RETURN (SIMPTIMES (LIST '(MTIMES)
+				      (EXPONENTIATE (CADDR AB))
+				      RESULT)
+				1.
+				NIL))
+	%E-CASE-QUAD
+	     (SETQ RESULT (AFIXSIGN (CAR AB) NIL))
+	     (SETQ 
+	      RESULT
+	       (LIST
+		'(MTIMES)
+		(DIV* (LIST '(MEXPT)
+			    (DIV* '$%PI RESULT)
+			    '((RAT) 1. 2.))
+		      2.)
+		(EXPONENTIATE (DIV* (LIST '(MEXPT) PARM 2.)
+				    (LIST '(MTIMES)
+					  4.
+					  RESULT)))
+		(LIST '(MPLUS)
+		      1.
+		      (LIST '(MTIMES)
+			    -1.
+			     (LIST '(%ERF)
+					   (DIV* PARM
+						 (LIST '(MTIMES)
+						       2.
+						       (LIST '(MEXPT)
+							     RESULT
+							     '((RAT)
+							       1.
+							       2.)))))
+				))))
+	     (AND (NULL (EQUAL (CADR AB) 0.))
+		  (SETQ RESULT
+			(SUBSTITUTE (LIST '(MPLUS)
+					  PARM
+					  (LIST '(MTIMES)
+						-1.
+						(CADR AB)))
+				    PARM
+				    RESULT)))
+	     (RETURN (SIMPTIMES  (LIST '(MTIMES)
+			   (EXPONENTIATE (CADDR AB))
+			   RESULT) 1 NIL))
+	VAR-CASE
+	     (COND ((OR (NULL REST) (FREEOF VAR (FIXUPREST REST)))
+		    (GO VAR-EASY-CASE)))
+	     (COND ((POSINT POWER)
+		    (RETURN (AFIXSIGN (APPLY '$DIFF
+					     (LIST (LAPTIMES REST)
+						   PARM
+						   POWER))
+				      (EVEN POWER))))
+		   ((NEGINT POWER)
+		    (RETURN (MYDEFINT (HACKIT POWER REST)
+				      (CREATENAME PARM (MINUS POWER))
+				      PARM)))
+		   (T (GO NOLUCK)))
+	VAR-EASY-CASE
+	     (SETQ POWER
+		   (SIMPLUS (LIST '(MPLUS) 1 POWER) 1 T))
+	     (OR (EQ (ASKSIGN POWER) '$POSITIVE) (GO NOLUCK))
+	     (SETQ RESULT (LIST (LIST '(%GAMMA) POWER)
+				(LIST '(MEXPT)
+				      PARM
+				      (AFIXSIGN POWER NIL))))
+	     (AND REST (SETQ RESULT (NCONC RESULT REST)))
+	     (RETURN (SIMPTIMES (CONS '(MTIMES) RESULT)
+				1
+				NIL))
+	NOLUCK
+	     (RETURN
+	      (COND
+	       ((AND (POSINT POWER)
+		     (MEMQ (CAAR BASE-OF-FUN)
+			   '(MPLUS %SIN %COS %SINH %COSH)))
+		(LAPTIMES (CONS BASE-OF-FUN
+				(CONS (COND ((= POWER 2.) BASE-OF-FUN)
+					    (T (LIST '(MEXPT SIMP)
+						     BASE-OF-FUN
+						     (SUB1 POWER))))
+				      REST))))
+	       (T (LAPSHIFT FUN REST)))))) 
+
+(DEFUN MYDEFINT (F X A) 
+       ;;;INTEGRAL FROM A TO INFINITY OF F(X)
+       ((LAMBDA (TRYINT) (COND (TRYINT (CAR TRYINT))
+			       (T (LIST '(%INTEGRATE SIMP)
+					F
+					X
+					A
+					'$INF))))
+	(AND (NOT ($UNKNOWN F))
+	     (ERRSET ($DEFINT F X A '$INF))))) 
+
+(DEFUN CREATENAME 
+ ;;;CREATES HOPEFULLY UNIQUE NAMES FOR VARIABLE OF INTEGRATION
+ (HEAD TAIL) 
+ (implode (NCONC (EXPLODEC HEAD) (EXPLODEC TAIL))))
+
+(DECLARE (FIXNUM EXPONENT)) 
+
+(DEFUN HACKIT (EXPONENT REST) 
+       ;;;REDUCES LAPLACE(F(T)/T**N,T,S) CASE TO LAPLACE(F(T)/T**(N-1),T,S) CASE
+       (COND ((EQUAL EXPONENT -1.)
+	      ((LAMBDA (PARM) (LAPTIMES REST)) (CREATENAME PARM 1.)))
+	     (T (MYDEFINT (HACKIT (1+ EXPONENT) REST)
+			  (CREATENAME PARM (DIFFERENCE -1. EXPONENT))
+			  (CREATENAME PARM (MINUS EXPONENT)))))) 
+
+(DECLARE (NOTYPE EXPONENT)) 
+
+(DEFUN AFIXSIGN (FUNCT SIGNSWITCH) 
+       ;;;MULTIPLIES FUNCT BY -1 IF SIGNSWITCH IS NIL
+       (COND (SIGNSWITCH FUNCT)
+	     (T (SIMPTIMES (LIST '(MTIMES) -1. FUNCT) 1. T)))) 
+
+ 
+
+(DEFUN LAPSHIFT (FUN REST) 
+       (COND ((ATOM FUN) (merror "INTERNAL ERROR"))
+	     ((OR (MEMQ 'LAPLACE (CAR FUN)) (NULL REST))
+	      (LAPDEFINT (COND (REST (SIMPTIMES (CONS '(MTIMES)
+					   (CONS FUN REST)) 1 T))
+			       (T FUN))))
+	     (T (LAPTIMES (APPEND REST
+				  (NCONS (CONS (APPEND (CAR FUN)
+						       '(LAPLACE))
+					       (CDR FUN)))))))) 
+
+(DEFUN MOSTPART (F PARM SIGN A B) 
+       ;;;COMPUTES %E**(W*B*%I)*F(S-W*A*%I) WHERE W=-1 IF SIGN IS T ELSE W=1
+       ((LAMBDA (SUBSTINFUN) 
+		(COND ((ZEROP1 B) SUBSTINFUN)
+		      (T (LIST '(MTIMES)
+			       (EXPONENTIATE (AFIXSIGN (LIST '(MTIMES)
+							     B
+							     '$%I)
+						       (NULL SIGN)))
+			       SUBSTINFUN))))
+	($AT F
+	     (LIST '(MEQUAL SIMP)
+		   PARM
+		   (LIST '(MPLUS SIMP)
+			 PARM
+			 (AFIXSIGN (LIST '(MTIMES)
+					 A
+					 '$%I)
+				   SIGN)))))) 
+
+(DEFUN COMPOSE 
+ ;;;IF WHICHSIGN IS NIL THEN SIN TRANSFORM ELSE COS TRANSFORM
+ (FUN PARM WHICHSIGN A B) 
+       ((LAMBDA (RESULT) 
+		($RATSIMP (SIMPTIMES (CONS '(MTIMES)
+					   (COND (WHICHSIGN RESULT)
+						 (T (CONS '$%I
+							  RESULT))))
+				     1 NIL)))
+	(LIST '((RAT) 1. 2.)
+	      (LIST '(MPLUS)
+		    (MOSTPART FUN PARM T A B)
+		    (AFIXSIGN (MOSTPART FUN PARM NIL A B)
+			      WHICHSIGN))))) 
+
+(DEFUN LAPSIN 
+ ;;;FUN IS OF THE FORM SIN(A*T+B)*REST(T) OR COS
+ (FUN REST TRIGSWITCH) 
+       ((LAMBDA (AB) 
+	 (COND
+	  (AB
+	    (COND
+	     (REST (COMPOSE (LAPTIMES REST)
+			    PARM
+			    TRIGSWITCH
+			    (CAR AB)
+			    (CDR AB)))
+	     (T (SIMPTIMES
+	      (LIST
+	       '(MTIMES)
+	       (COND
+		((ZEROP1 (CDR AB))
+		 (COND (TRIGSWITCH PARM) (T (CAR AB))))
+		(T (COND (TRIGSWITCH (LIST '(MPLUS)
+					   (LIST '(MTIMES)
+						 PARM
+						 (LIST '(%COS)
+						       (CDR AB)))
+					   (LIST '(MTIMES)
+						 -1.
+						 (CAR AB)
+						 (LIST '(%SIN)
+						       (CDR AB)))))
+			 (T (LIST '(MPLUS)
+				  (LIST '(MTIMES)
+					PARM
+					(LIST '(%SIN)
+					      (CDR AB)))
+				  (LIST '(MTIMES)
+					(CAR AB)
+					(LIST '(%COS)
+					      (CDR AB))))))))
+	       (LIST '(MEXPT)
+		     (LIST '(MPLUS)
+			   (LIST '(MEXPT) PARM 2.)
+			   (LIST '(MEXPT) (CAR AB) 2.))
+		     -1.))
+	    1 NIL))))
+	  (T (LAPSHIFT FUN REST))))
+	(ISLINEAR (CADR FUN) VAR))) 
+
+(DEFUN LAPSINH 
+ ;;;FUN IS OF THE FORM SINH(A*T+B)*REST(T) OR IS COSH
+ (FUN REST SWITCH) 
+	(COND ((ISLINEAR (CADR FUN) VAR)
+       ($RATSIMP
+	(LAPLUS
+	 (SIMPLUS
+	  (LIST '(MPLUS)
+		(NCONC (LIST '(MTIMES)
+			     (LIST '(MEXPT)
+				   '$%E
+				   (CADR FUN))
+			     '((RAT) 1. 2.))
+		       REST)
+		(AFIXSIGN (NCONC (LIST '(MTIMES)
+				       (LIST '(MEXPT)
+					     '$%E
+					     (AFIXSIGN (CADR FUN)
+						       NIL))
+				       '((RAT) 1. 2.))
+				 REST)
+			  SWITCH))
+	  1.
+	  NIL)))) 
+	(T (LAPSHIFT FUN REST))))
+
+(DEFUN LAPLOG 
+ ;;;FUN IS OF THE FORM LOG(A*T)
+ (FUN) ((LAMBDA (AB) 
+		(COND ((AND AB (ZEROP1 (CDR AB)))
+		       (SIMPTIMES (LIST '(MTIMES)
+					(LIST '(MPLUS)
+					      (subfunmake '$PSI
+							  '(0)
+							  (NCONS 1.))
+					      (LIST '(%LOG)
+						    (CAR AB))
+					      (LIST '(MTIMES)
+						    -1.
+						    (LIST '(%LOG)
+							  PARM)))
+					(LIST '(MEXPT)
+					      PARM
+					      -1.))
+				  1 NIL))
+		      (T (LAPDEFINT FUN))))
+	(ISLINEAR (CADR FUN) VAR))) 
+
+(DEFUN RAISEUP (FBASE EXPONENT) 
+       (COND ((EQUAL EXPONENT 1.) FBASE)
+	     (T (LIST '(MEXPT) FBASE EXPONENT)))) 
+
+(DEFUN LAPDELTA (FUN REST) 
+       ;;TAKES TRANSFORM OF DELTA(A*T+B)*F(T)
+       ((LAMBDA (AB SIGN RECIPA) 
+	 (COND
+	  (AB
+	   (SETQ RECIPA (POWER (CAR AB) -1) AB (DIV (CDR AB) (CAR AB)))
+	   (SETQ SIGN (ASKSIGN AB) RECIPA (SIMPLIFYA (LIST '(MABS) RECIPA) NIL))
+	   (SIMPLIFYA (COND ((EQ SIGN '$POSITIVE) 0)
+			    ((EQ SIGN '$ZERO)
+			     (LIST '(MTIMES)
+				   (SUBSTITUTE 0 VAR (FIXUPREST REST))
+				   RECIPA))
+			    (T (LIST '(MTIMES)
+				     (SUBSTITUTE (NEG AB)
+						 VAR
+						 (FIXUPREST REST))
+				     (LIST '(MEXPT)
+					   '$%E
+					   (CONS '(MTIMES)
+						 (CONS PARM (NCONS AB))))
+				     RECIPA)))
+		      NIL))
+	  (T (LAPSHIFT FUN REST))))
+	(ISLINEAR (CADR FUN) VAR) NIL NIL)) 
+
+(DEFUN LAPERF (FUN  )
+       ((LAMBDA (AB) 
+	 (COND
+	  ((AND AB (EQUAL (CDR AB) 0.))
+	   (SIMPTIMES (LIST '(MTIMES)
+		 (DIV* (EXPONENTIATE (DIV* (LIST '(MEXPT)
+						 PARM
+						 2.)
+					   (LIST '(MTIMES)
+						 4.
+						 (LIST '(MEXPT)
+						       (CAR AB)
+						       2.))))
+		       PARM)
+		 (LIST '(MPLUS)
+		       1.
+		       (LIST '(MTIMES)
+			     -1.
+			      (LIST '(%ERF)
+					    (DIV* PARM
+						  (LIST '(MTIMES)
+							2.
+							(CAR AB))))
+				      ))) 1 NIL))
+	  (T (LAPDEFINT FUN))))
+	(ISLINEAR (CADR FUN) VAR)))
+(DEFUN LAPDEFINT (FUN)
+  (PROG (TRYINT MULT)
+    (AND ($UNKNOWN FUN)(GO SKIP))
+    (SETQ MULT (SIMPTIMES (LIST '(MTIMES) (EXPONENTIATE
+					   (LIST '(MTIMES SIMP) -1 VAR PARM)) FUN) 1 NIL))
+    (MEVAL `(($ASSUME) ,@(LIST (LIST '(MGREATERP) PARM 0))))
+    (SETQ TRYINT (ERRSET ($DEFINT MULT VAR 0 '$INF)))
+    (MEVAL `(($FORGET) ,@(LIST (LIST '(MGREATERP) PARM 0))))
+    (AND TRYINT (NOT (EQ (CAAAR TRYINT) '%INTEGRATE))  (RETURN (CAR TRYINT)))
+   SKIP (RETURN (LIST '(%LAPLACE SIMP) FUN VAR PARM))))
+ 
+
+(DECLARE (FIXNUM ORDER)) 
+
+(DEFUN LAPDIFF 
+ ;;;FUN IS OF THE FORM DIFF(F(T),T,N) WHERE N IS A POSITIVE INTEGER
+ (FUN) (PROG (DIFFLIST DEGREE FRONTEND RESULTLIST NEWDLIST ORDER
+	      ARG2) 
+	     (SETQ NEWDLIST (SETQ DIFFLIST (COPY (CDDR FUN))))
+	     (SETQ ARG2 (LIST '(MEQUAL SIMP) VAR 0.))
+	A    (COND ((NULL DIFFLIST)
+		    (RETURN (CONS '(%DERIVATIVE SIMP)
+				  (CONS (LIST '(%LAPLACE SIMP)
+					      (CADR FUN)
+					      VAR
+					      PARM)
+					NEWDLIST))))
+		   ((EQ (CAR DIFFLIST) VAR)
+		    (SETQ DEGREE (CADR DIFFLIST) 
+			  DIFFLIST (CDDR DIFFLIST))
+		    (GO OUT)))
+	     (SETQ DIFFLIST (CDR (SETQ FRONTEND (CDR DIFFLIST))))
+	     (GO A)
+	OUT  (COND ((NULL (POSINT DEGREE))
+		    (RETURN (LIST '(%LAPLACE SIMP) FUN VAR PARM))))
+	     (COND (FRONTEND (RPLACD FRONTEND DIFFLIST))
+		   (T (SETQ NEWDLIST DIFFLIST)))
+	     (COND (NEWDLIST (SETQ FUN (CONS '(%DERIVATIVE SIMP)
+					     (CONS (CADR FUN)
+						   NEWDLIST))))
+		   (T (SETQ FUN (CADR FUN))))
+	     (SETQ ORDER 0.)
+	LOOP (SETQ DEGREE (1- DEGREE))
+	     (SETQ RESULTLIST
+		   (CONS (LIST '(MTIMES)
+			       (RAISEUP PARM DEGREE)
+			       ($AT ($DIFF FUN VAR ORDER) ARG2))
+			 RESULTLIST))
+	     (SETQ ORDER (1+ ORDER))
+	     (AND (> DEGREE 0.) (GO LOOP))
+	     (SETQ RESULTLIST (COND ((CDR RESULTLIST)
+				     (CONS '(MPLUS)
+					   RESULTLIST))
+				    (T (CAR RESULTLIST))))
+	     (RETURN (SIMPLUS (LIST '(MPLUS)
+				      (LIST '(MTIMES)
+					    (RAISEUP PARM ORDER)
+					    (LAPLACE FUN))
+				      (LIST '(MTIMES)
+					    -1.
+					    RESULTLIST))
+				1 NIL)))) 
+
+(DECLARE (NOTYPE ORDER)) 
+
+(DEFUN LAPINT 
+ ;;;FUN IS OF THE FORM INTEGRATE(F(X)*G(T)*H(T-X),X,0,T)
+ (FUN) (PROG (NEWFUN PARM-LIST F) 
+	     (AND DVAR (GO CONVOLUTION))
+	     (SETQ DVAR (CADR (SETQ NEWFUN (CDR FUN))))
+	     (AND (CDDR NEWFUN)
+		  (ZEROP1 (CADDR NEWFUN))
+		  (EQ (CADDDR NEWFUN) VAR)
+		  (GO CONVOLUTIONTEST))
+	NOTCON
+	     (SETQ NEWFUN (CDR FUN))
+	     (COND ((CDDR NEWFUN)
+		    (COND ((AND (FREEOF VAR (CADDR NEWFUN))
+				(FREEOF VAR (CADDDR NEWFUN)))
+			   (RETURN (LIST '(%INTEGRATE SIMP)
+					 (LAPLACE (CAR NEWFUN))
+					 DVAR
+					 (CADDR NEWFUN)
+					 (CADDDR NEWFUN))))
+			  (T (GO GIVEUP))))
+		   (T (RETURN (LIST '(%INTEGRATE SIMP)
+				    (LAPLACE (CAR NEWFUN))
+				    DVAR))))
+	GIVEUP
+	     (RETURN (LIST '(%LAPLACE SIMP) FUN VAR PARM))
+	CONVOLUTIONTEST
+	     (SETQ NEWFUN ($FACTOR (CAR NEWFUN)))
+	     (COND ((EQ (CAAR NEWFUN) 'MTIMES)
+		    (SETQ F (CADR NEWFUN) NEWFUN (CDDR NEWFUN)))
+		   (T (SETQ F NEWFUN NEWFUN NIL)))
+	GOTHRULIST
+	     (COND ((FREEOF DVAR F)
+		    (SETQ PARM-LIST (CONS F PARM-LIST)))
+		   ((FREEOF VAR F) (SETQ VAR-LIST (CONS F VAR-LIST)))
+		   ((FREEOF DVAR
+			    ($RATSIMP (SUBSTITUTE (LIST '(MPLUS)
+							VAR
+							DVAR)
+						  VAR
+						  F)))
+		    (SETQ VAR-PARM-LIST (CONS F VAR-PARM-LIST)))
+		   (T (GO NOTCON)))
+	     (COND (NEWFUN (SETQ F (CAR NEWFUN) NEWFUN (CDR NEWFUN))
+			   (GO GOTHRULIST)))
+	     (AND
+	      PARM-LIST
+	      (RETURN
+	       (LAPLACE
+		(CONS
+		 '(MTIMES)
+		 (NCONC PARM-LIST
+			(NCONS (LIST '(%INTEGRATE)
+				     (CONS '(MTIMES)
+					   (APPEND VAR-LIST
+						   VAR-PARM-LIST))
+				     DVAR
+				     0
+				     VAR)))))))
+	CONVOLUTION
+	     (RETURN
+	      (SIMPTIMES
+	       (LIST
+		'(MTIMES)
+		(LAPLACE ($EXPAND (SUBSTITUTE VAR
+					      DVAR
+					      (FIXUPREST VAR-LIST))))
+		(LAPLACE
+		 ($EXPAND (SUBSTITUTE 0
+				      DVAR
+				      (FIXUPREST VAR-PARM-LIST)))))
+	       1
+	       T)))) 
+
+(DECLARE (SPECIAL VARLIST RATFORM ILS ILT)) 
+
+(DEFMFUN $ILT (EXP ILS ILT) 
+ ;;;EXP IS F(S)/G(S) WHERE F AND G ARE POLYNOMIALS IN S AND DEGR(F) < DEGR(G)
+	 (LET (VARLIST ($SAVEFACTORS T) CHECKFACTORS $RATFAC $KEEPFLOAT) 
+		;;; MAKES ILS THE MAIN VARIABLE
+		(SETQ VARLIST (LIST ILS))
+		(NEWVAR EXP)
+		(ORDERPOINTER VARLIST)
+		(SETQ VAR (CAADR (RATREP* ILS)))
+		(COND ((MBAGP EXP)
+		       (CONS (CAR EXP)
+		             (MAPCAR #'(LAMBDA (E) ($ILT E ILS ILT)) (CDR EXP))))
+		      ((ZEROP1 EXP) 0)
+		      ((FREEOF ILS EXP) (LIST '(%ILT SIMP) EXP ILS ILT))
+		      (T (ILT0 EXP))))) 
+
+(DEFUN RATIONALP (LE V) 
+       (COND ((NULL LE))
+	     ((AND (NULL (ATOM (CAR LE))) (NULL (FREEOF V (CAR LE))))
+	      NIL)
+	     (T (RATIONALP (CDR LE) V)))) 
+
+(DEFUN ILT0 (EXP) ;; This function does the partial fraction decomposition.
+  (PROG (WHOLEPART FRPART NUM DENOM Y CONTENT REAL FACTOR
+	 APART BPART PARNUMER RATARG RATFORM) 
+	     (IF (MPLUSP EXP)
+		 (RETURN
+		  (ADDN (MAPCAR #'(LAMBDA (E) ($ILT E ILS ILT)) (CDR EXP)) T)))
+	     (AND (NULL (ATOM EXP))
+		  (EQ (CAAR EXP) '%LAPLACE)
+		  (EQ (CADDDR EXP) ILS)
+		  (RETURN (COND ((EQ (CADDR EXP) ILT) (CADR EXP))
+				(T (SUBST ILT (CADDR EXP) (CADR EXP))))))
+	     (SETQ RATARG (RATREP* EXP))
+	     (OR (RATIONALP VARLIST ILS)
+		 (RETURN (LIST '(%ILT SIMP) EXP ILS ILT)))
+	     (SETQ RATFORM (CAR RATARG))
+	     (SETQ DENOM (RATDENOMINATOR (CDR RATARG)))
+	     (SETQ FRPART (PDIVIDE (RATNUMERATOR (CDR RATARG)) DENOM))
+	     (SETQ WHOLEPART (CAR FRPART))
+	     (SETQ FRPART (RATQU (CADR FRPART) DENOM))
+	     (COND ((NOT (ZEROP1 (CAR WHOLEPART)))
+		    (RETURN (LIST '(%ILT SIMP) EXP ILS ILT)))
+		   ((ZEROP1 (CAR FRPART)) (RETURN 0)))
+	     (SETQ NUM (CAR FRPART) DENOM (CDR FRPART))
+	     (SETQ Y (OLDCONTENT DENOM))
+	     (SETQ CONTENT (CAR Y))
+	     (SETQ REAL (CADR Y))
+	     (SETQ FACTOR (PFACTOR REAL))
+	LOOP (COND ((NULL (CDDR FACTOR))
+		    (SETQ APART REAL 
+			  BPART 1 
+			  Y '((0 . 1) 1 . 1))
+		    (GO SKIP)))
+	     (SETQ APART (PEXPT (CAR FACTOR) (CADR FACTOR)))
+	     (SETQ BPART (CAR (RATQU REAL APART)))
+	     (SETQ Y (BPROG APART BPART))
+	SKIP (SETQ FRPART
+		   (CDR (RATDIVIDE (RATTI (RATNUMERATOR NUM)
+					  (CDR Y)
+					  T)
+				   (RATTI (RATDENOMINATOR NUM)
+					  (RATTI CONTENT APART T)
+					  T))))
+	     (SETQ 
+	      PARNUMER
+	      (CONS (ILT1 (RATQU (RATNUMERATOR FRPART)
+				 (RATTI (RATDENOMINATOR FRPART)
+					(RATTI (RATDENOMINATOR NUM)
+					       CONTENT
+					       T)
+					T))
+			  (CAR FACTOR)
+			  (CADR FACTOR))
+		    PARNUMER))
+	     (SETQ FACTOR (CDDR FACTOR))
+	     (COND ((NULL FACTOR)
+		    (RETURN (SIMPLUS (CONS '(MPLUS) PARNUMER)
+				     1
+				     T))))
+	     (SETQ NUM (CDR (RATDIVIDE (RATTI NUM (CAR Y) T)
+				       (RATTI CONTENT BPART T))))
+	     (SETQ REAL BPART)
+	     (GO LOOP))) 
+
+(DECLARE (FIXNUM K) (SPECIAL Q Z)) 
+
+(DEFUN ILT1 (P Q K)
+  ((LAMBDA (Z)
+  (COND ((ONEP1 K) (ILT3 P))
+	(T (SETQ Z (BPROG Q (PDERIVATIVE Q VAR)))(ILT2 P K)))) NIL))
+
+(DEFUN ILT2 
+ ;;;INVERTS P(S)/Q(S)**K WHERE Q(S)  IS IRREDUCIBLE
+ ;;;DOESN'T CALL ILT3 IF Q(S) IS LINEAR
+  (P K)
+       (PROG (Y A B) 
+		(AND (ONEP1 K)(RETURN (ILT3 P)))
+		(SETQ K (1- K))
+	     (SETQ A (RATTI P (CAR Z) T))
+	     (SETQ B (RATTI P (CDR Z) T))
+	     (SETQ Y (PEXPT Q K))
+	     (COND
+	      ((OR (NULL (EQUAL (PDEGREE Q VAR) 1.))
+		   (> (PDEGREE (CAR P) VAR) 0.))
+	       (RETURN
+		(SIMPLUS
+		 (LIST
+		  '(MPLUS)
+		  (ILT2
+		   (CDR (RATDIVIDE (RATPLUS A
+					    (RATQU (RATDERIVATIVE B
+								  VAR)
+						   K))
+				   Y))
+		   K)
+		  ($MULTTHRU (SIMPTIMES (LIST '(MTIMES)
+				   ILT
+				   (POWER K -1)
+				   (ILT2 (CDR (RATDIVIDE B Y)) K))
+			     1.
+			     T)))
+		 1.
+		 T))))
+	     (SETQ A (DISREP (POLCOEF Q 1.)) 
+		   B (DISREP (POLCOEF Q 0.)))
+	     (RETURN
+	      (SIMPTIMES (LIST '(MTIMES)
+			       (DISREP P)
+			       (RAISEUP ILT K)
+			       (SIMPEXPT (LIST '(MEXPT)
+					       '$%E
+					       (LIST '(MTIMES)
+						     -1.
+						     ILT
+						     B
+						     (LIST '(MEXPT)
+							   A
+							   -1.)))
+					 1.
+					 NIL)
+			       (LIST '(MEXPT)
+				     A
+				     (DIFFERENCE -1. K))
+			       (LIST '(MEXPT)
+				     (FACTORIAL K)
+				     -1.))
+			 1.
+			 NIL)))) 
+
+(DECLARE (NOTYPE K)) 
+
+(DEFUN COEF MACRO (POL) (SUBST (CADR POL) (QUOTE DEG)
+  '(DISREP (RATQU (POLCOEF (CAR P) DEG) (CDR P)))))
+
+(DEFUN LAPSUM N (CONS '(MPLUS)(LISTIFY N)))
+(DEFUN LAPPROD N (CONS '(MTIMES)(LISTIFY N)))
+(DEFUN EXPO N (CONS '(MEXPT)(LISTIFY N)))
+(DEFUN ILT3 
+ ;;;INVERTS P(S)/Q(S) WHERE Q(S) IS IRREDUCIBLE
+ (P ) (PROG (DISCRIM SIGN A C D E B1 B0 R TERM1 TERM2 DEGR) 
+	     (SETQ E (DISREP (POLCOEF Q 0.)) 
+		   D (DISREP (POLCOEF Q 1.)) 
+		   DEGR (PDEGREE Q VAR))
+	      (AND (EQUAL DEGR 1.)
+	       (RETURN
+		(SIMPTIMES (LAPPROD
+				 (DISREP P)
+				 (EXPO D -1.)
+				 (EXPO
+				       '$%E
+				       (LAPPROD
+					     -1.
+					     ILT
+					     E
+					     (EXPO
+						   D
+						   -1.))))
+			   1.
+			   NIL)))
+		(SETQ C (DISREP (POLCOEF Q 2)))
+	      (AND (EQUAL DEGR 2.) (GO QUADRATIC))
+	      (AND (EQUAL DEGR 3.) (ZEROP1 C) (ZEROP1 D)
+	       (GO CUBIC))
+	(RETURN (LIST '(%ILT SIMP) (DIV* (DISREP P)(DISREP Q)) ILS ILT))
+	CUBIC (SETQ  A (DISREP (POLCOEF Q 3))
+		R (SIMPNRT (DIV* E A) 3))
+		(SETQ D (DIV* (DISREP P)(LAPPROD A (LAPSUM
+			(EXPO ILS 3)(EXPO '%R 3)))))
+		(RETURN (ILT0 (SUBSTITUTE R '%R ($PARTFRAC D ILS))))
+	QUADRATIC (SETQ B0 (COEF 0) B1 (COEF 1))
+
+	     (SETQ DISCRIM
+		   (SIMPLUS (LAPSUM
+				  (LAPPROD
+					4.
+					E
+					C)
+				  (LAPPROD -1. D D))
+			    1.
+			    NIL))
+	     (SETQ SIGN (COND ((FREE DISCRIM '$%I) (ASKSIGN DISCRIM)) (T '$POSITIVE)) 
+		   TERM1 '(%COS) 
+		   TERM2 '(%SIN))
+	(SETQ DEGR (EXPO '$%E (LAPPROD ILT D (POWER C -1) '((RAT SIMP) -1 2))))
+	     (COND ((EQ SIGN '$ZERO)
+		    (RETURN (SIMPTIMES (LAPPROD DEGR (LAPSUM (DIV* B1 C)(LAPPROD
+		(DIV* (LAPSUM (LAPPROD 2 B0 C)(LAPPROD -1 B1 D))
+		(LAPPROD 2 C C)) ILT))) 1 NIL))
+)		   ((EQ SIGN '$NEGATIVE)
+		    (SETQ TERM1 '(%COSH) 
+			  TERM2 '(%SINH) 
+			  DISCRIM (SIMPTIMES (LAPPROD
+						   -1.
+						   DISCRIM)
+					     1.
+					     T))))
+	     (SETQ DISCRIM (SIMPNRT DISCRIM 2))
+	     (SETQ 
+	      SIGN
+	      (SIMPTIMES
+	       (LAPPROD
+		     (LAPSUM
+			   (LAPPROD
+				 2.
+				 B0
+				 C)
+			   (LAPPROD
+				 -1.
+				 B1
+				 D))
+		     (EXPO DISCRIM -1.))
+	       1.
+	       NIL))
+	     (SETQ C (POWER C -1))
+	     (SETQ DISCRIM (SIMPTIMES (LAPPROD
+					    DISCRIM
+					    ILT
+					    '((RAT SIMP) 1. 2.)
+					    C)
+				      1.
+				      T))
+	     (RETURN
+	      (SIMPTIMES
+	       (LAPPROD
+		     C
+		     DEGR
+		     (LAPSUM
+			   (LAPPROD
+				 B1
+				 (LIST TERM1 DISCRIM))
+			   (LAPPROD
+				 SIGN
+				 (LIST TERM2 DISCRIM))))
+	       1.
+	       NIL)))) 
+
+(DECLARE (UNSPECIAL DVAR ILS ILT NOUNL PARM Q RATFORM VAR VARLIST
+		    VAR-LIST VAR-PARM-LIST Z))
+

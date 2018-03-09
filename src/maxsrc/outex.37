@@ -1,0 +1,209 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1980 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; 1:42am  Thursday, 26 June 1980 -gjc
+
+(macsyma-module outex)
+
+;;; To PARSE a file of macsyma expressions, and make them quickly
+;;; and randomly accesable. Made for used by ELL's ODE package.
+;;; -GJC
+
+(defvar *parsed-output-file*) ;; written to during psuedo batching.
+(defvar *filepos-table* nil)  ;; pushed on during psuedo batching.
+
+;;; Format of file.
+;;; <pointer-to-index>.......<number-of-objects><index1><index2><index3>
+;;; File is ascii to avoid hair of fixnum=>ascii conversion for read.
+
+#.(PROGN (SETQ FP-LENGTH 10.) NIL)
+
+(DEFUN WRITE-FP (X &AUX (BASE 10.) (*NOPOINT T))
+       (DO ((N (LET ((TN (- #.FP-LENGTH (FLATSIZE X))))
+		    (IF (MINUSP TN) (MERROR "OUTEX internal BUG") TN))
+		    (1- N)))
+	   ((= N 0)
+	    (PRIN1 X *PARSED-OUTPUT-FILE*))
+	   (TYO #/0  *PARSED-OUTPUT-FILE*)))
+
+(defmfun $make_index_file (filename
+			   &AUX
+			   (lfilename ($filename_merge filename))
+			   (temp (probef lfilename))
+			   (*filepos-table* nil))
+	 (or temp
+	     (merror "File does not exist. ~M" lfilename))
+	 (setq lfilename (to-macsyma-namestring temp))
+	 (iota ((*parsed-output-file*
+		 (mergef "* _PARS_" lfilename)
+		 '(out dsk ascii block)))
+	       (WRITE-FP 0)
+	       (let ((*in-macsyma-indexer* t))
+		    (call-batch1 lfilename t))
+	       ;; o.k. the work is done, lets write the index file.
+	       (LET ((IPOINTER (FILEPOS *PARSED-OUTPUT-FILE*)))
+		    (FILEPOS *PARSED-OUTPUT-FILE* 0)
+		    (WRITE-FP IPOINTER)
+		    (FILEPOS *PARSED-OUTPUT-FILE* IPOINTER))
+	       (WRITE-FP (LENGTH *FILEPOS-TABLE*))
+	       (DO ((L (NREVERSE *FILEPOS-TABLE*) (CDR L)))
+		   ((NULL L))
+		   (WRITE-FP (CAR L)))
+	       (renamef *parsed-output-file* "* PARSED")
+	       `((mlist)
+		 ,lfilename
+		 ,(to-macsyma-namestring (truename *parsed-output-file*)))))
+
+
+(defmfun outex-hook-exp (form)
+	 ;; the function is called in MLOAD on expressions
+	 ;; in the BATCH file.
+	 (push (filepos *parsed-output-file*) *filepos-table*)
+	 (outex-print form))
+
+(defun outex-print (form)
+       (terpri *parsed-output-file*)
+       (outex-prin1 form)
+       (tyo #\SP *parsed-output-file*))
+
+(defun outex-prin1 (form)
+       ;; this wants to check for (MPLUS SIMP) and various other
+       ;; headers, and output #.(GET 'MPLUS 'SIMPIND)
+       ;; and other hacks. maybe.
+       (prin1 form *parsed-output-file*))
+
+;;; these functions are for accessing the index file once
+;;; produced.
+
+(declare (splitfile OUTEY))
+
+(eval-when (eval compile)
+(DEFSTRUCT (INDEX-FILE ARRAY CONC-NAME)
+	   ARRAY
+	   INDEX-POINTER
+	   N-ELEMENTS))
+
+(defmfun $open_index_file (filename
+			   &AUX OB
+			   (lfilename ($filename_merge filename))
+			   (pfilen (mergef "* parsed" lfilename))
+			   (sym
+			    (concat (namestring (probef pfilen))
+				    '|-index-file-object|)))
+	 (iota ((fi Pfilen '(in dsK ASCII BLOCK)))
+	       (SETQ OB (MAKE-INDEX-FILE ARRAY FI
+					 INDEX-POINTER (READ-FP FI)))
+	       (FILEPOS FI (INDEX-FILE-INDEX-POINTER OB))
+	       (SETF (INDEX-FILE-N-ELEMENTS OB)
+		     (READ-FP FI)))
+	 (putprop sym OB 'index-file)
+	 sym)
+
+(defmacro get-index-file (x)
+	  (if (atom x)
+	      `(and (symbolp ,x) (get ,x 'index-file))
+	      `(let ((temp ,x)) (get-index-file temp))))
+
+(defmfun $index_file_DIM (sym &aux
+			      (index-file (get-index-file sym)))
+	 (or index-file
+	     (merror "not an index file: ~%~M" SYM))
+	 (index-file-n-ELEMENTS INDEX-FILE))
+
+(defmfun $read_nth_object (n sym)
+	 (or (and (fixp n) (plusp n))
+	     (merror
+	      "The first arg was not a positive integer index.~%~M" n))
+	 (let ((if (get-index-file sym)))
+	      (or if (merror "2nd arg not an index file~%~M" sym))
+	      (and (> n (index-file-n-ELEMENTS if))
+		   (merror "Not that many objects in the file. ~:M ~:M"
+			   n sym))
+	      (let ((index)
+		    (STREAM (index-file-ARRAY IF)))
+		   (unwind-protect
+		    (progn
+		     (OPEN STREAM)
+		     (FILEPOS STREAM (+ (* N #.FP-LENGTH)
+					(INDEX-FILE-INDEX-POINTER IF)))
+		     (SETQ INDEX (READ-FP STREAM))
+		     (FILEPOS STREAM INDEX)
+		     (READ STREAM))
+		    (CLOSE STREAM)))))
+
+(DEFUN READ-FP (S)
+       (DO ((N 0 (+ (- (TYI S) #/0) (* N 10.)))
+	    (J #.FP-LENGTH (1- J)))
+	   ((= J 0) N)))
+
+(defmfun $map_over_index_file (func file
+				    &aux 
+				    (index-file (get-index-file file)))
+	 (or INDEX-FILE
+	     (merror "2nd argument not an indexed file object.~%~M" file))
+	 (let ((fp (index-file-ARRAY INDEX-FILE)))
+	      (unwind-protect
+	       (do ((j (progn (open fp)(READ-FP FP) 1) (1+ j))
+		    (l nil (CONS (mcall func (simplify (READ FP)) j) L)))
+		   ((> J (INDEX-FILE-N-ELEMENTS INDEX-FILE))
+		    `((mlist) ,@(nreverse l))))
+	       (close fp))))
+
+
+
+;;; Additional comments about implementation:
+
+;;; An indexed file object is represented at macsyma level by a symbol
+;;; with an indexed-file property. When array-objects are put into
+;;; macsyma, it will be an array-function of some kind.
+
+;;; This makes for very fast random accessing of
+;;; expressions in a file, incredibly faster than using BATCH,
+;;; very important for files of test cases. 
+
+;;; These are not FEXPR's because the major use of these guys is
+;;; in programs which test files of equations. Normal argument evaluation
+;;; is certainly desired.
+
+
+
+;;; at first I was interning an symbol table for the file,
+;;; this lost incredibly for files with lots of "Strings..." i.e.
+;;; |&Strings...|
+;;; Now: The INDEX file expects to be a FIXNUM mode file.
+;;; i.e. We should be able to do FILEPOSE and IN and OUT on it
+;;; and it should act like a FIXNUM ARRAY.
+;;; Any system should have a FIXNUM mode file, if not, it can
+;;; be simulated by ascii files. The exact number of BITs in a FIXNUM
+;;; doesn't really matter either. The FIXNUMs are just the FILEPOS
+;;; of expressions in the PARSED file. 
+
+;;; Things to add: Support for Symbolic reference to the
+;;; expressions through the FOO&& type labels. This seemed to
+;;; be slightly kludgy to put into the present BATCH1, so I'm waiting
+;;; for KMP's new reader to be installed. Once the labels
+;;; associated with an expression can be read we can work out
+;;; a way to have the possibly out-of-core symbol-table of
+;;; index numbers.
+;;; Maybe use some kind format which is FIXNUM-IO, and bumbed
+;;; for the kind of expressions which the macsyma parser makes.
+;;; That is, TYPEP of SYMBOL, LIST, FIXNUM, BIGNUM, FLONUM.
+;;; Very reasonable to have an out-of-core symbol table,
+;;; but with an in-core cache of the List's which are args to PNPUT.
+;;; That would cut down on the amount of FILEPOSing needed to
+;;; read-in a given expression. Uhm, maybe each entry
+;;; should be <FILEPOS><SYMBOL-SUBSET-VECTOR> where the subset
+;;; vector tells which symbol's (numbered 0..N for that file),
+;;; must be interned to "read" a given expression, which is 
+;;; located at <FILEPOS>.
+;;; Everything at FILEPOS is then a vector of 36-bit-lisp-pointers
+;;; Representation is <typecode><datum>.
+;;; Symbol: <datum> is the symbol-number.
+;;; Cons: <datum> is the filepos of the CAR? CDR follows?
+;;; Fixnum/Bignum: <datum> gives number of words (following) to
+;;; read to get the bits.
+;;; Flonum: next word is it.
+;;; () : is special maybe? well it is a symbol (sigh...)
+;;; Anyway, this could make for some DAMN fast reading of
+;;; expressions.
+

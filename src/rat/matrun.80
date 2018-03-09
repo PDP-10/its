@@ -1,0 +1,302 @@
+;;;;;;;;;;;;;;;;;;; -*- Mode: Lisp; Package: Macsyma -*- ;;;;;;;;;;;;;;;;;;;
+;;;     (c) Copyright 1982 Massachusetts Institute of Technology         ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(macsyma-module matrun)
+
+;;; TRANSLATION properties for the FSUBRs in this file
+;;; can be found in MAXSRC;TRANS5 >.  Be sure to check on those
+;;; if any semantic changes are made.
+
+(DECLARE (GENPREFIX M_)
+	 (*LEXPR $FACTOR $LDISP)
+	 (SPECIAL *EXPR *RULELIST $RULES $FACTORFLAG
+		  $MAXAPPLYHEIGHT $MAXAPPLYDEPTH)
+	 (FIXNUM $MAXAPPLYHEIGHT $MAXAPPLYDEPTH MAX DEPTH))
+
+;;  $MAXAPPLYDEPTH is the maximum depth within an expression to which
+;;  APPLYi will delve.  If $MAXAPPLYDEPTH is 0, it is applied only to 
+;;  top level.
+(DEFMVAR $MAXAPPLYDEPTH 10000.)
+
+;;  If $MAXAPPLYHEIGHT is 0, only atoms are affected by $APPLYB1 and 
+;;  $APPLYB2.
+(DEFMVAR $MAXAPPLYHEIGHT 10000.)
+
+(DEFMSPEC $DISPRULE (L) (SETQ L (CDR L))
+ (COND ((CDR L) (DISPRULE1 L))
+       ((NOT (EQ (CAR L) '$ALL)) (CONSRULE (CAR L)))
+       (T (DISPRULE1 (CDR $RULES)))))
+
+(DEFUN DISPRULE1 (L)
+ (DO L L (CDR L) (NULL L) ($LDISP (CONSRULE (CAR L))))
+ '$DONE)
+
+(DEFUN CONSRULE (X)
+ (LET ((RULE (MGET X '$RULE)))
+      (IF RULE (LIST '(MSETQ SIMP) X (CONS '(MARROW SIMP) (CDR RULE)))
+	       (MERROR "~:M not a user rule" X))))
+
+(DEFMFUN $REMRULE (OP RULE) 
+       (PROG (RULES) 
+	     (SETQ OP (GETOPR OP))
+	     (COND ((NOT (EQ RULE '$ALL))
+		    (REMOVERULE OP RULE) (RETURN (GETOP OP)))
+		   ((NULL (SETQ RULES (MGET OP 'OLDRULES)))
+		    (MERROR "~:@M has no rules" OP)))
+	NEXT (COND ((OR (NULL RULES) (NULL (CDR RULES)))
+		    (MPUTPROP OP 1 'RULENUM) (RETURN (GETOP OP)))
+		   (T (REMOVERULE OP (CAR RULES))
+		      (SETQ RULES (CDR RULES)) (GO NEXT)))))
+
+(DEFUN REMOVERULE (OP RULE) 
+       (PROG (OLDRULES OLD OTHRULENAME OTHRULE) 
+	     (SETQ OLDRULES (MGET OP 'OLDRULES))
+	     (COND ((OR (NULL RULE) (NULL (SETQ OLDRULES (MEMBER RULE OLDRULES))))
+		    (MERROR "~:M - no such rule." RULE))
+		   ((NULL (CAR (SETQ OLDRULES (CDR OLDRULES))))
+		    (SETQ OLDRULES (CDR OLDRULES))
+		    (SETQ OTHRULENAME 'SIMPARGS1)
+		    (SETQ OTHRULE '(LAMBDA (A B C) (SIMPARGS A C))))
+		   (T (SETQ OTHRULENAME (CAR OLDRULES))
+		      (SETQ OTHRULE (CADR (GETL (CAR OLDRULES) '(EXPR SUBR))))))
+	     (PUTPROP RULE OTHRULE 'EXPR)
+	     (SETQ OLD (CDR (MEMBER RULE (REVERSE (MGET OP 'OLDRULES)))))
+	     (IF OLD (PUTPROP (CAR OLD)
+			      (SUBST OTHRULENAME RULE (GET (CAR OLD) 'EXPR))
+			      'EXPR))
+	     (IF (BOUNDP RULE) (MAKUNBOUND RULE))
+	     (MREMPROP RULE '$RULE)
+	     (MREMPROP RULE '$RULETYPE)
+	     (MREMPROP RULE 'RULEOF)
+	     (REMPROP RULE 'EXPR)
+	     (DELQ RULE $RULES 1)
+	     (PUTPROP RULE OTHRULENAME 'EXPR)
+	     (IF (EQ (GET OP 'OPERATORS) RULE)
+		 (PUTPROP OP OTHRULENAME 'OPERATORS))
+	     (RETURN (MPUTPROP OP (DELQ RULE (MGET OP 'OLDRULES)) 'OLDRULES))))
+
+(DEFMFUN FINDBE (E)
+ (COND ((EQUAL E 1) '(1 . 0))
+       ((EQUAL E 0) '(0 . 1))
+       ((ATOM E) (CONS E 1))
+       ((EQ (CAAR E) 'MEXPT) (CONS (CADR E) (CADDR E)))
+       (T (CONS E 1))))
+
+(DEFMFUN FINDFUN (E P C)
+ (PROG NIL
+       (COND ((AND (NULL (ATOM E)) (EQ (CAAR E) P)) (RETURN E))
+	     ((OR (ATOM E) (NOT (EQ (CAAR E) C))) (MATCHERR))
+	     ((MEMQ C '(MPLUS MTIMES)) (SETQ E (REVERSE (CDR E))) (GO B)))
+  A    (SETQ E (CDR E))
+  B    (COND ((NULL E) (MATCHERR))
+	     ((AND (NOT (ATOM (CAR E))) (EQ (CAAAR E) P)) (RETURN (CAR E))))
+       (GO A)))
+
+(DEFMFUN FINDEXPON (E1 BASE* C)
+ (PROG (E)
+       (SETQ E E1)
+       (COND ((AND (MEXPTP E) (ALIKE1 BASE* (CADR E)))
+	      (RETURN (CADDR E)))
+	     ((OR (ATOM E) (NOT (EQ (CAAR E) C))) (GO C))
+	     ((MEMQ C '(MPLUS MTIMES)) (SETQ E (REVERSE (CDR E))) (GO B)))
+  A    (SETQ E (CDR E))
+  B    (COND ((NULL E) (GO C))
+	     ((AND (MEXPTP (CAR E)) (ALIKE1 BASE* (CADAR E)))
+	      (RETURN (CADDAR E))))
+       (GO A)
+  C    (COND ((OR (AND (NOT (ATOM E1)) (MEMQ C '(MPLUS MTIMES))
+		       (EQ C (CAAR E1)) (MEMALIKE BASE* E1))
+		  (ALIKE1 E1 BASE*)
+		  (AND (NOT (ATOM BASE*)) (EQ C (CAAR BASE*))))
+	      (RETURN 1))
+	     ((EQ C 'MEXPT) (MATCHERR))
+	     (T (RETURN 0)))))
+
+(DEFMFUN FINDBASE (E EXPON C)
+ (PROG NIL
+       (COND ((EQUAL EXPON 0)
+	      (IF (AND (EQ C 'MEXPT) (NOT (EQUAL 1 E))) (MATCHERR))
+	      (RETURN 1))
+	     ((EQUAL EXPON 1) (RETURN E))
+	     ((AND (NUMBERP EXPON) (GREATERP EXPON 0) (EQUAL E 0))
+	      (RETURN 0))
+	     ((AND (MEXPTP E) (ALIKE1 EXPON (CADDR E)))
+	      (RETURN (CADR E)))
+	     ((OR (ATOM E) (NOT (EQ (CAAR E) C))) (MATCHERR))
+	     ((MEMQ C '(MPLUS MTIMES)) (SETQ E (REVERSE (CDR E))) (GO B)))
+  A    (SETQ E (CDR E))
+  B    (COND ((NULL E)
+	      (RETURN (IF (AND (NUMBERP EXPON) (MINUSP EXPON)) 1 0)))
+	     ((AND (MEXPTP (CAR E)) (ALIKE1 EXPON (CADDAR E)))
+	      (RETURN (CADAR E))))
+       (GO A)))
+
+(DEFMFUN PART+ (E P PREDS) 
+       (PROG (FLAG SAVED VAL) 
+	     (COND ((> (LENGTH P) (LENGTH PREDS))
+		    (SETQ P (REVERSE P))
+		    (SETQ P (NTHKDR P (- (LENGTH P) (LENGTH PREDS))))
+		    (SETQ P (NREVERSE P))))
+	     (SETQ E ($RATEXPAND E))
+	     (SETQ E (COND ((NOT (MPLUSP E)) (NCONS E)) (T (CDR E))))
+	A    (COND ((NULL P) (COND ((NULL E) (RETURN T)) (T (MATCHERR))))
+		   ((AND (CDR PREDS) (MEMQ (CAR (CADDAR PREDS)) '(MSETQ SETQ)))
+		    (COND (FLAG (MERROR "Two or more pattern variables TRUE"))
+			  (T (SETQ FLAG T P (REVERSE P) PREDS (REVERSE PREDS))
+			     (GO A))))
+		   (T (MSET (CAR P) 0)))
+	     (SETQ SAVED 0)
+	     (MAPC 
+	       #'(LAMBDA (Z) 
+		   (COND ((NULL (SETQ VAL (*CATCH 'MATCH (MCALL (CAR PREDS) Z)))) NIL)
+			 (T (SETQ SAVED (ADD2* SAVED VAL))
+			    (SETQ E (DELETE Z E 1)))))
+	      E)
+	     (COND ((AND (EQUAL SAVED 0)
+		         (NULL (SETQ VAL (*CATCH 'MATCH (MCALL (CAR PREDS) 0)))))
+	            (MATCHERR)))
+	     (MSET (CAR P) SAVED)
+	     (SETQ PREDS (CDR PREDS) P (CDR P))
+	     (GO A)))
+
+(DEFMFUN PART* (E P PREDS) 
+       (PROG (FLAG SAVED VAL $FACTORFLAG) 
+	     (COND ((> (LENGTH P) (LENGTH PREDS))
+		    (SETQ P (REVERSE P))
+		    (SETQ P (NTHKDR P (- (LENGTH P) (LENGTH PREDS))))
+		    (SETQ P (NREVERSE P))))
+	     (SETQ E ($FACTOR E))
+	     (SETQ E (COND ((NOT (MTIMESP E)) (NCONS E)) (T (CDR E))))
+	A    (COND ((NULL P) (COND ((NULL E) (RETURN T)) (T (MATCHERR))))
+		   ((AND (CDR PREDS) (MEMQ (CAR (CADDAR PREDS)) '(MSETQ SETQ)))
+		    (COND (FLAG (MERROR "Two or more pattern variables TRUE"))
+			  (T (SETQ FLAG T P (REVERSE P) PREDS (REVERSE PREDS))
+			     (GO A))))
+		   ((NOT (ATOM (CAR P)))
+		    (PROG (MYE) 
+			  (SETQ MYE E)
+		     LOOP (COND ((NULL MYE) (MATCHERR)))
+			  (SETQ VAL (*CATCH 'MATCH (MCALL (CAR PREDS) (CAR MYE))))
+			  (COND ((NULL VAL)
+				 (SETQ MYE (CDR MYE)) (GO LOOP))
+				(T (RETURN (SETQ E (DELETE (CAR MYE) E 1))))))
+			  (GO B))
+		   (T (MSET (CAR P) 1)))
+	     (SETQ SAVED 1)
+	     (MAPC 
+	       #'(LAMBDA (Z) (SETQ VAL (*CATCH 'MATCH (MCALL (CAR PREDS) Z)))
+			   (COND ((NULL VAL) NIL)
+				 (T (SETQ SAVED (MUL2* SAVED VAL))
+				    (SETQ E (DELETE Z E 1)))))
+	      E)
+	     (COND ((AND (EQUAL SAVED 1)
+			 (NULL (SETQ VAL (*CATCH 'MATCH (MCALL (CAR PREDS) 1)))))
+		    (MATCHERR)))
+	     (MSET (CAR P) SAVED)
+	B    (SETQ PREDS (CDR PREDS) P (CDR P))
+	     (GO A)))
+
+;;; TRANSLATE property in MAXSRC;TRANS5 >
+
+(DEFMSPEC $APPLY1 (L) (SETQ L (CDR L))
+ (LET ((*EXPR (MEVAL (CAR L))))
+      (MAPC #'(LAMBDA (Z) (SETQ *EXPR (APPLY1 *EXPR Z 0))) (CDR L))
+      *EXPR))
+
+(DEFMFUN APPLY1 (EXPR *RULE DEPTH) 
+       (COND
+	((> DEPTH $MAXAPPLYDEPTH) EXPR)
+	(T
+	 (PROG NIL 
+	       (*RULECHK *RULE)
+	       (SETQ EXPR (RULE-APPLY *RULE EXPR))
+	  B    (COND
+		((OR (ATOM EXPR) (MNUMP EXPR)) (RETURN EXPR))
+		((EQ (CAAR EXPR) 'MRAT)
+		 (SETQ EXPR (RATDISREP EXPR)) (GO B))
+		(T
+		 (RETURN
+		  (SIMPLIFYA
+		    (CONS
+		     (DELSIMP (CAR EXPR))
+		     (MAPCAR #'(LAMBDA (Z) (APPLY1 Z *RULE (1+ DEPTH)))
+			     (CDR EXPR)))
+		    T))))))))
+
+(DEFMSPEC $APPLYB1 (L)  (SETQ L (CDR L))
+ (LET ((*EXPR (MEVAL (CAR L))))
+      (MAPC #'(LAMBDA (Z) (SETQ *EXPR (CAR (APPLY1HACK *EXPR Z)))) (CDR L))
+      *EXPR))
+
+(DEFMFUN APPLY1HACK (EXPR *RULE) 
+	 (PROG (PAIRS MAX) 
+	       (*RULECHK *RULE)
+	       (SETQ MAX 0)
+	  B    (COND
+		((ATOM EXPR) (RETURN (CONS (OR (MCALL *RULE EXPR) EXPR) 0)))
+		((SPECREPP EXPR) (SETQ EXPR (SPECDISREP EXPR)) (GO B)))
+	       (SETQ PAIRS (MAPCAR #'(LAMBDA (Z) (APPLY1HACK Z *RULE))
+				   (CDR EXPR)))
+	       (SETQ MAX 0)
+	       (MAPC #'(LAMBDA (L) (SETQ MAX (MAX MAX (CDR L)))) PAIRS)
+	       (SETQ EXPR (SIMPLIFYA (CONS (DELSIMP (CAR EXPR))
+					   (MAPCAR #'CAR PAIRS))
+				     T))
+	       (COND ((= MAX $MAXAPPLYHEIGHT) (RETURN (CONS EXPR MAX))))
+	       (SETQ EXPR (RULE-APPLY *RULE EXPR))
+	       (RETURN (CONS EXPR (1+ MAX)))))
+
+(DEFUN *RULECHK (*RULE)
+ (IF (AND (SYMBOLP *RULE) (NOT (FBOUNDP *RULE)) (NOT (MFBOUNDP *RULE)))
+     (MERROR "~:M not found" *RULE)))
+
+(DEFUN RULE-APPLY (*RULE EXPR)
+       (PROG (ANS)
+	LOOP (SETQ ANS (MCALL *RULE EXPR))
+	     (COND ((AND ANS (NOT (ALIKE1 ANS EXPR)))
+		    (SETQ EXPR ANS) (GO LOOP)))
+	     (RETURN EXPR)))
+
+(DEFMSPEC $APPLY2 (L) (SETQ L (CDR L))
+ (LET ((*RULELIST (CDR L))) (APPLY2 (MEVAL (CAR L)) 0)))
+
+(DEFMFUN APPLY2 (EXPR DEPTH) 
+       (COND
+	((> DEPTH $MAXAPPLYDEPTH) EXPR)
+	(T
+	 (PROG (ANS RULEPTR) 
+	  A    (SETQ RULEPTR *RULELIST)
+	  B    (COND
+		((NULL RULEPTR)
+		 (COND
+		  ((ATOM EXPR) (RETURN EXPR))
+		  ((EQ (CAAR EXPR) 'MRAT)
+		   (SETQ EXPR (RATDISREP EXPR)) (GO B))
+		  (T
+		   (RETURN
+		    (SIMPLIFYA
+		     (CONS
+		      (DELSIMP (CAR EXPR))
+		      (MAPCAR #'(LAMBDA (Z) (APPLY2 Z (1+ DEPTH)))
+			      (CDR EXPR)))
+		     T))))))
+	       (COND ((SETQ ANS (MCALL (CAR RULEPTR) EXPR))
+		      (SETQ EXPR ANS)
+		      (GO A))
+		     (T (SETQ RULEPTR (CDR RULEPTR)) (GO B)))))))
+
+(DEFMSPEC $APPLYB2 (L) (SETQ L (CDR L))
+ (LET ((*RULELIST (CDR L))) (CAR (APPLY2HACK (MEVAL (CAR L))))))
+
+(DEFMFUN APPLY2HACK (E) 
+   (PROG (PAIRS MAX) 
+      (SETQ MAX 0)
+      (COND ((ATOM E) (RETURN (CONS (APPLY2 E -1) 0)))
+	    ((SPECREPP E) (RETURN (APPLY2HACK (SPECDISREP E)))))
+      (SETQ PAIRS (MAPCAR #'APPLY2HACK (CDR E)))
+      (SETQ MAX 0)
+      (MAPC #'(LAMBDA (L) (SETQ MAX (MAX MAX (CDR L)))) PAIRS)
+      (SETQ E (SIMPLIFYA (CONS (DELSIMP (CAR E)) (MAPCAR #'CAR PAIRS)) T))
+      (COND ((= MAX $MAXAPPLYHEIGHT) (RETURN (CONS E MAX)))
+	    (T (RETURN (CONS (APPLY2 E -1) (1+ MAX)))))))

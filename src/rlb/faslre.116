@@ -1,0 +1,465 @@
+;;; F A S L R E A D
+(herald FASLREAD)
+
+(eval-when (eval compile) (tyipeek 12.))	 ; Gobble thru end of page
+
+The main functions are:
+
+(FASLREADOPEN <file-spec-or-file> <optional-list-of-options>)	;lsubr
+	opens the file, initializes, processes the options (read on),
+	and returns a FAS-OBJ for use by FASLREAD and FASLREADCLOSE.
+(FASLREADCLOSE <fas-obj>)		;subr
+	closes the file and flushes all associated arrays.
+(FASLREAD <fas-obj>)			;subr
+	reads an item of interest and returns it, setting the 
+	special variable FASLREAD-TYPE to the type, and perhaps consing the 
+	type onto the front of the item, depending on the option list given to
+	FASLREADOPEN.
+(FASLREADNUM <fas-obj>)			;NCALLable subr
+	returns the stored fixnum, when one is stored (...read on).
+(FASLREADNUM2 <fas-obj>)		;NCALLable subr
+	returns a second stored fixnum, when one is stored.
+(FASLREADSQUID <fas-obj>)		;SUBR
+	returns the squid marker.
+
+When the option list argument is omitted, (COMPAT EVAL ENTRY CALL) is implied.
+
+The option list, when present, should be a list of symbols representing
+which  kinds of fasl items should be returned (Selectors), and the form in
+which they are returned.  Only items specified to be of interest are
+returned; others are skipped over to avoid undue consing.
+
+Options of Form:
+ALL	All loadable cruft in the file is to be returned - implies all
+	Options of Interest.
+MIN	Minimal info is returned, to save consing. The effect is described 
+	below.
+COMPAT	The returned item has the type code consed on its front. The type 
+	code is set as EXT when it would ordinarily be CALL.
+
+Options of Interest (Selectors):
+When the description refers to "fixnum stored", the fixnum is recoverable
+by calling (FASLREADNUM <fas-obj>).  FASLREAD-TYPE is set to EOF at end 
+of file.
+
+ABS	Returns (). Fixnum stored is absolute word to be loaded.
+REL	Returns (). Fixnum stored is relocatable word to be loaded
+SPEC	Returns the symbol whose special value cell is referred to. Fixnum 
+	stored is the word loaded, with rh cleared. 
+CALL	When MIN, returns the symbol being called, otherwise returns a list
+	(opcode-symbol ac-field symbol) e.g. (CALL 2 CONS).  Fixnum stored 
+	is the loaded word with the rh cleared. When COMPAT, FASLREAD-TYPE
+	is set to EXT.
+QATOM	Returns the atom being referred to. Fixnum stored is the loaded word 
+	with the rh cleared.
+QLIST	Returns the sexp being referred to. Fixnum stored is the loaded word
+	with the rh cleared. Second fixnum stored is the number of structure
+	words in the fasl file.
+GLBL	Tries to returns a symbol. If the value was to be negated, a list of 
+	/- and the symbol is returned.  Fixnum stored is the internal word.
+GETDDT	Returns -1 for lh relocation, else the symbol. Fixnum stored is the
+	assembly time value of the symbol, if any. Second fixnum stored is
+	3-entire word, 2-ac field, 1-rh only, 0-swap halves, with
+	the sign bit set if the getddtsym value should be negated. 	
+ARRAY	Returns the symbol whose array prop is referred to. Fixnum stored is 
+	the loaded word with rh cleared.
+ENTRY	When MIN, returns the symbol, else returns a list 
+	(subr-name subr-type args-prop) e.g. (FOO SUBR ( () . 3)).
+	Fixnum stored is the (relocatable) entry point.
+LOC	Returns (). Fixnum stored is the relocatable loc location. 
+PUTDDT	Returns the symbol being defined. Fixnum stored is the squoze from the 
+	file.  Second fixnum stored is a defining value, if any.
+EVAL	Returns the form to be evaled.
+
+------------------------------------------------------------------
+
+IMPLEMENTATION --
+
+A FAS-OBJ is a Lisp T-type array with 25. entries:
+(0) is byte-obj, a Lisp FIXNUM array with 10. entries: 0-8. store the 
+    relocation bytes, 9. and 10. store the "stored fixnums".
+(1) is index indicating current (next) relocation type byte
+(2) is Newio file object
+(3) is the atom table, a Lisp T-type array
+(4) is the maximum subscript for the atom table (1- size)
+(5) is the greatest used subscript in the atom table.
+(6) and (7) store MIN and COMPAT flags.
+(8.) thru (23.) store option flags for ABS,REL,SPEC,CALL,QATOM,QLIST,GLBL,
+    GETDDT,ARRAY,UNUSED,ATOMTB,ENTRY,LOC,PUTDDT,EVAL,EOF respectively.
+(24.) is the squid marker.
+
+For a discussion of FASL format, relocation bytes, and atom table,
+see .INFO.;FASL FORMAT .
+
+(declare (*lexpr faslreadopen faslist faslread-error)
+	 (fixnum (faslreadnum) (faslreadnum2))
+	 (special faslread-type faslread-glbl -squid-)
+	 (fixnum byte word i (inc-atomtb-index) (returns-minus-1))
+	 (array* (notype faslread-types 1)))
+
+(eval-when (eval compile)
+   (or (get 'umlmac 'version) (load '((lisp)umlmac)))
+   (or (get 'bitmac 'version) (load '((rlb)bitmac)))
+   )
+(eval-when (compile)
+   (setq defmacro-for-compiling ()
+	 defmacro-displace-call ()
+	 macro-expansion-use ()))
+
+(eval-when (compile) (macro dbg (foo) foo ()))
+(eval-when (eval) (macro dbg (foo) `(and debug (progn ,@(cdr foo)))))
+
+;;;Abbreviations referring to FAS-OBJ array
+;;Warning! The expansions hereof use FAS-OBJ with a FREE REFERENCE!!
+#.`(progn 'compile
+    ,@(do ((l '(=byte-obj =byte-index =file-obj =atomtable =atomtb-size
+		=atomtb-index =min =compat =abs =rel =spec =call =qatom 
+		=qlist =glbl =getddt =array =unused =atomtb =entry =loc 
+		=putddt =eval =eof =squid)
+	      (cdr l))
+	   (i 0 (1+ i))
+	   (ml))
+	  ((null l)
+	   (cons `(defmacro fas-obj-size () ',(1+ i))
+		 (nreverse ml)))
+	  (push `(defmacro ,(car l) () '(arraycall T FAS-OBJ ,i)) ml)))
+
+;;;Abbreviations for referring to byte-obj and atomtb
+(defmacro =byte (form) `(arraycall fixnum byte-obj ,form))
+(defmacro =atom (form) `(arraycall T atomtb ,form))
+(defmacro =atom\hack (form)
+   (let ((g (gensym)))
+       `(let ((,g ,form))
+	     (atom\hack (arraycall T atomtb ,g) ,g))))
+
+;;;Abbreviation for common return from DO loop in FASLREAD fcn
+(defmacro breturn (form)
+  `(progn (store (=byte-index) byte-index)
+	  (store (=byte 9.) fixnum)
+	  (store (=byte 10.) fixnum2)
+	  (return ,form)))
+
+;;Cruft to get eval'ed when loaded
+(let ((l '(abs   rel    spec   call  qatom qlist  glbl getddt 
+	   array unused atomtb entry loc   putddt eval eof)))
+     (array faslread-types T (length l))
+     (fillarray 'faslread-types l)
+     'faslread-types)
+
+(setq-if-unbound faslread-glbl () )	;This holds the globalsym names
+(setq-if-unbound faslread-forget-atom\hack ())
+
+;;; Given a file spec (or a file), and a list of options, this opens the file 
+;;; and returns a FAS-OBJect which can then be passed to FASLREAD.
+
+(defun faslreadopen nargs 
+  (prog (file-obj fas-obj file options alloptions) ;keep prog for return below
+	(setq file (arg 1)
+	      options (cond ((= nargs 2) (arg 2)) ('(compat entry eval call)))
+	      alloptions '(abs   rel    spec   call  qatom qlist  glbl getddt 
+			   array unused atomtb entry loc   putddt eval eof))
+	(when (atom options) (setq options (ncons options)))
+	(when (memq 'all options)
+	      (setq options (nconc (delete 'all options) alloptions)))
+	(setq file (mergef file '(* fasl)))
+	(setq file-obj (open file '(dsk block fixnum in)))
+	(cond ((*fasl*check (in file-obj)))
+	      ('T (close file-obj) (return () )))
+	(eoffn file-obj 'returns-minus-1)
+	(in file-obj)			;gobble the lisp version #, immaterial
+	(setq fas-obj (*array () 'T (fas-obj-size)))
+	(store (=byte-index) 10.)	;init byte ptr to out of bounds
+	(store (=byte-obj) (*array () 'fixnum 11.))
+	(store (=file-obj) file-obj)	;The file object
+	(store (=atomtable) (*array () 'T 64.))	;The atom table
+	(store (=atomtb-size) 63.)	;(1- size of atom table)
+	(store (=atomtb-index) 0)	;last used index in atom table
+	(store (arraycall T (=atomtable) 0) () )	;(atomtb 0)==()
+	(store (=squid) (copysymbol '-SQUID- ()))
+	(do ((options options) (l `(min compat .,alloptions)))
+	    ((null options))
+	    (do ((l l (cdr l)) (i 6 (1+ i)))
+		((null l)
+		 (setq options (cons (error '|Unknown option - FASLREADOPEN|
+					    (car options) 'wrng-type-arg)
+				     (cdr options))))
+		(when (eq (car options) (car l))
+		      (store (arraycall T fas-obj i) 'T)
+		      (setq options (cdr options))
+		      (return 'T))))
+	(return fas-obj)))
+(args 'faslreadopen '(1 . 2))
+
+;;;Closes the file associated with FAS-OBJ, and flushes the arrays.
+(defun faslreadclose (fas-obj)
+       (and (=file-obj) (close (=file-obj)))
+       (*rearray (=atomtable))
+       (*rearray (=byte-obj))
+       (*rearray fas-obj)
+       'T)
+
+(defun faslreadnum (fas-obj) (arraycall fixnum (=byte-obj) 9.))
+(defun faslreadnum2 (fas-obj) (arraycall fixnum (=byte-obj) 10.))
+(defun faslreadsquid (fas-obj) (=squid))
+
+;;;FASLREAD an object and return it, setting FASLREAD-TYPE to the type.
+
+(defun faslread (fas-obj)
+ ((lambda (ans) (cond ((=compat) (cons faslread-type ans)) (ans)))
+  (do ((file-obj (=file-obj)) (atomtb (=atomtable)) (byte-index (=byte-index))
+       (byte-obj (=byte-obj)) (word 0) (obj) (fixnum 0) (fixnum2 0)
+       (-squid- (=squid)))
+      ((null file-obj) (setq faslread-type 'eof) () )
+      (cond ((> (setq byte-index (1+ byte-index)) 8.)
+	     (setq byte-index 0)
+	     ;;Get a word full of 9. four-bit bytes, split out the bytes,
+	     ;;and store into BYTE-OBJ
+	     (do ((word (rot (in file-obj) 4) (rot word 4)) (i 0 (1+ i)))
+		 ((> i 8.))
+		 (store (=byte i) (bit-and word #o17)))))
+      (setq faslread-type (faslread-types (=byte byte-index)))
+      (caseq faslread-type 
+       (abs (setq fixnum (in file-obj)) (when (=abs) (breturn () )))
+       (rel (setq fixnum (in file-obj)) (when (=rel) (breturn () )))
+       (spec (setq word (in file-obj) fixnum (deposit-byte word 0 18. 0))
+	     (when (=spec) (breturn (=atom\hack (rh-bits word)))))
+       (call (setq word (in file-obj) fixnum (deposit-byte word 0 18. 0))
+	     (when (=compat) (setq faslread-type 'ext))
+	     (when (=call)
+		   (cond ((=min) (breturn (=atom\hack (rh-bits word))))
+			 ('T
+			  (setq obj (caseq (bit-range word |4.9-4.1|)
+					   (2 'acall) (3 'ajcall)
+					   (#o14 'call) (#o15 'jcall)
+					   (#o16 'callf) (#o17 'jcallf)
+					   (#o20 'ncall) (#o21 'njcall)
+					   (#o22 'ncallf) (#o23 'njcalf)
+					   (T (bit-range word |4.9-4.1|))))
+			  (breturn
+			   (list obj	; opcode
+				 (bit-range word |3.9-3.6|)  ; ac field
+				 (=atom\hack (rh-bits word))))))))
+       (qatom (setq word (in file-obj) fixnum (deposit-byte word 0 18. 0))
+	      (when (=qatom) (breturn (=atom\hack (rh-bits word)))))
+       (qlist (setq obj (faslread-list file-obj atomtb))
+	      (in file-obj)		;Gobble the sxhash word
+	      (setq fixnum2 (car obj) obj (cdr obj))
+	      (cond ((= (lh-bits (car obj)) (rh-bits -2))
+		     (store (=atom (inc-atomtb-index fas-obj))
+			    (cdr obj)))
+		    ((=qlist) (setq fixnum (lsh (rh-bits (car obj)) 18.))
+			      (breturn (cdr obj)))))
+       (glbl (setq obj (=glbl) word (in file-obj))
+	     (when obj ;perhaps to keep complr bug happy?
+		   (setq obj (cond ((= (rh-bits word) #o777777) 'R70)
+				   ((lapfivify (rh-bits word))))
+			 fixnum word)
+		   (breturn (cond ((< word 0) `(/- ,obj)) (obj)))))
+       (getddt
+	(cond ((= (setq word (in file-obj)) -1)
+	       (when (=getddt) (breturn -1)))
+	      ('T (when (bitp word 1_34.) (setq fixnum2 (in file-obj)))
+		  (when (=getddt)
+			(setq obj (cond ((= (rh-bits word) #o777777) '0)
+					((unsquoze word)))
+			      fixnum (bit-range word |4.7-4.6|))
+			(when (minusp word)
+			      (setq fixnum (bit-or #o1_43 fixnum)))
+			(breturn obj)))))
+       (array (setq word (in file-obj) fixnum (deposit-byte word 0 18. 0))
+	      (when (=array) (breturn (=atom\hack (rh-bits word)))))
+       (unused (faslread-error faslread-type))
+       (atomtb (faslread-atom file-obj atomtb fas-obj))
+       (entry
+	(setq word (in file-obj) fixnum (in file-obj))
+	(when (=entry)
+	      (setq obj (=atom\hack (lh-bits word)))
+	      (cond ((=min)
+		     (setq fixnum (rh-bits fixnum))
+		     (breturn obj))
+		    ('T (setq obj (list obj (=atom\hack (rh-bits word))
+					(cons (faslread-args1
+					       (bit-range fixnum |4.9-4.1|))
+					      (faslread-args1
+					       (bit-range fixnum |3.9-3.1|))))
+			      fixnum (rh-bits fixnum))
+			(breturn obj)))))
+       (loc (setq fixnum (in file-obj)) (when (=loc) (breturn () )))
+       (putddt (setq fixnum2 (in file-obj) fixnum 0)
+	       (when (minusp fixnum2) (setq fixnum (in file-obj)))
+	       (when (=putddt) (breturn (unsquoze fixnum2))))
+       (eval (setq obj (cdr (faslread-list file-obj atomtb)) fixnum 0)
+	     (cond ((= (lh-bits (car obj)) (rh-bits -2))
+		    (store (=atom (inc-atomtb-index fas-obj))
+			   (faslread-eval (cdr obj))))
+		   ((=eval) (breturn (cdr obj)))))
+       (eof				;End of binary
+	(setq fixnum 0)
+	(cond ((not (*fasl*check (setq word (in file-obj))))
+	       (faslread-error faslread-type word)))
+	;;Check if another section in the file?
+	(cond ((not (*fasl*check (in file-obj)))
+	       (close file-obj)
+	       (setq file-obj (store (=file-obj) () ))
+	       (breturn () ))
+	      ('T (in file-obj) ;Gobble the Lisp version no.
+		 (store (=byte-index) 10.))))
+       ('T (error '|Missed data type - FASLREAD|
+		 faslread-type 'wrng-type-arg))))))
+
+;;;Read a list (reloc code 5 or 16) and return it.  The last word (-1,,n or 
+;;; -2,,n) is consed on the front of the list before return.
+
+(defun faslread-list (file-obj atomtb)
+  (do ((word (in file-obj) (in file-obj)) (stack) (i 1 (1+ i)))
+      ( () )
+      (declare (fixnum i))
+      (caseq (bit-range word |4.9-4.7|) 
+	     (0 (setq stack (cons (=atom\hack (rh-bits word))
+				  stack)))
+	     (1 (setq stack (pop-list stack (rh-bits word) () )))
+	     (2 (setq stack (pop-list (cdr stack) (rh-bits word) (car stack))))
+	     (3 (rplaca stack (faslread-eval (car stack))))
+	     (4 (setq stack (pop-list stack (rh-bits word) () ))
+		(rplaca stack (makhunk (car stack))))
+	     (7 (unless (= (length stack) 1)
+			(faslread-error 'faslread-list-stack stack))
+		(return (cons i (cons word (car stack)))))
+	     (T (faslread-error 'faslread-list word)))
+      ))
+
+(defun faslread-eval (form)
+  (hunk -squid-
+	(if (or (atom form) (not (memq (car form) '(pnput string-pnput))))
+	    form
+	    (let (((fn a1 a2) form))
+		 (if (and (not (atom a1))
+			  (eq (car a1) 'quote)
+			  (null (cddr a1))
+			  (do ((l (cadr a1) (cdr l)))
+			      ((null l) 'T)
+			      (or (eq (typep (car l)) 'fixnum) (return ())))) 
+		     `(,fn -> ,(pnput (cadr a1) ()) ,a2)
+		     form)))))
+
+(defun faslread-list-debug (which word stack)
+  (format tyo '|~&;~6a item=~d w=~d (length stack)=~d stack:~%    ~s|
+	   which (bit-range word |4.9-4.7|) (rh-bits word) (length stack)
+	   stack))
+
+;;;Pop N items off STACK, consing them, as popped, onto LAST.  Push (i.e., 
+;;;cons) the result back onto STACK and return it.
+;;;This actually works with a hairy RPLACD due to JPG.
+
+(defun pop-list (stacka ia last)
+  (do ((stack stacka) (i ia (1- i)) (l last) (s) (il (length stacka)))
+      ((= 0 i) (cons l stack))
+      (when (null stack) (error '|POP-LIST ran out of stack| (cons ia il)))
+      (setq stack (cdr (setq s stack)) l (rplacd s l))))
+
+;;;Read a type 12 item (atomtable info) and store in the atom table.
+(defun faslread-atom (file-obj atomtb fas-obj)
+   (let ((word (in file-obj)) obj)
+	(caseq (bit-range word |4.8-4.7|) 
+	       (0			;symbol
+		(setq obj (do ((i (rh-bits word) (1- i)) (l))
+			      ((zerop i) (pnput (nreverse l) 7))
+			      (setq l (cons (in file-obj) l)))))
+	       (1 (setq obj (in file-obj)))	; fixnum
+	       (2			;flonum -- fake fixnum into flonum
+		(setq obj (fsc (in file-obj) 1_18.)))
+	       (3			;bignum
+		(setq obj (do ((i (rh-bits word) (1- i)) (l))
+			      ((zerop i) (bncons l))
+			      (setq l (cons (in file-obj) l))))
+		(unless (zerop (bit-range word |3.3-3.1|))
+			(setq obj (minus obj)))))
+	(store (=atom (inc-atomtb-index fas-obj)) obj)
+	'T))
+
+
+;;;Increment atom table index in FAS-OBJ
+(defun inc-atomtb-index (fas-obj)
+  (let ((index (=atomtb-index)) (size (=atomtb-size)))
+       (setq index (1+ index))
+       ;;If no more room in ATOMTB, double its size
+       (when (>= (store (=atomtb-index) index) size)
+	     (setq size (* 2 (1+ size)))
+	     (*rearray (=atomtable) 'T (store (=atomtb-size) (1- size))))
+       index))
+
+(defun atom\hack (obj num &aux (base 10.) (*nopoint t))
+       (if (or (atom obj) faslink-forget-atom\hack)
+	   obj
+	   (hunk '-ATOM- num obj)))
+
+;;;Generate error message
+(defun faslread-error nargs
+  (error '|FASLREAD file not in FASL format| (listify nargs) 'fail-act))
+
+;;;Turn part of a word read from FASL file into part of an ARGS property.
+;;;See type 13, Entry Info
+
+(defun faslread-args1 (word) (caseq word (0 () ) (#o777 word) (T (1- word))))
+
+;;;Verify that a word read is *FASL* or *FASL+ in sixbit
+(defun *fasl*check (x) (= (bit-or 1 x) #.(car (pnget '*fasl+ 6))))
+
+;;;Turn a fixnum representing squoze into a symbol.
+;;;Squoze characters are: 0=null, 1-12=0-9, 13-44=A-Z, 45=., 46=$, 47=%
+
+(defun unsquoze (n)
+  (do ((l) (n (deposit-byte n (- 36. 4) 4 0) (// n #o50)) (c 0))
+      ((= n 0) (implode l))
+      (declare (fixnum n c))
+      (cond ((= 0 (setq c (\ n #o50))) (unless (null l) (push '\ l)))
+	    ((<= 1 c #o12) (push (+ c #.(1- #/0)) l))
+	    ((<= #o13 c #o44) (push (+ c #.(- #/A #o13)) l))
+	    ((= c #o45) (push '/* l))
+	    ((= c #o46) (push '/$ l))
+	    ((= c #o47) (push '/% l)))))
+
+;Turn a GLOBALSYM index into a symbol.
+
+;The number of globalsyms is LLSYMS. There are 3 tables of interest here:
+;LAPFIV has LLSYMS words of squoze symbol names, sorted in order of the squoze.
+;LSYMS has LLSYMS words of symbol values stored in historical order which
+;is different from that of LAPFIV.
+;LAP5P has LLSYMS 9-bit bytes such that LSYMS [LAP5P [j]] has the symbol value
+;for LAPFIV [j]. References to LSYMS appear in the FASL files, so for 
+;efficiency this function LAPFIVIFY must do the inverse sort to LAP5P in order
+;to convert the LSYMS index into an unsquozed symbol.
+
+(defun lapfivify (n)
+  (when (null faslread-glbl)		;If we haven't set up the table, do so.
+    (let ((llsyms (cond ((getddtsym 'llsyms))
+			('T (valret '|:VP |) (getddtsym 'llsyms))))
+	  (lap5p (getddtsym 'lap5p)) (lapfiv (getddtsym 'lapfiv)))
+	 (do ((llsyms llsyms) (lap5p lap5p) (lapfiv lapfiv)
+	      (i 0 (1+ i)) (j 36.) (word 0) (byte 0) (l))
+	     ((>= i llsyms)
+	      (setq faslread-glbl (*array () t llsyms))
+	      (do ((i 0 (1+ i)) (l (sortcar l '<) (cdr l)))
+		  ((null l))
+		  (store (arraycall T faslread-glbl i) (cdar l))))
+	     (declare (fixnum llsyms lap5p lapfiv i j word)) ;Lousy place
+	     (when (> j 27.) (setq word (examine lap5p)
+				   lap5p (1+ lap5p) j 0))
+	     (setq byte (bit-and (rot word (setq j (+ j 9.))) #o777))
+	     (setq l (xcons l (cons byte (unsquoze (examine (+ lapfiv i)))))))))
+  (arraycall T faslread-glbl n))
+
+(lap	bncons subr)		;make a positive bignum given its fixnum
+	(jrst 0 bncons)		;components, most significant word first.
+(entry	returns-minus-1 subr)		;used as eoffn for the fasl file
+	(push p (% 0 0 fix1))
+	(movni tt 1)
+	(popj p)
+()
+
+
+;; Local Modes:
+;; Mode:LISP
+;; Comment Column:40
+;; Atom Word Mode:1
+;; END:
