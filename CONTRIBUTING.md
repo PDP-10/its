@@ -17,3 +17,9 @@
   image.
 
 - Do use the git history rewriting operations to modify pull request.
+
+- Prefix temporary branch names with your username and `/`.
+
+- When making a major change to a versioned ITS file, rename the file
+  and increase the version number.  Do not keep the old version.  This
+  way, it's easier to see the diff in the revision log.
