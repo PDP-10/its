@@ -71,8 +71,8 @@ This information was collected from SYSTEM; CONFIG >
 - RP07 - disk drive
 - RM80 - disk drive
 - RM02/RM03 - disk drive
-- TU45 - tape controller
-- TM03 - tape drive
+- TM03 - tape controller
+- TU45 - tape formatter
 - IMP interface (KS), ACC LH/DH on unibus
 - Chaosnet (through unibus)
 - DZ11 - terminal controller
