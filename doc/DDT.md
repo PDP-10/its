@@ -14,6 +14,7 @@ The `$` character represents typing ESC.
 | ls            | ^F                   | :listf                   |
 | ls dir        | dir^F                | :listf dir               |
 | ls /          | ^R m.f.d. (file)     | :print m.f.d. (file)     |
+| ls *.foo      | ^R dir: second foo   | :print dir: second foo   |
 | more file     | ^R file              | :print file              |
 | mkdir dir     | ^R dir;..new. (udir) | :print dir;..new. (udir) |
 | cd dir        | dir$$s               | :cwd dir                 |
