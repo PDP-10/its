@@ -30,23 +30,23 @@ This information was collected from SYSTEM; CONFIG >
 - 340 display
 - E&S LDS-1 display
 - Sylvania tablet
-- Deselection device (don't know what that is)
+- Deselection device (coordinate device sharing between PDP-6 and 10)
 - Old DECtape controller (PDP-6)
 - New DECtape controller
 - Robot console
 - ARM (AMF mostly) - don't know what that is (robot arm?)
-- OMX - output multiplexor
-- IMX - input multiplexor
-- VIDI - don't know what that is
+- OMX - output multiplexor (multiple D/A channels)
+- IMX - input multiplexor (multiple A/D channels)
+- VIDI - TV camera?
 - Chess tournament clock
 - D/A converters
 - Old LPT (Data Products)
 - New LPT - line printer (ODEC)
 - Gould LPT
-- COD - don't know what that is
+- COD - Morse code oputput
 - Calcomp plotter
 - Stanford keyboard
-- GT40
+- GT40 - graphical terminal
 
 ### KL10
 
