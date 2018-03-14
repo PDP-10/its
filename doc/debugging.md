@@ -17,8 +17,9 @@ Notes where exec DDT differs from timesharing DDT.
 | $B | Remove breakpoint at current location | Remove all breakpoints
 | .$B | Set breakpoint at current location
 | . | Current location
+| $. | Current value of PC
 | $Q | Last printed quantity
-| *n*/ | Open location *n* symbolically
+| *n*/ | Open location *n* symbolically (show instructions and symbols)
 | / | Open $Q
 | ^J | Open next location
 | ^ | Open previous location
@@ -29,4 +30,4 @@ Notes where exec DDT differs from timesharing DDT.
 | " | Print $Q as five ASCII characters
 | # | Print $Q as one ASCII character | N/A
 | ^N | Single step | N/A
-| $^N | Stop at next instruction | N/A
+| $^N | Stop at next instruction (skip over calls) | N/A
