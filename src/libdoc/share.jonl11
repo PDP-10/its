@@ -1,0 +1,138 @@
+;;; This file was originally written by JONL and SUN on 9/15/1976.
+;;;
+;;; This file contains some functions for sharing pure pages
+;;; of fasl code among a number of dumps. Its use is for occasions
+;;; where a number of people will be using one basic system but
+;;; where each may have a dumped copy of his or her own. By suspending
+;;; and waking up the jobs correctly it is possible to share
+;;; the pages even though a few :PDUMPS have been done. It is also
+;;; useful where one makes a bunch of systems by adding on some files,
+;;; dumping them out, adding some more, etc.
+;;;
+;;; The way the code works is that one runs functions to save
+;;; the pointer in binary program space before fasload, after fasloading
+;;; and by noting what the name of the dump will be. These three things
+;;; are then pushed onto a list. Thus the list will contain a list
+;;; of all the files that have been dumped out and the appropriate
+;;; locations of code within each of these dumps.
+;;;
+;;; When the dump is awakened, one runs a program that maps down
+;;; the list and reads in and shares those appropriate pages
+;;; from each of the dumps.
+;;;
+;;; So this is the type of thing one does:
+;;;	(MAKE-READY-TO-FASLOAD)
+;;;	(FASLOAD FOO FASL)
+;;;	.
+;;;	.
+;;;	.
+;;;	(FASLOAD BAR FASL)
+;;;	(MAKE-READY-TO-DUMP '((DSK LOSER) TS FOO))
+;;;	(SUSPEND '|:PDUMP TS FOO/
+;;;	|)
+;;;	(COMMUNIZE)
+;;;
+;;; There is also a function called, *SUSPEND, which does
+;;; a SUSPEND and then a COMMUNIZE. This is for use when
+;;; one is quickly dumping out something and then want to
+;;; re-communize when one restarts.
+;;;
+;;; Dumping out to non unique names like TS FOO can
+;;; cause problems since a dump will think that TS FOO is
+;;; something that has actually been deleted. Therefore it
+;;; is recommended that one dump out to FOO 1, etc.. To do
+;;; this simply find out what FOO's are out there and dump
+;;; to a version greater than the one there. The important
+;;; thing is that your dumps will know the true names
+;;; of their sibling dumps.
+
+
+(DECLARE 
+	 ;;; ejs: commented out since no longer compiles
+	 ;;;(NEWIO T)
+	 (SPECIAL *DUMP-SHARE-LIST* *INITIAL-BPORG* *PAGSIZ*)
+
+	 ;; ***NOTE THE FOLLOWING BASE CHANGE***
+
+	 (SETQ BASE 8. IBASE 8.))
+
+(DECLARE (EVAL (READ)))
+
+(SETQ OLD-BASE BASE BASE 8. OLD-IBASE IBASE IBASE 8.)
+
+(COND ((NOT (BOUNDP '*DUMP-SHARE-LIST*))
+       (SETQ *DUMP-SHARE-LIST* NIL)))
+
+(SETQ *PAGSIZ* 1024.)
+
+(DEFUN MAKE-READY-TO-FASLOAD NIL
+       ;; This function is run before fasloading and simply
+       ;; saves the initial bporg.
+       (SETQ *INITIAL-BPORG* (PAGEBPORG)))
+
+(DEFUN MAKE-READY-TO-DUMP (FILE)
+       ;; This function is run prior to dumping and saves
+       ;; the final bporg and the name to be of the dump.
+       ;; The three items are consed together and pushed
+       ;; on the list.
+       (PROG
+	(HIGHPOINT)
+	(COND
+	 ((=
+	   *INITIAL-BPORG*
+	   (SETQ HIGHPOINT (PAGEBPORG)))
+	  (RETURN NIL)))
+	(PURIFY *INITIAL-BPORG* (1- HIGHPOINT) T)
+	(SETQ
+	 *DUMP-SHARE-LIST*
+	 (CONS
+	  (LIST FILE *INITIAL-BPORG* (1- HIGHPOINT))
+	  *DUMP-SHARE-LIST*))))
+
+
+
+
+(DEFUN COMMUNIZE NIL
+  ;; This function is run upon wake up of the dump. It maps
+  ;; down the list and loads appropriate sections from
+  ;; each of the shared dumps.
+  (PROG (FILE LO C PN CNT I X)
+	(SETQ X *DUMP-SHARE-LIST*)				;(...((FN1 FN2 DSK USR) 126000 131777)...)
+   S	(COND
+	 ((NOT (PROBEF (CAAR X)))
+	  (TERPRI)
+	  (PRINC '|;; The file |)
+	  (PRIN1 (CAAR X))
+	  (PRINC
+	   '| is not there.  Those pages will not be shared.|)
+	  (GO NEXT)))
+	(SETQ C (OPEN (CAAR X) '(BLOCK IN FIXNUM))
+	      LO (BOOLE 4 (CADAR X) (1- *PAGSIZ*))
+	      PN (// LO *PAGSIZ*))
+	(OR (ZEROP (IN C)) (BREAK LOSING-FILE))			;LOOK FOR A :PDUMP FILE
+	(SETQ CNT -1 I 0)
+   LOOP (COND ((> I PN) (FILEPOS C (* *PAGSIZ* (1+ CNT))))	;GO TO PLACE FOR PAGE NUMBER PN IN THIS JOB
+	      (T (AND (NOT (ZEROP (BOOLE 1 600000 (IN C))))	;NOT COUNTING IN NON-EXISTENT PAGES
+		      (SETQ CNT (1+ CNT)))
+		 (SETQ I (1+ I))
+		 (GO LOOP)))
+	(SETQ PN (BOOLE 7					;CONVERT TO AOBJN PTR
+			(LSH (// (- LO -1 *PAGSIZ* (CADDAR X)) *PAGSIZ*) 18.)
+			PN))
+	(SYSCALL 0 'CORBLK 200000 -1 PN C)
+	(CLOSE C)
+ NEXT	(AND (NULL (SETQ X (CDR X))) (RETURN NIL))
+	(GO S)))
+
+(DECLARE (EVAL (READ)))
+
+(SETQ BASE OLD-BASE IBASE OLD-IBASE)
+
+(DEFUN *SUSPEND NARGS
+       ;; This function is just a convenient way of suspending
+       ;; so that when the dump wakes up, it will share its pages.
+       (COND
+	((= NARGS 0.) (SUSPEND))
+	(T (SUSPEND (ARG 1.))))
+       (COMMUNIZE))
+

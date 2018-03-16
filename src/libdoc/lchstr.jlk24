@@ -1,0 +1,345 @@
+;;; Chaosnet Streams for Maclisp
+
+;;; todo: variable byte sizes for IN & OUT
+;;;       improve efficiency of ARRAY-IN, ARRAY-OUT
+;;;       make LSN's work
+;;;       flush sfa-get/store in favor of SETF and ...?
+
+;;; To generate a Chaosnet stream do (MAKE-CHAOSNET-STREAM).  Then do
+;;; (OPEN <stream> '(HOST <host-address> CONTACT <contact-name>)).
+;;; Then use standard operations like TYI, UNTYI, TYO, IN, OUT, CLOSE, etc
+;;; or non-standard operations PACKET-IN, PACKET-OUT, ARRAY-IN, ARRAY-OUT
+;;; More documentation can be found before each operation handler (e.g. OPEN).
+
+;;; Note:  If you want reasonable error handling when running in a bare
+;;;        LISP, you need a package like the one in MACSYMA (LIBMAX;MDEBUG >).
+
+;;; Standard compile-time environment
+(include |mc:libmax;gprelud >|)
+
+(herald lchstr)
+
+(eval-when (compile) (setq defmacro-for-compiling nil))
+
+(eval-when (eval compile)
+   (if (not (fboundp 'loop)) (load "dsk:liblsp;loop fasl")))
+
+;;; Load the Chaosnet support package, if not already loaded
+(eval-when (load eval)
+	   (or (get 'lchnsp 'version) (load "dsk:lisp;lchnsp fasl")))
+
+(defvar chaos-stream-id 0)
+(defvar default-window-size 10.)
+(defvar default-timeout 60.)
+
+;;; See the file L;LCHNSP > for the %chaos routines
+
+(declare (special chaos-internal-pkt-buffer)
+	 (*expr %chaos-open-channels %chaos-close-channels
+		%chaos-request-connection %chaos-eof %chaos-allocate-buffer
+		%chaos-pktiot %chaos-get-byte %chaos-put-byte
+		%chaos-set-pkt-length %chaos-set-pkt-opcode
+		%chaos-get-pkt-length %chaos-get-pkt-opcode))
+
+;;; Compile time constants
+
+(eval-when (eval compile)
+;;; Connection state symbols
+     (setq %cscls 0 %csrfs 3 %csopn 4 %cslos 5 %csinc 6
+;;; Packet Opcode definitions
+	   %codat 200 %coeof 14 %cocls 3
+;;; Other constants
+           max-connect-tries 5
+	   max-pkt-size-bytes 488.)
+;;; Stream slot indices (should be done as a structure, but sfa's don't win...)
+     (let ((slot-index 0))				;crock...
+        (mapc #'(lambda(slot) (set slot (setq slot-index (1+ slot-index))))
+	      '(connection host-address contact-name request-or-listen
+			   byte-size window-size timeout
+			   untyi-list in-buffer out-buffer in-count out-count
+			   max-chaosnet-stream-slot))))	;this must be last
+
+;;; Generate a bare chaosnet-stream object
+(defun make-chaosnet-stream ()
+   (let ((stream (sfa-create #'chaosnet-stream-function
+			     #.max-chaosnet-stream-slot
+			     (format nil "chaos-stream-object-~A"
+				     (setq chaos-stream-id (1+ chaos-stream-id))))))
+	(sfa-store stream #.host-address nil)
+	(sfa-store stream #.contact-name nil)
+	(sfa-store stream #.request-or-listen t)	;default to RFC
+	(sfa-store stream #.byte-size 8)
+	(sfa-store stream #.window-size default-window-size)
+	(sfa-store stream #.timeout default-timeout)
+	(sfa-store stream #.in-count -1)
+	(sfa-store stream #.out-count 0)
+	(sfa-store stream #.in-buffer (%chaos-allocate-buffer))
+	(sfa-store stream #.out-buffer (%chaos-allocate-buffer))
+	stream))
+
+;;; chaosnet-stream-function is at the end of the file because it depends on
+;;; the following macros.
+
+
+;;; These macros are  only to be expanded inside chaosnet-stream-function
+
+;;; OPEN msg handler.  Format is (OPEN <stream> <option-list>) where
+;;; <stream> is a chaosnet stream as returned by (MAKE-CHAOSNET-STREAM) and
+;;; <option-list> is a list of keywords and values (keywd1 val1 keywd2 val2 ..)
+;;; Known options are: HOST (or ADDRESS or HOST-ADDRESS)  - Chaosnet host addr
+;;;		       CONTACT-NAME (or CONTACT or NAME)  - Contact name + JCL
+;;;		       REQUEST or LISTEN		  - same as CONTACT
+;;;		       BYTE-SIZE (or BYTE)		  - byte size (8)
+;;;		       WINDOW-SIZE (or WINDOW)		  - xmt window size
+;;;  Note: HOST-ADDRESS and CONTACT-NAME are required.
+;;;  [Should OPEN errors here be signaled in a special way to be compatible?]
+
+;;; Map keywords into slot indices with an occassional side-effect.
+(defmacro chaosnet-stream-keyword-decode (stream keyword)
+   `(caseq ,keyword
+	   ((host address host-address host-number)
+	    #.host-address)
+	   ((contact name contact-name request)
+	    (sfa-store ,stream #.request-or-listen T)
+	    #.contact-name)
+	   (listen
+	    (sfa-store ,stream #.request-or-listen NIL)
+	    #.contact-name)
+	   ((byte byte-size) #.byte-size)
+	   ((window window-size) #.window-size)
+	   (timeout #.timeout)
+	   (T (ferror nil "Unknown keyword in OPEN for ~A - ~A"
+		      ,stream keyword))))
+
+(defmacro chaosnet-stream-open (stream args)
+    `(progn
+      (loop for (keyword value) on ,args by #'cddr
+	    for index = (chaosnet-stream-keyword-decode ,stream keyword)
+	    do (sfa-store ,stream index value))
+      (sfa-call ,stream 'close nil)			;make sure its closed
+      (if (null (sfa-get ,stream #.host-address))
+	  (ferror nil
+		  "Error handling OPEN for ~A: No host address specified."
+		  ,stream))
+      (if (null (sfa-get ,stream #.contact-name))
+	  (ferror nil
+		  "Error handling OPEN for ~A: No contact name specified."
+		  ,stream))
+      (if (null (sfa-get ,stream #.connection))		;create a connection,
+	  (sfa-store ,stream #.connection		;if needed
+		     (%chaos-open-channels (sfa-get ,stream #.window-size))))
+      (loop ;repeat #.max-connect-tries   ;  would be nicer...
+	    for connect-tries from 1 to #.max-connect-tries and
+	        state =
+		(*catch 'chaos-pktiot-error		;catch IOC errors
+			(%chaos-request-connection
+			 (sfa-get ,stream #.connection)
+			 (sfa-get ,stream #.host-address)
+			 (sfa-get ,stream #.contact-name)
+			 (sfa-get ,stream #.request-or-listen)
+			 (sfa-get ,stream #.timeout)))
+	    until (= #.%csopn state)
+	    finally
+	    (if (not (= #.%csopn state))
+		(error (get-chaosnet-error-msg ,stream)
+		      "some error from chaos site")))
+      (sfa-call ,stream 'clear-input nil)
+      (sfa-call ,stream 'clear-output nil)
+      ,stream))
+
+;;; CLOSE msg handler.  Shuts down the connection and frees up the channels.
+
+(defmacro chaosnet-stream-close (stream)
+   `(let ((conn (sfa-get ,stream #.connection)))
+	 (sfa-store ,stream #.connection nil)
+	 (unless (null conn)
+		 (*catch 'chaos-pktiot-error (%chaos-eof conn))
+		 (%chaos-close-channels conn))))
+
+;;; Standard stream operations
+
+;;; Define a wrapper to catch IOC errors and handle them nicely
+(defmacro chaosnet-op (stream &rest body)
+   `(if (null (*catch 'chaos-pktiot-error ,@ body))
+	(error (get-chaosnet-error-msg ,stream) "some error from chaos site"
+	       'fail-act
+	       )))
+
+;;; TYI and TYO ignore BYTE-SIZE and always return/take 8-bit bytes.
+;;; UNTYI can take anything (and TYI after UNTYI will return anything).
+
+(defmacro chaosnet-stream-tyi (stream eof)
+   `(let ((utl (sfa-get ,stream #.untyi-list)))
+	 (if utl (prog1 (car utl) (sfa-store ,stream #.untyi-list (cdr utl)))
+	     (let ((ibuf (sfa-get ,stream #.in-buffer))
+		   (cnt  (sfa-get ,stream #.in-count)))
+		  (when (<= cnt 0)
+			(chaosnet-op ,stream
+				  (%chaos-pktiot
+				          (car (sfa-get ,stream #.connection))
+					  ibuf))
+			(sfa-store ,stream #.in-count
+				   (setq cnt (%chaos-get-pkt-length ibuf))))
+		  (cond ((= #.%coeof (%chaos-get-pkt-opcode ibuf))
+			 (sfa-call ,stream 'clear-input nil)
+			 ,eof)
+			((= #.%cocls (%chaos-get-pkt-opcode ibuf))
+			 (error (get-chaosnet-error-msg ,stream T)))	;cls-flag
+			((= 0 cnt) (sfa-call ,stream 'tyi ,eof))
+			(T  (sfa-store ,stream #.in-count (1- cnt))
+			    (%chaos-get-byte
+			            ibuf
+				    (- (%chaos-get-pkt-length ibuf) cnt))))))))
+
+(defmacro chaosnet-stream-untyi (stream byte)
+   `(sfa-store ,stream #.untyi-list
+	       (push ,byte (sfa-get ,stream #.untyi-list))))
+
+(defmacro chaosnet-stream-tyo (stream byte)
+   `(let ((cnt (sfa-get ,stream #.out-count)))
+	 (%chaos-put-byte (sfa-get ,stream #.out-buffer) ,byte)
+	 (setq cnt (1+ cnt))
+	 (if (> cnt #.(1- max-pkt-size-bytes)) (sfa-call ,stream 'force-output
+							  nil)
+	     (sfa-store ,stream #.out-count cnt))
+	 T))	 
+
+;;; what should IN and OUT do? (pack arbitrary byte sizes into 16 bit words?)
+
+(defmacro chaosnet-stream-in (stream eof)
+    `(sfa-call ,stream 'tyi ,eof))			;should do something better..
+
+(defmacro chaosnet-stream-out (stream word)
+    `(sfa-call ,stream 'tyo ,word))
+
+(defmacro chaosnet-stream-force-output (stream)
+   `(when (> (sfa-get ,stream #.out-count) 0)
+	  (chaosnet-op ,stream
+		       (%chaos-pktiot (cdr (sfa-get ,stream #.connection))
+				      (sfa-get ,stream #.out-buffer)))
+	  (sfa-call ,stream 'clear-output nil)))
+
+(defmacro chaosnet-stream-clear-input (stream)
+   `(loop with ary = chaos-internal-pkt-buffer and
+	       ichan = (car (sfa-get ,stream #.connection))
+	  for count = (lsh (nth 2 (syscall 3 'whyint ichan)) -18.)
+	  while (and (> count 0)
+		     (*catch 'chaos-pktiot-error (%chaos-pktiot ichan ary)))
+	  finally (sfa-store ,stream #.in-count -1)		;no packet
+		  (sfa-store ,stream #.untyi-list nil)
+		  (return T)))
+
+(defmacro chaosnet-stream-clear-output (stream)
+    `(let ((obuf (sfa-get ,stream #.out-buffer)))
+	  (sfa-store ,stream #.out-count 0)
+	  (%chaos-set-pkt-length obuf 0)
+	  (%chaos-set-pkt-opcode obuf #.%codat)))	;data opcode
+
+;;; Non-standard stream operations
+
+;;; Input a packet into an array
+(defmacro chaosnet-stream-packet-in (stream array)
+   `(let ((ibuf (sfa-get ,stream #.in-buffer)))
+	 (chaosnet-op ,stream
+		      (%chaos-pktiot (car (sfa-get ,stream #.connection))
+				     ibuf)
+		      (fillarray ,array ibuf))
+	 T))
+
+(defmacro chaosnet-stream-packet-out (stream array)
+   `(let ((obuf (sfa-get ,stream #.out-buffer)))
+	 (chaosnet-op ,stream
+		      (fillarray obuf ,array)		;how big is obuf?
+		      (%chaos-pktiot (cdr (sfa-get ,stream #.connection))
+				     obuf))))
+
+;;; These should probably be made more efficient someday...
+
+(defmacro chaosnet-stream-array-in (stream array count)
+   `(progn
+     (dotimes (i ,count)
+	(setf (arraycall fixnum ,array i) (sfa-call ,stream 'tyi 0)))
+     T))
+
+(defmacro chaosnet-stream-array-out (stream array count)
+   `(progn
+     (dotimes (i ,count)
+	(sfa-call ,stream 'out (arraycall fixnum ,array i)))
+     T))
+
+(defmacro chaosnet-stream-eof (stream msg)		;hack the msg someday
+   `(progn (sfa-call ,stream 'force-output nil)
+	   (chaosnet-op ,stream (%chaos-eof (sfa-get ,stream #.connection)))
+	   (sfa-call ,stream 'clear-output nil)))
+
+;;; Dispatching function for Chaosnet streams
+(declare (*lexpr get-chaosnet-error-msg))
+
+(defun chaosnet-stream-function (stream msg arg)
+   (caseq msg
+	  (which-operations '(open close untyi tyi tyo in out force-output eof
+				   clear-input clear-output
+				    packet-in packet-out
+				   array-in array-out))
+        ;standard operations
+	  (open  (chaosnet-stream-open  stream arg))
+	  (close (chaosnet-stream-close stream))
+	  (untyi (chaosnet-stream-untyi stream arg))
+	  (tyi   (chaosnet-stream-tyi   stream arg))
+	  (tyo   (chaosnet-stream-tyo   stream arg))
+	  (in    (chaosnet-stream-in    stream arg))
+	  (out   (chaosnet-stream-out   stream arg))
+	  (force-output (chaosnet-stream-force-output stream))
+	  (clear-input  (chaosnet-stream-clear-input  stream))
+	  (clear-output (chaosnet-stream-clear-output stream))
+        ;non-standard operations
+	  (packet-in  (chaosnet-stream-packet-in stream arg))
+	  (packet-out (chaosnet-stream-packet-out stream arg))
+	  (array-in   (chaosnet-stream-array-in stream (car arg) (cadr arg)))
+	  (array-out  (chaosnet-stream-array-out stream (car arg) (cadr arg)))
+	  (eof        (chaosnet-stream-eof stream arg))
+	  (T (ferror nil "Unknown stream operation - ~A" msg))))
+
+;;; Function forms of non-standard stream operations
+
+;;; packet-in/out reads/writes a packet to/from a fixnum array
+;;; data is packed 32-bit to a word, left adjusted.
+
+(defun packet-in  (stream array)
+       (sfa-call stream 'packet-in array))
+
+(defun packet-out (stream array)
+       (sfa-call stream 'packet-out array))
+
+;;; Engorge or disgorge <n> numbers into or out of an array.
+;;; Packing is either 8,16, or 32 bit, depending on the mode of the OPEN.
+
+(defun array-in  (stream array count)
+       (sfa-call stream 'array-in (list array count)))
+
+(defun array-out (stream array count)
+       (sfa-call stream 'array-out (list array count)))
+
+;;; Read and stringify a message about why a connection is losing
+
+(defun get-chaosnet-error-msg (stream &optional (cls-flag nil)
+			       &aux (ichan (car (sfa-get stream #.connection)))
+			            (ary (sfa-get stream #.in-buffer)))
+   (let ((count (lsh (nth 2 (syscall 3 'whyint ichan)) -18.)))
+	(if (not (or cls-flag
+		     (and (> count 0)
+			  (*catch 'chaos-pktiot-error (%chaos-pktiot ichan ary)))))
+	    "Chaosnet Lossage - cause undetermined."
+	    (maknam (loop for i from 4
+			  for word = (arraycall fixnum ary i)
+			  until (= 0 word)
+			  collect (load-byte word 28. 8)
+			  collect (load-byte word 20. 8)
+			  collect (load-byte word 12. 8)
+			  collect (load-byte word 4. 8))))))
+
+
+;; Local Modes:
+;; Mode: LISP
+;; Comment Col:40
+;; END:

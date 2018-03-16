@@ -1,0 +1,221 @@
+;;-*-LISP-*-
+;; KLUDGEY PATCH FOR LISP TO GET AROUND I.T.S. LOSSAGE
+;; ON INPUT, CHECKS FOR USR DEVICE, DOES WORD/BLOCK AT A TIME, BLOCK IOT'S
+;; THIS CODE MUST BE CHECKED EVERY TIME A NEW LISP COMES OUT
+;; THE INPUT SIDE SIMPLY HACKS $DEV5K WHICH IS THE LISP ROUTINE FOR FILLING THE
+;; INPUT BUFFER FOR ASCII MODE CHANNELS ON NON-TTY DEVICES (SEE L;READER >)
+;; On output, a similar trap is put in IFORCE.  Unlike the input patch,
+;; the output patch is a very special kludge which works by letting
+;; the inferior TECO read the characters from LISP's buffer.
+
+;; Some assumptions on which this kludge is based:
+;; Assume USR-OPEN-FIX was called after calling OPEN.  This
+;; reopens the USR channel in block mode (but doesn't tell LISP!)
+;; and sets the "file length" to whatever is specified as an arg.
+;; This is usually ZV.  This way, the normal LISP EOF handling
+;; mechanisms can work.
+;; On output, it is assumed that a variable CURRENT-TECO-BUFFER-BLOCK
+;; has been set with a pointer to the buffer block of the target
+;; buffer.
+
+
+(eval-when (eval compile)
+	   (SETQ OIBASE IBASE IBASE 8)	; SO WE CAN READ INTO MACSYMA AND CGOL
+)
+
+(SETQ LISPT-PATCH 0) 		; HOLDS NUMBER OF "EXTRA CHARACTERS", FOR BELOW
+
+(OR (GETDDTSYM '$DEV5K)		; BE SURE THAT SYMBOL TABLE IS LOADED
+    ((LAMBDA (TTY-RETURN) (VALRET '|/î:SL /î:EXISTS /îºVP |)) NIL))
+
+(LAP-A-LIST '(
+   (LAP	LISPT-PATCH SUBR)	; ROUTINE TO ACCOMPLISH THE PATCHING
+	(MOVEI T ($DEV5K 0))	; INPUT PATCH
+	(MOVEI TT LTINP)
+	(PUSHJ P PURPAT)	; GO PUT A PURE PATCH
+	(MOVEI T (IFORCE 4))	; output patch
+	(MOVEI TT LTOUTP)	; FALL THRU
+   PURPAT (PUSH FXP (% PUSHJ P 0))
+	(PUSH FXP T)		; ALLOCATE A PDL SLOT FOR PATCH ADDRESS
+	(HRRM TT -1 FXP)	; ADDRESS TO COME TO, IN RH
+	(PUSHJ P DPUR)		; DEPURIFIES PAGE WHOSE ADDRESS IS IN 0(FXP)
+	(MOVE TT -1 FXP)	; GET PATCH-IN INSTRUCTION
+	(EXCH TT @ 0 FXP)	; SWAP THE OLD WITH THE NEW
+	(CAME TT @ 0 FXP)	; If same, we've already patched
+	 (MOVEM TT @ -1 FXP)	;   Otherwise save the old instruction
+	(PUSHJ P RPUR)		; JUST FOR WRITE PROTECTION
+	(SUB FXP (% 0 0 2 2))	; POP THE FXP SLOTS
+	(POPJ P)
+
+DPUR	(TDZA C C)
+RPUR	(MOVE C 'T)
+	(MOVEI A 0 FXP)
+	(MOVEI B 0 FXP)
+	(JCALL 3 (FUNCTION PURIFY))
+
+; ASCII mode input on the USR device patch:
+
+LTINP	(PUSH FXP D)		; COPIED FROM $DEV5K?
+	(PUSHJ P USRCHK)	; IS IT ASCII MODE ON THE USR DEVICE? 
+				; IF NOT, RETURNS
+	(PUSHJ P USRPOS)	; reposition the channel
+	(MOVEI D 0)
+	(MOVE TT F/.FLEN T)	; get pseudo file length in D
+	(CAMG TT F/.FPOS T)	; if over EOF,
+	 (JRST 0 USRFIX)	; skip doing input, and return 0
+	(PUSHJ P USRIO)		; INPUT FB.BFL CHARACTERS + (D)
+	(HLRES 0 D)		; UNFOLD COUNT LEFT FOR FB.CNT
+	(MOVNS 0 D)
+	(IMULI D 5)
+	(SUB D FB/.BFL T)
+	(SKIPE 0 D)
+	 (SUB D @ (SPECIAL LISPT-PATCH)) ; add in correction for word rounding
+        (SUB TT F/.FPOS T)
+	(ADD TT D)		; adding D is subtracting the count of chars read
+	(SKIPG 0 TT)		; skip if not at EOF
+	(SUB D TT)		; subtract the difference
+USRFIX	(MOVNM D FB/.CNT T)
+        (MOVNM D FB/.BVC T)
+	(JUMPE D POPXDJ)	; EOF in this case
+	(MOVE TT FB/.IBP T)	; RESTORE THE BYTE POINTER
+	(SKIPE D @ (SPECIAL LISPT-PATCH)); AND WORD BOUNDARY CORRECTIONS TO DO?
+IBPLP    (IBP 0 TT)
+	(AOJL D IBPLP)
+	(MOVEM TT FB/.BP T)
+	(POP FXP D)
+	(JRST 0 POPJ1)
+
+; USR device output patch.
+
+LTOUTP	(MOVE F FB/.BFL TT)	; COPIED FROM IFORCE+4?
+	(MOVE T TT)
+	(PUSHJ P USRCHK)	; IF NOT USER DEVICE, RETURNS DIRECTLY
+	(SUB F FB/.CNT T)	; update the filepos
+	(ADDM F F/.FPOS T)
+	(JUMPE F LTEXIT)
+	(HRRZ TT @ (SPECIAL CURRENT-TECO-BUFFER-BLOCK)) ; 
+	(JUMPE TT LTEXIT)	; SKIP ON NIL (WHAT ABOUT UNBOUND?)
+	(ADDI TT 8)		; ADDRESS WHERE THE ARG GOES
+	(*CALL 0 USRACC)
+	(JFCL)
+	(HRLS 0 F)
+	(HRRI F FB/.BUF T)	; ADDRESS IN THE RIGHT HALF
+	(HRROI D F)		; -1,,F
+	(*CALL 0 USRIOT)
+	(*LOSE 1000)
+	(SOJ TT)		; BACK TO BUFFER BLOCK + 7
+	(MOVEI F 0)		; .RUPC INTO F
+	(PUSH FXP (% 0))
+	(MOVE D (% MOVEM 0 0 FXP))
+	(*CALL 0 USRVAR)	; SAVE THE CURRENT PC
+	 (*LOSE 1000)
+	(HLL TT 0 FXP)
+	(MOVE D (% MOVE 0 TT))	; SET USER PC TO SPECIFIED LOCATION
+	(*CALL 0 USRVAR)
+	 (*LOSE 1000)
+	(MOVEI F 7)		; .RUSTP
+	(MOVE D (% MOVEI 0 0))	; CLEAR USTP, ALLOWING THE INFERIOR TO RUN
+	(*CALL 0 USRVAR)
+	 (*LOSE 1000)
+	(MOVE D (% MOVEM 0 TT))	; WAIT UNTIL USTP IS NON-ZERO
+LOOP	(*CALL 0 USRVAR)
+	 (*LOSE 1000)
+	(JUMPE TT LOOP)
+	(MOVEI F 0)		; RESTORE THE PC
+	(MOVE D (% MOVE 0 0 FXP))
+	(*CALL 0 USRVAR)
+	 (*LOSE 1000)
+	(SUB FXP (% 0 0 1 1))
+LTEXIT	(MOVE TT T)
+	(JSP D FORCE6)		; RESET VARIOUS BUFFER POINTERS
+	(POPJ P)
+
+USRVAR	(SETZ)
+	(SIXBIT USRVAR)
+	(0 0 F/.CHAN T)
+	(0 0 F)			; VARIABLE SPECIFIER IN F
+	(0)			; IGNORED
+	(SETZ 0 D)		; INSTRUCTION IN D
+
+
+; UTILITY ROUTINES
+
+USRCHK	(PUSH FXP F)
+	(PUSH FXP TT)
+	(MOVE D F/.DEV T)	; GET DEVICE FROM TTSAR
+	(MOVE F F/.MODE T)	; and check for ascii mode
+	(POP P TT)		; pop the stack and save in TT 
+	(CAMN D (% (SIXBIT |USR   |)))	; SIOT ON USR CHANNEL?
+	 (TRNE F 4)		; 1.3=0 implies ascii mode
+	  (SKIPA)
+	   (MOVEM TT 0 p)	; clobber the return for the patch
+        (POP FXP TT)
+	(POP FXP F)
+	(POPJ P)
+
+USRPOS	(MOVE TT F/.FPOS T)	; FIRST, STANDARD UPDATE OF FILEPOS
+	(ADD TT FB/.BVC T)
+	(MOVEM TT F/.FPOS T)
+	(SETZM 0 FB/.BVC T)
+	(IDIVI TT 5)		; ROUND TO WORDS (CLOBBERS R - OK?)
+	(*CALL 0 USRACC)	; AND ACTUALLY REPOSITION
+	 (JFCL)			; CAN'T FAIL...
+	(IMULI TT 5)		; BACK TO CHARS 
+	(SUB TT F/.FPOS T)      ; NUMBER OF CHARS TO SKIP (Negative)
+	(ADD TT CIN0)		; IN EFFECT, "FXCONS"
+	(MOVEM TT (SPECIAL LISPT-PATCH)) ; DUE TO FILEPOS NOT ON WORD BOUNDARY
+	(SUB TT CIN0)
+	(POPJ P)
+
+USRIO	(ADD D FB/.BFL T)	; Do input or output of (D) chars
+	(IDIVI D 5)		; CONVERT TO WORDS (CLOBBERS R)
+	(HRLOI D -1 D)		; MAKE AN AOBJN POINTER (from HAKMEM!!)
+	(EQVI D FB/.BUF T)	; can you figure that one out!
+	(*CALL 0 USRIOT)	; BLOCK IOT
+	 (*LOSE 0 1000)
+	(POPJ P)
+
+; various call blocks
+
+USRACC  (SETZ)
+	(SIXBIT ACCESS)
+	(0 0 F/.CHAN T)
+	(SETZ 0 TT)
+
+USRIOT	(SETZ)
+	(SIXBIT IOT)
+	(0 0 F/.CHAN T)
+	(SETZ 0 D)		; AOBJN POINTER IS IN D
+
+; (USR-OPEN-FIX <file> <fillen>)
+(ENTRY	USR-OPEN-FIX SUBR)
+	(HRRZ T 1 A)			; F.FLEN TO BE (B)
+	(MOVEI A NIL)
+	(MOVE TT 0 B)
+	(MOVEM TT F/.FLEN T)
+	(MOVE TT F/.MODE T)	; REOPEN IN BLOCK MODE (BUT DON'T TELL LISP!)
+	(ANDI TT 1)
+	(IORI TT 2)
+	(*CALL 0 OPUSRI)	; RE-OPEN USER INPUT (SPECS FROM FILE-ARRAY)
+	 (*LOSE 0 1000)		; WHAT IF IT FAILS?
+	(MOVEI A 'TRUTH)
+	(POPJ P)
+
+OPUSRI	(SETZ)
+	(SIXBIT OPEN)
+	(0 0 F/.CHAN T)
+	(5_33 0 0 TT)			; open mode (immediate cntrl arg (TT))
+	(0 0 F/.DEV T)
+	(0 0 F/.FN1 T)
+	(SETZ 0 F/.FN2 T)
+
+()					; (USE WITH CAUTION - CAN CASE LOSSAGE
+					; IF PAGES IN INFERIOR DON'T EXIST!)
+))
+
+(AND (NOT (STATUS FEATURE LISPT))	;PATCH TO ENABLE INTERRUPT HANDLING
+     (LISPT-PATCH))
+
+(eval-when (eval compile)
+	   (SETQ IBASE OIBASE)
+)

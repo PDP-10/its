@@ -1,0 +1,229 @@
+;;;-*-lisp-*-
+;;; Example of how to use the primitives, a simple plot package.
+
+(eval-when (eval compile)
+  (or (get 'graphm 'version)
+      (load (list (car (namelist infile)) 'graphm))))
+
+(graphs-module plot)
+
+(defvar max-flonum (expt 2.0 126.))
+(defvar min-flonum (expt 2.0 -129.))
+
+(defstruct (plot (type named-hunk) conc-name
+		 (constructor make-plot-1))
+  x-min 
+  x-max
+  (y-min max-flonum)
+  (y-max min-flonum)
+  x
+  n
+  ;; a list of Y's
+  y-list
+  ;; a list of funcs that went with the Y's.
+  funcs	
+  )
+
+(defun make-domained-plot (a b n)
+  (setq a (float a))
+  (setq b (float b))
+  (let ((ar (*array nil 'flonum n))
+	(step (//$ (-$ b a) (float (1- n)))))
+    (declare (flonum step))
+    (do ((j 0 (1+ j))
+	 (x a (+$ x step)))
+	((= j n)
+	 (make-plot-1 x-min a
+		      x-max b
+		      n n
+		      x ar))
+      (setf (arraycall flonum ar j) x))))
+
+(defun add-function-to-plot (func plot)
+  (let ((n (plot-n plot)))
+    (do ((yar (*array nil 'flonum n))
+	 (xar (plot-x plot))
+	 (y-min (plot-y-min plot) (min y y-min))
+	 (y-max (plot-y-max plot) (max y y-max))
+	 (y 0.0)
+	 (x 0.0)
+	 (j 0 (1+ j)))
+	((= j n)
+	 (push func (plot-funcs plot))
+	 (push yar (plot-y-list plot))
+	 (setf (plot-y-min plot) y-min)
+	 (setf (plot-y-max plot) y-max)
+	 plot)
+      (setq x (arraycall flonum xar j))
+      (setq y (float (funcall func x)))
+      (setf (arraycall flonum yar j) y))))
+
+(defvar image-tty (open "tty:" '(out image tty single)))
+(defvar image-file (open "nul:" '(out image dsk block)))
+(close image-file)
+(cnamef image-file "DSK:OUTPUT")
+(defvar image-broadcast (make-broadcast-sfa image-tty image-file))
+(defvar ards-stream (make-ards-stream image-broadcast))
+(defvar tek-stream (make-tek-stream image-broadcast))
+(defvar graphic-stream nil)
+
+(defun set-graphic-stream ()
+  (when (null graphic-stream)
+	(setq graphic-stream
+	      (make-graphics-stream
+	       (COND ((PROGN (CURSORPOS 'A TYO)
+			     (Y-OR-N-P "ARDS TTY?"))
+		      ards-stream)
+		     ((PROGN (CURSORPOS 'A TYO)
+			     (Y-OR-N-P "TEKRONICS TTY?"))
+		      TEK-STREAM)
+		     (T
+		      (ERROR "thats all the tty's I know for graphics." 'SORRY
+			     'FAIL-ACT)))))))
+
+
+(defun open-image-file (name)
+  (close image-file)
+  (cnamef image-file name)
+  (open image-file))
+
+(defvar auto-scalep t)
+(defvar x-min 0.0)
+(defvar x-max 1.0)
+(defvar y-min 0.0)
+(defvar y-max 1.0)
+
+(defvar image-file-name
+  (caseq (status opsys)
+    ((tops-20)
+     "plot.out")
+    ((its)
+     `((DSK |.TEMP.|) ,(STATUS UNAME) |.PLOT.|))
+    (t
+     (error "unknown opsys" (status opsys) 'fail-act))))
+
+(defun plot-plot (plot)
+  (set-graphic-stream)
+  (cond (auto-scalep
+	 (set-window GRAPHIC-STREAM
+		     (plot-x-min plot)
+		     (plot-x-max plot)
+		     (plot-y-min plot)
+		     (plot-y-max plot)))
+	(t
+	 (set-window GRAPHIC-STREAM
+		     x-min x-max y-min y-max)))
+  (unwind-protect
+   (progn
+    (open-image-file image-file-name)
+    (draw-frame GRAPHIC-STREAM)
+    (do ((x (plot-x plot))
+	 (l (plot-y-list plot) (cdr l)))
+	((null l))
+      (set-pen GRAPHIC-STREAM
+	       (arraycall flonum x 0)
+	       (arraycall flonum (car l) 0))
+      (move-pen GRAPHIC-STREAM x (car l))))
+   (close image-file)))
+
+(defvar last-plot nil)
+(defun re-plot ()
+  (CURSORPOS 'C TYO)
+  (and last-plot (plot-plot last-plot)))
+
+(defun plotf (f-list a b n)
+       (let ((p (make-domained-plot a b n)))
+	    (do ()
+		((null f-list)
+		 (setq last-plot p)
+		 (re-plot))
+		(add-function-to-plot (pop f-list) p))))
+
+(defvar plotnum 50.)
+
+(defmacro (plot defmacro-displace-call nil)
+	  (f var a &optional b)
+	  (cond (b
+		 `(plotf (list (function (lambda (,var) ,f)))
+			 ,a ,b plotnum))
+		(t
+		 `(plotf '(,f) ,var ,a plotnum))))
+
+
+;; The Chirikov or Standard mapping:
+;; (p[n+1] = p[n] - k/2 sin (2q[n])) and k is a parameter
+;; (q[n+1] = q[n] + p[n+1])
+
+(defvar chirikov-k 1.13)
+(defvar chirikov-n-per-run 200.)
+(defvar 2pi (times 8 (atan 1 1)))
+(defvar 1//2pi (quotient 1 2pi))
+
+(defvar graphic-sfa nil)
+(defun gr-format (x y string &rest l)
+  (call graphic-stream 'set-pen x y)
+  (lexpr-funcall 'format graphic-sfa string l))
+
+(declare (flonum (mod1$ flonum)))
+(defun mod1$ (x) (-$ x (float (ifix x))))
+
+(defun chirikov (&optional (runs 100.))
+  (if (fixp runs)
+      (do ((j 0 (1+ j))
+	   (l nil (cons (cons (quotient (random 1000000.) 1000000.0)
+			      (quotient (random 1000000.) 1000000.0))
+			l)))
+	  ((= j runs)
+	   (setq runs l))))
+  (set-graphic-stream)
+  (if (not graphic-sfa)
+      (setq graphic-sfa (make-graphics-sfa graphic-stream)))
+  (call graphic-stream 'set-window 0.0 1.0 0.0 1.0)
+  (cursorpos 'c tyo)
+  (open-image-file image-file-name)
+  (draw-frame graphic-stream)
+  (gr-format 0.0 1.1
+	     "Chirikov mapping plot. K=~S, ~D runs, ~D points per run."
+	     chirikov-k
+	     (length runs)
+	     chirikov-n-per-run)
+  (do ((l runs (cdr l)))
+      ((null runs)
+       (tyo #^g tyo)
+       (cursorpos 'm tyo))
+    (do ((j 0 (1+ j))
+	 (p (mod1$ (caar l)))
+	 (q (mod1$ (cdar l))))
+	((= j chirikov-n-per-run)
+	 (draw-point graphic-stream p q))
+      (declare (fixnum j) (flonum p q))
+      (draw-point graphic-stream p q)
+      (setq p (mod1$ (-$ p (*$ 1//2pi chirikov-k (sin (*$ 2pi q))))))
+      (setq q (mod1$ (+$ p q))))))
+
+(defun plot-file (filename)
+  ;; assume the file contains sets of four floating-point numbers for
+  ;; draw-line.
+  (set-graphic-stream)
+  (set-window GRAPHIC-STREAM x-min x-max y-min y-max)
+  (let (input-stream)
+    (unwind-protect
+      (progn (setq input-stream (open filename 'in))
+	     (unwind-protect
+	       (progn (open-image-file image-file-name)
+		      (draw-frame GRAPHIC-STREAM)
+		      (do ((x0)(x1)(y0)(y1))
+			  (())
+			(setq x0 (read input-stream '*eof*))
+			(and (eq x0 '*eof*) (return ()))
+			(setq y0 (read input-stream))
+			(setq x1 (read input-stream))
+			(setq y1 (read input-stream))
+			(call graphic-stream
+			      'draw-line
+			      (float x0)
+			      (float y0)
+			      (float x1)
+			      (float y1))))
+	       (close image-file)))
+      (and input-stream (close input-stream)))))

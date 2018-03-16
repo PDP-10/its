@@ -1,0 +1,1067 @@
+
+;;; This file contains the functions necessary to
+;;implement the INTERLISP ASKUSER function in MACLISP -- The
+;;first group of functions establishes systematic control over
+;;ITS handling of typed input -- The second group defines
+;;translations of INTERLISP functions used here into MACLISP --
+;;The third implements most of the MACLISP STRING package as it
+;;exists on MULTICS and implements within that the INTERLISP
+;;string functions used here -- The final group is the set of
+;;ASKUSER functions with slight modifications for the MACLISP
+;;environment
+
+;;; This implementation of the ASKUSER function should
+;;correspond exactly to its description in INTERLISP with the
+;;following exceptions: (1) Typeahead to the function is
+;;allowed, but no way exists to restore it in case it was
+;;directed to some other purpose -- (2) The <disconfirmation
+;;characters> which are <rubout> <^A> <^Q> and <^X> in the
+;;original implementation are replaced only by <rubout> (also
+;;called <DEL>) -- (3) Calling the function with a NIL KEYLST
+;;gives a default of only Yes or No -- (4) Some modifications
+;;have been made to improve cursor positioning
+
+;;; LIST UTILITIES FOR INTERLISP CONVERSION
+
+(DECLARE (MACROS T)
+	 (NEWIO T)
+	 (*EXPR INPUT-ACTIVATE INPUT-ECHO INPUT-UPPERCASE
+		STRINGP MKSTRING MAKE-ATOM STRINGLENGTH
+		NTHCHAR)
+	 (*LEXPR CATENATE SUBSTR CONCAT SUBSTRING)
+	 (*FEXPR ASKUSERLOOKUP)
+	 (SPECIAL KEYSTRING AUTOCOMPLETEFLG PROMPTON OPTIONS
+		  OPTIONSLST KEY NOECHOFLG PROMPTSTRING
+		  CONFIRMFLG FILE ANSWER INITIAL-TTY-STATUS))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; GLS crock so that the LISTEN code will work for both old
+;;; and NEWIO.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DECLARE (ARGS 'LISTEN NIL) (*LEXPR LISTEN) (FIXNUM (LISTENX)))
+
+(DEFUN LISTENX NIL
+       (COND ((STATUS FEATURES NEWIO) (LISTEN T))
+	     (T (LISTEN)))) 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ 
+
+;;; THE FOLLOWING ARE A NUMBER OF MACRO DEFINITIONS TO
+;;IMPLEMENT STANDARD INTERLISP FUNCTIONS IN MACLISP
+
+(MACRODEF SETQQ (VAR VAL) (SETQ VAR 'VAL)) 
+
+(MACRODEF RPAQQ (VAR VAL) (SETQ VAR 'VAL)) 
+
+(MACRODEF NLISTP (THING) (NOT (LISTP THING))) 
+
+(MACRODEF NEQ (THING1 THING2) (NOT (EQ THING1 THING2))) 
+
+(MACRODEF IPLUS BODY (/+ . BODY)) 
+
+(MACRODEF ITIMES BODY (* . BODY)) 
+
+(MACRODEF ILESSP BODY (< . BODY)) 
+
+(MACRODEF IGREATERP BODY (> . BODY)) 
+
+(MACRODEF DISMISS
+	  (MILLISECONDS)
+	  (SLEEP (//$ (FLOAT MILLISECONDS) 1000.0))) 
+
+(MACRODEF FMEMB BODY (MEMQ . BODY)) 
+
+(MACRODEF MEMB BODY (MEMQ . BODY)) 
+
+(MACRODEF CHARACTER (CH) (ASCII CH)) 
+
+(MACRODEF FRPLACD BODY (RPLACD . BODY)) 
+
+(MACRODEF NLSETQ BODY (ERRSET . BODY)) 
+
+(MACRODEF ERROR! BODY (ERROR '|ASKUSER ERROR| . BODY)) 
+
+(MACRODEF HELP BODY (ERROR '|ASKUSER ERROR FOR HELP|))
+ 
+(DEFUN PEEKC (FILE) 
+       (COND ((STRINGP FILE) (PEEKSTRING FILE))
+	     ((OR (NULL FILE) (EQ FILE T)) (ASCII (TYIPEEK)))
+	     (T (ERROR '|PEEKC NOT SUPPORTED FOR FILE|
+		       FILE)))) 
+
+(DEFUN READC (FILE) 
+       (COND ((STRINGP FILE) (READSTRING FILE))
+	     ((OR (NULL FILE) (EQ FILE T)) (READCH FILE))
+	     (T (ERROR '|READC NOT SUPPORTED FOR FILE|
+		       FILE)))) 
+
+(DEFUN READP (FILE) 
+       (COND ((STRINGP FILE) (PEEKSTRING FILE))
+	     ((OR (NULL FILE) (EQ FILE T))
+	      (NOT (= 0. (LISTENX))))
+	     (T (ERROR '|READP NOT SUPPORTED FOR FILE|
+		       FILE)))) 
+
+(DEFUN CLEARBUF (FILE) 
+       (COND ((EQ FILE T) (DO ((L (LISTENX) (LISTENX)))
+			      ((= L 0.) T)
+			      (DECLARE (FIXNUM L))
+			      (TYI)))
+	     (T (ERROR '|CLEARBUF NOT SUPPORTED FOR FILE|
+		       FILE))))
+
+
+(DEFUN LISTGET (LIST OPTION) 
+       (DO
+	((LIST LIST (CDDR LIST)))
+	((OR (NULL LIST) (EQ OPTION (CAR LIST))) (CADR LIST)))) 
+
+(DEFUN POSITION (FILE) 
+       (COND ((EQ FILE T)
+	      (COND ((MEMQ 'NEWIO (STATUS FEATURES))
+		     (CHARPOS T))
+		    (T (/- LINEL CHRCT))))
+	     (T (ERROR 'POSITION/ NOT/ DEFINED/ FOR/ FILE
+		       FILE))))
+
+(DEFUN NCONC1 (LIST ITEM) (NCONC LIST (NCONS ITEM))) 
+
+(MACRODEF CHCON1 (CHAR) (GETCHARN CHAR 1.)) 
+
+(MACRODEF LISTP (FORM) (AND (EQ (TYPEP FORM) 'LIST)
+			    FORM))
+
+;;;In NEWIO MACLISP, we can do a FASLOAD within a FASLOAD,
+;;;whereas in old-io, that is invalid.  Thus, in NEWIO we will
+;;;load up the STRING and STATTY packages automatically, whereas
+;;;in old-io they will have to be loaded explicitly.
+
+(COND ((MEMQ 'NEWIO (STATUS FEATURES))
+       (FASLOAD STRING FASL DSK LIBLSP)
+       (FASLOAD STATTY FASL DSK LIBLSP))
+      (T ;;Here is a hack for old-io.  A priori, we know that
+         ;;ASKUSER will call the functions INPUT-UPPERCASE and
+         ;;STRINGP before any others from the STRING or STATTY
+         ;;files.  Thus, we give them autoload properties to
+         ;;make sure that the files are loaded.
+	 (OR (GETL 'INPUT-UPPERCASE '(EXPR SUBR AUTOLOAD))
+	     (DEFPROP 
+	      INPUT-UPPERCASE (STATTY FASL DSK LIBLSP) AUTOLOAD))
+	 (OR (GETL 'STRINGP '(EXPR SUBR AUTOLOAD))
+	     (DEFPROP STRINGP (STRING FASL DSK LIBLSP) AUTOLOAD)))) 
+
+;;*PAGE
+
+;;; THE FOLLOWING SUPPORT THE INTERLISP-LIKE CAPABILITY
+;;OF READING AND PEEKING FROM STRINGS (sort of)
+
+(DEFUN PEEKSTRING (STRING) 
+       ((LAMBDA (PTR) 
+	 (COND ((NULL PTR)
+		(SETQ PTR
+		      (PUTPROP STRING 1. 'READ-PTR))))
+	 (COND ((ZEROP PTR) NIL)
+	       ((> PTR (STRINGLENGTH STRING))
+		(PUTPROP STRING 0. 'READ-PTR)
+		NIL)
+	       (T (NTHCHAR STRING PTR))))
+	(GET STRING 'READ-PTR))) 
+
+(DEFUN READSTRING (STRING) 
+       ((LAMBDA (PTR) 
+	 (COND
+	  ((NULL PTR)
+	   (SETQ PTR (PUTPROP STRING 1. 'READ-PTR))))
+	 (COND ((ZEROP PTR) NIL)
+	       ((> PTR (STRINGLENGTH STRING))
+		(PUTPROP STRING 0. 'READ-PTR)
+		NIL)
+	       (T (PUTPROP STRING (1+ PTR) 'READ-PTR)
+		  (NTHCHAR STRING PTR))))
+	(GET STRING 'READ-PTR))) 
+
+(DEFUN NCHARS (ITEM) 
+       (COND ((STRINGP ITEM) (STRINGLENGTH ITEM))
+	     (T (FLATC ITEM)))) 
+
+(DEFUN PRINCF (THING FILE) 
+       ((LAMBDA (*NOPOINT) 
+	 (COND
+	  ((OR (NULL FILE) (EQ FILE T))
+	   (COND ((STRINGP THING) (PRINC (MAKE-ATOM THING)))
+		 (T (PRINC THING))))
+	  (T (ERROR '|PRINC NOT SUPPORTED FOR FILES|
+		    FILE))))
+	T)
+       THING) 
+
+(DEFUN READF (FILE FLG) 
+       (COND ((EQ FILE T) (READ))
+	     (T (ERROR '|READ OPTION NOT SUPPORTED FOR FILES|
+		       FILE)))) 
+
+(DEFUN PACK (LIST) 
+       (PROG (VAL TEM) 
+	     (SETQ VAL
+		   (INTERN (MAKE-ATOM
+			    (APPLY (FUNCTION CONCAT) LIST))))
+	     (AND
+	      (NUMBERP
+	       (SETQ TEM
+		     (CAR
+		      (ERRSET (READLIST (EXPLODEN VAL)) NIL))))
+	      (SETQ VAL TEM))
+	     (RETURN VAL)))
+
+;;*page
+
+;;;Here it is... The actual ASKUSER functions. 
+
+(DEFUN ASKUSER EXPR NARGS 
+       ;;; This function provides the defaulting of NIL
+       ;;arguments for the call to ASKUSER
+       (APPLY
+	(FUNCTION ASKUSER0)
+	(DO ((I 1. (1+ I))
+	     (A NIL (CONS (AND (> NARGS (1- I)) (ARG I)) A)))
+	    ((> I 8.) (NREVERSE A))))) 
+
+(MACRODEF ASKUSERPRINC (X) (PRINCF X T)) 
+
+(DEFUN ASKUSER0 (WAIT DEFAULT MESS KEYLST TYPEAHEAD
+		 LISPXPRNTFLG OPTIONSLST FILE) 
+ ;;; wt: /17-DEC-75 19. 1.
+ ;;; Note that LISPXPRNTFLG has no meaning in
+ ;;MACLISP -- we use it to suppress clearing the bottom
+ ;;portion of the screen on a CRT terminal -- Normal action is
+ ;;to clear it
+ ;;; reads characters one at a time echoing
+ ;;and/or prompting as indicated by KEYLST
+ (PROG (OLDTTBL CHAR TEM KEYLST1 ANSWER BUFS ORIGKEYLST
+	ORIGMESS ORIGDEFAULT NC KEY PROMPTSTRING OPTIONS
+	NOECHOFLG CONFIRMFLG PRINTLST INDENTATION) 
+  (DECLARE (FIXNUM NC))
+  (SETQ ORIGKEYLST (COND ((NULL KEYLST)
+			  ;;; Yes no recognized
+			  ;;without confirmation
+			  (SETQQ KEYLST ((Y |es/
+|)					 (N |o/
+|))))			 (T KEYLST)) 
+	ORIGMESS MESS 
+	ORIGDEFAULT DEFAULT 
+	NC 1.)
+  (COND ((NULL FILE) (SETQ FILE T)) ((NEQ FILE T) (GO MESS)))
+  (ASKUSERTTYSETUP)
+  ;;;
+  ;;ASKUSERTTYSETUP establishes the MACLISP input environment
+  ;;described below in the original INTERLISP implementation
+  ;;--- ASKUSERTTBL has (CONTROL T) and (RAISE T) performed --
+  ;;The latter means that if the user types lower case
+  ;;characters they are converted to uppercase -- {Note however
+  ;;that this will recognize lower case y and n -- This is so
+  ;;the caller can provide y or n as a default and distinguish
+  ;;the default case from the case where the user types
+  ;;lowercase y or n (which will be converted to uppercase
+  ;;automatically by the terminal table) -- This has been removed.}
+  ;; -- ASKUSERTTBL also
+  ;;has (ECHOMODE NIL) performed so it can handle mistypings
+  ;;and confirations properly
+  ;;; File can be a file name or a string
+  (COND (TYPEAHEAD 
+		   ;;; TYPEAHEAD permitted
+		   (SETQ TYPEAHEAD (READP T))
+		   ;;; used in case there is a mistake -- In
+		   ;;this case all typeahead is restored -- In
+		   ;;the ITS implementation it is not known
+		   ;;how to restore the typeahead in case of
+		   ;;error - so it is discarded
+		   (GO MESS)))
+  (AND (READP T) (PRINCF '|| T))
+  (CLEARBUF T)
+  ;;; Clear typeahead
+  (COND
+   ((LISTP MESS)
+    (ASKUSERPRINC (CAR MESS))
+    (COND ((SETQ MESS (CDR MESS)) (ASKUSERPRINC '| |))
+	  (T (ASKUSERPRINC '| ? |))))
+   (MESS (ASKUSERPRINC MESS) (SETQ MESS NIL)))
+  ;;;
+  ;;The problem with user interactions such as this where
+  ;;typeahead is not allowed is that we have no way of knowing
+  ;;when the user types something (i.e. if he typed it after
+  ;;seeing part of the message or not) without doing a DOBE
+  ;;before doing any printing and this is not desirable as it
+  ;;produces a noticeable snag in teletype output - Therefore
+  ;;what we do is the following: all typeahead before the call
+  ;;to ASKUSER is cleared and saved for later restoration and
+  ;;in the event there is any typeahead bells are rung to warn
+  ;;the user to stop typing (this is done by the call to
+  ;;CLBUFS above) - After that we print something: either the
+  ;;first part of the message or the message itself to give
+  ;;the user time to respond to the warning to stop typing --
+  ;;In this interval anything that is typed is thrown away --
+  ;;After printing the message we do a DOBE and then check to
+  ;;see if user has typed anything -- If he has this material
+  ;;is discarded and bells printed again to warn him
+  (COND ((READP T) (PRINCF '|| T) (CLEARBUF T)))
+MESS
+  ;;; MESS is either an atom or string or
+  ;;a list in which case it is MAPRINTed
+  (COND ((NULL MESS) 
+		     ;;; Either user did not supply a
+		     ;;message or else it was printed above
+		     )
+	((NLISTP MESS) (ASKUSERPRINC MESS))
+	(T (MAPC (FUNCTION (LAMBDA (X) (PRINCF X T)
+				       (PRINCF '| | T)))
+		 MESS)
+	   (PRINCF '|? | T)))
+  (SETQ INDENTATION (POSITION T))
+  (COND ((OR (NOT (NUMBERP WAIT)) (NULL DEFAULT)) 
+	 ;;; WAIT is either a number meaning wait that many
+	 ;;seconds or NIL meaning wait forever
+	 (GO READLP)))
+  (SETQ WAIT (FIX (TIMES 4. WAIT)))
+  ;;; WAIT is in seconds but we are going
+  ;;to dismiss for quarter second intervals
+  (COND ((AND DEFAULT (NLISTP DEFAULT))
+	 (SETQ DEFAULT (LIST DEFAULT))))
+WAITLP
+  (COND ((READP T))
+	((NOT (MINUSP (SETQ WAIT (SUB1 WAIT)))) (DISMISS 250.)
+						(GO WAITLP))
+	(T 
+	   ;;; Assume DEFAULT if
+	   ;;nothing typed in WAIT/4 seconds
+	   (PRINCF '|...| T)
+	   (SETQ CHAR (CAR DEFAULT))
+	   (GO INTERP)))
+READLP
+  (COND ((NULL LISPXPRNTFLG) (CURSORPOS 'ERASE)))
+  ;;; Erase the rest of the screen
+  (COND ((AND (STRINGP FILE) (NOT (READP FILE)))
+	 (SETQ FILE T)
+	 (ASKUSERTTYSETUP)))
+  ;;; the string ran out
+  (SETQ CHAR (PEEKC FILE))
+  ;;; PEEKC used so that in case of $
+  ;;as a key askuser can do a READ
+  (AND (NEQ FILE T)
+       (IGREATERP (SETQ TEM (CHCON1 CHAR)) 96.)
+       (ILESSP TEM 123.)
+       (SETQ CHAR (CHARACTER (IPLUS TEM -32.))))
+  ;;; converts lower case to the canonical upper
+  ;;case on input from strings and files -- ASKUSERTTBL does
+  ;;this automatically on input from terminal
+  (SETQ DEFAULT NIL)
+INTERP
+  ;;;
+  ;;KEYLST is a list of elements of the form (KEY PROMPTSTRING
+  ;;.  OPTIONS) where KEY is an atom or string (including the
+  ;;empty string) that characters are to be matched against -
+  ;;PROMPTSTRING a string or atom (NIL is equivalent to) and
+  ;;OPTIONS a list in property list format which can contain
+  ;;the properties (KEYLST CONFIRMFLG RETURN EXPLAINSTRING
+  ;;NOECHOFLG KEYSTRING PROMPTON COMPLETEON AUTOCOMPLETEFLG)
+  ;;Default options for the entire keylst can be supplied as
+  ;;an argument to ASKUSER 
+  ;;;- - A key is considered to be
+  ;;complete when (1.) all of its characters have been matched
+  ;;and it is the only key left ie there are no other keys for
+  ;;which this key is a substring (2.) all of its characters
+  ;;have been matched and CONFIRMFLG is NIL and the next
+  ;;character matches one of the keys on its KEYLST (3.) all
+  ;;of its characters have been matched and a confirming
+  ;;character is typed ie a cr space or member of CONFIRMFLG
+  ;;(This option is used for implementing TENEX protocosl
+  ;;where CONFIRMFLG is ($)) or (4.) there is only one key
+  ;;left and a confirming character is typed 
+  ;;;- - When a key is
+  ;;complete PROMPTSTRING is printed Then if CONFIRMFLG is
+  ;;non-NIL and the key was not completed via a confirming
+  ;;character (case 3.  and 4.  above) askuser waits for a
+  ;;confirming character 
+  ;;;- - After confirmation if KEYLST is
+  ;;non NIL askuser descends into KEYLST Otherwise askuser
+  ;;returns a value which is the value of (eval of) the RETURN
+  ;;field if non-NIL otherwise the result of packing all the
+  ;;keys or keystrings if present - see below on the path - At
+  ;;any point the user can type an alt-mode which is
+  ;;equivalent to typing the next n shared characters (if
+  ;;there are none a bell is rung) Typing a confirming
+  ;;character has the same effect as typing an alt-mode ie the
+  ;;next n shared characters will be supplied If the key is
+  ;;the only key left confirmation is not required (this is
+  ;;case 4.  above) If the key is not the only key left a bell
+  ;;is rung 
+  ;;;- - special options: - EXPLAINSTRING if non-nil
+  ;;used in place of keykeystring + promptstring when user
+  ;;types a ? - NOECHOFLG if non-nil characters that are
+  ;;matched are not echoed - KEYSTRING if non-nil characters
+  ;;that are matched are echoed from keystring The main reason
+  ;;for this feature echoing since ASKUSER converts everything
+  ;;to a canonical upper case form keys will always be
+  ;;represented in uppercase KEYSTRING can be used to provide
+  ;;for lower case echoing and for returning a lower case
+  ;;value ie if the RETURN option is not specified and
+  ;;KEYSTRING is specified then KEYSTRING will be used in
+  ;;constructing the value to be returned rather than KEY -
+  ;;PROMPTON if non-NIL PROMPTSTRING is printed only when the
+  ;;key is confirmed with a member of PROMPTON This feature is
+  ;;used for implementing TENEX protocols in which case
+  ;;PROMPTON would be ($) Note that this doesnt make much
+  ;;sense unless CONFIRMFLG is also non-NIL and includes the
+  ;;elements on PROMPTON 
+  ;;;- - COMPLETEON when a confirming
+  ;;character is typed the n characters that are supplied are
+  ;;not echoed unless the confirming charactter is a member of
+  ;;COMPLETEON This is used for implementing tenex protocols
+  ;;in which case COMPLETEON is ($) ie user could complete a
+  ;;command with space or cr but completion and prompting
+  ;;would take place only for $ 
+  ;;;- - AUTOCOMPLETEFLG if T says
+  ;;supply characters as soon as they are unambiguous ie act
+  ;;as though alt-mode were typed after each character (but
+  ;;dont ring a bell) 
+  ;;;- - - & as a key matches any character 
+  ;;;- - "" can be used as a key. It starts out with all of its
+  ;;characters matched so that it is complete if it is the
+  ;;only key left (1.) above or the next character matches one
+  ;;of the keys on its KEYLST etc 
+  ;;;- - $ can be used as a key
+  ;;to match the result of doing a READ. For example the
+  ;;filepkg has as one of its entries on its keylst
+  ;;("" file/list: KEYLST ($)) which means that if a character
+  ;;is typpd that does not match any of the other characters
+  ;;on its keylst the prompt message filelist: is printed and
+  ;;a read is then performed and returned as the value of the
+  ;;call to askuser 
+  ;;;- - - for the more common useage, KEY is the same as
+  ;;(KEY NIL CONFIRMFLG T) and (KEY . PROMPT) the same as
+  ;;(KEY PROMPT).
+  (AND
+   (CATCH
+    (PROGN
+     ;;; The original INTERLISP code contains
+     ;;a (GO INTERP) inside the following FOR PROG -- since
+     ;;MACLISP does not support non-local GOs this has been
+     ;;replaced by the CATCH-THROW below
+     (SETQ 
+      KEYLST1
+      (PROG ($$LST1 $$VAL ENTRY $$TEM1 $$TEM2) 
+	     (SETQ $$LST1 KEYLST)
+	$$LP (SETQ ENTRY (CAR $$LST1))
+	     (ASKUSERSETUP ENTRY)
+	     (COND
+	      ((NLISTP $$LST1) (GO $$OUT))
+	      ((NOT
+		(COND
+		 ((EQ CHAR (SETQ TEM (NTHCHAR KEY NC))) 
+		  ;;; char matches the corresponding character
+		  ;;in key
+		  T)
+		 ((OR TEM $$VAL (EQ CHAR '?)) 
+		  ;;;
+		  ;;There was another character in the key and
+		  ;;char didnt match it The $$VAL check is to
+		  ;;insure that once there has been a match with
+		  ;;a character in a key atthis level we do not
+		  ;;treat space or cr as terminators so that
+		  ;;space and cr can be used as keys themselves
+		  ;;nor do we descend into subkeylists and so
+		  ;;thatthe user can specify a default match via
+		  ;;as a place marker and have it operate ONLY
+		  ;;when other elements are not matched by
+		  ;;placing it last on the keylst eg if keylst
+		  ;;is of the form ((cr --) -- (-- subkeylst))
+		  ;;and a cr is typed matching wont go into
+		  ;;subkeylst ADDTOFILES uses this feature.
+					      NIL)
+		 ((AND (NULL (ASKUSERLOOKUP CONFIRMFLG))
+		       (ASKUSERLOOKUP KEYLST)
+		       (ASKUSER1 ENTRY CHAR))
+		  ;;;
+		  ;;We have already matched all the characters
+		  ;;in key and entry contains a lower keylst
+		  ;;and char matches one of its elements
+		  ;;therefore do any prompting necessary for
+		  ;;this key and descend
+		  (SETQ ANSWER
+			(NCONC1
+			 ANSWER
+			 (OR (ASKUSERLOOKUP KEYSTRING) KEY)))
+		  (AND
+		   (NULL NOECHOFLG)
+		   (SETQ PRINTLST
+			 (NCONC1
+			  PRINTLST
+			  (OR (ASKUSERLOOKUP KEYSTRING) KEY))))
+		  (AND PROMPTSTRING
+		       (SETQ PRINTLST
+			     (NCONC1 PRINTLST
+				     (PRINCF PROMPTSTRING T))))
+		  ;;;
+		  ;;PRINTLST is maintained to implement the ?
+		  ;;feature and to be able to replay the
+		  ;;output to put on the history
+		  (SETQ KEYLST (ASKUSERLOOKUP KEYLST))
+		  (SETQ NC 1.)
+		  (THROW T DESCEND)
+		  ;;; CHAR will then be
+		  ;;matched aainst the lower keylst
+		  )
+		 ((OR (EQ CHAR '/
+)		      (EQ CHAR '| |)
+		      (MEMB CHAR (LISTP CONFIRMFLG)))
+		  ;;;
+		  ;;all of its characters were matched and
+		  ;;this character was a cr or space eg
+		  ;;CHARLST= (CLISP CLISPFLG CLISPTRANFLG) and
+		  ;;CLISP cr has been typed The check is made
+		  ;;after the other checks so that space and
+		  ;;carriage return themselves can be used in
+		  ;;keys Note that it doesnt matter whether
+		  ;;confirmflg is T or not the user can still
+		  ;;use cr or space to terminate a key
+		  T)))
+	       (GO $$ITERATE)))
+	     (SETQ $$TEM1 ENTRY)
+	     (COND
+	      ($$TEM2
+	       (FRPLACD $$TEM2 (SETQ $$TEM2 (LIST $$TEM1))))
+	      (T (SETQ $$VAL (SETQ $$TEM2 (LIST $$TEM1)))))
+	$$ITERATE
+	     (SETQ $$LST1 (CDR $$LST1))
+	     (GO $$LP)
+	$$OUT(RETURN $$VAL)))
+     NIL)
+    DESCEND)
+   (GO INTERP))
+  (COND
+   (KEYLST1 (SETQ KEYLST KEYLST1) (GO RIGHT))
+   ((AND (NULL ANSWER)
+	 (EQ NC 1.)
+	 (NULL DEFAULT)
+	 (OR (EQ CHAR '| |) (EQ CHAR '/
+)))
+    ;;; user typed cr or space simply to
+    ;;keep dwim from defaulting on him
+    (PRINCF CHAR T)
+    (READC FILE)
+    (GO READLP))
+   ((OR (EQ CHAR ')
+	(EQ CHAR '/
+)	(EQ CHAR '| |)
+	(MEMB CHAR (LISTP CONFIRMFLG)))
+    ;;;
+    ;;altmode cr or space says supply characters from atoms in
+    ;;this level of keylst until there are two or more atms
+    ;;with different characters at thatposition CR and space
+    ;;is same as alt mode except if there is only one atom
+    ;;then return without confirmation after supplying the
+    ;;characters If thee are not atms with common characters
+    ;;beyond this point then ring a bell and take no action
+    (COND
+     ((NULL (SETQ TEM (ASKUSER$ KEYLST CHAR NC))) (GO WRONG))
+     (T (SETQ NC (ADD1 TEM))))
+    (AND (NULL DEFAULT) (READC FILE))
+    (COND ((NULL (CDR KEYLST)) 
+			       ;;; only one Therefore this
+			       ;;character completes the key
+			       (GO COMPLETED))
+	  ((OR (EQ CHAR '/
+) (EQ CHAR '| |))
+	   (PRINCF '/ T)
+	   ;;; print a bell
+	   )
+	  )
+    (GO NEXT))
+   ((EQ CHAR '|ï|) 
+    ;;; del
+    (GO RETRY))
+   ((AND (NULL DEFAULT) (EQ CHAR '?) (EQ FILE T))
+    (TERPRI)
+    (READC T)
+    (PRINCF '|one of:/
+| T)(NLSETQ (ASKUSEREXPLAIN KEYLST PRINTLST OPTIONSLST FILE))
+    (TERPRI)
+    (ASKUSERINDENT INDENTATION)
+    (MAPC (FUNCTION (LAMBDA (X) (PRINCF X T))) PRINTLST)
+    (AND
+     (NEQ NC 1.)
+     (PRINCF
+      (SUBSTRING (COND ((NLISTP (CAR KEYLST)) (CAR KEYLST))
+		       (T (OR (LISTGET (CAR KEYLST)
+						 'KEYSTRING)
+			      (CAR (CAR KEYLST)))))
+		 1.
+		 (SUB1 NC))
+      T))
+    ;;; These are the characters that have been
+    ;;matched on this level key bt not yet added to answer or
+    ;;printlst
+    (GO READLP))
+   ((SETQ KEYLST1
+	  (PROG ($$LST1 $$VAL X) 
+		 (SETQ $$LST1 KEYLST)
+	    $$LP (SETQ X (CAR $$LST1))
+		 (COND ((NLISTP $$LST1) (GO $$OUT)))
+		 (COND ((OR (EQ X ')
+			    (AND (LISTP X)
+				 (OR (EQ (CAR X) '&)
+				     (EQ (CAR X) '))))
+			(SETQ $$VAL X)
+			(GO $$OUT)))
+	    $$ITERATE
+		 (SETQ $$LST1 (CDR $$LST1))
+		 (GO $$LP)
+	    $$OUT(RETURN $$VAL)))
+    (COND
+     ((OR (EQ KEYLST1 '&)
+	  (AND (LISTP KEYLST1) (EQ (CAR KEYLST1) '&)))
+      (SETQ KEYLST (LIST
+		    (CONS CHAR
+			  (AND (LISTP KEYLST1) (CDR KEYLST1)))))
+      (GO RIGHT))
+     (T
+      ;;; altmode
+      (AND (EQ FILE T) (PRINCF CHAR T))
+      ;;;
+      ;;The character would not have been echoed since the
+      ;;PEEKC was done with echomode off Since it has already
+      ;;been seen by LISP it wold not be echoed by the READ
+      ;;below even though ECHOMODE would then be turned on
+      ;;Therefore must print it
+      (OR (NLSETQ (PROGN (ASKUSERTTYCLEANUP)
+			 (SETQ TEM (READF FILE T))
+			 (ASKUSERTTYSETUP)))
+	  (GO RETRY))
+      (ASKUSERSETUP KEYLST1)
+      (SETQ KEYLST
+	    (LIST (CONS TEM (CONS PROMPTSTRING
+				  (CONS 'NOECHOFLG
+					(CONS T OPTIONS))))))
+      ;;; really should be a create
+      ;;but there is a bug in record
+      ;;; Creates a suitable keylst
+      ;;NOECHOFLG is set to T so that the cr or space that
+      ;;terminated the atom wont be echoed twice
+      (SETQ NC (ADD1 (NCHARS TEM)))
+      (GO READLP)))))
+WRONG
+  ;;; user typed invalid answer
+  (AND (NEQ FILE T) (ERROR!))
+  (AND (NULL DEFAULT) (READC FILE))
+  (COND (TYPEAHEAD (GO RETRY1)))
+  (PRINCF '|| T)
+  (CLEARBUF T)
+  (GO READLP)
+RIGHT
+  ;;; character matched
+  (AND (NULL DEFAULT) (READC FILE))
+  (ASKUSERSETUP (CAR KEYLST))
+  (COND ((OR (CDR KEYLST) (ILESSP NC (NCHARS KEY)))
+	 ;;; More than one candidate or
+	 ;;this candidate not finished yet
+	 (AND (NULL NOECHOFLG)
+	      (EQ FILE T)
+	      (SETQ TEM
+		    (COND ((SETQ TEM (ASKUSERLOOKUP KEYSTRING))
+			   ;;; primarily to allow
+			   ;;specifying of echoing in lower
+			   ;;case even though askuser always
+			   ;;converts to uppercase when it
+			   ;;reads
+			   (NTHCHAR TEM NC))
+			  (T CHAR)))
+	      (PRINCF TEM T))
+	 (SETQ NC (ADD1 NC))
+	 (COND ((AND (ASKUSERLOOKUP AUTOCOMPLETEFLG)
+		     (SETQ TEM (ASKUSER$ KEYLST CHAR NC)))
+		(COND ((EQ (SETQ NC TEM) (NCHARS KEY))
+		       (GO COMPLETED))
+		      (T (SETQ NC (ADD1 NC))))))
+	 (GO NEXT)))
+  ;;; There is only one entry left and
+  ;;all of its characters are matched
+  (AND (NULL NOECHOFLG)
+       (EQ FILE T)
+       (EQ NC (NCHARS KEY))
+       (SETQ TEM
+	     (COND ((SETQ TEM (ASKUSERLOOKUP KEYSTRING))
+		    (NTHCHAR TEM NC))
+		   (T CHAR)))
+       (PRINCF TEM T))
+  ;;; the character is the last one in the key the
+  ;;case where a cr was typed to terminate a key is handled
+  ;;below
+COMPLETED
+  (SETQ ANSWER
+	(NCONC1 ANSWER (OR (ASKUSERLOOKUP KEYSTRING) KEY)))
+  (AND
+   (NULL NOECHOFLG)
+   (SETQ PRINTLST
+	 (NCONC1 PRINTLST (OR (ASKUSERLOOKUP KEYSTRING) KEY))))
+  (AND
+   PROMPTSTRING
+   (OR (NULL (SETQ TEM (ASKUSERLOOKUP PROMPTON)))
+       (MEMB CHAR TEM))
+   (SETQ PRINTLST (NCONC1 PRINTLST (PRINCF PROMPTSTRING T))))
+  ;;; If PROMPTON is present must wait till after
+  ;;confirmation to see if confirming charactter is PROMPTON
+  ;;(usually $) this enables tenex like protocols
+  (AND (NULL NOECHOFLG)
+       (EQ FILE T)
+       (IGREATERP NC (NCHARS KEY))
+       (PRINCF (COND ((AND (EQ CHAR '/
+)			   (NULL (ASKUSERLOOKUP KEYLST)))
+		      ;;; space is echoed for all
+		      ;;confirming characters except on a
+		      ;;terminal leaf in which char isused
+		      ;;itself
+		      CHAR)
+		     (T '| |))
+	       T))
+  (COND ((OR (NULL CONFIRMFLG)
+	     (EQ CHAR '| |)
+	     (EQ CHAR '/
+)	     (MEMB CHAR (LISTP CONFIRMFLG)))
+	 ;;; CONFIRMFLG can be a list of characters
+	 ;;that are acceptable for confirming eg ($) can be
+	 ;;used to implemente tenex like protocols
+	 (GO CONFIRMED))
+	(T (GO CONFIRM)))
+NEXT
+  (SETQ DEFAULT (CDR DEFAULT))
+  ;;; DEFAULT stays one behind the current character
+  ;;so that we can tell if the character came from a default
+  ;;list
+  (COND ((NULL DEFAULT) (GO READLP))
+	(T (SETQ CHAR (CAR DEFAULT)) (GO INTERP)))
+  (GO INTERP)
+CONFIRM
+  (COND ((AND (STRINGP FILE) (NOT (READP FILE)))
+	 (SETQ FILE T)
+	 (ASKUSERTTYSETUP)))
+  (SETQ CHAR (COND ((SETQ DEFAULT (CDR DEFAULT)) (CAR DEFAULT))
+		   (T (READC FILE))))
+  (COND
+   ((MEMQ CHAR '(/
+ | |))
+    ;;; CR or space
+    (AND (NULL NOECHOFLG)
+	 (PRINCF (COND ((NULL (ASKUSERLOOKUP KEYLST)) CHAR)
+		       (T '| |))
+		 T))
+    (GO CONFIRMED))
+   ((EQ CHAR '|ï|) 
+		   ;;; control-a or q or x
+		   (GO RETRY))
+   ((MEMB CHAR (LISTP CONFIRMFLG))
+    ;;; used for TENEX mode
+    (AND
+     PROMPTSTRING
+     (SETQ TEM (ASKUSERLOOKUP PROMPTON))
+     (MEMB CHAR TEM)
+     (SETQ PRINTLST (NCONC1 PRINTLST (PRINCF PROMPTSTRING T))))
+    (AND (NULL NOECHOFLG) (PRINCF '| | T))
+    (GO CONFIRMED)))
+  (COND
+   ((NEQ CHAR '?) (PRINCF '/? T) (CLEARBUF T)))
+  (PRINCF '| [confirm]| T)
+  (GO CONFIRM)
+CONFIRMED
+  (COND ((SETQ TEM (ASKUSERLOOKUP KEYLST)) (SETQ KEYLST TEM)
+					   (SETQ NC 1.)
+					   (GO NEXT)))
+  ;;; (COND
+  ;;(LISPXPRNTFLG (MAPC (FUNCTION (LAMBDA (X) (ASKUSERPRINC
+  ;;X))) PRINTLST) (COMMENT fakes the printing for the history
+  ;;list)))
+  (COND (BUFS 
+	      ;;; I do not know how to do this in ITS
+	      ;;; (BKBUFS BUFS)
+	      )
+	)
+  (ASKUSERTTYCLEANUP)
+  (RETURN
+   (COND
+    ((SETQ TEM (OR (FMEMB 'RETURN OPTIONS)
+		   (FMEMB 'RETURN OPTIONSLST)))
+     (COND
+      ((AND
+	(NOT
+	 (CATCH
+	  (PROGN (SETQ TEM (NLSETQ (EVAL (CADR TEM)))) NIL)
+	  RETRY))
+	TEM)
+       ;;; ASKUSERLOOKUP not used since
+       ;;then couldnt distinguish case where RETURN NIL was
+       ;;specified from case where RETURN was not specified at
+       ;;all
+       ;;; This permits user to return
+       ;;ANSWER as a list itself or to take some other action
+       ;;and then restart by simply generating an error -- In
+       ;;the MACLISP system it is better form to do a (THROW T
+       ;;RETRY)
+       (CAR TEM))
+      (T (GO RETRY))))
+    (ANSWER (PACK ANSWER))
+    (T (HELP) KEY)))
+RETRY
+  (COND (TYPEAHEAD (GO RETRY1)))
+  (PRINCF '___/
+ T)
+  (CLEARBUF T)
+  (SETQ KEYLST ORIGKEYLST)
+  (SETQ PRINTLST NIL)
+  (SETQ NC 1.)
+  (SETQ ANSWER NIL)
+  (ASKUSERINDENT INDENTATION)
+  (GO READLP)
+RETRY1
+  ;;; User has typed ahead before the call to
+  ;;askuser1 and his resonse is invalid therefore assume he
+  ;;didnt know that askuser would be called and his typeahead
+  ;;was intended for what follows clear and ave the typeahead
+  ;;and continue with interaction
+  ;;; In the ITS implementation this is not
+  ;;possible -- we merely throw away the typed-ahead input and
+  ;;start again
+  (CLEARBUF T)
+  (SETQ TYPEAHEAD NIL)
+  ;;; so this is only done once
+  (SETQ ANSWER NIL)
+  (SETQ KEYLST ORIGKEYLST)
+  (SETQ MESS ORIGMESS)
+  (SETQ DEFAULT ORIGDEFAULT)
+  (SETQ PRINTLST NIL)
+  (TERPRI)
+  (GO MESS))) 
+
+(DEFUN ASKUSERLOOKUP FEXPR (FIELD) 
+       ;;; wt: / 4-DEC-75 /00:27
+       ;;; this wuld be just a fetch xcept want to lok
+       ;;it up on optionslst if not found on options
+       (PROG (TEM) 
+	     (RETURN
+	      (COND ((SETQ TEM (FMEMB (CAR FIELD) OPTIONS))
+		     (CADR TEM))
+		    ((SETQ TEM (FMEMB (CAR FIELD) OPTIONSLST))
+		     (CADR TEM)))))) 
+
+(DEFUN ASKUSER$ (KEYLST CHAR NC) 
+       ;;; wt: / 4-DEC-75 /00:21
+       (PROG ($$LST1 $$VAL ENTRY NC0 KEY0 TEM) 
+	      (SETQ $$LST1 (CDR KEYLST))
+	      (SETQ KEY0
+		    (COND ((NLISTP (CAR KEYLST)) (CAR KEYLST))
+			  (T (CAR (CAR KEYLST)))))
+	      (SETQ NC0 (NCHARS KEY0))
+	 $$LP (SETQ ENTRY (CAR $$LST1))
+	      (SETQ KEY (COND ((NLISTP ENTRY) ENTRY)
+			      (T (CAR ENTRY))))
+	      (COND ((NLISTP $$LST1) (GO $$OUT)))
+	      ;;; Goes through keylst and looks at each key and
+	      ;;determines the largest N for which NTHCHAR of
+	      ;;thatcharacter is equal for every atom
+	      (SETQ 
+	       NC0
+	       (PROG ($$VAL I) 
+		      (DECLARE (FIXNUM I))
+		      (SETQ I 1.)
+		 $$LP (COND ((OR (NEQ (NTHCHAR KEY I)
+				      (NTHCHAR KEY0 I))
+				 (IGREATERP I NC0))
+			     (GO $$OUT)))
+		 $$ITERATE
+		      (SETQ I (IPLUS I 1.))
+		      (GO $$LP)
+		 $$OUT(RETURN (SUB1 I))))
+	 $$ITERATE
+	      (SETQ $$LST1 (CDR $$LST1))
+	      (GO $$LP)
+	 $$OUT(COND ((ILESSP NC0 NC) 
+				     ;;; all atoms have different
+				     ;;characters at this
+				     ;;position
+				     (RETURN NIL)))
+	      (ASKUSERSETUP (CAR KEYLST))
+	      (SETQ 
+	       TEM
+	       (AND
+		(OR
+		 (NULL (SETQ TEM (ASKUSERLOOKUP COMPLETEON)))
+		 (MEMB CHAR TEM))
+		(SUBSTRING (OR (ASKUSERLOOKUP KEYSTRING) KEY)
+			   NC
+			   (COND ((EQ (NCHARS KEY0) NC0)
+				  -1.
+				  ;;reason for this is: in case
+				  ;;KEYSTRING is longer, will
+				  ;;get all of it.
+				   )
+				 (T NC0)))))
+	      ;;; if COMPLETEON is $ means only complete on
+	      ;;alt-mode this is used for tenex type protocol
+	      (AND (NULL NOECHOFLG) TEM (PRINCF TEM T))
+	      ;;; Reason for not just using value of noechoflg
+	      ;;is that askusersetup oul have set noechoflg to
+	      ;;T when reading from a string in order to
+	      ;;suppress echoing of the character but this
+	      ;;does not mean that we do not echo the
+	      ;;characters that are supplied for copleting
+	      (RETURN NC0))) 
+
+(DEFUN ASKUSER1 (ENTRYX CHAR) 
+       ;;; wt: / 4-DEC-75 /01:07
+       ;;; We know that ENTRYX contains a subkeylst This function
+       ;;sees if char could conceivably match one of the
+       ;;entries on keylst
+       (PROG ($$LST1 $$VAL ENTRY TEM) 
+	      (SETQ $$LST1
+		    (LISTGET (CDDR ENTRYX) 'KEYLST))
+	 $$LP (SETQ ENTRY (CAR $$LST1))
+	      (SETQ TEM (COND ((NLISTP ENTRY) ENTRY)
+			      (T (CAR ENTRY))))
+	      (COND ((NLISTP $$LST1) (GO $$OUT)))
+	      (COND ((OR (EQ TEM '&)
+			 (EQ TEM ')
+			 (EQ (SETQ TEM (NTHCHAR TEM 1.)) CHAR)
+			 (AND (NULL TEM)
+			      (LISTP ENTRY)
+			      (LISTP (CDR ENTRY))
+			      (ASKUSER1 ENTRY CHAR)))
+		     (SETQ $$VAL ENTRY)
+		     (GO $$OUT)))
+	 $$ITERATE
+	      (SETQ $$LST1 (CDR $$LST1))
+	      (GO $$LP)
+	 $$OUT(RETURN $$VAL))) 
+
+(DEFUN ASKUSERSETUP (ENTRY) 
+       ;;; wt: / 4-DEC-75 /00:25
+       ;;; Sets free variables KEY
+       ;;CONFIRMFLG QUIETFLG and PROMPTSTRING
+       (PROG (TEM) 
+	     (COND
+	      ((NLISTP ENTRY)
+	       (SETQ KEY ENTRY)
+	       (SETQ PROMPTSTRING NIL)
+	       (SETQ OPTIONS NIL)
+	       ;;; The default is for NOECHOFLG
+	       ;;to be NIL and CONFIRMFLG to be T
+	       (SETQ NOECHOFLG
+		     (LISTGET OPTIONSLST 'NOECHOFLG))
+	       (SETQ CONFIRMFLG
+		     (COND ((SETQ TEM (MEMB 'CONFIRMFLG
+					    OPTIONSLST))
+			    (CADR TEM))
+			   (T T))))
+	      ((NLISTP (CDR ENTRY))
+	       (SETQ KEY (CAR ENTRY))
+	       (SETQ PROMPTSTRING (CDR ENTRY))
+	       (SETQ OPTIONS NIL)
+	       (SETQ NOECHOFLG
+		     (LISTGET OPTIONSLST 'NOECHOFLG))
+	       (SETQ CONFIRMFLG
+		     (COND ((SETQ TEM (MEMB 'CONFIRMFLG
+					    OPTIONSLST))
+			    (CADR TEM))
+			   (T T))))
+	      (T (SETQ KEY (CAR ENTRY))
+		 (SETQ PROMPTSTRING
+		       (CADR ENTRY))
+		 (SETQ OPTIONS (CDDR ENTRY))
+		 (SETQ NOECHOFLG (ASKUSERLOOKUP NOECHOFLG))
+		 (SETQ CONFIRMFLG (ASKUSERLOOKUP CONFIRMFLG))))
+	     (COND
+	      ((AND (NEQ FILE T) (STRINGP FILE) (READP FILE))
+	       (SETQ NOECHOFLG T)
+	       (SETQ PROMPTSTRING NIL)
+	       ;;; askusersetup is called after the character
+	       ;;has been read Thus this sets noechoflg to T
+	       ;;and promptstring to NIL only if there are
+	       ;;more characters to be read However the check
+	       ;;on whether or not the character JUST read is
+	       ;;to bechoed alsoincludes an (EQ FILE T) check
+	       )
+	      )
+	     )
+       ) 
+
+(DEFUN ASKUSEREXPLAIN (KEYLST PREV OPTIONSLST FILE) 
+       ;;; wt: / 4-DEC-75 /00:26
+       (OR FILE (SETQ FILE T))
+       (MAPC 
+	(FUNCTION
+	 (LAMBDA (ENTRY) 
+	  (PROG (KEY CONFIRMFLG NOECHOFLG PROMPTSTRING TEM
+		 OPTIONS) 
+	   (ASKUSERSETUP ENTRY)
+	   (COND
+	    ((SETQ TEM (ASKUSERLOOKUP KEYLST))
+	     ;;; entry is of the form
+	     ;;(key prompt charlst)
+	     (ASKUSEREXPLAIN
+	      TEM
+	      (COND
+	       ((ASKUSERLOOKUP EXPLAINSTRING)
+		(APPEND PREV
+			(LIST (ASKUSERLOOKUP EXPLAINSTRING))))
+	       (T
+		(APPEND
+		 PREV
+		 (AND
+		  (NULL NOECHOFLG)
+		  (LIST (OR (ASKUSERLOOKUP KEYSTRING) KEY)))
+		 (AND PROMPTSTRING (LIST PROMPTSTRING)))))
+	      OPTIONSLST
+	      FILE)
+	     (RETURN NIL)))
+	   (MAPC (FUNCTION (LAMBDA (X) (PRINCF X T))) PREV)
+	   (COND ((SETQ TEM (ASKUSERLOOKUP EXPLAINSTRING))
+		  (PRINCF TEM T))
+		 ((SETQ TEM (OR (ASKUSERLOOKUP KEYSTRING) KEY))
+		  (AND (NULL NOECHOFLG)
+		       (NEQ TEM ')
+		       (NEQ TEM '&)
+		       (PRINCF TEM T))
+		  ;;; If the user wants to explain the
+		  ;;& or $ he can include the appropriate text
+		  ;;in the prompt field
+		  (AND PROMPTSTRING (PRINCF PROMPTSTRING T))))
+	   (AND (NEQ (POSITION T) 0.) (TERPRI))
+	   (RETURN NIL))))
+	KEYLST)) 
+
+(DEFUN ASKUSERTTYSETUP NIL 
+       ;;; This function causes ITS to convert all
+       ;;characters read to upper case and to activate on all
+       ;;characters and to suppress echoing -- this is what
+       ;;INTERLISP would accomplish by doing (RAISE T)
+       ;;(CONTROL T) and (ECHOMODE NIL) -- The function also
+       ;;adds to the ERRLIST a call to ASKUSERTTYCLEANUP so
+       ;;that if a major error or interrupt should happen
+       ;;while ASKUSER is processing the TTY status will still
+       ;;be correctly reset
+       (SETQ INITIAL-TTY-STATUS (STATUS TTY))
+       (SETQ ERRLIST (CONS '(ASKUSERTTYCLEANUP) ERRLIST))
+       (INPUT-UPPERCASE T)
+       (INPUT-ACTIVATE T)
+       (INPUT-ECHO NIL)) 
+
+(DEFUN ASKUSERTTYCLEANUP NIL 
+       ;;; This function undoes the effect of
+       ;;ASKUSERTTYSETUP
+       (SSTATUS TTY
+		(CAR INITIAL-TTY-STATUS)
+		(CADR INITIAL-TTY-STATUS))
+       (SETQ ERRLIST (DELETE '(ASKUSERTTYCLEANUP)
+			     ERRLIST))) 
+
+(DEFUN ASKUSERINDENT (INDENTATION) 
+       (DO NIL
+	   ((NOT (< (POSITION T) INDENTATION)))
+	   (PRINC '| |))) 

@@ -1,0 +1,198 @@
+
+;;; Circular-list hackers:
+
+;;; The functions %PRINT and %PRIN1 herein
+;;; can print (or prin1) any arbitrarily involuted
+;;; list structure in a moderately readable form.
+
+;;; There is a CPRINT-like facility available for doing
+;;; arbitrary formatting of things.
+;;; Currently, this file contains code for the
+;;; /' and /@ readmacros.
+
+;;; Please direct comments regarding bugs/features to
+;;; Rick Grossman  (AI:GROSS;), 825 Tech Square, 3-5848.
+
+
+;;; Note:
+;;; We avoid the overhead of a hash table by actually smashing
+;;; the cells to indicate that they have been traversed.
+;;; Thus we lose on pure list structure.
+
+
+;;; Output format:
+;;; (setq x '(foo bar)) (rplacd (cdr x) x) (%print x)
+;;; would print as:   %:G0012 (foo bar . %-G0012)
+;;; where %:<label> defines a piece of list structure,
+;;; and %-<label> denotes a back-reference.
+;;;
+;;; The file %READ FASL DSK: LIBLSP; contains a readmacro
+;;; for "%" which allows reading this stuff back in.
+
+
+;;; Note that the functions %MUNGE and %UNMUNGE
+;;; in this package can be used for other kinds of
+;;; circular list hacking (such as a circular sxhash).
+
+
+
+;;; Revision:
+;;; 21	Re-do the whole thing (clean it up).
+;;; 22	Add test for ^W and ^R.
+;;;	Run in (nointerrupt t) mode.
+;;; 23	(7/2/75) Adapt to the fact that PRINC always returns T.
+;;;	Do automatic %UNMUNGE if pure-page trap.
+;;; 24	(8/13/75)  Flush :MAIL kludge.
+
+
+(declare (setq nfunvars t) (macros t) (genprefix /%p\)) 
+
+
+
+(defun /%print (x) (princ '/n/î) (/%prin1 x) (princ '/ ) t) 
+
+(defun /%prin1 (x) 
+ (cond
+  ((and ^w (not ^r))) 
+  (t
+   ((lambda (nointerrupt errset) 
+     (errset (/%prin1* (/%munge x)) t) 
+     (/%unmunge x) 
+     (nointerrupt nointerrupt) ) 
+    (nointerrupt t) 
+    nil
+    ) ) ) 
+ t )
+
+ 
+;; Munged format:
+;; (A . B) becomes ((/%flag A . <marker>) . B).
+;; The <marker> is non-nil if this cell is multiply referenced.
+
+
+(declare (special /%flag /%unmunge))
+
+(setq /%flag (copysymbol '/%flag nil))
+
+
+(defun /%munge (x) 
+ ;; Munge from top to bottom.
+ (cond
+  ((atom x)) 
+  ((eq (caar x) /%flag) 
+   ;; Indicate this cell is multiply referenced.
+   (rplacd (cdar x) t) ) 
+  (t
+   (rplaca x (list /%flag (car x))) 
+   (/%munge (cadar x)) 
+   (/%munge (cdr x)) ) ) 
+ x ) 
+
+  
+(defun /%unmunge (x) 
+ ;; Unmunge from bottom to top.
+ (cond
+  ((atom x)) 
+  ((not (eq (caar x) /%flag)))
+  (t
+   (prog (y) 
+    (setq y (car x)) 
+    (rplaca y nil) ;Prevent infinite recursion.
+    (/%unmunge (cadr y)) (/%unmunge (cdr x))
+    (rplaca x (cadr y)) 
+    ;...(reclaim y nil) 
+    ) ) ) ) 
+   
+  
+
+
+;; ejs 2018-03-13: replaced with defmacro
+;;(defun macro /%atom (x) 
+ ;; A munged cell with a non-nil marker should be
+ ;; printed as an atom (because of the label).
+;; (subst (cadr x) 'x
+;;  '(or (atom x) (cddar x)) ) )
+
+(defmacro /%atom (x)
+ `(or (atom ,x) (cddar ,x))))
+
+;; ejs 2018-03-13: replaced with defmacro
+;;(defun macro /%cdr (x) (cons 'cdr (cdr x)))
+
+(defmacro /%cdr (x) `(cdr ,x))
+
+;; ejs 2018-03-13: replaced with defmacro
+;;(defun macro /%car (x) (cons 'cadar (cdr x)))
+
+(defmacro /%car (x) `(cadar ,x))
+
+
+(defun /%prin1* (x) (prog (y z) 
+  (cond
+   ((and ^w (not ^r)))
+   ((atom x) 
+    (cond
+     ((and (setq y (get x 'print0)) (funcall y x))) 
+     ((prin1 x)) ) ) 
+   ((not (eq (caar x) /%flag))
+    (error '/%print x 'fail-act) )
+   ((setq y (cddar x))
+    ;; The marker is set, thus we use a label.
+    (cond
+     ((eq y t)
+      ;; First time -- generate a label.
+      (princ '/%/:)
+      (princ (setq y (gensym)))
+      (rplacd (cdar x) y)
+      (princ '/ ) (/%prin/.loop x) )
+     (t
+      ;; Not first time.
+      (princ '/%/-) (princ y) ) ) )
+   ;; A normal cell -- do cprint hackery.
+   ((atom (setq z (/%car x))) 
+    (cond
+     ((and (setq y (get z '/%print1)) (funcall y x))) 
+     ((/%prin/.loop x)) ) )  
+   ((atom (setq z (/%car z))) 
+    (cond
+     ((and (setq y (get z '/%print2)) (funcall y x))) 
+     ((/%prin/.loop x)) ) )  
+   ((/%prin/.loop x)) ) 
+  (return t) )) 
+
+(defun /%prin/.loop (x) 
+ (princ '/() 
+ (/%prin1* (/%car x)) 
+ (do ((x (/%cdr x) (/%cdr x))) 
+  ((cond
+    ((null x))
+    ((and ^w (not ^r)))
+    ((or (/%atom x) 
+      (and (atom (/%car x)) (get (/%car x) 'print-cdr)) ) 
+     (princ '/ /./ ) 
+     (/%prin1* x) ) ) 
+   (princ '/)) ) 
+  (princ '/ ) 
+  (/%prin1* (/%car x)) ) )
+ 
+
+
+;; Stuff for readmacros.
+
+
+(defun /%print-/' (x) 
+ (cond
+  ((and (not (/%atom (/%cdr x))) (null (/%cdr (/%cdr x)))) 
+   (princ '/') (/%prin1* (/%car (/%cdr x))) ) ) 
+ ;; if length not 2, we return nil so /%prin1* will print
+ ;; it as an ordinary form.
+ ) 
+
+(defprop quote /%print-/' /%print1) 
+
+
+(defun /%print-/@ (e) (princ (/%car e)) (/%prin1* (/%cdr e))) 
+
+(defprop /@ /%print-/@ /%print1) 
+(defprop /@ t print-cdr) 
+ 

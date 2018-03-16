@@ -1,0 +1,148 @@
+;;;-*-lisp-*-
+;;; Utilities for reading information from the TTY with prompt,
+;;; these utilities are simple and small, do slight amounts of consing,
+;;; and are suitable for most user interactions required in utility programs.
+;;; 4:45pm  Sunday, 22 February 1981 -GJC
+
+;;; Calling and return convention (P-READ <PROMPT> . <OPTIONS>)
+;;; P-READ returns a list of the characters TYI'd in reverse order.
+
+;;; Example usage.  (P-READ "File name->")
+;;;                 (P-READ (FORMAT NIL "Frob the ~A (Y or N)?" foo)
+;;;                          #\NUMBER-OF-CHARS 1 #\STOP-CHARS NIL)
+;;;                 (P-READ "Input-pass-word" #\ECHO-P NIL)
+;;;                 (P-READ "Extended-command->" #\COMPLETION-ALIST FOOBAR)
+
+;;; NOTES: [1] P-READ binds TTY-RETURN to increase user comfort and assurance.
+;;;        [2] In order to specify the options symbolicaly, you must load
+;;;            LIBLSP;OPTDEF at read time.
+;;;        [3] COMPLETION-ALIST is recursively of the form
+;;;            ((<CHAR> . COMPLETION-ALIST) (<CHAR> . COMPLETION-ALIST) ...)
+;;;            it is presently unimplemented.
+;;;        [4] STOP-FUNCTION allows arbitrary stop conditions
+;;;            including interface to a lisp reader.
+
+#.(PROGN (OR (GET 'OPTDEF 'VERSION) (LOAD '((LIBLSP)OPTDEF))) NIL)
+
+(defvar query-io-out tyo)
+(defvar query-io-in tyi)
+
+(eval-when (eval compile)
+  (or (get 'defstruct 'macro)
+      (load '((liblsp)struct)))
+  (OR (GET 'TTY 'VERSION) (LOAD '((LIBLSP)TTY)))
+  (defstruct (p-display conc-name default-pointer
+			;;list
+			;;array
+			;; If you don't want any hunks then use
+			;; arrays which add 70 words to the code, or
+			;; list, which is a bit slower.
+			
+			)
+    (chars nil)
+    (EOL-H-CURSORPOS NIL)
+    (prompt '||)
+    ECHO-P
+    n
+    rubout-p
+    f		      
+    ))
+
+(eval-when (compile)
+  (setq defmacro-for-compiling nil))
+
+(HERALD PROMPT)
+
+(defvar p-display (make-p-display))
+
+(defun p-display (IGNORE)
+  (cursorpos 'a query-io-out)
+  (princ (p-display-prompt) query-io-out)
+  (if (p-display-echo-p)
+      (p-display-sub (p-display-chars) nil)))
+
+(defun p-display-sub (l function)
+  (cond ((null l))
+	(t
+	 (p-display-sub (cdr l) function)
+	 (if function
+	     (funcall function (car l))
+	     (tyo (car l) query-io-out)))))
+
+(defun get= (option list default)
+  (do ()
+      ((null list) default)
+    (if (= option (pop list))
+	(return (car list)))))
+
+(defmacro optional (option default)
+  (comment 
+   `(let ((given-val (get=skip ,option options)))
+      (if given-val (car given-val) ,default)))
+  `(get= ,option options ,default))
+
+(defun p-enter-c (c)
+  (setf (p-display-n) (1- (p-display-n)))
+  (push c (p-display-chars))
+  (if (p-display-echo-p) (tyo c query-io-out))
+  (cond ((p-display-rubout-p)
+	 (setf (p-display-rubout-p) nil)
+	 (if (p-display-f)
+	     (p-display-sub (p-display-chars)
+			    (p-display-f))))))
+
+(defun p-read (prompt
+	       &rest options
+	       &aux
+	       (stop-chars (optional #\stop-chars '(#\cr)))
+	       ;;(completion-char (optional #\completion-char #\alt))
+	       ;;(completion-alist (optional #\completion-alist nil))
+	       ;;(completion-query-char (optional #\completion-query-char #/?))
+	       ;;(COMPLETION-QUERY-STREAM (OPTIONAL #\COMPLETION-QUERY-STREAM QUERY-IO-OUT))
+	       (CT (OPTIONAL #\CHAR-TRANSLATION-FUNCTION NIL))
+	       (p-display (make-p-display prompt prompt
+					  echo-p (optional #\echo-p t)
+					  f (optional #\stop-function nil)
+					  rubout-p nil
+					  n (optional #\number-of-chars -1)))
+	       (tty-return #'p-display)
+	       )
+  (do-with-tty-off
+   (p-display nil)
+   (do ((c))(nil)
+     (setq c (tyi query-io-in))
+     (IF CT (SETQ C (FUNCALL CT C)))
+     (if (or (and (p-display-f) (funcall (p-display-f) c))
+	     (member c stop-chars))
+	 (return (cons c (p-display-chars))))
+     (caseq c
+       ((#\ff)
+	(cursorpos 'c query-io-out)
+	(p-display nil))
+       ((#\rubout)
+	(if (p-display-chars)
+	    (let ((c-rub (pop (p-display-chars))))
+	      (setf (p-display-n) (1+ (p-display-n)))
+	      (setf (p-display-rubout-p) t)
+	      (if (p-display-echo-p)
+		  (caseq c-rub
+		    ((#\cr #\tab)
+		     ;; its doesn't handle rubout of #\cr.
+		     (if (= c-rub #\cr)
+			 (cursorpos 'u query-io-out)
+			 (rubout #\tab query-io-out))
+		     (cursorpos 
+		      'h
+		      (pop (p-display-eol-h-cursorpos))
+		      query-io-out))
+		    (t
+		     (rubout c-rub query-io-out)))))))
+       ((#\cr #\tab)
+	(if (p-display-echo-p)
+	    (push (cdr (cursorpos query-io-out))
+		  (p-display-eol-h-cursorpos)))
+	(p-enter-c c))
+       (t
+	(p-enter-c c)))
+     (if (zerop (p-display-n))
+	 (return (p-display-chars))))))

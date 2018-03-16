@@ -1,0 +1,161 @@
+;;;-*-LISP-*-
+;;; Correct and simple rubout handler for CGOL or other readers.
+;;; Note that this code does not turn off tty echoing.
+;;; 11:43pm  Sunday, 5 July 1981 -GJC
+
+(herald CGRUB)
+
+(eval-when (compile eval)
+  (or (status feature defstruct)
+      (load '((liblsp)struct))))
+
+
+(defstruct (rubout-tty conc-name sfa default-pointer)
+  (tyi tyi)
+  (tyo tyo) ; should actually be (SFA-GET * 'XCONS)
+  (prompt #'(LAMBDA (S) (PRINC "<CGOL> " S)))
+  (untyi ())
+  (want-rubout-p nil)
+  (display ()))
+
+;; the display is a list ((C . (V-POS . H-POS)) (C . (V-POS . H-POS)) ...)
+;; where the cursorpos is that before the character was echoed.
+;; if we wanted to we could
+;; [1] use a more compact representation, hacking a fixnum array.
+;; [2] calculate the cursorpos for some characters instead of asking for it,
+;;     use ITS rubout with corrections only for certain characters.
+
+(defun re-display (rubout-tty)
+  (cursorpos 'a (rubout-tty-tyo))
+  (funcall (rubout-tty-prompt) (rubout-tty-tyo))
+  (re-display-sub (rubout-tty-display) (rubout-tty-tyo)
+		  (cursorpos (rubout-tty-tyo))))
+
+(defun re-display-sub (l s c)
+  (cond ((null l))
+	(t
+	 (re-display-sub (cdr l) s c)
+	 (setf (cdr (car l)) (cursorpos s))
+	 (tyo (caar l) s))))
+
+(defun rub-out-display (rubout-tty)
+  (if (rubout-tty-display)
+      (let (((char . cp-before) (pop (rubout-tty-display))))
+	(if (null cp-before)
+	    ;; no cursorpos information, probably a printing terminal,
+	    ;; so call the primitive RUBOUT function.
+	    (rubout char (rubout-tty-tyo))
+	    ;; kill all lines between where we are and where we want
+	    ;; to be. This covers the important case of an error message
+	    ;; which was printed on the screen before we were put into the
+	    ;; force-rubout state.
+	    (if (not (= (car (cursorpos (rubout-tty-tyo)))
+			(car cp-before)))
+		(do ()(nil)
+		  (cursorpos 'u (rubout-tty-tyo))
+		  (if (= (car (cursorpos (rubout-tty-tyo)))
+			 (car cp-before))
+		      (return nil))
+		  (cursorpos 'h 0 (rubout-tty-tyo))
+		  (cursorpos 'l (rubout-tty-tyo))))
+	    ;; set the cursorpos back to what it was before.
+	    (cursorpos (car cp-before) (cdr cp-before) (rubout-tty-tyo))
+	    ;; now kill the rest of that line.
+	    (cursorpos 'l (rubout-tty-tyo))))))
+
+(defun rubout-tty (rubout-tty com arg)
+  (caseq com
+    ((tyi)
+     (if (rubout-tty-untyi) (pop (rubout-tty-untyi))
+	 (do ((c)(pos)(rubout nil)) (nil)
+	   (setq pos (cursorpos (rubout-tty-tyo)))
+	   (setq c (tyi (rubout-tty-tyi) arg))
+	   (caseq c
+	     ((#\FF)
+	      (cursorpos 'c (rubout-tty-tyo))
+	      (re-display rubout-tty))
+	     ((#\RUBOUT)
+	      (setq rubout t)
+	      (rub-out-display rubout-tty))
+	     (t
+	      (push (cons c pos)
+		    (rubout-tty-display))
+	      (cond ((AND (rubout-tty-want-rubout-p)
+			  (NOT RUBOUT))
+		     (rub-out-display rubout-tty)
+		     (tyo #^G (rubout-tty-tyo))))
+	      (cond ((and rubout (rubout-tty-display))
+		     (setf (rubout-tty-want-rubout-p) nil)
+		     (setf (rubout-tty-untyi)
+			   (nreverse (mapcar #'car
+					     (rubout-tty-display))))
+		     (*throw 'rubout nil))
+		    (t (return c))))))))
+    ((untyi)
+     (push arg (rubout-tty-untyi)))
+    ((tyipeek)
+     (let ((c (tyi rubout-tty arg)))
+       (sfa-call rubout-tty 'untyi c)
+       c))
+    ((FORCE-RUBOUT)
+     (SETF (RUBOUT-TTY-WANT-RUBOUT-P) T)
+     (DO ()(NIL)
+       (TYI RUBOUT-TTY ARG)))
+    ((INIT)
+     (setf (rubout-tty-display)
+	   (NREVERSE (MAPCAR 'LIST (rubout-tty-untyi))))
+     (setf (rubout-tty-want-rubout-p) NIL)
+     (RE-DISPLAY RUBOUT-TTY))
+    ((which-operations)
+     '(tyi untyi tyipeek FORCE-RUBOUT))))
+
+(defstruct (rubout-handler conc-name sfa default-pointer)
+  (substream (make-rubout-tty)))
+
+(defvar error-mangler t "Set to NIL if debugging the rubout-handler")
+
+(defun error-mangler (errset-val f &rest l)
+  (if error-mangler
+      ;; If the luser ^B breaks he is in a bogus error handler environment.
+      (let ((errset        errset-val)
+	    (undf-fnctn    nil)
+	    (unbnd-vrbl    nil)
+	    (wrng-type-arg nil)
+	    (unseen-go-tag nil)
+	    (wrng-no-args  nil)
+	    (fail-act      nil)
+	    (*rset-trap    nil)
+	    (pdl-overflow  nil)
+	    (io-lossage    nil))
+	(errset (apply f l)))
+      (list (apply f l))))
+
+(defun rubout-handler (rubout-handler com arg)
+  (caseq com
+    ((rubout-handler READ)
+     (sfa-call (rubout-handler-substream) 'init ())
+     (do ((form))(nil)
+       (setq form
+	     (*catch 'rubout
+	       (error-mangler
+		`(LAMBDA N
+		   (SFA-CALL ',(RUBOUT-HANDLER-SUBSTREAM) 'FORCE-RUBOUT ()))
+		(IF (EQ COM 'READ) 'READ ARG)
+		(RUBOUT-HANDLER-SUBSTREAM))))
+       (if form (return (car form)))))
+    ((which-operations)
+     '(RUBOUT-HANDLER READ TYI UNTYI TTYIPEEK))
+    (T
+     (SFA-CALL (RUBOUT-HANDLER-SUBSTREAM) COM ARG))))
+
+(defvar rubout-handler
+  (make-rubout-handler))
+
+(DEFUN CGOL-TOPLEVEL ()
+  (do ()(NIL)
+    (SETQ + -)
+    (SETQ - (cgolread rubout-handler))
+    (setq * (read-*-eval-print -))
+    (read-eval-*-print *)
+    (read-eval-print-*)))
+

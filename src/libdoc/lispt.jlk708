@@ -1,0 +1,798 @@
+;;; LISP Inferior-job Editing Package
+
+(comment declarations and special variables)
+
+(declare (special editor-jname editor-job null editor-usr-input editor-usr-output
+		  lispt-read-loop crlf lispt-jname lispt-file
+		  lispt-file-forced lispt-protect tty-return-prompt? 
+		  lispt-initial-sname lispt-text-string lispt-prompter
+		  lispt-tty-to-ddt-msg lispt-tty-passing-msg tty-verbose
+		  current-job tty-return-list default-tty-return-list
+		  tty-passing-msg current-editor-buffer current-teco-buffer-block
+		  roving-editor?)
+	 (fixnum (examine-job fixnum))
+	 (notype (deposit-job fixnum fixnum))
+	 (*expr make-job  load-job start-job job-returned-tty wait-for-job
+		deposit-job examine-job job-uset-write job-uset-read
+		set-job-start-adr usr-open-fix return-to-ddt
+		kill-job disown-job job-start-adr continue-job select-job
+		clear-tty-return set-jcl)
+	 (genprefix /|lt))
+
+(eval-when (eval compile)
+      (setq ibase 8)
+      (cond ((not (get '*uset 'macro))
+	     (fasload lusets fasl dsk liblsp)))
+      (cond ((not (status feature lspmac))
+	     (fasload lspmac fasl dsk liblsp)))
+      (setsyntax '/# 'macro '/#macro)	;enable #
+      (defun 6bit macro (x) (list 'car (list 'pnget (cadr x) 6)))
+
+      ; TECO Buffer Block symbols and other things (.OPTION bits)
+
+      (setq beg 0 begv 1 pt 2 gpt 3 zv 4 z 5 extrac 6 crlf '|/
+|           null (ascii 0) bufblk 2 suparg 8 supcmd 7 read-jcl 1 edit-text 2
+            select-buffer 3 optddt 1_36))
+
+; insert the kludgey LISP patch
+(include |dsk:libdoc;lispt patch|)
+
+(sstatus feature lispt)		; this comes after the patch
+
+; LISP EXTERNAL REFERENCES FOR JOB MANIPULATION
+
+(mapc '(lambda(x) (cond ((not (getl x '(subr expr autoload)))
+			 (putprop x '(lddt fasl dsk liblsp) 'autoload))))
+      '(start-job set-job-start-adr continue-job wait-for-job make-job
+		  set-job-start-adr disown-job job-start-adr))
+
+(mapc '(lambda(x) (cond ((not (getl x '(subr autoload)))
+			 (putprop x '(humble fasl dsk liblsp) 'autoload))))
+      '(select-job load-job kill-job examine-job deposit-job
+		   job-uset-read job-uset-write))
+
+;;; GLOBAL VARIABLES
+
+(setq editor-job nil editor-usr-input nil editor-usr-output nil
+      editor-jname nil lispt-file-forced nil)
+
+;;; These symbols may have previous definitions by the user
+(special-init lispt-file '((dsk sys2) ts lispt))
+(special-init lispt-initial-sname (status udir))
+(special-init lispt-jname (cond ((status feature macsyma) 'macst) (t 'lispt)))
+(special-init lispt-protect nil)
+(special-init lispt-prompter (cond ((status feature macsyma) 'ttyretfun)
+				   (t 'lisp-prompt)))
+(special-init lispt-tty-passing-msg '|(Console Passing to the Editor)|)
+(special-init lispt-tty-to-ddt-msg  '|(Console Passing to DDT)|)
+(special-init roving-editor? t)
+
+(cond ((status feature macsyma)
+       (defprop $edprotect lispt-protect alias)
+       (defprop lispt-protect edprotect reversealias)
+       (defprop $rover roving-editor? alias)
+       (defprop roving-editor? rover reversealias)))
+
+(COMMENT INTERRUPT HANDLER FOR /.BREAK 16 FROM TECO)
+
+;;; THE .BREAK 16, CONVENTION FOR COMMUNICATING WITH AN INFERIOR TECO
+;;; 100000 IS DECODED BY THE REMAINING BITS:
+;;;	1 - DO A READ-EVAL-PRIN1 LOOP OVER THE WHOLE BUFFER.
+;;;	2 - TRY ZAPPING MACSYMA CODE IF IN A MACSYMA
+;;;	4 - random text
+;;;	10 - return to DDT, and upon return, directly back to the editor
+;;;       20 - return to DDT
+;;;       40
+;;;       100 - silent return (i.e. tty wasn't used by TECO
+;;;       200
+;;;       400
+;;;      1000 - error return.  Encountered errors while executing
+;;;             TECO commands requested by the superior.  The
+;;;	      error message is left in a buffer for the superior
+;;;	      to read.  After doing that, the superior should
+;;;	      continue the teco to allow it to clean up, and then
+;;;	      the teco will return silently.
+;;;	OTHERWISE JUST GENTLY RETURN
+
+
+(SETQ *BREAK16-FUNCTION '*BREAK-TECO)
+
+(defun *break-teco (eff)
+   (caseq (boole 1 7777 eff)
+	  (1 (load-from-teco editor-job))
+	  (2 (batch-from-teco editor-job))
+	  (4 (lispt-read-text editor-job))
+	  (10 (lispt-return-to-ddt t))
+	  (20 (lispt-return-to-ddt nil))
+	  (100 (clear-tty-return))		; silent return
+	  (1000 (lispt-teco-error editor-job)))
+   null)
+
+(COMMENT LOAD AND START EDITOR)
+
+
+(DEFUN MAKE-EDITOR NIL 
+       (LET ((FILE LISPT-FILE-FORCED)
+	     (JOB-ORIGIN) (JNAME-TAIL)
+	     (JNAME-LIST (EXPLODEN LISPT-JNAME))
+	     (FILE-LIST `(((DSK ,(STATUS hsname)) ,(status xuname) LISPT)
+			  ((DSK ,(STATUS hsname)) ,(status xuname) EDIT)
+			  ,LISPT-FILE)))
+
+	      (IF (AND FILE (ATOM FILE)) (SETQ FILE `(TS ,FILE)))
+	      (IF FILE (SETQ FILE-LIST
+			     (NCONC (LIST (MERGEF FILE `((DSK ,(STATUS UDIR))))
+					  (MERGEF FILE `((DSK ,(STATUS hsname))))
+					  (MERGEF FILE `((DSK SYS)))
+					  (MERGEF FILE `((DSK SYS1)))
+					  (MERGEF FILE `((DSK SYS2))))
+				    FILE-LIST)))
+
+	      (DO ((FL FILE-LIST (CDR FL)))
+		  ((NULL FL) (ERROR '|Can't find editor on disk! |))
+		  (IF (PROBEF (CAR FL)) (RETURN (SETQ FILE (CAR FL)))))
+
+	      (IF (> (LENGTH JNAME-LIST) 6)
+		  (DO ((L (NREVERSE JNAME-LIST) (CDR L)))
+		      ((NOT (> (LENGTH L) 6)) (SETQ JNAME-LIST (NREVERSE L)))))
+
+
+	      (DO ((JNAME (PROG2 NIL (IMPLODE JNAME-LIST)
+				 (SETQ JNAME-LIST (NREVERSE JNAME-LIST)
+				       JNAME-TAIL
+				       (IF (= 6 (LENGTH JNAME-LIST)) (RPLACA JNAME-LIST 0)
+					   (CONS 0 JNAME-LIST))
+				       JNAME-LIST (NREVERSE JNAME-TAIL)))
+			  (PROG2 (RPLACA JNAME-TAIL (+ I 60)) (IMPLODE JNAME-LIST)))
+		   (I 0 (1+ I)) (JOB))
+		  ((> I 7) (ERROR '|Can't create LISPT job |))
+		  (SETQ JOB (MAKE-JOB JNAME)
+			JOB-ORIGIN (CAR JOB)
+			JOB (CADR JOB))
+		  (IF (NULL JOB-ORIGIN) (ERROR '|Can't Create job (system full?) |))
+		  (IF (NOT (EQ 'FOREIGN JOB-ORIGIN))
+		      (RETURN (SETQ EDITOR-JNAME JNAME EDITOR-JOB JOB))))
+
+	      (IF (NOT (GETL 'START-JOB '(EXPR SUBR)))	;  need LDDT below
+		  (LET ((^W T) (DEFAULTF))
+			   (APPLY 'FASLOAD (GET 'START-JOB 'AUTOLOAD))))
+
+	      (IF (NOT (EQ 'REOWNED JOB-ORIGIN))
+		  (PROGN (IF (LOAD-JOB FILE) (ERROR '|Can't load LISPT job |))
+			 (COND (TTY-VERBOSE
+				(IF (NOT (= 0 (CDR (CURSORPOS)))) (TERPRI))
+				(MAPC 'PRINC `(|; Editor job "| ,EDITOR-JNAME
+								 |" Created | ,CRLF))))
+			 (SET-JOB-START-ADR EDITOR-JOB (+ 2 (JOB-START-ADR EDITOR-JOB)))
+			 (*USET *SSNAM (6BIT LISPT-INITIAL-SNAME)))
+		  (IF (NOT (= 0 (CDR (CURSORPOS)))) (TERPRI))
+		  (MAPC 'PRINC `(|; Editor job "| ,EDITOR-JNAME |" Reowned | ,CRLF))
+		  (SET-JOB-START-ADR EDITOR-JOB 4002))	; MAY NOT WIN. FOR $G RECOVERY.
+
+	      (IF LISPT-PROTECT (VALRET* '|/..SAFE//1/î:VP |))
+
+	      JOB-ORIGIN))
+
+(defun start-editor nil
+       (if (not (inf-editor-test)) (make-editor))
+       (continue-editor t))
+
+(defun GZP-editor nil
+       (if (not (inf-editor-test)) (make-editor))
+       (set-jcl '|100100. FS EXIT|)
+       (select-job editor-job)
+       (continue-job t)
+       (wait-for-editor)
+       T)
+
+(defun continue-editor (tty-flag)
+       (setq tty-passing-msg lispt-tty-passing-msg)
+       (select-job editor-job)
+       (continue-job tty-flag))
+
+(defun wait-for-editor nil (wait-for-job editor-job))
+
+
+(COMMENT EDITOR JOB CONTROL)
+
+(DEFUN KILL-EDITOR NIL
+       (IF EDITOR-JOB (PROGN (CLEAN-UP-EDITOR)
+			     (SELECT-JOB EDITOR-JOB)
+			     (KILL-JOB)
+			     (PRINC0 '|; Job "|) (PRINC EDITOR-JNAME)
+			     (PRINC '|" killed|) (TERPRI)
+			     (SETQ EDITOR-JOB NIL EDITOR-JNAME NIL))
+	   (PRINC0 '|; No editor job? |) (TERPRI))
+       'DONE)
+
+(DEFUN $KILLEDITOR NIL (KILL-EDITOR) '$DONE)
+
+(DEFUN DISOWN-EDITOR NIL
+       (IF EDITOR-JOB (PROG2 (CLEAN-UP-EDITOR)
+			     (DISOWN-JOB EDITOR-JOB)
+			     (PRINC0 '|; Job "|) (PRINC EDITOR-JNAME)
+			     (PRINC '|" disowned |) (TERPRI)
+			     (SETQ EDITOR-JOB NIL EDITOR-JNAME NIL))
+	   (PRINC0 '|; No editor job? |) (TERPRI) NIL))
+
+(DEFUN $DISOWNEDITOR NIL (IF (DISOWN-EDITOR) '$DONE))
+
+(DEFUN REOWN-EDITOR (X)
+       (PROG NIL
+	     (SETQ X (IF (NULL X) 'LISPT X))
+	     (COND  ((AND EDITOR-JOB (EQ EDITOR-JNAME X))
+		     (PRINC0 '|; Editor already owned |)
+		     (RETURN '*))
+		    (EDITOR-JOB (CLOBBER-EDITOR?)))
+	     (LET ((JOB  (MAKE-JOB X)))
+		    (COND ((EQ 'REOWNED (CAR JOB))
+			   (SETQ EDITOR-JNAME X EDITOR-JOB (CADR JOB))
+			   (SET-JOB-START-ADR EDITOR-JOB 4000)
+			   (RETURN T))
+			  (T (KILL-JOB)
+			     (PRINC0 '|; Job "|) (PRINC X)
+			     (IF (EQ 'FOREIGN (CAR JOB))
+				 (PRINC '|" is owned by another job|) 
+				 (PRINC '|" not found |))
+			     (TERPRI))))
+	     (IF LISPT-PROTECT (VALRET* '|/..SAFE//1/î:VP |))))
+
+(DEFUN $REOWNEDITOR MACRO (X)
+       `(PROGN (REOWN-EDITOR .,(IF X (MAPCAR 'STRIPDOLLAR X)))
+	       '$DONE))
+
+(DEFUN CLEAN-UP-EDITOR NIL
+       (IF EDITOR-USR-OUTPUT (CLOSE-EDITOR EDITOR-USR-OUTPUT))
+       (IF EDITOR-USR-INPUT  (CLOSE-EDITOR EDITOR-USR-INPUT)))
+
+
+(COMMENT Open and Closing files to Editor Buffers)
+
+(DECLARE (SPECIAL TECO-PC))
+(DEFUN OPEN-EDITOR (JOB MODE)
+       (COND ((EQ 'INPUT MODE)
+	      (SETQ EDITOR-USR-INPUT (OPEN JOB '(IN ASCII)))
+	      (USR-OPEN-FIX EDITOR-USR-INPUT (TECO-V #,ZV))
+	      (FILEPOS EDITOR-USR-INPUT (TECO-V #,BEGV))
+	      EDITOR-USR-INPUT)
+	     (T (SETQ EDITOR-USR-OUTPUT (OPEN JOB '(OUT ASCII)))
+		(USR-OPEN-FIX EDITOR-USR-OUTPUT (TECO-V #,ZV))
+		(FILEPOS EDITOR-USR-OUTPUT (TECO-V #,PT))
+		EDITOR-USR-OUTPUT)))
+
+(DEFUN CLOSE-EDITOR (FILE)				; not too exciting for now
+       (CLOSE FILE)
+       (SET (IF (EQ EDITOR-USR-INPUT FILE) 'EDITOR-USR-INPUT 'EDITOR-USR-OUTPUT)
+	    NIL)
+       T)
+
+(DEFUN TECO-V (X)
+       (LET ((BUFBLK (EXAMINE-JOB #,BUFBLK)))
+		(LET ((VX (EXAMINE-JOB (+ BUFBLK X))))
+			 (COND ((NOT (< VX (EXAMINE-JOB (+ BUFBLK #,GPT))))
+				(+ VX (EXAMINE-JOB (+ BUFBLK #,EXTRAC))))
+			       (T VX)))))
+
+(setq current-editor-buffer nil)
+(declare (*lexpr run-teco))
+
+							; Crufty TECO code below is for editor independence (ugh). It simply runs
+							; MM & LISPT SELECT WRITE BUFFER
+
+(defun select-buffer (buffer)
+       (let ((tty-return))
+		(if (not (inf-editor-test))
+		    (error '|Can't select buffer - No editor job.|))
+		(if (not (atom buffer))
+		    (error '|Buffer names must be atoms.|))
+		(if editor-usr-output (close-editor editor-usr-output))
+		(setq current-editor-buffer buffer)
+		(select-job editor-job)
+		(set-jcl buffer)
+		(let ((save-pc (*uset *rupc)) (bb (examine-job #,bufblk)))
+		       (declare (fixnum bb save-pc))
+		       (deposit-job (+ bb #,suparg) #,select-buffer)
+		       (*uset *supc (+ bb #,supcmd))
+		       (continue-job T)			; JCL hacker gives tty back too
+		       (wait-for-editor)
+		       (setq current-teco-buffer-block (examine-job #,bufblk))
+		       (continue-job T)
+		       (wait-for-job editor-job)
+		       (*uset *supc save-pc))
+		(open-editor editor-job 'output)
+		T))
+
+(defun run-teco-command (cmd)
+       (select-job editor-job)
+       (let ((save-pc (*uset *rupc)) (bb (examine-job #,bufblk)) (TTY-RETURN))
+	      (declare (fixnum bb save-pc))
+	      (deposit-job (+ bb #,suparg) cmd)
+	      (*uset *supc (+ bb #,supcmd))
+	      (continue-job T)				; JCL hacker gives tty back too
+	      (wait-for-editor)
+	      (*uset *supc save-pc))
+       t)
+
+(defun run-teco n
+       (select-job editor-job)
+       (apply 'set-jcl (listify n))
+       (let ((save-pc (*uset *rupc)) (bb (examine-job #,bufblk)))
+	      (declare (fixnum bb save-pc))
+	      (deposit-job (+ bb #,suparg) #,read-jcl)       
+	      (*uset *supc (+ bb #,supcmd))
+	      (let ((tty-return))
+		       (continue-job T)
+		       (wait-for-job editor-job))
+	      (*uset *supc save-pc))
+       t)
+
+							; ERROR Handling for Errors in TECO while executing JCL commands
+							; assumes that TECO has closed the gap in the current buffer
+
+(defun lispt-teco-error (job)
+       (clear-tty-return)
+       (let ((editor-usr-input) (lispt-text-string))
+		(princ0 '|; Error while editor executing commands requested by LISP:|)
+		(terpri) (princ (lispt-read-text job)) (terpri)
+		(nointerrupt nil)
+		(select-job job)
+		(let ((tty-return))
+			 (continue-job T)
+			 (wait-for-job job))
+		(tyipeek nil tyi)))
+
+
+(COMMENT READ-EVAL ROUTINE)
+
+(special-init lispt-read-loop 'default-lispt-read-eval-print-loop)
+(special-init lispt-readtable readtable)
+
+(defun load-from-teco (job)
+       (let ((prompt? tty-return-prompt?))
+	      (clear-tty-return)
+	      (open-editor job 'input)
+	      (funcall lispt-read-loop)
+	      (close-editor editor-usr-input)
+	      (if prompt? (funcall lispt-prompter nil))))
+
+(defun default-lispt-read-eval-print-loop nil
+       (let ((errlist '((princ '|; Reading from the editor aborted|) (terpri))))
+		(cursorpos 'c)				; start with a fresh screen
+		(princ0 '|; Reading from the editor |) (terpri)
+		(do ((infile editor-usr-input) (^Q T) (expr))
+		    (NIL)
+		    (setq expr (funcall (or read 'read) 'LISPT-EOF))
+		    (IF (EQ 'LISPT-EOF EXPR) (RETURN NIL))
+		    (setq + expr)
+		    (if (and (not (atom expr)) (eq 'INCLUDE (car expr)))
+			(let ((file (cadr expr)))
+			       (princ0 '|; Including  File |) (princ file)
+			       (funcall 'load file)
+			       (terpri) (princ '|; End of File |)
+			       (princ file)))
+		    (terpri) (funcall (or prin1 'prin1) (setq * (eval expr)))))
+       (terpri) (terpri) (princ '|; Finished reading  |))
+
+
+(COMMENT OUTPUT TO EDITOR BUFFERS)
+
+(defun eprinc n						; doesn't force output
+       (if (and (> n 1) (not (eq (arg 2) current-editor-buffer)))
+	   (select-buffer (arg 2)))
+       (princ (if (> n 0) (arg 1)) editor-usr-output)
+       T)
+
+(defun eprint n
+       (if (and (> n 1) (not (eq (arg 2) current-editor-buffer)))
+	   (select-buffer (arg 2)))
+       (print (if (> n 0) (arg 1)) editor-usr-output)
+       (eforce-output)
+       T)
+
+(defun eprin1 n
+       (if (and (> n 1) (not (eq (arg 2) current-editor-buffer)))
+	   (select-buffer (arg 2)))
+       (prin1 (if (> n 0) (arg 1)) editor-usr-output)
+       (eforce-output)
+       T)
+
+(defun eterpri n
+       (if (and (> n 0) (not (eq (arg 1) current-editor-buffer)))
+	   (select-buffer (arg 1)))
+       (terpri editor-usr-output)
+       (eforce-output)
+       T)
+
+(defun esprinter n (editor-output 'sprinter (listify n)))
+
+(defun egrindef fexpr (x) (editor-output 'grindef x))
+
+(defun etyo n
+       (if (and (> n 1) (not (eq (arg 2) current-editor-buffer)))
+	   (select-buffer (arg 2)))
+       (tyo (if (> n 0) (arg 1) 0) editor-usr-output)
+       t)
+
+(defun eforce-output nil (force-output editor-usr-output))
+
+(defun eclose nil (close-editor editor-usr-output))
+
+(declare (macros t))
+(defun editt macro (form)
+       (if (null (inf-editor-test)) (GZP-EDITOR))
+       (select-buffer 'LISP-EDIT)
+       (mapc '(lambda (x) (editor-output 'grindef x)) (cdr form))
+       (run-teco-command #,edit-text)
+       T)
+(declare (macros nil))
+
+(defun editor-output (op x)
+  (if (not (inf-editor-test)) (error '|No editor job|))
+  (if (= 2 (length x)) (select-buffer (cadr x)))
+  (if (null (and editor-usr-output current-editor-buffer))
+      (error '|No channel open to the editor or no buffer selected.|))
+
+  (if (null (getl 'grindef '(fsubr fexpr))) (grindef))
+  (let ((^w t) (^d nil) (outfiles (list editor-usr-output)) (^r t))
+	   (apply op (list (car x))))
+  (eforce-output)
+  '*)
+
+(COMMENT BATCH MACSYMA COMMAND FROM TECO)
+
+(DECLARE (SPECIAL $DEMOMODE $TRANSLMODE $BATCHKILL $LINENUM CR LF TAB ST FF SP
+		  $INCHAR $OUTCHAR REPHRASE $% $NOLABELS LINELABLE $LASTTIME
+		  UPCASEP $CURSOR POS $DISPFLAG $FUNCTIONS $ARRAYS $ALL $INPUT
+		  $STRDISP OLDST THISTIME IMAGE-STRING $ERRORFUN)
+	 (*LEXPR PRINT-CONSOLE-MSG)
+	 (*EXPR KILL1 STRIPDOLLAR TYI* PARSE1 CONTINUE1 TRANSLATE-MACEXPR
+		PRINTLABEL DISPLAY* MAKELABEL $RESET MAKSTRING GETLABELS
+		STRMEVAL GETLABELS* CONSFUNDEF MGET LISTARGP ERLIST REPRINT
+		CHECKLABEL))
+
+(SETQ $DEMOMODE NIL $TRANSLMODE NIL)
+
+(DEFUN BATCH-FROM-TECO (JOB)
+   (LET ((PROMPT? TTY-RETURN-PROMPT?))
+       (IF (NOT (STATUS FEATURE MACSYMA))
+	   (ERROR '|Zapping MACSYMA code into a LISP without MACSYMA? |))
+       (CLEAR-TTY-RETURN)
+       (CURSORPOS 'C)
+       (PRINT-CONSOLE-MSG '|(Reading Commands from the Editor)|)
+       (OPEN-EDITOR JOB 'INPUT)
+       (COND ((PROG2 NIL (TECO-BATCH)
+		     (CLOSE-EDITOR EDITOR-USR-INPUT))
+	      (PRINT-CONSOLE-MSG '|(Finished)|)))
+       (IF PROMPT? (FUNCALL lispt-prompter NIL))
+       NULL))
+
+(DEFUN TECO-BATCH NIL
+   (LET (($DISPFLAG) (ST) ($ERRORFUN 'TECO-BATCH-ERROR)
+	     (ERRLIST '((TECO-BATCH-ERROR))))
+       (COND ($BATCHKILL (KILL1 $BATCHKILL)
+	      (COND ((EQ $BATCHKILL T) ($RESET))) (GCTWA)))
+       (COND ((NOT (CHECKLABEL $INCHAR)) (SETQ $LINENUM (1+ $LINENUM))))
+       (MAKELABEL $INCHAR)
+       (DO ((COMMAND-STRING) (TERMINATOR) (COMMAND) (RESULT))
+	   ((EQ 'EOF/# TERMINATOR))
+	   (SETQ IMAGE-STRING NIL
+		 COMMAND-STRING (GET-COMMAND-STRING)
+		 TERMINATOR (CAR COMMAND-STRING)
+		 $DISPFLAG (EQ '/; TERMINATOR)
+		 ST (mapcar '(lambda (x) (getcharn x 1)) (CDR COMMAND-STRING)))
+	   (COND ((EQ 'EOF/# TERMINATOR) (RETURN T)))
+	   (REPRINT IMAGE-STRING T)
+	   (SETQ OLDST ST)
+	   (SETQ COMMAND (COND ($TRANSLMODE ((LAMBDA (^W) (PARSE1)) NIL))
+			       (T (PARSE1))))
+	   (COND ((NULL COMMAND) (TERPRI)
+		  (PRINC '|Syntax error occurred in reading commands from the editor.|)
+		  (TERPRI) (RETURN NIL))
+		 ($TRANSLMODE (TRANSLATE-MACEXPR (CAR COMMAND)))
+		 (T (SETQ RESULT (CONTINUE1 (CAR COMMAND)))))
+	   (COND ((NULL RESULT) (TERPRI)
+		  (PRINC '|Error occurred while executing commands from the editor.|)
+		  (TERPRI) (RETURN NIL)))
+	   (SETQ $% (CAR RESULT)) (MAKELABEL $OUTCHAR)
+	   (COND ((NOT $NOLABELS) (SET LINELABLE $%)
+		  (PUTPROP LINELABLE (CONS (CADR $LASTTIME) (CADDR $LASTTIME)) 'TIME)))
+	   (COND ($DISPFLAG (REMPROP LINELABLE 'NODISP) (DISPLAY*))
+		 (T (PUTPROP LINELABLE T 'NODISP)))
+	   (SETQ $LINENUM (1+ $LINENUM)) (MAKELABEL $INCHAR)
+	   (COND ($DEMOMODE (PRINC (STRIPDOLLAR $CURSOR))
+ 	          (COND ((NOT (= (TYI*) 32.))
+			 (TERPRI) (PRINC '|DEMO TERMINATED|)
+			 (TERPRI) (SETQ ST NIL)
+			 (RETURN nil))))))))
+
+(DEFUN TECO-BATCH-ERROR NIL
+       (PRINC0 '|		(Command reading from the Editor aborted)|)
+       (TERPRI))
+
+(DEFUN GET-COMMAND-STRING NIL
+   (LET ((CH-STRING))
+       (DO ((CH) (STARTING T (AND STARTING (NULL CH-STRING)))
+	    (CTRL-LIST (LIST CR LF FF TAB)))
+	   ((MEMQ CH '(  EOF/# /; $)))
+	   (SETQ CH (READCH* 'EOF/#))
+	   (COND ((EQ '/\ CH)
+		  (SETQ CH-STRING (CONS (SETQ CH (LET ((UPCASEP))
+							  (READCH* 'EOF/#)))
+					(CONS '/\ CH-STRING))))
+		 ((EQ '/" CH)
+		  (SETQ CH-STRING (CONS CH CH-STRING)
+			CH (DO ((CH) (UPCASEP))
+			       ((MEMQ CH '(/" EOF/#)) CH)
+			       (SETQ CH (READCH* 'EOF/#)
+				     CH-STRING (CONS CH CH-STRING)))))
+		 ((MEMQ CH CTRL-LIST)
+		  (IF STARTING (SETQ IMAGE-STRING (CDR IMAGE-STRING))))
+		 ((AND STARTING (EQ SP CH)))
+		 ((EQ '// CH)
+		  (SETQ CH (READCH* 'EOF/#))
+		  (COND ((EQ '* CH) ; GOBBLE COMMENT
+			 (SETQ STARTING NIL
+			       CH (DO ((CH)) ((EQ 'EOF/# CH) CH)
+				      (SETQ CH (READCH* 'EOF/#))
+				      (IF (AND (EQ '* CH)
+					       (EQ '//
+						   (SETQ CH (READCH* 'EOF/#))))
+					  (RETURN CH)))))
+			(T (SETQ CH-STRING (CONS CH (CONS '// CH-STRING))))))
+		 (T (SETQ CH-STRING (CONS CH CH-STRING)))))
+       (IF (MEMQ (CAR CH-STRING) '(/; /$))
+	   (DO ((CH (TYIPEEK NIL EDITOR-USR-INPUT) 
+		    (TYIPEEK NIL EDITOR-USR-INPUT)))
+	       ((MEMBER CH '(-1 15)))
+	      (READCH* NIL)))
+       CH-STRING))
+
+(DEFUN READCH* (X)
+   (LET ((N (TYI EDITOR-USR-INPUT 300)))
+	    (IF (OR (= 300 N) (= 3 N)) X
+		(SETQ IMAGE-STRING (CONS (ASCII N) IMAGE-STRING))
+		(IF (AND UPCASEP (> N 96.) (< N 123.)) (ASCII (- N 32.))
+		    (ASCII N)))))
+
+(COMMENT READ A RANDOM STRING OF TEXT FROM TECO)
+
+(declare (special lispt-text-string))
+(setq lispt-text-string nil)
+
+(defun lispt-read-text (job)
+       (open-editor job 'input)
+       (do ((nchlist nil (cons (tyi editor-usr-input) nchlist)))
+	   ((= -1 (car nchlist))
+	    (close-editor editor-usr-input)
+	    (setq lispt-text-string (implode (nreverse (cdr nchlist)))))))
+
+
+(COMMENT STRING MACSYMA EXPRESSIONS INTO A EDITOR BUFFER)
+
+(defun $selectbuffer (buffer) (select-buffer (stripdollar buffer)) '$DONE)
+
+(DEFUN $TEDIT FEXPR (X)
+       (APPLY '$TSTRING X)
+       (CONTINUE-EDITOR T)
+       (WAIT-FOR-JOB EDITOR-JOB)
+       '$DONE)
+
+(DECLARE (*EXPR $LISTP))
+
+(DEFUN $TSTRING FEXPR (X) 
+ (if (not (inf-editor-test)) (make-editor))
+ (if ($LISTP (car x)) (select-buffer (stripdollar (cadar x))))
+ (if (null editor-usr-output) (select-buffer 'MACSYMA-EDIT))
+ (LET ((^W T) (^D NIL) (ERROR)
+	   (OUTFILES (LIST EDITOR-USR-OUTPUT))
+	   (^R T))
+   (COND ((NULL
+	   (ERRSET
+	    (DO ((L X (CDR L)) (L1)) ((NULL L))
+		(COND ((MEMQ (CAR L) '($ALL $INPUT))
+		       (SETQ L (NCONC (GETLABELS* $INCHAR) (CDR L))))
+		      ((EQ (CAR L) '$FUNCTIONS)
+		       (SETQ L (NCONC (MAPCAR
+				       (FUNCTION
+					(LAMBDA (X) (CONSFUNDEF (CAAR X) NIL NIL)))
+				       (CDR $FUNCTIONS))
+				      (MAPCAN
+				       (FUNCTION
+					(LAMBDA (X)
+					 (COND ((MGET X 'AEXPR)
+						(NCONS (CONSFUNDEF X T NIL))))))
+				       (CDR $ARRAYS))
+				      (CDR L))))
+		      ((SETQ L1 (LISTARGP (CAR L)))
+		       (SETQ L (NCONC (GETLABELS (CAR L1) (CDR L1) T) (CDR L)))))
+		(TERPRI) (MAPC 'PRINC (MAKSTRING (STRMEVAL (CAR L))))
+		(COND ((OR (AND (ATOM (CAR L)) (GET (CAR L) 'NODISP)) (NOT $STRDISP))
+		       (PRINC '$))
+		      (T (PRINC '/;))))))
+	  (SETQ ERROR T)))
+   (TERPRI)
+   (IF ERROR (LET ((ERRSET 'ERRBREAK1))
+		      (SETQ ^W NIL)
+		      (ERLIST '(ERROR IN TSTRING ATTEMPT))))
+   (SETQ ^R NIL)
+   (CLOSE-EDITOR EDITOR-USR-OUTPUT)
+   '$DONE))
+
+(defun MACSYMA-edit-interrupt (file char) (setq char char)
+       (if (not (= 0 (listen file))) (tyi file))
+       (if (null (inf-editor-test)) (GZP-editor))
+       (if (not editor-usr-output) (select-buffer 'MACSYMA-EDIT))
+       (EPRINC (maknam (REVERSE ST)))
+       (eforce-output)
+       (run-teco-command #,edit-text)
+       (reprint st t)
+       '$DONE)
+
+(if (and (null (status ttyint 5)) (status feature MACSYMA))
+    (sstatus ttyint 5 'MACSYMA-EDIT-INTERRUPT))
+
+(COMMENT COMMANDS FOR ENTERING EDITORS)
+
+; useless functions for calling editors
+
+(defun $teco nil (enter-specific-inf-editor 'teco) '$done)
+
+(defun teco  nil (enter-specific-inf-editor 'teco))
+
+(defun $emacs nil (enter-specific-inf-editor  'emacs) '$done)
+
+(defun emacs  nil (enter-specific-inf-editor  'emacs))
+
+(defun lispt nil (enter-specific-inf-editor nil))
+
+(declare (macros t))
+(defun (inf-edit macro) (x)
+       (setq x (cdr x))
+       (cond (x `(lispt-edit ',x))
+	     (T '(lispt-edit nil))))
+
+(defun inf-edit* n (lispt-edit (listify n)))
+
+(defun $edit macro (x)
+       (setq x (cdr x))
+       (cond (x `(progn (lispt-edit ',(map-strip$  x)) '$DONE))
+	     (t '(progn (lispt-edit nil) '$DONE))))
+
+(defun map-strip$ (x) (if (atom x) (stripdollar x) (mapcar 'map-strip$ x)))
+
+(defun lispt-edit (x)
+   (if (and x (not (atom x)) (null (cdr x))) (setq x (car x)))
+   (let ((lispt-jname (if (null x) lispt-jname
+			      (if (atom x) x
+				  (if (atom (car x)) (car x)
+				      (error '| First arg must be atomic.|)))))
+	     (file (if (atom x) x (cadr x))))
+       (enter-specific-inf-editor file)))
+
+(defun enter-specific-inf-editor (x)
+       (setq tty-return-prompt? nil)
+       (let ((lispt-file-forced x))
+		(if (not (inf-editor-test)) (make-editor))
+		(continue-editor t))
+       (wait-for-job editor-job)
+       '*)
+
+(defun inf-editor-test nil
+       (or editor-job (and roving-editor? (find-roving-editor lispt-jname))))
+
+(declare (*expr $error))
+
+(defun find-roving-editor (jname)
+   (let  ((job (make-job jname)))
+	   (cond ((eq 'FOREIGN (car job))
+		  (if (prog2 nil (not (= 0 (boole 1 #,optddt (*uset *ROPTI))))
+			     (kill-job))
+		      (editor-from-ddt jname)
+		      (princ0 '|Roving editor job is inferior to some other job./
+Create a new one? (Y or N):|)
+		      (if (not (= 31 (boole 1 37 (tyi))))
+			  (if (status feature MACSYMA) ($ERROR) (^G)))
+		      nil))
+		 ((eq 'REOWNED (car job))
+		  (if tty-verbose (princ0 '|; Roving editor reowned |) (TERPRI))
+		  (setq editor-jname jname
+			editor-job (cadr job))
+		  (set-job-start-adr editor-job 4000)
+		  T)
+		 ((car job) (kill-job) nil)
+		 (T (ERROR '|Can't create editor job (system full?)|)))))
+
+(SSTATUS TTYINT
+	 '/ 
+	 '(LAMBDA (CHNL CHAR)
+		  (DO () 
+		      ((OR (= 0 (LISTEN CHNL))
+			   (= (TYI CHNL) CHAR))))
+		  (VALRET '|/..SAFE// 1/î:VP |)
+		  (NOINTERRUPT () )
+		  (TERPRI (SETQ CHAR (STATUS TTYCONS CHNL)))
+		  (PRINC '|Editor jName? | CHAR)
+		  (AND (ZEROP (FLATC (SETQ CHAR (READLINE CHNL))))
+		       (SETQ CHAR 'LISPT))
+		  (UNWIND-PROTECT
+		   (PROG2 (SETQ CHNL NOUUO)
+			  (NOUUO ())
+			  (LISPT-EDIT (LIST CHAR 'EMACS)))
+		   (SSTATUS TTYINT '/ 'LISPT-EDIT-INTERRUPT)
+		   (NOUUO CHNL))))
+
+(defun lispt-edit-interrupt (file char) 
+       (terpri)
+       (do () 
+	   ((or (= 0 (listen file))
+		(= (tyi file) char))))
+       (if (not (inf-editor-test)) (make-editor))      ; autostart
+       (continue-editor t)
+       null)
+
+(COMMENT Commands for Passing Through to DDT)
+
+; interrupt level routine run from *BREAK-TECO
+
+(defun lispt-return-to-ddt (trf)
+   (let ((tty-return '(lambda(x) x))) 
+	    (nointerrupt nil))
+       (if trf (setq tty-return-list '((return-to-editor))))
+       (return-to-ddt))
+
+(defun return-to-editor nil
+       (if editor-job
+	   (progn (select-job editor-job)
+		  (continue-job t)))) ; punt the tty passing message
+
+(defun LISPT-^Z nil
+   (setq tty-passing-msg lispt-tty-to-ddt-msg)
+   (cond ((and roving-editor? editor-job)
+	  (addl '(roving-editor-tty-return) tty-return-list)
+	  (editor-to-ddt))))
+
+(special-init default-return-to-ddt-list '((LISPT-^Z) (DDT-return)))
+
+(defun roving-editor-tty-return nil
+   (cond ((null(errset (editor-from-ddt editor-jname) NIL))
+	  (PRINC0 '|; Warning: Can't get the editor.|)
+	  (terpri)
+	  (nointerrupt nil)
+	  (rplacd tty-return-list nil)
+	  (if tty-return-prompt? (funcall lispt-prompter nil)))))
+
+(defun editor-to-ddt nil
+   (if (null editor-job) (error '|No editor job. |))
+   (let ((stadr))
+       (select-job editor-job) (setq stadr (job-start-adr editor-job))
+       (clean-up-editor)
+       (if (null (disown-job editor-job)) (error '|Disowning the editor failed |))
+       (valret* '|:job | editor-jname '|  ..star//jrst | stadr '|/î:job |
+		(status jname) '| :vp |))
+   (setq editor-job nil)
+       'done)
+
+(DEFUN EDITOR-FROM-DDT (X)
+       (SETQ X (IF (NULL X) 'LISPT X))
+       (IF EDITOR-JOB (CLOBBER-EDITOR?))
+       (LET ((JOB (MAKE-JOB X)))
+	      (COND ((EQ 'REOWNED (CAR JOB)) (DISOWN-JOB (CADR JOB)))
+		    ((EQ 'FOREIGN (CAR JOB))
+		     (IF (NOT (= 0 (BOOLE 1 #,OPTDDT (*USET *ROPTI))))
+			 (KILL-JOB)
+			 (ERROR '|Editor belongs to some job other than DDT|))
+		     (VALRET* '|:JOB | X '| :DISOWN :JOB | (STATUS JNAME)
+			      '| :VP |))
+		    (T (IF (CAR JOB) (KILL-JOB)) ; INFERIOR create, or NIL
+                     (ERROR '|Editor job doesn't exist |))))
+       (REOWN-EDITOR X))
+
+(DEFUN CLOBBER-EDITOR? NIL
+       (LET ((^W NIL)) (PRINC0 '|Clobber the existing editor? (Y or N) |))
+       (IF (MEMQ (PROG2 NIL (READCH) (TERPRI)) '(Y /y)) (KILL-EDITOR)
+	   (ERR)))
+
+;; Local Modes:
+;; Mode: LISP
+;; Comment Col: 40
+;; END:

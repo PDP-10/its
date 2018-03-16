@@ -1,0 +1,1149 @@
+;;;-*-Lisp-*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			ITERATION FUNCTIONS		     ;;;
+;;; 		   Peter Szolovits (PSZ @ MIT-ML)	     ;;;
+;;;			   July 16, 1976		     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	revised by LH@MIT-ML on May 9, 1979	     	     ;;;
+;;;	revised again by BYRON@MIT-ML on July 12, 1979	     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(COMMENT ** ITERATION FUNCTIONS **)
+
+;;;This package defines a set of functions to provide an
+;;;approximation of INTERLISP's iteration statement facility
+;;;within a MACRO package for MACLISP.
+;;;
+;;;
+;;;For the simplest exposition of its use and utility, here are
+;;;a few examples of how the iterations statements may be used:
+;;;
+;;; (FOR I FROM 1 TO 3 COLLECT I) ==> (1 2 3)
+;;;
+;;; (COLLECT (CONS I X) FOR X IN '(A B C D E) AS I BY 3)
+;;;		==> ((1 . A) (4 . B) (7 . C) (10 . D) (13 . E))
+;;;
+;;; (UNLESS (ATOM X) JOIN X FOR X IN '((A B C) (D E) F (G)))
+;;;		==> (A B C D E G)
+;;;
+;;; (FOR X ON '(A B C D) AS I FROM 1 ADJOIN (PRINT I) X)
+;;; 1
+;;; 2
+;;; 3
+;;; 4
+;;;		==> (A B C D B C D C D D)
+;;;
+;;; (FIRST (SETQ FOO '(A B (C D) E))
+;;;  WHILE (ATOM (CAR FOO)) DO (SETQ FOO (CDR FOO)) (PRINT FOO))
+;;; (B (C D) E)
+;;; ((C D) E)
+;;;		==> NIL
+;;;
+;;; (BIND X (FOO '(A B (C D) E))
+;;;  WHILE (ATOM (SETQ X (CAR FOO))) 
+;;;  COLLECT (SETQ FOO (CDR FOO)) (CONS X X))
+;;;		==> ((A . A) (B . B))
+;;;
+;;; (FOR X IN '(A B C D) FIRST-TIME (MEMQ X '(E F G C 1 2 3)))
+;;;		==> (C 1 2 3)
+;;;
+;;;FOR now supports LET-type "destructuring" wherever variables are
+;;; explicitly bound (by BIND, FOR, or AS) so:
+;;;
+;;; (FOR (X Y) IN '((1 2) (3 4)) COLLECT (+ X Y) ==> (3 7)
+;;;
+;;; (BIND ((X Y) '(2 4)) FOR I FROM 1 TO 2 COLLECT (+ X Y I)) ==> (7 8)
+;;;
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			GENERAL DESCRIPTION		     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;
+;;;	An ITERATION is a convenient manner of writing a complex
+;;;LISP looping expression when control is desired of various
+;;;aspects of the iteration which make the system-provided
+;;;functions (e.g., MAPCAR, DO) too rigid or too cumbersome.
+;;;
+;;;	An iteration statement consists of a number of clauses,
+;;;described below, written in succession within a single S-EXPR.
+;;;
+;;;	Every iteration has at most one MAIN CLAUSE, which
+;;;controls what, if anything, is collected as the result of the
+;;;iteration.  The default provided main clauses are:
+;;;
+;;; DO (or DOING) -- evaluated for side-effect only; return is
+;;;		NIL.
+;;; COLLECT -- A list of the values of every evaluation of the
+;;;		main clause is returned (c.f. MAPCAR).
+;;; JOIN -- The values of every evaluation of the main clause
+;;;		are NCONCed together to form the value (c.f.
+;;;		MAPCAN).
+;;; ADJOIN -- Like JOIN, but joining is by APPEND rather than
+;;;		NCONC.  Every joined segment is copied exactly
+;;;		once, even if there is only one segment.
+;;; COUNT -- The number of non-NIL values of the evaluations of
+;;;		the main clause is returned.
+;;; SUM -- The sum of the values of the evaluations of the main
+;;;		clause is returned.
+;;; FIRST-TIME -- The value of the iteration is the first
+;;;		non-NIL value of the main clause, and iteration
+;;;		terminates when and if this occurs.
+;;; PRINT (or PRINTING) -- PRINT's the values of the evaluations
+;;;		of the main clause.
+;;; RESULT -- Sets the RESULT variable to the value of the expression
+;;;           and exits.
+;;;
+;;;Other main clauses may be added.  Each must be signalled by a
+;;;keyword marked by the !FUNCTION property with an appropriate
+;;;function to fill in the iteration template for it. 
+;;;
+;;;
+;;;	The binding of LOOP VARIABLES and AUXILLIARY VARIABLES is
+;;;controlled by the BIND, FOR and AS clauses.  The BIND keyword is
+;;;followed by the variables or (variable initial-val) or
+;;;(variable-structure initial-val) <as in LET> forms to be
+;;;bound.  Those variables are bound, and the initial-vals are evaluated
+;;;before any of the bindings for this iteration.  The FOR and AS
+;;;clauses are equivalent and provide a way to have several loop
+;;;variables.  The keyword is followed by the name of the variable, and
+;;;optionally by FIXNUM, FLONUM, or NOTYPE.  NOTYPE is the default
+;;;except for numeric (FROM, TO, DOWNTO, BY) variables, for which it is
+;;;FIXNUM.  An appropriate declaration to the compiler is made. The rest
+;;;of each variable clause has one of the following forms:
+;;;
+;;; FROM e1 TO e2 BY e3 -- This is the numeric iteration clause.
+;;;		Its terms may appear in any order.  Instead of
+;;;		the TO, we may have a DOWNTO term to indicate
+;;;		that the loop is for decrementing the var.  FROM
+;;;		defaults to 1, BY to 1 with TO and -1 with
+;;;		DOWNTO.  Incrementing is assumed if neither is
+;;;		stated.  (Currently, no checking is performed to
+;;;		see that the types of args are consistent, and
+;;;		the type of arithmetic used is determined by the
+;;;		type specified.  NOTYPE implies general
+;;;		arithmetic, and the default is FIXNUM.)
+;;; IN list -- This is iteration over a list.  The var gets
+;;;		successive elements of the list.
+;;; ON list -- This is iteration over successive tails of the
+;;;		list.
+;;; STARTING e1 STEPPING e2 -- This is a general form for giving
+;;;		initial and incremental values.  The terms may
+;;;		be in either order.  STARTING defaults to NIL,
+;;;		and if STEPPING is omitted, no stepping action
+;;;		is set up.
+;;; TRAILING v1, or TRAILS v1 -- The iteration variable will take on the
+;;;		value that v1 had on the previous iteration.  V1 should
+;;;		be some other iteration variable of this iteration.  On
+;;;		the first iteration, since there is no previous value of
+;;;		v1, we use NIL.
+;;; SET-TO e1, or = e1 -- On each iteration, e1 is evaluated and
+;;;		assigned to the variable.  This is most useful when e1
+;;;		is expressed in terms of some other iteration
+;;;		variable(s).  E1 is always computed in terms of the new
+;;;		values of the iteration variables, not the old.
+;;; BEING pathname OF e1, or
+;;; BEING e1 AND ITS pathname -- These are the exclusive and
+;;;		inclusive forms of the PATH ITERATION. 
+;;;		Pathnames must be explicitly marked by the
+;;;		!PATH-FUNCTION property with a function to
+;;;		process them.  This is a special feature, most
+;;;		useful for LMS and OWL, and in this package
+;;;		there are no paths defined by default.  The
+;;;		keyword ALONG is synonymous with BEING.  Note
+;;;		that there are variants of these subclauses, not
+;;;		described here, that are specifically tailored
+;;;		for iterating through the objects in a zone of
+;;;		an LMS node; these variants are recognized by
+;;;		the fact that EACH occurs where the pathname or
+;;;		ITS would normally have occurred.
+;;;
+;;; The sub-keywords like FROM, IN, etc., are recognized by having an
+;;;!ITER-FUNCTION property;  thus, others may be added to the package.
+;;;
+;;;	TERMINATION CLAUSES allow specification of additional
+;;; iteration termination conditions beyond any that are
+;;; implied by FOR and AS clauses.  The following exist:
+;;;
+;;; WHILE e1 -- e1 is evaluated at the beginning of each
+;;;		iteration, and the iteration terminates when e1
+;;;		is NIL.
+;;; UNTIL e1 -- like WHILE but terminates when e1 is non-NIL.
+;;; REPEAT-WHILE e1 -- e1 is evaluated at the end of each
+;;;		iteration, and the iteration terminates when e1
+;;;		is NIL;  this guarantees at least one
+;;;		iteration.
+;;; REPEAT-UNTIL e1 -- like REPEAT-WHILE but terminates when e1 is
+;;;		non-NIL.
+;;;
+;;;
+;;;	A SELECTION-CLAUSE is a filter on which iteration the
+;;;main clause should be evaluated.  A conjunction is implied if more
+;;; than one selection exists.  The following exist:
+;;; WHEN e1 -- The main clause is evaluated if e1 is non-NIL.
+;;; UNLESS e1 -- The main clause is evaluated if e1 is NIL.
+;;;
+;;;
+;;;	The PERIPHERAL CLAUSES are of three kinds:
+;;;
+;;; FIRST e1 -- Evaluates e1 after initially binding the vars
+;;;		but before starting the first iteration.
+;;; FINALLY e1 -- Evaluates e1 after exiting the last iteration
+;;;		but before returning the answer.  If the main
+;;;		clause is a value-returning clause, the result
+;;;		to be returned is in the variable RESULT (see notes).
+;;; EACH-TIME e1 -- Evaluates e1 on every iteration of the loop,
+;;;		whether or not the selection test is passed.
+;;;
+
+;;*page
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			   CAVEATS			     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;
+;;;
+;;;	A few notes should be made about implementation features
+;;;which affect the evaluation of iteration forms:
+;;;
+;;; 1.  Like in  the LISP DO, initialization and updating of the
+;;;iteration variables takes place in parallel.  Only SET-TO varaibles
+;;;and their internally generated equivalents (e.g., "X in Y") are done
+;;;after the others, and these should never lead to trouble.  This is a
+;;;significant change from earlier versions of the FOR package.
+;;;
+;;; 2.  The iteration statement is translated to a LISP DO.  In
+;;;particular, this means that a (RETURN val) form may be
+;;;evaluated at any place to return that particular val as the
+;;;value of the iteration.  If it is desired that any FINALLY
+;;;clauses be evaluated and the value returned, then the
+;;; following may be done:
+;;;	(SETQ RESULT val), if appropriate and if the main clause
+;;;			      is value-returning
+;;;	(TERMINATE-ITERATION)
+;;;Note that the RESULT clause may be used in many cases where this is
+;;;desired.
+;;;
+;;; 3.  Wherever possible, the order of evaluation of
+;;;expressions whose evaluation order is not otherwise
+;;;constrained is that suggested by the order of writing them in
+;;;the iteration statement.  This is only of significance if
+;;;significant use of side effects is made.
+;;;
+;;; 4.  Wherever a single expression may appear, more than one
+;;;may appear.  They will be implicitly surrounded by a PROGN,
+;;;so all but the last will be evaluated for side effect only.
+;;;
+;;; 5.  The name RESULT, in which the value of value-collecting
+;;;iterations is built up, is selected only by default.  If the
+;;;value of the variable !RESULT-NAME is bound, that will be
+;;;used instead.
+;;;
+;;; 6.  Almost no error checking is currently done, so it is
+;;;possible to get weird errors if the iterative statement is
+;;;not well-formed.
+;;;
+;;; 7.  This code is written using (I think) only one macro,
+;;;!PUSH, which is not part of the standard LISP complement.
+;;;!PUSH is defined herein to be equivalent to PUSH with its
+;;;arguments reversed, except that it only works for simple
+;;;(atomic) variables.
+;;;
+;;; 8.  For efficiency, translations produced by these macros
+;;;are saved in the array !MACRO-EXPANSIONS and further calls on
+;;;the same form are translated by retrieval rather than
+;;;recomputation.  This, however, may cause some problems:  For
+;;;efficiency considerations (i.e., SXHASH or EQUAL are slow),
+;;;retrieval is done by EQ comparison on the form.  Thus, if the
+;;;form has been edited since its original translation, an
+;;;incorrect translation will be retrieved.  Further, since all
+;;;translated forms are referred to from !MACRO-EXPANSIONS, many
+;;;un-garbage-collectable obsolete copies of a form can be
+;;;retained during debugging runs.  (E.g., if one keeps
+;;;redefining some function which includes macro calls.  For
+;;;anyone who thinks they can solve this problem by retrieval on
+;;;the MAKNUM of the form or by making the array untraced by the
+;;;GC, be warned that either "fix" causes mis-translations.)  The
+;;;function !MACRO-FLUSH is provided to flush all existing
+;;;translations and guarantee that new translations of all these
+;;;macro forms are made.  This also releases for
+;;;garbage-collection all the "old" forms which are only pointed
+;;;at by this translation mechanism.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			The macro functions.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;	The following define as macros those keywords which may
+;;;serve to introduce the iteration form.  Note that DO and
+;;;PRINT cannot be among them because they are already taken by LISP
+;;;so use DOING and PRINTING in the initial position.
+
+(DECLARE (SPECIAL !VAR-LIST !MAIN-VARLIST !DECLARATIONS !DEP-VARLIST
+		  !INITIALIZATION !PRE-LOOP-TEST !SET-VARLIST
+		  !LOOP-TEST !EACH-TIME !SELECTION !BODY
+		  !POST-TEST !FINALLY !RETURN
+		  !FORM !FULL-FORM !RESULT-NAME)
+	 (MACROS T)) 
+
+(COND ((STATUS FEATURE COMPLR)
+        (SPECIAL !VAR-LIST !MAIN-VARLIST !DECLARATIONS !DEP-VARLIST
+		  !INITIALIZATION !PRE-LOOP-TEST !SET-VARLIST
+		  !LOOP-TEST !EACH-TIME !SELECTION !BODY
+		  !POST-TEST !FINALLY !RETURN
+		  !FORM !FULL-FORM !RESULT-NAME)
+	(*EXPR !SCAN)
+	(NOTYPE (!SCAN NOTYPE))))
+
+(DEFUN !PUSH MACRO (FORM)
+       (LIST 'SETQ
+	     (CADR FORM)
+	     (LIST 'CONS (CADDR FORM) (CADR FORM))))
+
+(DEFUN FOR MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN AS MACRO (FORM) (!ITERATION-PROCESSOR FORM)) 
+
+(DEFUN COLLECT MACRO (FORM) (!ITERATION-PROCESSOR FORM)) 
+
+(DEFUN JOIN MACRO (FORM) (!ITERATION-PROCESSOR FORM)) 
+
+(DEFUN ADJOIN MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN SUM MACRO (FORM) (!ITERATION-PROCESSOR FORM)) 
+
+(DEFUN COUNT MACRO (FORM) (!ITERATION-PROCESSOR FORM)) 
+
+(DEFUN FIRST-TIME MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN DOING MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN BIND MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN WHILE MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN UNTIL MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN REPEAT-WHILE MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN REPEAT-UNTIL MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN WHEN MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN UNLESS MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN FIRST MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN EACH-TIME MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN FINALLY MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN TERMINATE-ITERATION MACRO (FORM) '(GO !EXIT))
+
+(DEFUN PRINTING MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+(DEFUN RESULT MACRO (FORM) (!ITERATION-PROCESSOR FORM))
+
+;;;For collecting clauses, the resulting value is kept in the
+;;;variable whose name is in !RESULT-NAME.  It defaults to RESULT.
+
+(OR (AND (BOUNDP '!RESULT-NAME)
+	 (ATOM !RESULT-NAME))
+    (SETQ !RESULT-NAME 'RESULT))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	The main iteration form decoding driver.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;	This function is the driver for calling the successive
+;;;keyword-oriented parsing functions.  When the parsing is
+;;;complete, it assembles the resulting form.
+;;;
+;;;	The iteration statement is translated into a template
+;;;defined here.  It is the role of the various clause parsers
+;;;to fill in the appropriate special variables bound by the
+;;;driver to fill the slots of the template.  The template has
+;;;the following form:
+;;;
+;;;	(DO	!VAR-LIST
+;;;		NIL
+;;;		(DECLARE !DECLARATIONS)
+;;;		!INITIALIZE-DEPENDENT-VARS
+;;;		!SET-VARS
+;;;		!INITIALIZATION
+;;;		!PRE-LOOP-TEST
+;;;	 !LOOP	
+;;;		!LOOP-TEST	;go to !EXIT on disjunction
+;;;		!EACH-TIME
+;;;		(COND !SELECTION
+;;;		      !BODY)
+;;;		!POST-TEST
+;;;		!INCREMENT
+;;;		!SET-VARS
+;;;		(GO !LOOP)
+;;;	 !EXIT	!FINALLY
+;;;		!RETURN)
+;;;
+;;;	In case !INITIALIZATION is not needed, the two occurrances of
+;;; !SET-VARS are consolidated into a single one immediately after
+;;; !LOOP, as a minor optimization.
+;;;
+;;;	By adding statements to these variables, the modularly
+;;;implemented clause processing functions can build up the
+;;;form.  NOTE:  Some of these entries are in fact not directly
+;;; constructed by the processing functions. 
+;;; !INITIALIZE-DEPENDENT-VARS, !SET-VARS, and !INCREMENT, for instance,
+;;; are actually computed from !DEP-VARLIST, !SET-VARLIST, and
+;;; !MAIN-VARLIST. 
+
+;;;	The following describes the meaning of each portion of the
+;;; iteration frame presented above.
+;;; 
+;;; !VAR-LIST -- This is where the principal variables of the iteration
+;;; are intialized, via the LISP DO.  None of the forms specifies an
+;;; increment, since the implicit iteration established by the DO is not
+;;; used. 
+;;; 
+;;; !DECLARATIONS -- All declarations of variables (in particular, the
+;;; numeric ones which may be "typed") are gathered together here. 
+;;; Note:  apparently all declarations must appear in a single
+;;; (DECLARE ...) form since the compiler requires it.
+;;; 
+;;; !INITIALIZE-DEPENDENT-VARS -- which is actually computed from
+;;; !DEP-VARLIST -- Because !VAR-LIST initializations are done in
+;;; parallel and we must not recompute any values computed there, it may
+;;; occur that an explicit initialization is needed for some variable
+;;; which depends on the initial value of some other.  That
+;;; initialization is specified in !DEP-VARLIST and turned into a SETQ
+;;; here.  These dependent initializations are done sequentially, with
+;;; all variables bound by the DO already bound.  However, since none of
+;;; the user-available iteration forms directly translates into
+;;; dependent variable initialization, and since all the ones generated
+;;; internally do not depend on that binding time, this presents no
+;;; problem. 
+;;; 
+;;; !SET-VARS -- computed from !SET-VARLIST -- These variables
+;;; correspond to local variables set on each iteration of the loop,
+;;; presumably from the values of the main loop variables, as an
+;;; efficiency or clarity aid.  The iteration frame prefers to compute
+;;; these just before the !LOOP-TEST, but if it may need them for
+;;; initialization (e.g., FIRST clause processing), it computes them
+;;; before !INITIALIZATION and also after the !INCREMENT where the main
+;;; variables are stepped.  In either case, these variables are computed
+;;; from the current values of the main variables, not their previous
+;;; ones.  They can be explicitly specified by a SET-TO clause.  A
+;;; possible problem arises with these set variables.  We assume that
+;;; they should have their appropriate values for all steps of the
+;;; program, including the loop tests.  However, if the loop should
+;;; really terminate by a test on one of the main variables, and it only
+;;; makes sense to compute the set variable when the main variable does
+;;; not yet indicate termination, then the computation of the set
+;;; variable at !SET-VARS may cause an error.  For example,
+;;; (FOR X IN NIL ...) will give X the value NIL here, even though it
+;;; should nave "no value at all."  Only the fact that (CAR NIL) is
+;;; defined saves us from an error.  In other cases, one may need to use
+;;; BIND and EACH-TIME to produce the effect of SET-TO to avoid such
+;;; errors, but then the value of the set variable will of course not be
+;;; available for the !LOOP-TEST or !INITIALIZATION.
+;;; 
+;;; !INITIALIZATION -- Specified explicitly by the FIRST clause, this is
+;;; some series of actions to take before the first iteration of the
+;;; loop.  All variables are bound at this point to the values they will
+;;; have on the first iteration.  These steps are executed even if the
+;;; iteration is in fact never performed.  Note that this case may lead
+;;; to nonsense as described above under !SET-VARS.
+;;; 
+;;; !PRE-LOOP-TEST -- Some of the OWL path functions need to check,
+;;; before entering into the loop at all, to see if the iteration should
+;;; be performed.  Since this test may be different from an appropriate
+;;; !LOOP-TEST, it is given a special place here.
+;;; 
+;;; !LOOP-TEST -- This is where tests for termination are placed.  They
+;;; may be generated by one of the iteration forms or by the WHILE or
+;;; UNTIL clauses.  Iteration terminates when any one of the tests
+;;; succeeds. 
+;;; 
+;;; !EACH-TIME -- A set of steps to perform on every iteration of the
+;;; loop, even if the selection clause causes the body not to be
+;;; performed. 
+;;; 
+;;; !SELECTION -- Determines whether the body is to be performed. 
+;;; Specified by the WHEN and UNLESS clauses.  The body is performed
+;;; only if all of the selections pass.  Non-selected loopings of the
+;;; iteration contribute nothing to the RESULT of an iteration form.
+;;; 
+;;; !BODY -- Specified by the main clause of the iteration form, it does
+;;; the principal work of the iteration.  Actions that collect the
+;;; result are all here.
+;;; 
+;;; !POST-TEST -- A test similar to the !LOOP-TEST but designed to allow
+;;; REPEAT-UNTIL and REPEAT-WHILE type loops.  The iteration is
+;;; terminated if any one of the tests passes.
+;;; 
+;;; !INCREMENT -- This is where all the main (including dependent, but
+;;; excluding set) variables are incremented.  The increment
+;;; computations are done in parallel, as in the LISP DO.
+;;; 
+;;; !FINALLY -- Any steps specified by a FINALLY clause are computed
+;;; here.  The loop variables are all still bound, but their state will
+;;; depend on how the loop was exited.  For example, if exit occurred
+;;; due to a WHILE clause, all the variables will already have been
+;;; stepped from the values they had on the last execution of the loop; 
+;;; but, if exit occurred because of REPEAT-WHILE, they will not yet
+;;; have been stepped.
+;;; 
+;;; !RETURN -- This is where the explicit RETURN statement exits the DO.
+
+(DEFUN !ITERATION-PROCESSOR (!FULL-FORM) 
+       (COND
+	((!MACRO-FETCH !FULL-FORM))
+	(T
+	 (DO
+	  ((!VAR-LIST) (!MAIN-VARLIST)
+		       (!DECLARATIONS)
+		       (!DEP-VARLIST)
+		       (!INITIALIZATION)
+		       (!PRE-LOOP-TEST)
+		       (!SET-VARLIST)
+		       (!LOOP-TEST)
+		       (!EACH-TIME)
+		       (!SELECTION)
+		       (!BODY)
+		       (!POST-TEST)
+		       (!FINALLY)
+		       (!RETURN)
+		       (!FORM !FULL-FORM)
+		       (RESULT-FORM))
+	  ((NULL !FORM)
+	   (SETQ 
+	    !BODY (NREVERSE !BODY)
+	    !LOOP-TEST (NREVERSE !LOOP-TEST)
+	    !SELECTION (NREVERSE !SELECTION)
+	    !POST-TEST (NREVERSE !POST-TEST)
+	    !DEP-VARLIST (NREVERSE !DEP-VARLIST)
+	    !SET-VARLIST (NREVERSE !SET-VARLIST)
+	    !MAIN-VARLIST (NREVERSE !MAIN-VARLIST)
+	    RESULT-FORM
+	    (NCONC
+	      (LIST 'LET (NREVERSE !VAR-LIST))
+	      (AND !DECLARATIONS
+		   (NCONS (CONS 'DECLARE (NREVERSE !DECLARATIONS))))
+	      (LIST
+		(NCONC
+		 (LIST 'DO NIL NIL)
+		 (AND !DEP-VARLIST (!ADD-SETQ !DEP-VARLIST))
+		 (AND (OR !INITIALIZATION !PRE-LOOP-TEST) !SET-VARLIST
+		      (!ADD-SETQ !SET-VARLIST))
+		 (NREVERSE !INITIALIZATION)
+		 (COND
+		  ((AND !PRE-LOOP-TEST (CDR !PRE-LOOP-TEST))
+		   (NCONS (LIST 'COND
+				(LIST (CONS 'OR !PRE-LOOP-TEST)
+				      '(GO !EXIT)))))
+		  (!PRE-LOOP-TEST (NCONS (LIST 'COND
+					   (LIST (CAR !PRE-LOOP-TEST)
+						 '(GO !EXIT))))))
+		 (NCONS '!LOOP)
+		 (AND (NULL !INITIALIZATION)
+		      (NULL !PRE-LOOP-TEST)
+		      !SET-VARLIST
+		      (!ADD-SETQ !SET-VARLIST))
+		 (COND
+		  ((AND !LOOP-TEST (CDR !LOOP-TEST))
+		   (NCONS (LIST 'COND
+				(LIST (CONS 'OR !LOOP-TEST)
+				      '(GO !EXIT)))))
+		  (!LOOP-TEST (NCONS (LIST 'COND
+					   (LIST (CAR !LOOP-TEST)
+						 '(GO !EXIT))))))
+		 (NREVERSE !EACH-TIME)
+		 (COND
+		  ((AND !SELECTION (CDR !SELECTION))
+		   (NCONS (LIST 'COND
+				(CONS (CONS 'AND !SELECTION)
+				      !BODY))))
+		  (!SELECTION
+		   (NCONS (LIST 'COND
+				(CONS (CAR !SELECTION) !BODY))))
+		  (T !BODY))
+		 (COND
+		  ((AND !POST-TEST (CDR !POST-TEST))
+		   (NCONS (LIST 'COND
+				(LIST (CONS 'OR !POST-TEST)
+				      '(GO !EXIT)))))
+		  (!POST-TEST (NCONS (LIST 'COND
+					   (LIST (CAR !POST-TEST)
+						 '(GO !EXIT))))))
+		 (AND !MAIN-VARLIST (!ADD-PARALLEL-SETQ !MAIN-VARLIST))
+		 (AND (OR !INITIALIZATION !PRE-LOOP-TEST) !SET-VARLIST
+		      (!ADD-SETQ !SET-VARLIST))
+		 (LIST '(GO !LOOP) '!EXIT)
+		 (NREVERSE !FINALLY)
+		 !RETURN))))
+	   (!MACRO-STOW !FULL-FORM RESULT-FORM)
+	   RESULT-FORM)
+	  (FUNCALL (GET (CAR !FORM) '!FUNCTION))))))
+
+(DEFUN !ADD-SETQ (VARLIST)
+       (NCONS (CONS 'DESETQ (MAPCAN
+			     (FUNCTION
+			        (LAMBDA (X) (APPEND X NIL)))
+			     VARLIST))))
+
+(DEFUN !ADD-PARALLEL-SETQ (VARLIST)
+       (NCONS
+	(COND ((CDR VARLIST)
+	      ((LAMBDA (LOCALVARS)
+		(CONS (LIST 'LAMBDA
+			    LOCALVARS
+			    (CONS 'SETQ
+				  (MAPCAN (FUNCTION
+					   (LAMBDA (X Y)
+						   (LIST (CAR X) Y)))
+					  VARLIST
+					  LOCALVARS)))
+		      (MAPCAR (FUNCTION CADR) VARLIST)))
+	       (MAPCAR (FUNCTION (LAMBDA (DUMMY) (!NEWSYM))) VARLIST)))
+	     (T (CONS 'SETQ (CAR VARLIST))))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Functions to process the MAIN CLAUSE.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFPROP DO !DO-FUNCTION !FUNCTION) 
+
+(DEFPROP DOING !DO-FUNCTION !FUNCTION)
+
+(DEFUN !DO-FUNCTION NIL (POP !FORM) (!PUSH !BODY (!SCAN NIL))) 
+
+(DEFPROP COLLECT !COLLECT-FUNCTION !FUNCTION) 
+
+(DEFUN !COLLECT-FUNCTION NIL 
+       (DO ((TAILVAR (!NEWSYM))
+	    (VALVAR (!NEWSYM)))
+	   NIL
+	   (POP !FORM)
+	   (!PUSH !VAR-LIST (NCONS !RESULT-NAME))
+	   (!PUSH !VAR-LIST (NCONS VALVAR))
+	   (!PUSH !VAR-LIST (NCONS TAILVAR))
+	   (!PUSH !BODY (LIST 'SETQ
+			      VALVAR
+			      (LIST 'NCONS (!SCAN NIL))))
+	   (!PUSH
+	    !BODY
+	    (SUBLIS
+	     (LIST (CONS 'VAL VALVAR)
+		   (CONS 'TAIL TAILVAR)
+		   (CONS 'RESULT !RESULT-NAME))
+	     '(COND (RESULT (RPLACD TAIL VAL) (SETQ TAIL VAL))
+		    (T (SETQ RESULT (SETQ TAIL VAL))))))
+	   (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME)))) 
+
+(DEFPROP JOIN !JOIN-FUNCTION !FUNCTION) 
+
+(DEFUN !JOIN-FUNCTION NIL 
+       (DO ((TAILVAR (!NEWSYM))
+	    (VALVAR (!NEWSYM)))
+	   NIL
+	   (POP !FORM)
+	   (!PUSH !VAR-LIST (NCONS VALVAR))
+	   (!PUSH !VAR-LIST (NCONS TAILVAR))
+	   (!PUSH !VAR-LIST (NCONS !RESULT-NAME))
+	   (!PUSH !BODY
+		  (SUBLIS (LIST (CONS 'VAL VALVAR)
+			        (CONS 'TAIL TAILVAR)
+			        (CONS 'RESULT !RESULT-NAME)
+			        (CONS 'BODY (!SCAN NIL)))
+			  '(PROGN
+			    (SETQ VAL BODY)
+			    (COND ((NULL VAL))
+				  (RESULT (RPLACD TAIL VAL)
+					  (SETQ TAIL (LAST VAL)))
+				  (T (SETQ RESULT VAL)
+				     (SETQ TAIL (LAST VAL)))))))
+	   (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME))))
+
+(DEFPROP ADJOIN !ADJOIN-FUNCTION !FUNCTION) 
+
+(DEFUN !ADJOIN-FUNCTION NIL 
+       (DO ((TAILVAR (!NEWSYM))
+	    (VALVAR (!NEWSYM)))
+	   NIL
+	   (POP !FORM)
+	   (!PUSH !VAR-LIST (NCONS VALVAR))
+	   (!PUSH !VAR-LIST (NCONS TAILVAR))
+	   (!PUSH !VAR-LIST (NCONS !RESULT-NAME))
+	   (!PUSH !BODY
+		  (SUBLIS (LIST (CONS 'VAL VALVAR)
+			        (CONS 'TAIL TAILVAR)
+			        (CONS 'RESULT !RESULT-NAME)
+			        (CONS 'BODY (!SCAN NIL)))
+			  '(PROGN
+			    (SETQ VAL (APPEND BODY NIL))
+			    (COND ((NULL VAL))
+				  (RESULT (RPLACD TAIL VAL)
+					  (SETQ TAIL (LAST VAL)))
+				  (T (SETQ RESULT VAL)
+				     (SETQ TAIL (LAST VAL)))))))
+	   (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME))))
+
+(DEFPROP SUM !SUM-FUNCTION !FUNCTION) 
+
+(DEFUN !SUM-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !VAR-LIST (LIST !RESULT-NAME 0.))
+       (!PUSH
+	!BODY
+	(LIST 'SETQ
+	      !RESULT-NAME
+	      (LIST 'PLUS !RESULT-NAME (!SCAN NIL))))
+       (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME))) 
+
+(DEFPROP COUNT !COUNT-FUNCTION !FUNCTION) 
+
+(DEFUN !COUNT-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !VAR-LIST (LIST !RESULT-NAME 0.))
+       (!PUSH !DECLARATIONS (LIST 'FIXNUM !RESULT-NAME))
+       (!PUSH !BODY (LIST 'AND
+			  (!SCAN NIL)
+			  (LIST 'SETQ !RESULT-NAME
+			         (LIST '/1+ !RESULT-NAME))))
+       (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME))) 
+
+(DEFPROP FIRST-TIME !FIRST-TIME-FUNCTION !FUNCTION) 
+
+(DEFUN !FIRST-TIME-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !VAR-LIST (NCONS !RESULT-NAME))
+       (!PUSH !BODY (LIST 'COND (LIST (LIST 'SETQ
+					    !RESULT-NAME
+					    (!SCAN NIL))
+				      '(GO !EXIT))))
+       (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME))) 
+
+(DEFPROP PRINTING !PRINTING-FUNCTION !FUNCTION)
+
+(DEFPROP PRINT !PRINTING-FUNCTION !FUNCTION)
+
+(DEFUN !PRINTING-FUNCTION NIL
+       (POP !FORM)
+       (!PUSH !BODY (LIST 'PRINT (!SCAN NIL))))
+
+(DEFPROP RESULT !RESULT-FUNCTION !FUNCTION)
+
+(DEFUN !RESULT-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !VAR-LIST (NCONS !RESULT-NAME))
+       (!PUSH !BODY (LIST 'PROGN
+			  (LIST 'SETQ !RESULT-NAME (!SCAN NIL))
+			  '(GO !EXIT)))
+       (!PUSH !RETURN (LIST 'RETURN !RESULT-NAME)))
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Functions to process the VAR CLAUSES.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFPROP FOR !FOR-FUNCTION !FUNCTION) 
+
+(DEFPROP AS !FOR-FUNCTION !FUNCTION)
+
+(DEFPROP FROM !VAR-IS-NUMBER !ITER-FUNCTION)
+
+(DEFPROP TO !VAR-IS-NUMBER !ITER-FUNCTION)
+
+(DEFPROP DOWNTO !VAR-IS-NUMBER !ITER-FUNCTION)
+
+(DEFPROP BY !VAR-IS-NUMBER !ITER-FUNCTION)
+
+(DEFPROP STARTING !VAR-IS-STEP !ITER-FUNCTION)
+
+(DEFPROP STEPPING !VAR-IS-STEP !ITER-FUNCTION)
+
+(DEFPROP IN !VAR-IS-IN !ITER-FUNCTION)
+
+(DEFPROP ON !VAR-IS-ON !ITER-FUNCTION)
+
+(DEFPROP BEING !VAR-IS-PATH !ITER-FUNCTION)
+
+(DEFPROP ALONG !VAR-IS-PATH !ITER-FUNCTION)
+
+(DEFPROP TRAILING !VAR-IS-TRAILING !ITER-FUNCTION)
+
+(DEFPROP TRAILS !VAR-IS-TRAILING !ITER-FUNCTION)
+
+(DEFPROP SET-TO !VAR-IS-SET-TO !ITER-FUNCTION)
+
+(DEFPROP = !VAR-IS-SET-TO !ITER-FUNCTION)
+
+(DEFUN !FOR-FUNCTION NIL 
+       (PROG (VAR TYPE FUNCT) 
+	     (POP !FORM)
+	     (SETQ VAR (POP !FORM))
+	     (COND
+	      ((ATOM VAR)
+	       (COND ((MEMQ (CAR !FORM) '(FIXNUM FLONUM NOTYPE))
+		      (SETQ TYPE (POP !FORM))))
+	       (AND (OR (EQ TYPE 'FIXNUM) (EQ TYPE 'FLONUM))
+		    (!PUSH !DECLARATIONS (LIST TYPE VAR)))
+	       (COND ((SETQ FUNCT (GET (CAR !FORM) '!ITER-FUNCTION))
+		      (COND ((EQ FUNCT '!VAR-IS-NUMBER)
+			     (FUNCALL FUNCT VAR TYPE))
+			    (T (FUNCALL FUNCT VAR))))
+		     (T (!VAR-IS-NUMBER VAR TYPE))))
+	      (T (LET ((DVAR (!GENSYM-UNIQUE)))
+		      (SETQ !VAR-LIST
+			    (NCONC (MAPCAR 'NCONS (!ATOMS VAR)) !VAR-LIST))
+		      (FUNCALL (GET (CAR !FORM) '!ITER-FUNCTION) DVAR)
+		      (!PUSH !SET-VARLIST (LIST VAR DVAR))))))) 
+
+(DEFUN !ATOMS (SEXP)
+       (COND
+	((NULL SEXP) NIL)
+	((ATOM SEXP) (LIST SEXP))
+	(T (NCONC (!ATOMS (CAR SEXP)) (!ATOMS (CDR SEXP))))))
+
+(DEFUN !VAR-IS-NUMBER (VAR TYPE) 
+       (PROG (FROM TO DOWNTO BY CLAUSE VAL)
+	     ;; For numeric iteration, TYPE defaults to FIXNUM.
+	     (AND (NULL TYPE)
+		  (SETQ TYPE 'FIXNUM)
+		  (!PUSH !DECLARATIONS (LIST 'FIXNUM VAR)))
+	LOOP (SETQ CLAUSE (CAR !FORM))
+	     (COND
+	      ((MEMQ CLAUSE '(FROM TO DOWNTO BY))
+	       (POP !FORM)
+	       (SETQ VAL (!SCAN '(FROM TO DOWNTO BY)))
+	       (CASEQ CLAUSE
+	        (FROM (SETQ FROM VAL))
+		(TO (SETQ TO VAL))
+		(DOWNTO (SETQ DOWNTO VAL))
+		(BY (SETQ BY VAL)))
+	       (GO LOOP)))
+	     (!PUSH !VAR-LIST
+		    (LIST VAR (OR FROM (COND ((EQ TYPE 'FLONUM) 1.0)
+					     (T 1.)))))
+	     (!PUSH 
+	      !MAIN-VARLIST
+	      (LIST
+	       VAR
+		(COND (BY (LIST (CASEQ TYPE (FIXNUM '+)
+					    (FLONUM '+$)
+					    (T 'PLUS)) 
+				VAR BY))
+		      (DOWNTO (LIST (CASEQ TYPE (FIXNUM '1-)
+					   	(FLONUM '1-$)
+					   	(T 'SUB1))
+				     VAR))
+		      (T (LIST (CASEQ TYPE (FIXNUM '1+)
+					   (FLONUM '1+$)
+					   (T 'ADD1))
+			        VAR)))))
+	     (COND (TO (!PUSH !LOOP-TEST
+			      (LIST (COND ((OR (EQ TYPE 'FIXNUM)
+					       (EQ TYPE 'FLONUM))
+					   '>)
+					  (T 'GREATERP))
+				    VAR
+				    TO)))
+		   (DOWNTO
+		    (!PUSH !LOOP-TEST
+			   (LIST (COND ((OR (EQ TYPE 'FIXNUM)
+					    (EQ TYPE 'FLONUM))
+					   '<)
+					  (T 'LESSP))
+				  VAR DOWNTO)))))) 
+
+(DEFUN !VAR-IS-STEP (VAR) 
+       (PROG (STARTING STEPPING STEPPING-SEEN?) 
+	LOOP (COND
+	      ((EQ (CAR !FORM) 'STARTING)
+	       (POP !FORM)
+	       (SETQ STARTING (!SCAN '(STARTING STEPPING)))
+	       (GO LOOP))
+	      ((EQ (CAR !FORM) 'STEPPING)
+	       (POP !FORM)
+	       (SETQ STEPPING (!SCAN '(STARTING STEPPING)))
+	       (SETQ STEPPING-SEEN? T)
+	       (GO LOOP)))
+	     (!PUSH !VAR-LIST (LIST VAR STARTING))
+	     (COND (STEPPING-SEEN?
+		    (!PUSH !MAIN-VARLIST
+			   (LIST VAR STEPPING)))))) 
+
+(DEFUN !VAR-IS-ON (VAR) 
+       (POP !FORM)
+       (!PUSH !VAR-LIST (LIST VAR (!SCAN NIL)))
+       (!PUSH !MAIN-VARLIST
+	      (LIST VAR (LIST 'CDR VAR)))
+       (!PUSH !LOOP-TEST (LIST 'NULL VAR))) 
+
+(DEFUN !VAR-IS-IN (VAR) 
+       (DO
+	((LVAR (!NEWSYM)))
+	NIL
+	(POP !FORM)
+	(!PUSH !VAR-LIST (LIST LVAR (!SCAN NIL)))
+	(!PUSH !VAR-LIST (NCONS VAR))
+	(!PUSH !MAIN-VARLIST
+	       (LIST LVAR (LIST 'CDR LVAR)))
+	(!PUSH !LOOP-TEST (LIST 'NULL LVAR))
+	(!PUSH
+	 !SET-VARLIST
+	 (LIST VAR (LIST 'CAR LVAR))))) 
+
+(DEFUN !VAR-IS-PATH (VAR) 
+       (PROG (BASE-VALUE PATH-NAME) 
+	     (POP !FORM)
+	     (COND
+	      ((AND (SYMBOLP (CAR !FORM))
+		    (GET (CAR !FORM) '!PATH-FUNCTION))
+	       (SETQ PATH-NAME (POP !FORM))
+	       (AND (EQ PATH-NAME 'EACH)
+		    (SETQ BASE-VALUE (!SCAN '(OF))))
+	       (AND (EQ (CAR !FORM) 'OF) (POP !FORM))
+	       (FUNCALL (GET PATH-NAME '!PATH-FUNCTION)
+			VAR
+			NIL
+			(COND ((EQ PATH-NAME 'EACH)
+			       (LIST BASE-VALUE
+				     (!SCAN
+				        '(UNDER UNDER-OR-EQ))))
+			      (T (!SCAN '(UNDER UNDER-OR-EQ))))))
+	      (T
+	       (SETQ BASE-VALUE (!SCAN '(AND OR)))
+	       (AND (MEMQ (CAR !FORM) '(AND OR))
+		    (POP !FORM))
+	       (AND (EQ (CAR !FORM) 'ITS) (POP !FORM))
+	       (COND
+		((AND (SYMBOLP (SETQ PATH-NAME (CAR !FORM)))
+		      (GET (CAR !FORM) '!PATH-FUNCTION))
+		 (FUNCALL
+		  (GET (POP !FORM) '!PATH-FUNCTION)
+		  VAR
+		  T
+		  (COND ((EQ PATH-NAME 'EACH)
+			 (LIST (!SCAN '(UNDER UNDER-OR-EQ))
+			       BASE-VALUE))
+			(T BASE-VALUE))))
+		(T (ERROR 'BAD-PATH-EXPRESSION !FULL-FORM)))))))
+
+(DEFUN !VAR-IS-TRAILING (VAR)
+       (POP !FORM)
+       (!PUSH !VAR-LIST (NCONS VAR))
+       (!PUSH !MAIN-VARLIST (LIST VAR (!SCAN NIL))))
+
+(DEFUN !VAR-IS-SET-TO (VAR)
+       (POP !FORM)
+       (!PUSH !VAR-LIST (NCONS VAR))
+       (!PUSH !SET-VARLIST (LIST VAR (!SCAN NIL))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Function to process the BIND CLAUSE.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(DEFPROP BIND !BIND-FUNCTION !FUNCTION) 
+
+(DEFUN !BIND-FUNCTION NIL 
+       (POP !FORM)
+       (PROG (VARLIST) 
+	     ;;We use a kludge here to scan the list of
+	     ;;variables to be bound and initial values to
+	     ;;bind for them.  The normal PROGN scanner is
+	     ;;used, which will return a PROGN if there
+	     ;;was more than one var.  We can, however,
+	     ;;tell that (PROGN FOO) must mean initialize
+	     ;;PROGN to FOO whereas (PROGN FOO BAR) means
+	     ;;bind FOO and BAR.
+	     (SETQ VARLIST (!SCAN NIL))
+	     (COND ((AND (NOT (ATOM VARLIST))
+			 (EQ (CAR VARLIST) 'PROGN))
+		    (COND ((NULL (CDDR VARLIST))
+			   ;;The (PROGN FOO) case:
+			   (SETQ VARLIST (NCONS VARLIST)))
+			  (T 
+			     ;;the (PROGN FOO BAR) case:
+			     (SETQ VARLIST (CDR VARLIST)))))
+		   (T (SETQ VARLIST (NCONS VARLIST))))
+	     (SETQ VARLIST
+		   (NREVERSE
+		    (MAPCAR 
+		     (FUNCTION
+		      (LAMBDA (X)
+		       (COND ((ATOM X) (NCONS X)) (X))))
+		     VARLIST)))
+	     (SETQ !VAR-LIST (NCONC VARLIST !VAR-LIST))))
+
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Functions to process the PERIPHERAL CLAUSES.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFPROP FIRST !FIRST-FUNCTION !FUNCTION) 
+
+(DEFUN !FIRST-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !INITIALIZATION (!SCAN NIL))) 
+
+(DEFPROP EACH-TIME !EACH-TIME-FUNCTION !FUNCTION) 
+
+(DEFUN !EACH-TIME-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !EACH-TIME (!SCAN NIL))) 
+
+(DEFPROP FINALLY !FINALLY-FUNCTION !FUNCTION) 
+
+(DEFUN !FINALLY-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !FINALLY (!SCAN NIL)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Functions to process the SELECTION CLAUSES.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFPROP WHEN !WHEN-FUNCTION !FUNCTION) 
+
+(DEFUN !WHEN-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !SELECTION (!SCAN NIL))) 
+
+(DEFPROP UNLESS !UNLESS-FUNCTION !FUNCTION) 
+
+(DEFUN !UNLESS-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !SELECTION (LIST 'NOT (!SCAN NIL)))) 
+
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Functions to process the TERMINATION CLAUSES.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(DEFPROP WHILE !WHILE-FUNCTION !FUNCTION) 
+
+(DEFUN !WHILE-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !LOOP-TEST (LIST 'NOT (!SCAN NIL)))) 
+
+(DEFPROP UNTIL !UNTIL-FUNCTION !FUNCTION) 
+
+(DEFUN !UNTIL-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !LOOP-TEST (!SCAN NIL))) 
+
+(DEFPROP REPEAT-WHILE !REPEAT-WHILE-FUNCTION !FUNCTION) 
+
+(DEFUN !REPEAT-WHILE-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !POST-TEST (LIST 'NOT (!SCAN NIL)))) 
+
+(DEFPROP REPEAT-UNTIL !REPEAT-UNTIL-FUNCTION !FUNCTION) 
+
+(DEFUN !REPEAT-UNTIL-FUNCTION NIL 
+       (POP !FORM)
+       (!PUSH !POST-TEST (!SCAN NIL))) 
+
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		Utility for scanning and symbol creation
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DEFUN !SCAN (DELIMITERS) 
+       ;;This is the common function which scans out the rest of
+       ;;the current clause and forms it into a PROGN if more
+       ;;than one step was involved.  Unless we are at the end
+       ;;of the form, at least one S-EXPR is collected.
+       (DO ((COLLECT NIL (CONS (POP !FORM) COLLECT)))
+	   ((OR (NULL !FORM)
+		(AND (SYMBOLP (CAR !FORM))
+		     (OR (GET (CAR !FORM) '!FUNCTION)
+			 (MEMQ (CAR !FORM) DELIMITERS))
+		     COLLECT))
+	    (SETQ COLLECT (NREVERSE COLLECT))
+	    (COND ((CDR COLLECT) (CONS 'PROGN COLLECT))
+		  (COLLECT (CAR COLLECT))))))
+
+(DEFUN !NEWSYM NIL
+       ;;When interpreting, the generated symbols are interned. 
+       ;;During compilation, however, they are not.
+       (COND ((OR (EQ COMPILER-STATE 'MAKLAP)
+		  (EQ COMPILER-STATE 'COMPILE))
+	      (!GENSYM-UNIQUE))
+	     (T (INTERN (!GENSYM-UNIQUE)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;  The function !GENSYM-UNIQUE is provided to give a pretty-well
+;;; guaranteed unique GENSYM type symbol when needed.  Difficulties with
+;;; the system-provided GENSYM arise from its initialization at 0 in
+;;; each separate compilation.  The function given here includes in its
+;;; name both a counter and the date and time of day.  The counter is to
+;;; make a symbol unique within a particular job and the date/time
+;;; combination to make it unique with respect to other jobs.  This is
+;;; probably overkill.  The form of the generated symbol is:
+;;;  !cc-yymmddhhmmss
+;;; where
+;;;  cc is the counter, being any number of digits,
+;;;  yymmdd is the year, month and day form of the date, and
+;;;  hhmmss is the hour, minute and second form of the time.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(DECLARE (SPECIAL !GENSYM-UNIQUE-COUNTER)
+	 (FIXNUM !GENSYM-UNIQUE-COUNTER))
+
+(OR (BOUNDP '!GENSYM-UNIQUE-COUNTER)
+    (SETQ !GENSYM-UNIQUE-COUNTER 0.))
+
+(DEFUN !GENSYM-UNIQUE NIL
+       (MAKNAM (NCONC (NCONS '!)
+		      (EXPLODEN (SETQ !GENSYM-UNIQUE-COUNTER
+				      (1+ !GENSYM-UNIQUE-COUNTER)))
+		      (NCONS '-)
+		      (MAPCAN
+			 (FUNCTION
+			  (LAMBDA (NUM)
+			   ((LAMBDA (TENS)
+			     (LIST ;; 48. is ASCII 0
+				   (+ TENS 48.)
+				   (+ (- NUM (* 10. TENS)) 48.)))
+			    (// NUM 10.))))
+			 (NCONC (STATUS DATE) (STATUS DAYTIME))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Functions for manipulating the saved translations.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(ARRAY !MACRO-EXPANSIONS T 47.) 
+
+(DEFUN !MACRO-FETCH (FORM) 
+       (CDR (ASSQ FORM (!MACRO-EXPANSIONS (\ (MAKNUM FORM) 47.)))))
+
+(DEFUN !MACRO-STOW (FORM EXPANSION) 
+       ((LAMBDA (HASH) 
+	 (STORE
+	  (!MACRO-EXPANSIONS HASH)
+	  (CONS (CONS FORM EXPANSION) (!MACRO-EXPANSIONS HASH)))
+	 EXPANSION)
+	(\ (MAKNUM FORM) 47.))) 
+
+(DEFUN !MACRO-FLUSH NIL 
+       (FILLARRAY '!MACRO-EXPANSIONS '(NIL))) 
+
