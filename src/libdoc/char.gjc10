@@ -1,0 +1,354 @@
+;;-*-LISP-*-
+;; Practical character and string manipulation primitives for PDP-10 maclisp.
+;; The readmacro #~ is set up for reading of characters.
+;; This package has been tested for both robustness and speed,
+;; it won't blow up on you, and is very fast. It does better than
+;; certain famous and highly bumbed string packages for maclisp that
+;; will remain nameless. -GJC
+
+(HERALD CHAR)
+
+;; Character primitives:
+;; (TO-CHARACTER <any>) returns a character. 
+;; (CHARACTERP <any>)   True if and only if a character.
+;; (CHAR-CODE <char>)   Returns ascii fixnum cooresponding to character.
+;; (CODE-CHAR <fixnum)  Returns character.
+;; (CHAR-UPCASE <char>) Maps #~a to #~A etc.
+;; (CHAR-DOWNCASE <char>) Maps #~A to #~a etc.
+
+;; String primitives:
+;; (TO-STRING <any>)    Converts to string.
+;; (STRINGP <any>)      True if and only if a string.
+;; (CHAR <string> <j>)  Returns the <j>'th character in the string.
+;; (RPLACHAR <string> <j> <char>) Replaces the <j>'th character. Caution side-effect!
+;; (STRING-LENGTH <string>)
+;; (STRING-SUBSEQ <string> &optional (<skip-j> 0) (<dim>))
+;; (MAKE-STRING <n>)    Returns a string with <n> null characters.
+;; (STRING-APPEND s1 s2 ...) Returns the concatenated string.
+;; (STRING-UPCASE <string>)
+;; (STRING-DOWNCASE <string>)
+;; (STRING-EQUAL <s1> <s2>)
+;; (STRING-LESSP <s1> <s2>)
+
+;; Notes: Characters may be compared with EQ, so it is reasonable to do
+;;        (IF (EQ C #~^C) (SEND-THE-MESSAGE)) or
+;;        (ASSOC C KEY-TABLE).
+;;        Strings should be compared with STRING-LESSP and STRING-EQUAL.
+;;        Generic equal will not work on strings in this implementation,
+;;        because strings are first SYMBOLS.
+;;        Characters will not print out using the #~A syntax, so that
+;;        they will not read back in as characters. Boo Hoo.
+;;        However, they will remain characterp in FASL files.
+
+(eval-when (eval compile load)
+  (cond ((status feature complr)
+	 (*EXPR TO-CHARACTER CHARACTERP CHAR-CODE CODE-CHAR CHAR-UPCASE
+		CHAR-DOWNCASE
+		TO-STRING STRINGP CHAR RPLACHAR STRING-LENGTH
+		STRING-EQUAL STRING-LESSP STRING-UPCASE STRING-DOWNCASE
+		STRING-TRIM STRING-LEFT-TRIM STRING-RIGHT-TRIM)
+	 (*LEXPR STRING-SUBSEQ MAKE-STRING STRING-APPEND
+		 STRING-SEARCH STRING-REPLACE)
+	 (FIXNUM (STRING-SEARCH NIL NIL FIXNUM FIXNUM)
+		 (STRING-LENGTH NIL))
+	 (NOTYPE (CHAR NIL FIXNUM)
+		 (RPLACHAR NIL FIXNUM NIL)
+		 (STRING-SUBSEQ NIL FIXNUM FIXNUM)
+		 (STRING-REPLACE NIL NIL FIXNUM FIXNUM FIXNUM))
+	 (*LEXPR WRITE-CHAR READ-CHAR OUSTR))))
+
+(DEFUN TO-CHARACTER (X)
+  (COND ((CHARACTERP X) X)
+        ((STRINGP X) (CHAR X 0))
+        ((FIXP X) (CODE-CHAR X))
+        ((SYMBOLP X) (CODE-CHAR (GETCHARN X 1)))
+        ('ELSE
+         (TO-CHARACTER (ERROR "can't go TO-CHARACTER" X 'WRNG-TYPE-ARG)))))
+
+(DEFUN CHARACTERP (X)
+  (AND (SYMBOLP X) (GET X 'CHAR-CODE) T))
+
+(DEFUN CHAR-ERROR (F X)
+  (FUNCALL F (ERROR (LIST "is not a character. --" F) X 'WRNG-TYPE-ARG)))
+
+(DEFUN CHAR-CODE (C)
+  (OR (GET C 'CHAR-CODE)
+      (CHAR-ERROR #'CHAR-CODE C)))
+
+(DEFVAR CODE-CHAR-ARRAY (*ARRAY NIL T #o200))
+
+(DEFUN CODE-CHAR (J)
+  (IF (AND (< J #o200)
+           (NOT (< J 0)))
+      (ARRAYCALL T CODE-CHAR-ARRAY J)
+      (CODE-CHAR (ERROR "fixnum out of range to be a char-code" J
+                        'WRNG-TYPE-ARG))))
+
+(DEFUN CHAR-UPCASE (C)
+  (OR (GET C 'CHAR-UPCASE)
+      (CHAR-ERROR #'CHAR-UPCASE C)))
+
+(DEFUN CHAR-DOWNCASE (C)
+  (OR (GET C 'CHAR-DOWNCASE)
+      (CHAR-ERROR #'CHAR-DOWNCASE C)))
+
+
+;; Strings.
+
+(DEFUN TO-STRING (X)
+  (COND ((STRINGP X)
+         X)
+        ((CHARACTERP X)
+         (TO-STRING-SUB-MAKNAM (LIST (CHAR-CODE X))))
+        ((SYMBOLP X)
+         (TO-STRING-SUB (PNPUT (APPEND (PNGET X 7.) NIL) NIL)))
+        ((FIXP X)
+         (TO-STRING (CODE-CHAR X)))
+        ('ELSE
+         (TO-STRING (ERROR "can't go to string." X 'WRNG-TYPE-ARG)))))
+
+(DEFUN TO-STRING-SUB (S)
+  (SETPLIST S '(+INTERNAL-STRING-MARKER T))
+  (SET S S))
+
+(DEFUN TO-STRING-SUB-MAKNAM (L)
+  (PROG1 (TO-STRING-SUB (MAKNAM L))
+         (RECLAIM L NIL)))
+
+(DEFUN STRINGP (X)
+  (AND (SYMBOLP X) (GET X '+INTERNAL-STRING-MARKER) T))
+
+(DEFUN CHAR (S J)
+  (CODE-CHAR (GETCHARN S (1+ J))))
+
+(DEFUN RPLACHAR (S J C)
+  (LET ((L (NTHCDR (// J 5.) (PNGET S 7.)))
+        (K (- #.(- 36. 7.) (* 7. (\ J 5.)))))
+    (DECLARE (FIXNUM K))
+    (IF (NULL L)
+        (RPLACHAR (ERROR (LIST "string too small for index =" J)
+                         S 'WRNG-TYPE-ARG) J C)
+        (LET ((ADDRESS (MAKNUM (CAR L)))
+              (VALUE   (LOGIOR (BOOLE 4 (CAR L) (LSH #o177 K))
+                               (LSH (CHAR-CODE C) K))))
+          (DECLARE (FIXNUM ADDRESS VALUE))
+          (IF (PUREP (CAR L))
+              ;; error check now to avoid the rush!
+              (RPLACA L VALUE)
+              (DEPOSIT ADDRESS VALUE)))))
+  C)
+
+(DEFUN STRING-REPLACE (S1 S2 &OPTIONAL
+                          (INDEX1 0) (INDEX2 0)
+                          (COUNT (MIN (- (STRING-LENGTH S1) INDEX1)
+                                      (- (STRING-LENGTH S2) INDEX2))))
+  (DO ((J 0 (1+ J)))
+      ((= J COUNT) S1)
+    (RPLACHAR S1 (+ J INDEX1) (CHAR S2 (+ J INDEX2)))))
+
+(DEFUN STRING-LENGTH (S)
+  (IF (STRINGP S)
+      (FLATC S)
+      (STRING-LENGTH (ERROR "is not a string." S 'WRNG-TYPE-ARG))))
+
+(DEFUN STRING-SUBSEQ (S &OPTIONAL (IND 0) (DIM (- (STRING-LENGTH S) IND)))
+  (IF (AND (STRINGP S)
+           (NOT (< (STRING-LENGTH S) (+ DIM IND))))
+      (TO-STRING-SUB-MAKNAM (STRING-SUBSEQ-SUB S IND DIM))
+      (STRING-SUBSEQ (ERROR "not a string or string too short" S
+                            'WRNG-TYPE-ARG)
+                     IND
+                     DIM)))
+
+(DEFUN STRING-SUBSEQ-SUB (S IND DIM)
+  (DO ((L NIL (CONS (GETCHARN S (+ IND 1 J)) L))
+       (J 0 (1+ J)))
+      ((= J DIM)
+       (NREVERSE L))))
+
+(DEFUN MAKE-STRING (DIM &OPTIONAL (C #/@))
+  (SETQ C (TO-CHARACTER C))
+  (TO-STRING-SUB-MAKNAM (MAP #'(LAMBDA (V) (RPLACA V C))
+                             (MAKE-LIST DIM))))
+
+(DEFUN STRING-EXPLODEN-SUB (S) (EXPLODEN S))
+
+(DEFUN STRING-APPEND N
+  (DO ((J N (1- J))
+       (L NIL))
+      ((ZEROP J)
+       (TO-STRING-SUB-MAKNAM L))
+    (SETQ L (NCONC (STRING-EXPLODEN-SUB (ARG J)) L))))
+
+(DEFUN STRING-EQUAL (S1 S2)
+  (SAMEPNAMEP S1 S2))
+
+(DEFUN STRING-LESSP (S1 S2)
+  (ALPHALESSP S1 S2))
+
+(DEFUN STRING-UPCASE (S)
+  (TO-STRING-SUB-MAKNAM
+   (MAP #'(LAMBDA (V)
+            (RPLACA V (CHAR-UPCASE (CODE-CHAR (CAR V)))))
+        (STRING-EXPLODEN-SUB S))))
+
+
+(DEFUN STRING-DOWNCASE (S)
+  (TO-STRING-SUB-MAKNAM
+   (MAP #'(LAMBDA (V)
+            (RPLACA V (CHAR-DOWNCASE (CODE-CHAR (CAR V)))))
+        (STRING-EXPLODEN-SUB S))))
+
+(DEFUN STRING-TRIM-SUB (CHAR-SET L)
+  (DO ()
+      ((OR (NULL L) (NOT (MEMQ (CODE-CHAR (CAR L)) CHAR-SET))) L)
+    (SETQ L (CDR L))))
+
+(DEFUN STRING-TRIM-MAKE-SUB (L) (TO-STRING-SUB (MAKNAM L)))
+
+(DEFUN STRING-TRIM (CHAR-SET STRING)
+  (LET ((L (STRING-EXPLODEN-SUB STRING)))
+    (PROG1 (STRING-TRIM-MAKE-SUB
+            (NREVERSE (STRING-TRIM-SUB CHAR-SET
+                                       (NREVERSE (STRING-TRIM-SUB CHAR-SET
+                                                                  L)))))
+           (RECLAIM L NIL))))
+
+(DEFUN STRING-LEFT-TRIM (CHAR-SET STRING)
+  (LET ((L (STRING-EXPLODEN-SUB STRING)))
+    (PROG1 (STRING-TRIM-MAKE-SUB (STRING-TRIM-SUB CHAR-SET L))
+           (RECLAIM L NIL))))
+
+(DEFUN STRING-RIGHT-TRIM (CHAR-SET STRING)
+  (LET ((L (STRING-EXPLODEN-SUB STRING)))
+    (PROG1 (STRING-TRIM-MAKE-SUB (NREVERSE (STRING-TRIM-SUB CHAR-SET
+                                                            (NREVERSE L))))
+           (RECLAIM L NIL))))
+
+(DECLARE (FIXNUM (STRING-SEARCH-SUB NIL NIL FIXNUM)))
+
+(DEFUN STRING-SEARCH (KEY STRING &OPTIONAL
+                          (FROM 0)
+                          (TO (STRING-LENGTH STRING)))
+  (IF (< (- TO FROM) (STRING-LENGTH KEY))
+      -1
+      (LET ((L1 (STRING-EXPLODEN-SUB KEY))
+            (L2 (STRING-EXPLODEN-SUB STRING)))
+        (PROG1 (LET ((N (STRING-SEARCH-SUB L1 (NTHCDR FROM L2) (- TO FROM))))
+                 (IF (= N -1)
+                     -1
+                     (+ N FROM)))
+               (RECLAIM L1 NIL)
+               (RECLAIM L2 NIL)))))
+
+(DEFUN STRING-SEARCH-SUB (SMALL LARGE DIM)
+  (DO ((LARGE LARGE (CDR LARGE))
+       (N 0 (1+ N)))
+      ((= N DIM) -1)
+    (IF (DO ((SMALL SMALL (CDR SMALL))
+             (LARGE LARGE (CDR LARGE)))
+            ((NULL SMALL) T)
+          (OR (= (CAR SMALL) (CAR LARGE))
+              (RETURN NIL)))
+        (RETURN N))))
+
+
+;; Read syntax and initiatializations.
+
+(DEFUN TILDE-READMACRO N
+  (SQUID-CHAR
+   (LET ((C (TYI)))
+     (COND ((= C #//)
+            (CODE-CHAR (TYI)))
+           ((= C #/^)
+            (CODE-CHAR (LOGAND #o77
+                               (CHAR-CODE (CHAR-UPCASE (CODE-CHAR (TYI)))))))
+           ((= C #/\)
+            (LET ((S (READ)))
+              (OR (AND (SYMBOLP S) (GET S 'SYMBOLIC-CHARACTER))
+                  (ERROR "undefined symbolic character" S))))
+           ('ELSE
+            (CODE-CHAR C))))))
+
+(SETSYNTAX-SHARP-MACRO '/~ 'MACRO 'TILDE-READMACRO)
+  
+(DECLARE (SPECIAL SQUID COMPILER-STATE))
+(DEFUN SQUID-CHAR (C)
+  (IF (MEMQ COMPILER-STATE '(NIL TOPLEVEL))
+      C
+      `(,SQUID (TO-CHARACTER ',C))))
+
+
+(COND ((NULL (ARRAYCALL T CODE-CHAR-ARRAY 0))
+       (DO ((J 0 (1+ J))
+            (C))
+           ((= J #o200))
+         (SETQ C (MAKNAM (LIST J)))
+         (SET C C)
+         (STORE (ARRAYCALL T CODE-CHAR-ARRAY J) C))
+       (DO ((J 0 (1+ J))
+            (J-UP)(J-DOWN)(C))
+           ((= J #o200))
+         (COND ((AND (NOT (< J #/A)) (NOT (> J #/Z)))
+                (SETQ J-UP J
+                      J-DOWN (+ J #.(- #/a #/A))))
+               ((AND (NOT (< J #/a)) (NOT (> J #/z)))
+                (SETQ J-UP (- J #.(- #/a #/A))
+                      J-DOWN J))
+               (T
+                (SETQ J-UP J J-DOWN J)))
+         (SETQ C (ARRAYCALL T CODE-CHAR-ARRAY J))
+         (PUTPROP C
+                  (ARRAYCALL T CODE-CHAR-ARRAY J-UP)
+                  'CHAR-UPCASE)
+         (PUTPROP C
+                  (ARRAYCALL T CODE-CHAR-ARRAY J-DOWN)
+                  'CHAR-DOWNCASE)
+         (PUTPROP C J 'CHAR-CODE)
+         )))
+
+(MAPC #'(LAMBDA (X) (PUTPROP (CAR X) (CODE-CHAR (CADR X)) 'SYMBOLIC-CHARACTER))
+      '((NULL       0.)
+        (ALPHA      2.)
+        (BETA       3.)
+        (EPSILON    6.)
+        (BELL       7.)
+        (BACKSPACE  8.)
+        (BS         8.)
+        (TAB        9.)
+        (LINEFEED  10.)
+        (LF        10.)
+        (VT        11.)
+        (FORM      12.)
+        (FORMFEED  12.)
+        (FF        12.)
+        (RETURN    13.)
+        (NEWLINE   13.)
+        (CR        13.)
+        (NL        13.)
+        (ALTMODE   27.)
+        (ALT       27.)
+        (BACK-NEXT 31.) 
+        (SPACE     32.)
+        (SP        32.)  
+        (DELETE   127.)
+        (RUBOUT   127.)))
+
+        
+
+;; I/O primitives.
+
+(defvar standard-input nil)
+(defvar standard-output nil)
+
+(defun read-char (&optional (stream standard-input) (eof-char () eof-char-p))
+  (if eof-char-p
+      (let ((c (tyi stream -1)))
+        (if (= c -1) eof-char (code-char c)))
+      (code-char (tyi stream))))
+
+(defun write-char (char &optional (stream standard-output))
+  (tyo (char-code char) stream))
+
+(defun oustr (string &optional (stream standard-output))
+  (princ string stream))

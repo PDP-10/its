@@ -1,0 +1,275 @@
+;;;-*-Lisp-*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			ITERATION FUNCTIONS		     ;;;
+;;; 		   Peter Szolovits (PSZ @ MIT-ML)	     ;;;
+;;;			   July 16, 1976		     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;     revised by PSZ & RAMESH on Mar. 22, 1979	     ;;;
+;;;	revised by LH@MIT-ML on May 9, 1979	     	     ;;;
+;;;	revised again by BYRON@MIT-ML on July 12, 1979	     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;This package defines a set of functions to provide an
+;;;approximation of INTERLISP's iteration statement facility
+;;;within a MACRO package for MACLISP.
+;;;
+;;;
+;;;For the simplest exposition of its use and utility, here are
+;;;a few examples of how the iterations statements may be used:
+;;;
+;;; (FOR I FROM 1 TO 3 COLLECT I) ==> (1 2 3)
+;;;
+;;; (COLLECT (CONS I X) FOR X IN '(A B C D E) AS I BY 3)
+;;;		==> ((1 . A) (4 . B) (7 . C) (10 . D) (13 . E))
+;;;
+;;; (UNLESS (ATOM X) JOIN X FOR X IN '((A B C) (D E) F (G)))
+;;;		==> (A B C D E G)
+;;;
+;;; (FOR X ON '(A B C D) AS I FROM 1 ADJOIN (PRINT I) X)
+;;; 1
+;;; 2
+;;; 3
+;;; 4
+;;;		==> (A B C D B C D C D D)
+;;;
+;;; (FIRST (SETQ FOO '(A B (C D) E))
+;;;  WHILE (ATOM (CAR FOO)) DO (SETQ FOO (CDR FOO)) (PRINT FOO))
+;;; (B (C D) E)
+;;; ((C D) E)
+;;;		==> NIL
+;;;
+;;; (BIND X (FOO '(A B (C D) E))
+;;;  WHILE (ATOM (SETQ X (CAR FOO))) 
+;;;  COLLECT (SETQ FOO (CDR FOO)) (CONS X X))
+;;;		==> ((A . A) (B . B))
+;;;
+;;; (FOR X IN '(A B C D) FIRST-TIME (MEMQ X '(E F G C 1 2 3)))
+;;;		==> (C 1 2 3)
+;;;
+;;;FOR now supports LET-type "destructuring" wherever variables are
+;;; explicitly bound (by BIND, FOR, or AS) so:
+;;;
+;;; (FOR (X Y) IN '((1 2) (3 4)) COLLECT (+ X Y) ==> (3 7)
+;;;
+;;; (BIND ((X Y) '(2 4)) FOR I FROM 1 TO 2 COLLECT (+ X Y I)) ==> (7 8)
+;;;
+;;*page
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			GENERAL DESCRIPTION		     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;
+;;;	An ITERATION is a convenient manner of writing a complex
+;;;LISP looping expression when control is desired of various
+;;;aspects of the iteration which make the system-provided
+;;;functions (e.g., MAPCAR, DO) too rigid or too cumbersome.
+;;;
+;;;	An iteration statement consists of a number of clauses,
+;;;described below, written in succession within a single S-EXPR.
+;;;
+;;;	Every iteration has at most one MAIN CLAUSE, which
+;;;controls what, if anything, is collected as the result of the
+;;;iteration.  The default provided main clauses are:
+;;;
+;;; DO (or DOING) -- evaluated for side-effect only; return is
+;;;		NIL.
+;;; COLLECT -- A list of the values of every evaluation of the
+;;;		main clause is returned (c.f. MAPCAR).
+;;; JOIN -- The values of every evaluation of the main clause
+;;;		are NCONCed together to form the value (c.f.
+;;;		MAPCAN).
+;;; ADJOIN -- Like JOIN, but joining is by APPEND rather than
+;;;		NCONC.  Every joined segment is copied exactly
+;;;		once, even if there is only one segment.
+;;; COUNT -- The number of non-NIL values of the evaluations of
+;;;		the main clause is returned.
+;;; SUM -- The sum of the values of the evaluations of the main
+;;;		clause is returned.
+;;; FIRST-TIME -- The value of the iteration is the first
+;;;		non-NIL value of the main clause, and iteration
+;;;		terminates when and if this occurs.
+;;; PRINT (or PRINTING) -- PRINT's the values of the evaluations
+;;;		of the main clause.
+;;; RESULT -- Sets the RESULT variable to the value of the expression
+;;;           and exits.
+;;;
+;;;Other main clauses may be added.  Each must be signalled by a
+;;;keyword marked by the !FUNCTION property with an appropriate
+;;;function to fill in the iteration template for it. 
+;;;
+;;;
+;;;	The binding of LOOP VARIABLES and AUXILLIARY VARIABLES is
+;;;controlled by the BIND, FOR and AS clauses.  The BIND keyword is
+;;;followed by the variables or (variable initial-val) or
+;;;(variable-structure initial-val) <as in LET> forms to be
+;;;bound.  Those variables are bound, and the initial-vals are evaluated
+;;;before any of the bindings for this iteration.  The FOR and AS
+;;;clauses are equivalent and provide a way to have several loop
+;;;variables.  The keyword is followed by the name of the variable, and
+;;;optionally by FIXNUM, FLONUM, or NOTYPE.  NOTYPE is the default
+;;;except for numeric (FROM, TO, DOWNTO, BY) variables, for which it is
+;;;FIXNUM.  An appropriate declaration to the compiler is made. The rest
+;;;of each variable clause has one of the following forms:
+;;;
+;;; FROM e1 TO e2 BY e3 -- This is the numeric iteration clause.
+;;;		Its terms may appear in any order.  Instead of
+;;;		the TO, we may have a DOWNTO term to indicate
+;;;		that the loop is for decrementing the var.  FROM
+;;;		defaults to 1, BY to 1 with TO and -1 with
+;;;		DOWNTO.  Incrementing is assumed if neither is
+;;;		stated.  (Currently, no checking is performed to
+;;;		see that the types of args are consistent, and
+;;;		the type of arithmetic used is determined by the
+;;;		type specified.  NOTYPE implies general
+;;;		arithmetic, and the default is FIXNUM.)
+;;; IN list -- This is iteration over a list.  The var gets
+;;;		successive elements of the list.
+;;; ON list -- This is iteration over successive tails of the
+;;;		list.
+;;; STARTING e1 STEPPING e2 -- This is a general form for giving
+;;;		initial and incremental values.  The terms may
+;;;		be in either order.  STARTING defaults to NIL,
+;;;		and if STEPPING is omitted, no stepping action
+;;;		is set up.
+;;; TRAILING v1, or TRAILS v1 -- The iteration variable will take on the
+;;;		value that v1 had on the previous iteration.  V1 should
+;;;		be some other iteration variable of this iteration.  On
+;;;		the first iteration, since there is no previous value of
+;;;		v1, we use NIL.
+;;; SET-TO e1, or = e1 -- On each iteration, e1 is evaluated and
+;;;		assigned to the variable.  This is most useful when e1
+;;;		is expressed in terms of some other iteration
+;;;		variable(s).  E1 is always computed in terms of the new
+;;;		values of the iteration variables, not the old.
+;;; BEING pathname OF e1, or
+;;; BEING e1 AND ITS pathname -- These are the exclusive and
+;;;		inclusive forms of the PATH ITERATION. 
+;;;		Pathnames must be explicitly marked by the
+;;;		!PATH-FUNCTION property with a function to
+;;;		process them.  This is a special feature, most
+;;;		useful for LMS and OWL, and in this package
+;;;		there are no paths defined by default.  The
+;;;		keyword ALONG is synonymous with BEING.  Note
+;;;		that there are variants of these subclauses, not
+;;;		described here, that are specifically tailored
+;;;		for iterating through the objects in a zone of
+;;;		an LMS node; these variants are recognized by
+;;;		the fact that EACH occurs where the pathname or
+;;;		ITS would normally have occurred.
+;;;
+;;; The sub-keywords like FROM, IN, etc., are recognized by having an
+;;;!ITER-FUNCTION property;  thus, others may be added to the package.
+;;;
+;;;	TERMINATION CLAUSES allow specification of additional
+;;; iteration termination conditions beyond any that are
+;;; implied by FOR and AS clauses.  The following exist:
+;;;
+;;; WHILE e1 -- e1 is evaluated at the beginning of each
+;;;		iteration, and the iteration terminates when e1
+;;;		is NIL.
+;;; UNTIL e1 -- like WHILE but terminates when e1 is non-NIL.
+;;; REPEAT-WHILE e1 -- e1 is evaluated at the end of each
+;;;		iteration, and the iteration terminates when e1
+;;;		is NIL;  this guarantees at least one
+;;;		iteration.
+;;; REPEAT-UNTIL e1 -- like REPEAT-WHILE but terminates when e1 is
+;;;		non-NIL.
+;;;
+;;;
+;;;	A SELECTION-CLAUSE is a filter on which iteration the
+;;;main clause should be evaluated.  A conjunction is implied if more
+;;; than one selection exists.  The following exist:
+;;; WHEN e1 -- The main clause is evaluated if e1 is non-NIL.
+;;; UNLESS e1 -- The main clause is evaluated if e1 is NIL.
+;;;
+;;;
+;;;	The PERIPHERAL CLAUSES are of three kinds:
+;;;
+;;; FIRST e1 -- Evaluates e1 after initially binding the vars
+;;;		but before starting the first iteration.
+;;; FINALLY e1 -- Evaluates e1 after exiting the last iteration
+;;;		but before returning the answer.  If the main
+;;;		clause is a value-returning clause, the result
+;;;		to be returned is in the variable RESULT (see notes).
+;;; EACH-TIME e1 -- Evaluates e1 on every iteration of the loop,
+;;;		whether or not the selection test is passed.
+;;;
+
+;;*page
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			   CAVEATS			     ;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;
+;;;
+;;;	A few notes should be made about implementation features
+;;;which affect the evaluation of iteration forms:
+;;;
+;;; 1.  Like in  the LISP DO, initialization and updating of the
+;;;iteration variables takes place in parallel.  Only SET-TO varaibles
+;;;and their internally generated equivalents (e.g., "X in Y") are done
+;;;after the others, and these should never lead to trouble.  This is a
+;;;significant change from earlier versions of the FOR package.
+;;;
+;;; 2.  The iteration statement is translated to a LISP DO.  In
+;;;particular, this means that a (RETURN val) form may be
+;;;evaluated at any place to return that particular val as the
+;;;value of the iteration.  If it is desired that any FINALLY
+;;;clauses be evaluated and the value returned, then the
+;;; following may be done:
+;;;	(SETQ RESULT val), if appropriate and if the main clause
+;;;			      is value-returning
+;;;	(TERMINATE-ITERATION)
+;;;Note that the RESULT clause may be used in many cases where this is
+;;;desired.
+;;;
+;;; 3.  Wherever possible, the order of evaluation of
+;;;expressions whose evaluation order is not otherwise
+;;;constrained is that suggested by the order of writing them in
+;;;the iteration statement.  This is only of significance if
+;;;significant use of side effects is made.
+;;;
+;;; 4.  Wherever a single expression may appear, more than one
+;;;may appear.  They will be implicitly surrounded by a PROGN,
+;;;so all but the last will be evaluated for side effect only.
+;;;
+;;; 5.  The name RESULT, in which the value of value-collecting
+;;;iterations is built up, is selected only by default.  If the
+;;;value of the variable !RESULT-NAME is bound, that will be
+;;;used instead.
+;;;
+;;; 6.  Almost no error checking is currently done, so it is
+;;;possible to get weird errors if the iterative statement is
+;;;not well-formed.
+;;;
+;;; 7.  This code is written using (I think) only one macro,
+;;;!PUSH, which is not part of the standard LISP complement.
+;;;!PUSH is defined herein to be equivalent to PUSH with its
+;;;arguments reversed, except that it only works for simple
+;;;(atomic) variables.
+;;;
+;;; 8.  For efficiency, translations produced by these macros
+;;;are saved in the array !MACRO-EXPANSIONS and further calls on
+;;;the same form are translated by retrieval rather than
+;;;recomputation.  This, however, may cause some problems:  For
+;;;efficiency considerations (i.e., SXHASH or EQUAL are slow),
+;;;retrieval is done by EQ comparison on the form.  Thus, if the
+;;;form has been edited since its original translation, an
+;;;incorrect translation will be retrieved.  Further, since all
+;;;translated forms are referred to from !MACRO-EXPANSIONS, many
+;;;un-garbage-collectable obsolete copies of a form can be
+;;;retained during debugging runs.  (E.g., if one keeps
+;;;redefining some function which includes macro calls.  For
+;;;anyone who thinks they can solve this problem by retrieval on
+;;;the MAKNUM of the form or by making the array untraced by the
+;;;GC, be warned that either "fix" causes mis-translations.)  The
+;;;function !MACRO-FLUSH is provided to flush all existing
+;;;translations and guarantee that new translations of all these
+;;;macro forms are made.  This also releases for
+;;;garbage-collection all the "old" forms which are only pointed
+;;;at by this translation mechanism.

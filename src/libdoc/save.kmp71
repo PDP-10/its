@@ -1,0 +1,649 @@
+;;; -*- LISP -*-
+;;; LSPSAV: A package for doing environment saving/recalling from MacLISP
+;;;
+;;; Documentation is just a little ways down in the file.
+;;; Loading this file into LISP and doing (SAVE ?) will also 
+;;; give documentation.
+
+(EVAL-WHEN (EVAL)
+	   (DEFPROP IOTA ((DSK LIBLSP) IOTA FASL) AUTOLOAD))
+
+(EVAL-WHEN (COMPILE)
+	   (LOAD '((DSK LIBLSP) IOTA FASL)))
+
+(DECLARE (SPECIAL SAVE-FILE
+		  SAVE-OPTIONS
+		  SAVE-VERBOSE
+		  SAVE-PARANOIA
+		  |LSPSAV-`-,-level/||))
+
+(SETQ |LSPSAV-`-,-level/|| 0.)
+
+(DEFUN LSPSAV$VERSION MACRO (X) (LIST 'QUOTE LSPSAV$VERSION))
+(DEFUN LSPSAV$DOC     MACRO (X) (LIST 'QUOTE LSPSAV$DOC))
+
+(EVAL-WHEN (COMPILE EVAL)
+	   (SETQ LSPSAV$VERSION
+		 (DO ((X (EXPLODEN (CADDR (NAMELIST (TRUENAME INFILE))))
+			 (CDR X))
+		      (L ()))
+		     ((NULL X) (IMPLODE (NREVERSE L)))
+		     (COND ((AND (> (CAR X) 47.) (< (CAR X) 58.))
+			    (PUSH (CAR X) L)))))
+	   (SETQ LSPSAV$DOC (MAKNAM (DO ((C (TYI) (TYI)) (L NIL (CONS C L)))
+					((= C 12.) (NREVERSE L))))))
+;;;
+;;; MacLISP File-Save Package
+;;;
+;;; Syntax:
+;;;
+;;; SAVE:   (SAVE <file> <symbols> <options>)
+;;;
+;;; UNSAVE: (UNSAVE <file>)
+;;;
+;;; Args needn't be quoted. If they are, the quote will be removed. 
+;;; Don't expect args to evaluate as variables, however.
+;;;
+;;;    <file> has the form ((Device Directory) Filename1 Filename2)
+;;;           or |Device:Directory;Filename1 Filename2|
+;;;           The default output file is in the free variable
+;;;           SAVE-FILE and may be altered as needed.
+;;;
+;;;    <vars> is a list of symbols to be saved. An arg of NIL or 
+;;;	      ALL means to save all user variables.
+;;;	      An arg of T saves system vars too. (Can't be unsaved!)
+;;;
+;;;    <options> is a list of options to be saved. Possible options are:
+;;;           [VALUES, PROPS, FUNCTIONS, ARRAYS]. Other more obscure 
+;;;           ones are supported as well. Default options are in the
+;;;	      free variable SAVE-OPTIONS.
+;;;
+;;; Examples:
+;;;  
+;;;  (SAVE ((DSK FOO) BAR >)    ; Save to file FOO;BAR >
+;;;	   (A B F)              ; symbols A, B, and F
+;;;	   (PROPS VALUES))      ; values and non-functional properites
+;;;  (UNSAVE |DSK:FOO; BAR >|)  ; UnSave last save to FOO;BAR >
+;;;
+;;;  (SAVE)    ; Save all values and functions to default file
+;;;  (UNSAVE)  ; UnSave last save from default file
+;;;  
+;;;  Pertinent variables:
+;;;
+;;;  SAVE-VERBOSE -- Setting this variable to T will cause the return value of
+;;;                  each form in the file to be printed when it is UNSAVE'd.
+;;;
+;;;  SAVE-PARANOIA -- Setting this variable to NIL will turn off checking
+;;;                   for an already existing file by the same name as the
+;;;                   file you are planninng to write to.
+;;;
+;;;  SAVE-OPTIONS -- This variable contains info on what types of things
+;;;                  for SAVE to store into the file.
+;;;
+;;;  SAVE-FILENAMES -- The filenames to SAVE/UNSAVE to/from.
+
+
+
+;;; Defaults:
+;;;
+;;; OPTIONS  => (VALUES FUNCTIONS)
+;;; FILE     => ((DSK hsname) username .LISP.)
+;;; VERBOSE  => NIL
+;;; PARANOIA => T
+
+(PROG (FILE)
+      (COND ((NOT (BOUNDP 'SAVE-OPTIONS))
+	     (SETQ SAVE-OPTIONS '(VALUES FUNCTIONS))))
+      (SETQ FILE `((DSK ,(STATUS HSNAME)) ,(STATUS USERID) |.LISP.|))
+      (COND ((NOT (BOUNDP 'SAVE-PARANOIA))
+	     (SETQ SAVE-PARANOIA T)))
+      (COND ((NOT (BOUNDP 'SAVE-VERBOSE))
+	     (SETQ SAVE-VERBOSE NIL)))
+      (COND ((BOUNDP 'SAVE-FILE)
+	     (SETQ SAVE-FILE (MERGEF SAVE-FILE FILE)))
+	    (T
+	     (SETQ SAVE-FILE FILE))))
+
+(DEFUN LSPSAV$PRINT (FROB STREAM)
+       (TERPRI STREAM)
+       (LSPSAV$PRIN1 FROB STREAM)
+       (PRINC '| | STREAM))
+
+(DEFUN LSPSAV$PRIN1 (FROB STREAM)
+       (COND ((ATOM FROB) (PRIN1 FROB STREAM))
+	     ((HUNKP FROB)
+	      (PRINC '|(| STREAM)
+	      (DO ((I 1. (1+ I))
+		   (END (1- (HUNKSIZE FROB))))
+		  ((> I END))
+		  (LSPSAV$PRIN1 (CXR I FROB) STREAM)
+		  (PRINC '| . | STREAM))
+	      (PRINC (CXR 0. FROB) STREAM)
+	      (PRINC '| .)| STREAM))
+	     ((AND (EQ (CAR FROB) 'QUOTE)
+		   (= (LENGTH FROB) 2.))
+	      (PRINC '/' STREAM)
+	      (LSPSAV$PRIN1 (CADR FROB) STREAM))
+	     ((EQ (CAR FROB) '|`-expander/||)
+	      (LET ((|LSPSAV-`-,-level/|| (1+ |LSPSAV-`-,-level/||)))
+		   (PRINC '|`| STREAM)
+		   (LSPSAV$PRIN1 (CDR FROB) STREAM)))
+	     ((AND (EQ (CAR FROB) '|`,/||) (> |LSPSAV-`-,-level/|| 0.))
+	      (LET ((|LSPSAV-`-,-level/|| (1- |LSPSAV-`-,-level/||)))
+		   (PRINC '|,| STREAM)
+		   (LSPSAV$PRIN1 (CDR FROB) STREAM)))
+	     ((AND (EQ (CAR FROB) '|`,@/||) (> |LSPSAV-`-,-level/|| 0.))
+	      (LET ((|LSPSAV-`-,-level/|| (1- |LSPSAV-`-,-level/||)))
+		   (PRINC '|,@| STREAM)
+		   (LSPSAV$PRIN1 (CDR FROB) STREAM)))
+	     ((AND (EQ (CAR FROB) '|`,./||) (> |LSPSAV-`-,-level/|| 0.))
+	      (LET ((|LSPSAV-`-,-level/|| (1- |LSPSAV-`-,-level/||)))
+		   (PRINC '|,.| STREAM)
+		   (LSPSAV$PRIN1 (CDR FROB) STREAM)))
+	     ((AND (EQ (CAR FROB) '|`.,/||) (> |LSPSAV-`-,-level/|| 0.))
+	      (LET ((|LSPSAV-`-,-level/|| (1- |LSPSAV-`-,-level/||)))
+		   (PRINC '|.,| STREAM)
+		   (LSPSAV$PRIN1 (CDR FROB) STREAM)))
+	     ((AND (EQ (CAR FROB) 'MACROEXPANDED)
+		   (GET (CADR FROB) 'MACRO))
+	      (LSPSAV$PRIN1 (NTH 3. FROB) STREAM))
+	     ((LSPSAV$MEM '|`,/|| FROB)
+	      (LSPSAV$PRIN1
+	       (DO ((L FROB (CDR L))
+		    (NL () (CONS (CAR L) NL)))
+		   ((EQ (CAR L) '|`,/||)
+		    (NREVERSE (CONS (CONS '|`.,/|| (CDR L)) NL))))
+	       STREAM))
+	     (T
+	      (PRINC '|(| STREAM)
+	      (LSPSAV$PRIN1 (CAR FROB) STREAM)
+	      (DO ((F (CDR FROB) (CDR F)))
+		  ((ATOM F)
+		   (COND ((NULL F) (PRINC '|)| STREAM))
+			 (T (PRINC '| . | STREAM)
+			    (LSPSAV$PRIN1 F STREAM)
+			    (PRINC '|)| STREAM))))
+		  (PRINC '| | STREAM)
+		  (LSPSAV$PRIN1 (CAR F) STREAM))))
+       T)
+
+(DEFUN LSPSAV$MEM (X Y)
+       (DO ((L Y (CDR L)))
+	   ((ATOM L) NIL)
+	   (COND ((EQ (CAR L) X) (RETURN L)))))
+
+(DEFUN LSPSAV$DOCUMENTATION ()
+       (TERPRI TYO)
+       (PRINC '|;;; LSPSAV.| TYO)
+       (PRINC (LSPSAV$VERSION) TYO)
+       (PRINC '| Documentation.| TYO)
+       (PRINC (LSPSAV$DOC) TYO)
+       (TERPRI TYO))
+       
+(DEFUN LSPSAV$SAVE-VALUE (LAB STREAM)
+       (COND ((BOUNDP LAB)
+	      ((LAMBDA (VAL BASE *NOPOINT)
+		       (LSPSAV$PRINT (LIST 'SETQ LAB
+				    (COND ((OR (NUMBERP VAL)
+					       (EQ VAL 'T)
+					       (NULL VAL))
+					   VAL)
+					  (T (LIST 'QUOTE VAL))))
+			      STREAM))
+	       (EVAL LAB) 10. NIL))))
+
+(DEFUN LSPSAV$LAMBDA? (X)
+       (AND (NOT (ATOM X))
+	    (EQ (CAR X) 'LAMBDA)
+	    (> (LENGTH X) 2.)))
+
+(DEFUN LSPSAV$SAVE-EXPR (NAME STREAM)
+       ((LAMBDA (BASE *NOPOINT)
+		(COND ((GET NAME 'EXPR)
+		       (COND ((LSPSAV$LAMBDA? (GET NAME 'EXPR))
+			      (LSPSAV$PRINT (APPEND (LIST 'DEFUN NAME)
+						    (CDR (GET NAME 'EXPR)))
+					    STREAM))
+			     (T
+			      (LSPSAV$PRINT (LIST 'DEFPROP
+						  NAME
+						  (GET NAME 'EXPR)
+						  'EXPR)
+					    STREAM))))))
+	10. NIL))
+
+(DEFUN LSPSAV$SAVE-FEXPR (NAME STREAM)
+       ((LAMBDA (BASE *NOPOINT)
+		(COND ((GET NAME 'FEXPR)
+		       (COND ((LSPSAV$LAMBDA? (GET NAME 'FEXPR))
+			      (LSPSAV$PRINT (APPEND (LIST 'DEFUN NAME 'FEXPR)
+						    (CDR (GET NAME 'FEXPR)))
+					    STREAM))
+			     (T
+			      (LSPSAV$PRINT (LIST 'DEFPROP
+						  NAME
+						  (GET NAME 'FEXPR)
+						  'FEXPR)
+					    STREAM))))))
+	10. NIL))
+
+(DEFUN LSPSAV$SAVE-MACRO (NAME STREAM)
+       ((LAMBDA (BASE *NOPOINT)
+		(COND ((GET NAME 'MACRO)
+		       (COND ((LSPSAV$LAMBDA? (GET NAME 'MACRO))
+			      (LSPSAV$PRINT (APPEND (LIST 'DEFUN NAME 'MACRO)
+						    (CDR (GET NAME 'MACRO)))
+					    STREAM))
+			     (T
+			      (LSPSAV$PRINT (LIST 'DEFPROP
+						  NAME
+						  (GET NAME 'MACRO)
+						  'MACRO)
+					    STREAM))))))
+	10. NIL))
+
+(DEFUN LSPSAV$SAVE-PLIST (NAME STREAM)
+       ((LAMBDA (P BASE *NOPOINT)
+		(AND P (LSPSAV$PRINT (LIST 'SETPLIST
+				    (LIST 'QUOTE NAME)
+				    (LIST 'QUOTE P))
+			      STREAM)))
+	(LSPSAV$PLIST NAME) 10. NIL))
+
+(DEFUN LSPSAV$SAVE-PROP (NAME PROP STREAM)
+       ((LAMBDA (P BASE *NOPOINT)
+		(AND P
+		     (LSPSAV$PRINT (LIST 'DEFPROP NAME PROP) STREAM)))
+	(GET NAME PROP) 10. NIL))
+
+(DEFUN LSPSAV$SAVE-ARRAY (NAME STREAM)
+       ((LAMBDA (A BASE *NOPOINT)
+		(AND A
+		     (LSPSAV$PRINT (CONS 'ARRAY (CONS NAME (ARRAYDIMS A))) 
+				   STREAM)
+		     (LSPSAV$PRINT (LIST 'FILLARRAY
+				  NAME
+				  (LIST 'QUOTE (LISTARRAY NAME)))
+			    STREAM)))
+	(GET NAME 'ARRAY) 10. NIL))
+
+(DEFUN LSPSAV$PLIST (NAME)
+       (DO ((L (PLIST NAME) (CDDR L))
+	    (P NIL))
+	   ((NULL L) (NREVERSE P))
+	   (COND ((MEMQ (CAR L) '(SUBR LSUBR FSUBR   ; Binary garbage!
+				  ARRAY		     ; Arrays 
+				  FEXPR EXPR MACRO)) ; Defun's
+		  (COMMENT DO NOTHING WITH THESE!))
+		 (T
+		  (SETQ P (CONS (CADR L) (CONS (CAR L) P)))))))
+
+(DEFUN LSPSAV$UNQUOTE (X Q)
+  (OR Q
+      (PROGN
+       (CURSORPOS 'A TYO)
+       (PRINC '|;Please don't quote args to this function. I'll strip| TYO)
+       (TERPRI TYO)
+       (PRINC '|;the quotes since it is obvious what your error was| TYO)
+       (TERPRI TYO)
+       (PRINC '|;but in general you should not expect args to this| TYO)
+       (TERPRI TYO)
+       (PRINC '|;function to get EVAL'd.| TYO)
+       (TERPRI TYO)))
+  (EVAL X))
+
+(DEFUN SAVE FEXPR (X)
+       (PROG (FILE VARLIST OPTIONS QWARN SYSTEM!)
+	     (COND ((EQUAL X '(?))
+		    (LSPSAV$DOCUMENTATION)
+		    (RETURN NIL)))
+	     (COND ((> (LENGTH X) 3.)
+		    (CURSORPOS 'A TYO)
+		    (PRINC '|;Too many args to SAVE.| TYO)
+		    (PRINC '| Do (SAVE ?) for help.| TYO)
+		    (TERPRI TYO)
+		    (RETURN NIL)))
+	     (SETQ FILE (CAR X))
+	     (COND ((AND (NOT (ATOM FILE))
+			 (EQ (CAR FILE) 'QUOTE))
+		    (SETQ FILE (PROG2 NIL
+				      (LSPSAV$UNQUOTE FILE QWARN)
+				      (SETQ QWARN T)))))
+	     (SETQ FILE (MERGEF (OR FILE '||) SAVE-FILE)) 
+	     (SETQ VARLIST (CADR X))
+	     (COND ((EQ (CAR VARLIST) 'QUOTE)
+		    (SETQ VARLIST
+			  (PROG2 NIL
+				 (LSPSAV$UNQUOTE VARLIST QWARN)
+				 (SETQ QWARN T)))))
+	     (COND ((AND VARLIST
+			 (ATOM VARLIST)
+			 (NOT (EQ VARLIST T)))
+		    (SETQ VARLIST (NCONS VARLIST))))
+	     (SETQ VARLIST
+		   (COND ((AND (EQ VARLIST 'T)
+			       (PROGN
+				(TERPRI TYO)
+				(PRINC '|;Save all system variables.| TYO)
+				(TERPRI TYO)
+				(PRINC '|;This dump will not be loadable| TYO)
+				(PRINC '| without editting out certain| TYO)
+				(TERPRI TYO)
+				(PRINC '|;reserved variables like NIL,| TYO)
+				(PRINC '| T, BPORG,...| TYO)
+				(TERPRI TYO)
+				(PRINC '|;Do you really want to do this? | TYO)
+				(COND ((MEMQ (ASCII (TYI TYI)) '(Y /y | |))
+				       (PRINC '| [Yes]| TYO)
+				       (SETQ SYSTEM! T)
+				       (TERPRI TYO)
+				       T)
+				      (T (PRINC '| [No]| TYO)
+					 (TERPRI TYO)
+					 (PRINC '|;Save request aborted.| TYO)
+					 (TERPRI TYO)
+					 (RETURN NIL)))))
+			  (PROG (L)
+				(MAPATOMS
+				 (FUNCTION
+				  (LAMBDA (X)
+					  (SETQ L (CONS X L)))))
+				(RETURN L)))
+			 ((OR (NULL VARLIST) (EQUAL VARLIST '(ALL)))
+			  (PROG (L)
+				(MAPATOMS
+				 (FUNCTION
+				  (LAMBDA (X)
+					  (COND ((OR (= (FLATC X) 1.)
+						     (NOT (STATUS SYSTEM X)))
+						 (SETQ L (CONS X L)))))))
+				(RETURN L)))
+			 (T VARLIST)))
+	     (SETQ OPTIONS (CADDR X))
+	     (COND ((EQ (CAR OPTIONS) 'QUOTE)
+		    (SETQ OPTIONS (PROG2
+				   NIL
+				   (LSPSAV$UNQUOTE OPTIONS QWARN) 
+				   (SETQ QWARN T)))))
+	     (SETQ OPTIONS (OR OPTIONS SAVE-OPTIONS))
+	     (COND ((AND OPTIONS (ATOM OPTIONS))
+		    (SETQ OPTIONS (NCONS OPTIONS))))
+	     (SETQ OPTIONS
+		   (APPLY 'APPEND
+			  (MAPCAR (FUNCTION
+				   (LAMBDA (X)
+					   (COND ((ATOM X) (NCONS X))
+						 (T X))))
+				  (SUBLIS '((FUNCTIONS . (EXPR FEXPR MACRO))
+					    (ALL . (EXPR FEXPR MACRO
+							 VALUES ARRAY))
+					    (FUNCTION . (EXPR FEXPR MACRO))
+					    (PROPERTIES . PROP)
+					    (PROPERTY . PROP)
+					    (PROPS . PROP)
+					    (VALUE . VAL)
+					    (VALUES . VAL)
+					    (EXPRS . EXPR)
+					    (LEXPRS . LEXPR)
+					    (MACROS . MACRO)
+					    (ARRAYS . ARRAY))
+					  OPTIONS))))
+	     (RETURN (LSPSAV FILE VARLIST OPTIONS SYSTEM!))))
+
+(DEFUN UNSAVE FEXPR (X)
+       (PROG (FILE)
+	     (COND ((EQUAL X '(?))
+		    (LSPSAV$DOCUMENTATION)
+		    (RETURN NIL)))
+	     (COND ((> (LENGTH X) 1.)
+		    (CURSORPOS 'A TYO)
+		    (PRINC '|;Too many args to UNSAVE. Usage is:| TYO)
+		    (TERPRI TYO)
+		    (PRINC '|; (UNSAVE) or (UNSAVE <filename>)| TYO)
+		    (RETURN NIL)))
+	     (SETQ FILE (CAR X))
+	     (COND ((AND (NOT (ATOM FILE))
+			 (EQ (CAR FILE) 'QUOTE))
+		    (SETQ FILE (LSPSAV$UNQUOTE FILE NIL))))
+	     (SETQ FILE (MERGEF (OR FILE '||) SAVE-FILE)) 
+	     (COND ((NOT (PROBEF FILE))
+		    (TERPRI TYO)
+		    (PRINC '|File not found: | TYO)
+		    (PRINC (NAMESTRING FILE) TYO)
+		    (RETURN NIL))
+		   ((ERRSET (LSPSAV$LOAD FILE) T)
+		    (RETURN T))
+		   (T
+		    (PRINC '|;Error in UNSAVE attempt. Aborting.|)
+		    (RETURN NIL)))))
+
+(DEFUN LSPSAV$LOAD (FILE)
+       (CATCH
+	(IOTA ((STREAM FILE '(IN)))
+	      (SETQ FILE (NAMESTRING (TRUENAME STREAM)))
+	      (TERPRI TYO)
+	      (PRINC '|; UNSAVE: Reading file "| TYO)
+	      (PRINC FILE TYO)
+	      (PRINC '|"| TYO)
+	      (TERPRI TYO)
+	      (DO ((LINE (READLINE STREAM NIL) (READLINE STREAM NIL)))
+		  ((NULL LINE) (OPEN STREAM 'IN))
+		  (TERPRI TYO)
+		  (COND ((AND (NOT (SAMEPNAMEP LINE '||))
+			      (NOT (EQ (GETCHAR LINE 1.) '/;)))
+			 (RETURN T))
+			(T
+			 (PRINC LINE TYO))))
+	      (FILEPOS STREAM 0.)
+	      (DO ((FORM (ERRSET (READ STREAM STREAM) NIL)
+			 (ERRSET (READ STREAM STREAM) NIL))
+		   (VERBOSE SAVE-VERBOSE)
+		   (OLD-FILEPOS 0.)
+		   (EOF (NCONS STREAM)))
+		  ((EQUAL FORM EOF) T)
+		  (COND ((NULL FORM)
+			 (LSPSAV$ERROR-IN-FILE STREAM OLD-FILEPOS))
+			(T
+			 (LET ((EVAL-FORM (ERRSET (EVAL (CAR FORM)) T)))
+			      (COND ((NULL EVAL-FORM)
+				     (TERPRI TYO)
+				     (PRINC '|;Unable to EVAL this form:| TYO)
+				     (LET ((PRINLEVEL 3.) (PRINLENGTH 4.))
+					  (PRINT (CAR FORM) TYO)))
+				    (VERBOSE
+				     (PRINT (CAR EVAL-FORM) TYO))))))
+		  (SETQ OLD-FILEPOS (FILEPOS STREAM)))
+	      (CURSORPOS 'A TYO)
+	      (TERPRI TYO)
+	      (PRINC '|; UNSAVE: Completed reading of "| TYO)
+	      (PRINC FILE TYO)
+	      (PRINC '|"| TYO))
+	LSPSAV-LOAD-EXIT))
+
+(DEFUN LSPSAV$ERROR-IN-FILE (STREAM WHERE)
+       (PROG (C)
+	     (TERPRI TYO)
+	     (PRINC '|;Error in file at character | TYO)
+	     (PRINC WHERE TYO)
+	     TOP
+	     (TERPRI TYO)
+	     (PRINC '|;View region? (Y or N)| TYO)
+	     (CLEAR-INPUT TYI)
+	     (SETQ C (TYI TYI))
+	     (COND ((OR (= C 89.) (= C 121.))
+		    (LET ((POS (FILEPOS STREAM))
+			  (OLD-ENDPAGEFN (ENDPAGEFN TYO)))
+			 (UNWIND-PROTECT
+			  (CATCH (PROGN
+				  (TERPRI TYO)
+				  (PRINC '|;Viewing erroneous region...| TYO)
+				  (TERPRI TYO)
+				  (ENDPAGEFN TYO 'LSPSAV$ENDPAGEFN)
+				  (FILEPOS STREAM WHERE)
+				  (DO ((C (TYI STREAM) (TYI STREAM))
+				       (I WHERE (1+ I)))
+				      ((= I POS))
+				      (TYO C TYO)))
+				 LSPSAV-ENDPAGEFN-EXIT)
+			  (FILEPOS STREAM POS)
+			  (ENDPAGEFN TYO OLD-ENDPAGEFN))))
+		   ((OR (= C 78.) (= C 110.))
+		    (TERPRI TYO)
+		    (PRINC '|;Error not being viewed.| TYO)
+		    (TERPRI TYO))
+		   (T
+		    (GO TOP)))
+	     MIDDLE
+	     (TERPRI TYO)
+	     (PRINC '|;Continue UNSAVE attempt? (Y or N) | TYO)
+	     (CLEAR-INPUT TYI)
+	     (SETQ C (TYI TYI))
+	     (COND ((OR (= C 89.) (= C 121.))
+		    (PRINC '| [Yes]| TYO)
+		    (RETURN T))
+		   ((OR (= C 78.) (= C 110.))
+		    (PRINC '| [No]| TYO)
+		    (THROW T LSPSAV-LOAD-EXIT))
+		   (T
+		    (GO MIDDLE)))))
+
+(DEFUN LSPSAV (FILE VARS OPTIONS SYSTEM!)
+       (PROG (OUTSTREAM)
+	     (COND ((EQ (CADDR FILE) '>)
+		    (SETQ OUTSTREAM (OPEN FILE 'OUT)))
+		   ((AND SAVE-PARANOIA (PROBEF FILE))
+		    (TERPRI TYO)
+		    (PRINC '|;File exists.| TYO)
+		    (TERPRI TYO)
+		    (PRINC '|; Type "A" to append,| TYO)
+		    (PRINC '| "C" to clobber, or "Q" to quit. -> | TYO)
+		    ((LAMBDA (CHAR)
+			     (COND ((MEMQ CHAR '(A /a))
+				    (PRINC '| [Append]| TYO)
+				    (TERPRI TYO)
+				    (SETQ OUTSTREAM (OPEN FILE 'APPEND)))
+				   ((MEMQ CHAR '(C /c))
+				    (PRINC '| [Clobber]| TYO)
+				    (TERPRI TYO)
+				    (SETQ OUTSTREAM (OPEN FILE 'OUT)))
+				   (T
+				    (PRINC '| [Quit]| TYO)
+				    (TERPRI TYO)
+				    (PRINC '|;Save request aborted!| TYO)
+				    (RETURN NIL))))
+		     (ASCII (TYI TYI))))
+		   (T (SETQ OUTSTREAM (OPEN FILE 'OUT))))
+	     (PRINC '|;;; -*- LISP -*-| OUTSTREAM)
+	     (TERPRI OUTSTREAM)
+	     (PRINC '|;;; MacLISP.| OUTSTREAM)
+	     (PRINC (STATUS LISPV) OUTSTREAM)
+	     (PRINC '| Save File.| OUTSTREAM)
+	     (TERPRI OUTSTREAM)
+	     (PRINC '|;;; Saved by | OUTSTREAM)
+	     (PRINC (STATUS UNAME) OUTSTREAM)
+	     (PRINC '| from job | OUTSTREAM)
+	     (PRINC (STATUS JNAME) OUTSTREAM)
+	     (PRINC '| by LSPSAV.| OUTSTREAM)
+	     (PRINC (LSPSAV$VERSION) OUTSTREAM)
+	     (TERPRI OUTSTREAM)
+	     (LET ((BASE 10.)
+		   (*NOPOINT T)
+		   (DOW (EXPLODEN (STATUS DOW)))
+		   ((YEAR MONTH DATE) (STATUS DATE))
+		   ((HOUR MIN ()) (STATUS DAYTIME)))
+		  (PRINC '|;;; | OUTSTREAM)
+		  (PRINC (COND ((ZEROP (\ HOUR 12.)) '|12|)
+			       (T (\ HOUR 12.)))
+			 OUTSTREAM)
+		  (PRINC '/: OUTSTREAM)
+		  (COND ((< MIN 10.) (PRINC '/0 OUTSTREAM)))
+		  (PRINC MIN OUTSTREAM)
+		  (PRINC (COND ((ZEROP (// HOUR 12.)) '|am |)
+			       (T '|pm |))
+			 OUTSTREAM)
+		  (TYO (CAR DOW) OUTSTREAM)
+		  (MAPC (FUNCTION (LAMBDA (X) (TYO (+ X 32.) OUTSTREAM)))
+			(CDR DOW))
+		  (PRINC '|, | OUTSTREAM)
+		  (PRINC (CDR (ASSOC MONTH '(( 1. . |January |)
+					     ( 2. . |February |)
+					     ( 3. . |March |)
+					     ( 4. . |April |)
+					     ( 5. . |May |)
+					     ( 6. . |June |)
+					     ( 7. . |July |)
+					     ( 8. . |August |)
+					     ( 9. . |September |)
+					     (10. . |October |)
+					     (11. . |November |)
+					     (12. . |December |))))
+			 OUTSTREAM)
+		  (PRINC DATE OUTSTREAM)
+		  (PRINC '|, 19| OUTSTREAM)
+		  (PRINC YEAR OUTSTREAM))
+	     (COND (SYSTEM!
+		    (TERPRI OUTSTREAM)
+		    (PRINC '|;;;| OUTSTREAM)
+		    (TERPRI OUTSTREAM)
+		    (PRINC 
+		     '|;;; >* WARNING *< Do not load this file into lisp!|
+		     OUTSTREAM)
+		    (TERPRI OUTSTREAM)
+		    (TERPRI OUTSTREAM)
+		    (PRINT 
+		     '(ERROR '|Error: SAVE'd with MacLISP reserved words!|)
+		     OUTSTREAM)
+		    (TERPRI OUTSTREAM)))
+	     (TERPRI OUTSTREAM)
+	     (MAPC (FUNCTION
+		    (LAMBDA (OPTION)
+			    (LSPSAV$SAVE OPTION VARS OUTSTREAM)))
+		   OPTIONS)
+	     (COND ((STATUS TTY)
+		    (TERPRI TYO)
+		    (PRINC '|;All info saved as requested in | TYO)
+		    (PRINC (NAMESTRING OUTSTREAM) TYO)
+		    (TERPRI TYO)))
+	     (CLOSE OUTSTREAM)
+	     (RETURN T)))
+
+(DEFUN LSPSAV$SAVE (OPTION VARLIST OUTSTREAM)
+     (CATCH
+       (MAPC (FUNCTION
+	      (LAMBDA (VAR)
+		      (CASEQ OPTION
+			     ('VAL (LSPSAV$SAVE-VALUE VAR OUTSTREAM))
+			     ('EXPR  (LSPSAV$SAVE-EXPR VAR OUTSTREAM))
+			     ('FEXPR (LSPSAV$SAVE-FEXPR VAR OUTSTREAM))
+			     ('MACRO (LSPSAV$SAVE-MACRO VAR OUTSTREAM))
+			     ('ARRAY (LSPSAV$SAVE-ARRAY VAR OUTSTREAM))
+			     ('PROP  (LSPSAV$SAVE-PLIST VAR OUTSTREAM))
+			     (T (CURSORPOS 'A TYO)
+				(PRINC '|;Specified option not offered: | TYO)
+				(PRIN1 OPTION)
+				(TERPRI TYO)
+				(PRINC '|;This option being ignored.| TYO)
+				(TERPRI TYO)
+				(THROW NIL BAD-OPTION)))))
+	     VARLIST)
+       BAD-OPTION))
+
+(DEFUN LSPSAV$ENDPAGEFN (())
+       (PROG (C POS)
+	     (SETQ POS (CURSORPOS TYO))
+	     (PRINC '|*** More? | TYO)
+	     (SETQ C (TYI TYI))
+	     (COND ((OR (= C 89.) (= C 121.) (= C 32.))
+		    (CURSORPOS (CAR POS) (CDR POS) TYO)
+		    (CURSORPOS 'L TYO)
+		    (CURSORPOS 0. 0. TYO)
+		    (CURSORPOS 'L TYO)
+		    (RETURN T))
+		   (T
+		    (CURSORPOS (CAR POS) (CDR POS) TYO)
+		    (PRINC '|Flushed| TYO)
+		    (CURSORPOS 'L TYO)
+		    (CURSORPOS 0. 0. TYO)
+		    (THROW NIL LSPSAV-ENDPAGEFN-EXIT)))))
+
+(REMOB '|LSPSAV-`-,-level/||)

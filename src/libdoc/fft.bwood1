@@ -1,0 +1,723 @@
+;;;This file is the info and source file for the LISP FAST FOURIER TRANSFORM routines
+;;;
+;;;The routines are loaded via (FASLOAD FFT FASL DSK BWOOD)
+;;;
+;;;The two basic functions are:
+;;;	FFT  -->  Fast Fourier Transform
+;;;	IFT  -->  Inverse Fast Fourier Transform
+;;;
+;;;These functions perform a (complex) Fast Fourier Transform on either one
+;;;or two dimensional FLONUM arrays. For the one-dimensional case, the
+;;;FLONUM array must be of length a power of two. For the two-dimensional
+;;;case, the FLONUM array must be square (ie. n x n) where n is a power of two.
+;;;
+;;;Calling format is as follows:
+;;;(FFT <real-array-ptr> <complex-array-ptr>)
+;;;(IFT <real-array-ptr> <complex-array-ptr>)
+;;;
+;;;NOTE: The arguments are array pointers not array names
+;;;
+;;;Needless to say, the real and complex arrays must be of the same size
+;;;and dimension.  The Fast Fourier Transform is performed in place. On
+;;;return, the original arrays contain respectively, the real and complex
+;;;part of the (Discrete) Fourier transform.
+;;;
+;;;Two additional functions are provided (useful for display purposes):
+;;;	(COMPLEX-TO-POLAR <real-array-ptr> <complex-array-ptr>)
+;;;		This function converts (in place) from FLONUM real/imaginery
+;;;		format to FLONUM polar (ie. magnitude/phase) format. On
+;;;		return, the real array contains the magnitude and
+;;;		the complex array contains the phase.
+;;;	(POLAR-TO-COMPLEX <magnitude-array-ptr> <phase-array-ptr>)
+;;;		This function converts (in place) from FLONUM polar
+;;;		format to FLONUM real/imaginery format. On return, the
+;;;		magnitude array contains the real part and the phase
+;;;		array contains the imaginery part.
+;;;
+;;;REMINDER:
+;;;Recall that the FFT is really a DFT. Thus the FFT assumes periodicity of
+;;;the data.  In the one-dimensional case, the origin occurs at both ends
+;;;of the array.  In the two-dimesional case, the origin occurs at all four
+;;;corners of the array. High frequency points are those furthest from the
+;;;origin.
+;;;
+;;;
+;;;To center the origin (for display purposes), say in the two-dimensional
+;;;case, one can use the following accessing function (for ARRAY1):
+;;;
+;;;(DEFUN ARRAY1-PT (X Y)
+;;;       (ARRAYCALL FLONUM
+;;;		  ARRAY1
+;;;		  (BOOLE 1. (+ X (LSH N -1)) (1- N))
+;;;		  (BOOLE 1. (+ Y (LSH N -1)) (1- N))))
+;;;
+;;;(where ARRAY1 is N x N)
+;;;
+;;;
+;;;Everything is believed to work as advertised. Report any bugs/problems
+;;;to BWOOD.
+.FASL
+
+.MLLIT==1
+
+.INSRT LISP; DEFNS >
+
+TITLE LISP FAST FOURIER TRANSFORM
+
+;;;Need *MAKE-ARRAY (for creating SINE and COSINE tables)
+.SXEVA (DEFPROP *MAKE-ARRAY (ARRAY FASL AI BWOOD) AUTOLOAD)
+
+;;;Some (local) AC definitions
+
+T1==C		;temporary ac's (not preserved)
+T2==AR1
+T3==AR2A
+T4==T
+T5==TT
+
+P1==D		;permanent ac's (must be saved)
+P2==R
+P3==F
+P4==FREEAC
+
+;;;Define a few macros
+
+DEFINE	SACS PLACE
+	MOVEM 17,PLACE+17
+	MOVEI 17,PLACE
+	BLT 17,PLACE+16
+TERMIN
+
+DEFINE	RACS PLACE
+	MOVSI 17,PLACE
+	BLT 17,16
+	MOVE 17,PLACE+17
+TERMIN
+
+ACS:	BLOCK 20
+
+DEFINE	FLOAT AC
+	FSC AC,232
+	FADR AC,AC
+TERMIN
+
+DEFINE	BARF ARG
+	LERR [SIXBIT \^M!ARG!!\]
+TERMIN
+
+SINE==0
+COSINE==0
+;;;addr's tagged `sine' and `cosine' eventually get smashed (inelegant but fast)
+
+.ENTRY FFT SUBR 3
+
+FFT:	SKIPA	TT,[MOVE B,SINE(P4)]
+
+.ENTRY IFT SUBR 3
+
+IFT:	MOVE	TT,[MOVN B,SINE(P4)]
+	MOVEM	TT,FFTSIN
+
+	PUSH	P,A
+	PUSH	P,B
+	CALL	1,.FUNCTION TYPEP
+	CAIE	1,.ATOM ARRAY
+	BARF	ARGUMENT NOT AN ARRAY POINTER (FFT)
+	MOVE	A,-1(P)
+	CALL	1,.FUNCTION ARRAYDIMS
+	NCALL	1,.FUNCTION LENGTH
+	SKIPN	TT
+	BARF	ARGUMENT #DEAD-ARRAY (FFT)
+	CAIL	TT,2
+	CAILE	TT,3
+	BARF	ARRAY HAS WRONG NUMBER OF DIMENSIONS (FFT)
+	PUSH	FXP,TT
+	MOVE	A,(P)
+	CALL	1,.FUNCTION TYPEP
+	CAIE	1,.ATOM ARRAY
+	BARF	ARGUMENT NOT AN ARRAY POINTER (FFT)
+	MOVE	A,(P)
+	CALL	1,.FUNCTION ARRAYDIMS
+	NCALL	1,.FUNCTION LENGTH
+	SKIPN	TT
+	BARF	ARGUMENT #DEAD-ARRAY (FFT)
+	CAIL	TT,2
+	CAILE	TT,3
+	BARF	ARRAY HAS WRONG NUMBER OF DIMENSIONS (FFT)
+	POP	FXP,D
+	CAIE	TT,(D)
+	BARF	REAL AND IMAGINARY ARRAY DIMENSIONS DIFFER (FFT)
+	CAIE	TT,2
+	JRST	2DBEG
+
+;;;1-dimensional FFT
+BEG:	MOVE	A,-1(P)
+	MOVE	B,(P)
+	MOVEI	TT,-1
+	MOVE	D,@1(A)			;get dimension
+	MOVNI	R,(D)
+	ANDCAI	R,(D)
+	SKIPE	R
+	BARF	ARRAY SIZE NOT POWER OF 2 (FFT)
+	CAME	D,@1(B)
+	BARF	REAL AND IMAGINARY ARRAY SIZES DIFFER (FFT)
+	MOVEM	D,NN
+	MOVNI	TT,(D)
+	HRLZM	TT,ABJPTR
+
+	CAME	D,LASTNN
+	PUSHJ	P,FINIT
+
+	POP	P,B
+	POP	P,A
+
+;;;When array addresses are smashed, no garbage collection can be allowed
+;;;(since arrays may get relocated). Also, don't allow ^G interrupts.
+;;;The code is written this way for speed.
+	HLLOS	NOQUIT
+	SACS	ACS
+
+;;;Now able to smash addr's of sine & cosine arrays (with impunity)
+	MOVE	TT,.ARRAY SINTBL
+	MOVEI	TT,(TT)
+	HRRM	TT,FFTSIN
+	MOVE	TT,.ARRAY COSTBL
+	MOVEI	TT,(TT)
+	HRRM	TT,FFTCOS
+
+REAL==0
+IMAG==0
+;;;Now able to smash addr's tagged `real' and `imag' (with impunity)
+	HRRZ	A,1(A)
+	HRRZ	B,1(B)
+	MOVSI	TT,-TBLSIZ
+	HRRM	A,@RTBL(TT)
+	HRRM	B,@ITBL(TT)
+	AOBJN	TT,.-2
+
+	PUSHJ	P,REVBS
+	PUSHJ	P,TRANS
+
+	JRST	DONE
+
+;;;2-dimensional FFT
+2DBEG:	MOVE	A,-1(P)
+	MOVE	B,(P)
+	MOVEI	TT,-2
+	MOVE	D,@1(A)
+	MOVNI	R,(D)
+	ANDCAI	R,(D)
+	SKIPE	R
+	BARF	ARRAY SIZE NOT POWER OF 2 (FFT)
+	CAME	D,@1(B)
+	BARF	REAL AND IMAGINARY ARRAY SIZES DIFFER (FFT)
+	MOVEI	TT,-1
+	MOVE	R,@1(A)
+	CAME	R,@1(B)
+	BARF	REAL AND IMAGINARY ARRAY SIZES DIFFER (FFT)
+	CAIE	D,(R)
+	BARF	ARRAY NOT SQUARE (FFT)
+	MOVEM	D,NN
+	MOVEM	D,LIMIT
+	SOS	LIMIT
+
+	MOVNI	TT,(D)
+	HRLZM	TT,ABJPTR
+
+	CAME	D,LASTNN
+	PUSHJ	P,FINIT
+
+	POP	P,B
+	POP	P,A
+
+;;;When array addresses are smashed, no garbage collection can be allowed
+;;;(since arrays may get relocated). Also, don't allow ^G interrupts.
+;;;The code is written this way for speed.
+	HLLOS	NOQUIT
+	SACS	ACS
+
+;;;Now can smash addr's of sine & cosine arrays (with impunity)
+	MOVE	TT,.ARRAY SINTBL
+	MOVEI	TT,(TT)
+	HRRM	TT,FFTSIN
+	MOVE	TT,.ARRAY COSTBL
+	MOVEI	TT,(TT)
+	HRRM	TT,FFTCOS
+
+	SETZM	COUNT
+	SETZM	FLAG
+	SETZM	INDEX
+
+;;;save addr's of real & imaginary data
+	HRRZ	A,1(A)
+	MOVEM	A,DATA1
+	HRRZ	B,1(B)
+	MOVEM	B,DATA2
+
+FFTLP:
+REAL==0
+IMAG==0
+;;;Now can smash addr's tagged `real' and `imag' (with impunity)
+	MOVE	A,DATA1
+	ADD	A,INDEX
+	MOVE	B,DATA2
+	ADD	B,INDEX
+	MOVSI	TT,-TBLSIZ
+	HRRM	A,@RTBL(TT)
+	HRRM	B,@ITBL(TT)
+	AOBJN	TT,.-2
+
+	PUSHJ	P,REVBS
+	PUSHJ	P,TRANS
+
+	MOVE	A,NN
+	ADDM	A,INDEX
+	AOS	A,COUNT
+	CAMGE	A,NN
+	JRST	FFTLP
+	PUSHJ	P,TPOS
+	SKIPE	FLAG
+	JRST	DONE
+	SETOM	FLAG
+	SETZM	INDEX
+	SETZM	COUNT
+	JRST	FFTLP
+
+;;;This restores LISP world and returns
+DONE:	RACS	ACS
+	HLLZS	NOQUIT
+	PUSHJ	P,CHECKI
+	POPJ	P,
+
+COUNT:	0
+FLAG:	0
+INDEX:	0
+LIMIT:	0
+
+DATA1:	0	;ptr to real data
+DATA2:	0	;ptr to imaginary data
+
+X=SP
+Y=FLP
+
+;;;transpose array
+
+TPOS:	MOVE	A,DATA1
+	HRRM	A,TR1
+	HRRM	A,TR2
+	HRRM	A,TR3
+	MOVE	A,DATA2
+	HRRM	A,TI1
+	HRRM	A,TI2
+	HRRM	A,TI3
+	SETZB	D,TT
+	SETZB	X,Y
+
+TPLOP:	MOVEI	T,(D)
+	ADDI	T,(Y)
+	MOVEI	T3,(TT)
+	ADDI	T3,(X)
+TR1:	MOVE	A,(T)
+TI1:	MOVE	B,(T)
+TR2:	EXCH	A,(T3)
+TI2:	EXCH	B,(T3)
+TR3:	MOVEM	A,(T)
+TI3:	MOVEM	B,(T)
+	ADD	TT,NN
+	AOJ	Y,
+	CAIGE	Y,(X)
+	JRST	TPLOP
+	SETZB	Y,TT
+	AOJ	X,
+	ADD	D,NN
+	CAMGE	X,NN
+	JRST	TPLOP
+	POPJ	P,
+
+
+RTBL:	R1
+	R2
+	R3
+	R4
+	R5
+	R6
+	R7
+	R8
+	R9
+	R10
+	R11
+TBLSIZ==.-RTBL
+
+;;;note: rtbl and itbl must be of same length
+ITBL:	I1
+	I2
+	I3
+	I4
+	I5
+	I6
+	I7
+	I8
+	I9
+	I10
+	I11
+
+SNAME:	.ATOM SINTBL
+CNAME:	.ATOM COSTBL
+TYPE:	.ATOM FLONUM
+
+FINIT:	MOVEM	D,LASTNN
+	FLOAT	D
+	MOVEM	D,FLTNN		;float<nn>
+	LDB	TT,[330700,,D]
+	SOJ	TT,
+	MOVEM	TT,LN		;save log<nn>
+
+;;;calculate required length of sintbl & costbl
+	MOVE	TT,NN
+	LSH	TT,-1
+	AOJ	TT,
+	PUSH	FXP,TT
+	MOVEI	FREEAC,(FXP)
+
+	MOVEI	TT,FINIT1 
+	PUSH	P,TT
+	PUSH	P,SNAME 
+	PUSH	P,TYPE 
+	PUSH	P,FREEAC
+	MOVNI	T,3 
+	JCALL	16,.FUNCTION *MAKE-ARRAY
+
+FINIT1: MOVEI	TT,FINIT2
+	PUSH	P,TT
+	PUSH	P,CNAME
+	PUSH	P,TYPE
+	PUSH	P,FREEAC
+	MOVNI	T,3
+	JCALL	16,.FUNCTION *MAKE-ARRAY
+
+FINIT2: SUB	FXP,[1,,1]
+
+;;;fill costbl and sintbl arrays (need only 0-pi)
+	MOVE	TT,TWPI
+	FDVR	TT,FLTNN
+	MOVEM	TT,STEP
+
+	MOVN	TT,NN
+	ASH	TT,-2		;-nn/4
+	SOJ	TT,
+	HRLZI	FREEAC,(TT)
+	SETZ	TT,
+	PUSH	FLP,TT
+
+QUAD1:	MOVEI	A,(FLP)
+	NCALL	1,.FUNCTION SIN
+	EXCH	TT,FREEAC
+	MOVEM	FREEAC,@ .ARRAY SINTBL
+	MOVE	FREEAC,TT
+	MOVEI	A,(FLP)
+	NCALL	1,.FUNCTION COS
+	EXCH	TT,FREEAC
+	MOVEM	FREEAC,@ .ARRAY COSTBL
+	MOVE	FREEAC,TT
+	MOVE	TT,STEP
+	FADRM	TT,(FLP)
+	AOBJN	FREEAC,QUAD1
+	SUB	FLP,[1,,1]
+
+	MOVN	TT,NN
+	ASH	TT,-2
+	HRLI	FREEAC,(TT)
+	MOVEI	TT,1
+
+QUAD2:	MOVE	T,@ .ARRAY COSTBL
+	EXCH	FREEAC,TT
+	MOVEM	T,@ .ARRAY SINTBL
+	EXCH	FREEAC,TT
+	MOVE	T,@ .ARRAY SINTBL
+	EXCH	FREEAC,TT
+	MOVNM	T,@ .ARRAY COSTBL
+	EXCH	FREEAC,TT
+	AOJ	TT,
+	AOBJN	FREEAC,QUAD2
+	MOVE	TT,NN
+	LSH	TT,-2
+	SETZB	TT,@ .ARRAY COSTBL
+	POPJ	P,
+
+TWPI:	6.283185307
+TOPSTR:	0
+LASTNN:	0	;last value of nn
+ABJPTR:	0	;aobjn ptr for data
+NN:	0	;number of points to transform (must be power of 2)
+LN:	0	;log base 2 of nn
+FLTNN:	0	;floating pt version of nn
+STEP:	0	;step size (in floating pt. radians)
+
+
+CYCLES==FLP
+FPERC==FXP
+ICS==SP
+XX==T4
+YY==T5
+K==P3
+
+TRANS:	MOVEI	CYCLES,1
+	MOVE	FPERC,NN
+	LSH	FPERC,-1
+	MOVEI	ICS,2
+	MOVE	K,LN		;log nn
+	JFCL	17,.+1		;clear PC flags
+
+RANK:	SETZB	P4,P2
+	SETZM	TOPSTR
+	MOVEI	P1,(CYCLES)	;bottom of first btrfly
+	MOVEI	YY,(CYCLES)	;count cycles
+RANK1:	MOVEI	XX,(FPERC)	;count btrflies
+FFTCOS:	MOVE	A,COSINE(P4)	;get cosine
+FFTSIN: MOVE	B,SINE(P4)	;IFT --> MOVN B,SINE(P4)
+RANK2:
+R1:	MOVE	T1,REAL(P1)
+	FMPR	T1,A
+I1:	MOVE	T2,IMAG(P1)
+	FMPR	T2,B
+	FSBR	T1,T2
+R2:	MOVE	T2,REAL(P1)
+	FMPR	T2,B
+I2:	MOVE	T3,IMAG(P1)
+	FMPR	T3,A
+	FADR	T2,T3
+	JFCL	10,RANK6	;test for arithmetic underflow
+
+RANK3:
+R3:	MOVNM	T1,REAL(P1)
+I3:	MOVNM	T2,IMAG(P1)
+R4:	EXCH	T1,REAL(P2)
+I4:	EXCH	T2,IMAG(P2)
+
+R5:	FADRM	T1,REAL(P2)
+	JFCL	10,[	SETZM	@R5
+			JRST	I5]
+I5:	FADRM	T2,IMAG(P2)
+	JFCL	10,[	SETZM	@I5
+			JRST	R6]
+R6:	FADRM	T1,REAL(P1)
+	JFCL	10,[	SETZM	@R6
+			JRST	I6]
+I6:	FADRM	T2,IMAG(P1)
+	JFCL	10,[	SETZM	@I6
+			JRST	RANK4]
+
+RANK4:	ADDI	P2,(ICS)	;do next
+	ADDI	P1,(ICS)
+	SOJG	XX,RANK2
+	ADDI	P4,(FPERC)	;do next cycle
+	AOS	P1,TOPSTR	;start of next cycle
+	MOVEI	P2,(P1)
+	ADDI	P1,(CYCLES)	;bottom
+	SOJG	YY,RANK1
+
+	LSH	CYCLES,1	;2*cycles
+	LSH	ICS,1		;2*ics
+	LSH	FPERC,-1	;fperc/2
+	SOJG	K,RANK		;do ln ranks
+
+	MOVE	T2,FFTSIN
+	TLNN	T2,010000	;ift?
+	POPJ	P,
+
+;;;ift --> normalize transform
+	MOVE	T2,FLTNN
+	MOVE	T4,ABJPTR
+
+RANK5:	MOVE	T1,T2
+R10:	EXCH	T1,REAL(T4)
+R11:	FDVRM	T1,REAL(T4)
+	JFCL	10,[	SETZM	@R11
+			JRST	RNK51]
+RNK51:	MOVE	T1,T2
+I10:	EXCH	T1,IMAG(T4)
+I11:	FDVRM	T1,IMAG(T4)
+	JFCL	10,[	SETZM	@I11
+			JRST	RNK52]
+RNK52:	AOBJN	T4,RANK5
+
+	POPJ P,
+
+;;;Overflow flag set. Make sure it really was underflow and then repeat the
+;;;computation at RANK2 checking each step along the way
+RANK6:	PUSH	P,T
+	JSP	T,RANK7
+	POP	P,T
+	JRST	RANK3
+
+RANK7:	TLNN	T,100
+	.VALUE
+	MOVE	T1,@R1
+	FMPR	T1,A
+	JFCL	10,[	MOVEI	T1,
+			JRST	RNK71]
+RNK71:	MOVE	T2,@I1
+	FMPR	T2,B
+	JFCL	10,[	MOVEI	T2,
+			JRST	RNK72]
+RNK72:	FSBR	T1,T2
+	JFCL	10,[	MOVEI	T1,
+			JRST	RNK73]
+RNK73:	MOVE	T2,@R2
+	FMPR	T2,B
+	JFCL	10,[	MOVEI	T2,
+			JRST	RNK74]
+RNK74:	MOVE	T3,@I2
+	FMPR	T3,A
+	JFCL	10,[	MOVEI	T3,
+			JRST	RNK75]
+RNK75:	FADR	T2,T3
+	JFCL	10,[	MOVEI	T2,
+			JRST	(T)]
+	JRST	(T)
+
+REVBS:	MOVEI	T5,2*36.
+	SUB	T5,LN
+	MOVE	T4,ABJPTR
+REVB:	MOVEI	T1,(T4)
+	SETZ	T1+1,
+	CIRC	T1,(T5)
+	CAIL	T1+1,(T4)
+	JRST	CONT
+R7:	MOVE	T1,REAL(T4)
+R8:	EXCH	T1,REAL(T1+1)
+R9:	MOVEM	T1,REAL(T4)
+I7:	MOVE	T1,IMAG(T4)
+I8:	EXCH	T1,IMAG(T1+1)
+I9:	MOVEM	T1,IMAG(T4)
+
+CONT:	AOBJN	T4,REVB
+	POPJ	P,
+
+
+ARRAY1:	0
+ARRAY2:	0
+
+.ENTRY COMPLEX-TO-POLAR SUBR 0
+
+	MOVEM	A,ARRAY1
+	MOVEM	B,ARRAY2
+	CALL	1,.FUNCTION ARRAYDIMS
+	NCALL	1,.FUNCTION LENGTH
+	MOVE	A,ARRAY1
+	MOVE	B,ARRAY2
+	CAIN	TT,2
+	JRST	1DCTP
+	CAIN	TT,3
+	JRST	2DCTP
+	BARF	BAD ARRAY DIMENSIONS (COMPLEX-TO-POLAR)
+
+1DCTP:	MOVEI	TT,-1
+	MOVE	FREEAC,@1(A)	;dimension
+	JRST	CTP1
+
+2DCTP:	MOVEI	TT,-2
+	MOVE	FREEAC,@1(A)	;x dimension
+	MOVEI	TT,-1
+	IMUL	FREEAC,@1(A)	;times y dimension
+
+CTP1:	JFCL	17,.+1		;clear PC flags
+	MOVNI	FREEAC,(FREEAC)	;negate it
+	MOVSI	FREEAC,(FREEAC)	;finally... an aobjn ptr
+
+CTP2:	MOVEI	TT,(FREEAC)
+	MOVE	D,@1(A)
+	PUSH	FLP,D
+	FMPR	D,D
+	JFCL	10,[	SETZ	D,
+			JRST	CTP3]
+CTP3:	MOVE	TT,@1(B)
+	PUSH	FLP,TT
+	FMPR	TT,TT
+	FADR	TT,D
+	JFCL	10,[	SETZ	TT,
+			JRST	CTP4]
+CTP4:	CAMG	TT,[0.000000000001]
+	JRST	CTP5
+	PUSH	FLP,TT
+	MOVEI	A,(FLP)
+	NCALL	1,.FUNCTION SQRT
+	MOVEI	B,-2(FLP)
+	MOVEI	A,-1(FLP)
+	PUSH	FLP,TT
+	NCALL	2,.FUNCTION ATAN
+	MOVE	D,TT
+	MOVE	A,ARRAY1
+	MOVE	B,ARRAY2
+	MOVEI	TT,(FREEAC)
+	MOVEM	D,@1(B)
+	MOVE	D,(FLP)
+	MOVEM	D,@1(A)
+	SUB	FLP,[4,,4]
+	AOBJN	FREEAC,CTP2
+	POPJ	P,
+
+CTP5:	MOVEI	TT,(FREEAC)
+	SETZM	@1(A)
+	SETZM	@1(B)
+	SUB	FLP,[2,,2]
+	AOBJN	FREEAC,CTP2
+	POPJ	P,
+
+
+.ENTRY POLAR-TO-COMPLEX SUBR 0
+
+	MOVEM	A,ARRAY1
+	MOVEM	B,ARRAY2
+	CALL	1,.FUNCTION ARRAYDIMS
+	NCALL	1,.FUNCTION LENGTH
+	MOVE	A,ARRAY1
+	MOVE	B,ARRAY2
+	CAIN	TT,2
+	JRST	1DPTC
+	CAIN	TT,3
+	JRST	2DPTC
+	BARF	BAD ARRAY DIMENSIONS (POLAR-TO-COMPLEX)
+
+1DPTC:	MOVEI	TT,-1
+	MOVE	FREEAC,@1(A)	;dimension
+	JRST	PTC1
+
+2DPTC:	MOVEI	TT,-2
+	MOVE	FREEAC,@1(A)	;x dimension
+	MOVEI	TT,-1
+	IMUL	FREEAC,@1(A)	;times y dimension
+
+PTC1:	JFCL	17,.+1		;clear PC flags
+	MOVNI	FREEAC,(FREEAC)	;negate it
+	MOVSI	FREEAC,(FREEAC)	;finally... an aobjn ptr
+
+PTC2:	MOVEI	TT,(FREEAC)
+	MOVE	D,@1(A)
+	PUSH	FLP,D
+	MOVE	TT,@1(B)
+	PUSH	FLP,TT
+	MOVEI	A,(FLP)
+	NCALL	1,.FUNCTION COS
+	FMPR	TT,-1(FLP)
+	JFCL	10,[	SETZ	TT,
+			JRST	PTC3]
+PTC3:	PUSH	FLP,TT
+	MOVEI	A,-1(FLP)
+	NCALL	1,.FUNCTION SIN
+	FMPR	TT,-2(FLP)
+	JFCL	10,[	SETZ	TT,
+			JRST	PTC4]
+PTC4:	MOVE	D,TT
+	MOVE	A,ARRAY1
+	MOVE	B,ARRAY2
+	MOVEI	TT,(FREEAC)
+	MOVEM	D,@1(B)
+	MOVE	D,(FLP)
+	MOVEM	D,@1(A)
+	SUB	FLP,[3,,3]
+	AOBJN	FREEAC,PTC2
+	POPJ	P,
+
+	FASEND
+

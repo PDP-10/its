@@ -1,0 +1,494 @@
+;-*- LISP -*-
+(comment an improved version of DEBUG)
+
+;this file written by Richard C. Waters Dec 1977. Send all comments to DICK@AI.
+
+;DEBUG* is based on the function DEBUG. however, it fixes a few bugs that 
+;debug has, and adds a lot of new features.
+;
+;OLD BUGS FIXED.
+;1. the function bt sometimes chokes and prints out everthing twice, this is
+;	because baklist has an analogous problem. debug* doesn't call
+;	baklist and therefore doesn't have this problem.
+;2. debug's C command doesn't work if applied to an evalframe of the
+;	apply type. debug* does work in this case.
+;3. debug isn't supposed to complain when you type a ^L but it does, debug* doesn't
+;
+;IMPROVEMENTS OF DEBUG* OVER DEBUG
+;the major improvement in debug* is the way it looks at the stack, all of
+;	debug*'s commands operate with respect to an edited version of what is
+;	on the stack.  this edited version is different from the actual stack
+;	in that:
+; 1. every trace of the stepping package's actions are deleted (i.e. calls on
+;	evalhook and evalhook*).
+; 2. duplicate stack entries caused by a macro expansion that displaced itself
+;	by doing a rplaca and rplacd are deleted.
+; 3. when an R or C command is done a freturn starts an evaluation sequence which
+;	effectively skips over a part of the stack. if you enter debug again
+;	above such a point you see a lot of junk which is bypassed and does
+;	not have any effect on the current evaluation sequence.  debug*
+;	deletes all this stuff so that from looking at the stack you can't
+;	tell whether or not Rs and Cs have been done above you.
+;	everything just looks normal.  debug* does similar elisions for the V command
+;	(NOTE these elisions only work 100% when the uuos are snapped. (for instance not
+;	until the second time a feature is used after debug* is fasloaded) when the uuos
+;	are not snapped you see some extra evals and applies on the stack.)
+; 4. further several of debug*'s commands look at a version of the stack which
+;	is further restricted in that it only contains calls on user functions
+;	(ie ones where (status system function-name) is nil)
+;another improvement of debug* is that it knows about step (Chuck Rich's stepper)
+;	it allows you to:
+; 1. enter debug* while stepping without the stepping intruding on anything
+;	you do in debug*.  debug* sets evalhook* to nil when it is entered and
+;	restores it before it exits via Q R or C.
+; 2. when you leave debug* stepping is smoothly resumed. (except for pathological cases)
+; 3. a command S is provided for changing the stepping mode from inside debug,
+;	so that you can decide what type of stepping you want after you exit
+;	debug. (see the documentation for step for what kinds of things you
+;	can do) 
+; 4. as mentioned above you don't see the garbage the stepper leaves on the
+;	stack.
+;debug* takes an argument which tells it where to set the top of the stack.
+;	the top of the stack is taken as the first frame below the frame
+;	corresponding to the function name given as the argument to debug*.
+;	this is useful because debug* automatically prints out the top of the
+;	stack when it is entered and the argument helps you avoid seeing
+;	irrelavent stuff. (you can see parts of the stack above the chosen top
+;	point by simply moving up to them with [ or {)).  as an example of how
+;	this is usefull see the function *start*debug*
+;debug* prints a lot less terpris.  As a result you get to see a lot more on the screen
+;	basically twice as much.
+;there are a lot of additional commands (see below)
+;
+;COMPLETE COMPATABILITY WITH DEBUG
+;there are a lot of new features, and the typeout looks a bit different, but DEBUG*
+;responds to all of the same commands as DEBUG, and this file contains a redefinition
+;of DEBUG which calls DEBUG*.  this can be used to do all the things DEBUG does. (including
+;setting *rset).  debug* encourages a change from using the commands U and D to [ and ] but
+;doesn't force you to change.
+;BASIC USE OF DEBUG*
+;
+;HOW TO LOAD DEBUG* IN
+;	a. do a (fasload debug* fasl dsk liblsp)
+;
+;HOW TO START DEBUG* UP
+;	a. you can use the redefinition of debug in this file to start up
+;	   debug* just the way you start up debug (i.e. by doing (debug))
+;	b. you can do a (debug* nil) if you don't care where debug* calls the
+;	   top point on the stack
+;	c. you can do a (debug* topfn) in which case debug will choose as top
+;	   point the highest point on the stack where the stack frame is an
+;	   evaluation of the function TOPFN.  note that where the top point is
+;	   put does not alter what parts of the stack are excessable for you
+;	   to look at, but rather only sets the initial position on the stack,
+;	   and the place the T command goes to.  the option of specifying the
+;	   top point exists so that you can have debug* start up showing you a convenient
+;	   place on the stack. 
+;	d. you can use (sstatus ttyint # '*start*debug*) in order to put the
+;	   function *start*debug* on a control character. (this does not
+;	   automatically happen when debug* is loaded in) if you do, then
+;	   typing the control character (for example ^D) will start up debug*
+;
+;HOW TO INTERACT WITH DEBUG*
+;	a. debug* runs as a read eval print loop where the commands it reads
+;	   are all one character.  they can all be proceeded by an optional
+;	   positive integer argument (though all but [, ], {, and } ignore
+;	   it). some of the comands do input themselves.  most commands cause
+;	   some object to be printed out.  if you type a character which is
+;	   not a command, debug* goes into a mode where it ignores all input
+;	   until a cr is typed. it then returns to reading commands.
+;
+;BRIEF DESCRIPTION OF COMMANDS (SEE BELOW FOR MORE DETAIL);
+;	a. EXAMINING THE STACK the commands -, =, and @ show you the entries
+;	   on the stack in various amounts of detail.  the commands [, ], {,
+;	   }, and T move up and down the stack showing you the stack frame they
+;	   go to.
+;	b. PRINTOUT cr redisplays the current stack frame. P prints the current
+;	   thing without abbreviation.  (the user prin1 is used if supplied as
+;	   the value of DEBUG*PRIN1 or of PRIN1)
+;	c. EVALUATING things in the environment of the current stack frame. E
+;	   reads in and evaluates a single expression and displays the result.
+;	   B and V enter read-eval-print loops in the current environment.
+;	d. EXITING debug*. Q, R, and C all return to the computation in
+;	   process.  a ^G can be used to go to toplevel.  in addition you can
+;	   eval (with E) a GO or THROW if the situation is appropriate.
+;	e. EFFECTING THE STEPPER the S command reads in an expression and
+;	   assigns it to evalhook*.
+;	f. HELP the ? command types out a summary of the commands
+
+;COMMANDS TO DEBUG* 
+;[ - moves up (more recent in time) one stackframe and displays the new frame (U works too)
+;] - moves down (further back in time) one stackframe and displays the new frame (D works too)
+;{ - moves up to the next user function frame
+;} - moves down to the next user function frame
+;the four commands []{} take an optional numeric prefix arg n which
+;	causes them to operate n times
+;cr - displays the current stack frame
+;T - moves to the top stack frame. which stack frame is the top one is based on
+;	the value of the argument to debug*
+;- - displays the functions on the stack from top to bottom. "[]" is printed
+;	around the function corresponding to the current stack frame.
+;= - displays the user functions on the stack. "[]" is printed as in "-".
+;@ - is like = except that between the first user function frame at or above
+;	where you are and the first user function frame below where you are it displays
+;	all of the functions.
+;E - reads in an sexpr and evaluates it in the environment of the current
+;	stackframe.  in addition, in this environment the variable *debug*
+;	is bound to the result of evalframe which corresponds to the current
+;	stack frame. it then displays the result.  E does an errset in order to 
+;	prevent errors from generating a break while it evaluates the sexpr.
+;P - redisplays the last thing displayed with prinlevel and prinlength set to
+;	nil. all other printout is done with prinlevel 4 and prinlength 3. all
+;	printout is done by calling the value of the atom prin1 if it is not nil.
+;       Additionally P will use the value of DEBUG*PRIN1 if non-nil.
+;S - reads in an sexpr which it sets as the value of evalhook*.  this allows
+;	you to alter the state of stepping from in debug.   (the value of evalhook* is
+;	not emediatly changed, rather things are set up so that it will change when
+;	debug is exited through Q R or C. while in debug stepping is inhibited by
+;	setting evalhook* to nil.)
+;	     (note that you can't start up stepping just by changing evalhook* if
+;	stepping is completely disabled (ie evalhook is nil) in the environment you
+;	return into.  if this is the case, you must do an E(setq evalhook 'evalhook*)
+;	in the same environment before returning to it.  (note that it will not help 
+;	to do this from inside a B or V because they both bind evalhook.) Further, if
+;	stepping is started up this way, it will not work 100%.  it will not know what
+;	level it is at; already invoked forms will not print out their values, and the
+;	scope of stepping may be strange.)
+;B - starts up a break loop in the environment of the current stack frame. in
+;	addition, in this environment the variable *debug* is bound to the
+;	result of evalframe which corresponds to the current stack frame. 
+;	returning from the break reenters debug*
+;V - creates a mini top level in the environment of the current stack frame with *debug*
+;	set as above.  this mini top level operates basically like a break loop.
+;	you can exit from it by typing a $p to it at top level.  this causes you
+;	to reenter debug*.  the variables + - * are appropriately bound.
+;		the key difference is that the mini top level DOES NOT DO AN ERRSET.
+;	as a result, you can investigate any error which occures.  at any time you can
+;	pop back up to the mini top level by doing a (*throw '*debug* nil).
+;       the mini top level is useful for setting up a checkpoint on the 
+;	stack which you can repeatedly back up to while debugging a program.
+;Q - causes debug* to exit returning '||.
+;R - forces the current stack frame to return.  before doing anything, R asks
+;	you to type a T to confirm that you really want to force a return. it
+;	then reads an sexpr which is evaluated in the evironment of the current stack
+;	frame and then returned as the result of the current stack frame.  *debug* is
+;	not bound in the evaluation environment.  if stepping is enabled then the
+;	evaluation of the sexpr will be stepped.  
+;C - the C command is just like the R command except the sexpr evaluated is the
+;	one which corresponds to the current stack frame.  it allows you to
+;	continue execution starting with a reevaluation of that expression.
+;? - prints out a short form of this page.
+;^L, space - are ignored. (note that if you have tyi open in twelve bit mode, you must
+;	use the FORM key in order to actually type a ^L if you use the control key you
+;       will get L or l with some high order bits. (to fix this debug* ignores L too))
+;other - any other character causes '| invalid character, type cr to continue |to be printed 
+;	and debug* goes into a mode where all input is refused until a cr is typed. this
+;	is done to protect you from doing something strange if you don't realize you
+;	are typing to debug*. 
+
+(declare (special *debug* tyo tyi terpri prinlevel prinlength evalhook*
+		  *debug*? debug*prin1)
+	 (fixnum code n i j))
+
+(herald debug*)
+
+;the system function which forms the bases for this program is EVALFRAME.
+;evalframe lets you look at what is on the stack, but only if *RSET is non
+;nil. each call on evalframe returns either NIL if it doesn't find anything,
+;or a 4 tuple (EVALTYPE STACKPTR EXP ENV).  the argumant to evalframe is a
+;stack pointer which is either nil, or one of the numbers returned as the
+;second entry in the tuple returned by evalframe.  each tuple corresponds to
+;a function invocation.  the EXP is the expression evaluated.  STACKPTR is a
+;number which if passed to evalframe will get you the invocation below this
+;one.  ENV is the environment the EXP was invoked in.  EVALTYPE is either
+;'EVAL or 'APPLY and says whether EXP was invoked by (EVAL EXP) or 
+;(APPLY (CAR EXP) (CADR EXP)). 
+;	DEBUG* calls evalframe repeatedly and builds up a two-way linked list
+;of the 4 tuples (with some of them elliminated as discussed above). all of
+;the work done by the rest of debug* is with respect to this intermediate data
+;structure.  this makes it easy to do the elision for all commands, and avoids
+;calling evalframe again and again.  each entry in the intermediate structure
+;is of the form (FRAME UP DOWN . USERFN). where FRAME is a result of
+;evalframe, UP points to the next higher stack frame, DOWN points to the next
+;lower, and USEFN is a flag which says whether of not the function
+;correspanding to this frame is a user function or not. (ie. whether or not
+;(STATUS SYSTEM ...) is NIL.)
+
+
+;the following are just macro definitions used to make debug* more readable.
+
+(eval-when (eval compile)
+  (defmacro evaltypepart (e) `(car ,e))
+  (defmacro evaltype (p) `(evaltypepart (car ,p)))
+  (defmacro stackptrpart (e) `(cadr ,e))
+  (defmacro stackptr (p) `(stackptrpart (car ,p)))
+  (defmacro exppart (e) `(caddr ,e))
+  (defmacro exp (p) `(exppart (car ,p)))
+  (defmacro envpart (e) `(cadddr ,e))
+  (defmacro env (p) `(envpart (car ,p)))
+  (defmacro frame (p) `(car ,p))
+  (defmacro up (p) `(cadr ,p))
+  (defmacro down (p) `(caddr ,p))
+  (defmacro userfn (p) `(cdddr ,p)))
+
+(or (boundp 'evalhook*) (setq evalhook* nil))
+(or (boundp 'debug*prin1) (setq debug*prin1 nil))
+
+;this function is intended to be put on an interupt character such as ^D
+; (i.e. (sstatus ttyint 4. '*start*debug*)) in order to make starting up
+;debug* easier.
+
+(defun *start*debug* (ignore ignore-ch)
+  (nointerrupt nil)
+  (tyi tyi)
+  (debug* '+internal-ttyscan-subr))
+
+;this is used by debug* to do freturns in order to have an identifiable mark
+;on the stack to know what parts of the stack to skip when displaying it.
+
+(defun *debug*freturn* (ptr evaltype exp old-evalhook*)
+  (setq evalhook* old-evalhook*)
+  (cond ((eq evaltype 'eval) (freturn ptr (eval exp)))
+	(T (freturn ptr (apply (car exp) (cadr exp))))))
+
+;this is the mini top level.  it doesn't use its argument ptr but
+;debug* does use it when it is deciding how to skip over pieces of the
+;stack.
+
+(defun *debug*top-level (ignore)
+  (let (exit evalhook ^w ^q  (* *)  (+ +)  (- -))
+    (terpri)
+    (princ '|*debug*top-level|)
+    (prog ()
+     L (*catch '*debug*
+	 (prog (exp)
+	    (setq * '*)
+	  L (terpri)
+	    (cond (prin1 (funcall prin1 *)) (T (prin1 *)))
+	    (terpri)
+	    (setq exp (read))
+	    (cond ((eq exp /p) (clear-input tyi)
+		   (setq exit T) (return nil)))
+	    (setq + -   - exp   * (eval exp))
+	    (go L)))
+       (cond ((not exit)
+	      (terpri)
+	      (princ '|quit; reentering *debug*top-level|)
+	      (go L))))))
+
+;the basic logic of debug* is as follows: when entered debug* tries
+;to fix everything up so that things will work ok i.e. ^w ^q evalhook
+;evalhook* and nointerrupt are set to nil. further tyi is cleared.
+;next debug* constructs an elided version of the stack.  and decides
+;what the top point is based on its argument.  (this takes a bit of
+;time, but it saves a lot of time in the long run). if *rset was not T
+;then debug* just does a break since there is no stack to look at.
+;otherwise debug* goes into a mode where it reads characters from tyi
+;and interprets them as commands (see commands comment above). it
+;continues reading and dispatching until a command which causes an
+;exit is encountered.
+
+(defun debug* (topfn)
+  (let ((ef (evalframe nil))
+	(old-evalhook* evalhook*) evalhook ^w ^q)
+    (setq evalhook* nil) (nointerrupt nil) (clear-input tyi)
+    (if (not (zerop (charpos tyo))) (terpri))
+
+    (prog (top bot topend ptr code item n)
+;make internal copy of stack, with appropriate elisions.
+      (prog (ex oldex uf i n)
+	 (setq i 1   n 100)
+       L (setq i (1+ i))
+	 (cond ((> i n)
+		(princ '|More than |) (princ n) (princ '| stack frames. |)
+		(cond ((Y-or-N-p "Do you want them all viewable")
+		       (terpri)
+		       (setq n (* 2 n)))
+		      (T (terpri) (return nil)))))
+	 (setq ex (exppart ef))
+	 (cond ((null ef) (return nil))
+	       ((and (not (atom ex))
+		     (or (memq (car ex) '(evalhook evalhook*))
+			 (and (not (atom oldex))
+			      (eq (cdr ex) (cdr oldex))
+			      (eq (car ex) (car oldex)))))
+		(setq ef (evalframe (cadr ef))))
+	       ((and (not (atom ex)) (eq (car ex) '*debug*freturn*))
+		(setq ef (evalframe (caadr ex))))
+	       (T (setq uf (and (not (atom ex))
+				(eq (typep (car ex)) 'symbol)
+				(not (status system (car ex))))
+			bot (list* ef bot nil uf))
+		  (cond ((up bot) (setf (caddr (up bot)) bot))
+			(T (setq topend bot)))
+		  (cond ((and (not top) (or (eq ex topfn)
+					    (and (not (atom ex))
+						 (eq (car ex) topfn))))
+			 (setq top bot)))
+		  (setq oldex ex)
+		  (cond ((and (not (atom ex)) (eq (car ex) '*debug*top-level))
+			 (setq ef (evalframe (cadr ex))))
+			(T (setq ef (evalframe (cadr ef)))))))
+	 (go L))
+      (setq top (or (down top) top (down topend) topend))
+;if no stack (i.e. *rset nil) just do a break
+      (cond ((null bot) (princ '|No evalframes try setting *rset to T. |)
+	     (break debug*) (return '||)))
+;get set for the main operation loop
+      (setq ptr top  item (exp top))
+
+;print out the current thing
+     print
+      (let ((prinlevel 4) (prinlength 3))
+	(errset (cond (prin1 (funcall prin1 item)) (T (prin1 item)))))
+      (tyo #\space)
+;read in a command with optional number prefix.
+     read
+      (prog (i temp)
+       L (setq i (boole 1 127. (tyi tyi)))
+         (cond ((and (< 47. i) (< i 58.)) (push i temp) (go L)))
+	 (setq code i)
+	 (setq n (cond (temp (readlist (nreverse temp))) (T 1))))
+;dispatch on the command character to see what to do (see comments above)
+     process
+      (caseq code
+	((#/] #/D #/d)
+	 (cond ((eq ptr bot) (princ '| at bottom |) (go read))
+	       (T (prog ()
+		   L (setq n (1- n)  ptr (down ptr))
+		     (cond ((null ptr) (setq ptr bot))
+			   ((plusp n) (go L))))))
+	  (setq item (exp ptr)))
+	(#\cr (setq item (exp ptr)) (go print))
+	((#/[#/U #/u)
+	 (cond ((eq ptr topend) (princ '| at top |) (go read))
+	       (T (prog ()
+		   L (setq n (1- n) ptr (up ptr))
+		     (cond ((null ptr) (setq ptr topend))
+			   ((plusp n) (go L))))))
+	 (setq item (exp ptr)))
+	(#/} (cond ((eq ptr bot) (princ '| at bottom |) (go read))
+		   (T (prog ()
+		       L (setq ptr (down ptr))
+		         (cond ((userfn ptr) (setq n (1- n))))
+			 (cond ((null ptr) (setq ptr bot))
+			       ((plusp n) (go L))))))
+	     (setq item (exp ptr)))
+	(#/{ (cond ((eq ptr topend) (princ '| at top |) (go read))
+		   (T (prog ()
+		       L (setq ptr (up ptr))
+		         (cond ((userfn ptr) (setq n (1- n))))
+			 (cond ((null ptr) (setq ptr topend))
+			       ((plusp n) (go L))))))
+	     (setq item (exp ptr)))
+	((#/T #/t) (setq item (exp (setq ptr top))))
+	((#/- #/= #/@ #/+)
+	 (let ((prinlevel 1) (prinlength 1) (terpri nil) showlocal
+	       (firstufbefore (and (member code '(#/@ #/+))
+				   (prog (p)
+				      (setq p ptr)
+				    L (setq p (up p))
+				      (cond ((null p) (return topend))
+					    ((userfn p) (return p)))
+				      (go L)))))
+	   (terpri)
+	   (prog (p)
+	      (setq p topend)
+	    L (setq showlocal (or (and showlocal (not (userfn p)))
+				  (eq p firstufbefore)))
+	      (cond ((eq p ptr) (princ '/[)))
+	      (cond ((or showlocal (userfn p) (= code #/-))
+		     (errset (prin1 (cond ((atom (exp p)) (exp p))
+					  (T (car (exp p))))))
+		     (cond ((eq p ptr) (princ '/]))) (tyo #\space))
+		    ((eq  p ptr) (princ '|] |)))
+	      (cond ((not (eq p bot)) (setq p (down p)) (go L)))))
+	 (go read))
+
+	((#/R #/r #/C #/c)
+	 (let ((fr (evalframe (stackptr ptr))) exp evalt)
+	   (cond ((eq (car (exppart fr)) 'evalhook)
+		  (setq fr (evalframe (stackptrpart fr)))))
+	   (cond ((not (eq (car (exppart fr)) 'evalhook*))
+		  (setq fr (frame ptr))))
+	   (setq exp (exppart fr)  evalt (evaltypepart fr))
+	   (cond ((member code '(#/R #/r))
+		  (princ '| return form: |)
+		  (setq exp (read tyi)  evalt 'eval)
+		  (clear-input tyi)
+		  (cond ((not (eq fr (frame ptr)))
+			 (setq exp (list 'evalhook* (ncons exp))
+			       evalt 'apply)))))
+	   (cond ((not (Y-or-N-p "confirm:"))
+		  (terpri)
+		  (setq code #\cr)
+		  (go process)))
+	   (apply '*debug*freturn* 
+		  (list (stackptrpart fr) evalt exp old-evalhook*)
+		  (envpart fr))))
+	((#/S #/s) (setq old-evalhook* (read tyi)) (clear-input tyi))
+	((#/E #/e)
+	 (setq item (car (errset (eval `((lambda (*debug*)
+					  ,(prog1 (read tyi)
+						  (clear-input tyi)))
+					 ',(frame ptr))
+				       (env ptr))
+				 t))))
+	((#/B #/b)
+	 (eval `((lambda (*debug*) (break debug* t))
+		 ',(frame ptr)) (env ptr))
+	 (setq item (exp ptr))
+	 (go print))
+	((#/V #/v)
+	 (eval `((lambda (*debug*) (*debug*top-level ,(stackptr ptr)))
+		 ',(frame ptr)) (env ptr))
+	 (setq item (exp ptr)))
+	((#/Q #/q)
+	 (princ '| end debug |)
+	 (setq evalhook* old-evalhook*)
+	 (return '||))
+	((#/P #/p)
+	 (let (prinlevel prinlength)
+	   (terpri)
+	   (errset (funcall (or debug*prin1 prin1 'prin1) item))
+	   (tyo #\space))
+	 (go read))
+	(#/? (mapc #'(lambda (x) (terpri) (princ x)) *debug*?) (go read))
+	((#/L #/l #\ff #\space) (go read)) ;works in 12bit read in mode too
+	(T (Y-or-N-p " invalid character, continue")
+	   (terpri)
+	   (setq code #\cr)
+	   (go process)))
+      (terpri)
+      (go print))))
+
+;this just holds the message printed out by ?.  If you don't want to
+;loose the space setq *debug*? to nil
+
+(setq *debug*?
+  '(|] move down one stack frame|
+    |[ move up one stack frame|
+    |} move down to next user function stack frame|
+    |{ move up to next user function stack frame|
+    |cr show current stack frame|
+    |T go to top stack frame|
+    |- show stack|
+    |= show user functions on stack|
+    |@ (or +) show user functions on stack, and all functions near current position|
+    |E read and evaluate an expression in the current environment|
+    |P print last thing in full|
+    |S set evalhook*|
+    |B start up a break point in the current environment|
+    |V start up a mini top level in the current environment|
+    |Q quit debug*|
+    |R read in evaluate and freturn an expression in the current environment|
+    |C continue execution starting from the current stack frame expression |))
+
+;______________________________________________________________________________
+
+;this is a redefinition of debug which calls debug* this gives you the
+;new features without having to rewrite anything.
+
+(defun debug nargs
+  (cond ((= nargs 0) (debug* nil))
+	(T (*rset (nouuo (arg 1))))))

@@ -1,0 +1,994 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		SATURDAY  AUG 06,1977  14:31:23
+;;;		lisp stepper with heuristic controls
+;;;
+;;;	Copyright (c) 1977 by
+;;;	   Robert V. Baron and
+;;;	   Massachusetts Institute of Technology.
+;;;	All rights reserved.
+;;;
+;;;				r.v.baron
+;;;				ne43-316
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(comment lisp "stepper" debugger)
+(*rset t)	;;;else the stepper is not active
+
+(declare (*expr seval stepper-top step-eval step-apply
+		step-value step-look step-check applyhook step-macroform
+		step-prog step-lambda step-firstarg)
+	 (*fexpr step step-options heur atompreds formpreds
+		 step-preds heur-atom heur-function offpreds)
+	 (*lexpr evalhook step-print step-retrieve step-f step-v stepa
+		 reform step-form step-fun step-op reevaluate)
+	 (genprefix stephook)
+	 (special step-form oldstep-form step-value oldstep-value
+		  stepsilence stepatomdefault stepmacrodefault
+		  stepfunctiondefault stepformdefault stepmax stepold
+		  stepdepth oldstepdepth steplimit sprinter step-count
+		  step-ans atompreds stepheuristics stepmarkedfunctions
+		  stepmarkedatoms steplimitpostview steppassing
+		  stepmarkedforms formpreds silentstepfunctiondefault
+		  silentstepatomdefault stepcheck-enable)
+	 (special prinlevel prinlength grindlevel grindlength))
+
+(mapc (function (lambda (x)
+         (or (getl (car x) '(subr fsubr lsubr autoload))
+	     (putprop (car x) (cdr x) 'autoload))))
+     '((sprinter grindef fasl com)
+       (pretty-print pretty fasl dsk ps1)
+       (pretty-print-datum pretty fasl dsk ps1)))
+
+
+(setq stepdepth 0 stepmax 140. atompreds nil formpreds nil 
+      oldstep-value nil oldstep-form nil
+      stepmarkedfunctions nil stepmarkedforms nil  stepmarkedatoms nil)
+
+(or (boundp 'sprinter)
+    (setq sprinter (cond ((memq 'ml (status features)) 'lh)
+			 (t t))))
+
+(array steparray t stepmax 2)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			main functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+(defun step fexpr (the-form)
+       (terpri)
+       (step-print 'form stepdepth (or the-form stepold)
+		   (setq the-form (stepper-top (car the-form))))
+       the-form)
+
+(defun seval (the-form) (stepper-top the-form)) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			execution environment
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun unbound-default macro (x)
+       (list 'cond
+	     (list (list 'boundp (list 'quote (cadr x)))
+		   (cadr x))
+	     (list t (caddr x))))
+
+
+;;;	rebind and possibly initialize global variables for
+;;;recursive step invocation.  initialize to previous values if
+;;;any.
+(defun stepper-top (the-form)
+       (cond ((numberp the-form) (setq the-form (steparray the-form 0)))
+	     ((eq the-form t) (setq the-form (steparray stepdepth 0)))
+	     ((null the-form) (setq the-form stepold)))
+       (setq stepold the-form)
+
+       ((lambda (*rset stepsilence steplimit stepatomdefault
+		 stepfunctiondefault stepformdefault stepmacrodefault
+		 stepheuristics stepold steppassing steplimitpostview
+		 stepcheck-enable)
+
+	(setq step-count 0 oldstepdepth (1+ stepmax))
+
+;;;	(evalhook the-form (function step-eval))
+	(step-eval the-form))
+
+	t
+	(unbound-default stepsilence nil)
+	stepmax
+	(unbound-default stepatomdefault '(step-atomvalue))
+	(unbound-default stepfunctiondefault nil)
+	(unbound-default stepformdefault nil)
+	(unbound-default stepmacrodefault '(step-macroform))
+	(unbound-default stepheuristics t)
+	(unbound-default stepold nil)
+	(unbound-default steppassing t)
+	(unbound-default steplimitpostview t)
+	(unbound-default stepcheck-enable nil))) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		main evalhook function
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;at breaks step-form has the current form
+;;;	     step-value has the value of the form
+
+(defun step-eval (step-form)
+       ((lambda (step-value stepdepth usertypein ^w)
+		
+		(store (steparray stepdepth 0) step-form)
+		;;;check any unusual conditions
+	        (and stepcheck-enable
+		     (or atompreds formpreds)
+		     (step-check))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		user option
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(prog ()  read-in
+(cond
+;;;second time around.
+	      (usertypein
+	       (setq usertypein (step-read-eval '==ok=>)))
+;;;don't ask user and don't display
+	      ((and (setq usertypein stepcheck-enable)
+		    (not (eq stepcheck-enable 'watch))))
+	      ((< steplimit stepdepth)
+	       (setq usertypein 'no))
+
+	      ((and stepheuristics
+		    (setq usertypein
+			  (stepask step-form))
+		    (not (eq usertypein 'ask))))
+;;;print the form to user
+	      (t
+	       (step-print 'form stepdepth 'step-form step-form)
+	       (setq stepsilence nil steplimit stepmax
+		     usertypein (step-read-eval '==ok=>))))
+
+(cond
+;;;reset defaults and check for non local go to.
+	      ((numberp usertypein)
+	       (setq steplimit usertypein usertypein 'no))
+;;;stop all tree print out including on return branches
+	      ((eq usertypein 'k) ;kill killc
+		   (setq stepsilence t)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		control evaluation for this form
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(setq ^w nil oldstepdepth (1+ stepmax))		;just in case.
+(setq step-value
+      (cond   ((and stepcheck-enable
+		    (not (eq stepcheck-enable 'watch)))
+	       (evalhook step-form (function step-eval))) 
+;;;no deeper evaluation on this branch
+              ((or stepsilence
+		   (memq usertypein '(n v no b))
+		   (> stepdepth steplimit))
+	       (eval step-form))
+;;;recursion
+	      ((memq usertypein '(c r d y))
+	       (evalhook step-form (function step-eval)))
+
+;;;macro      
+              ((eq usertypein 'm)
+	       (setq step-value
+		     (errset (funcall (get (car step-form) 'macro)
+				    step-form)
+			     nil))
+	       (cond ((null step-value)
+		      (error step-form 'macro-expansion-error))
+		     (t (setq step-form (car step-value)
+			      step-value nil
+			      usertypein nil)
+			(go read-in))))
+
+;;;do checking on way down
+	      ((eq usertypein 'fork)
+	       (setq stepcheck-enable t)
+	       (evalhook step-form (function step-look)))
+
+;;;user claims to have calculated the answer already
+	      ((eq usertypein 'evaled)
+	       (setq usertypein 'n) step-value)
+
+;;;eval the users form instead of the one present
+	      ((eq usertypein 'i)
+	       (do ((xtemp nil 
+			   (errset (eval
+				    (step-retrieve
+			      'type 'a 'form 'to 'eval))))
+		    (errset nil))
+		   (xtemp (car xtemp))))
+
+;;;break after the args have been accumulated
+	      ((eq usertypein 'a)	;args
+	       ((lambda (step-value)
+			(cursorpos 'c)
+			(step-f)
+			(step-print 'value
+				    stepdepth 'args step-value)
+			(break examine-args t)
+;;;apply function
+			(applyhook  (car step-form)
+				    step-value
+				    (function step-eval)))
+;;;build arg list
+		(mapcar (function eval) (cdr step-form))))
+
+;;;other wise assume error
+	      ((eq usertypein 'again) 
+	       (setq usertypein nil) (go read-in))
+	      ((null usertypein) (go read-in))
+	      ((boundp usertypein)
+	       (step-print 'value stepdepth 'atom-value
+			   (symeval usertypein))
+	       (go read-in))
+	      (t (step-print 'value
+			     stepdepth 'no-value-or-bad-option
+			     usertypein)
+		 (go read-in))))) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		thursday  nov 13,1975  12:21:49
+;;;			print out control
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	(store (steparray stepdepth 1) step-value)
+	(cond 
+	    ((and stepcheck-enable
+		  (not (eq stepcheck-enable 'watch))))
+;;;if "great" motion print out marker
+	    ((or stepsilence
+		 (> stepdepth steplimit)))
+	    ((and steplimitpostview
+		  (= (- oldstepdepth stepdepth 1) 0)
+		  (eq step-value oldstep-value))
+	     (setq oldstepdepth stepdepth)
+	     (and steppassing
+	          (not (atom step-form))
+		  (atom (car step-form))
+		  (not (sysp (car step-form)))
+;;;then
+		  (step-print 'form 
+			      stepdepth 'passing step-form)))
+;;;no print out
+	    ((memq usertypein '(no r n k)) nil)
+;;; view does not break
+	    ((prog ()
+		   (cond ((memq usertypein '(d c y))
+			  (cursorpos 'c)
+			  (step-print 'form 
+				      stepdepth 're-form step-form)))
+		   (step-print 'value
+			       stepdepth 'step-value step-value)))
+	    ((memq usertypein '(d v i))
+;;;we guarantee at least one brak
+	       (setq oldstepdepth stepdepth
+		     oldstep-value step-value
+		     oldstep-form step-form)
+	       (sleep 2.2))
+	    (t 
+;;;and break
+	         (cond 
+		     ((null
+		       (setq usertypein
+			     (break postview t))))
+;;;if we have a return t the next clause gets invoked
+		     ((eq usertypein t) (setq stepsilence t))
+		     ((numberp usertypein)
+		      (setq steplimit usertypein)))
+		 (setq oldstepdepth stepdepth
+		     oldstep-value step-value
+		     oldstep-form step-form)))
+	step-value)
+	nil (1+ stepdepth) nil nil))  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		thursday  nov 13,1975  12:04:40
+;;;	heuristics are either atoms or list. if it is a list, it
+;;;is first evaluated by calling the function that is the car of
+;;;the list with two arguments.  the first is the form to be
+;;;evaluated and the second is the list that is the heuristic.
+;;;an atom should be returned.  this is then interpreted as
+;;;though an atom was given originally.
+;;;	if the atom is neither ask nor nil it is passed back as
+;;;the heuristic.  if it is ask the user is asked for the
+;;;heuristic to be used.  finally if it is nil a default is taken.
+;;;
+;;;	for atoms the default is the "atomdefault".
+;;;	for forms the default is the "formdefault" and then the
+;;;function heuristic (and maybe the "functiondefault")
+;;;	for functions the default is the "functiondefault"
+;;;	for macros the default is the "macrodefault"
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun stepinterpret-option macro (x)
+       (list 'cond
+	     (list (list 'atom (cadr x)) 
+		   (cadr x))
+	     (list t
+		   (list 'funcall (list 'car (cadr x))
+				  'step-form
+			   	  (cadr x))))) 
+
+(defun stepask (form)
+       ((lambda (lookup temp)
+          (cond ((atom form)
+;;;atom
+		 (setq temp (get form 'stepaskatom))
+		 (or (and temp (stepinterpret-option (car temp)))
+		     (and stepatomdefault
+		       (stepinterpret-option stepatomdefault))))
+;;;operator
+		((setq temp
+		       (get (cond ((atom (car form)) (car form))
+				  (t (caar form)))
+			    'stepaskfunction))
+		 (cond ((and (cdr temp)
+;;;there is a form default
+			     (cond
+			       ((and (setq lookup
+				       (getl temp (ncons form)))
+;;;match on specific form
+				     (stepinterpret-option 
+				    	(cadr lookup))))
+;;;form default
+				 (stepformdefault
+				      (stepinterpret-option
+					 stepformdefault)))))
+;;;fall into function defaults
+		       (t
+;;;operator
+			(or (stepinterpret-option (car temp))
+			    (and stepfunctiondefault
+				 (stepinterpret-option
+				      stepfunctiondefault))))))
+;;;		((and stepmacrodefault
+;;;		      (get (car form) 'macro))
+;;;		 (stepinterpret-option stepmacrodefault))
+;;;unknown operator
+		(stepfunctiondefault
+		  (stepinterpret-option stepfunctiondefault))
+;;;	if there is a non-nil functiondefault it has precedence over a
+;;;macro default.  Thus the (heur silent) mechanism need not recognize
+;;;macros specially.  This could be changed by fliping the 
+;;; ";;;"'s from above
+		((and stepmacrodefault
+		      (get (car form) 'macro))
+		 (stepinterpret-option stepmacrodefault))))
+	nil nil))
+
+
+(defun stepdefault-form-to-function (form me)
+       (setq me (get (car form) 'stepaskfunction))
+       (or (stepinterpret-option (car me))
+	   (stepinterpret-option stepfunctiondefault))) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		establish special heuristic behavior
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun dour fexpr (pairs)
+       (apply (function heur) pairs)
+       (setq step-count 1 step-ans 'again)
+       'doing-it)
+
+(defun heur fexpr (pairs)
+ (cond ((null pairs)
+
+        (heur declare n quote n function n comment n nil n t n)
+        (heur prog prog)
+	(heur-function lambda lambda)
+	'done)
+       ((null (cdr pairs))
+	(heur-command (car pairs)))
+       (t (do ((2-tuple pairs (cddr 2-tuple))
+	       (ans nil (cons (enter-heur (car 2-tuple)
+					  (cadr 2-tuple)
+					  nil)
+			       (cons (car 2-tuple) ans))))
+	      ((null 2-tuple) (nreverse ans))))))
+
+(defun heur-atom fexpr (tuple)
+       (enter-heur (car tuple) (cadr tuple) 'atom))
+
+(defun heur-function fexpr (tuple)
+       (enter-heur (car tuple) (cadr tuple) 'function))
+
+(defun heur-command (option)
+	(cond ((eq option 'off)
+	       (mapc (function (lambda (x) (enter-heur x 'off 'function)))
+		     stepmarkedfunctions)
+	       (setq stepmarkedfunctions nil))
+	      ((memq option '(off-forms offforms))
+	       (mapc (function (lambda (x) (enter-heur x 'off 'function)))
+		     stepmarkedforms)
+	       (setq stepmarkedforms nil))
+	      ((memq option '(off-atoms offatoms))
+	       (mapc (function (lambda (x) (enter-heur x 'off 'atom)))
+		     stepmarkedatoms)
+	       (setq stepmarkedatoms nil))
+	      ((eq option 'list) (append stepmarkedatoms
+					 stepmarkedfunctions))
+	      ((memq option '(list-forms listforms)) stepmarkedforms)
+	      ((memq option '(defaults default))
+	       (list (list 'atomdefault (or stepatomdefault 'off))
+		     (list 'formdefault (or stepformdefault 'off))
+		     (list 'functiondefault
+			    (or stepfunctiondefault 'off))
+		     (list 'macrodefault (or stepmacrodefault 'off))))
+	      
+	      ((eq option 'silent)
+	       (setq silentstepatomdefault stepatomdefault
+		     stepatomdefault 'n
+		     silentstepfunctiondefault stepfunctiondefault
+		     stepfunctiondefault 'r))
+	      ((memq option '(loud unsilent noisy))
+	       (setq stepatomdefault silentstepatomdefault
+		     stepfunctiondefault silentstepfunctiondefault)))) 
+(defun heur-tuple (op heur)
+       (enter-heur op heur nil))
+
+(defun enter-heur (op heur type)
+       (prog (form prop plist deflt)
+       
+;;;make op the operator; form is nil if spec is for function or
+;;;atom.
+	     (cond ((and (numberp op) (> op 0))
+		    (setq form (steparray op 0)
+			  op   (car form)))
+		   ((numberp op)
+		    (setq form (steparray (+ stepdepth
+					     op) 0)
+			  op (car form)))
+		   ((atom op) (setq form nil))
+		   (t (setq form op op (car form))))
+	     (or (atom op)
+		 (setq op (car op)))
+
+;;;are there any heuristics on the op
+	     (setq type
+		   (cond ((or form
+			      (and type (not (eq type 'atom)))
+			      (getl op '(expr fexpr macro subr 
+					  fsubr lsubr)))
+			  'stepaskfunction)
+			 (t 'stepaskatom)))
+	     (setq plist (get op type))
+
+;;;decode special user abberviations for heuristic options
+	     (setq prop
+	        (cond ((setq prop (assq
+		        heur
+		       '((prog step-prog)
+		         (lambda step-lambda)
+		         (fun step-automatic)
+			 (atom step-atomvalue)
+			 (macro step-macroform)
+		         (silent . r)
+		         (arg step-firstarg))))
+		       (cdr prop))
+		      (t heur)))
+	     (and (eq prop 'off)
+		  (setq prop nil))  
+;;;	now the fun begins we have 3 variables
+;;;	  plist - whether there are other heuristics - t
+;;;	  form  - whether a form is being marked     - t
+;;;	  prop  - whether and what heur is set - (not nil)
+;;;thus 2^3 gives 8 possible states and we decode and act
+;;;specially for each.
+	(cond
+;;;report out user defaults
+	  ((eq prop 'default)
+	   (cond ((null plist) (setq deflt 'off))
+		 (form (setq deflt (or (get plist form) 'off)))
+		 (t (setq deflt (or (car plist) 'off)))))
+;;;set simple defaults 
+	  ((eq op 'atomdefault) (setq stepatomdefault prop))
+	  ((eq op 'functiondefault) (setq stepfunctiondefault prop))
+	  ((eq op 'formdefault) (setq stepformdefault prop))
+	  ((eq op 'macrodefault) (setq stepmacrodefault prop))
+;;;the "dispatch" begins.
+	  (form (setq stepmarkedforms
+		      (cons form stepmarkedforms))
+		(cond
+		  (plist (cond
+			   (prop (putprop plist prop form)) ;t t t form+
+			   ((remprop plist form)
+			    (setq stepmarkedforms
+				  (delq form stepmarkedforms))
+			    (and (null (cdr plist))
+				 (null (car plist))
+				 (remprop (car form)
+					  type))))) ;t t nil form+
+		   (t     (cond
+			   (prop (putprop op
+					  (list nil form prop)
+					  type)) ;nil t t form+
+			   (t    (putprop op
+					  (list nil form nil)
+					  type)))))) ;t nil nil fun-
+	  (t     (cond ((eq type 'stepaskatom)
+			(setq stepmarkedatoms
+			      (cons op stepmarkedatoms)))
+		       (t (setq stepmarkedfunctions
+				(cons op stepmarkedfunctions))))
+		 (cond
+		   (plist (cond
+			    (prop (rplaca plist prop)) ;t nil t fun there
+			    ((and (setq stepmarkedfunctions
+				        (delq op stepmarkedfunctions))
+				  nil))
+			    ((null (cdr plist))
+			     (remprop op type)) ;t nil nil fun
+			    (t (rplaca plist nil)))) ;nil t nil form+
+		   (t     (cond
+			    ((or prop
+				 (get op 'macro))
+			      (putprop op (list prop)
+					   type)) ;nil nil t fun+
+			    (t nil))))))
+	(return (or deflt prop 'off))))  
+
+
+;;;	auxiliary user print functions.
+(defun step-automatic (form heur)
+       (step-print 'form stepdepth '==function== (car form)) 'r)
+
+(defun step-prog (form heur)
+       (step-print 'form stepdepth '==autoprog== 
+			(list 'prog (cadr form))) 'r)
+
+(defun step-lambda (form heur)
+       (step-print 'form stepdepth '==autolambda==
+			(list 'lambda (cadar form))) 'r)
+
+(defun step-firstarg (form heur)
+       (step-print 'form stepdepth '==firstarg==
+			(list (car form) (cadr form))) 'r)
+
+(defun step-macroform (form heur)
+       (step-print 'form stepdepth 'macro form) 'm)
+
+(defun step-atomvalue (form heur)
+       (cond ((numberp form) (setq step-value form))
+	     (t 
+	      (step-print 'value stepdepth form 'value-is 
+		   (setq step-value (symeval form)))))
+       (sleep 1.0) 'evaled)
+
+(defun rvbs-way (form heur)
+       (step-print 'form stepdepth 'dwim-nwit form)
+       (setq form (step-read-eval '==ok=>))
+       (cond ((memq form '(y c d r)) (cadr heur))
+	     (t form))) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		trace entry point
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;	the next two function are auxiliaries for breaking
+;;;after the arguments have been evaluated
+(defun step-lively (a b)
+       ((lambda (*rset stepsilence steplimit stepatomdefault
+		 stepfunctiondefault stepformdefault stepmacrodefault
+		 stepheuristics stepold steppassing steplimitpostview
+		 stepcheck-enable)
+
+	(setq oldstepdepth (1+ stepmax) step-count 0)
+
+	(applyhook a b (function step-eval)))
+
+	t
+	(unbound-default stepsilence nil)
+	stepmax
+	(unbound-default stepatomdefault '(step-atomvalue))
+	(unbound-default stepfunctiondefault nil)
+	(unbound-default stepformdefault nil)
+	(unbound-default stepmacrodefault '(step-macroform))
+        (unbound-default stepheuristics t)
+	(unbound-default stepold nil)
+	(unbound-default steppassing t)
+	(unbound-default steplimitpostview t)
+	(unbound-default stepcheck-enable nil)))
+
+(and (getl 'trace-value '(lsubr expr))
+     (putprop (trace-value 'intern 'step-lively)
+	      (get 'step-lively 'subr)
+	      'subr))
+
+(defun applyhook (fun arglist hooker)
+       (cond ((and *rset (getl fun '(fsubr fexpr)))
+	      (evalhook (cons fun arglist)
+			(function step-eval)))
+;;;eval'ing calls
+	     (*rset
+               (evalhook
+                 (cons fun
+	               (mapcar (function (lambda (x)
+		                 (cons '*apply-marker* x)))
+		               arglist))
+	          (function step-apply)))
+	     (t (apply fun arglist))))
+
+
+(defun step-apply (form)
+       (cond ((eq (car form) '*apply-marker*)
+	      (cdr form))
+	     (t (step-eval form))))   
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			check enabling
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun step-silent fexpr (arg)
+       (cond ((and arg (memq (car arg) '(fast faster)))
+	      (force-command 'fork)
+		'checking)
+	     (t (setq stepcheck-enable 'c)
+		(force-command 'c)
+		'cloak-checking)))
+
+(defun watch ()
+       (setq stepcheck-enable 'watch)
+       'watching)
+
+(defun force-command (opt)
+       (setq step-count 1 step-ans opt))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			checking code
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;	below is a much tighter loop for steping with the check
+;;;option. 
+(defun step-look (step-form)
+       ((lambda (stepdepth step-value)
+       	 (store (steparray stepdepth 0) step-form)
+
+;;;has the condition we wathc for arisen.
+	 (cond ((or (not stepcheck-enable)
+		    (not (or atompreds formpreds))
+		    (and (step-check) (not stepcheck-enable)))
+;;;t means condition met
+	        (step-eval step-form))
+	       (t 
+		(evalhook step-form (function step-look))))
+
+	 )
+	(1+ stepdepth)
+	nil))
+
+;;;	of course the actual checking is embodied in this
+;;;routine soeverything will be reasonably modular
+(defun step-check nil
+       (do ((checks (cond ((atom step-form) atompreds)
+			    (t formpreds))
+		    (cdr checks))
+	    (once) (ans) (errset))
+	   ((null checks)
+	    (cond ((null once))
+		  ((or (and (null atompreds)
+			    (null formpreds))
+		       (memq (step-retrieve 'should 'i 
+					    'stop 'checking)
+			    '(y yes t)))
+		   (setq stepcheck-enable nil)))
+	    once)
+	 
+	 (cond ((and (setq ans
+			   (errset (eval (car checks)) nil))
+		     (car ans))
+		(or once (progn (cursorpos 'c)
+				(step-f)
+				(terpri)
+                                (setq once t)))
+		(step-print 'form 
+			    stepdepth 'condition (car checks))
+		(cond ((memq (step-read-eval 'flush?)
+			     '(y yes t))
+		       (setq atompreds
+			      (delq (car checks) atompreds)
+			     formpreds
+			      (delq (car checks) formpreds))))))))  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		predicate accumulating primitives
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun step-preds fexpr (args)
+       (cond ((null atompreds))
+	     ((memq (step-retrieve 'do 'you 'want atompreds 
+				   'done 'when 'i 'evaluate
+				   'atoms?)
+			'(y yes t)))
+	     (t (setq atompreds nil)))
+       (cond ((null formpreds))
+	     ((memq (step-retrieve 'do 'you 'want formpreds
+				   'done 'when 'i 'evaluate
+				   'atoms?)
+			'(y yes t)))
+	     (t (setq formpreds nil)))
+       (do ((ele args (cdr ele)) (ans) (test) (errset nil))
+	   ((null ele) (setq atompreds (nreverse atompreds))
+		       (setq formpreds (nreverse formpreds))
+		       'done)
+
+;;;	   (setq test (predsubst (car ele)))
+	   (setq test (car ele))
+	   
+	   (cond ((memq (step-retrieve 'do 'you 'want test 
+				   'done 'when 'i 'evaluate
+				   'atoms?)
+			'(y yes t))
+		  (setq atompreds (cons test atompreds))))
+
+	   (cond ((memq (step-retrieve 'do 'you 'want test 
+				   'done 'when 'i 'evaluate
+				   'forms?)
+			'(y yes t))
+		  (setq formpreds (cons test formpreds))))))
+
+
+;;; take a user specified predicate and cons up a executable
+;;;form
+(defun predsubst (form)
+       (sublis '( (! . step-form) (!op . (car step-form))
+		  (!v . (symeval step-form))
+		  (!1 . (cadr step-form))
+		  (!2 . (caddr step-form))
+		  (!3 . (cadddr step-form))
+		  (!4 . (car (cddddr step-form)))
+		  (!5 . (cadr (cddddr step-form))))
+		form))  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;		low-level i/o
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;print an expression. ^x's are caught and can stop printout
+(defun step-print lexpr 
+       ((lambda (^w ^r type response errset prinlevel prinlength)
+          (errset (cond ((eq sprinter 'lh)
+			 (cond ((eq type 'form)
+				(pretty-print response))
+			       (t
+				(pretty-print-datum response))))
+			(sprinter (sprinter response))
+			((null prin1) (print response))
+			(t (terpri)
+			   (funcall prin1 response)))))
+	nil
+	nil
+	(arg 1)
+	(cons 'depth (listify (- 1 lexpr)))
+	nil
+	grindlevel
+	grindlength))
+
+(defun setq-if-unbound macro (x)
+       (rplaca x 'or)
+       (rplacd x
+	       (list
+		  (list 'boundp (list 'quote (cadr x)))
+		  (cons 'setq (cdr x)))))
+
+(setq-if-unbound grindlength 6)
+(setq-if-unbound grindlevel 10)
+
+(defprop depth (3 1 (extra-elements-in-head test-depth-hair))
+	 pretty-print-format-description)
+
+(defun test-depth-hair fexpr (arg)
+       (cond ((atom (cadr arg)) 2)
+	     (t 1)))
+
+;;;print a prompt and if it is not a valid answer eval it, else
+;;;return it. not valid means either a list or an atom prefixed
+;;;by a colon. in the latter case the atom without the : prefix
+;;;is symevaled.
+(defun step-read-eval (prompt)
+    (prog (ans 1char errset)
+a	  (cond ((> step-count 0)
+		 (setq step-count (1- step-count))
+		 (return step-ans)))
+	  (setq ans (step-retrieve prompt))
+	   
+	  (setq ans
+		(cond ((numberp ans) (return ans))
+		      ((atom ans)
+		       (setq 1char (getcharn ans 1))
+		       (cond ((= 1char 58.)
+			      (errset 
+			        (symeval
+			         (implode (cdr (explodec ans))))))
+			     ((= 1char 35.)
+			      (setq step-ans
+				     (implode (cdr (explodec ans))))
+			      (enter-heur step-form
+					  step-ans
+					  'function)
+			      (return step-ans))
+			     ((= 1char 33.)
+			      (setq step-ans
+				     (implode (cdr (explodec ans))))
+			      (enter-heur (car step-form)
+					  step-ans
+					  'function)
+			      (return step-ans))
+			     ((and (< 1char 58.) (> 1char 48.))
+;;; its a number
+			      (setq step-count (- 1char 49.)
+				    step-ans
+				    (implode (cdr (explodec ans))))
+			      (return step-ans))
+			     (t (return ans))))
+			(t (errset (eval ans)))))
+	  (cond (ans
+	          (step-print 'value
+			      stepdepth 'eval-value (car ans)))
+		 (t (step-print 'value
+				stepdepth 'error-in 'evaluation)))
+	  (go a)))
+ 
+;;;print a message and wait for a response
+(defun step-retrieve expr lexpr
+       (terpri)
+       (do ((xtemp)
+	    (readtable (get 'readtable 'array))
+	    (obarray (get 'obarray 'array))
+	    (^q nil nil) (^w nil nil) (^r nil nil))
+	   (xtemp (and (atom (car xtemp))
+		       (not (zerop (boole 1 32768.
+					  (status syntax (tyipeek)))))
+		       (tyi))
+		  (car xtemp))
+	   (do ((yt 1 (1+ yt)))
+	       ((> yt lexpr))
+	       (princ (arg yt)) (princ '/ ))
+	   (setq xtemp (errset (read)))))  
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;			utility functions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;print form evaluated at "level"
+(defun step-f lexpr
+  ((lambda (level grindlevel grindlength)
+       (terpri)
+       (step-print 'form 
+		   level 'form (steparray level 0)) (ascii 0))
+   (cond ((= lexpr 0) stepdepth)
+	 (t (arg 1)))
+   nil nil))
+
+;;;print value returned at "level"
+(defun step-v lexpr
+  ((lambda (level grindlevel grindlength)
+       (terpri)
+       (step-print 'value
+		   level 'value (steparray level 1)) (ascii 0))
+   (cond ((= lexpr 0) stepdepth)
+	 (t (arg 1)))
+   nil nil))
+
+;;;reset  the return value for a form, or the arglist to a fun
+(defun step-value (form)
+       (setq step-value form))
+
+;;;patch the form to something else
+(defun step-form expr lexpr
+       ((lambda (level copy)
+         (cond ((atom (steparray level 0))
+		(error (steparray level 0) 'must/ be/ list))
+	       (t (rplaca (steparray level 0) (car copy))
+		  (rplacd (steparray level 0) (cdr copy)))))
+	(cond ((= lexpr 1) stepdepth)
+	      (t (arg 2)))
+	(append (arg 1) nil)))
+
+;;;find the function we are in
+(defun step-fun lexpr 
+       (terpri)
+       (do ((cnt (cond ((= lexpr 0) stepdepth)
+		       (t (1- (arg 1)))) (1- cnt))
+	    (temp) (function))
+	   ((or function (= stepdepth 1))
+	    (and function (step-print 'form (1+ cnt) temp (car function))))
+	   (cond ((sysp (setq temp (car (steparray cnt 0)))))
+		 ((setq function
+		        (getl temp
+			      '(expr fexpr macro))))
+		 ((or (= lexpr 2)
+		      (setq function
+			    (getl temp '(subr fsubr lsubr)))))))
+       (ascii 0))
+
+;;;	first stack frame that matches a given operator
+(defun step-op lexpr
+       (do ((cnt (cond ((< lexpr 2) stepdepth)
+		       (t (1- (arg 2)))) (1- cnt))
+	    (function nil (car (steparray cnt 0))))
+	   ((= cnt 1) (ascii 0))
+	   (and (eq function (arg 1))
+		(return  (step-f (1+ cnt))))))
+
+;;;retry or redo some form inplace of some part of the stack
+;;;revaluate at given level
+
+(defun reevaluate expr lexpr
+       (terpri)
+       (do ((point (steparray
+		    (cond ((= lexpr 0) stepdepth) (t (arg 1)))
+		    0))
+	    (evf (do ((hunt (evalframe nil)
+			    (evalframe (cadr hunt))))
+		     ((or (null hunt) (eq (caaddr hunt)
+					  'reevaluate))
+		      hunt))
+		 (evalframe (cadr evf))))
+	   ((or (null evf) (eq (caddr evf) point))
+	    (and evf 
+		 
+		 (apply
+		  (function freturn)
+		  (list (cadr evf)
+		        (seval    (cond ((> lexpr 1)
+					 (step-print 'form 
+						     (1+ stepdepth)
+						 'revaluate
+						 (arg 2))
+					 (arg 2))
+					(t (step-print 'form 
+						       (1+ stepdepth)
+						    'revaluate
+						     point)
+					    point)))))))))
+
+
+
+
+(defun burp fexpr (control)
+    (cond ((or (null control) (memq (car control) '(stack on)))
+           (do ((inc (1+ stepdepth) (1+ inc))
+	        (frame (evalframe 0)
+		       (evalframe (abs (cadr frame)))))
+	       ((or (null frame)
+		    (eq (caaddr frame) 'burp))
+	        (eval '(stepsetstate)
+		       (cadddr
+		         (evalframe (cadr (evalframe (cadr frame))))))
+	        (and (eq (car control) 'stack)
+		     (setq stepdepth (1- inc)))
+		(1- inc))
+
+	       (cond ((eq (car frame) 'eval)
+		      (store (steparray inc 0) (caddr frame)))
+		     (t (setq inc (1- inc))))))
+	  (t (setq evalhook nil stepdepth 0))))
+
+(defun stepsetstate ()
+       (setq *rset t)
+       (setq step-count 0 oldstepdepth (1+ stepmax))
+       (setq stepsilence (unbound-default stepsilence nil))
+       (setq steplimit stepmax)
+       (setq stepatomdefault
+	     (unbound-default stepatomdefault'(step-atomvalue)))
+       (setq stepfunctiondefault
+	     (unbound-default stepfunctiondefault nil))
+       (setq stepformdefault
+	     (unbound-default stepformdefault nil))
+       (setq stepmacrodefault
+	     (unbound-default stepmacrodefault '(step-macroform)))
+       (setq stepheuristics
+	     (unbound-default stepheuristics t))
+       (setq stepold
+	     (unbound-default stepold nil))
+       (setq steppassing
+	     (unbound-default steppassing t))
+       (setq steplimitpostview
+	     (unbound-default steplimitpostview t))
+       (setq stepcheck-enable
+	     (unbound-default stepcheck-enable nil))
+       (setq evalhook (function step-eval)))
+
+
+
+(heur)
+;;;uread the users step (init) if he has one
+
+((lambda (file-name)
+	 (cond ((probef file-name) (load file-name))))
+ (list (list 'dsk (status udir)) 'step '|(init)|))

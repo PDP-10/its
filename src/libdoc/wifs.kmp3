@@ -1,0 +1,76 @@
+;;; -*- Mode:LISP; -*-
+
+;;; LispM semi-compatible WITH-INPUT-FROM-STRING package.
+
+;;; (WITH-INPUT-FROM-STRING (var string [index] [limit])
+;;;
+;;; Allows the user to read from a string as if it were a stream. Starting
+;;; pos is optional and defaults to 0. Ending pos is optional and defaults
+;;; to string-length of the string.
+;;;
+;;; Unlike the lispm, the index will not be assigned to so can be any expression.
+;;; This means you cannot easily tell how far you read in the string. You are,
+;;; however, allowed to do (SFA-CALL var 'READ-POINTER) to find out your position
+;;; in the string. I have not abstracted this functionality into a function since
+;;; it is incompatible with other implementations anyway.
+;;;
+;;; If you want to specify a limit but not an index and can't bring yourself
+;;; to write 0, use NIL instead and the right thing will happen.
+
+;;; Bugs/Comments to KMP@MC.
+
+;;; Accessors
+
+(DEFMACRO SSH-BUFFER  (SFA) `(SFA-GET ,SFA 0))
+(DEFMACRO SSH-POINTER (SFA) `(SFA-GET ,SFA 1))
+(DEFMACRO SSH-LIMIT   (SFA) `(SFA-GET ,SFA 2))
+
+;; Now define the actual handler function.
+(DEFUN STRING-STREAM-HANDLER (SELF OP DATA)
+  (CASEQ OP
+    (WHICH-OPERATIONS '(TYI UNTYI TYIPEEK INIT-BUFFER INIT-POINTER INIT-LIMIT
+			    READ-POINTER))
+    (INIT-BUFFER      (SETF (SSH-BUFFER  SELF) DATA))
+    (INIT-POINTER     (SETF (SSH-POINTER SELF) DATA))
+    (INIT-LIMIT       (SETF (SSH-LIMIT   SELF) DATA))
+    (READ-POINTER     (SSH-POINTER SELF))
+    (TYI              (LET ((POINTER (SSH-POINTER SELF)))
+			(COND ((= POINTER (SSH-LIMIT SELF)) DATA)
+			      (T
+			       (PROG1 (CHAR-N (SSH-BUFFER SELF) POINTER)
+				      (SETF (SSH-POINTER SELF) (1+ POINTER)))))))
+    (UNTYI            (LET* ((POINTER (SSH-POINTER SELF))
+			     (OPOINTER (1- POINTER)))
+			(COND ((ZEROP POINTER)
+			       (ERROR "Can't UNTYI past beginning of buffer"))
+			      ((NOT (= DATA (CHAR-N (SSH-BUFFER SELF) OPOINTER)))
+			       (ERROR "Char UNTYI'd doesn't match last TYI'd char"
+				      DATA))
+			      (T (SETF (SSH-POINTER SELF) OPOINTER)))
+			T))
+    (TYIPEEK          (LET ((POINTER (SSH-POINTER SELF)))
+			(COND ((= POINTER (SSH-LIMIT SELF)) DATA)
+			      (T (CHAR-N (SSH-BUFFER SELF) POINTER)))))
+    (T (ERROR "Unsupported SFA operation" `(SFA-CALL ,SELF ,OP ,DATA)))))
+
+(EVAL-WHEN (EVAL LOAD COMPILE)
+  (COND ((NOT (MEMQ COMPILER-STATE '(NIL TOPLEVEL)))
+	 (*EXPR STRING-STREAM-HANDLER))))
+
+;; Now define a function which creates/uses SFA's with our handler.
+(DEFMACRO WITH-INPUT-FROM-STRING (STREAM-SPEC &BODY BODY)
+  (LET (((VAR STRING IDX LIMIT) STREAM-SPEC)
+	(TEMP1 (GENSYM))
+	(TEMP2 (GENSYM))
+	(TEMP3 (GENSYM)))
+    `(LET* ((,TEMP1 ,STRING)
+	    (,TEMP2 ,(OR IDX 0.))
+	    (,TEMP3 ,(OR LIMIT `(STRING-LENGTH ,TEMP1))))
+       (LET ((,VAR (SFA-CREATE #'STRING-STREAM-HANDLER
+			       3. ;One slot for local storage
+			       "StringStream")))
+	 (SFA-CALL ,VAR 'INIT-BUFFER  ,TEMP1)
+	 (SFA-CALL ,VAR 'INIT-POINTER ,TEMP2)
+	 (SFA-CALL ,VAR 'INIT-LIMIT   ,TEMP3)
+	 ,@(IF (NULL BODY) (NCONS NIL)) ;in case null body, want to return NIL
+	 ,@BODY))))

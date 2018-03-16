@@ -1,0 +1,352 @@
+;;;   NSHARE 						  -*-LISP-*-
+;;;   **************************************************************
+;;;   ***** MacLISP ****** Share as Many Pure Pages as Possible ****
+;;;   **************************************************************
+;;;   ** (C) Copyright 1980 Massachusetts Institute of Technology **
+;;;   ****** This is a read-only file! (All writes reserved) *******
+;;;   **************************************************************
+
+(eval-when (eval compile)
+	   (or (status macro /#)
+	       (setsyntax '/# 'SPLICING '+INTERNAL-/#-MACRO))
+	   (and (status feature LODBYT) (load '((LISP) LODBYT)))
+)
+
+
+;;; Functions for creating heirachical MACLISP dumps on ITS.
+;;; This will work with (STATUS FLUSH) either T or NIL.
+
+;;; Originally provided by GSB, Thursday  June 29,1978  14:13:38
+;;; Extended Feb 22, 1980 by JONL to do incremental page flushing
+;;;  and re-association.
+;;; Comments, complaints, suggestions, etc. to GSB@ML and JONL@MC
+
+;;; For Optimal sharing, this file should be loaded into a nearly fresh
+;;;  lisp, with PURE bound to T;  in this case, *PURE  ###must### be
+;;;  bound to () during the loading of this file.
+;;; Then a pure dump is made by loading up other functions and data 
+;;;  with *PURE set to T, and PURE set either to a small fixnum or to T.
+;;; When finished loading, you probably want to set *PURE to (), and then
+;;;  call PURE-SUSPEND (rather than SUSPEND) with 2 arguments -  the second 
+;;;  arg is the name of the file to PDUMP into, and the first is passed to 
+;;;  SUSPEND.  If the first arg is (), then SUSPEND merely does the PDUMP
+;;;  and returns;  if it is 0, SUSPEND will valret to DDT after PDUMPing.
+;;; All components of the filename for the second arg must be explicitly
+;;; specified, since this package needs to remember exactly which
+;;; file it was dumped to.  For this reason, it is preferable to
+;;; dump new versions with numeric second filenames, and have links
+;;; from the TS file to either a specific version or the '>' version.
+;;; (EG, LMS is dumped to DSK:LMS;.LMS > .  Note however that you
+;;; can't give '>' as a component to PURE-SUSPEND;  you must figure
+;;; out what version will be generated and specify it.  In most cases
+;;; this is done anyway, to figure out what your version number is.)
+
+;;; The primary operation here is the function COMMUNIZE, which
+;;; opens up all the files which the dump has been generated from,
+;;; and maps in pages from them so as to optimize sharing between
+;;; jobs which come from those files.
+;;; *SUSPEND takes from 0 to 2 arguments, calls SUSPEND with them,
+;;; and then calls COMMUNIZE.
+;;; PURE-SUSPEND does a general purification, suspend, and communize.
+
+;;; Hackers note - 
+;;; This only maps in pure pages from a file, and only pages which are
+;;; not absolute.  (It does not recognize public pages though.)  
+;;; It will not clobber an impure page in the job with a pure page from
+;;; a file.  If, however, an earlier dump has had a patch put into a
+;;; pure area and the page has been repurified, then that change will
+;;; propagate to all dumps made from that one.
+
+
+
+(declare (special *sharing-file-list *already-shared-pure-pages))
+
+(and (not (boundp '*sharing-file-list))
+     (setq *sharing-file-list () ))
+(and (or (not (boundp '*already-shared-pure-pages))
+	 (null *already-shared-pure-pages))
+     (setq *already-shared-pure-pages (array () FIXNUM 32.)))
+
+;;; Information about the purity of pages is stored in a fixnum array,
+;;;  packed 8 4-bit bytes per word.  Meaning of the 4 bits is:
+;;;   0  (1) 	- do not delete this page
+;;;   1  (2) 	- lisp system page
+;;;   2  (4) 	- other pure page
+;;;   3  (8) 	- temporary setting for purity, just before suspension
+;;; This array, "*already-shared-pure-pages", is set up at the end
+;;;  of this file.
+
+(defmacro (LDB-A-BYTE defmacro-for-compiling () defmacro-displace-call () )
+	  (&optional (index 'I) 
+		     (byte-size 4)
+		     (bytes-per-word 8)
+		     (ar '*ALREADY-SHARED-PURE-PAGES))
+    `(LOAD-BYTE (ARRAYCALL FIXNUM ,ar (// ,index ,bytes-per-word))
+		(* ,byte-size (\ ,index ,bytes-per-word))
+		,byte-size))
+
+(defmacro (DPB-A-BYTE defmacro-for-compiling () defmacro-displace-call () )
+	  (&optional byte 
+		     (index 'I) 
+		     (byte-size 4)
+		     (bytes-per-word 8)
+		     (ar '*ALREADY-SHARED-PURE-PAGES))
+    `(STORE (ARRAYCALL FIXNUM ,ar (// ,index ,bytes-per-word))
+	    (DEPOSIT-BYTE (ARRAYCALL FIXNUM ,ar (// ,index ,bytes-per-word))
+			  (* ,byte-size (\ ,index ,bytes-per-word))
+			  ,byte-size 
+			  ,byte)))
+
+
+(comment PURE-SUSPEND)
+
+(putprop '*SUSPEND  (lsh bporg -10.) 'BPORG)
+
+
+(defun PURE-SUSPEND (argument-to-suspend file-namelist)
+  (prog (flushp *pure zero file-to-dump-to)
+	 ;You wouldn't believe the bug which this line prevents!
+	(setq zero 0)
+   RECOVER-FROM-WRONG-TYPE-ARG
+       (setq file-namelist (namelist file-namelist))
+       (setq flushp (and (status FLUSH) 
+			 (not (alphalessp (status LISPV) '/1941)) 
+			 (get '*UNPURIFY-SYMBOL 'FLUSH)))
+       (cond ((or (memq (cadr file-namelist) '(* /> /<))
+		  (memq (caddr file-namelist) '(* /> /<))
+		  (eq (caar file-namelist) '*)
+		  (eq (cadar file-namelist) '*))
+	      (setq file-namelist
+		    (error '|Unspecified filename component - PURE-SUSPEND et al|
+			   file-namelist
+			   'WRNG-TYPE-ARG))
+	      (go RECOVER-FROM-WRONG-TYPE-ARG)))
+
+        ;Unpurify all the symbols of the file's namelist, so we can fetch it
+        ; after suspending but before the pure data pages are loaded in.
+       (*unpurify-symbol (caar file-namelist))
+       (*unpurify-symbol (cadar file-namelist))
+       (*unpurify-symbol (cadr file-namelist))
+       (*unpurify-symbol (caddr file-namelist))
+       (setq file-to-dump-to (namestring file-namelist))
+
+       (gctwa)
+       (cond ((null argument-to-suspend)
+	       ;; Special dispensation for lazy programmers.
+	      (setq argument-to-suspend
+		    (cond ((eq (status hactrn) 'DDT)
+			     ;; This is the normal default that
+			     ;; the function SUSPEND provides.
+			   '|:PDUMPED/î|)
+			  ('t ;; This causes suspend to execute a
+			      ;; .BREAK 16,300000  which causes the
+			      ;; job to simply return to its superior.
+			     (+ 3_15. zero))))))
+
+       ;; Round up binary program space to a page boundary.
+       ;; (This should not be necessary but lisp may or
+       ;; may not be smart enough to do so itself.)
+       (pagebporg)
+
+       ;; Now, do the purification.  This purifies all binary
+       ;; program space, and also list structure etc. which 
+       ;; was 'purcopied'.
+       (purify 0 0 'bporg)
+       (gc)
+
+       ;; Save away the name of the file we are dumping to.
+       (push file-to-dump-to *sharing-file-list)
+
+       ;; Remember any new shared pages, and disconnect them if flushing
+       (do ((i 0 (1+ i)) (tpno 0))
+	   ((= i 256.) )
+	 (declare (fixnum i tpno))
+	 (cond  ;If not pure page, then don't bother
+	       ((not (> (car (syscall 1 'CORTYP i)) 0)))
+		; 1_0-bit in "shared-pages" table says don't delete.
+		; 1_1-bit in "shared-pages" table says "LISP" system pure page.
+	       ((not (= 0 (boole 1 (setq tpno (ldb-a-byte)) #.(+ 1_1 1)))))
+	       ((not (= 0 (boole 1 tpno #.(+ 1_2))))
+		 ;Flush page from this job, if random shared page
+		(and flushp (syscall 0 'CORBLK 0 -1 i)))	      
+	       ('t  ;Mark as "intermediately", or "newly", shared page
+	           (and (= 0 (boole 1 1_3 tpno)) (dpb-a-byte (+ 1_3 tpno))) )))
+
+       ;; And finally, suspend.
+       (suspend argument-to-suspend file-to-dump-to)
+
+       (do ((i 0 (1+ i)) (tpno 0))
+	   ((= i 256.) )
+	 (declare (fixnum i tpno))
+	 (setq tpno (ldb-a-byte))
+	 (cond ((not (= 0 (boole 1 1_3 tpno)))
+		 ;Turn off bit 3, and turn on bit 2
+		(setq tpno (boole 7 1_2 (boole 2 1_3 tpno)))
+		(dpb-a-byte tpno))))
+
+       ;; Now, since we are suspended, map in the pages from
+       ;; other files.
+       (communize)
+
+       (return t)))
+
+
+
+(defun COMMUNIZE ()
+   (let ((array-pointer (*array nil 'fixnum 256.)))
+	(mapc '(lambda (x) (communize-single-file x array-pointer))
+	      *sharing-file-list)
+	(*rearray array-pointer)
+	t))
+
+(defun COMMUNIZE-SINGLE-FILE (filename array-pointer)
+  (cond ((not (probef filename))
+	   (terpri)
+	   (princ '|; The file |)
+	   (prin1 (namestring filename))
+	   (princ '| is not there;|)
+	   (terpri)
+	   (princ '|; sharing will not be optimal.|))
+	((let ((file-object (open filename '(IN FIXNUM SINGLE))))
+		;; Note the use of unit mode.
+		;; This keeps the file array smaller (no buffer)
+	    ;; So, do the map-in-pure-pages-from-file thing
+	   (cond ((not (= (in file-object) 0))
+		  (terpri)
+		  (princ '|File |)
+		  (prin1 (namestring (truename file-object)))
+		  (princ '| is not in PDUMP format.|))
+	    ('t  ;Get page map from first block of file - 256. words
+	        (fillarray array-pointer file-object)
+	        (do ((page-number 0 (1+ page-number))
+		     (file-page-number 1)
+		     (entry 0)
+		      syscall-corblk-result )
+		    ((= page-number 256.))
+		  (declare (fixnum page-number entry))
+		  (setq entry (arraycall fixnum array-pointer page-number))
+		  (and 
+		     ;; Negative means absolute page; zero non-existent.
+		    (plusp entry)
+		     ;; Read-only page iff bit 2.8 is 1 and 2.9 is 0.
+		    (= (boole 1 3. (lsh entry -16.)) 1.)
+		     ;; And it's not one of the pages with this code on it!
+		    (= 0 (boole 1 1 (ldb-a-byte page-number))) 
+		     ;; And it's either not in us, or is unpatched-pure in us
+		    (not (minusp (car (syscall 1 'CORTYP page-number))))
+		     ;; then map it in!
+		    (setq syscall-corblk-result 
+			  (syscall 0 'CORBLK 
+				     1_12. 
+				     -1 
+				     page-number 
+				     file-object
+				     file-page-number))
+		     ;;  Non-null indicates an error.
+		    (error '|(SYSCALL 'CORBLK) lost| 
+			   (list file-object 
+				 (list page-number (list file-page-number entry)) 
+				 syscall-corblk-result) 
+			   'wrng-type-arg))
+		   ;; Determine whether there was a page in the file
+		   ;; corresponding to PAGE-NUMBER.
+		  (and (plusp entry)
+		       (plusp (boole 1 3. (lsh entry -16.)))
+		       (setq file-page-number (1+ file-page-number))))))
+	   (close file-object)))))
+
+
+
+;;; Wait! Dont move this one - see comments above
+(defun *SUSPEND number-of-arguments
+   ;; Suspend, then communize.
+   ;; Note that here the exact specification of the filename 
+   ;; is not critical here, this function does no purification.
+   (cond ((= number-of-arguments 0) (suspend))
+	 ((= number-of-arguments 1) (suspend (arg 1)))
+	 ('t (suspend (arg 1) (arg 2))))
+   (communize))
+
+(putprop '*SUSPEND (lsh bporg -10.) 'BPEND)
+
+
+(defun *UNPURIFY-SYMBOL (x)
+   (cond ((get x '*UNPURIFY-SYMBOL))
+	 ((let ((car 't) (cdr 't) tmp)
+	       (setq tmp (args x))
+	       (args x '(105 . 105))
+	       (args x tmp)
+	       (setq tmp (munkam (1+ (maknum (car x)))))
+	       (rplacd tmp (mapcar '*copy-fixnum (cdr tmp))) 
+	       (putprop x 'T '*UNPURIFY-SYMBOL)))))
+
+
+(lap-a-list '((lap *COPY-FIXNUM subr)
+		(args *COPY-FIXNUM (() . 1))
+		(jsp t fxnv1)
+		(jsp t fwcons)
+		(popj p) 
+	      (entry *WHO-BORE-ME? subr)
+		(args *WHO-BORE-ME? (() . 0))
+		(movei tt 1 flp)
+		(hrli tt 2)
+		(jsp t (/0*0PUSH -4))
+		(*break 10. tt)
+		(pushj p take2)
+		(push p 1)
+		(pushj p take2)
+		(pop p 2)
+		(jcall 2 'CONS)
+	      take2
+		(pop flp tt)
+		(pushj p sixatm)
+		(call 1 'NCONS)
+		(push p 1)
+		(pop flp tt)
+		(pushj p sixatm)
+		(pop p 2)
+		(jcall 2 'CONS)
+	      () ))
+
+
+(defun *set-up-shared-pages-table ()
+  (let ((pt (*array nil 'fixnum 256.))
+	(file-object (open (*who-bore-me?) '(IN FIXNUM SINGLE)))
+	(b-low 0) (b-hi 0)
+	(finishedp) (file-namelist) (tmp) )
+     (declare (fixnum i b-low b-hi))
+     (setq b-low (1- (cond ((setq tmp (get '*SUSPEND 'BPORG)) tmp) (1000.))))
+     (setq b-hi (1+ (cond ((setq tmp (get '*SUSPEND 'BPEND)) tmp) (-1000.))))
+     (setq file-namelist (truename file-object))
+     (cond ((or (not (= (in file-object) 0))
+		(not (eq (caddr file-namelist) (status LISPV))))
+	    (terpri)
+	    (princ '|File |)
+	    (prin1 (namestring (truename file-object)))
+	    (princ '| is not the pdump'd LISP file|) 
+	    (error '|LISP| file-object)))
+     (fillarray pt file-object)
+     (unwind-protect 
+       (do ((i 0 (1+ i)))
+	   ((= i 256.) (setq finishedp 'T))
+	 (cond  ;"self" pages which must not be cut out
+	       ((lessp b-low i b-hi) (dpb-a-byte 1))
+	        ;LISP system pages, which also must not be cut out
+	       ((= (boole 1 3. (lsh (arraycall fixnum pt i) -16.)) 1.)
+		(dpb-a-byte 1_1))))
+       (or finishedp (setq *already-shared-pure-pages () ))) 
+     (cond (*already-shared-pure-pages 
+	    (*unpurify-symbol (caar file-namelist))
+	    (*unpurify-symbol (cadar file-namelist))
+	    (*unpurify-symbol (cadr file-namelist))
+	    (*unpurify-symbol (caddr file-namelist))
+	    (push file-namelist *sharing-file-list)))))
+
+
+;;; Can only play the FLUSH game if this file is loaded with PURE = T
+;;;  Otherwise, you may try to "CALL 1 'CONS" during COMMUNIZE-SINGLE-FILE 
+;;;  and find that the plist of CONS was on a pure page which is not yet back!
+(cond ((eq pure 'T)
+       (*set-up-shared-pages-table)
+       (mapc '*unpurify-symbol '(CORBLK CORTYP |:PDUMPED/î| SYS DSK LISP))
+       (defprop *UNPURIFY-SYMBOL T FLUSH)))

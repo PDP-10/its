@@ -1,0 +1,133 @@
+;;; -*- Mode: Lisp; IBase: 10.; -*-
+;;; TRAP: A library for trapping errors at runtime
+
+;;; (AWAIT val [pred])
+;;;
+;;;	Sets up an EVALHOOK which looks for any evaluation or subevaluation
+;;;	which results in value, retval, which answers non-() to the test
+;;;		(FUNCALL pred retval val)
+;;;
+;;;	The function pred defaults to #'EQ, for efficiency.
+;;;
+;;;	Since it works by EVALHOOK, can work only on return values that go 
+;;;	through the interpreter. Can't find such values in compiled code.
+;;;
+;;;	Since Lisp resets EVALHOOK to NIL in breakpoints and globally, when 
+;;;	a ^G or error quit is done, the effect of AWAIT may be fleeting. If 
+;;;	it doesn't seem to be working, check to see that EVALHOOK has not 
+;;;	been reset to NIL.
+;;;
+;;; Sample usage:
+;;;
+;;;	(AWAIT 'FOO)
+;;;  =>	T
+;;;	(LIST (IMPLODE '(F O O)) 'BAR)
+;;;	;BKPT Found It!
+;;;	(EVALFRAME NIL)
+;;;  =>	(APPLY -21746 (AWAIT-EVALHOOK ((IMPLODE (QUOTE (F O O))))) -7767)
+;;;	P
+;;;  => (FOO BAR)
+;;;
+
+(DECLARE (SPECIAL AWAIT-VALUE AWAIT-PREDICATE))
+
+(DEFVAR AWAIT-PREDICATE () "Function to use in recognition of awaited values") 
+(DEFVAR AWAIT-VALUE     () "Value being awaited")
+
+(DEFUN AWAIT-EVALHOOK (EVAL-HOOK-VAR)
+  (LET ((RETURN-VALUE (EVALHOOK EVAL-HOOK-VAR 'AWAIT-EVALHOOK)))
+    (COND ((FUNCALL AWAIT-PREDICATE RETURN-VALUE AWAIT-VALUE)
+	   (LET ((ARGS EVAL-HOOK-VAR))
+	     (BREAK "Found it!" T))))
+    RETURN-VALUE))
+
+(DEFMACRO AWAIT (&OPTIONAL (VAL () VAL?) (PRED '#'EQ))
+  (COND (VAL?
+	 `(PROGN (SETQ AWAIT-PREDICATE ,PRED
+		       AWAIT-VALUE     ,VAL
+		       EVALHOOK	#'AWAIT-EVALHOOK)
+		 T))
+	(T
+	 (SETQ EVALHOOK ()))))
+
+
+
+;;; (MAR-TRACE sym)
+;;;
+;;;	sym is not evaluated. It should be a lisp symbol.
+;;;
+;;;	Initializes a hardware trap on writes to the value cell of sym.
+;;;	Any attempt to set this variable from either compiled or interpreted
+;;;	code, including special variable binding in compiled code, will fire
+;;;	an interrupt to let you know.
+;;;
+;;;	If the variable MAR-BREAKP is
+;;;		T	Then a Lisp breakpoint will happen automatically.
+;;;		()	Then a Lisp breakpoint will not happen, but
+;;;			 notification will be typed out.
+;;;		QUERY	Then Lisp will query if you want a breakpoint.
+;;;			 This is the default behavior.
+;;;
+;;;	Sample usage:
+;;;
+;;;	(MAR-TRACE FOO)
+;;;  =>	T
+;;;	(SETQ FOO 5)
+;;;	;Variable FOO being set to 5
+;;;	;*** Break? (Y or N) Y (Yes)
+;;;	;BKPT FOO
+;;;	(BAKTRACE)
+;;;	BAKTRACE
+;;;	MAR-HANDLER_ SETQ_
+;;;  =>	NIL
+;;;	P
+;;;  =>	5
+;;;	(MAR-UNTRACE)
+;;;  =>	T
+;;;
+
+(DEFVAR MAR-BITS     2.            "See .INFO.;LISP NEWS for info on bits")
+(DEFVAR MAR-BREAK    ()		   "Handler to call on MAR interrupts")
+(DEFVAR MAR-BREAKP   'QUERY	   "Ask before breaking")
+(DEFVAR MAR-VARIABLE ()		   "Variable being traced")
+
+(SETQ MAR-BREAK #'MAR-HANDLER) ;; Lisp System variable. Was initially ()
+
+(DEFUN MAR-HANDLER (())
+  (SSTATUS MAR MAR-BITS (MUNKAM (VALUE-CELL-LOCATION MAR-VARIABLE)))
+  (NOINTERRUPT NIL)
+  (TERPRI                        MSGFILES)
+  (PRINC  ";Variable "           MSGFILES)
+  (PRIN1  MAR-VARIABLE           MSGFILES)
+  (PRINC  " being set to "       MSGFILES)
+  (PRIN1  (SYMEVAL MAR-VARIABLE) MSGFILES)
+  (TERPRI			 MSGFILES)
+  (*BREAK (AND MAR-BREAKP
+	       (OR (EQ MAR-BREAKP T)
+		   (PROG (CHAR)
+			 (CLEAR-INPUT TYI)
+		     TOP (CURSORPOS 'A TYO)
+			 (PRINC ";**** Break? " TYO)
+			 (SETQ CHAR (TYI TYI))
+			 (COND ((OR (= CHAR #/Y)
+				    (= CHAR #/y)
+				    (= CHAR #\SPACE))
+				(PRINC " (Yes)" TYO)
+				(RETURN T))
+			       ((OR (= CHAR #/N)
+				    (= CHAR #/n)
+				    (= CHAR #\RUBOUT))
+				(PRINC " (No)" TYO)
+				(RETURN NIL))
+			       (T (PRINC " ?? Answer 'Y' or 'N'")
+				  (GO TOP))))))
+	  MAR-VARIABLE))
+
+(DEFMACRO MAR-TRACE (SYM)
+  `(PROGN (SETQ MAR-VARIABLE ',SYM)
+	  (COND ((NOT (BOUNDP ',SYM)) (SETQ ,SYM 'UNBOUND)))
+	  (SSTATUS MAR MAR-BITS (MUNKAM (VALUE-CELL-LOCATION ',SYM)))
+	  T))
+
+(DEFUN MAR-UNTRACE () (SSTATUS MAR 0 NIL) T)
+

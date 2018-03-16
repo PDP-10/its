@@ -1,0 +1,230 @@
+;;;-*-lisp-*-
+;;; program to aid in the garbage collection (i.e. file deletion)
+;;; of systems dumped in lisp.
+;;; 3:21pm  Saturday, 14 February 1981 -GJC
+
+(HERALD DUMPGC 1)
+
+(DECLARE (*LEXPR TYIPEEK-GOBBLE-WHITESPACE))
+(DEFVAR VERBOSE? T "Set to NIL if no while-running comments are wanted.")
+(DEFVAR INCLUDE-DELETED-FILES? T "NIL to keep deleted files out of listings.")
+
+;;; Raw data file is created by lusers who MAIL to the
+;;; file LISP;LOCK MAIL.
+;;; PURE-SUSPEND in LIBDOC;SHARAB sends such mail, also, you can
+;;; load this file and run the function
+;;; (SEND-LOCK-MAIL <SYSTEM-FILENAME> &OPTIONAL <LOCK-MAILFILE>)
+;;; which will send mail to keep the lispversion around as long
+;;; as <SYSTEM-FILENAME> is not deleted.
+
+;;; (GENERATE-LOCK-REPORT &OPTIONAL <INPUT-FILENAME> <OUTPUT-FILENAME>)
+
+;;; (READ-LOCK-MAIL-FILE &optional filename) returns a list of 
+;;; plists of information.
+;;; (FORMAT-LOCK-INFO <STREAM> <stuff from READ-LOCK-MAIL-FILE>)
+;;; Gives an indented listing, with one lisp version per page.
+;;; Files which no longer exist are marked with a "*"
+
+(DEFUN READ-LOCK-MAIL-FILE (&OPTIONAL (FILENAME "") &AUX STREAM)
+  (SETQ FILENAME (MERGEF FILENAME "DSK:LISP;LOCK MAIL"))
+  (UNWIND-PROTECT (READ-LOCK-MAIL-STREAM (SETQ STREAM (OPEN FILENAME)))
+		  (AND STREAM (CLOSE STREAM))))
+
+(DEFUN READ-LOCK-MAIL-STREAM (STREAM)
+  (IF VERBOSE? (FORMAT MSGFILES "~%; Reading /"~A/"~%"
+		       (NAMESTRING (TRUENAME STREAM))))
+  (DO ((L NIL (CONS ENTRY L))
+       (ENTRY))
+      ((NULL (SETQ ENTRY (READ-LOCK-MAIL-ENTRY STREAM)))
+       (IF VERBOSE? (FORMAT MSGFILES "~&; Done.~%"))
+       (NREVERSE L))))
+
+(DEFUN READ-LOCK-MAIL-ENTRY (STREAM)
+  (IF (= (TYIPEEK-GOBBLE-WHITESPACE STREAM) -1)
+      NIL
+      (LET ((UNAME   (READ-LOCK-UNAME STREAM))
+	    (DATE    (READ-LOCK-DATE STREAM))
+	    (DAYTIME (READ-LOCK-DAYTIME STREAM))
+	    (SHARING (READ STREAM)))
+	(GOBBLE-END-OF-MAIL-MARK STREAM)
+	;; Sharing list is (<LISP-VERSION> <BASEFILE> . <brain-damage>)
+	;; so we give this a more useful ordering.
+	(SETQ SHARING (LIST* (CAR SHARING)
+			     (CADR SHARING)
+			     (NREVERSE (CDDR SHARING))))
+	;; Now it is ordered most primitive to least primitive, the
+	;; reverse of which would be just as useful of course.
+	(LIST (CAR (LAST SHARING))
+	      'UNAME   UNAME
+	      'DATE    DATE
+	      'DAYTIME DAYTIME
+	      'SHARING SHARING))))
+
+
+;;; Format of a mail-header is assumed to be "FOO 02/14/81 15:15:24"
+
+(DEFUN READ-LOCK-UNAME (STREAM)
+  (READ STREAM))
+
+(DEFUN READ-LOCK-DATE (STREAM)
+  (LET ((MONTH (READ-INT STREAM))
+	(DAY   (READ-INT STREAM))
+	(YEAR  (READ-INT STREAM)))
+    ;; compatable with (STATUS DATE)
+    (LIST YEAR MONTH DAY)))
+
+(DEFUN READ-LOCK-DAYTIME (STREAM)
+  (LIST (READ-INT STREAM) (READ-INT STREAM) (READ-INT STREAM)))
+
+(DEFUN GOBBLE-END-OF-MAIL-MARK (STREAM)
+  (IF (= (TYIPEEK-GOBBLE-WHITESPACE STREAM #'(LAMBDA (C) (NOT (= C #^_))))
+	 #^_)
+      (TYI STREAM)))
+
+(DEFUN WHITESPACEP (X) 
+  (MEMBER X '(#\SP #\TAB #\CR #\LF #\FF)))
+(DEFUN NONDIGITP (X) (OR (< X #/0) (> X #/9)))
+
+(DEFUN TYIPEEK-GOBBLE-WHITESPACE (STREAM &OPTIONAL (F #'WHITESPACEP))
+  (DO ((C))
+      ((NOT (FUNCALL F (SETQ C (TYIPEEK NIL STREAM -1)))) C)
+    (TYI STREAM)))
+
+(DEFUN READ-INT (STREAM)
+  (DO ((C (TYIPEEK-GOBBLE-WHITESPACE STREAM #'NONDIGITP)
+	  (TYIPEEK () STREAM))
+       (X 0 (+ (- C #/0) (* X 10.))))
+      ((NONDIGITP C) X)
+    (TYI STREAM)))
+
+;; A RALIST is a recursive alist.
+
+(defun rinsert (list ralist)
+  (if (null list)
+      ralist
+      (let ((next-ralist (assoc (car list) ralist)))
+	(cond ((null next-ralist)
+	       (cons (cons (car list) (rinsert (cdr list) nil))
+		     ralist))
+	      ('else
+	       (rplacd next-ralist (rinsert (cdr list) (cdr next-ralist)))
+	       ralist)))))
+
+(DEFUN SHARING-FILE-RALIST (PLISTS)
+  (DO ((RALIST NIL (RINSERT (GET (POP PLISTS) 'SHARING) RALIST)))
+      ((NULL PLISTS)
+       (SORTCAR RALIST #'ALPHALESSP))))
+
+(DEFVAR LOCK-MAIL-ALIST ())
+
+(DEFUN FORMAT-SHARED-FILENAME (STREAM FILENAME INDENTATION-LEVEL)
+  (LET* ((INFO (ASSOC FILENAME LOCK-MAIL-ALIST))
+	 (PROBEF? (LET ((L (GETL INFO '(PROBEF))))
+		    (IF L (CADR L) (PROBEF FILENAME)))))
+    (IF (OR PROBEF? INCLUDE-DELETED-FILES?)
+	(FORMAT STREAM
+		"~&~VX/"~A/"~:[*~; ~] ~40T~A ~S ~S~%"
+		INDENTATION-LEVEL
+		(NAMESTRING FILENAME)
+		PROBEF?
+		(GET INFO 'UNAME)
+		(GET INFO 'DATE)
+		(GET INFO 'DAYTIME)))))
+
+(DEFUN FORMAT-SHARING-RALIST (STREAM RALIST INDENTATION-LEVEL)
+  (DO ((L RALIST (CDR L)))
+      ((NULL L))
+    (FORMAT-SHARED-FILENAME STREAM (CAAR L)     INDENTATION-LEVEL)
+    (FORMAT-SHARING-RALIST  STREAM (CDAR L) (1+ INDENTATION-LEVEL))))
+
+(DEFUN GENERATE-LOCK-REPORT (&OPTIONAL (INPUT "") (OUTPUT ""))
+  (SETQ INPUT  (MERGEF INPUT  "DSK:LISP;LOCK MAIL"))
+  (SETQ OUTPUT (MERGEF OUTPUT (MERGEF "* REPORT" INPUT)))
+  (LET ((LOCK-MAIL-ALIST (REMOVE-EARLIER-LOCK-ENTRIES
+			  (READ-LOCK-MAIL-FILE INPUT)))
+	(BASE 10.)
+	(*NOPOINT T)
+	(STREAM))
+    (IF VERBOSE? (FORMAT MSGFILES "~&; Doing PROBEF of ~D files~%"
+			 (LENGTH LOCK-MAIL-ALIST)))
+    (MAPC #'(LAMBDA (U) (PUTPROP U (PROBEF (CAR U)) 'PROBEF)) LOCK-MAIL-ALIST)
+    (IF VERBOSE? (FORMAT MSGFILES "~&; Generating report file.~%"))
+    (UNWIND-PROTECT
+     (PROGN (SETQ STREAM (OPEN (MERGEF "* _REPO_" OUTPUT) 'OUT))
+	    (FORMAT STREAM
+		    "~
+		    ~&** File Dependencies given by the file /"~A/"~60T**~
+		    ~:[~;~
+		    ~%** Files marked with a /"*/" no longer exist. ~60T**~
+		    ~]~
+		    ~%** Generated by ~S on ~S ~S~60T**~%~%"
+		    (NAMESTRING (PROBEF INPUT))
+		    INCLUDE-DELETED-FILES?
+		    (STATUS UNAME) (STATUS DATE) (STATUS DAYTIME))
+	    (DO ((L (SHARING-FILE-RALIST LOCK-MAIL-ALIST) (CDR L)))
+		((NULL L))
+	      (FORMAT STREAM "~&-- MacLisp version ~A --~%"
+		      (CAAR L))
+	      (FORMAT-SHARING-RALIST STREAM (CDAR L) 0)
+	      (TYO #\FF STREAM)
+	      (TERPRI STREAM))
+	    (RENAMEF STREAM OUTPUT))
+     (AND STREAM (CLOSE STREAM)))
+    (LET ((S (NAMESTRING (TRUENAME STREAM))))
+      (PUTPROP S T '+INTERNAL-STRING-MARKER)
+      S)))
+
+(DEFUN LOCK-DATE-GREATERP (ENTRY-A ENTRY-B)
+  (OR (DICT-GREATERP (GET ENTRY-A 'DATE)
+		     (GET ENTRY-B 'DATE))
+      (DICT-GREATERP (GET ENTRY-A 'DAYTIME)
+		     (GET ENTRY-B 'DAYTIME))))
+
+(DEFUN DICT-GREATERP (L-A L-B)
+  (AND L-A
+       (OR (GREATERP (CAR L-A) (CAR L-B))
+	   (DICT-GREATERP (CDR L-A) (CDR L-B)))))
+
+(DEFUN REMOVE-EARLIER-LOCK-ENTRIES (L)
+  (IF (NULL L) NIL
+      (LET ((A (CAR L)))
+	(LET ((B (ASSOC (CAR A) (CDR L))))
+	  (IF (OR (NULL B)
+		  (LOCK-DATE-GREATERP A B))
+	      (CONS (CAR L) (REMOVE-EARLIER-LOCK-ENTRIES (CDR L)))
+	      (REMOVE-EARLIER-LOCK-ENTRIES (CDR L)))))))
+
+
+(DEFUN SEND-LOCK-MAIL (SYSTEM-FILENAME &OPTIONAL (MF "DSK:LISP;LOCK MAIL"))
+  (LET ((FN (PROBEF SYSTEM-FILENAME)))
+    ;; we need to do this to insure that a fully-expanded non-losing
+    ;; filename has been given, otherwise really meaningless stuff
+    ;; might be generated. In other words, this function is
+    ;; meant to be used AFTER you dump a system, not before.
+    (OR FN (ERROR "SYSTEM-FILENAME does not exist yet!"
+		  SYSTEM-FILENAME
+		  'FAIL-ACT))
+    (SETQ SYSTEM-FILENAME (NAMELIST FN)))
+  (LET ((BASE 10.)
+	(*NOPOINT 'T) 
+	F DATE TIME PRINLEVEL PRINLENGTH)
+    (unwind-protect
+     (DO ((I 3 (1- I))) 
+	 ((OR (< I 0)
+	      (ERRSET (SETQ F (OPEN MF '(APPEND))) NIL))
+	  (COND ((< I 0) 
+		 (ERRSET (RENAMEF MF (MERGEF "LCKMAI >" MF)) NIL)
+		 (SETQ F (OPEN MF '(OUT)))))
+	  (SETQ DATE (STATUS DATE))
+	  (SETQ TIME (STATUS DAYTIME))
+	  (FORMAT F
+		  "~%~A ~A//~A//~A ~A:~A:~A~
+		  ~%(~S ~S)~%"
+		  (STATUS USERID)
+		  (CADR DATE)(CADDR DATE)(CAR DATE)
+		  (CAR TIME) (CADR TIME) (CADDR TIME)
+		  (STATUS LISPV) SYSTEM-FILENAME))
+       (TERPRI TYO)
+       (PRINC "LOCK MAIL file not available -- waiting 10 seconds." TYO)
+       (SLEEP 10.))
+     (and f (close f)))))
