@@ -1,3 +1,7 @@
+if {![info exists env(MACSYMA)]} {
+    set env(MACSYMA) "yes"
+}
+
 proc abort {} {
     puts ""
     puts "The last command timed out."
@@ -1584,6 +1588,8 @@ respond "_" "libmax;mdefun\r"
 respond "_" "\032"
 type ":kill\r"
 
+if {$env(MACSYMA)!="no"} {
+
 # build MAXTUL FASL files
 
 respond "*" ":print maxerr;..new. (udir)\r"
@@ -1778,6 +1784,8 @@ respond "T" "(loader 999)"
 respond "(C1)" "quit();"
 
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
+
+} #MACSYMA
 
 ### more lisplib stuff
 respond "*" "complr\013"
