@@ -2025,6 +2025,7 @@ respond "_" "nschem;scheme macros_schmac lsp\r"
 respond "_" "nschem;scheme uuohan_schuuo lsp\r"
 respond "_" "\032"
 type ":kill\r"
+respond "*" ":lisp scheme (dump)\r"
 
 bootable_tapes
 
