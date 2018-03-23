@@ -896,7 +896,7 @@ respond "_" "\032"
 type ":kill\r"
 
 respond "*" ":link lisp;sharab fasl,liblsp;\r"
-respond "*" ":link lisp;bs fasl,liblsp\r"
+respond "*" ":link lisp;bs fasl,liblsp;\r"
 
 respond "*" "complr\013"
 respond "_" "\007"
