@@ -2018,6 +2018,14 @@ respond "*" ":link lisp;defns mid,l;defns >\r"
 respond "*" ":midas liblsp;_libdoc;fft\r"
 respond "*" ":midas liblsp;_libdoc;phase\r"
 
+# New Scheme interpreter
+respond "*" "complr\013"
+respond "_" "nschem;scheme interp_schint lsp\r"
+respond "_" "nschem;scheme macros_schmac lsp\r"
+respond "_" "nschem;scheme uuohan_schuuo lsp\r"
+respond "_" "\032"
+type ":kill\r"
+
 bootable_tapes
 
 # make output.tape
