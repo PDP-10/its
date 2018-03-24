@@ -18,7 +18,7 @@
   wild card.  Finish with an empty line.  When DUMP has finished
   writing the files, type `quit` to exit.
 
-- Unmount the tape image.  For KLH10, type Control-Z, and
+- Unmount the tape image.  For KLH10, type Control-\\, and
 
        devunmount mta0
        continue
