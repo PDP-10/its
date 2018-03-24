@@ -1,0 +1,245 @@
+;-*-lisp-*-
+;;; George Carrette -GJC. 10:22am  Tuesday, 9 September 1980
+
+(herald stacks)
+
+(eval-when (compile eval)
+	   (or (status feature 'alan/;struct)
+	       (load 'alan/;struct)))
+
+;;; Stack implementations in maclisp.
+;;; I have carefully timed these, see the examples at the end of the file.
+;;; These operations take slightly longer than the equivalent list
+;;; operations. However, under conditions where much static consing is
+;;; going on, that is, when much list structure exists through more than
+;;; one GC, (.e.g. Lisp Readers, tokenizers, parsers, assemblers), using
+;;; these stacks and allocating with the amount of static consing in mind
+;;; will save huge amounts of time otherwise spent in GC.
+
+;;; there is the possibilty of lap coding some of these.
+
+(eval-when (compile eval load)
+	   (comment Entry Points)
+	   (cond ((status feature complr)
+		  (*expr (fixnum (stack%-pop nil) (stack%-top nil))
+			 stack-zero stack%-zero
+			 stack%-push stack%-empty-p
+			 stack-push stack-pop stack-empty-p stack-top)
+		  (*lexpr make-stack% make-stack))))
+
+;;; Other possible implementations include hacks for reclaiming list
+;;; structure, through the use of RECLAIM, which puts an object back
+;;; on its free-list, or by keeping around structure and using RPLACD/RPLACA.
+;;; Both of these have disadvantages, RECLAIM in dangerousness, and
+;;; RPLAC in pointer chasing time.
+
+;;; You might try HUNKS in multics maclisp, on the PDP10 I don't always
+;;; want to use hunks at run-time, and type NIL arrays are almost as good.
+
+(eval-when (compile eval)
+
+(defstruct (stack% named-hunk conc-name
+		    (constructor make-stack%-1))
+	   ; this is a fixnum stack.
+	   array dim dim-inc max-dim)
+
+(defmacro aref% (&rest l) `(arraycall fixnum ,@l))
+(defmacro make-array% (&rest l) `(*array nil 'fixnum ,@l))
+(defmacro adjust-array% (a &rest l) `(*rearray ,a 'fixnum ,@l))
+(defmacro aref  (&rest l) `(arraycall t ,@l))
+(defmacro make-array (&rest l) `(*array nil t ,@l))
+(defmacro adjust-array (a &rest l) `(*rearray ,a t ,@l))
+
+
+(defstruct (stack named-hunk conc-name (constructor make-stack-1))
+	   ; this is a NOTYPE type stack.
+	   array dim sp dim-inc max-dim)
+
+;;; macros for general stack which you may want to use:
+
+(defmacro stack-null (X) `(zerop (stack-sp ,x)))
+
+;;; end of eval-when-compile
+)
+
+
+(defun |stack underflow| (stack)
+       (error '|stack underflow| stack 'wrng-type-arg))
+(defun |stack overflow| (stack)
+       (error '|stack overflow| stack 'wrng-type-arg))
+
+(defun make-stack% (dim &optional
+			(dim-inc (1+ (// dim 10)))
+			(max-dim (* dim 4)))
+       (make-stack%-1 array (make-array% (1+ dim))
+		      dim dim
+		      max-dim max-dim
+		      dim-inc dim-inc))
+
+(defun make-stack (dim &optional
+		       (dim-inc (1+ (// dim 10)))
+		       (max-dim (* dim 4)))
+       (make-stack-1 array (make-array (1+ dim))
+		     dim dim
+		     sp 0
+		     max-dim max-dim
+		     dim-inc dim-inc))
+
+(defun stack%-push (c stack)
+       (declare (fixnum c))
+       (let* ((array (stack%-array stack))
+	      (SP (1+ (aref% array 0))))
+	     (declare (fixnum sp))
+	     (cond ((> SP (stack%-dim stack))
+		    (let* ((dim-inc (stack%-dim-inc stack))
+			   (new-dim (+ (stack%-dim stack) dim-inc)))
+			  (cond ((or (zerop dim-inc)
+				     (> new-dim (stack%-max-dim stack)))
+				 (stack%-push
+				  c
+				  (|stack overflow| stack)))
+				(t
+				 (adjust-array% array new-dim)
+				 (setf (stack%-dim stack) new-dim))))))
+	     (setf (aref% array 0) SP)
+	     (setf (aref% array sp) C)
+	     stack))
+
+(defun stack-push (c stack)
+       (let ((array (stack-array stack))
+	     (SP (1+ (stack-sp stack))))
+	    (declare (fixnum sp))
+	    (cond ((> SP (stack-dim stack))
+		   (let* ((dim-inc (stack-dim-inc stack))
+			  (new-dim (+ (stack-dim stack) dim-inc)))
+			 (cond ((or (zerop dim-inc)
+				    (> new-dim (stack-max-dim stack)))
+				(stack-push
+				 c
+				 (|stack overflow| stack)))
+			       (t
+				(adjust-array array new-dim)
+				(setf (stack-dim stack) new-dim))))))
+	     (setf (stack-sp stack) SP)
+	     (setf (aref array sp) C)
+	     stack))
+
+(defun stack%-pop (stack)
+       (let* ((array (stack%-array stack))
+	      (SP (aref% array 0)))
+	     (declare (fixnum sp))
+	     (cond ((plusp sp)
+		    (setf (aref% array 0) (1- SP))
+		    (aref% array sp))
+		   (t
+		    (stack%-pop
+		     (|stack underflow| stack))))))
+
+(defun stack-pop (stack)
+       (let ((sp (stack-sp stack)))
+	    (declare (fixnum sp))
+	    (cond ((plusp sp)
+		   (setf (stack-sp stack) (1- sp))
+		   (aref (stack-array stack) sp))
+		  (t
+		   (stack-pop
+		    (|stack underflow| stack))))))
+
+(defun stack%-top (stack)
+       (let* ((array (stack%-array stack))
+	      (sp (aref% array 0)))
+	     (declare (fixnum sp))
+	     (cond ((zerop sp)
+		    (stack%-top (|stack underflow| stack)))
+		   (t
+		    (aref% array sp)))))
+
+(defun stack-top (stack)
+       (cond ((zerop (stack-sp stack))
+	      (stack-top (|stack underflow| stack)))
+	     (t
+	      (aref (stack-array stack) (stack-sp stack)))))
+
+(defun stack%-empty-p (stack)
+       (zerop (aref% (stack%-array stack) 0)))
+
+(defun stack-empty-p (Stack)
+       (zerop (stack-sp stack)))
+
+(defun stack%-zero (stack)
+       (setf (aref% (stack%-array stack) 0) 0)
+       stack)
+
+(defun stack-zero (stack)
+       (setf (stack-sp stack) 0)
+       stack)
+
+;;; more esoteric operations, and ha! these you can't do efficiently
+;;; with lists.
+
+(defun stack-ref (stack ind)
+       (let ((n (- (stack-sp stack) ind)))
+	    (cond ((plusp n)
+		   (aref (stack-array stack) n))
+		  (t
+		   (stack-ref (|stack underflow| stack) ind)))))
+
+(defun stack-set (val stack ind)
+       (let ((n (- (stack-sp stack) ind)))
+	    (cond ((plusp n)
+		   (setf (aref (stack-array stack) n) val))
+		  (t
+		   (stack-set val (|stack underflow| stack) ind)))))
+
+
+
+(eval-when (compile eval)
+	   (if (not (boundp 'test-cases)) (setq test-cases nil))
+	   (defmacro test-cases (&rest l)
+		     (cond (test-cases
+			    `(progn 'compile ,@l))
+			   (t nil))))
+
+(test-cases
+
+(defun empty%-p-test (s n)
+       (do ((foo))
+	   ((zerop (setq n (1- n)))
+	    (stack%-empty-p s))
+	   (setq foo (stack%-empty-p s))))
+
+(defun push%-test (s m)
+       (do ()
+	   ((zerop (setq m (1- m)))
+	    (stack%-push m s))
+	   (stack%-push m s)))
+
+(defun pop%-test (s m)
+       (do ()
+	   ((zerop (setq m (1- m)))
+	    (stack%-pop s))
+	   (stack%-pop s)))
+
+(defun push-pop%-test (s m)
+       ; see Sussman and Steele, RACKS
+       (DO ()
+	   ((zerop (setq m (1- m)))
+	    (stack%-push m s)
+	    (stack%-pop m s))
+	   (stack%-push m s)
+	   (stack%-pop m s)))
+
+(defun empty-list-test (s n)
+       (do ((foo))
+	   ((zerop (setq n (1- n)))
+	    (null s))
+	   ; even complr knows that (null s) for effect is losing.
+	   (setq foo (null s))))
+
+(defun loopn (n)
+       (do ()
+	   ((zerop (setq n (1- n))) nil)))
+
+; end of test cases.
+
+)

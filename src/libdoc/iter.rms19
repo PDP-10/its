@@ -1,0 +1,556 @@
+;-*-LISP-*-
+
+;ITER is a generalized iteration construct based on the use of
+;input and output streams.  For efficiency, input and output from
+;ITER streams is expanded using macros.  Several types of stream
+;are predefined, and the user can easily define new types.
+
+;Here is an example of an ITER:
+;(ITER ((LIST-IN PROP PROPS) (LIST-OUT VAL VALS) (LOCAL X))
+;      VALS
+;      (SETQ X (GET FOO (FETCHR PROP)))
+;      (AND X (SEND VAL X)))
+;It takes all the indicators in PROPS and returns a list
+;of all the non-null properties which the symbol in FOO
+;has on any of those indicators.
+
+;The first thing in an ITER is a list of stream definitions.
+;   Each stream definition starts with a type, followed by the stream name,
+;   followed by optional extra info for that type of stream.
+;The second thing in an ITER is the thing it should normally return.
+;   It can be any form, which will be evaluated just before returning it.
+;   "Normally" means when exited by a failing FETCHR.
+;   You can also do a RETURN out of the ITER, returning whatever you like.
+;   You must not use tags or go's, however.
+;Then comes the body, which is evaluated over and over.
+;In the body, (SEND stream value) gives a value to an output stream.
+;   The value returned by SEND is unpredictable.  The value of
+;   the stream name as a variable is not changed;  for an output-only
+;   stream, that variable may not even be bound.
+;(FETCH stream) gets the next value from an input stream.
+;   It returns T if there was another value, NIL if it was empty.
+;   The value itself goes in a local variable with the same name as the stream.
+;(FETCHR stream) fetches the next value from the stream, returning from the ITER
+;   if the stream is empty, returning the new value if there is one.
+;   The value also goes into the local variable as with FETCH.
+;   Since FETCHRs do RETURNS implicitly, you must not use FETCHR inside
+;   any PROGs or DOs within the body of the ITER.
+;(FETCHR stream1 stream2 ... streamn) does a FETCHR on each stream
+;    and returns the new value got from the last one.
+;(FETCHF stream) is like (FETCHR stream) except that the stream-name
+;   variable is NOT set.  The next object is just returned by the FETCHF.
+;   Use FETCHF instead of FETCHR in simple cases, for extra efficiency.
+;   If the particular stream type does not supply a definition for FETCHF,
+;   an ordinary FETCHR is done, so you will get the right behavior.
+
+
+; The predefined types of streams are:
+;(LOCAL var var var...)
+;   simply causes the variables to be bound by the ITER.
+;   They can't be fetched from or sent to.
+;   Initializations are possible, as in (LOCAL (X 1) (Y 'FOO)).
+;(MAPC name init)
+;   fetches the elements of <init> one by one.
+;   There is no way to refer to the list of remaining values.
+;   For that, use STACK or STACK-GLOBAL.
+;   MAPC generates very good code when used with ITER-FETCHR.
+;(LIST-OUT name)
+;   accumulates a list in a fifo manner, optimally.  To access the value,
+;   you must do (ITER-LIST name), and you can only do it once.
+;   On the PDP-10, this uses NREVERSE.  On the Lisp machine, it uses locatives.
+;   On other machines, it may work in yet other ways.
+;(STACK name listname [init])
+;   <listname> is a variable (bound in the ITER) which holds a list initialized
+;   to the same variable's outer binding, or to <init>, if <init> is given.
+;   Fetching takes the next element from <listname> and puts it in <name>.
+;   Sending conses the sent object onto the list.
+;   STACK streams can be used either as lifo lists of objects to be processed
+;   or just for processing a list's elements in order a la MAPCAR.
+;(STACK-GLOBAL name listname)
+;   works like STACK except that <listname> is not bound by the ITER.
+;   It can be used for taking things off a global list of things to do.
+;(LIST-OUT-ORDERED name listname)
+;   is used for building up a list that is always in correct order.
+;   Sending to it NCONCs onto the end of <listname>.
+;(STEP name to [from] [by])
+;   starts <name> out as <from> (or zero) after the first fetch,
+;   and each successive fetch increments <name> by <by> (or 1).
+;   The stream is empty if <name> comes to equal <to>.
+;   Thus, <to> is an exclusive bound, never returned as a value by the stream.
+;(STEP-GLOBAL ...)
+;   is like STEP except that the stepped variable is free, rather
+;   than bound by the ITER.
+;(ESCAPE name fetchfn sendfn init)
+;   makes a stream named <name> initialized to <init>
+;   that fetches by calling <fetchfn> and sends by calling <sendfn>.
+;   The fetch function is passed the stream definition (the list (ESCAPE ...))
+;   as its argument.  The send function is passed that and the value to send.
+;   If the fetch or send function is NIL, that operation is not allowed.
+;   Internal lambdas work efficiently as the fetch and step functions.
+
+;ITER-FETCHR is like ITER except that every input stream is FETCHRed
+;automatically at the start of each cycle.  An input stream is one
+;whose definition notices the auto-fetch-flag argument it is passed
+;and generates an automatic fetchr.  The predefined stream types
+;MAPC, STACK, STACK-GLOBAL, STEP, and STEP-GLOBAL will automatically fetchr.
+;The others, LIST-OUT, LOCAL and ESCAPE, will not be affected by this.
+;Automatic FETCHRs generate good code.
+;ITER-FETCHR is especially efficient with MAPC streams.
+
+;In order to use ITER, you need a DISPLACE function.
+;Since people have different favorite versions of it, none is included.
+;Since ITER is implemented as a macro, if you compile code that uses ITER
+;you must load ITER FASL into the compiler.
+
+;Macros, etc., needed by the compilation of ITER itself.
+
+(DECLARE 
+ (COND ((AND (NOT (= 1_24. 0))		;IN MACLISP
+	     (OR (NOT (BOUNDP 'COMPILING-FOR-LISPM))
+		 (NULL COMPILING-FOR-LISPM)))
+
+ ;;;IF NOT IN LISP MACHINE AND NOT COMPILING FOR IT IN QCMP,
+ ;;;WE MUST SET UP SOME OF THE LISP MACHINE ENVIRONMENT THAT WE USE.
+
+  (DEFUN IF-FOR-LISPM MACRO (FORM) NIL)
+  (DEFUN IF-FOR-MACLISP MACRO (FORM) (CONS 'PROGN (CONS ''COMPILE (CDR FORM))))
+
+ ;;;SIMILAR UNQUOTE MACRO TO WHAT IS IN LISP MACHINE.
+ ;;;NOTE:  COMMA IS DEFINED ALL THE TIME, NOT JUST IN BACKQUOTE.
+  (SETQ **BACKQUOTE** NIL)
+
+  (SETSYNTAX '/` 'MACRO '(LAMBDA ()
+     (MACLISP-BACK-QUOTIFY ((LAMBDA (**BACKQUOTE**) (READ))
+			    T))))
+
+  (SETSYNTAX '/, 'MACRO '(LAMBDA ()
+    (COND ((NULL **BACKQUOTE**)
+	   (ERROR '|COMMA NOT INSIDE BACKQUOTE| NIL 'FAIL-ACT))
+	  ((EQ (TYIPEEK) 100)	;CAN'T USE ## SINCE NOT DEFINED YET	;WAS IT A ",@"?
+	   (TYI)
+	   (CONS '/,/@ (READ)))
+	  (T
+	   (CONS '/, (READ))))))
+
+  (DEFUN MACLISP-BACK-QUOTIFY (X)
+   ((LAMBDA (A D)
+     (COND ((ATOM X) (LIST 'QUOTE X))
+	   ((EQ (CAR X) '/,)
+	    (CDR X))
+	   ((OR (ATOM (CAR X))
+		(NOT (EQ (CAAR X) '/,/@)))
+	    ;(LIST 'CONS (MACLISP-BACK-QUOTIFY (CAR X))
+	    ;	        (MACLISP-BACK-QUOTIFY (CDR X)))
+	    (SETQ A (MACLISP-BACK-QUOTIFY (CAR X)) D (MACLISP-BACK-QUOTIFY (CDR X)))
+	    (COND ((AND (NOT (ATOM A))
+			(NOT (ATOM D))
+			(EQ (CAR A) 'QUOTE)
+			(EQ (CAR D) 'QUOTE))
+		   (LIST 'QUOTE (CONS (CADR A) (CADR D))))
+		  (T (LIST 'CONS A D))))
+	   (T
+	    (LIST 'APPEND (CDAR X)
+			  (MACLISP-BACK-QUOTIFY (CDR X))))))
+    NIL NIL)))))
+
+;This is the main entry point of this file.
+
+(defun iter macro (form)
+    (displace form (iter-expand (cadr form) (caddr form) (cdddr form) nil)))
+
+(defun iter-fetchr macro (form)
+    (displace form (iter-expand (cadr form) (caddr form) (cdddr form) t)))
+
+(defun iter-test (form)
+    (iter-expand (cadr form) (caddr form) (cdddr form) nil))
+
+
+;For each stream, we call the ITER-STREAM-DEFINER property of the stream type.
+;The arguments it is given are the stream definition,
+; and whether to do an automatic fetchr at the start of each cycle
+; (output-only streams ignore this argument).
+;It should return a list containing three things:
+; 1st, an updated stream definition (defaults filled in, etc.).
+; 2nd, a list of local variable binding specs for a DO  (for example, ((X) (Y FOO) (Z)) ).
+; 3rd, a list of forms to be done at the start of each ITER cycle.
+; 4th, a list of end-tests.  All end-tests are or'ed together.
+;  end-tests need only be supplied if an automatic fetchr is being done.
+; 5th, a list of forms to be used to init global variables before starting the iteration.
+; 6th, a list of variables to be bound each time through the iter.
+; 7th, a list of the things (forms) to bind them to.
+
+(defun iter-expand (stream-list value-form body auto-fetch-flag)
+    (prog (stream-defs local-vars setups each-cycle end-tests tem inner-vars inner-var-values)
+	  (do ((streams stream-list (cdr streams)))
+	      ((null streams))
+	      (setq tem (funcall (get (caar streams) 'iter-stream-definer)
+				 (car streams)
+				 auto-fetch-flag))
+	      (setq stream-defs (cons (cons (cadar streams) (car tem))
+				      stream-defs))
+	      (setq local-vars (nconc (cadr tem) local-vars))
+	      (setq each-cycle (nconc (caddr tem) each-cycle))
+	      (setq end-tests (nconc (cadddr tem) end-tests))
+	      (setq setups (nconc (car (cddddr tem)) setups))
+	      (setq inner-vars (nconc (cadr (cddddr tem)) inner-vars))
+	      (setq inner-var-values (nconc (caddr (cddddr tem)) inner-var-values)))
+	  ;; Turn end-tests into a form which checks them all.
+	  (cond ((null end-tests))
+		((cdr end-tests)
+		 (setq end-tests (cons 'or end-tests)))
+		(t (setq end-tests (car end-tests))))
+	  (return `(compiler-bind ((iter-streams ,@stream-defs)
+				   (iter-value (iter-value . ,value-form)))
+		      (progn ,@setups
+			;; We use a DO since that way MACLISP allows initializations.
+		        (do ,local-vars
+			    (,end-tests
+			     . ,(and end-tests (list value-form)))
+			    ((lambda ,inner-vars
+				,@each-cycle
+				,@body)
+			     . ,inner-var-values)
+			    ))))))
+
+;Expand (SEND stream arg).  Look up the stream and pass the stream's definition
+;and the form for arg to the ITER-SEND-EXPANDER function for this type of stream.
+(defun send macro (form)
+    (prog (stream newval strdef sendfn)
+	  (setq stream (cadr form) newval (caddr form))
+	  (setq strdef (compiler-bindings-search '|Undefined stream name| 'iter-streams stream))
+	  (setq sendfn (get (car strdef) 'iter-send-expander))
+	  (or sendfn (error stream '|Stream can't fetch|))
+	  (return (displace form (funcall sendfn strdef newval)))))
+
+;Expand (FETCH stream).  Look up the stream and pass the stream's definition
+;to the ITER-FETCH-EXPANDER function for this type of stream.
+(defun fetch macro (form)
+    (prog (stream strdef sendfn)
+	  (setq stream (cadr form))
+	  (setq strdef (compiler-bindings-search '|Undefined stream name| 'iter-streams stream))
+	  (setq fetchfn (get (car strdef) 'iter-fetch-expander))
+	  (or fetchfn (error stream '|Stream can't send|))
+	  (return (displace form (funcall fetchfn strdef)))))
+
+;Expand (FETCHF stream).  Look up the stream and pass the stream's definition
+;to the ITER-FETCHF-EXPANDER function for this type of stream.  If there
+;is none, tret this FETCHF as a FETCHR.
+(defun fetchf macro (form)
+    (prog (stream strdef sendfn value-form)
+	  (setq value-form (compiler-bindings-search '|ITER internal lossage|
+						     'iter-value 'iter-value))
+	  (setq stream (cadr form))
+	  (setq strdef (compiler-bindings-search '|Undefined stream name| 'iter-streams stream))
+	  (setq fetchfn (get (car strdef) 'iter-fetchf-expander))
+	  (return (displace form
+			    (cond (fetchfn (funcall fetchfn strdef value-form))
+				  (t `(progn (or (fetch ,stream) (return ,value-form))
+					     ,stream)))))))
+
+(defun fetchr macro (streams)
+    (displace streams
+       (prog (return-form)
+	     (setq return-form (compiler-bindings-search '|ITER internal lossage|
+							 'iter-value 'iter-value))
+	     (return
+	      `(progn ,@(mapcar (function (lambda (stream)
+				    `(or (fetch ,stream) (return ,return-form))))
+				(cdr streams))
+		      ,(car (last streams)))))))
+
+(declare (special compiler-binding-list))
+(setq compiler-binding-list nil)
+
+;The compiler-binding-list is a list of any number of entries.
+;The car of an entry is its entry-type.  The cdr is an alist of bindings,
+;each binding being (object . value).
+
+;(COMPILER-BINDINGS-SEARCH '|No BAR for this| 'BAR 'FOO)
+;searches for compiler binding entries of type BAR
+;and searches each one for a binding for FOO.
+;If one is found, the value associated with FOO in the binding is returned.
+;Otherwise, an error with message "No BAR for this" is caused.
+;NIL as the error message means return NIL instead of erring.
+
+(defun compiler-bindings-search (errmsg entry-type object)
+    (do ((entries compiler-binding-list (cdr entries))
+	 (val))
+	((null entries) (and errmsg (error object errmsg)))
+	(and (eq entry-type (caar entries))
+	     (setq val (assoc object (cdar entries)))
+	     (return (cdr val)))))
+
+;(COMPILER-BIND list-of-bindings form form...)
+;evaluates the forms with list of bindings appended to the
+;COMPILER-BINDING-LIST to be visible to COMPILER-BINDINGS-SEARCH.
+;It is a macro which sets COMPILER-BINDING-LIST to the new value
+;but sticks onto the end of the forms to be evaluated
+;a call to the macro COMPILER-UNBIND, which resets COMPILER-BINDING-LIST
+;when it is expanded (AFTER the body is expanded).
+
+(defun compiler-bind macro (form)
+    (prog (tem)
+	  (setq tem compiler-binding-list)
+	  (setq compiler-binding-list (append (cadr form) compiler-binding-list))
+	  (return `(prog2 nil (progn ,@(cddr form))
+			  (compiler-unbind ,tem)))))
+
+(defun compiler-unbind macro (form)
+    (setq compiler-binding-list (cadr form))
+    nil)
+
+;Definition of STACK type streams.
+;(STACK topvar restvar init) defines a stream named <topvar>
+;which is a stack.  <topvar> is the element at the top.
+;<restvar> is a list of the rest of the elements.
+;Fetching loads <topvar> from <restvar>, which is popped.
+;Sending just conses onto <restvar>.  This is right for
+;using a STACK as a stack of things to process.
+;It is also right for just building up a list in reverse order (to nreverse, maybe).
+;<init> is used to initialize <restvar>.  If left out, the external
+;value of <restvar> is used;  however, <restvar> is always rebound.
+
+(defprop stack iter-stack-definer iter-stream-definer)
+
+(defun iter-stack-definer (stream-def auto-fetch)
+    (do ((elt (cadr stream-def))
+	 (list (caddr stream-def))
+	 (init (or (cadddr stream-def) (caddr stream-def))))
+	(t
+	 `(,stream-def
+	   ((,elt)
+	    (,list
+	     ,init))
+	   ,(and auto-fetch `((fetchr ,elt)))))))
+
+(defprop stack iter-stack-fetch iter-fetch-expander)
+
+(defun iter-stack-fetch (stream-def)
+    `(cond (,(caddr stream-def)
+	    (setq ,(cadr stream-def) (car ,(caddr stream-def)))
+	    (setq ,(caddr stream-def) (cdr ,(caddr stream-def)))
+	    T)))
+
+(defprop stack iter-stack-fetchf iter-fetchf-expander)
+
+(defun iter-stack-fetchf (stream-def value-form)
+    `(cond (,(caddr stream-def)
+	    (prog2 nil (car ,(caddr stream-def))
+		   (setq ,(caddr stream-def) (cdr ,(caddr stream-def)))))
+	   (t (return ,value-form))))
+
+(defprop stack iter-stack-send iter-send-expander)
+
+(defun iter-stack-send (stream-def arg-form)
+    `(setq ,(caddr stream-def) (cons ,arg-form ,(caddr stream-def))))
+
+;Definition of STACK-GLOBAL type.  Like STACK except that the stack-remainder
+;variable is not bound by the ITER.  The top-of-stack variable (the stream name)
+;is still bound.
+
+(defprop stack-global iter-stack-fetch iter-fetch-expander)
+(defprop stack-global iter-stack-fetchf iter-fetchf-expander)
+(defprop stack-global iter-stack-send iter-send-expander)
+
+(defprop stack-global iter-stack-global-definer iter-stream-definer)
+
+(defun iter-stack-global-definer (stream-def auto-fetch)
+    (or (cddr stream-def)
+	(error '|STACK-GLOBAL: No name for the stack itself| stream-def))
+    `(,stream-def
+      ((,(cadr stream-def)))
+      ,(and auto-fetch `((fetchr ,(cadr stream-def))))
+      nil
+      ,(and (cadddr stream-def)
+	    `((setq ,(caddr stream-def) ,(cadddr stream-def))))))
+
+
+;Definition of MAPC stream type.
+;Although the user supplies (MAPC name init),
+;the stream-def that we supply for compiler-binding says
+;(MAPC name gensym init).
+;In an ITER (as opposed to an ITER-FETCHR), MAPC is treated as a STACK,
+;since that is the most efficient way to do it, then.
+
+(defprop mapc iter-mapc-definer iter-stream-definer)
+
+(defun iter-mapc-definer (stream-def auto-fetch)
+    (do ((name (cadr stream-def))
+	 (init (caddr stream-def))
+	 (tem (intern (gensym))))
+	(t
+	 (cond (auto-fetch
+		`((mapc ,name ,tem ,init)
+		  ((,tem ,init (cdr ,tem)))
+		  nil
+		  ((null ,tem))
+		  nil
+		  (,name)				;Bind this each time around,
+		  ((car ,tem))))			;to this.
+	       (t 
+		`((stack ,name ,tem ,init)
+		  ((,name)
+		   (,tem ,init))))))))
+
+(defprop mapc iter-mapc-fetch iter-fetch-expander)
+
+(defun iter-mapc-fetch (stream-def)
+    `(progn (setq ,(caddr stream-def) (cdr ,(caddr stream-def)))
+	    (setq ,(cadr stream-def) (car ,(caddr stream-def)))
+	    ,(caddr stream-def)))
+
+(defprop mapc iter-mapc-fetchf iter-fetchf-expander)
+
+(defun iter-mapc-fetchf (stream-def value-form)
+    (do ((list (caddr stream-def))
+	 (name (cadr stream-def)))
+	(t `(car (or (setq ,list (cdr ,list)) (return ,value-form))))))
+
+;Definition of LIST-OUT-ORDERED stream type.
+;(LIST-OUT-ORDERED X <listvar>) defines a stream which accumulates a list in forward order.
+;<listvar> contains the list so far.  X is not defined as a variable.
+
+(defprop list-out-ordered iter-list-out-ordered-definer iter-stream-definer)
+
+(defun iter-list-out-ordered-definer (stream-def auto-fetch)
+    `(,stream-def
+      ((,(caddr stream-def)
+	,(cadddr stream-def)))))
+
+(defprop list-out-ordered iter-list-out-ordered-send iter-send-expander)
+
+(defun iter-list-out-ordered-send (stream-def arg-form)
+    `(setq ,(caddr stream-def) (nconc ,(caddr stream-def) (ncons ,arg-form))))
+
+
+;Definition of LIST-OUT stream type.
+;(LIST-OUT X) defines a stream named X which accumulates a list somehow.
+;Then say (ITER-LIST X) as the "value" of the ITER and the accumulated
+;list will be returned by the ITER.  There is no other way to use the list.
+;This makes it possible to optimize everything as much as possible.
+
+(defprop list-out iter-list-out-definer iter-stream-definer)
+
+(defun iter-list-out-definer (stream-def auto-fetch)
+    (do ((tem (intern (gensym))))
+	(t 
+	 (or (if-for-maclisp
+	      `((list-out ,(cadr stream-def) ,tem)
+		((,tem))))
+	     (if-for-lispm
+	      `((list-out ,(cadr stream-def) ,tem)
+		((,tem)
+		 (,(cadr stream-def)
+		  (value-cell-location ',tem)))))))))
+
+(if-for-maclisp
+  (defprop list-out iter-stack-send iter-send-expander))
+
+(if-for-lispm
+  (defprop list-out iter-list-out-send iter-send-expander)
+
+(defun iter-list-out-send (stream-def arg-form)
+    `(progn (rplacd ,(cadr stream-def) (ncons ,arg-form))
+	    (setq ,(cadr stream-def) (cdr ,(cadr stream-def))))))
+
+(if-for-maclisp
+  (defun iter-list macro (form)
+      (prog (stream strdef)
+	  (setq stream (cadr form))
+	  (setq strdef (compiler-bindings-search '|Undefined stream name| 'iter-streams stream))
+	  (return `(nreverse ,(caddr strdef))))))
+
+(if-for-lispm
+(defun iter-list macro (form)
+    (prog (stream strdef)
+	(setq stream (cadr form))
+        (setq strdef (compiler-bindings-search '|Undefined stream name| 'iter-streams stream))
+	(return (caddr strdef)))))
+
+;Definition of LOCAL stream type.
+;(LOCAL X Y (FOO 1)) just binds X and Y to NIL and FOO to 1.
+
+(defprop local iter-local-definer iter-stream-definer)
+
+(defun iter-local-definer (stream-def auto-fetch)
+    `(nil
+      ,(mapcar (function (lambda (var)
+		   (cond ((atom var) (ncons var))
+			 (t var))))
+	       (cdr stream-def))))
+
+
+;Definition of STEP stream type.
+;(STEP X to from by) steps X starting with <from> by <by> stopping before <to>.
+;If <by> is left out, it is 1.  If <from> is left out, it is 0.
+;<to>, <from> and <by> are re-evaluated each time they are used.
+;When the stream is exhausted, it steps anyway, but claims to be empty.
+;If <to> is left out or is NIL, the stream is inexhaustible.
+
+(defprop step iter-step-definer iter-stream-definer)
+
+(defun iter-step-definer (stream-def auto-fetch)
+    (do ((from (or (cadddr stream-def) 0))
+         (by (or (cadddr (cdr stream-def)) 1)))
+	(T
+	 (cond (auto-fetch
+		`((STEP ,(cadr stream-def) ,(caddr stream-def) ,from ,by)
+		  ((,(cadr stream-def) ,from (+ ,(cadr stream-def) ,by)))
+		  nil
+		  ((not (< ,(cadr stream-def) ,(caddr stream-def))))))
+	       (t
+		`((STEP ,(cadr stream-def) ,(caddr stream-def) ,from ,by)
+		  ((,(cadr stream-def) (- ,from ,by)))))))))
+
+(defprop step iter-step-fetch iter-fetch-expander)
+
+(defun iter-step-fetch (stream-def)
+    (cond ((caddr stream-def)				;If stream has a <to>, check it.
+	   `(< (setq ,(cadr stream-def) (+ ,(cadr stream-def) ,(cadddr (cdr stream-def))))
+	       ,(caddr stream-def)))
+	  (t `(progn (setq ,(cadr stream-def)
+			   (+ ,(cadr stream-def) ,(cadddr (cdr stream-def))))
+		     T))))
+
+;Definition of STEP-GLOBAL stream type.
+;It is just like STEP except that the iteration variable is not bound.
+
+(defprop step-global iter-step-global-definer iter-stream-definer)
+
+(defprop step-global iter-step-fetch iter-fetch-expander)
+
+(defun iter-step-global-definer (stream-def auto-fetch)
+    (do ((from (or (cadddr stream-def) 0))
+	 (by (or (cadddr (cdr stream-def)) 1)))
+	(T `((STEP ,(cadr stream-def) ,(caddr stream-def) ,from ,by)
+	     nil					;No local variables.
+	     ,(and auto-fetch `((fetchr ,(cadr stream-def))))
+	     nil
+	     ((setq ,(cadr stream-def)
+		    (- ,from ,by)))))))			;Instead, SETQ the var to init it.
+
+;Definition of ESCAPE stream type.
+;(ESCAPE name fetchfn sendfn init) makes a stream named <name> initialized to <init>
+;that fetches by calling <fetchfn> and sends by calling <sendfn>.
+;The fetch function is passed the stream definition (the list (ESCAPE ...))
+;as its argument.  The send function is passed that and the value to send.
+;If the fetch or send function is NIL, that direction is not allowed.
+;Internal lambdas work efficiently as the fetch and step functions.
+
+(defprop escape iter-escape-definer iter-stream-definer)
+
+(defun iter-escape-definer (stream-def auto-fetch)
+    `(,stream-def
+      ((,(cadr stream-def) ,(car (cddddr stream-def))))))
+
+(defprop escape iter-escape-fetch iter-fetch-expander)
+
+(defun iter-escape-fetch (stream-def)
+    (or (caddr stream-def) (error '|Stream can't fetch| stream-def))
+    `(,(caddr stream-def) ',stream-def))
+
+(defprop escape iter-escape-send iter-send-expander)
+
+(defun iter-escape-send (stream-def arg-form)
+    (or (cadddr stream-def) (error '|Stream can't send| stream-def))
+    `(,(cadddr stream-def) ',stream-def ,arg-form))

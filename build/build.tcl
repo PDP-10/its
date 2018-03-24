@@ -2027,6 +2027,25 @@ respond "_" "\032"
 type ":kill\r"
 respond "*" ":lisp scheme (dump)\r"
 
+# More LIBLSP packages
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;didl\r"
+respond "_" "liblsp;_libdoc;getsyn\r"
+respond "_" "liblsp;_libdoc;iter\r"
+respond "_" "liblsp;_libdoc;hash\r"
+respond "_" "liblsp;_libdoc;graph3\r"
+respond "_" "liblsp;_libdoc;ledit*\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;stacks\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" ":midas liblsp;_libdoc;dirsiz\r"
+respond "*" ":midas liblsp;_z;timer\r"
+
 bootable_tapes
 
 # make output.tape
