@@ -132,6 +132,7 @@
 - RMTDEV, MLDEV for non-ITS hosts.
 - SALV, old file system tool for KA and KL.
 - SCANDL, TTY OUTPUT SPY.
+- SCHEME, Scheme interpreter.
 - SCRAM, encypt/decrypt file.
 - SEND, REPLY, replacements for DDT :SEND.
 - SENDS, Chaosnet SEND server.
