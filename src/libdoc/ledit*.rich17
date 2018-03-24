@@ -1,0 +1,273 @@
+(comment LISP-TECO EDITOR INTERFACE)			; -*-LISP-*-
+
+(defun LET macro (s)
+       (cons (cons 'lambda
+		   (cons (mapcar 'car (cadr s))
+			 (cddr s)))
+	     (mapcar 'cadr (cadr s))))
+
+(declare (special ledit-jname				;atomic name of emacs job 
+		  ledit-loadfile			;namestring of binary file for editor
+		  ledit-library				;namestring of teco macro library
+		  ledit-tags				;namestring of tags file
+		  ledit-tags-find-file			;0 or 1 controls setting of qreg in 
+							; teco whether to use Find File
+		  ledit-deletef				;switch, if T delete file from teco
+							; after reading
+		  ledit-pre-teco-func			;called with list of arguments given
+							; to ledit
+		  ledit-post-teco-func			;called with namestring of file
+							; returned from teco
+		  ledit-pre-eval-func			;called with form to be eval'ed,
+							; returns form to be eval'ed instead
+		  ledit-eof				;gensym once to save time
+		  ledit-jcl				;pre-exploded strings to save time
+		  ledit-valret				; "
+		  ledit-proceed				; "
+		  ledit-jname-altj			; "
+		  ledit-lisp-jname			; "
+		  ledit-find-tag			; "
+		  ledit-find-file			; "
+		  ledit-lisp-mode			; "
+		  defun					;enables expr-hash hack
+		  tty-return))				;system variable
+
+;; default values for global variables
+
+(or (boundp 'ledit-jname)(setq ledit-jname 'LEDIT))
+(or (boundp 'ledit-loadfile)(setq ledit-loadfile '|SYS2;TS EMACS|))
+(or (boundp 'ledit-library)(setq ledit-library '|EMACS;LEDIT*|))	
+(or (boundp 'ledit-tags)(setq ledit-tags nil))
+(or (boundp 'ledit-tags-find-file)(setq ledit-tags-find-file 1))
+(or (boundp 'ledit-deletef)(setq ledit-deletef nil))	;for development
+(or (boundp 'ledit-pre-teco-func)(setq ledit-pre-teco-func nil))
+(or (boundp 'ledit-post-teco-func)(setq ledit-post-teco-func nil))
+(or (boundp 'ledit-pre-eval-func)(setq ledit-pre-eval-func nil))
+(or pure (setq pure 3))
+
+(setq ledit-eof (gensym))
+(setq ledit-jname-altj nil)
+(setq ledit-valret nil)
+(setq ledit-jcl (exploden '|:JCL |))
+(setq ledit-find-tag (exploden '|WMMFIND TAG|))
+(setq ledit-find-file (exploden '|WMMFIND FILE|))
+(setq ledit-lisp-jname (exploden '|W:ILEDIT LISP JNAME|))
+(setq ledit-lisp-mode (exploden '|1MMLISP MODEW|))
+(setq tty-return 'ledit-tty-return))
+
+(setq ledit-proceed (exploden '|
+/
+..UPI0// /
+:IF E Q&<%PIBRK+%PIVAL>/
+(:ddtsym tygtyp///
+:if n q&10000/
+(: Teco Improperly Exited, Use ^Z (NOT CALL!)/
+)/
+:else/
+(: Teco Improperly Exited, Use ^X^C (NOT ^Z !)/
+)/
+:SLEEP 30./
+P/
+:INPOP/
+)/
+2// /
+Q+8//-1 /
+.-1G|))
+    
+(comment USER FUNCTIONS)
+
+(defun FLOAD fexpr (filespec)
+       ;; given filespec of FASL file, first FASLOAD it in
+       ;; then compare creation dates with corresponding EXPR (assuming
+       ;; second file name >) and if it is more recent,
+       ;; LOAD it in with DEFUN=T and snap uuolinks
+       ;; returns name of last file loaded
+       (let ((faslfile (mergef (mergef filespec (cons '* 'fasl)) defaultf))
+	     (exprfile (probef (mergef (mergef (cons '* '>) filespec) defaultf))))
+	    (cond ((probef faslfile)
+		   (load faslfile)
+		   (cond ((ledit-olderp faslfile exprfile)
+			  (let ((defun t))(load exprfile))
+			  (sstatus uuolinks)
+			  (and (< (cadr (status uuolinks)) 10.)
+			       (princ '|;Warning - down to less than 10 uuolinks.|))
+			  exprfile)
+			 (faslfile)))
+		  (t (load exprfile)
+		     exprfile))))
+
+(defun CLOAD fexpr (filespec)
+       ;; for ease of conversion from old LEDIT
+       (let ((defun t))				      
+	    (load (mergef (mergef filespec (cons '* '>)) defaultf))))
+
+(defun LEDIT-TTYINT (fileobj char)
+       ;; intended to be put on control character, e.g.
+       ;; (sstatus ttyint 5 'ledit-ttyint)
+       (nointerrupt nil)
+       (tyi fileobj)					;gobble up control char
+       (apply 'ledit
+	      (cond ((= (boole 1 127. (tyipeek nil fileobj)) 32.)	;note masking for 7 bit
+		     (tyi fileobj)			;gobble space
+		     ;; if space typed then just (ledit)
+		     nil)
+		    (t (let ((s (read fileobj)))
+			    (cond ((atom s)(list s))	;atom is taken as tag
+				  (t s)))))))		;list is filename
+
+(defun LEDIT fexpr (spec)
+       ;; if given one arg, is tag to be searched for (using FIND FILE)
+       ;; if more than one arg, taken as file name to find (may be newio or oldio form)
+       (let ((newjob (cond ((not (job-exists-p (status uname) ledit-jname))
+			    (setq ledit-jname-altj nil)
+			    (setq ledit-valret nil)
+			    (mapcan 'exploden (list '/
+'|L| ledit-loadfile '/
+'|G|)))))
+	     (firstcall)
+	     (atomvalret))
+
+	    (and ledit-pre-teco-func (funcall ledit-pre-teco-func spec))
+
+	    (or ledit-jname-altj			;memoize for fast calls later
+		(setq ledit-jname-altj (mapcan 'exploden (list '/
+ ledit-jname '|J|))
+		      firstcall t))
+
+	    (cond ((and ledit-valret (null spec))	;go to teco in common case
+		   (valret ledit-valret))
+
+		  (t
+		   (setq atomvalret (maknam (nconc
+
+		      (list 23.)			;ctl-W
+	              (append ledit-jcl nil)		;set own jcl line to nil
+		      (append ledit-jname-altj nil)	;$J to ledit job
+		      (append ledit-jcl nil)		;set jcl line for teco
+
+		      (and newjob			;for new job only
+			  (mapcan 'exploden	        
+				   (list '|F~EDITOR TYPELEDIT"NMMLOAD LIBRARY|
+					 ledit-library '|'|)))
+
+		      (and firstcall			;for first call only
+			   (append ledit-lisp-mode nil))
+
+		      (and firstcall ledit-tags		;for first call only
+			   (mapcan 'exploden
+				   (list ledit-tags-find-file
+					 '|MMVISIT TAG TABLE| ledit-tags '/)))
+		      
+		      (nconc (append ledit-lisp-jname nil)	;tell teco lisp's job name
+			     (exploden (status jname))	
+			     (list 27.))		;note 27. = altmode
+
+		      (cond ((= (length spec) 1)			;tag
+			     (nconc (append ledit-find-tag nil)
+				    (exploden (car spec))
+				    (list 27.)))	
+			    ((> (length spec) 1)	;file name
+			     (nconc (append ledit-find-file nil)
+				    (exploden (namestring (mergef spec defaultf)))
+				    (list 27.))))
+		      (or newjob ledit-proceed))))	;start new job or proceed old one
+	    
+		   (and (not firstcall)(not newjob)(null spec)
+			(setq ledit-valret atomvalret))	;memoize common simple case
+
+		   (valret atomvalret)))				;go to teco
+	    '*))
+
+(comment READING CODE BACK FROM TECO)
+
+(defun LEDIT-TTY-RETURN (unused)
+       ;; this function called by tty-return interrupt
+       ;; check JCL to see if it starts with LEDIT-JNAME
+       ;; if so, rest of JCL is filename to be read in
+       ;; note: need to strip off trailing <cr> on jcl
+       (declare (fixnum i))
+       (let ((jcl (status jcl)))
+         (cond ((and jcl
+		     (setq jcl (errset (readlist (nreverse (cdr (nreverse jcl)))) nil))
+		     (not (atom (setq jcl (car jcl))))
+		     (eq (car jcl) ledit-jname))
+
+	        (valret '|:JCL/
+P|)							;clear jcl
+		(cursorpos 'c)
+		(nointerrupt nil)
+
+		(and ledit-post-teco-func (funcall ledit-post-teco-func (cadr jcl)))
+
+         (cond ((cadr jcl)				;if non-null then read in file
+		;; read in zapped forms
+		(let ((file (open (cadr jcl) 'in)))
+		     (princ '|;Reading from |)(prin1 ledit-jname)
+		     ;; Read-Eval-Print loop
+		     (do ((form (read file ledit-eof) (read file ledit-eof)))
+			 ((eq form ledit-eof)(close file)
+					     (and ledit-deletef (deletef file)))
+			 (and ledit-pre-eval-func
+			      (setq form (funcall ledit-pre-eval-func form)))
+			 ;; check if uuolinks might need to be snapped
+			 (let ((p (memq (car (getl (cadr form)
+						   '(expr subr fexpr fsubr lsubr)))
+					     '(subr fsubr lsubr))))
+			      (print (eval form))
+			      (cond ((and p
+					  (memq (car (getl (cadr form)
+							   '(expr subr fexpr fsubr lsubr)))
+						'(expr fexpr)))
+				     (sstatus uuolinks)
+				     (princ '|	; sstatus uuolinks|))))))))
+	
+         (terpri)
+	 (princ '|;Edit Completed|)
+	 (terpri)))))
+
+(comment UTILITIES)
+
+(defun LEDIT-AGELIST (file)
+       ((lambda (plist)
+		(nconc (get plist 'credate)(get plist 'cretime)))
+	(car (directory (list file) '(credate cretime)))))
+
+
+(defun LEDIT-OLDERP (file1 file2)
+       (do ((age1 (ledit-agelist file1)(cdr age1))
+	    (age2 (ledit-agelist file2)(cdr age2)))
+	   ((null age1) nil)
+	   (cond ((< (car age1)(car age2))(return t))
+		 ((> (car age1)(car age2))(return nil)))))
+
+;;Lap courtesy of GLS.
+
+(declare (setq ibase 8.))
+
+(LAP JOB-EXISTS-P SUBR)
+(ARGS JOB-EXISTS-P (NIL . 2))	;ARGS ARE UNAME AND JNAME, AS SYMBOLS
+	(PUSH P B)
+	(SKIPN 0 A)		;NULL UNAME => DEFAULT TO OWN UNAME
+	(TDZA TT TT)		;ZERO UNAME TELLS ITS TO DEFAULT THIS WAY
+	(PUSHJ P SIXMAK)	;CONVERT UNAME TO SIXBIT
+	(PUSH FXP TT)
+	(POP P A)
+	(PUSHJ P SIXMAK)	;CONVERT JNAME TO SIXBIT
+	(POP FXP T)		;UNAME IN T, JNAME IN TT
+	(MOVEI A 'NIL)
+	(*CALL 0 JEP43)		;SEE IF JOB EXISTS
+	(POPJ P)		;NO - RETURN NIL
+	(*CLOSE 0)		;YES - CLOSE THE CHANNEL
+	(MOVEI A 'T)		; AND RETURN T
+	(POPJ P)
+JEP43	(SETZ)
+	(SIXBIT OPEN)
+	(0 0 16 5000)		;CONTROL BITS: IMAGE BLOCK INPUT/INSIST JOB EXISTS
+	(0 0 0 1000)		;CHANNEL # - 0 IS SAFE IN BOTH OLDIO AND NEWIO
+	(0 0 (% SIXBIT USR))	;DEVICE NAME (USR)
+	(0 0 T)			;UNAME
+	(0 0 TT 400000)		;JNAME
+NIL 
+
+
+

@@ -1,0 +1,2527 @@
+;;;-*-Lisp-*-
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;  DIDL: A LISP debugger for display terminals
+;;;
+;;;  Copyright 1978 by Daniel C. Halbert   (DCH@ML)
+;;;
+;;;  This project was undertaken as an S.B thesis.
+;;;  The thesis is entitled "A LISP Debugger for Display Terminals"
+;;;  and can be found in the Barker Engineering Library
+;;;  Microreproduction Center.
+;;;   Thesis Advisor:  Peter Szolovits
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(eval-when (eval)
+	   (cond ((or (not (= ibase 8.))
+		      (not (= base 8.)))
+		  (format T '|~&Setting the base to eight.~&|)
+		  (setq base 8)
+		  (setq ibase 8))))
+
+;;; I just want vanilla, cheap-to-run macros, hence the below.
+
+(setq macro-expansion-use 'displace)
+(eval-when (compile)
+	   (setq defmacro-check-args nil))
+
+;;; Macros and useful functions taken from DCH;LISP! >.
+
+
+;;; (allbutlast '(1 2 3 4)) => (1 2 3)
+
+(eval-when (compile load)
+	   (defun allbutlast (list)
+		  (if (null (cdr list))
+		      nil
+		      (cons (car list) (allbutlast (cdr list))))))
+
+;;; (nillist 4) => (nil nil nil nil)
+
+(eval-when (compile load)
+	   (defun nillist (num)
+		  (if (zerop num)
+		      nil
+		      (cons nil (nillist (1- num))))))
+
+(defmacro 1st (l)
+	  `(car ,l))
+(defmacro 2nd (l)
+	  `(cadr ,l))
+(defmacro 3rd (l)
+	  `(caddr ,l))
+(defmacro 4th (l)
+	  `(cadddr ,l))
+
+
+(defmacro do-forever (&rest forms)
+	  `(do () (nil) ,@forms))
+
+
+
+(defmacro for (var start end &rest forms)
+	`(do ,var ,start (1+ ,var)
+	     (> ,var ,end) ,@forms))
+
+
+
+(defmacro vars (names &rest forms)
+	  `((lambda ,names ,@forms)
+	    ,@(nillist (length names))))
+
+
+(defmacro <= (a b)
+	  `(not (> ,a ,b)))
+
+(defmacro >= (a b)
+	  `(not (< ,a ,b)))
+
+
+
+;;; (defstructure <structure> <item-1> <item-2> ...)
+;;;
+;;; (defstructure pkt address data) defines many macros:
+;;; (create-pkt)                 => (hunk nil nil 'pkt)
+;;;   [Thus (cdr <structure>) gives the structure's type.]
+;;; (pkt^address a-pkt)          => (cxr 1 a-pkt)
+;;; (store-pkt^address a-pkt 45) => (rplacx 0 a-pkt 45)
+;;; (pkt^data a-pkt)             => (cxr 2 a-pkt)
+;;; (store-pkt^data a-pkt 32)    => (rplacx 1 a-pkt 32)
+
+
+(defmacro defstructure (structure-name &rest structure-fields)
+	  `(progn
+	    'compile
+	    (defmacro ,(implode (append '(c r e a t e -)
+					(explode structure-name)))
+		       ()
+		       `(hunk . ,(append (nillist ,(length structure-fields))
+					 '(',structure-name))))
+	    . ,(do ((item-list structure-fields (cdr item-list))
+		    (item-name-chars)
+		    (structure-name-chars (explode structure-name))
+		    (item-number 1 (1+ item-number))
+		    (item-defs))
+		   ((null item-list) item-defs)
+
+		   (setq item-name-chars (explode (car item-list)))
+		   (push `(defmacro
+			   ,(implode (append structure-name-chars
+					     '(^)
+					     item-name-chars))
+			   (structure)
+			   `(cxr ,,item-number ,structure))
+			 item-defs)
+		   (push `(defmacro
+			   ,(implode (append '(s t o r e -)
+					     structure-name-chars
+					     '(^)
+					     item-name-chars))
+			   (structure value)
+			   `(rplacx ,,item-number ,structure ,value))
+			 item-defs))))
+
+
+;;; array macros and functions
+
+(defmacro arraystore (array &rest args)
+	  `(store (arraycall t ,array ,@(allbutlast args)) ,@(last args)))
+
+(defmacro arrayget (array &rest args)
+	  `(arraycall t ,array ,@args))
+
+(defmacro newarray (&rest args)
+	  `(*array nil t ,@args))
+
+(declare (*lexpr didl
+		 stuff-line
+		 window-set-status-line
+		 echo-area-prompt-and-read
+		 echo-area-prompt-and-read-with-default
+		 unsplit-screen))
+
+;;; "See DS" means see the data structure description page below.
+
+(declare (special didl		; NIL if DIDL not yet initialized.
+		  tyi		; Standard input and output.
+		  tyo
+		  errlist	; progn eval'd on ^G.
+		  $window-tty	; TTY channels for DIDL.  See Open-TTYS.
+		  $echo-area-tty
+		  $is-screen-split?	; Is echo area set up?
+		  $screen-width		; Effective width of display screen.
+		  $hash-table		; SX hash table.  See data structure
+					;  description below.
+		  $echo-area-length	; Number of lines in the echo area.
+		  $window-length	; Number of lines in the window.
+		  $info-area-length	; Number of lines in the info area,
+					;  between the window and echo area.
+		  $status-line		; Current status ("info") line.
+		  $ht-size		; Size of $hash-table.
+
+		  $breakpoint-list	; List of current breakpoints.
+					;  For use by DIDL-Evalhook (q.v.)
+		  $global-when-condition; Global predicate set by user
+					;  to break on.
+		  $global-when-condition-enable
+					; The when-condition is checked for.
+		  $local-when-condition	; Local predicate, lambda-bound
+					;  by each invocation of DIDL.
+		  $local-when-condition-enable
+		  $unique-number	; To get a unique breakpoint name.
+		  $unique-symbol	; Used where such a thing is needed.
+
+		  $last-screen		; A Screen.  See DS.
+					;  The last one displayed.
+		  $last-screen-type	; See Screen in DS.
+		  $last-pos		; Where cursor was last.  See DS.
+		  $last-top-window-line	; Line of Screen that is at top of
+            				;  Window.
+
+		  ;; These symbols are bound to the characters that
+		  ;;  correspond to the commands.
+
+		  $command-first-window  $command-last-window
+		  $command-next-or-previous-window  $command-rewindow
+		  $command-show-left-paren  $command-show-right-paren
+		  $command-look-at-frames
+		  $command-jump-to-frame
+		  $command-show-frame
+		  $command-into-sx  $command-out-of-sx
+		  $command-next  $command-previous
+		  $command-examine-user-function
+		  $command-grind-function
+		  $command-evaluate-in-frame
+		  $command-force-return-from-frame
+		  $command-continue $command-show-value $command-step-deeper
+		  $command-help
+		  $command-quit
+
+		  ;; All the breakpoint commands.
+
+		  $command-breakpoint
+		  $bkpt-command-set-breakpoint  $bkpt-command-clear-breakpoint
+		  $bkpt-command-tell-about-breakpoint
+		  $bkpt-command-list-all-breakpoints
+		  $bkpt-command-goto-breakpoint
+		  $bkpt-command-set-if
+		  $bkpt-command-set-action
+		  $bkpt-command-set-patch
+
+		  ;; The When-Condition commands.
+
+		  $command-when
+		  $when-command-local
+		  $when-command-global
+		  $when-command-tell-about-when-conditions
+
+		  ;; Chars to ignore when trying to read commands (space, etc.)
+
+		  $command-chars-to-ignore))
+
+;;; Structures for DIDL
+
+
+;;; Pos:
+;;;      A pos is a two-element list: (<line> <col>).  Its components are
+;;; screen co-ordinates.
+
+;;; Screen:
+;;;         A screen is an array of lines.  (arrayget screen 0) is the
+;;; last used line in the screen.  Screens are grown if necessary.  They
+;;; may have unused components at the end which are NIL.
+;;; Screens are used to hold text which the user needs to peruse, and which
+;;; may not fit in one display window.  Ground function-forms and stack
+;;; traces are stored in screens.
+;;; Screens have types: No-Screen = no Screen is being displayed.
+;;;			User-Function-Screen = Ground user function.
+;;;			Frame-Screen = Stackframe trace.
+
+
+;;; Window:
+;;;        The tox ($window-length + 1 + $info-area-length) lines on the user's
+;;; display terminal are the window.  The window is used mostly for displaying
+;;; parts of screens, and for displaying static information.
+;;; The status line is just below the main window.
+;;; The two lines below it are the info-area which is
+;;; used for displaying "Stepping", etc. messages.
+
+;;; Line:
+;;;       A line is an array that is $screen-width+1 long.
+;;; Characters are stored as fixnums.  Some elements are markers (see below).
+;;; (arrayget line 0) indicates the last used char on the line.
+;;; Lines do not have CRLF at the end.  When a line is created it is filled
+;;; with spaces (40's).
+
+;;; Loc:
+;;; loc's contain information about where things are on a screen,
+;;; and are usually stored in markers (see below).
+;;; atomloc's are not stored on screen, but are just returned by put-atom.
+
+(defstructure atomloc
+	      begin-pos	      ; Where is first char of atom?
+	      end-pos	      ; Where is last char?
+	      the-atom)	      ; The atom itself.
+
+
+(defstructure leftparenloc    ; Information about where an sx is, stored at
+			      ;  the left paren.
+	      begin-pos	      ; Where is the left paren?
+	      end-pos	      ; Where is right paren?
+	      sx)	      ; The sx itself which this loc is for.
+
+
+(defstructure rightparenloc   ; Information about where an sx is, stored at
+			      ;  the right paren.
+	      begin-pos	      ; Where is the left paren?
+	      end-pos	      ; Where is right paren?
+	      sx)	      ; The sx itself which this loc is for.
+
+
+;;; marker:
+;;;         A marker is a cons that sometimes substitutes for
+;;; just a char (a fixnum) in a line.  A marker is:
+;;; (<char> . <loc>), where <loc> is a leftparenloc or rightparenloc.
+;;; Markers are used for finding out where sx's begin and end on screens.
+
+(defstructure breakpoint      ; Info about a breakpoint.
+	      name	      ; An atom, can be set by user.
+	      function	      ; The function in which this breakpoint is set.
+	      if	      ; Break to user only if this eval's to not NIL.
+	      if-enable	      ; T to indicate that action should be used.
+	      action	      ; Eval this whenever the breakpoint is hit,
+			      ;  even if it doesn't break to the user.
+	      action-enable   ; T to indicate that action should be used.
+	      patch	      ; force return of (eval patch).
+	      patch-enable)   ; T to indicate that patch should be used.
+
+;;; Breakpoints are stored on $breakpoint list in the format:
+;;; ( (sx . breakpoint) ...)  where sx is the form to be broken on.
+
+;;; Set up.
+
+(setq didl nil			; DIDL is not yet initialized.
+      $breakpoint-list nil	; No breakpoints yet.
+      $global-when-condition nil	; No when-conditions yet.
+      $global-when-condition-enable nil
+      $local-when-condition nil
+      $local-when-condition-enable nil
+      $ht-size 997.		; Should be a prime number.
+      $unique-number 0
+      $unique-symbol (gensym)
+      $is-screen-split? nil
+      $info-area-length 2
+      $echo-area-length 9.)
+
+;;; Set up all the command characters.
+
+(setq $command-first-window 74		     ; <    
+      $command-last-window  76		     ; >
+      $command-next-or-previous-window  126  ; V
+      $command-rewindow	 114		     ; L
+      $command-show-left-paren 50	     ; (
+      $command-show-right-paren 51	     ; )
+      $command-look-at-frames 106	     ; F
+      $command-jump-to-frame  112	     ; J
+      $command-show-frame  56		     ; .
+      $command-into-sx  111		     ; I
+      $command-out-of-sx  117		     ; O
+      $command-next  116		     ; N
+      $command-previous  120		     ; P
+      $command-examine-user-function  130    ; X
+      $command-grind-function  107           ; G
+      $command-evaluate-in-frame  105	     ; E
+      $command-force-return-from-frame  122  ; R
+      $command-continue  103		     ; C
+      $command-show-value  54		     ; ,
+      $command-step-deeper  73		     ; ;
+      $command-help  77			     ; ?
+      $command-quit  121		     ; Q
+
+      $command-breakpoint  102		      ; B
+      $bkpt-command-set-breakpoint  123	      ;  S
+      $bkpt-command-clear-breakpoint  103     ;  C
+      $bkpt-command-tell-about-breakpoint 124 ;  T
+      $bkpt-command-list-all-breakpoints 114  ;  L
+      $bkpt-command-goto-breakpoint  107      ;  G
+      $bkpt-command-set-if  111		      ;  I
+      $bkpt-command-set-action  101	      ;  A
+      $bkpt-command-set-patch  120	      ;  P
+
+      $command-when  127		      ; W
+      $when-command-local  114		      ;  L
+      $when-command-global  107		      ;  G
+      $when-command-tell-about-when-conditions  124
+					      ;  T
+
+      $command-chars-to-ignore '(15 12 13 14 40)	; cr lf ^K ^L space
+)
+
+
+;;; These functions are ground specially, so indicate so on their
+;;; property lists.
+
+(putprop 'lambda 'put-miser 'didl-put-format)
+(putprop 'cond 'put-miser 'didl-put-format)
+(putprop 'do 'put-miser 'didl-put-format)
+(putprop 'prog 'put-miser 'didl-put-format)
+(putprop 'progn 'put-miser 'didl-put-format)
+
+;;; Put the interrupt function that calls DIDL on Control-E.
+
+(or (status ttyint 5)
+    (sstatus ttyint 5 (function enter-didl)))
+
+;;; Function to enter DIDL.
+;;; (didl) is the way the user calls it.  didl-evalhook or
+;;; didl-evalhook-step call it as
+;;;  (didl 'stepping form) if we're stepping,
+;;;  (didl '$local-when-condition form) if the local when-condition
+;;;  evaluated to non-NIL, or
+;;;  (didl '$global-when-condition form) if the global when-condition
+;;;  evaluated to non-NIL, or
+;;;  (didl 'breakpoint form breakpoint) if a breakpoint was hit.
+
+(defun didl numbargs
+    (unwind-protect
+       (let
+	((evalhook nil)		; Don't enable DIDL-Evalhook now.
+	 (value)		; Value to quick-return.
+	 (quick-return)		; Don't read commands, just return.
+				;  For use in cases like (didl <atom>).
+	 ($local-when-condition $local-when-condition)
+				; Lambda-bind $local-when-condition to itself
+				;  so that previous $local-when-conditions will
+				;  be retained, but a new one may be set.
+	 ($local-when-condition-enable $local-when-condition-enable)
+	 (frame-array)		; Backtrace created by Framearray.
+				;  NIL if no frames.
+	 (frame-screen)		; Display of frame-array.
+	 (current-frame)	; Frame being looked at now, as returned by
+				;  EVALFRAME.
+	 (current-frame-number)	; Number of current frame.  Index into
+				;  current-frame. 1=top frame.
+	 (force-redisplay)	; Force the display to be redisplayed.
+	 (current-screen)	; Screen that is currently being displayed.
+	 (current-screen-type 'no-screen)	; No screen yet.
+	 (current-pos '(1 1))	; Upper left hand corner.
+	 (current-loc)		; Loc being used.
+	 (current-function)	; Name of function being displayed.
+	 (current-sx)		; Bound to SX currently being pointed to
+	 (broke-at-frame)	; If we broke, frame broken on.
+				;  NIL if we didn't break.
+	 (broke-at-loc)		; Similarly...
+	 (broke-at-function)
+	 (broke-at-sx)
+	 (broke-at-breakpoint)
+	 (breakpoint)		; The current breakpoint itself
+	 (current-screen-length)	; Length of current-screen.
+	 (command-arg)		; A number.
+	 (command-char)		; As typed by user.
+	 (how-many-frames)	; How many in frame-array.
+	 )
+
+	(or didl		; Is DIDL initialized yet?
+	    (progn		; No.
+ 	     (setq terpri t)	; Turn off auto-terpri.
+	     (open-ttys)	; Set up the new TTY channels.
+
+	     ;; Make Control-A undo the echo area.
+
+	     (or (status ttyint 1)
+		 (sstatus ttyint 1 (function unsplit-screen)))
+
+	     ;; Screen width must be one less so we avoid automatic wrapping.
+
+	     (setq $screen-width (1- (cdr (cond ((sfap tyo)
+						 (sfa-call tyo 'ttysize nil))
+						(t (status ttysize))))))
+
+	     (setq $window-length (- (car (cond ((sfap tyo)
+						 (sfa-call tyo 'ttysize nil))
+						(T (status ttysize))))
+				     $echo-area-length
+				     1			; 1 for status line.
+				     $info-area-length))
+
+	     (setq $breakpoint-list nil)
+
+	     (let ((didl-errlist	; Make Control-G enable DIDL-Evalhook.
+		   '(progn
+		     (setq evalhook (function didl-evalhook))
+		     (unsplit-screen))))	; Also restore full screen.
+		  (or (memq didl-errlist errlist)
+		      (push didl-errlist errlist)))
+
+	     (setq $status-line (create-line))
+	     (ht-setup $ht-size)	; Set up $hash-table.
+	     (setq didl t)))		; Now DIDL is initialized.
+
+;;; Always do the following upon entering DIDL.
+
+	(or $is-screen-split?		; Resplit screen if necessary.
+	    (progn
+	     (split-screen)
+	     (echo-area-clear)
+	     (setq $last-screen nil
+		   $last-screen-type 'no-screen
+		   $last-top-window-line nil
+		   $last-pos '(1 1))))
+
+	(setq force-redisplay t)	; The first time, must redisplay.
+
+	(setq current-frame (evalframe nil))	; Get top stack frame.
+	(setq frame-array (framearray current-frame))	; Get backtrace.
+
+	;; Grind all the user functions referred to in frame-array.
+
+	(and frame-array
+	     (progn
+	      (put-frame-array-user-functions frame-array)
+	      (setq current-frame
+		    (setq broke-at-frame (arrayget frame-array 1)))))
+
+	(setq current-frame-number 1)	; Start at top frame.
+	(window-set-status-line 'DIDL)
+
+;;; See if we were entered by the user, or by a breakpoint or stepping.
+
+	(and (> numbargs 0)	; Not entered by user.
+	     (progn
+	      (setq broke-at-sx (setq current-sx (arg 2)))
+
+	      ;; Try to display where we broke.
+	      (let ((ht-entry (ht-find broke-at-sx)))
+		   (setq broke-at-function            ; These could be NIL.
+			 (setq current-function (2nd ht-entry)))
+		   (setq broke-at-loc (setq current-loc (3rd ht-entry)))
+
+		   (cond
+		    ((null broke-at-loc)	; Didn't break in a user func.
+		     (setq current-screen nil)
+		     (setq current-screen-type 'no-screen)
+		     (setq force-redisplay t))
+		    (t				; Did break in a user function.
+		     (setq force-redisplay nil)
+		     (setq current-screen (get broke-at-function 'didl-screen))
+		     (setq current-screen-type 'user-function-screen)
+		     (setq current-pos (loc^begin-pos broke-at-loc)))))
+
+	      (cond
+	       ((eq (arg 1) 'breakpoint)	; Broke at a breakpoint.
+		(setq breakpoint (setq broke-at-breakpoint (arg 3)))
+		(info-area-clear)
+		(info-area-princ '|Hit breakpoint |)	; Say where.
+		(info-area-princ (breakpoint^name breakpoint))
+		(and (breakpoint^patch-enable breakpoint)
+		     (info-area-princ '|, but has an enabled patch!|)))
+						; Warn user about patches.
+	       ((or
+		 (eq (arg 1) 'stepping)
+		 (eq (arg 1) '$global-when-condition)
+		 (eq (arg 1) '$local-when-condition))
+		(cond
+
+		 ;; If stepping on atom or 'foo, just show what we're eval'ing
+		 ;;  and wait for user to indicate we can continue.
+
+		 ((or (atom broke-at-sx)
+		      (eq (car broke-at-sx) (function quote)))
+		  (info-area-clear)
+		  (info-area-prin1 broke-at-sx)
+		  (info-area-princ '| => |)
+		  (let ((prinlevel 3) (prinlength 4))
+		       (setq value (evalhook broke-at-sx nil))
+		       (info-area-prin1t value))
+		  (info-area-princ '|--Continue--|)
+		  (tyi)
+		  (setq quick-return t))
+		 (t
+		  (info-area-clear)
+		  (cond
+		   ((eq (arg 1) 'stepping)
+		    (info-area-princt '|Stepping   |))
+		   ((eq (arg 1) '$global-when-condition)
+		    (info-area-princ '|Global when-condition |)
+		    (info-area-print $global-when-condition)
+		    (info-area-princt '| satisfied	 |))
+		   ((eq (arg 1) '$local-when-condition)
+		    (info-area-princ '|Local when-condition |)
+		    (info-area-print $local-when-condition)
+		    (info-area-princt '|satisfied|)))))))))
+
+;;; Main command loop
+
+	(do-forever
+	 (and quick-return		; Used when eval'ing atom or 'foo.
+	      (return value))
+
+	 ;; Do redisplay of screen if necessary.
+
+	 (didl-redisplay current-screen current-screen-type current-pos
+			 current-sx current-function force-redisplay
+			 current-frame-number how-many-frames)
+
+	 (or $is-screen-split?
+	     (split-screen))	 ; In case someone has unsplit it e.g. a higher
+				 ;  invocation of DIDL.
+	 (setq force-redisplay nil)
+
+	 ;; Now that redisplay is done, update display info.
+
+	 (setq $last-screen current-screen)
+	 (setq $last-screen-type current-screen-type)
+	 (setq $last-pos current-pos)
+	 (and current-screen
+	      (setq current-screen-length (arrayget current-screen 0)))
+
+	 (and (eq current-screen-type 'frame-screen)
+	      (progn
+	       (setq current-frame-number (1st current-pos))
+	       (setq current-frame (arrayget frame-array current-frame-number))
+	       ))
+
+
+	 ;;Read an arg and command.
+
+	 (setq command-arg (read-command-arg))
+	 (setq command-char (read-command-char))
+
+	 ;;This catch catches on Abort-Command, so various commands
+	 ;; can be aborted.
+
+	 (and
+	  (eq
+	   'abort-command
+	   (catch
+	    (cond
+
+;;; Display manipulation commands.
+
+	     ;; Display first windowful of current-screen.
+
+	     ((= $command-first-window command-char)
+	      (if (eq current-screen-type 'no-screen)
+		  (didl-error '|No window to scroll.|)
+		  (setq current-pos '(1 1))))
+
+
+	     ;; Display last screenful.
+
+	     ((= $command-last-window command-char)
+	      (if (eq current-screen-type 'no-screen)
+		  (didl-error '|No window to scroll.|)
+		  (setq current-pos (list current-screen-length 1))))
+
+
+	     ;; Go forward or backward one or several windows, but
+	     ;; don't go too far.
+
+	     ((= $command-next-or-previous-window command-char)
+	      (if (eq current-screen-type 'no-screen)
+		  (didl-error '|No window to scroll.|)
+		  (setq current-pos
+			(list
+			 (force-into-range 1 current-screen-length
+					   (+ $last-top-window-line
+					      (if (> command-arg 0) -1 1)
+					      (// $window-length 2)
+					      (* $window-length command-arg)))
+			 1))))
+
+
+	     ;; Force the display to be redone.
+
+	     ((= $command-rewindow command-char)
+	      (setq force-redisplay t))
+
+
+	     ;; Point to the left paren of the current sx.
+
+	     ((= $command-show-left-paren command-char)
+	      (if (eq current-screen-type 'user-function-screen)
+		  (setq current-pos (loc^begin-pos current-loc))
+		  (didl-error '|Not looking at a user form.|)))
+
+
+	     ;; Point to the right paren of the current sx.
+
+	     ((= $command-show-right-paren command-char)
+	      (if (eq current-screen-type 'user-function-screen)
+		  (setq current-pos (loc^end-pos current-loc))
+		  (didl-error '|Not looking at a user form.|)))
+	     
+;;; Frame selection commands.
+
+
+	     ;; Display the frame backtrace.
+
+	     ((= $command-look-at-frames command-char)
+	      (cond
+	       (frame-array
+		(or frame-screen
+		    (setq frame-screen (make-frame-screen frame-array)))
+		(setq current-screen frame-screen)
+		(setq current-screen-type 'frame-screen)
+		(setq current-pos (list current-frame-number 1))
+		(setq how-many-frames (arrayget frame-array 0)))
+	       (t (didl-error '|No frames to display.|))))
+
+
+	     ;; Jump directly to the frame whose number is command-arg.
+
+	     ((= $command-jump-to-frame command-char)
+	      (if (eq current-screen-type 'frame-screen)
+		  (setq current-pos
+			(list (force-into-range 1 how-many-frames command-arg)
+			      1))
+		  (didl-error '|Not looking at frames.|)))
+
+
+	     ;; Show the user function and sx associated with the current
+	     ;; frame if possible, else just show the sx.
+	     ;; If we broke, frame #1 is  (DIDL-EVALHOOK[-STEP] ...), and
+	     ;; is not really the frame of what is about to be EVAL'd.
+	     ;; But we'd like to make it appear this way, so we check for
+	     ;; specially below.  (This subsumes the old "/" command.)
+
+	     ((= $command-show-frame command-char)
+	      (cond
+	       ((and (= command-arg 1) (> numbargs 0))
+			      ; If we broke, first frame is not really a frame,
+			      ;  but is the DIDL-Evalhook or DIDL-Evalhook-Step
+			      ;  frame.  But make it look like a real frame.
+		(setq current-sx broke-at-sx)
+		(let ((ht-entry (ht-find current-sx)))
+		     (setq current-function (2nd ht-entry))
+		     (setq current-loc (3rd ht-entry)))
+		(cond
+		 ((null current-loc)
+		  (setq current-screen nil)
+		  (setq current-screen-type 'no-screen)
+		  (setq force-redisplay t))
+		 (t
+		  (setq current-screen (get current-function 'didl-screen))
+		  (setq current-screen-type 'user-function-screen)
+		  (setq current-pos (loc^begin-pos current-loc)))))
+	      (frame-array
+		(setq current-sx (3rd current-frame))
+		(let ((ht-entry (ht-find current-sx)))
+		     (setq current-function (2nd ht-entry))
+		     (setq current-loc (3rd ht-entry)))
+		(cond
+		 ((null current-loc)
+		  (setq current-screen nil)
+		  (setq current-screen-type 'no-screen)
+		  (setq force-redisplay t))
+		 (t
+		  (setq current-screen (get current-function 'didl-screen))
+		  (setq current-screen-type 'user-function-screen)
+		  (setq current-pos (loc^begin-pos current-loc)))))
+	       (t
+		(didl-error '|No frame to show.|))))
+
+;;; Moving-around commands.
+
+
+	     ;; Move forward one or several left parens, ignoring the
+	     ;; structure of the code.
+
+	     ((= $command-into-sx command-char)
+	      (cond
+	       ((eq current-screen-type 'user-function-screen)
+		(setq current-loc (screen-go-into-sx current-screen
+						     current-loc
+						     command-arg))
+		(setq current-pos (loc^begin-pos current-loc))
+		(setq current-sx (leftparenloc^sx current-loc)))
+	       (t
+		(didl-error '|Not looking at a user function.|))))
+
+
+	     ;; Move backward one or several left parens.
+
+	     ((= $command-out-of-sx command-char)
+	      (cond
+	       ((eq current-screen-type 'user-function-screen)
+		(setq current-loc (screen-go-out-of-sx current-screen
+						       current-loc
+						       command-arg))
+		(setq current-pos (loc^begin-pos current-loc))
+		(setq current-sx (leftparenloc^sx current-loc)))
+	       (t
+		(didl-error '|Not looking at a user function.|))))
+
+
+	     ;; Move forward one or several left parens on the same
+	     ;; structural level as the current sx, if in a
+	     ;; user-function-screen.  If looking at frames, go deeper
+	     ;; one or several frames.
+
+	     ((= $command-next command-char)
+	      (cond
+	       ((eq current-screen-type 'user-function-screen)
+		(setq current-loc (screen-next-sx current-screen
+						  current-loc
+						  command-arg))
+		(setq current-pos (loc^begin-pos current-loc))
+		(setq current-sx (leftparenloc^sx current-loc)))
+	       ((eq current-screen-type 'frame-screen)
+		(setq current-pos
+		      (list (force-into-range 1 how-many-frames
+					      (+ current-frame-number
+						 command-arg))
+			    1)))
+	       (t
+		(didl-error '|Not looking at frames or a user function.|))))
+
+
+	     ;; Move backward one or several left parens on this level,
+	     ;; if looking at a user-function-screen.  If looking at frames,
+	     ;; go up one or more frames.
+
+	     ((= $command-previous command-char)
+	      (cond
+	       ((eq current-screen-type 'user-function-screen)
+		(setq current-loc (screen-previous-sx current-screen
+						      current-loc
+						      command-arg))
+		(setq current-pos (loc^begin-pos current-loc))
+		(setq current-sx (leftparenloc^sx current-loc)))
+	       ((eq current-screen-type 'frame-screen)
+		(setq current-pos
+		      (list (force-into-range 1 how-many-frames
+					      (- current-frame-number
+						 command-arg))
+			    1)))
+	       (t
+		(didl-error '|Not looking at frames or a user function.|))))
+
+
+	     ;; Select and display a user function.
+
+	     ((= $command-examine-user-function command-char)
+	      (let ((func (echo-area-prompt-and-read '|Function: |)))
+		   (cond
+		    ((user-function func)
+		     (put-defun-if-necessary func)
+		     (setq current-screen (get func 'didl-screen))
+		     (setq current-screen-type 'user-function-screen)
+		     (setq current-loc (get func 'didl-toploc))
+		     (setq current-function func)
+		     (setq current-sx (leftparenloc^sx current-loc))
+		     (setq current-pos (loc^begin-pos current-loc)))
+		    (t
+		     (didl-error '|Not a user function.|)))))
+
+
+	     ;;  Force a user function to be ground, though not displayed.
+
+	     ((= $command-grind-function command-char)
+	      (let ((func (echo-area-prompt-and-read '|Function: |)))
+		   (if (user-function func)
+		       (put-defun func)
+		       (didl-error '|Not a user function.|))))
+
+
+;;; Manipulating frame values.
+
+
+	     ;; Do an EVAL in the environment of the current frame,
+	     ;; if there is one, or just do an EVAL if there isn't.
+
+	     ((= $command-evaluate-in-frame command-char)
+	      (let ((what-to-eval (echo-area-prompt-and-read '|Evaluate: |)))
+		   (if frame-array
+		       (echo-area-print
+			(car (errset (evalhook what-to-eval
+					       (4th current-frame)
+					       (function didl-evalhook)))))
+		       (echo-area-print
+			(car (errset (evalhook what-to-eval
+					       (function didl-evalhook))))))
+		   (echo-area-terpri)))
+
+
+	     ;; Force a return from the current frame, returning a
+	     ;; given value.
+
+	     ((= $command-force-return-from-frame command-char)
+	      (let ((what-to-return (echo-area-prompt-and-read '|Return: |)))
+		   (cond
+		    (frame-array
+		     (setq what-to-return (errset (eval what-to-return
+							(4th current-frame))))
+		     (if what-to-return
+			 (freturn (2nd current-frame) (car what-to-return))
+			 (didl-error '|Error while eval'ing value.|)))
+		    (t
+		     (didl-error '|Nothing to return to.|)))))
+
+;;; Stepping-type commands.
+
+
+	     ;; Continue from where we broke.
+
+	     ((= $command-continue command-char)
+	      (cond
+	       (broke-at-frame				; Did we really break?
+		(return (evalhook (if (and broke-at-breakpoint
+					   (breakpoint^patch-enable
+					    broke-at-breakpoint))
+				      (breakpoint^patch broke-at-breakpoint)
+				      broke-at-sx)	; Do breakpoint patch
+							;  if it has one.
+   ;;;doesn't work		       (4th broke-at-frame)
+				  (function didl-evalhook))))
+	       (t
+		(didl-error '|Nothing to continue.|))))
+
+
+	     ;; Continue from where we broke, but display the eventual
+	     ;; value of the form we broke on.
+
+	     ((= $command-show-value command-char)
+	      (cond
+	       (broke-at-frame
+		(vars (value)
+		      (setq value
+			    (evalhook (if (and broke-at-breakpoint
+					       (breakpoint^patch-enable
+						broke-at-breakpoint))
+					  (breakpoint^patch broke-at-breakpoint)
+					  broke-at-sx)
+   ;;; doesn't work		   (4th broke-at-frame)
+				      (function didl-evalhook)))
+
+		      ;; Must redisplay, since much may have happened
+		      ;; in the meantime.
+
+		      (didl-redisplay current-screen current-screen-type
+				      current-pos current-sx current-function
+				      force-redisplay current-frame-number
+				      how-many-frames)
+		      (setq force-redisplay nil)
+		      (setq $last-screen current-screen)
+		      (setq $last-screen-type current-screen-type)
+		      (setq $last-pos current-pos)
+		      (and current-screen
+			   (setq current-screen-length
+				 (arrayget current-screen 0)))
+		      (info-area-clear)
+		      (info-area-princ '|Returned: |)
+		      (info-area-prin1t value)
+		      (info-area-princ '|--Continue--|)
+		      (window-set-cursor-with-pos $last-top-window-line
+						  current-pos)
+		      (tyi)
+		      (return value)))
+	       (t
+		(didl-error '|Nothing to continue.|))))
+
+
+	     ;; Continue from where we broke, but enable DIDL-Evalhook-Step
+	     ;; so we'll break on deeper EVAL's.  Eventually, show the value
+	     ;; of the form we broke on.
+
+	     ((= $command-step-deeper command-char)
+	      (cond
+	       (broke-at-frame
+		(vars (value)
+		      (setq value
+			    (evalhook (if (and broke-at-breakpoint
+					       (breakpoint^patch-enable
+						broke-at-breakpoint))
+					  (breakpoint^patch broke-at-breakpoint)
+					  broke-at-sx)
+   ;;; doesn't work		  (4th broke-at-frame)
+				      (function didl-evalhook-step)))
+		      (didl-redisplay current-screen current-screen-type
+				      current-pos current-sx
+				      current-function force-redisplay
+				      current-frame-number how-many-frames)
+		      (setq force-redisplay nil)
+		      (setq $last-screen current-screen)
+		      (setq $last-screen-type current-screen-type)
+		      (setq $last-pos current-pos)
+		      (and current-screen
+			   (setq current-screen-length
+				 (arrayget current-screen 0)))
+		      (info-area-clear)
+		      (info-area-princ '|Returned: |)
+		      (info-area-prin1t value)
+		      (info-area-princ '|--Continue--|)
+		      (info-area-terpri)
+		      (window-set-cursor-with-pos $last-top-window-line
+						  current-pos)
+		 
+		      (tyi)
+		      (return value)))
+	       (t
+		(didl-error '|Nothing to continue.|))))
+
+;;; Breakpoint commands.
+
+	     ;; Breakpoint commands are all two letters, so enter here
+	     ;; and read the next letter.
+
+	     ((= $command-breakpoint command-char)
+	      (setq command-char (read-command-char))
+
+	      (cond
+
+	       ;; Set a breakpoint, and give it a default or a user-assigned
+	       ;; name.
+
+	       ((= $bkpt-command-set-breakpoint command-char)
+		(cond
+		 ((not (atom current-sx))
+		  (setq breakpoint
+			(breakpoint-enter current-sx current-function))
+		  (store-breakpoint^name
+		   breakpoint
+		   (echo-area-prompt-and-read-with-default
+		    (breakpoint^name breakpoint)
+		    '|Breakpoint name [type space for default name: |
+		    (breakpoint^name breakpoint)
+		    `|]: |))
+		  (info-area-clear)
+		  (info-area-princ '|Breakpoint set, named |)
+		  (info-area-prin1t (breakpoint^name breakpoint)))
+		 (t
+		  (didl-error '|Can't set a breakpoint now.|))))
+
+
+	       ;; Clear a breakpoint.
+
+	       ((= $bkpt-command-clear-breakpoint command-char)
+		(cond
+		 (breakpoint
+		  (let ((breakpoint-name
+			 (echo-area-prompt-and-read-with-default
+			  (breakpoint^name breakpoint)
+			  '|Breakpoint to clear [type space for default: |
+			  (breakpoint^name breakpoint)
+			  '|]: |)))
+		       (cond
+			((breakpoint-remove breakpoint-name)
+			 (and (eq breakpoint-name (breakpoint^name breakpoint))
+			      (setq breakpoint nil))
+			 (info-area-clear)
+			 (info-area-princ '|Breakpoint |)
+			 (info-area-prin1 breakpoint-name)
+			 (info-area-princt '| cleared.|))
+			(t
+			 (didl-error '|No breakpoint has that name.|)))))
+		 (t
+		  (didl-error '|No breakpoint to clear.|))))
+
+
+	       ;; Set an if on the current breakpoint, which must
+	       ;; be non-NIL for the breakpoint to force a break.  If
+	       ;; command-arg is negative, disable the if,
+	       ;; which will force a break always.  Prompting for an if
+	       ;; defaults to the old if.
+
+	       ((= $bkpt-command-set-if command-char)
+		(cond
+		 ((not (atom current-sx))
+		  (setq breakpoint
+			(breakpoint-enter current-sx current-function))
+		  (cond
+		   ((< command-arg 0)
+		    (store-breakpoint^if-enable breakpoint nil)
+		    (info-area-clear)
+		    (info-area-princ '|Disabled if on breakpoint |)
+		    (info-area-princt (breakpoint^name breakpoint)))
+		   (t
+		    (store-breakpoint^if
+		     breakpoint
+		     (echo-area-prompt-and-read-with-default
+		      (breakpoint^if breakpoint)
+		      (breakpoint^name breakpoint)
+		      '| If [type space for old if]:  |))
+		    (store-breakpoint^if-enable breakpoint t))))
+		 (t
+		  (didl-error '|Can't set a breakpoint now.|))))
+
+	       ;; Set an action on the current breakpoint, which will always
+	       ;; be EVAL'd, even if the breakpoint does not break.  If
+	       ;; command-arg is negative, disable the action.
+	       ;; The prompt for an action defaults to the old action.
+
+	       ((= $bkpt-command-set-action command-char)
+		(cond
+		 ((not (atom current-sx))
+		  (setq breakpoint
+			(breakpoint-enter current-sx current-function))
+		  (cond
+		   ((< command-arg 0)
+		    (store-breakpoint^action-enable breakpoint nil)
+		    (info-area-clear)
+		    (info-area-princ '|Disabled action on breakpoint |)
+		    (info-area-princt (breakpoint^name breakpoint)))
+		   (t
+		    (store-breakpoint^action
+		     breakpoint
+		     (echo-area-prompt-and-read-with-default
+		      (breakpoint^action breakpoint)
+		      (breakpoint^name breakpoint)
+		      '| Action [type space for old action]: |))
+		    (store-breakpoint^action-enable breakpoint t))))
+		 (t
+		  (didl-error '|Can't set a breakpoint now.|))))
+
+
+	       ;; Set a patch on the current breakpoint, which will be
+	       ;; EVAL'd INSTEAD of the sx the breakpoint is set on, when
+	       ;; the breakpoint is hit.  If command-arg is negative, disable
+	       ;; the patch.  The prompt for the patch defaults to the
+	       ;; old patch.
+
+	       ((= $bkpt-command-set-patch command-char)
+		(cond
+		 ((not (atom current-sx))
+		  (setq breakpoint
+			(breakpoint-enter current-sx current-function))
+		  (cond
+		   ((< command-arg 0)
+		    (store-breakpoint^patch-enable breakpoint nil)
+		    (info-area-clear)
+		    (info-area-princ '|Disabled patch on breakpoint |)
+		    (info-area-princt (breakpoint^name breakpoint)))
+		   (t
+		    (store-breakpoint^patch
+		     breakpoint
+		     (echo-area-prompt-and-read-with-default
+		      (breakpoint^patch breakpoint)
+		      (breakpoint^name breakpoint)
+		      '| Patch [type space for old patch]: |))
+		    (store-breakpoint^patch-enable breakpoint t))))
+		 (t
+		  (didl-error '|Can't set a breakpoint now.|))))
+
+
+
+	       ;; List all the breakpoints on the $breakpoint-list.
+
+	       ((= $bkpt-command-list-all-breakpoints command-char)
+		(window-clear-line 1)
+		(window-princ '|Breakpoints:|)
+		(window-terpri)
+		(mapc (function
+		       (lambda (pair)
+			       (window-prin1 (breakpoint^name (cdr pair)))
+			       (window-princ '|  in |)
+			       (window-prin1 (breakpoint^function (cdr pair)))
+			       (window-terpri)))
+		      $breakpoint-list)
+		(or $breakpoint-list
+		    (window-princ '|No breakpoints have been set|)
+		    (window-terpri)))
+
+
+	       ;; Give the name, condition, action, and patch of the
+	       ;; current breakpoint.
+
+	       ((= $bkpt-command-tell-about-breakpoint command-char)
+		(cond
+		 (breakpoint
+		  (window-clear-line 1)
+		  (window-princ (breakpoint^name breakpoint))
+		  (window-princ '|: in |)
+		  (window-prin1 (breakpoint^function breakpoint))
+		  (window-terpri)
+		  (or (breakpoint^if-enable breakpoint)
+		      (window-princ '|[Disabled] |))
+		  (window-princ '|If: |)
+		  (window-prin1 (breakpoint^if breakpoint))
+		  (window-terpri)
+		  (or (breakpoint^action-enable breakpoint)
+		      (window-princ '|[Disabled] |))
+		  (window-princ '|Action: |)
+		  (window-prin1 (breakpoint^action breakpoint))
+		  (window-terpri)
+		  (or (breakpoint^patch-enable breakpoint)
+		      (window-princ '|[Disabled] |))
+		  (window-princ '|Patch: |)
+		  (window-prin1 (breakpoint^patch breakpoint))
+		  (window-terpri))
+		 (t
+		  (didl-error '|No current breakpoint.|))))
+
+
+	       ;; Ask for a breakpoint name from the user, and display
+	       ;; the user function in which the breakpoint is set,
+	       ;; pointing to where the breakpoint is set.
+
+	       ((= $bkpt-command-goto-breakpoint command-char)
+		(do ((name (echo-area-prompt-and-read '|Breakpoint name: |))
+		     (ht-entry)
+		     (bkpts $breakpoint-list (cdr bkpts)))
+		    ((null bkpts)
+		     (didl-error '|No such breakpoint.|))
+		    (and (eq name (breakpoint^name (cdar bkpts)))
+			 (progn
+			  (setq current-sx (caar bkpts))
+			  (setq ht-entry (ht-find current-sx))
+			  (setq current-function (2nd ht-entry))
+			  (setq current-loc (3rd ht-entry))
+			  (setq current-pos (loc^begin-pos current-loc))
+			  (setq current-screen
+				(get current-function 'didl-screen))
+			  (setq breakpoint (cdar bkpts))
+			  (setq current-screen-type 'user-function-screen)
+			  (return nil)))))
+
+
+	       ;; The user typed an unknown second letter for a breakpoint
+	       ;; command.
+
+	       (t
+		(didl-error '|Not a breakpoint command.|))))
+
+;;; When-condition commands.
+
+	     ;; When-condition commands are all two letters, so enter here
+	     ;; and read the next letter.
+
+	     ((= $command-when command-char)
+	      (setq command-char (read-command-char))
+
+	      (cond
+
+	       ;; Operate on the global when-condition.
+
+	       ((= $when-command-global command-char)
+		(cond
+		 ((< command-arg 0)
+		  (setq $global-when-condition-enable nil)
+		  (info-area-clear)
+		  (info-area-princt '|Disabled global when-condition |))
+		 (t
+		  (setq $global-when-condition
+			(echo-area-prompt-and-read-with-default
+			 $global-when-condition
+			 '|Global when-condition [type space for old one]: |))
+		  (setq $global-when-condition-enable t))))
+
+
+	       ;; Operate on the local when-condition.
+
+	       ((= $when-command-local command-char)
+		(cond
+		 ((< command-arg 0)
+		  (setq $local-when-condition-enable nil)
+		  (info-area-clear)
+		  (info-area-princt '|Disabled local when-condition |))
+		 (t
+		  (setq $local-when-condition
+			(echo-area-prompt-and-read-with-default
+			 $local-when-condition
+			 '|Local when-condition [type space for old one]: |))
+		  (setq $local-when-condition-enable t))))
+
+
+	       ;; Tell about the global and local when-conditions.
+
+	       ((= $when-command-tell-about-when-conditions command-char)
+		(window-clear-line 1)
+		(or $local-when-condition-enable
+		    (window-princ '|[Disabled] |))
+		(window-princ '|Local when-condition: |)
+		(window-prin1 $local-when-condition)
+		(window-terpri)
+		(or $global-when-condition-enable
+		    (window-princ '|[Disabled] |))
+		(window-princ '|Global when-condition: |)
+		(window-prin1 $global-when-condition)
+		(window-terpri))
+	       
+	       (t
+		(didl-error '|Not a when-condition command.|))))
+
+;;; Miscellaneous commands.
+
+
+	     ;; The Help command displays libdoc;didl help.
+
+	     ((= $command-help command-char)
+	      (let ((help-file (open '((dsk libdoc) didl help) 'in)))
+		   (window-clear)
+		   (do ((char (tyi help-file -1) (tyi help-file -1)))
+		       ((= char -1)
+			(window-terpri)
+			(window-princ '|End of help.  --Redisplay--|)
+			(close help-file))
+		       (or (member char '(14 3))
+			   (window-tyo char))))
+	      (tyi)
+	      (setq force-redisplay t))
+
+
+	     ;; Quit from DIDL, enabling DIDL-Evalhook.
+
+	     ((= $command-quit command-char)
+	      (eval '(setq evalhook (function didl-evalhook)) nil)
+	      (unsplit-screen)
+	      (return 'QUIT-FROM-DIDL))
+
+	     
+	     ;; Ignore certain characters.
+
+	     ((memq command-char $command-chars-to-ignore))
+
+
+	     ;; All other characters are errors.
+
+	     (t
+	      (didl-error '||)
+	      (tyo 7)))
+
+	    abort-command))
+	  (progn
+	   (echo-area-clear)
+	   (didl-error '|Command aborted.|)))
+	  ;End of catch for aborting commands
+	 ))
+       (unsplit-screen)))
+
+
+;;; DIDL-Evalhook is the evalhook function, which looks at every call
+;;; to eval when it is enabled.  It calls didl if we're stepping or a
+;;; breakpoint has been hit.  The call to didl returns with the value
+;;; of the form.
+
+(defun didl-evalhook (form)
+       (let ((breakpoint (assq form $breakpoint-list)))
+	    (cond
+	     ((and $local-when-condition-enable
+		   (car (errset (eval $local-when-condition) nil)))
+	      (didl '$local-when-condition form))
+	     ((and $global-when-condition-enable
+		   (car (errset (eval $global-when-condition) nil)))
+	      (didl '$global-when-condition form))
+	     (breakpoint				; We hit a breakpoint.
+	      (setq breakpoint (cdr breakpoint))
+	      (and (breakpoint^action-enable breakpoint)
+		   (eval (breakpoint^action breakpoint)))
+	      (let ((should-break (if (breakpoint^if-enable breakpoint)
+				      (eval (breakpoint^if breakpoint))
+				      t)))
+		   (cond			; Eval patch if there is one.
+		    ((breakpoint^patch-enable breakpoint)
+		     (and should-break
+			  (didl 'breakpoint form breakpoint))
+		     (eval (breakpoint^patch breakpoint)))
+		    (t
+		     (if should-break
+			 (didl 'breakpoint form breakpoint)
+			 (evalhook form (function didl-evalhook)))))))
+
+	     ;; No breakpoint, so just continue.
+
+	     (t
+	      (evalhook form (function didl-evalhook))))))
+
+;;; Didl-Evalhook-Step is for single-stepping, and always calls
+;;; didl before evaluating a form.  But it does check for breakpoints
+;;; first.
+
+(defun didl-evalhook-step (form)
+       (let ((breakpoint (assq form $breakpoint-list)))
+	    (cond
+	     ((and $local-when-condition-enable
+		   (car (errset (eval $local-when-condition) nil)))
+	      (didl '$local-when-condition form))
+	     ((and $global-when-condition-enable
+		   (car (errset (eval $global-when-condition) nil)))
+	      (didl '$global-when-condition form))
+	     (breakpoint
+	      (setq breakpoint (cdr breakpoint))
+	      (eval (breakpoint^action breakpoint))
+	      (let ((should-break (if (breakpoint^if-enable breakpoint)
+				      (eval (breakpoint^if breakpoint))
+				      t)))
+		   (cond
+		    ((breakpoint^patch-enable breakpoint)
+		     (and should-break
+			  (didl 'breakpoint form breakpoint))
+		     (eval (breakpoint^patch breakpoint)))
+		    (t
+		     (if should-break
+			 (didl 'breakpoint form breakpoint)
+			 (evalhook form (function didl-evalhook)))))))
+
+	     ;; Break to DIDL, since we're stepping.
+
+	     (t
+	      (didl 'stepping form)))))
+
+
+;;; DStep is to be called by the user.  It is for stepping a form from
+;;; the beginning, without entering DIDL first.
+
+(defun dstep (form)
+       (evalhook form (function didl-evalhook-step)))
+
+
+;;; Enter-DIDL is the interrupt function put on Control-E.  It effectively
+;;; does "(didl)".
+
+(defun enter-didl (tty char)
+       (nointerrupt nil)
+       (tyi tty)
+       (print (didl))
+       (terpri))
+
+;;; DIDL-Redisplay compares $last-screen, etc. with its arguments, to
+;;; determine if a redisplay should be done.
+
+(defun didl-redisplay (current-screen current-screen-type current-pos
+		       current-sx current-function force-redisplay
+		       current-frame-number how-many-frames)
+       (vars (old-top-window-line)
+	     (cond
+	      ((not (eq current-screen-type 'no-screen))
+	       (setq old-top-window-line $last-top-window-line)
+	   
+	       (cond
+		((or force-redisplay (not (eq current-screen $last-screen)))
+		 (setq $last-top-window-line
+		       (window-redisplay current-screen (1st current-pos))))
+		(t (setq $last-top-window-line
+			 (window-redisplay-if-necessary current-screen
+							$last-top-window-line
+							(1st current-pos)))))
+	   
+	       (and (or force-redisplay
+			(not (eq current-screen $last-screen))
+			(not (equal old-top-window-line
+				    $last-top-window-line)))
+
+		    ;; Set up status line and display what needs to
+		    ;; be displayed.
+
+		    (cond
+		     ((eq current-screen-type 'user-function-screen)
+			  (window-set-status-line
+			   current-function
+			   '|  (Frame #| current-frame-number
+			   '|)  [Top line: | $last-top-window-line
+			   (cond
+			    ((= $last-top-window-line 1)
+			     (if
+			      (<= (arrayget current-screen 0)
+				  (+ $last-top-window-line $window-length -1))
+			      '| ]  --All--|
+			      '| ]  --Top--|))
+			    ((> (arrayget current-screen 0)
+			     (+ $last-top-window-line $window-length -1))
+			     '| ]  --Middle--|)
+			    (t
+			     '| ]  --Bottom--|)))
+		      (window-display-status-line))
+		     ((eq current-screen-type 'frame-screen)
+		      (window-set-status-line '|Frame display  [|
+					    how-many-frames '| frames]|)
+		      (window-display-status-line))))
+	   
+	       (window-set-cursor-with-pos $last-top-window-line current-pos))
+	  
+	      (force-redisplay
+	       (cond
+		((and (atom current-sx) (not (null current-sx)))
+		 (window-clear-and-print current-sx)
+		 (window-set-status-line '|Atom|)
+		 (window-display-status-line))
+		(current-sx
+		 (window-clear-and-print current-sx)
+		 (window-set-status-line '|Non-user-form|)
+		 (window-display-status-line))
+		(t
+		 (window-clear)
+		 (window-set-status-line 'DIDL)
+		 (window-display-status-line)))))))
+
+
+;;; DIDL-Error reports the error in the echo area.
+
+(defun didl-error (error-message)
+       (info-area-clear)
+       (tyo 7)
+       (info-area-princ error-message))
+
+;;; Functions for adding and removing breakpoints from $breakpoint-list.
+
+;;; Breakpoint-Enter looks for a breakpoint for the given sx on
+;;; $breakpoint-list.  It returns that breakpoint if found, otherwise
+;;; it creates a fresh new breakpoint.
+
+(defun breakpoint-enter (sx function)
+       (cond
+	((cdr (assq sx $breakpoint-list)))
+	(t
+	 (let ((breakpoint (create-breakpoint)))
+	      (push (cons sx breakpoint) $breakpoint-list)
+	      (store-breakpoint^name breakpoint (breakpoint-new-name))
+	      (store-breakpoint^function breakpoint function)
+	      (store-breakpoint^if-enable breakpoint nil)
+	      (store-breakpoint^if breakpoint t)
+	      (store-breakpoint^action-enable breakpoint nil)
+	      (store-breakpoint^action breakpoint nil)
+	      (store-breakpoint^patch-enable breakpoint nil)
+	      (store-breakpoint^patch breakpoint nil)
+	      breakpoint))))
+
+
+;;; Breakpoint-Remove splices the breakpoint entry of the breakpoint with the
+;;; name breakpoint-name out of $breakpoint-list.
+;;; If there is no breakpoint by that name, Breakpoint-Remove returns nil;
+;;; if it succeeds, it returns t.
+
+(defun breakpoint-remove (breakpoint-name)
+       (do ((rest $breakpoint-list (cdr rest)))
+	   ((null rest) nil)
+	   (cond
+	    ((eq breakpoint-name (breakpoint^name (cdr (1st rest))))
+	     (setq $breakpoint-list (delq (1st rest) $breakpoint-list))
+	     (return t)))))
+
+
+;;; Breakpoint-New-Name generates a new interned name for a breakpoint.
+
+(defun breakpoint-new-name ()
+       (let ((base 10.) (*nopoint t))
+	    (implode (append '(B P T) (explode (setq $unique-number
+						     (1+ $unique-number)))))))
+
+;;; Functions for moving around in screens, using locs.
+
+
+;;; Screen-Go-Into-SX tries to go into the next non-atomic sx.
+;;; It scans forward from the current-loc, looking for a marker
+;;; containing a leftparenloc.  If it finds one, it stops at the next
+;;; loc after that.  If it doesn't find one, it doesn't move.
+;;; It returns the loc it stops at.
+;;; count indicates how many times to do this.  If count < 0, it will call
+;;; screen-go-out-of-sx instead.
+
+(defun screen-go-into-sx (screen current-loc count)
+       (if (< count 0)
+	   (screen-go-out-of-sx screen current-loc (- count))
+	   (catch
+	    (do ((i 1 (1+ i)))
+		((> i count) current-loc)
+		(do ((next-loc current-loc))
+		    (nil)
+		    (setq next-loc
+			  (screen-next-loc screen next-loc))
+		    (if (null next-loc)
+			(throw current-loc)
+			(and (eq (cdr next-loc) 'leftparenloc)
+			     (return (setq current-loc next-loc)))))))))
+
+
+;;; Screen-Go-Out-Of-SX searches backwards for a leftparenloc.
+
+(defun screen-go-out-of-sx (screen current-loc count)
+       (if (< count 0)
+	   (screen-go-into-sx screen current-loc (- count))
+	   (catch
+	    (do ((i 1 (1+ i)))
+		((> i count) current-loc)
+		(do ((previous-loc current-loc))
+		    (nil)
+		    (setq previous-loc
+			  (screen-previous-loc screen previous-loc))
+		    (if (null previous-loc)
+			(throw current-loc)
+			(and (eq (cdr previous-loc) 'leftparenloc)
+			     (return (setq current-loc previous-loc)))))))))
+
+;;; Screen-Next-SX searches forward from the end of the current-loc
+;;; (after its corresponding rightparenloc), looking for a leftparenloc.
+;;; If it doesn't find one, it stays where it was.
+
+(defun screen-next-sx (screen current-loc count)
+       (if (< count 0)
+	   (screen-previous-sx screen current-loc (- count))
+	   (catch
+	    (do ((i 1 (1+ i)))
+		((> i count) current-loc)
+		(do ((next-loc current-loc))
+		    (nil)
+		    (setq next-loc
+			  (screen-next-loc screen
+					   (cdr (screen-char-or-marker
+						 screen
+						 (loc^end-pos next-loc)))))
+		    (if (or (null next-loc) (eq (cdr next-loc) 'rightparenloc))
+			(throw current-loc)
+			(and (eq (cdr next-loc) 'leftparenloc)
+			     (return (setq current-loc next-loc)))))))))
+
+
+;;; Screen-Previous-SX searches backwards, looking for a leftparenloc,
+;;; skipping left parens at levels deeper than the current-loc.
+
+(defun screen-previous-sx (screen current-loc count)
+       (if (< count 0)
+	   (screen-next-sx screen current-loc (- count))
+	   (catch
+	    (do ((i 1 (1+ i)))
+		((> i count) current-loc)
+		(do ((previous-loc current-loc))
+		    (nil)
+		    (setq previous-loc
+			  (screen-previous-loc screen previous-loc))
+		    (if (or (null previous-loc) (eq (cdr previous-loc)
+						    'leftparenloc))
+			(throw current-loc)
+			(and (eq (cdr previous-loc) 'rightparenloc)
+			     (return
+			      (setq current-loc
+				    (cdr (screen-char-or-marker
+					  screen
+					  (rightparenloc^begin-pos
+					   previous-loc))))))))))))
+
+;;; Screen-Next-Loc returns the next loc it finds after current-loc.
+;;; It returns NIL if there is no next loc.
+
+(defun screen-next-loc (screen current-loc)
+       (do ((pos (screen-next-pos screen
+				  (if (eq (cdr current-loc) 'rightparenloc)
+				      (rightparenloc^end-pos current-loc)
+				      (leftparenloc^begin-pos current-loc)))
+		 (screen-next-pos screen pos))
+	    (char))
+	   ((null pos) nil)
+	   (setq char (screen-char-or-marker screen pos))
+	   (or (atom char)
+	       (return (cdr char)))))
+
+
+;;; Screen-Previous-Loc goes the other way.
+
+(defun screen-previous-loc (screen current-loc)
+       (do ((pos
+	     (screen-previous-pos screen
+				  (if (eq (cdr current-loc) 'rightparenloc)
+				      (rightparenloc^end-pos current-loc)
+				      (leftparenloc^begin-pos current-loc)))
+	     (screen-previous-pos screen pos))
+	    (char))
+	   ((null pos) nil)
+	   (setq char (screen-char-or-marker screen pos))
+	   (or (atom char)
+	       (return (cdr char)))))
+
+
+;;; Screen-Next-Pos and Screen-Previous-Pos return the next meaningful
+;;; pos after/before current-pos.  They return NIL if there is none.
+
+(defun screen-next-pos (screen pos)
+       (let ((last-line-num (arrayget screen 0))
+	     (last-char-num (arrayget (arrayget screen (1st pos)) 0)))
+	    (if (< (2nd pos) last-char-num)
+		(list (1st pos) (1+ (2nd pos)))
+		(if (< (1st pos) last-line-num)
+		    (list (1+ (1st pos)) 1)
+		    nil))))
+
+(defun screen-previous-pos (screen pos)
+       (if (> (2nd pos) 1)
+	   (list (1st pos) (1- (2nd pos)))
+	   (if (> (1st pos) 1)
+	       (list (1- (1st pos))
+		     (arrayget (arrayget screen (1- (1st pos))) 0))
+	       nil)))
+
+
+;;; Screen-Char-Or-Marker, unlike Line-Char, returns exactly what is at pos.
+
+(defun screen-char-or-marker (screen pos)
+       (arrayget (arrayget screen (1st pos)) (2nd pos)))
+
+;;; Functions for stack frame operations.
+
+;;; Framearray returns an array of results from evalframe, starting at
+;;; first-frame-to-use.  It returns NIL if there are no frames.
+;;; Frame indexing starts at 1; (arrayget frame-array 0) is how many
+;;; frames there are.
+;;; Occurrences of DIDL, Enter-DIDL,
+;;; EVALHOOK and +INTERNAL-TTYSCAN-SUBR are deleted.
+;;; Occurrences of DIDL-Evalhook and DIDL-Evalhook step are also deleted,
+;;; except if they would be the first entries in the frame array.
+
+(defun framearray (first-frame-to-use)
+       (do ((frame-list)
+	    (frame-list-length 0)
+	    (frame first-frame-to-use (evalframe (2nd frame)))
+	    (form))
+	   ((null frame)
+	    (if (null frame-list)
+		nil
+		(fillarray (newarray (1+ frame-list-length))
+			   (cons frame-list-length
+				 (nreverse frame-list)))))
+	   (setq form (3rd frame))
+	   (cond
+	    ((and (not (atom form))
+		  (or (memq (car form)
+			    '(didl evalhook enter-didl +internal-ttyscan-subr))
+		      (and (not (= frame-list-length 0))
+			   (memq (car form)
+				 '(didl-evalhook didl-evalhook-step))))))
+	    (t
+	     (setq frame-list-length (1+ frame-list-length))
+	     (push frame frame-list)))))
+
+
+;;; Put-Frame-Array-User-Functions scans the whole frame-array, and
+;;; Puts the user functions it finds, if they haven't been Put already.
+
+(defun put-frame-array-user-functions (frame-array)
+       (do ((last-frame (arrayget frame-array 0))
+	    (frame-form)
+	    (frame-index 1 (1+ frame-index)))
+	   ((> frame-index last-frame))
+	   (setq frame-form (3rd (arrayget frame-array frame-index)))
+	   (and (not (atom frame-form))
+		(user-function (car frame-form))
+		(put-defun-if-necessary (car frame-form)))))
+
+
+;;; Find-User-Frame starting at start-at in frame-array, and searches
+;;; upwards or downwards, depending on inc,
+;;; looking for a form that is in a user function.
+;;; It returns an index into frame-array, or NIL if no user function was found.
+
+(defun find-user-frame (frame-array start-at inc)
+       (do ((last-frame (arrayget frame-array 0))
+	    (frame-index start-at (+ inc frame-index)))
+	   ((or (> frame-index last-frame) (< frame-index 1)) nil)
+	   (and (ht-find (3rd (arrayget frame-array frame-index)))
+		(return frame-index))))
+
+
+;;; User-Function says if the function is an expr, fexpr, or macro.
+
+(defun user-function (func)
+       (and (symbolp func)
+	    (find-fun func)))	   ;find any DIDL-hackable functional property
+
+;;; Make-Frame-Screen creates a screen that has the information
+;;; of frame-array in it.
+;;; A frame-screen line looks like:
+;;; <frame number>: <user function>: <frame form> e.g.
+;;; 7: FUNC: (CAR FOO)
+;;; The <user function> may be blank if the <frame form> is not
+;;; found in $hash-table.  For instance, it may be an atom or a subr form.
+;;; (DIDL-EVALHOOK ...) and (DIDL-EVALHOOK-STEP ...) frames are special,
+;;; and look like:
+;;; 1: Broke at FUNC: (CAR FOO)
+;;; where (CAR FOO) is the frame that is ABOUT to be created.
+
+(defun make-frame-screen (frame-array)
+       (let ((how-many-frames (arrayget frame-array 0))
+	     (form) (in-what-func) (broke-at nil)
+	     (exploded-broke-at (exploden '|Broke at |))
+	     (frame-screen (newarray (cadr (arraydims frame-array)))))
+	    (arraystore frame-screen 0 how-many-frames)
+	    (for i 1 how-many-frames
+		 (setq broke-at nil)
+		 (arraystore frame-screen i (create-line))
+		 (setq form (3rd (arrayget frame-array i)))
+		 (and (not (symbolp form))
+		      (memq (car form) '(didl-evalhook didl-evalhook-step))
+		      (setq broke-at exploded-broke-at)
+		      (setq form (2nd form)))
+		 (if (setq in-what-func (2nd (ht-find form)))
+		     (stuff-line (arrayget frame-screen i)
+				 (explodendec i) '(72 40)             ;; ": "
+				 broke-at
+				 (exploden in-what-func) '(72 40)  ;; ": "
+				 (exploden form))
+		     (stuff-line (arrayget frame-screen i)
+				 (explodendec i) '(72 40)
+				 broke-at
+				 (exploden form))))
+	    frame-screen))
+
+;;; Utility functions for command readers.
+
+;;; Force-Into-Range forces a number into being in a certain range.
+;;; E.g.: (force-into-range 1 3 4) => 3.
+
+(defun force-into-range (low high num)
+       (max low (min high num)))
+
+
+;;; Read-Command-Arg tyipeek's to see if there is a digit present.
+;;; Ifso, it builds a decimal number from that and subsequent digits.
+;;; Ifnot, it returns 1.
+
+(defun read-command-arg ()
+       (do ((char (tyipeek) (tyipeek))
+	    (no-arg t)
+	    (neg 1)
+	    (argument 0))
+	   (nil)
+	   (cond
+	    ((and (<= char 71) (>= char 60))    ;a digit?
+	     (setq argument (+ (* argument 10.) (- char 60)))
+	     (setq no-arg nil))
+	    ((= char 55)
+	     (setq neg (- neg))			; a - ?
+	     (setq no-arg t))
+	    (t
+	     (return (* neg (if no-arg 1 argument)))))
+	   (tyi)))
+
+
+;;; Read-Command-Char inputs a char and uppercases it.
+
+(defun read-command-char ()
+       (let ((char (tyi)))
+	    (if (or (< char 141) (> char 172))
+		char
+		(- char 40))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Put- functions are for grinding s-expressions (sx's), and producing:
+;;; an array which is the printed representation of the result, and
+;;; containing markers which indicate where sx's are.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;; Put-Defun-If-Necessary does a put-defun only if the function has
+;;; not already been put.
+
+(defun put-defun-if-necessary (func)
+       (or (and (get func 'didl-screen)
+		(ht-find (find-fun func)))
+	   (progn
+	    (echo-area-princ '|Grinding |)
+	    (echo-area-prin1 func)
+	    (put-defun func)
+	    (echo-area-princt '|.|))))
+
+;;; Find-Fun finds any functional that DIDL can print, or returns nil if none
+
+(defun find-fun (function)
+  (let ((function (cadr (getl function '(expr fexpr macro)))))
+     (cond ((null function) nil)
+	   ((symbolp function) (find-fun function))
+	   (t function))))
+
+;;; Put-Defun takes a function name, and produces the put-ground result, using
+;;;  lower functions.
+
+(defun put-defun (func)
+       (vars (screen sx)
+	     (setq sx (find-fun func))
+	     (and (atom sx) (error '|has no reasonable functional property|
+				   func))
+
+	     (setq screen (newarray 20.))		; can expand
+	     (arraystore screen 0 0)
+	     (putprop func (put-sx sx screen '(1 1) func) 'didl-toploc)
+	     (putprop func screen 'didl-screen)))
+
+;;; Put-SX looks at an sx, decides how it should be put, and calls the right
+;;; routine.
+
+(defun put-sx (sx screen pos in-function)
+       (vars (put-format)
+	     (cond
+
+	      ;; If an atom, just put it out.
+
+	      ((atom sx)  (put-atom sx screen pos))
+
+	      ;; If function wants to be put a special way, acquiesce.
+
+	      ((and (atom (car sx))
+		    (setq put-format (get (car sx) 'didl-put-format)))
+	       (cond
+		((eq put-format 'put-miser)
+		 (put-miser sx screen pos in-function))
+		((eq put-format 'put-block)
+		 (put-block sx screen pos in-function))
+		((eq put-format 'put-function-call)
+		 (put-function-call sx screen pos in-function))
+		(t (error '|does not have a legal DIDL-Put-Format|
+			  (car sx)))))
+
+	      ;; If it fits on a line, put it on one line.
+
+	      ((fits-on-line (flatsize sx) pos)
+	       (put-block sx screen pos in-function))
+
+	      ;; If it's a function, put it in function format.
+
+	      ((and (symbolp (car sx))
+		    (getl (car sx) '(subr fsubr lsubr expr fexpr macro)))
+	       (put-function-call sx screen pos in-function))
+
+	      ;; Else, put it in miser format.
+
+	      (t (put-miser sx screen pos in-function)))))
+
+;;; Put-Miser puts lists in the form:
+;;; (A
+;;;  B
+;;;  C)
+;;; It calls put-sx for each element of the list.
+;;; It puts markers at the left-paren and right-paren.
+
+(defun put-miser (sx screen start-pos in-function)
+       (vars
+	(leftparenloc rightparenloc
+	 ht-entry indent-column next-pos)
+
+	(setq ht-entry (ht-enter sx))
+	(setq leftparenloc (create-leftparenloc))
+	(setq rightparenloc (create-rightparenloc))
+	(rplacd ht-entry (list in-function leftparenloc))
+
+	(store-leftparenloc^begin-pos leftparenloc start-pos)
+	(store-rightparenloc^begin-pos rightparenloc start-pos)
+	(store-leftparenloc^sx leftparenloc sx)
+	(store-rightparenloc^sx rightparenloc sx)
+
+	(setq indent-column (2nd (setq next-pos (pos+1 start-pos))))
+	(putscreen-char screen start-pos (cons 50 leftparenloc))
+	(do ((sx-left sx (if (atom sx-left) nil (cdr sx-left)))
+	     (element) (element-loc) (atomic-cdrp) (last-elementp)
+	     (element-index 0 (1+ element-index)))
+
+	    ((null sx-left))
+
+	    ;; atomic-cdrp checks for (... . <atom>).
+
+	    (setq atomic-cdrp (atom sx-left))
+	    (setq element (if atomic-cdrp sx-left (car sx-left)))
+	    (setq last-elementp (or atomic-cdrp (null (cdr sx-left))))
+
+	    (and atomic-cdrp
+		 (progn
+		  (putscreen-char screen next-pos 56)	; period
+		  (setq next-pos (pos+1 (pos+1 next-pos)))))
+
+	    (setq element-loc (put-sx element screen next-pos in-function))
+
+	    (setq next-pos
+		  (if last-elementp
+		      (pos+1-with-indent (loc^end-pos element-loc)
+					 indent-column)
+		      (list (1+ (1st (loc^end-pos element-loc)))
+			    indent-column))))
+
+	(putscreen-char screen next-pos (cons 51 rightparenloc))
+	(store-leftparenloc^end-pos leftparenloc next-pos)
+	(store-rightparenloc^end-pos rightparenloc next-pos)
+
+	leftparenloc))
+
+;;; Put-Block puts lists in the form:
+;;; (A B C
+;;;  D E F)
+;;; by calling Put-Block-Indent with 0 indentation.
+
+(defun put-block (sx screen start-pos in-function)
+       (put-block-indent sx screen start-pos in-function 0))
+
+
+
+;;; Put-Function-Call puts lists in the form:
+;;; (FUNC A B C
+;;;    D E F)
+;;; by calling Put-Block-Indent with an indentation of 2.
+
+(defun put-function-call (sx screen start-pos in-function)
+       (put-block-indent sx screen start-pos in-function 2))
+
+;;; Put-Block-Indent puts lists in the form:
+;;; (A B C
+;;;  <indentation spaces>D E F)
+;;; It will wrap the first atom on a line onto the next line if necessary,
+;;; but not subsequent atoms or sx's.
+;;; It puts a marker for the sx when it puts the left-paren on the screen.
+
+(defun put-block-indent (sx screen start-pos in-function indentation)
+       (vars (leftparenloc rightparenloc
+	      ht-entry indent-column next-pos)
+	 
+	     (setq ht-entry (ht-enter sx))
+	     (setq leftparenloc (create-leftparenloc))
+	     (setq rightparenloc (create-rightparenloc))
+	     (rplacd ht-entry (list in-function leftparenloc))
+	 
+	     (store-leftparenloc^begin-pos leftparenloc start-pos)
+	     (store-rightparenloc^begin-pos rightparenloc start-pos)
+	     (store-leftparenloc^sx leftparenloc sx)
+	     (store-rightparenloc^sx rightparenloc sx)
+	 
+	     (setq indent-column (+ indentation
+				    (2nd (setq next-pos (pos+1 start-pos)))))
+	     (putscreen-char screen start-pos (cons 50 leftparenloc))
+	 
+	     (do ((sx-left sx (if (atom sx-left) nil (cdr sx-left)))
+		  (element) (element-loc) (atomic-cdrp) (last-elementp)
+		  (element-index 0 (1+ element-index)))
+
+		 ((null sx-left))
+
+		 (setq atomic-cdrp (atom sx-left))
+		 (setq element (if atomic-cdrp sx-left (car sx-left)))
+		 (setq last-elementp (or atomic-cdrp (null (cdr sx-left))))
+
+		 (and atomic-cdrp
+		      (progn
+		       (putscreen-char screen next-pos 56)	; period
+		       (setq next-pos
+			     (compute-next-block-pos indent-column next-pos
+						     next-pos
+						     (1+ (flatsize element)))))
+		      )
+
+		 (setq element-loc
+		       (put-sx element screen next-pos in-function))
+
+		 (setq next-pos
+		       (if last-elementp
+			   (pos+1-with-indent (loc^end-pos element-loc)
+					      (1+ indent-column))
+			   (compute-next-block-pos indent-column next-pos
+						   (loc^end-pos element-loc)
+						   (flatsize
+						    (if (atom (cdr sx-left))
+							(cdr sx-left)
+							(cadr sx-left)))))))
+	 
+	 
+	     (putscreen-char screen next-pos (cons 51 rightparenloc))
+	     (store-leftparenloc^end-pos leftparenloc next-pos)
+	     (store-rightparenloc^end-pos rightparenloc next-pos)
+	 
+	     leftparenloc))
+
+;;; Compute-Next-Block-Pos sees if what is to be printed will fit on the
+;;; current line.  Ifso, it returns a pos of where to start printing on the
+;;; line, including the necessary space before.  Ifnot, it returns a pos that
+;;; is at the proper indentation on the next line.  It also forces printing
+;;; on the next line if the previous form was not completely put on the same
+;;; line.
+;;; start-pos and end-pos are where the last form was put.
+
+(defun compute-next-block-pos (indent-column start-pos end-pos size)
+       (if (and (fits-on-line (+ 2 size) end-pos)
+		(= (1st start-pos) (1st end-pos)))
+	   (list (1st end-pos) (+ 2 (2nd end-pos)))
+	   (list (1+ (1st end-pos)) indent-column)))
+
+
+;;; Put-Atom puts the chars that are in an atom's pname onto the screen,
+;;; starting at pos.
+
+(defun put-atom (the-atom screen pos)
+       (let ((atomloc (create-atomloc)))
+	    (store-atomloc^begin-pos atomloc pos)
+	    (store-atomloc^the-atom atomloc the-atom)
+	    (do ((chars (explode the-atom) (cdr chars))
+		 (next-pos pos (pos+1 next-pos))
+		 (first t nil)
+		 (last-pos pos next-pos))
+		((null chars)
+		 (store-atomloc^end-pos atomloc last-pos)
+		 atomloc)
+		(putscreen-char screen next-pos (getcharn (car chars) 1)))))
+
+
+;;; Putscreen-char grows the screen if necessary, and then calls putline-char.
+
+(defun putscreen-char (screen pos char)
+       (let ((screen-length (1- (cadr (arraydims screen)))))
+	     (and (> (1st pos) screen-length)
+		  (*rearray screen t (+ (1st pos) screen-length)))
+	     (putline-char screen pos char)))
+
+
+;;; Putline-Char actually does the storing on the line array, and also updates
+;;; the last-line-used (arrayget screen 0) and last-char-used
+;;; (arrayget <line> 0) indices.  It creates a new line array if there was
+;;; not one in the screen array, and fills it with spaces.
+
+(defun putline-char (screen pos char)
+       (let ((line (1st pos))
+	     (col (2nd pos))
+	     (line-array))
+	    (setq line-array (arrayget screen line))
+	    (cond
+	     ((null line-array)
+	      (arraystore screen line (setq line-array (create-line)))
+	      (for i 1 $screen-width (arraystore line-array i 40)))) ;space
+	    (arraystore line-array col char)
+	    (arraystore line-array 0 (max (arrayget line-array 0) col))
+	    (arraystore screen 0 (max (arrayget screen 0) line))))
+
+;;; Line-Char fetches a char from a line, taking it out of a marker
+;;; if necessary.
+
+(defun line-char (line index)
+       (let ((char-or-marker (arrayget line index)))
+	    (if (atom char-or-marker)
+		char-or-marker
+		(car char-or-marker))))
+
+
+;;; Loc^Begin-Pos looks like a structure ref, but really sees what kind of
+;;; loc it is given, and then fetches the right Begin-Pos.
+;;; Loc^End-Pos is similar.
+
+(defun loc^begin-pos (loc)
+       (cond
+	((eq (cdr loc) 'leftparenloc) (leftparenloc^begin-pos loc))
+	((eq (cdr loc) 'rightparenloc) (rightparenloc^begin-pos loc))
+	((eq (cdr loc) 'atomloc) (atomloc^begin-pos loc))
+	(t (error '|is not a loc [loc^begin-pos]| loc))))
+
+(defun loc^end-pos (loc)
+       (cond
+	((eq (cdr loc) 'leftparenloc) (leftparenloc^end-pos loc))
+	((eq (cdr loc) 'rightparenloc) (rightparenloc^end-pos loc))
+	((eq (cdr loc) 'atomloc) (atomloc^end-pos loc))
+	(t (error '|is not a loc [loc^end-pos]| loc))))
+
+
+;;; Fits-On-Line says whether there is room on the rest of a line for
+;;; something of a given size.  It assumes starting at pos.
+
+(defun fits-on-line (size pos)
+       (not (> (+ size (2nd pos) -1) $screen-width)))
+
+
+;;; Create-Line creates a new array of length $screen-width+1, and stores
+;;; 0 in its 0th element, to create a blank line.
+
+(defun create-line ()
+       (let ((line (newarray (1+ $screen-width))))
+	    (arraystore line 0 0)
+	    line))
+
+
+;;; Pos+1-with-indent adds 1 column to a pos, wrapping onto the next line if
+;;; necessary, and indenting to indent-column.
+
+(defun pos+1-with-indent (pos indent-col)
+       (if (>= (2nd pos) $screen-width)
+	   (list (1+ (1st pos)) indent-col)
+	   (list (1st pos) (1+ (2nd pos)))))
+
+;;; Pos+1 wraps to the left side of the next line by using an indent-col of 1.
+
+(defun pos+1 (pos)
+       (pos+1-with-indent pos 1))
+
+
+
+;;; Debugging functions for dumping a screen.
+
+(defun dump-screen (screen)
+       (for line 1 (arrayget screen 0)
+	    (terpri)
+	    (let ((line-array (arrayget screen line)))
+		 (if (null line-array)
+		     (princ nil)
+		     (for col 1 (arrayget line-array 0)
+			  (tyo (line-char line-array col)))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Hash table functions for DIDL.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; The HT (hash table) is used for finding the loc of a particular
+;;; sx.  The hashing is on (maknum sx), which is faster than (sxhash sx).
+
+;;; The HT is an array with a prime number of elements (for good hashing).
+;;; Each entry in the HT is a bucket list, which is an assq-type
+;;; of list, for fast searching.  Each bucket looks like:
+;;; ( (<sx> <func> <leftparenloc>)) ... [repeated], or NIL if there
+;;; are no entries.  Func is the function the form is found in, and
+;;; <leftparenloc> points to the <sx> on the didl-screen for <func>.
+
+
+;;; HT-Setup should be called when DIDL is first entered.  It initializes
+;;; the $hash-table array.
+
+(defun ht-setup (size)
+       (setq $hash-table (newarray size)))
+
+
+;;; HT-Bucket-Index returns the array slot number for a particular sx.
+
+(defun ht-bucket-index (sx)
+       (\ (abs (maknum sx)) (cadr (arraydims $hash-table))))
+
+
+;;; HT-Enter looks up an sx in the HT.  If found, it returns
+;;; which is (sx func leftparenloc), if it already existed.
+;;; If the sx is new, it enters it in the HT, and returns (sx . nil).
+
+(defun ht-enter (sx)
+       (vars (bucket-index bucket pair)
+	     (setq bucket-index (ht-bucket-index sx))
+	     (setq bucket (arrayget $hash-table bucket-index))
+	     (setq pair (assq sx bucket))
+	     (if (null pair)
+		 (prog1 (setq pair (ncons sx))
+			(push pair bucket)
+			(arraystore $hash-table bucket-index bucket))
+		 pair)))
+
+
+;;; HT-Find just looks for an sx like ht-enter, but just returns NIL
+;;; if the sx is not found, and does not add it.
+
+(defun ht-find (sx)
+       (assq sx (arrayget $hash-table (ht-bucket-index sx))))
+
+;;; Window functions for displaying parts of a screen onto the user's
+;;; terminal.
+
+;;; Window-Clear erases everything in the window.
+
+(defun window-clear ()
+       (for window-line 0 (+ $window-length $info-area-length)
+	    (cursorpos window-line 0 $window-tty)
+	    (cursorpos 'L $window-tty))
+       (cursorpos (1+ $window-length) 0 $window-tty))
+
+
+;;; Window-Display fills the window with screen starting at first-screen-line.
+
+(defun window-display (screen first-screen-line)
+       (window-display-part screen first-screen-line 1 $window-length))
+
+
+
+;;; Window-Display-Part only changes part of the window and does
+;;; not bother the rest of the window. Top-screen-line is the line
+;;; corresponding to window-line 1, not to first-window-line.
+
+(defun window-display-part (screen top-screen-line first-window-line
+				   last-window-line)
+       (do ((screen-line (+ top-screen-line first-window-line -1)
+			 (1+ screen-line))
+	    (window-line first-window-line (1+ window-line))
+	    (last-screen-line (arrayget screen 0)))
+	   ((> window-line last-window-line))
+	   (if (> screen-line last-screen-line)
+	       (window-clear-line window-line)
+	       (window-output-line (arrayget screen screen-line)
+				   window-line))))
+
+
+;;; Window-Redisplay repaints the window, putting line at the middle
+;;; of the window if reasonable.  It returns the number of the screen
+;;; line that is at the top of the window.
+
+(defun window-redisplay (screen line)
+       (cond
+	((<= line (// $window-length 2))
+	 (window-display screen 1)
+	 1)
+	(t
+	 (let ((top-line (- line (// $window-length 2))))
+	      (window-display screen top-line)
+	      top-line))))
+
+
+;;; Window-Redisplay-If-Necessary does a Window-Redisplay with the
+;;; given screen only if line is not on the current window, given that
+;;; top-line is at the top of window.  It returns the new top-line.
+
+(defun window-redisplay-if-necessary (screen top-line line)
+       (if (or (< line top-line)
+	       (> line (+ top-line $window-length -1)))
+	   (window-redisplay screen line)
+	   top-line))
+
+
+;;; Window-Output-Line does a clear-to-end-of-line on the window line,
+;;; and then puts the screen line onto it.
+
+(defun window-output-line (screen-line window-line)
+       (window-clear-line window-line)
+       (do ((char-index 1 (1+ char-index))
+	    (last-char-index (arrayget screen-line 0)))
+	   ((> char-index last-char-index))
+	   (tyo (line-char screen-line char-index) $window-tty)))
+
+;;; Window-Clear-Line goes to the beginning of a window line, and
+;;; then does a clear-to-end-of-line.
+
+(defun window-clear-line (window-line)
+       (window-set-cursor window-line 1)
+       (cursorpos 'L $window-tty))
+
+
+;;; Stuff-Line puts its exploden'd arguments into line.
+
+(defun stuff-line expr numbargs
+       (do ((arg-num 2 (1+ arg-num))
+	    (line (arg 1))
+	    (char-num 1)
+	    (chars))
+	   ((or (> char-num $screen-width) (> arg-num numbargs))
+	    (arraystore line 0 (1- char-num)))
+	   (setq chars (arg arg-num))
+	   (do ()
+	       ((or (> char-num $screen-width) (null chars)))
+	       (arraystore line char-num (car chars))
+	       (setq chars (cdr chars))
+	       (setq char-num (1+ char-num)))))
+
+
+;;; ExplodenDec does an explode with base=10. and *nopoint=t, so
+;;; numbers will come out in decimal.
+
+(defun explodendec (x)
+       (let ((base 10.) (*nopoint t))
+	    (exploden x)))
+
+
+;;; Window-Set-Status-Line does a Stuff-Line into $status-line.
+
+(defun window-set-status-line expr numbargs
+       (apply (function stuff-line)
+	      (cons $status-line
+			 (mapcar 'explodendec (listify numbargs)))))
+
+
+;;; Window-Display-Status-Line displays $status-line at the line that
+;;; is 1 greater than $window-length.  But this line is really included
+;;; in the window area.
+
+(defun window-display-status-line ()
+       (window-output-line $status-line (1+ $window-length)))
+
+
+;;; Window-Set-Cursor does a cursorpos in the window.  The window is 1-origin
+;;; indexing, and cursorpos is 0-origin.
+
+(defun window-set-cursor (line col)
+       (cursorpos (1- line) (1- col) $window-tty))
+
+
+;;; Window-Set-Cursor-With-Pos uses info about the top window line
+;;; to set the cursor to a pos.
+
+(defun window-set-cursor-with-pos (top-screen-line-on-window pos)
+       (window-set-cursor (- (1st pos) top-screen-line-on-window -1)
+			  (2nd pos)))
+
+
+;;; Window-Clear-And-Print just does a print into the window region
+;;; after clearing it.
+
+(defun window-clear-and-print (what-to-print)
+       (window-clear)
+       (window-print what-to-print)
+       (window-terpri))
+
+;;; Other window-printing functions.
+
+(defun window-print (x)
+       (print x $window-tty))
+
+
+(defun window-princ (x)
+       (princ x $window-tty))
+
+
+(defun window-prin1 (x)
+       (prin1 x $window-tty))
+
+
+(defun window-terpri ()
+       (terpri $window-tty))
+
+
+(defun window-tyo (char)
+       (tyo char $window-tty))
+
+;;; Following are various Info-Area printing functions.
+
+;;; Info-Area-Clear clears the info area, which is the two lines below
+;;; the status line.
+
+(defun info-area-clear ()
+       (for info-line 1 $info-area-length
+	    (cursorpos (+ $window-length info-line) 0 $window-tty)
+	    (cursorpos 'L $window-tty))
+       (cursorpos (1+ $window-length) 0 $window-tty))
+
+
+(defun info-area-terpri ()
+       (terpri $window-tty))
+
+
+(defun info-area-princ (x)
+       (princ x $window-tty))
+
+
+(defun info-area-print (x)
+       (print x $window-tty))
+
+
+(defun info-area-prin1 (x)
+       (prin1 x $window-tty))
+
+
+;;; These functions do various terpri's before and after printing
+;;; for convenience.
+
+(defun info-area-printc (x)
+       (info-area-terpri)
+       (princ x $window-tty))
+
+
+(defun info-area-princt (x)
+       (princ x $window-tty)
+       (info-area-terpri)))
+
+
+(defun info-area-prin1t (x)
+       (prin1 x $window-tty)
+       (info-area-terpri)))
+
+;;; Following are various Echo-Area printing functions.
+
+;;; Echo-Area-Clear clears the echo area, which also sets the cursor
+;;; to the top left of the area.
+
+(defun echo-area-clear ()
+       (cursorpos 'C $echo-area-tty))
+
+
+(defun echo-area-terpri ()
+       (terpri $echo-area-tty))
+
+
+(defun echo-area-princ (x)
+       (princ x $echo-area-tty))
+
+
+(defun echo-area-print (x)
+       (print x $echo-area-tty))
+
+
+(defun echo-area-prin1 (x)
+       (prin1 x $echo-area-tty))
+
+
+;;; These functions do various terpri's before and after printing
+;;; for convenience.
+
+(defun echo-area-printc (x)
+       (echo-area-terpri)
+       (princ x $echo-area-tty))
+
+
+(defun echo-area-princt (x)
+       (princ x $echo-area-tty)
+       (echo-area-terpri)))
+
+
+(defun echo-area-prin1t (x)
+       (prin1 x $echo-area-tty)
+       (echo-area-terpri)))
+
+
+;;; Echo-Area-Prompt-And-Read clears the echo area, then princ's all its
+;;; arguments to prompt the user.  It then does a (read) and returns its value.
+;;; If the user over-rubouts, causing an end-of-file condition on tyi,
+;;; Echo-Area-Prompt-And-Read throws back to Abort-Command.
+
+(defun echo-area-prompt-and-read numbargs
+       (echo-area-clear)
+       (for i 1 numbargs
+	    (echo-area-princ (arg i)))
+       (let ((thing-read (read $unique-symbol))) ;(read) returns $unique-symbol
+	    (and (eq thing-read $unique-symbol)	 ; if user over-rubouts
+		 (throw 'abort-command abort-command))
+	    (echo-area-terpri)
+	    thing-read))
+
+
+;;; Echo-Area-Prompt-And-Read-With-Default is like Echo-Area-Prompt-And-Read,
+;;; but (arg 1) is a default to use if the user just types space.
+
+(defun echo-area-prompt-and-read-with-default numbargs
+       (echo-area-clear)
+       (for i 2 numbargs
+	    (echo-area-princ (arg i)))
+       (caseq (tyipeek)
+	      (40		; If just a space is typed, return the default.
+	       (arg 1))
+	      (177
+	       (throw 'abort-command abort-command))	; Rubout will abort it.
+	      (t
+	       (let ((thing-read (read $unique-symbol)))
+		    			; (read) returns $unique-symbol
+					;  if user over-rubouts.
+		    (and (eq thing-read $unique-symbol)
+			 (throw 'abort-command abort-command))
+		    (echo-area-terpri)
+		    thing-read))))
+
+
+
+;;; Open-TTYS sets up $window-tty and $echo-area-tty, making $window-tty
+;;; the normal full-screen tty, and opens a new tty called $echo-area-tty.
+
+(defun open-ttys ()
+       (setq $echo-area-tty (open '((tty)) '(tty out echo)))
+       (setq $window-tty tyo)
+       (endpagefn $window-tty (function didl-endpagefn))
+       (endpagefn $echo-area-tty (function didl-endpagefn)))
+
+
+;;; Split-Screen does a SCML on $echo-area-tty.
+
+(defun split-screen ()
+       (syscall 0 'scml $echo-area-tty $echo-area-length)
+       (sstatus ttycons $echo-area-tty tyi)
+       (setq tyo $echo-area-tty)
+       (setq $is-screen-split? t))
+
+
+;;; Unsplit-screen undoes the SCML.
+
+(defun unsplit-screen numbargs
+       (and (= numbargs 2)
+	    (tyi))
+       (syscall 0 'scml $echo-area-tty 0)
+       (setq tyo $window-tty)
+       (sstatus ttycons tyo tyi)
+       (setq $is-screen-split? nil))
+
+
+;;; DIDL-Endpagefn is a simple-minded one, unlike the +INTERNAL-TTY-ENDPAGEFN,
+;;; which requires the channel it is on to be TTYCONS'd with TYI.
+
+(defun didl-endpagefn (output-tty)
+       (nointerrupt nil)	; Make sure the guy can ^G (etc..)
+       (princ '|##More##| output-tty)
+       (tyi)			; Eat a character
+       (cursorpos 'Z output-tty)	; Clear the ##More##
+       (cursorpos 'L output-tty)
+       (cursorpos 'TOP output-tty))
+
+
