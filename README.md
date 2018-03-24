@@ -91,217 +91,26 @@ There are some short introductions for beginners:
 
 A list of [known ITS machines](doc/machines.md).
 
-### Build procedure
+How [ITS is built](doc/build.md).
 
-1. First, magnetic tape images are created from files in `src` and
-   `bin`.  There are two bootable tapes, and two tapes with files in
-   DUMP backup format.
+### Applications
 
-2. Then the tapes are used to create a file system on an RP06 disk and
-   populate it with a minimal system.
+Some major applications:
 
-3. Next, the system is booted from the disk.  Source code is loaded
-   from tape, and the following programs are rebuilt:
+- Adventure, game
+- C10, C compiler
+- DDT, debugger
+- Emacs, editor
+- Maclisp, interpreter and compiler
+- Macsyma, symbolic math
+- Midas, assembler
+- PDP-11 simulator
+- Scheme, interpreter
+- Spacewar!, game
+- TECO, editor
+- TOPS-10 and WAITS emulator
 
-   - MIDAS, the assembler.
-   - DDT, debugger and HACTRN user login shell.
-   - The ITS monitor (kernel).
-   - Exec DDT, standalone debugger.
-   - NSALV, standalone file system tool.
-   - DSKDMP, disk bootstrap and file access.
-   - KSFEDR, manipulate front-end file system.
-
-4. The new DSKDMP is installed, and the rebuilt monitor and salvager
-   are combined into a new ITS binary, which is then started.
-
-5. Remaining programs are rebuilt:
-
-   - 11SIM, PDP-11 emulator.
-   - 20XCVT, convert TOPS-20 CSAVE file to PDUMP.
-   - @, cross reference generation tool.
-   - ACCLNK, sets com-link accept bit for specified TTY.
-   - ACOUNT, dummy account program used for users from safe sites.
-   - ADVENT, (Colossal Cave) Adventure by Will Crowther.
-   - ARCCPY, copies and old-format archive, converting to new format.
-   - ARCDEV, transparent file system access to archive files.
-   - ARCSAL, archive salvager.
-   - ARGUS, alerts you when specified users login or logout.
-   - ATSIGN CHAOS, Chaosnet support.
-   - ATSIGN DEVICE, load device drivers.
-   - ATSIGN TARAKA, starts dragons.
-   - ATSIGN TCP, TCP support.
-   - BALANC, MOVDIR, balances directories.
-   - BDAY, happy birthday demon.
-   - BINPRT, display information about binary executable file.
-   - BITPRT, print JCL as bits.
-   - BYE, say goodbye to user. Used in LOGOUT scripts.
-   - CALPRT, decode a .CALL instructions CALL block.
-   - CC, C compiler (binary only).
-   - CHADEV, Chaosnet jobdev (binary only).
-   - CHARFC/CHARFS, Chaos RFC.
-   - CHATST, Chaos test.
-   - CHESS2, Greenblatt chess program.
-   - CHTN, CFTP, Chaosnet TELNET and FTP support.
-   - COMIFY, convert HEX to COM format.
-   - COMPLR, lisp compiler.
-   - COMSAT, Mail server.
-   - CREATE, creates a text file in your home directory from console input.
-   - CROCK, analog watch.
-   - CROSS, cross assembler for micros.
-   - CTIMES, Chaosnet time server.
-   - CTIMSR, Chaosnet time server.
-   - DATE, print date and time.
-   - DATSRV, server for RFC 867 Daytime protocol.
-   - DCROCK, digital watch.
-   - DDTDOC, interactive DDT documentation.
-   - DECUUO, TOPS-10 and WAITS emulator.
-   - DIRCPY, copy directory.
-   - DIRDEV, list directories, sorted or subsetted.
-   - DIRED, directory editor (independent from EMACS DIRED).
-   - DMPCPY, crach dump copy dragon.
-   - DP Device, 7-bit conversions?
-   - DQ Device, for doing hostname resolutions. Used by COMSAT.
-   - DSKDEV, D - short disk device.
-   - DSKUSE, disk usage information.
-   - DUMP/LOAD, tape backup and restore.
-   - EMACS, editor.
-   - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
-   - EXPN/VRFY - query remote SMTP server.
-   - FAIL, assembler from SAIL.
-   - FCDEV, talk to LispM file server.
-   - FDIR, fast directory listing.
-   - FED, font editor.
-   - FIDO, watch for system events and bark.
-   - FILE, Chaosnet file server.
-   - FIND, search for files.
-   - FRETTY, display list of free TTYs.
-   - FTPS, FTP Server.
-   - FTPU, FTP Client.
-   - GETSYM, copy all symbols from running ITS to a file.
-   - GMSGS, copy system messages to mail file.
-   - H3MAKE, a job that requests DRAGON to build host table.
-   - HEXIFY, convert COM file into Intel HEX format.
-   - HOST, display information about network host.
-   - HOSTAB, display HOSTS2 format host table.
-   - HOSTS3, the host table compiler.
-   - HSNAME, displays user's HSNAME.
-   - HSNDEV, HSNAME device.
-   - IDLE, list idle users.
-   - IFILE, Chaosnet file service.
-   - INIT, a helper program for LOGIN, LOGOUT, and other script files.
-   - INLINE, reads line from TTY and adds to JCL (for DDT init files).
-   - INQUIR, user account database.
-   - INQUPD, processes INQUIR change requests.
-   - INSTAL, install executables on other ITS machines.
-   - ITSDEV, ITS device server.
-   - JEDGAR, counter spying tool.
-   - JOBS, list jobs by category.
-   - LISP, lisp interpreter and runtime library (autoloads only).
-   - LOADP, displays system load.
-   - LOCK, shut down system.
-   - LOOKUP, looks up user info in INQUIR database.
-   - LOSS (device).
-   - LSPEED, set tty line parameters.
-   - LUSER, request help from registered list of logged-in users.
-   - MACSYMA, symboling manipulation system.
-   - MAXTUL, tools for managing Macsyma.
-   - MAGDMP, standalone program loader/dumper for magtape.
-   - MAGFRM, create tapes for use with MAGDMP.
-   - MAIL, Mail sending client.
-   - MAILT, allows editing mail (from :MAIL) in EMACS.
-   - MCL, subsystem for compiling individual Macsyma files.
-   - METER, displays system metering information.
-   - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
-   - MLIFE, Bill Gosper's Conway Life.
-   - MODEMS, modems gragon.
-   - MSPLIT, split a file into smaller parts.
-   - MTBOOT, make bootable tapes.
-   - NAME, Shows logged in users and locations, aka FINGER.
-   - NETIME, network time dragon.
-   - NICNAM/NICWHO, look up someone in the ARPAnet directory.
-   - NUDIR, create user directory.
-   - NWATCH, small watch display.
-   - OBS, observe system activities.
-   - OCM, chess program.
-   - OCTPUS, print character representations.
-   - OS, realtime TTY spy.
-   - PALX, PDP-11 cross assembler.
-   - PANDA, user account management program.
-   - PDSET, set time and date.
-   - PEEK, system monitoring.
-   - PFTHMG, Puff the magic dragon.
-   - PHOTO, capture STY session output.
-   - PLAN (CREATE), creates a PLAN file in your home directory from console input.
-   - PORTS, display free network ports.
-   - PR, print out various system documentation.
-   - PRINT, print long-named files.
-   - PROBE, probe inside job and display various information about it.
-   - PRUFD, list files on disk volume.
-   - PSEND, super sender.
-   - PT, pager test.
-   - PTY, pseudo-tty.
-   - PWMAIL, a limited version of MAIL when not yet logged in under PWORD.
-   - PWORD, replacement for sys;atsign hactrn that requires registered logins.
-   - QUOTE, prints out a random quote.
-   - REATTA, reattaches disowned jobs to terminal.
-   - REDRCT, redirect IP routing.
-   - RIPDEV, replacement for MLDEV for no-longer-existing machines.
-   - RMAIL, Mail reading client.
-   - RMTDEV, MLDEV for non-ITS hosts.
-   - SALV, old file system tool for KA and KL.
-   - SCANDL, TTY OUTPUT SPY.
-   - SCRAM, encypt/decrypt file.
-   - SEND, REPLY, replacements for DDT :SEND.
-   - SENDS, Chaosnet SEND server.
-   - SENSOR, sends censor.
-   - SENVER, Chaosnet SEND server.
-   - SN, snoop terminal.
-   - SPCWAR, Spacewar game.
-   - SPELL, ESPELL spell checker.
-   - SRCCOM, Compares/merges source files, compares binary files.
-   - STINK, linker.
-   - STINKR, new linker (binary only).
-   - STTY, set terminal parameters.
-   - STY, pseudo-terminal for multiple sessions.
-   - STYLOG, convert PTY output file into ascii file.
-   - SUPDUP, Supdup client.
-   - SYSCHK, check up on system job.
-   - SYSLOD, system load histogram.
-   - SYSMSG, displays system messages.
-   - TAGS, generate tags table for sources.
-   - TALK/WHO/WHOJ/WHOM/USERS, list users.
-   - TCTYP and CRTSTY, terminal handling.
-   - TEACHE, Emacs tutorial.
-   - TECO, editor.
-   - TELNET, Telnet client.
-   - TELSER, Telnet/Supdup server.
-   - TEN50, TOPS-10 emulator.
-   - TIME, displays date/time/uptime and other info.
-   - TIMES, TCP time server.
-   - TIMOON, displays the time and phase of the moon.
-   - TIMSRV, RFC 868 network time protocol.
-   - TMPKIL, clean out old files in .TEMP.;.
-   - TTLOC, Advertises physical location of logged in users.
-   - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
-   - TTYSWP, swap TTYs.
-   - TYPE8, type 8-bit file.
-   - UFIND, find users.
-   - UNTALK, split-screen comm-link program.
-   - UP/DOWN, check if host is online.
-   - UPTIME, Chaosnet uptime server.
-   - USQ, unsqueeze/uncram a file.
-   - VV/VJ/DETREE, list jobs.
-   - XHOST, tool for replacing host nicnames with real hostnames.
-   - WHAT, humorous quips to various "what" questions.
-   - WHO%, list index/uname/jname/%time in sorted list.
-   - WHOLIN, mode line for display terminals (with date/time/job/etc info).
-   - WHOSEN, print author of last send.
-   - X, Y, Z, remember DDT command and re-execute it.
-
-6. A brand new host table is built from the host table source and
-   installed into SYSBIN; HOSTS3 > using H3MAKE.
-
-7. Finally, the whole file system is dumped to tape.
+There is a [detailed list of all installed programs](doc/programs.md).
 
 ### Network Support
 
