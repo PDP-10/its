@@ -2033,6 +2033,24 @@ respond "*" {(load "scheme; nschsy fasl")}
 respond "\n" "(schemedump)"
 respond "==>" "(quit)"
 
+if 0 { # Takes too much time 
+# Rabbit Scheme compiler
+respond "*" ":scheme;scheme\r"
+respond "==>" {(schload "scheme; rabbit")}
+respond "==>" {(comfile "scheme; rabbit")}
+expect -timeout 1000 "COMPILE TIME:"
+respond "==>" "(quit)"
+respond "*" ":complr\r"
+respond "_" "scheme;_rabbit lisp\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":scheme;scheme\r"
+respond "==>" {(schload "scheme; rabbit fasl")}
+respond "==>" "(dumpit)"
+respond "Dump anyway" " "
+respond "TS RABBIT" "\r"
+}
+
 # New Scheme interpreter
 respond "*" "complr\013"
 respond "_" "nschem;scheme interp_schint lsp\r"
