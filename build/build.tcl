@@ -2022,6 +2022,17 @@ respond "*" ":link lisp;defns mid,l;defns >\r"
 respond "*" ":midas liblsp;_libdoc;fft\r"
 respond "*" ":midas liblsp;_libdoc;phase\r"
 
+# Old? Scheme interpreter
+respond "*" "complr\013"
+respond "_" "scheme;_nschsy\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":lisp\r"
+respond "Alloc?" "n"
+respond "*" {(load "scheme; nschsy fasl")}
+respond "\n" "(schemedump)"
+respond "==>" "(quit)"
+
 # New Scheme interpreter
 respond "*" "complr\013"
 respond "_" "nschem;scheme interp_schint lsp\r"

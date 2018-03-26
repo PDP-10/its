@@ -1,0 +1,1583 @@
+;;; SCHEME IN MACLISP 					-*- LISP -*-
+
+;;; To create a TS SCHEME dump, FASLOAD this file, then say (scheme-dump).
+
+
+(eval-when (eval compile)
+    (and ;(status feature maclisp) ;implicit!
+	 (not (status macro /#))
+	 (fasload (LISP) SHARPM))
+)
+
+(eval-when (eval load compile)
+    (setq backquote-expand-when 'read)
+)
+
+; These utility functions are generally used for definitions.
+
+(declare (mapex t))
+
+(declare (special *displace-sw* *displace-save-sw* *displace-list* *displace-count*))
+
+(eval-when (eval load compile)
+(defun careful-displace (x y)
+   (cond ((atom y) y)
+	 (*displace-sw*
+	  (cond (*displace-save-sw*
+		 (setq *displace-count* (1+ *displace-count*))
+		 (setq *displace-list*
+		       (cons (cons (cons (car x) (cdr x))
+				   x)
+			     *displace-list*))))
+	  (rplaca x (car y))
+	  (rplacd x (cdr y))
+	  x)
+	 (t y)) )
+
+(or (boundp '*displace-sw*)
+    (setq *displace-sw* t))
+
+(or (boundp '*displace-save-sw*)
+    (setq *displace-save-sw* t))
+
+(or (boundp '*displace-list*)
+    (setq *displace-list* nil))
+
+(or (boundp '*displace-count*)
+    (setq *displace-count* 0))
+
+(defun replace ()
+       ((lambda (n)
+		(declare (fixnum n))
+		(cond ((not (= n *displace-count*))
+		       (terpri) (princ '|Someone's been hacking my *displace-list*!!!|)
+		       (terpri) (princ '|Do it again and I won't speak to you anymore.|)
+		       (break replace-lossage t)))
+		(mapc '(lambda (z)
+			(rplaca (cdr z) (caar z))
+			(rplacd (cdr z) (cdar z)))
+		      *displace-list*)
+		(setq *displace-count* 0)
+		(setq *displace-list* nil))
+	(length *displace-list*)))
+
+;;; Read-macro characters.
+
+;;; Make FOO read as (FLUID FOO).
+
+(defun fmac () (list 'fluid (read)))
+
+(sstatus macro / 'fmac)
+
+)	;NEHW-LAVE
+
+(declare (special **exp** **template** **display** **unevlis** **evlis** **pc** **clink**
+                  **fun** **val** **tem** **fluidvars** **fluidvals**
+		  **cont** **env** **nargs**
+	          **argument-registers** **cont+arg-regs** **number-of-arg-regs**
+		  **one** **two** **three** **four** **five** **six** **seven** **eight**
+                  **queue** **tick** **quantum** **process** **procnum**
+                  **jpcr** **jrst** **break-flag** **no-args-check** **unassigned**
+		  *noprint* version lispversion))
+
+(setq *noprint* (list '*noprint*))
+
+(setq **unassigned** (list '**unassigned**))
+
+;Control stack formats and utilities
+
+(defun push macro (l) (list 'setq '**clink** (push1 (cdr l))))
+
+(declare (eval (read)))
+
+(defun push1 (x)
+       (cond ((null x) '**clink**)
+             (t (list 'cons (car x) (push1 (cdr x))))))
+
+(defun top macro (l)
+   (list 
+     (list 'lambda '(ltem)
+       (cons 'setq
+             (mapcan '(lambda (x)
+                        (list x '(car ltem)  'ltem '(cdr ltem) ))
+                     (cdr l))))
+     '**clink**))
+
+(defun pop macro (l)
+ (list 'setq '**clink**
+   (list 
+     (list 'lambda '(ltem)
+       (cons 'setq
+             (mapcan '(lambda (x)
+                        (list x '(car ltem)  'ltem '(cdr ltem) ))
+                     (cdr l))))
+     '**clink**)))
+
+(defun 1st macro (l) (list 'car '**clink**))
+(defun 2nd macro (l) (list 'cadr '**clink**))
+(defun 3rd macro (l) (list 'caddr '**clink**))
+
+
+;Environment structure for Interpretive code.
+
+;The environment is stored as **template** and **display**.
+; **template** is the template containing the currently active variable names,
+; and the script of the current lambda.  It also points back to the previous template.
+; **display** contains the values of the currently active variables.
+
+(defun make-display macro (l) `(cons ,(cadr l) ,(caddr l)))
+
+(defun values macro (l) `(car ,(cadr l)))
+
+(defun previous-display macro (l) `(cdr ,(cadr l)))
+
+(defun set-vals macro (l) `(rplaca ,(cadr l) ,(caddr l)))
+
+
+;Template structure is ((<vars> . <body>) . (<name> . <previous template>))
+
+(defun make-template (vars body parent-template name)
+       (cons (cons vars body)
+	     (cons name parent-template)))
+
+(defun variables macro (l) `(caar ,(cadr l)))
+
+(defun previous-template macro (l) `(cddr ,(cadr l)))
+
+(defun template-body macro (l) `(cdar ,(cadr l)))
+
+(defun template-name macro (l) `(cadr ,(cadr l)))
+
+(defun set-template-name macro (l) `(rplaca (cdr ,(cadr l)) ,(caddr l)))
+
+(defun lookup (identifier templ displ)
+       (prog (vl dl)
+	     next-display
+	     (cond ((null templ) (return nil)))
+	     (setq vl (variables templ))
+	     (setq dl (values displ))
+	     next-var
+	     (cond ((null vl)
+		    (setq templ (previous-template templ))
+		    (setq displ (previous-display displ))
+		    (go next-display))
+		   ((eq identifier (car vl))
+		    (return dl)))
+	     (setq vl (cdr vl))
+	     (setq dl (cdr dl))
+	     (go next-var)))
+
+(defun locin macro (l)
+       (list 'car (cadr l)))
+
+(defun lambda-to-script (lambda-exp template)
+       (or (eq (car lambda-exp) 'lambda)
+	   (error '|Bad LAMBDA - lambda-to-script| lambda-exp 'fail-act))
+       (cons 'lambda-script
+	     (make-template (reverse (cadr lambda-exp))
+			    (caddr lambda-exp)
+			    template
+			    (list 'lambda-expression (cadr lambda-exp)))))
+
+(defun betacons (script display)
+       (cons 'beta
+	     (cons (cdr script)
+		   display)))
+
+(defun beta-template macro (l) `(cadr ,(cadr l)))
+
+(defun beta-display macro (l) `(cddr ,(cadr l)))
+
+;Enclose is the user level operator for making lambda expressions into closures.
+;  The first argument is the lambda expression, the second is an alist describing
+;  the enclosing environment.  If second arg is non-NIL atom, closure is so named.
+
+(defun enclose nargs
+    (prog (parent-template previous-display closure-name)
+        (cond ((= nargs 1.)
+	       (setq parent-template nil
+		     previous-display nil
+		     closure-name nil))
+	      ((and (= nargs 2.)
+		    (or (null (arg 2))
+			(not (atom (arg 2)))))
+	       ;;; have alist 2nd arg
+	       (setq parent-template
+		         (make-template (mapcar 'car (arg 2)) ;vars
+					nil ;body
+					nil ;parent-template
+					'*enclosure*)
+		     previous-display
+		         (make-display (mapcar 'cdr (arg 2)) nil)
+		     closure-name nil))
+	      ((= nargs 2.)
+	       ;;; have atomic 2nd arg
+	       (setq parent-template nil
+		     previous-display nil
+		     closure-name (arg 2)))
+	      (t (error '|Wrong number of ENCLOSE args|
+			(listify nargs)
+			'fail-act)))
+	(setq **tem** (betacons (lambda-to-script (arg 1) parent-template)
+				previous-display))
+	(and closure-name (name-closure **tem** closure-name))
+	(return **tem**)))
+
+;Often a user wants to give a closure a name for debugging purposes:
+
+(defun name-closure (closure name)
+       (set-template-name (beta-template closure) name))
+
+(defun procp (x)
+       (and (not (atom x))
+	    (cond ((eq (car x) 'beta)
+		   (length (variables (beta-template x))))
+		  ((eq (car x) 'subr)
+		   (or (cdr (args (subr (maknum (cadr x))))) t))
+		  ((eq (car x) 'lsubr) t)
+		  ((eq (car x) 'expr)
+		   (cond ((atom (cadr x)) (procp (getl (cadr x) '(expr subr lsubr))))
+			 ((and (cadadr x) (atom (cadadr x))) t)
+			 (t (length (cadadr x)))))
+		  ((eq (car x) 'delta) 1)
+		  ((eq (car x) 'cbeta)
+		   (or (get (subr (maknum (cadr x))) 'number-of-args) t))
+		  ((eq (car x) 'epsilon) 1)
+		  ((eq (car x) 'debugfn)
+		   (procp (caadr x))))))
+
+;The `machine`
+
+(defun mloop ()
+       (do ((**tick** nil))  (nil)
+	  (and **break-flag** (funcall **break-flag**))	;Debugging escape.
+	  (and **tick** (schedule))
+          (fastcall **pc**)))
+
+; Multi-process stuff
+
+(declare (special **swapping**))
+
+(setq **swapping** nil)					;LISP alarmclock bug.
+(setq **quantum** 1000000.)
+
+(defun setalarmclock ()
+       (and **swapping** (alarmclock 'runtime **quantum**)))
+
+(defun schedule ()
+       (and **queue** (swap!process))
+       (setq **tick** nil)
+       (setalarmclock))
+
+(defun swap!process ()					;**queue** must be non-empty
+       (swapoutprocess)
+       (nconc **queue** (list **process**))
+       (setq **process** (car **queue**))
+       (setq **queue** (cdr **queue**))
+       (swapinprocess))
+
+(declare (special **process-format**))
+
+(eval-when (eval load compile)
+(setq **process-format**
+      '(**pc** **clink** **val**
+	**fun** **evlis** **unevlis**
+	**exp** **template** **display**
+	**fluidvars** **fluidvals** **tem**
+	**cont** **env** **nargs**
+	**one** **two** **three** **four**
+	**five** **six** **seven** **eight**)))
+
+(defun swapoutprocess1 macro (m)
+       `(list ,@**process-format**))
+
+(defun swapoutprocess ()
+       (putprop **process** (swapoutprocess1) '**process**))
+
+(defun swapinprocess ()
+       (mapc 'set
+	     **process-format**
+	     (get **process** '**process**)))
+
+(defun settick (x) (setq **tick** t))
+
+(defun procstart ()
+       (setq **pc** 'procstop)
+       (sapply))
+
+(defun procstop ()
+       (terminate))
+
+;The essence of the evaluator starts here.
+
+(defun symbol-value (symbol template display)
+       (cond ((setq **tem** (lookup symbol template display))
+	      (cond ((eq (locin **tem**) **unassigned**)
+		     (symbol-value (error '|Unassigned Symbol| symbol 'unbnd-vrbl)
+				   template display))
+		    (t (locin **tem**))))
+	     ((getl symbol '(subr expr lsubr debugfn)))
+	     ((boundp symbol) (symeval symbol))
+	     (t (symbol-value (error '|Unbound Symbol| symbol 'unbnd-vrbl) template display))))
+
+(defun dispatch ()
+       (cond ((atom **exp**)
+              (cond ((numberp **exp**) (setq **val** **exp**))
+		    (t (setq **val** (symbol-value **exp** **template** **display**)))))
+	     ((eq (car **exp**) 'lambda-script)
+	      (setq **val** (betacons **exp** **display**)))
+	     (t (dispatch1))))
+
+(defun dispatch1 ()			;This winning bum is due to Charlie Rich.
+       (cond ((atom (car **exp**))
+              (cond ((setq **tem** (get (car **exp**) 'aint))
+                     (fastcall **tem**))
+		    (t (setq **fun** (symbol-value (car **exp**) **template** **display**))
+		       (setq **unevlis** (cdr **exp**)  **evlis** nil)
+		       (evlis-nopush))))
+	     ((eq (caar **exp**) 'lambda-script)
+	      (setq **fun** (betacons (car **exp**) **display**))
+	      (setq **unevlis** (cdr **exp**)  **evlis** nil)
+	      (evlis-nopush))
+	     ((null (cdr **exp**))
+	      (push **pc**)
+	      (setq **exp** (car **exp**)  **pc** 'nargs)
+	      (dispatch1))
+             (t (push **exp** **template** **display** **pc**)
+                (setq **exp** (car **exp**)  **pc** 'gotfun)
+                (dispatch1))))
+
+(defun evlis-nopush ()
+       (cond ((null **unevlis**)
+	      (setq **unevlis** **pc**  **pc** 'tapply))
+	     ((atom (car **unevlis**))
+	      (setq **evlis**
+		    (cons (cond ((numberp (car **unevlis**))
+				 (car **unevlis**))
+				(t (symbol-value (car **unevlis**) **template** **display**)))
+			  **evlis**)
+		    **unevlis** (cdr **unevlis**))
+	      (evlis-nopush))
+	     ((eq (caar **unevlis**) 'lambda-script)
+	      (setq **evlis**
+		    (cons (betacons (car **unevlis**) **display**)
+			  **evlis**)
+		    **unevlis** (cdr **unevlis**))
+	      (evlis-nopush))
+	     ((null (cdr **unevlis**))
+	      (push **evlis** **fun** **pc**)
+	      (setq **exp** (car **unevlis**)  **pc** 'evlast)
+	      (dispatch1))
+	     (t (push **evlis** **unevlis** **fun** **template** **display** **pc**)
+		(setq **exp** (car **unevlis**)  **pc** 'evlis1)
+		(dispatch1))))
+
+(defun tapply () (setq **pc** **unevlis**) (sapply))
+
+(defun gotfun ()
+       (pop **exp**)
+       (push **val**)			;stack = fun,template,display,pc.
+       (setq **unevlis** (cdr **exp**)  **evlis** nil)
+       (evlis))
+
+(defun evlis ()
+       (cond ((null **unevlis**)
+              (pop **fun** **template** **display** **pc**)
+	      (sapply))
+	     ((atom (car **unevlis**))
+	      (setq **evlis**
+		    (cons (cond ((numberp (car **unevlis**))
+				 (car **unevlis**))
+				(t (symbol-value (car **unevlis**) (2nd) (3rd))))
+			  **evlis**)
+		    **unevlis** (cdr **unevlis**))
+	      (evlis))
+	     ((eq (caar **unevlis**) 'lambda-script)
+	      (setq **evlis**
+		    (cons (betacons (car **unevlis**) (3rd))
+			  **evlis**)
+		    **unevlis** (cdr **unevlis**))
+	      (evlis))
+	     ((null (cdr **unevlis**))
+	      (pop **fun** **template** **display**)
+	      (push **evlis** **fun**)
+	      (setq **exp** (car **unevlis**)  **pc** 'evlast)
+	      (dispatch1))
+             (t (top **fun** **template** **display**)
+                (push **evlis** **unevlis**) 
+                (setq **exp** (car **unevlis**) **pc** 'evlis1)
+                (dispatch1))))
+
+(defun evlis1 ()
+      (pop **evlis** **unevlis**)
+      (setq **evlis** (cons **val** **evlis**)  **unevlis** (cdr **unevlis**))
+      (evlis))
+
+(defun evlast ()
+       (pop **evlis** **fun** **pc**)
+       (setq **evlis** (cons **val** **evlis**))
+       (sapply))
+
+(defun nargs ()
+       (pop **pc**)
+       (setq **evlis** nil  **fun** **val**)
+       (sapply))
+
+(defun sapply ()
+       (cond ((eq (car **fun**) 'subr)
+	      (setq **val** (revsubrapply **fun** **evlis**)))
+	     ((eq (car **fun**) 'lsubr)
+	      (setq **val** (revlsubrapply **fun** **evlis**)))
+	     ((eq (car **fun**) 'beta)
+	      (setq **template** (beta-template **fun**))
+	      (or **no-args-check**
+		  (= (length (variables **template**))
+		     (length **evlis**)) 
+		  ((lambda (prinlevel)
+		       (error '|Wrong number of args to BETA -- SAPPLY|
+			      (list (reverse (variables **template**))
+				    (reverse **evlis**))
+			      'fail-act))
+		   3.))
+	      (setq **display** (make-display **evlis**
+					      (beta-display **fun**))
+		    **exp** (template-body **template**))
+	      (dispatch))
+	     ((eq (car **fun**) 'expr)
+	      (setq **val** (revapply (cadr **fun**) **evlis**)))
+	     ((eq (car **fun**) 'cbeta)
+	      (compiled-beta-entry))
+	     ((eq (car **fun**) 'delta)
+	      (or **no-args-check**
+		  (= (length **evlis**) 1)
+		  ((lambda (prinlevel)
+		       (error '|Not exactly one arg to CATCH tag -- SAPPLY|
+			      (reverse **evlis**)
+			      'fail-act))
+		   3.))
+	      (setq **clink** (cadr **fun**))
+	      (pop **template** **display** **fluidvars** **fluidvals** **pc**)
+	      (setq **val** (car **evlis**)))
+	     ((eq (car **fun**) 'debugfn)
+	      (setq **fun** (caadr **fun**))
+	      (sapply))
+	     (t (error '|Bad Function - Evlis| **fun** 'fail-act))))
+
+(setq **no-args-check** nil)				;default, check arg num
+
+;Speedup hacks -- implementation dependent stuff.
+
+(defun revapply (fn vals)
+       (prog (a b c d e temp)
+	     (or vals (return (funcall fn)))
+	     (setq a (car vals) temp vals vals (cdr vals))
+	     (or vals (return (funcall fn a)))
+	     (setq b (car vals) vals (cdr vals))
+	     (or vals (return (funcall fn b a)))
+	     (setq c (car vals) vals (cdr vals))
+	     (or vals (return (funcall fn c b a)))
+	     (setq d (car vals) vals (cdr vals))
+	     (or vals (return (funcall fn d c b a)))
+	     (setq e (car vals) vals (cdr vals))
+	     (or vals (return (funcall fn e d c b a)))
+	     (return (apply fn (reverse temp)))))
+
+(defun revsubrapply (fn vals)
+       (prog (a b c d e)
+	     (or vals (return (subrcall nil (cadr fn))))
+	     (setq a (car vals) vals (cdr vals))
+	     (or vals (return (subrcall nil (cadr fn) a)))
+	     (setq b (car vals) vals (cdr vals))
+	     (or vals (return (subrcall nil (cadr fn) b a)))
+	     (setq c (car vals) vals (cdr vals))
+	     (or vals (return (subrcall nil (cadr fn) c b a)))
+	     (setq d (car vals) vals (cdr vals))
+	     (or vals (return (subrcall nil (cadr fn) d c b a)))
+	     (setq e (car vals) vals (cdr vals))
+	     (or vals (return (subrcall nil (cadr fn) e d c b a)))
+	     (error '|Too Many Arguments to a Subr| (cons fn vals) 'wrng-no-args)))
+
+(defun revlsubrapply (fn vals)
+       (prog (a b c d e temp)
+	     (setq temp vals)
+	     (or temp (return (lsubrcall nil (cadr fn))))
+	     (setq a (car temp) temp (cdr temp))
+	     (or temp (return (lsubrcall nil (cadr fn) a)))
+	     (setq b (car temp) temp (cdr temp))
+	     (or temp (return (lsubrcall nil (cadr fn) b a)))
+	     (setq c (car temp) temp (cdr temp))
+	     (or temp (return (lsubrcall nil (cadr fn) c b a)))
+	     (setq d (car temp) temp (cdr temp))
+	     (or temp (return (lsubrcall nil (cadr fn) d c b a)))
+	     (setq e (car temp) temp (cdr temp))
+	     (or temp (return (lsubrcall nil (cadr fn) e d c b a)))
+	     (setplist 'the-lsubr-apply-atom fn)
+	     (return (apply 'the-lsubr-apply-atom (reverse vals)))))
+
+
+(defun fastcall (atsym)
+       (cond ((eq (car (plist atsym)) 'subr)
+	      (subrcall nil (cadr (plist atsym))))
+	     (t ((lambda (subr)
+			 (cond ((and subr
+				     (null (get atsym 'expr))	;don't screw TRACE
+				     (null (get atsym 'debugfn))) ;don't screw scheme-broken fns
+				(remprop atsym 'subr)
+				(putprop atsym subr 'subr)
+				(subrcall nil subr))
+			       (t (apply atsym nil))))
+		 (get atsym 'subr)))))
+
+; Compiled code linker and run-time environment.
+
+(setq **argument-registers** '(**one** **two** **three** **four**
+			       **five** **six** **seven** **eight**))
+
+(setq **cont+arg-regs** (cons '**cont** **argument-registers**))
+
+(setq **env+cont+arg-regs** (cons '**env** **cont+arg-regs**))
+
+(setq **number-of-arg-regs** (length **argument-registers**))
+
+(setq **jrst** nil)
+
+(defun cheapy-jpc ()
+	(mapcar '(lambda (x) (subr (cadr x))) **jrst**))
+
+(defun rabbit-jpc ()
+	(mapcar '(lambda (x) (list (get (subr (cadr x))
+					'user-function)
+				   (caddr x)))
+		**jrst**))
+
+(defun jrsticate ()
+       (cond ((eq (car **fun**) 'cbeta)
+	      (setq **env** (cddr **fun**))
+	      (and **jrst**
+		   (setq **jrst** (cons **fun** **jrst**)))
+	      (subrcall nil (cadr **fun**)))
+	     ((eq (car **fun**) 'subr)
+	      (setq **one** (spreadsubrcall))
+	      (setq **fun** **cont**)
+	      (jrsticate))
+	     ((eq (car **fun**) 'lsubr)
+	      (setq **one** (spreadlsubrcall))
+	      (setq **fun** **cont**)
+	      (jrsticate))
+	     ((eq (car **fun**) 'expr)
+	      (setq **one** (spreadexprcall))
+	      (setq **fun** **cont**)
+	      (jrsticate))
+	     ((eq (car **fun**) 'beta)
+	      (setq **template** (beta-template **fun**))
+	      (or **no-args-check**
+		  (= **nargs**
+		     (length (variables **template**)))
+		  ((lambda (prinlevel)
+		       (error '|Wrong number of args to BETA -- JRSTICATE|
+			      (list (reverse (variables **template**))
+				    (reverse (gather-evlis)))
+			      'fail-act))
+		   3.))
+	      (setq **display**
+		    (make-display (gather-evlis)
+				  (beta-display **fun**)))
+	      (setq **exp** (template-body **template**))
+	      (cond ((eq (car **cont**) 'epsilon)
+		     (setq **clink** (cadr **cont**))
+		     (pop **pc**))
+		    (t (setq **clink** **cont**)
+		       (setq **pc** 'jrsticate1)))
+	      (dispatch))
+	     ((eq (car **fun**) 'epsilon)
+	      (setq **clink** (cadr **fun**))
+	      (pop **pc**)
+	      (setq **val** **one**))
+	     ((eq (car **fun**) 'delta)
+	      (setq **clink** (cadr **fun**))
+	      (pop **template** **display** **fluidvars** **fluidvals** **pc**)
+	      (setq **val** **one**))
+	     ((eq (car **fun**) 'debugfn)
+	      (setq **fun** (caadr **fun**))
+	      (jrsticate))
+	     (t (error '|Bad Function - Jrsticate| **fun** 'fail-act))))
+
+(defun jrsticate1 ()
+       (setq **one** **val**)
+       (setq **fun** **clink**)
+       (setq **pc** 'jrsticate)				;must set up pc
+       (jrsticate))					;faster than going through MLOOP
+
+(defun compiled-beta-entry ()
+       (setq **env** (cddr **fun**))
+       (setq **cont**
+	     (list 'epsilon
+		   ((lambda (**clink**)
+			    (push **pc**)
+			    **clink**)
+		    **clink**)))
+       (spread-evlis **evlis**)
+       (setq **pc** 'jrsticate)
+       (subrcall nil (cadr **fun**)))
+
+(defun spread-evlis (evlis)
+       (cond ((> (length evlis) **number-of-arg-regs**)
+	      (setq **one** (reverse evlis)))
+	     (t (spread-evlis1 evlis))))
+
+(defun spread-evlis1 (evlis)
+       (cond (evlis
+	      ((lambda (tem)
+		       (set (car tem)
+			    (car evlis))
+		       (cdr tem))
+	       (spread-evlis1 (cdr evlis))))
+	     (t **argument-registers**)))
+
+(defun gather-evlis ()
+       (cond ((> **nargs** **number-of-arg-regs**) (reverse **one**))
+	     (t (do ((n 0 (+ 1 n))
+		     (argl nil (cons (symeval (car regl)) argl))
+		     (regl **argument-registers** (cdr regl)))
+		    ((= n **nargs**)
+		     argl)))))
+
+(defun spreadsubrcall ()
+       (cond ((= **nargs** 0)
+	      (subrcall nil (cadr **fun**)))
+	     ((= **nargs** 1)
+	      (subrcall nil (cadr **fun**) **one**))
+	     ((= **nargs** 2)
+	      (subrcall nil (cadr **fun**) **one** **two**))
+	     ((= **nargs** 3)
+	      (subrcall nil (cadr **fun**) **one** **two** **three**))
+	     ((= **nargs** 4)
+	      (subrcall nil (cadr **fun**) **one** **two** **three** **four**))
+	     ((= **nargs** 5)
+	      (subrcall nil (cadr **fun**) **one** **two** **three** **four** **five**))
+	     (t (error '|Too many arguments to a SUBR -- SPREAD|
+		       (list **fun** **nargs**)
+		       'fail-act))))
+
+(defun spreadlsubrcall ()
+       (cond ((= **nargs** 0)
+	      (lsubrcall nil (cadr **fun**)))
+	     ((= **nargs** 1)
+	      (lsubrcall nil (cadr **fun**) **one**))
+	     ((= **nargs** 2)
+	      (lsubrcall nil (cadr **fun**) **one** **two**))
+	     ((= **nargs** 3)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three**))
+	     ((= **nargs** 4)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three** **four**))
+	     ((= **nargs** 5)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three** **four** **five**))
+	     ((= **nargs** 6)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six**))
+	     ((= **nargs** 7)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six** **seven**))
+	     ((= **nargs** 8.)
+	      (lsubrcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six** **seven** **eight**))
+	     (t (setplist 'the-lsubr-apply-atom **fun**)
+		(apply 'the-lsubr-apply-atom **one**))))
+
+(defun spreadexprcall ()
+       (cond ((= **nargs** 0)
+	      (funcall nil (cadr **fun**)))
+	     ((= **nargs** 1)
+	      (funcall nil (cadr **fun**) **one**))
+	     ((= **nargs** 2)
+	      (funcall nil (cadr **fun**) **one** **two**))
+	     ((= **nargs** 3)
+	      (funcall nil (cadr **fun**) **one** **two** **three**))
+	     ((= **nargs** 4)
+	      (funcall nil (cadr **fun**) **one** **two** **three** **four**))
+	     ((= **nargs** 5)
+	      (funcall nil (cadr **fun**) **one** **two** **three** **four** **five**))
+	     ((= **nargs** 6)
+	      (funcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six**))
+	     ((= **nargs** 7)
+	      (funcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six** **seven**))
+	     ((= **nargs** 8.)
+	      (funcall nil (cadr **fun**) **one** **two** **three** **four**
+		                          **five** **six** **seven** **eight**))
+	     (t (apply (cadr **fun**) **one**))))
+
+; AINTs are special syntactic forms
+
+(defprop if aif aint)
+
+(defun aif ()
+       (push **exp** **template** **display** **pc**)
+       (setq **exp** (cadr **exp**)  **pc** 'if1)
+       (dispatch))
+
+(defun if1 ()
+       (pop **exp** **template** **display** **pc**)
+       (setq **exp** (cond (**val** (caddr **exp**)) (t (cadddr **exp**))))
+       (dispatch))
+
+
+(defprop block ablock aint)
+
+
+(defun ablock ()
+       (push **template** **display** **pc**)
+       (setq **unevlis**
+	     (or (cdr **exp**)
+		 (error '|Strange Block -- Ablock| **exp** 'fail-act)))
+       (ablock1))
+
+(defun ablock1 ()
+       (cond ((cdr **unevlis**)
+	      (top **template** **display**)
+	      (push **unevlis**)
+	      (setq **pc** 'ablock2))
+	     (t (pop **template** **display** **pc**)))
+       (setq **exp** (car **unevlis**))
+       (dispatch))
+
+(defun ablock2 ()
+       (pop **unevlis**)
+       (setq **unevlis** (cdr **unevlis**))
+       (ablock1))
+
+
+(defprop quote aquote aint)
+
+(defun aquote () (setq **val** (cadr **exp**)))
+
+;Amacros for SCHEME syntax extension.
+
+(defun amacro ()
+       (setq **tem**
+	     (or (getl (car **exp**) '(amacro smacro))	;If both a LISP macro and a SCHEME
+		 (getl (car **exp**) '(macro))))	; macro is defined, prefer the latter.
+       (cond ((not (eq (car **tem**) 'smacro))
+	      (setq **exp** (funcall (cadr **tem**) **exp**))
+	      (dispatch))
+	     (t (push **template** **display** **pc**)
+		(setq **fun** (symeval (cadr **tem**)))
+		(setq **evlis** (list **exp**))
+		(setq **pc** 'amacro1)
+		(sapply))))
+
+(defun amacro1 ()
+       (setq **exp** **val**)
+       (pop **template** **display** **pc**)
+       (dispatch))
+
+(defprop lambda lambda-crunch amacro)
+(defprop lambda amacro aint)
+
+(defun lambda-crunch (lamb)
+       (careful-displace lamb
+		 (lambda-to-script lamb **template**)))
+
+
+(defprop labels labels-crunch amacro)
+(defprop labels amacro aint)
+
+(defun labels-crunch (labels-exp)
+       (careful-displace labels-exp (labels-sort labels-exp)))
+
+
+(defun labels-sort (labels-exp)
+     (labels-to-script 
+       (cons 'labels
+             (cons
+	      (mapcar '(lambda(x)
+	       		(cond((atom (car x))
+	       		      (cond((eq 'lambda (caadr x))
+	       			    x)
+	       			   (t (cons (car x)
+					    (list (append '(lambda)
+							  (cdr x)))))))
+	       		      (t (cons (caar x)
+					(list (append 
+						(cons 'lambda (list (cdar x)))
+						(cdr x)))))))
+	       		(cadr labels-exp))
+               (cddr labels-exp)))))
+
+(defun labels-to-script (labels-exp)
+       ((lambda (deflist body genvars)
+		`((lambda ,(mapcar 'car deflist)
+			  (block ((lambda ,genvars
+					  (block ,@(mapcar '(lambda (fd iv)
+								    `(aset' ,(car fd) ,iv))
+							   deflist
+							   genvars)))
+				  ,@(mapcar 'cadr deflist))
+				 ,body))
+		  ,@(mapcar '(lambda (x) '**unassigned**) deflist)))
+	(cadr labels-exp)
+	(caddr labels-exp)
+	(mapcar '(lambda (x) (gensym)) (cadr labels-exp))))
+
+;Side effects.
+
+(defprop define adefine aint)
+
+(defun adefine () (setq **val** (eval **exp**)))
+
+(defun define fexpr (l)
+       (cond ((null (cdr l)) (*define (car l) nil l))
+	     ((not (atom (car l)))
+	      (*define (caar l)
+		       `(lambda ,(cdar l) ,(blockify (cdr l)))
+		       l))
+	     ((cddr l)
+	      (*define (car l) `(lambda ,(cadr l) ,(blockify (cddr l))) l))
+	     (t (*define (car l) (cadr l) l))))
+
+(defun *define (name defn l)
+       (setq **tem**
+	     (cond (defn
+		    (and (eq (car defn) 'lambda)
+			 (putprop name
+				  defn
+				  'scheme!function)))
+		   ((get name 'scheme!function))))
+       (or (and (eq (typep name) 'symbol)
+		**tem**)
+	   (error '|Bad Definition| (cons 'define l) 'fail-act))
+       (setq **tem** (enclose **tem** nil))
+       (set name **tem**)
+       (name-closure **tem** name)
+       name)
+
+(defprop aset aaset aint)
+
+(defun aaset ()
+       (push **exp** **template** **display** **pc**)
+       (setq **exp** (cadr **exp**)  **pc** 'aset1)
+       (dispatch))
+
+(defun aset1 ()
+       (pop **exp**)
+       (top **template** **display**)
+       (setq **exp** (caddr **exp**)  **pc** 'aset2)
+       (push **val**)
+       (dispatch))
+
+(defun aset2 ()
+       (pop **tem** **template** **display** **pc**)	; tem is the identifier to be clobbered.
+       ((lambda (vc)
+                (cond (vc (rplaca vc **val**))
+                      (t (set **tem** **val**))))
+        (lookup **tem** **template** **display**)))
+
+;Multiprocessing crap
+
+(setq **procnum** 0)
+
+(defun genprocname ()
+       ((lambda (base *nopoint)
+		(maknam (append '(p r o c e s s)
+				(exploden (setq **procnum** (1+ **procnum**))))))
+	10. t))
+
+(defun create!process (fun)
+       ((lambda (**process**
+		 **exp** **template** **display** **evlis** **unevlis** **pc** **clink**
+		 **fun** **fluidvars** **fluidvals** **val** **tem** **cont** **env** **nargs**
+		 **one** **two** **three** **four** **five** **six** **seven** **eight**)
+                (setq **clink** (list **process**))
+		;;; **clink** starts this way so the originating process
+		;;; of a DELTA can be clumsily identified
+		(swapoutprocess)
+                **process**)
+        (genprocname)
+	nil nil nil nil nil 'procstart nil
+	fun nil nil nil nil nil nil 0
+	nil nil nil nil nil nil nil nil))
+
+(defun start!process (p)
+       (cond ((or (not (eq (typep p) 'symbol)) (not (get p '**process**)))
+	      (error '|Bad Process - START!PROCESS| p 'fail-act)))
+       (or (eq p **process**) (memq p **queue**)
+	   (setq **queue** (nconc **queue** (list p))))
+       p)
+
+(defun stop!process (p)
+       (cond ((memq p **queue**)
+	      (setq **queue** (delq p **queue**))
+	      p)
+	     ((eq p **process**)
+	      (setq **val** p)
+	      (suspend!process))))
+
+(defun terminate ()
+       ((lambda (proc) (prog2 nil
+			      (suspend!process)
+			      (remprop proc '**process**)))
+	**process**))
+
+(defun suspend!process ()
+       (swapoutprocess)
+       (cond ((null **queue**)
+	      (setq **template** nil)
+	      (setq **display** nil)
+	      (setq **fluidvars** nil)
+	      (setq **fluidvals** nil)
+	      (setq **process** (make-ear '|Queue Ran Out| '|==> |)))
+	     (t (setq **process** (car **queue**))
+		(setq **queue** (cdr **queue**))))
+       (swapinprocess)
+       **val**)
+
+(defun make-ear (msg prompt)
+       (create!process (enclose `(lambda () (**top** ',msg ',prompt)) nil)))
+
+;Catch
+
+(defprop catch acatch aint)
+
+(defun acatch ()
+       (setq **template**
+	     (make-template (list (cadr **exp**))
+			    (caddr **exp**)
+			    **template**
+			    (list 'catch-expression (cadr **exp**))))
+       (setq **display**
+	     (make-display (list (list 'delta
+				       ((lambda (**clink**)
+						(push **template**
+						      **display**
+						      **fluidvars**
+						      **fluidvals**
+						      **pc**)
+						**clink**)
+					**clink**)
+				       (cadr **exp**)))
+			   **display**))
+       (setq **exp** (caddr **exp**))
+       (dispatch))
+
+
+;Utilities
+
+(declare (macros t))
+
+(defun if macro (x)					;for MacLISP code
+       (careful-displace x
+		 `(cond (,(cadr x) ,(caddr x))
+			(t ,(cadddr x)))))
+
+(defun blockify (x)
+       (cond ((null x) nil)
+             ((null (cdr x)) (car x))
+             (t `(block . ,x))))
+
+(defun orify (x)
+       (cond ((null x) nil)
+	     ((null (cdr x)) (car x))
+	     (t (cons 'or x))))
+
+(defun afsubr (x) `(eval ',x))
+
+(defprop proclaim afsubr amacro) (defprop proclaim amacro aint)
+
+(defun proclaim fexpr (x) 'proclamation)
+
+; Defmac's allow for variable lists of the form (a1 ,,, an)
+;  or alternatively, allow a dotted list construction (a1 ,,, an-1 . an)
+;  so that an will be bound to the remainder of the calling form.
+; In addition, the list of arguments will be bound to the given
+;  variable in LSUBR fashion if a variable (not a list) is supplied.
+
+(declare (defun /@define fexpr (x) nil)
+	 (/@define defmac |lisp macro|))
+
+(defprop defmac amacro aint)
+
+(defun defmac macro (x)			;define MacLISP macro
+       (careful-displace x
+		 `(progn
+		   'compile
+		   (defprop ,(cadr x) amacro aint)
+		   (defun ,(cadr x) macro (*z*)
+			   (careful-displace *z*
+				     ((lambda ,(do ((a (caddr x) (cdr a))
+						    (b nil (cons (car a) b)))
+						   ((or (null a) (eq (typep a) 'symbol))
+						    (cond ((null a) (nreverse b))
+							  (t (nreverse (cons a b))))))
+					       ,(cadddr x))
+				      ,@(do ((a (caddr x) (cdr a))
+					     (b '(cdr *z*) `(cdr ,b))
+					     (c nil (cons `(car ,b) c)))
+					    (nil)
+					    (cond ((null a) (return (nreverse c)))
+						  ((eq (typep a) 'symbol)
+						   (return
+						    (nreverse (cons b c))))))))))))
+
+;SCHMACs are for SCHEME what DEFMACs are for LISP, with similar syntax.
+
+(declare (/@define schmac |scheme macro|))
+
+(defprop schmac amacro aint)
+
+(defun schmac macro (x)			;define SCHEME macro
+       ((lambda (newname)
+		(careful-displace x
+			  `(progn 'compile
+				  (defprop ,(cadr x) amacro aint)
+				  (defprop ,(cadr x) ,newname amacro)
+				  (defun ,newname (*z*)
+					 (careful-displace *z*
+						   ((lambda ,(do ((a (caddr x) (cdr a))
+								  (b nil (cons (car a) b)))
+								 ((or (null a)
+								      (eq (typep a) 'symbol))
+								  (cond ((null a) (nreverse b))
+									(t (nreverse
+									    (cons a b))))))
+							    ,(cadddr x))
+						    ,@(do ((a (caddr x) (cdr a))
+							   (b '(cdr *z*) `(cdr ,b))
+							   (c nil (cons `(car ,b) c)))
+							  (nil)
+							  (cond ((null a) (return (nreverse c)))
+								((eq (typep a) 'symbol)
+								 (return
+								  (nreverse (cons b c))))))))))))
+	(implode (append (explodec (cadr x)) '(- a m a c r o)))))
+
+(defprop macro amacro aint)
+
+(defun macro macro (x)
+       ((lambda (newname)
+		(careful-displace x
+			  `(progn 'compile
+				  (defprop ,(cadr x) amacro aint)
+				  (defprop ,(cadr x) ,newname smacro)
+				  (define ,newname (*z*)
+					   (careful-displace *z*
+						     ((lambda ,(do ((a (caddr x) (cdr a))
+								    (b nil (cons (car a) b)))
+								   ((or (null a)
+									(eq (typep a) 'symbol))
+								    (cond ((null a) (nreverse b))
+									  (t (nreverse
+									      (cons a b))))))
+							       ,(cadddr x))
+						      ,@(do ((a (caddr x) (cdr a))
+							     (b '(cdr *z*) `(cdr ,b))
+							     (c nil (cons `(car ,b) c)))
+							    (nil)
+							    (cond ((null a) (return (nreverse c)))
+								  ((eq (typep a) 'symbol)
+								   (return
+								    (nreverse (cons b c))))))))))))
+	(implode (append (explodec (cadr x)) '(- s m a c r o)))))
+
+(schmac let (defns . body)
+	`((lambda ,(mapcar 'car defns) ,(blockify body))
+	   ,@(mapcar 'cadr defns))))
+
+(declare (special **doname** **dobody**))
+
+(setq **doname** (maknam (explodec '*doloop*)))
+
+(schmac do (specs end . body)
+	`(labels ((,**doname**
+		   (lambda ,(mapcar 'car specs)
+			    (if ,(car end)
+				,(blockify (cdr end))
+				,(blockify
+				    (append body
+					`((,**doname** 
+					  ,@(mapcar '(lambda (y)
+							     (cond ((and (cdr y)
+									 (cddr y))
+								    (caddr y))
+								   (t (car y))))
+						    specs)))))))))
+		 (,**doname** ,@(mapcar '(lambda (y) (and (cdr y) (cadr y))) specs))))
+
+(schmac iterate (name varinits . body)
+	`(labels ((,name (lambda ,(mapcar 'car varinits) ,(blockify body))))
+		 (,name . ,(mapcar 'cadr varinits))))
+
+(schmac test (pred fn alt)
+	`((lambda (p f a)
+		  (if p ((f) p) (a)))
+	  ,pred
+	  (lambda () ,fn)
+	  (lambda () ,alt)))
+
+(schmac cond clauses
+	(cond ((null clauses) nil)
+	      ((eq (caar clauses) 't)
+	       (blockify (cdar clauses)))		;bum
+	      ((null (cdar clauses))
+	       `(or ,(caar clauses)
+		     (cond . ,(cdr clauses))))
+	      ((eq (cadar clauses) '=>)
+	       `(test ,(caar clauses)
+		       ,(caddar clauses)
+		       (cond . ,(cdr clauses))))
+	      (t `(if ,(caar clauses)
+		       ,(blockify (cdar clauses))
+		       (cond . ,(cdr clauses))))))
+
+(schmac or args
+	(cond ((null args) nil)
+	      ((null (cdr args)) (car args))
+	      (t `((lambda (p r) (if p p (r)))
+		    ,(car args)
+		    (lambda () (or . ,(cdr args)))))))
+
+(schmac and args
+	(cond ((null args) t)
+	      ((null (cdr args)) (car args))
+	      (t `(if ,(car args) (and . ,(cdr args)) nil))))
+
+(schmac amapcar (fn . arglists)
+	((lambda (fnname result names)
+		 `(do ((,fnname ,fn)
+		       ,@(mapcar '(lambda (y n) `(,n ,y (cdr ,n)))
+				 arglists
+				 names)
+		       (,result
+			nil
+			(cons (,fnname ,@(mapcar '(lambda (y) `(car ,y))
+						 names))
+			      ,result)))
+		      (,(orify (mapcar '(lambda (n) `(null ,n)) names))
+		       (nreverse ,result))))
+	 (gensym)
+	 (gensym)
+	 (mapcar '(lambda (x) (gensym)) arglists)))
+
+(schmac amaplist (fn . arglists)
+	((lambda (fnname result names)
+		 `(do ((,fnname ,fn)
+		       ,@(mapcar '(lambda (y n) `(,n ,y (cdr ,n)))
+				 arglists
+				 names)
+		       (,result nil (cons (,fnname ,@names) ,result)))
+		      (,(orify (mapcar '(lambda (n) `(null ,n)) names))
+		       (nreverse ,result))))
+	 (gensym)
+	 (gensym)
+	 (mapcar '(lambda (x) (gensym)) arglists)))
+
+(schmac amapc (fn . arglists)
+	((lambda (fnname names)
+		 `(do ((,fnname ,fn)
+		       ,@(mapcar '(lambda (y n) `(,n ,y (cdr ,n)))
+				 arglists
+				 names))
+		      (,(orify (mapcar '(lambda (n) `(null ,n)) names))
+		       nil)
+		      (,fnname ,@(mapcar '(lambda (y) `(car ,y))
+					 names))))
+	 (gensym)
+	 (mapcar '(lambda (x) (gensym)) arglists)))
+
+(schmac aarraycall (type . args)
+	`(funcall ,@args))
+
+;Fluid variable stuff.
+
+(schmac FLUIDBIND (vars expression)
+	`(FLUIDBIND-HANDLER ',(mapcar 'car vars)
+			      (LIST ,@(mapcar 'cadr vars))
+			      (LAMBDA () ,expression)))
+
+(define FLUIDBIND-HANDLER
+    (lambda (vars vals c)
+	(let ((ovars **fluidvars**)
+	      (ovals **fluidvals**))
+	     (block (set' **fluidvars** (append vars ovars)) ;not NCONC
+		    (set' **fluidvals** (append vals ovals))
+		    (let ((val (c)))
+			 (block (set' **fluidvars** ovars)
+				(set' **fluidvals** ovals)
+				val))))))
+
+(schmac FLUID (var)
+	`(FLUID-HANDLER ',var))
+
+(define FLUID-HANDLER
+    (lambda (var)
+	(let ((vc (fluidlookup var **fluidvars** **fluidvals**)))
+	     (if vc
+		 (car vc)
+		 (if (boundp var)
+		     (symeval var)
+		     (fluid-handler
+		         (error '|Unbound Fluid Variable -- FLUID-HANDLER|
+				var 'unbnd-vrbl))))))))
+
+
+(defun fluidset (var val)
+       ((lambda (vc)
+                (cond (vc (rplaca vc val))
+                      (t (set var val))))
+        (fluidlookup var **fluidvars** **fluidvals**)))
+
+(defun fluidlookup (id vars vals)
+       (prog ()
+         lp (cond ((null vars) (return nil))
+                  ((eq id (car vars))
+                   (cond ((null vals) (error '|Vals too short -- fluidlookup| id 'fail-act)))
+                   (return vals))
+                  ((null vals) (error '|Too few vals - fluidlookup| id 'fail-act)))
+            (setq vars (cdr vars)  vals (cdr vals))
+            (go lp)))
+
+(schmac STATIC (var) var)
+
+
+(declare (special **genprogtag**))
+
+(defun genprogtag ()
+       ((lambda (base *nopoint)
+		(maknam (append '(T A G)
+				(explodec (setq **genprogtag**
+						(1+ **genprogtag**))))))
+	10.
+	t))
+
+(setq **genprogtag** 0)
+
+(defprop prog aprog amacro) (defprop prog amacro aint)
+
+(defun aprog (x)
+       (careful-displace x (aprog1 (cdr x) nil nil)))
+
+(defun aprog1 (x rnl ret)
+       `((lambda ,(car x) ,(aprog2 (cdr x) rnl ret))
+	 ,@(mapcar '(lambda (x) nil) (car x))))
+
+(defun aprog2 (body rnl ret)
+       ((lambda (stuff)
+		`(labels ,(maplist '(lambda (z)
+					`(,(caar z)
+					  (lambda ()
+					      ,(aprogx (cadar z)
+						       (cond ((cdr z) (caadr z))
+							     (t ret))
+						       (cdr stuff)
+						       ret))))
+				    (car stuff))
+			  (,(caaar stuff))))
+	(aprog3 body rnl ret)))
+
+(defun aprog3 (body rnl ret)
+       (do ((b body (cdr b))
+	    (r rnl)
+	    (tags nil
+		  (and (atom (car b)) (cons (car b) tags)))
+	    (x nil
+	       (cond ((atom (car b)) x)
+		     (t ((lambda (g)
+			     (setq r (do ((z tags (cdr z))
+					  (y r (cons (cons (putprop g (car z) 'gotag)
+							   g)
+						     y)))
+					 ((null z) y)))
+			     (cons (list g (car b)) x))
+			 (genprogtag))))))
+	   ((null b)
+	    (cons (nreverse x)
+		  (do ((z tags (cdr z))
+		       (y r (cons (cons (car z) ret) y)))
+		      ((null z) y))))))
+
+(defun aprogx (form next rnl ret)
+       (cond ((atom form)
+	      (cond (next `(,next))
+		    (t (error '|What The Hell? - PROG| form 'fail-act))))
+	     ((eq (car form) 'go)
+	      ((lambda (x)
+		   (cond ((null x)
+			  (error '|Illegal GO| form 'unseen-go-tag))
+			 (t `(,(cdr x)))))
+	       (assq (cadr form) rnl)))
+	     ((eq (car form) 'return)
+	      (cond (ret `(,ret))
+		    (t (cadr form))))
+	     ((eq (car form) 'if)
+	      `(if ,(cadr form)
+		   ,(aprogx (caddr form) next rnl ret)
+		   ,(aprogx (cadddr form) next rnl ret)))
+	     ((eq (car form) 'lambda)
+	      `(lambda ,(cadr form) ,(aprogx (caddr form) next rnl ret)))
+	     ((eq (car form) 'labels)
+	      `(labels ,@(mapcar '(lambda (x) `(,(car x)
+						,(aprogx (cadr x) next rnl ret)))
+				 (cadr form))
+		       ,(aprogx (caddr form) next rnl ret)))
+	     ((eq (car form) 'prog)
+	      (aprog1 (cdr form) rnl next))
+	     ((and (atom (car form))
+		   (get (car form) 'amacro))
+	      (aprogx (apply (get (car form) 'amacro) form)
+		      next rnl ret))
+	     (t ((lambda (fm)
+		     (cond (next `(block ,fm (,next)))
+			   (t fm)))
+		 (mapcar '(lambda (x)
+				      (cond ((atom x) x)
+					    ((eq (car x) 'lambda)
+					     (aprogx x next rnl ret))
+					    (t x)))
+				 form)))))
+
+;Getting the whole thing started up.
+
+(defun version macro (x)
+       (cond (compiler-state
+	      (list 'quote
+		    (cond ((status feature newio)
+			   (list (namestring (truename infile))
+				 '|compiled by|
+				 (STATUS USERID)))
+			  (t (status uread)))))
+	     (t (rplaca x 'quote)
+		(rplacd x (list version))
+		(list 'quote version))))
+
+(eval-when (compile)
+(setq version ((lambda (compiler-state) (version)) t))
+)
+
+(defprop moonphase (phase fasl dsk liblsp) autoload)
+(defprop phaseprinc (phsprt fasl dsk liblsp) autoload)
+(defprop datimprinc (phsprt fasl dsk liblsp) autoload)
+(defprop sunposprinc (phsprt fasl dsk liblsp) autoload)
+
+; Interpreter initialization
+
+(defun scheme (garbagep msg)
+       (cond (garbagep
+	      (setq version (version))
+	      (setq lispversion (status lispversion))
+	      (terpri)
+	      (princ '|This is SCHEME |)
+	      (princ version)
+	      (princ '| running in LISP |)
+	      (princ lispversion)
+	      (princ '|.|)
+	      (terpri)
+	      (princ '|   |)
+	      (phaseprinc (moonphase))
+	      (terpri)
+	      (princ '|   |)
+	      (sunposprinc)
+	      (terpri)
+	      (princ '|   |)
+	      (datimprinc 'hack)))
+       (setq **break-flag** nil)
+       (setq **jpcr** nil)
+       (setq **queue** nil)
+       (setq **process** (make-ear msg '|==> |))
+       (swapinprocess)
+       (setq alarmclock 'settick)
+       (setalarmclock)
+       (mloop))
+
+(defun schemestart nargs
+       (sstatus toplevel '(schemestart1))
+       (nointerrupt nil)
+       (^g))
+
+(defun schemestart1 ()
+       (sstatus toplevel nil)
+       (cond ((not (= tty 5)) (scheme nil '|Quit|))
+	     (t (scheme t '|SCHEME: Top Level|))))
+
+(cond ((status feature newio)
+       (sstatus ttyint '/ 'schemestart))
+      (t (sstatus interrupt 16. 'schemestart)))
+
+(defun punt-once ()					;atomic
+       (and **queue**
+	    (progn (putprop **process** t '**punt**)
+		   (swap!process)
+		   (remprop **process** '**punt**)	;great obscurity
+		   **val**)))
+
+(define punt
+	(lambda ()
+		(iterate search
+			 ((q **queue**))
+			 (if (null q)
+			     nil
+			     (if (get (car q) '**punt**)
+				 (search (cdr q))
+				 (block (punt-once) (punt)))))))
+
+;The read-eval-print loop.
+
+(define **top**
+	(lambda (message prompt)
+		(block (set '-- nil)
+		       (terpri)
+		       (princ message)
+		       (iterate the-top-level-loop
+				()
+				(block (punt)
+				       (terpri)
+				       (princ prompt)
+				       (set' ++ --)
+				       (set' -- (read))
+				       (set' ** ((enclose `(lambda () ,--) nil)))
+				       (if (not ^q)
+					   (if (not (eq ** *noprint*)) (terpri))
+					   (if (> (charpos (symeval 'tyo)) 10.)
+					       (block (terpri) (princ '|    |))))
+				       (if (not (eq ** *noprint*))
+					   (if scheme-prin1
+					       (scheme-prin1 **)
+					       (schprin1 **)))
+				       (princ '| |)
+				       (the-top-level-loop))))))
+
+(setq scheme-prin1 nil)  
+
+(defun schprin1 (x)
+       (cond (prin1 (funcall prin1 x))
+	     (t (prin1 x))))
+
+(defun where ()
+       (do ((b **template** (previous-template b)))
+           ((null b) nil)
+	   (print (template-name b))))
+
+
+(defun schval fexpr (l)
+       (locin (lookup (car l) **template** **display**)))
+
+;; The following let the grinder (sprinter, sprin1) know about SCHEME's
+;; circular data structures.  For endless beauty, say (SETQ PRIN1 'SPRIN1)
+
+(defun grind-a-procedure (&AUX temp)
+       (declare (special l m))
+       (princ '|#<|)
+       (prin1 (car l))
+       (princ '| |)
+       (prin1 (maknum l))
+       (cond ((and (eq (car l) 'beta)
+		   (symbolp (setq temp (template-name (beta-template l)))))
+	      (princ '| |)
+	      (prin1 temp))
+	     ((eq (car l) 'delta)
+	      (princ '| |)
+	      (prin1 (caddr l))))
+       (princ '|>|))
+
+(mapcar '(lambda (marker)
+		  (putprop marker '+INTERNAL-DWIM-PREDICTFUN 'grindpredict)
+		  (putprop marker 'grind-a-procedure 'grindmacro))
+	'(beta cbeta subr lsubr expr delta epsilon debugfn))
+
+(defprop sprin1 #.(get 'sprinter 'autoload) autoload)
+
+
+;;; Function to load SCHEME stuff from a file.
+;;; Works on FASL or SCHEME files.  Attempts to duplicate LOAD algorithm;
+;;; in particular, if no second filename is given `FASL` is tried first.
+
+(declare (special defaultf))
+
+(define SCHLOAD
+    (lambda (f0)
+	(let ((f (mergef f0 '((* *) * *))))
+	     (let ((fn2 (caddr f))
+		   (>0 (mergef (mergef f '((* *) * >))
+			       (symeval 'defaultf)))
+		   (fasl0 (mergef (mergef f '((* *) * fasl))
+				  (symeval 'defaultf))))
+		  (let ((> (probef >0))
+			(fasl (probef fasl0))
+			(initname (implode (append '(i n i t -)
+						   (exploden (cadr fasl0))))))
+		       (cond ((null >)
+			      ;;; no file there at at all
+			      (let ((tyo (symeval 'tyo)))
+				   (terpri tyo)
+				   (princ (namestring >0))
+				   (princ '| file not found -- SCHLOAD| tyo)
+				   (terpri tyo)
+				   (princ '|Use what filename instead? | tyo)
+				   (schload (readline (symeval 'tyi)))))
+			     ((and (eq fn2 '*)
+			      ;;; no second filename -- try FASL
+				   fasl
+				   (faslp fasl))
+			      (let ((v (apply 'fasload (list (cadr fasl)
+							     (caddr fasl)
+							     (caar fasl)
+							     (cadar fasl)))))
+				   (block (and (boundp initname)
+					       (procp (symeval initname))
+					       ((symeval initname)))
+					  v)))
+			     ((faslp >)
+			      ;;; got fasl file
+			      (let ((v (apply 'fasload (list (cadr >)
+							     (caddr >)
+							     (caar >)
+							     (cadar >)))))
+				   (block (and (boundp initname)
+					       (procp (symeval initname))
+					       ((symeval initname)))
+					  v)))
+			     (t (let ((file (open > '(dsk in)))
+				      (eof (list 'eof)))
+				     (iterate readloop ()
+					      (let ((x (read file eof)))
+						   (if (eq x eof)
+						       (block (close file) t)
+						       (block
+							  ((enclose `(lambda () ,x)
+								    nil))
+							  (readloop)))))))))))))
+
+
+;; Utility to dump out a TS SCHEME.
+
+(eval-when (eval load) 
+   (alloc '(LIST  (40000. 100000. .2) SYMBOL (5000. 10000. 512.))))
+
+;; Before loading NSCHSY, do a (setq pure 1).
+(defun schemedump (&OPTIONAL (file '|SCHEME;TS SCHEME|))
+  (or (getl 'moonphase '(subr lsubr))
+      (and (get 'moonphase 'autoload) (load (get 'moonphase 'autoload))))
+  (sstatus flush 't)
+  (gc)
+  (suspend () file)
+  (setq defaultf `((DSK ,(STATUS UDIR)) FOO >))
+  (setq pure 1)
+  (setq **swapping** nil) ;Default is not to time-share.
+  (setq *displace-save-sw* nil)
+  ((lambda (fn) (and (probef fn) (apply 'uread fn)))
+   (list (list 'dsk (status homedir)) (status userid) 'scheme))
+  (scheme t '|SCHEME: Top Level|))
+
+
+;Various LISP FSUBRS are useful in SCHEME.
+;This must be at the end of the file.
+
+(mapatoms '(lambda (x)
+		   (cond ((and (get x 'fsubr) (not (get x 'aint)))
+			  (putprop x 'afsubr 'amacro)
+			  (putprop x 'amacro 'aint)))))
+
+(defprop grindef afsubr amacro) (defprop grindef amacro aint)
+(defprop trace afsubr amacro) (defprop trace amacro aint)
+(defprop untrace afsubr amacro) (defprop untrace amacro aint)
+(defprop debug afsubr amacro) (defprop debug amacro aint)
+(defprop ledit afsubr amacro) (defprop ledit amacro aint)
