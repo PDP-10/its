@@ -151,6 +151,7 @@
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.
 - SYSMSG, displays system messages.
+- RABBIT, Scheme compiler.
 - TAGS, generate tags table for sources.
 - TALK/WHO/WHOJ/WHOM/USERS, list users.
 - TCTYP and CRTSTY, terminal handling.
