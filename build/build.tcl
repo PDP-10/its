@@ -675,6 +675,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts date_sysen3;date\r"
 expect ":KILL"
 
+# SRDATE
+respond "*" ":midas sys3;ts srdate_sysen3;srdate\r"
+expect ":KILL"
+
 # PWMAIL
 respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "Y\r"

@@ -142,6 +142,7 @@
 - SPCWAR, Spacewar game.
 - SPELL, ESPELL spell checker.
 - SRCCOM, Compares/merges source files, compares binary files.
+- SRDATE, set reference date on a file.
 - STINK, linker.
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
