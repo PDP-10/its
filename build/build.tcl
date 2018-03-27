@@ -502,6 +502,13 @@ respond "*" ":link device;jobdev chaos,device;jobdev cha\r"
 
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
+# CHAOS ARPA/NCP/TCP gateway
+respond "*" ":midas sysnet;_arpa\r"
+expect ":KILL"
+respond "*" ":link device;chaos arpa, sysnet;arpa bin\r"
+respond "*" ":link device;chaos ncp, sysnet;arpa bin\r"
+respond "*" ":link device;chaos tcp, sysnet;arpa bin\r"
+
 respond "*" ":midas .;ts redrct_sysnet;redrct\r"
 expect ":KILL"
 
