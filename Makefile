@@ -13,6 +13,8 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc chprog
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon graphs
 
+SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
+
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
 NSALV = bin/ks10/boot/salv.rp06
@@ -26,8 +28,9 @@ WRITETAPE=${PWD}/tools/tapeutils/tapewrite
 MAGFRM=${PWD}/tools/dasm/magfrm
 
 H3TEXT=$(shell cd build; ls h3text.*)
+SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 
-all: out/$(EMULATOR).stamp tools/supdup/supdup
+all: $(SMF) out/$(EMULATOR).stamp tools/supdup/supdup
 
 out/klh10.stamp out/simh.stamp: out/rp0.dsk
 	touch $@
@@ -133,6 +136,9 @@ $(MAGFRM):
 
 tools/supdup/supdup:
 	cd tools/supdup; make
+
+$(SMF):
+	git submodule update --init `dirname $@`
 
 clean:
 	rm -rf out start build/*/stamp src/system/config.* src/syshst/h3text.*
