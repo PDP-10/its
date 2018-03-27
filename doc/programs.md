@@ -8,6 +8,7 @@
 - ARCDEV, transparent file system access to archive files.
 - ARCSAL, archive salvager.
 - ARGUS, alerts you when specified users login or logout.
+- ARPA, gateway from Chaosnet to Arpanet and Internet.
 - ATSIGN CHAOS, Chaosnet support.
 - ATSIGN DEVICE, load device drivers.
 - ATSIGN TARAKA, starts dragons.

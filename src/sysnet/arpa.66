@@ -1,0 +1,611 @@
+;-*-midas-*-
+title arpa
+;chaosnet to arpanet server, rfc has hostname and optional (octal) socket number
+
+;data is just forwarded from chaosnet connection to arpanet connection and vice versa,
+;except:
+; data opcode 201 from the chaosnet means do an INS on the arpanet connection
+;  the rest of this packet is treated normally
+; data opcode 210 means establish auxiliary connection (for gateway FTP), the
+;  the data portion of this packet contains 8 bytes of the (gensym'ed presumably)
+;  contact name for the chaos end of the auxiliary connection, the server will do
+;  a listen on that name; and 2 words of the arpanet socket number to connect to.
+;  when a rfc is received for that contact name, a half-duplex arpanet connection
+;  is established and data then forwarded from/to it to/from the chaosnet connection
+;  in the same manner as the main connection.
+; For TCP it is much worse, it starts listening on TCP and chaos and waits for a
+; 211 packet before checking that TCP is open and opening chaos.  This is needed
+; with the screwy way TCP FTP works.
+; Using 212 instead of 210 gensyms the local port and sends it back as
+; a 300 packet on the main data connection.
+; Made it send local internet host number in 300 packet, as four bytes
+; following the local port.  (Users must check packet length since other
+; servers might not have it) -GZ 10/2/84
+;
+; hacked a little in preparation for TCP.  -dcp  12/29/82
+
+f=0
+a=1
+b=2
+c=3
+d=4
+e=5
+n=6
+bp=7
+t=10
+tt=11
+s=12
+cch=13
+nch=14
+p=17
+
+frauxo==400000
+frcaxo==200000
+
+.insrt system;chsdef
+
+%cobrk==%codat+1		;R11 net INS magic
+icpch==0
+netich==2
+netoch==3
+auxich==4
+auxoch==5
+filech==7
+chaich==10
+chaoch==11
+caxich==12
+caxoch==13
+
+call=pushj p,
+ret=popj p,
+return=popj p,
+define syscal name,args
+	.call [setz ? sixbit /name/ ? args ((setz))]
+termin
+
+$$hst3==1
+$$allnet==1			;let them go anyplace
+$$arpa==1			;support Arpanet, we do Chaos net ourselves
+$$icp==1			;icp routine
+$$tcp==1
+$$connect==1
+$$hostnm==1			;hostname lookup routines
+$$ownhst==1			;Own hostname in standard format
+$$symlook==1
+$$hstsix==1
+$$analyze==1			;analyze routine
+ifndef $$logging,$$logging==0
+
+.insrt syseng;netwrk >
+
+;storage
+debug:	0			;non-zero => .value on barfage
+whoami:	0			;sixbit of program name (ARPA, NCP or TCP)
+usrhst:	0			;user host number
+lclhst:	0			;local host number
+frnhst:	0			;arpanet host number
+icpskt:	0			;icp socket
+chapkt:	block %cpmxw		;chaosnet packet goes here
+hstnam:	block 10		;stick the host name here
+npdl==100
+pdl:	block npdl
+
+;interrupt handler
+tsint:	loc 42
+	-tsintl,,tsint
+loc tsint
+	p
+	%piioc ? 0 ? -1 ? -1 ? iocerr	;iocerr ints highest priority
+	0 ? 1_netich ? 0 ? 1_chaich\1_netich\1_caxich\1_auxich ? netint
+	0 ? 1_chaich ? 0 ? 1_netich\1_chaich\1_caxich\1_auxich ? chaint
+	0 ? 1_auxich ? 0 ? 1_chaich\1_netich\1_caxich\1_auxich ? auxint
+	0 ? 1_caxich ? 0 ? 1_netich\1_chaich\1_caxich\1_auxich ? caxint
+tsintl==.-tsint
+
+;error handler
+die:	0
+	skipe debug
+	 .value
+passon:	.logout			;natural causes
+	.value
+
+sndpkt:	setz ? 'pktiot ? movei 1(cch) ? setzi chapkt
+rcvpkt:	setz ? 'pktiot ? movei 0(cch) ? setzi chapkt
+
+;main program
+go:	.close 1,		;this can still be open from loading us
+	move p,[-npdl,,pdl-1]
+	call getme		;get my job info
+	trz f,frauxo\frcaxo	;neither auxiliary conn open yet
+	call getcha		;get the chaos connection
+	call logmein		;I know it's seven characters
+	call gethst		;get the host we are trying to send to
+	call getskt		;get the socket number to connect to
+	call getcon		;get the NCP or TCP connection
+	call getrdy		;get ready for main loop
+	jfcl
+	.hang
+
+getme:	.suset [.rsname,,whoami]
+	return			;maybe error check someday
+
+getcha:	movei cch,chaich
+	movei nch,netich
+	syscal chaoso,[movei chaich ? movei chaoch ? movei 5]
+	 jsr die
+	move t,[.byte 8 ? %colsn ? 0 ? 0 ? 0]
+	movem t,chapkt
+	move t,[440600,,whoami]	;better not take up all six characters
+	move tt,[440800,,chapkt+%cpkdt]
+	ildb s,t
+	jumpn s,[addi s,"A-'a	;'"
+		 idpb s,tt
+		 movei s,1_4
+		 addm s,chapkt	;increment length
+		 jrst .-1]
+	.call sndpkt
+	 jsr die
+	movei t,30.*60.
+	skipe debug
+	 hrloi t,177777		;wait forever if debugging
+	syscal netblk,[movei chaich ? movei %cslsn ? t ? movem t]
+	 jsr die
+	caie t,%csrfc		;did we get an rfc for this?
+	 jsr die
+	.call rcvpkt		;yes, read it in
+	 jsr die
+	syscal rfname,[	%climm,,chaich	   ;Examine Chaosnet conn
+			%clout,,a ?	   ;(Should be CHAOS device)
+			%clout,,tt ? %clout,,tt	   ;Ignore index nums
+			%clout,,usrhst ]   ;Find user host address
+	 return
+ifn $$logging, netwrk"log CH2TCP,[usrhst]
+	return
+
+logmein:			;and tell the system other things
+	movei a,hstpag
+	movei b,filech
+	call netwrk"hstmap	;get the hosttable
+	 jsr die
+	skipe debug		;debugging?
+	 return
+	ldb a,[chapkt+$cpksa]	;get source host address
+	tlo a,netwrk"nw%chs_9
+	pushj p,netwrk"hstsix	;Get sixbit of it
+	 .lose
+	move tt,[sixbit /000_00/]	;convert host number to sixbit
+	ldb t,[.bp <sixbit /_     />,whoami]	;get first character
+	dpb t,[.bp <sixbit /   _  />,tt]	;set it
+	ldb t,[$cpksa chapkt]	;get source host address
+	dpb t,[220300,,tt]
+	lsh t,-3
+	dpb t,[300300,,tt]
+	lsh t,-3
+	dpb t,[360300,,tt]
+	.suset [.ruind,,t]	;incoroporate user index also
+	dpb t,[000300,,tt]
+	lsh t,-3
+	dpb t,[060300,,tt]
+	move t,tt		;save copy for xuname
+	.suset [.sjname,,whoami]
+	movei n,100(tt)		;loop at most 100 times
+login:	cain n,(tt)
+	 jsr die
+	.call [setz
+	       sixbit /LOGIN/
+	       tt ? a ? setz t]
+	 aoja tt,login		;error, perhaps need to try other uname
+	syscal detach,[movsi 3 ? movei %jself]
+	 jsr die
+	return
+
+;now look at the connection name string and find out where the guy wants to go
+gethst:	move bp,[440800,,chapkt+%cpkdt]	;point to packet's data
+	ldb n,[chapkt+$cpknb]	;get number of bytes in it
+geths1:	sojl n,nohost		;didnt give enough information
+	ildb t,bp
+	caie t,40		;look for space
+	 jrst geths1
+	jumpe n,nohost
+	move a,[440700,,hstnam]
+geths2:	ildb t,bp		;get char from packet
+	idpb t,a		;build ascii of hostname
+	caie t,40
+	 sojge n,geths2
+	movei t,0
+	dpb t,a			;make null terminated string
+	move a,[440700,,hstnam]
+	call netwrk"hstlook	;go lookup hostname
+	 jrst badhst
+	movem a,frnhst
+	move a,[netwrk"nw%arp]
+	call netwrk"ownhst	;look up our name
+	  setz a,
+	tlz a,740000		;Flush any format info
+	movem a,lclhst
+	setzm netwrk"hstadr	;can now flush hosttable
+	.core hstpag
+	 jsr die
+	return
+
+;now look for socket to hook up to
+getskt:	setz a,			;accumulate it here
+getsk1:	sojle n,getsk2
+	ildb t,bp
+	cain t,40
+	 jrst getsk2
+	cail t,"0
+	 caile t,"7
+	 jrst badskt
+	lsh a,3
+	addi a,-"0(t)
+	jrst getsk1
+
+getsk2:	skipn a
+	 movei a,1		;default to logger
+	movem a,icpskt
+	return
+
+;now we attempt the connection
+getcon:	move a,whoami
+	camn a,[sixbit /ARPA/]
+	 jrst gtcarp
+	camn a,[sixbit /NCP/]
+	 jrst gtcncp
+	camn a,[sixbit /TCP/]
+	 jrst gtctcp
+	movei a,[asciz /Unknown gateway protocol request/]
+	call sndcls
+	jsr die
+
+gtcncp:	movei a,icpch		;first of 4 channels to use
+	move b,frnhst		;host
+	move c,icpskt		;icp socket
+	move d,[40+.uai,,40+.uao]	;8 bit mode
+	move nch,a		;arg to doanal
+	call netwrk"arpicp	;try to connect up
+	 jrst doanal		;failed, send CLS of why
+	return
+
+gtcarp:	call gtttcp		;try tcp first
+	 jrst [	move  t,[sixbit /NCP/]	;tcp failed
+		movem t,whoami
+		jrst gtcncp]		;else try NCP
+	move  t,[sixbit /TCP/]	;tcp succeeded
+	movem t,whoami
+	return
+
+gtctcp:	call gtttcp
+	 jrst fail
+	return
+
+gtttcp:	
+IFN 0,[	syscal tcpopn,[movei netich ? movei netoch
+		[-1] ? icpskt	;local, foreign
+		frnhst]
+	 jsr die		;failed (should timeout!)
+	movei t,15.*30.		;15 seconds
+	syscal netblk,[movei netich ? movei %nsrfs ? t ? movem tt ? movem t]
+	 jsr die
+	jumple t,tcptmo
+	tlz tt,-1		;cflush left half??
+	caie tt,%nsopn
+	 cain tt,%nsinp
+	  jrst gtctc2		;winning
+	cain tt,%nscli		;CLS but input?
+	 jrst gtctc2		;still winning
+	return			;failure
+];IFN 0
+	movei a,netich
+	move b,frnhst
+	move c,icpskt
+	call netwrk"tcpcon
+	 return			;failure
+gtctc2:	aos (p)			;skip return
+	return
+
+;set up interrupts
+getrdy:	move t,[-6,,[	sixbit /OPTION/	? tlo %opint	; new style
+			sixbit /MASK/	? move [%piioc]
+			sixbit /MSK2/	? movei 1_netich\1_chaich
+			]]
+	syscal usrvar,[movei %jself ? t]
+	 .lose %lssys
+	
+;won, send back opn on chaosnet connection
+	movei t,%coopn
+	dpb t,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+	return
+
+
+fail:	movei a,[asciz /TCP connection to foreign host failed/]
+	jrst sndcls
+tcptmo:	movei a,[asciz /Timeout while trying to TCP connect/]
+	jrst sndcls
+badhst:	skipa a,[[asciz /No such host/]]	;gave a bad host name
+badskt:	 movei a,[asciz /Bad icp socket/]
+	jrst sndcls
+
+nohost:	movei a,[asciz /No host name specified/]	;didnt give a hostname
+sndcls:	hrli a,440700
+	movei n,0		;initialize byte count
+	move bp,[440800,,chapkt+%cpkdt]	;and byte pointer for packet
+sndcl1:	ildb t,a
+	jumpe t,sndcl2
+	idpb t,bp
+	aoja n,sndcl1
+sndcl2:	dpb n,[chapkt+$cpknb]	;store byte count
+	movei t,%cocls
+	dpb t,[chapkt+$cpkop]	;and opcode
+	.call sndpkt
+	 jsr die
+sndcl3:	cain cch,chaich
+	 jrst passon
+	jrst auxfls
+
+doeof:	movei cch,chaich-netich(nch)
+	movsi t,(.byte 8 ? %coeof ? 0)
+	movem t,chapkt
+	.call sndpkt
+	 .lose %lssys
+	.call [	setz		;wait for output to get there
+		sixbit /FINISH/
+		setzi 1(cch)]
+	 jrst sndcl3		;dont need to close if other side does
+
+;send cls of reason for arpanet connection losing
+doanal:	movei n,0
+	move bp,[440800,,chapkt+%cpkdt]	;init byte count and pointer
+	movei a,(nch)
+	call netwrk"analyz
+	 jsr die
+	movei cch,chaich-netich(nch)
+	cail cch,chaich
+	 caile cch,caxoch
+	  movei cch,chaich
+	jrst sndcl2		;and go send that off
+
+;guys for netwrk
+popj1:	aos (p)
+cpopj:	ret
+
+putchr:	idpb t,bp
+	aoja n,cpopj
+
+;here if get an ioc error, check the state of the arpanet connections
+iocerr:	aosn iocflg
+	 jsr die		;recursive IOC errors, go away
+	.call [setz ? 'whyint ? movei netich ? movem s ? setzm s]
+	 jsr die
+	tlz s,400000		;ignore network interrupt bit
+	caie s,%nsopn		;still intact?
+	 jrst iocer1		;no, go tell chaosnet connection why it lost
+	.call [setz ? 'whyint ? movei netoch ? movem s ? setzm s]
+	 jsr die
+	tlz s,400000
+	caie s,%nsrfn
+	 cain s,%nsopn
+	 jsr die		;random ioc error, just go away
+iocer1:	;;undefer interrupts so can get another ioc ok
+	setom iocflg'		;If recursive IOC error, give up and go away, don't loop
+	move a,-2(p)		;previous DF1 word
+	.suset [.sdf1,,a]	;undefer this first so can get IOC if get I/O int
+	move a,-1(p)		;previous DF2 word
+	.suset [.sdf2,,a]
+	jrst doeof
+
+;network interrupt, get input from arpanet and send to chaosnet
+auxint:	movei nch,auxich
+	movei cch,caxich
+	jrst netin0
+
+netint:	movei nch,netich
+	movei cch,chaich
+netin0:	.call [setz ? 'whyint ? movei 0(nch) ? movem s ? movem s ? setzm n]
+	 jsr die
+	tlz s,400000
+	cain s,%nsopn		;still open?
+	 jrst intx		;yes, spurious i guess
+	caie s,%nscli
+	 cain s,%nsinp
+	 jrst netin1		;input waiting, get some
+	jrst doeof		;in some wedged state, flush it
+
+netin1:	move t,whoami
+	came t,[sixbit /NCP/]
+	 jrst ntitcp		;not NCP, go handle TCP
+	jumple n,netin2		;no bytes waiting, forget it
+	caig n,%cpmxc		;more than a packet's worth?
+	 skipa t,n
+	 movei t,%cpmxc
+	subi n,(t)
+	dpb t,[chapkt+$cpknb]	;number of bytes we will send
+	movei tt,%codat
+	dpb tt,[chapkt+$cpkop]
+	move tt,[440800,,chapkt+%cpkdt]
+	.call [setz ? sixbit/siot/ ? movei 0(nch) ? tt ? setz t]
+	 jsr die
+	.call sndpkt
+	 jsr die
+	jrst netin1		;go see if there is more to come
+
+ntitcp:	movei t,%cpmxc		;assume we'll read in a chaos packet's worth
+	move tt,[440800,,chapkt+%cpkdt]
+	syscal siot,[movsi 10 ? movei 0(nch) ? tt ? t]	;don't hang
+	 jsr die
+	cain t,%cpmxc		;read anything
+	 jrst netin2		;nope, finish up
+	subi t,%cpmxc
+	movn t,t		;now number of characters read
+	dpb t,[$cpknb chapkt]
+	movei tt,%codat
+	dpb tt,[$cpkop chapkt]
+	.call sndpkt
+	 jrst die
+	jrst ntitcp
+
+netin2:	cain s,%nscli		;was is closed except for that input?
+	 jrst doeof		;yes, finish up then
+intx:	.call [setz ? 'dismis ? setz p]
+	 jsr die
+
+;chaosnet interrupt
+caxint:	movei cch,caxich
+	movei nch,auxich
+	jrst chain0
+
+chaint:	movei cch,chaich
+	movei nch,netich
+chain0:	.call [setz ? 'whyint ? movei 0(cch) ? movem s ? movem s ? setzm n]
+	 jsr die
+	cain s,%csinc		;did chaosnet go away?
+	 jrst chain3		;yes, flush it i guess
+	hlres n			;get number of receive packets waiting
+	jumple n,intx
+chain1:	.call rcvpkt		;read the next packet out
+	 jsr die
+	ldb t,[chapkt+$cpkop]	;get opcode
+	caie t,%cocls
+	 cain t,%colos
+	 jrst chain3		;connection gone or losing, go away
+	caie t,212
+	 cain t,210		;special escape?
+	  jrst opnaux		;yes, open aux conn
+	cain t,211
+	 jrst tcaux2		;open aux conn, part two
+	caige t,%codat		;data packet?
+	 jrst chain2		;no, just ignore it
+	cain t,%cobrk		;send network INS, then treat packet as data
+	 .call [setz ? sixbit/netint/ ? setzi 1(nch)]
+	  jfcl
+	ldb t,[chapkt+$cpknb]	;get byte count
+	move tt,[440800,,chapkt+%cpkdt]	;point to data
+	.call [setz ? sixbit/siot/ ? movei 1(nch) ? tt ? setz t]
+	 jsr die
+chain2:	sojg n,chain1
+	.nets netoch,		;send off the buffered output
+	jrst chain0		;go look for more
+
+chain3:	caie cch,chaich		;main connection?
+	 jrst auxfls		;no, just close aux
+	.close netoch,		;close the arpanet connections
+	.close netich,
+	jrst passon		;and go away quietly
+
+auxfls:	.suset [.samsk,,[1_auxich\1_caxich]]
+	.close auxoch,
+	.close auxich,
+	.close caxich,
+	.close caxoch,
+	setzm iocflg		;DOne processing ioc error I guess
+	jrst intx
+
+;special escape, open an aux connection
+opnaux:	movem t,opnaxo'		;save opcode
+	move c,chapkt+%cpkdt+2	;get the foreign socket
+	lsh c,-4		;normalize it
+	movei cch,caxich
+	movei nch,auxich
+	.call [setz ? 'chaoso ? movei caxich ? movei caxoch ? setzi 5]
+	 jsr die
+	ldb t,[chapkt+$cpknb]
+	subi t,4
+	dpb t,[chapkt+$cpknb]
+	movei t,%colsn
+	dpb t,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+	movei t,30.*60.
+	skipe debug
+	 hrloi t,177777		;wait forever if debugging
+	.call [setz ? 'netblk ? movei caxich ? movei %cslsn ? t ? setzm t]
+	 jsr die
+	caie t,%csrfc		;did we get an rfc for this?
+	 jrst intx		;no, forget it
+	.call rcvpkt		;yes, read it in
+	 jsr die
+	move b,frnhst
+	move t,whoami
+	camn t,[sixbit /TCP/]
+	 jrst tcpaux
+	movei a,auxich
+	trnn c,1		;is this going to be receive?
+	 movei a,auxoch		;no, send
+	movei d,140+.uai
+	trnn c,1
+	 movei d,140+.uao
+	call netwrk"arpcon
+	 jrst doanal		;failed, send a cls for rfc
+	movei t,%coopn
+	dpb t,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+	.suset [.simsk,,[1_caxich\1_auxich]]
+	jrst intx
+
+tcpaux:	syscal rfname,[movei netich ? movem d ? movem d]
+	 .lose %lssys
+	move t,opnaxo		;opcode 212?
+	cain t,212	
+	 seto d,		;yes, use gensym local port
+	syscal tcpopn,[movsi 100 ? movei auxich ? movei auxoch
+		d ? c		;otherwise same local port, specified foreign port
+		b]
+	  jrst doanal
+	caie t,212
+	 jrst intx		;dismiss now, wait when told to
+	syscal rfname,[movei auxich ? movem t ? movem t]
+	 jsr die
+	;Send back a packet containing the local port number
+	lsh t,16.+4
+	movem t,chapkt+%cpkdt
+	movei t,2
+	skipn tt,lclhst
+	 jrst tcaux1
+	lsh tt,-16.+4
+	iorm tt,chapkt+%cpkdt
+	move tt,lclhst
+	lsh tt,16.+4
+	movem tt,chapkt+%cpkdt+1
+	movei t,6
+tcaux1:	dpb t,[chapkt+$cpknb]
+	movei t,300		;binary data
+	dpb t,[chapkt+$cpkop]
+	syscal pktiot,[movei chaoch ? movei chapkt]
+	 jsr die
+	jrst intx
+
+;;; TCP open, part two.
+tcaux2:	movei cch,caxich
+	movei nch,auxich
+	movei b,30.*30.		;only gets called from aux connection
+	movei c,%nslsn
+tcax2b:	syscal netblk,[movei auxich ? c ? b ? movem c ? movem b]
+	  jrst doanal
+	jumple b,doanal
+	tlz c,-1
+	cain c,%nsrfc		;transient state
+	 jrst tcax2b
+	caie c,%nsopn		;open, or
+	 cain c,%nsinp		;open with input
+	  jrst tcax2a
+	caie c,%nscli		;also closed with input
+	 jrst doanal
+tcax2a:	movei t,%coopn		;open response to chaos
+	dpb t,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+	.suset [.simsk,,[1_caxich\1_auxich]]	;enable interrupts
+	jrst auxint		;exit through interrupt code in case closed with input
+
+
+pat": patch":	block 100
+
+variables
+constants
+
+hstpag==<.+1777>/2000		;place to map in the hosts1 file.
+
+end go
