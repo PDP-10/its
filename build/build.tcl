@@ -2090,6 +2090,17 @@ type ":kill\r"
 respond "*" ":midas liblsp;_libdoc;dirsiz\r"
 respond "*" ":midas liblsp;_z;timer\r"
 
+respond "*" ":link lisp;vsaid lisp,nilcom;vsaid >\r"
+respond "*" "complr\013"
+respond "_" "lisp;_nilcom;vsaid\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":link liblsp;vsaid fasl,lisp;\r"
+
+respond "*" ":midas liblsp;_gsb;ttyvar\r"
+respond "Use what filename instead?" "lisp;\r"
+expect ":KILL"
+
 bootable_tapes
 
 # make output.tape
