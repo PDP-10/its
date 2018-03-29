@@ -111,6 +111,10 @@ proc dump_switches {} {
     respond "WHICH MACHINE?" "DB\r"
 }
 
+proc peek_switches {} {
+    respond "with ^C" "\003"
+}
+
 proc dump_nits {} {
     respond "DSKDMP" "dskdmp bin\r"
     respond "DSKDMP" "l\033ddt\r"
@@ -118,6 +122,13 @@ proc dump_nits {} {
     respond "\n" "\033u"
     respond "DSKDMP" "m\033nsalv bin\r"
     respond "\n" "d\033nits\r"
+}
+
+proc magdmp_switches {} {
+    respond "KL10P=" "n\r"
+    respond "TM10BP=" "n\r"
+    # 340P=y doesn't work yet.
+    respond "340P=" "n\r"
 }
 
 proc bootable_tapes {} {

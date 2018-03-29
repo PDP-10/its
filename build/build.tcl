@@ -291,12 +291,10 @@ respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
 
-# magdmp
+# magdmp, paper tape
 respond "*" ":midas dsk0:.;_syseng;magdmp\r"
 respond "PTRHRI=" "y\r"
-respond "KL10P=" "n\r"
-respond "TM10BP=" "n\r"
-respond "340P=" "n\r"
+magdmp_switches
 expect ":KILL"
 
 # magdmp
@@ -341,7 +339,8 @@ respond " BIN" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys3;ts crtsty,sysbin;crtsty bin\r"
 
-respond "*" ":midas sysbin;_sysen2;peek\r"
+respond "*" ":midas /t sysbin;_sysen2;peek\r"
+peek_switches
 expect ":KILL"
 respond "*" ":job peek\r"
 respond "*" ":load sysbin;peek bin\r"
