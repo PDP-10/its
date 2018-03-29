@@ -72,6 +72,10 @@ proc dump_switches {} {
     respond "WHICH MACHINE?" "KA\r"
 }
 
+proc peek_switches {} {
+    respond "with ^C" "340P==1\r\003"
+}
+
 proc dump_nits {} {
     respond "DSKDMP" "l\033ddt\r"
     expect "\n"; type "t\033@ dskdmp\r"
@@ -82,14 +86,19 @@ proc dump_nits {} {
     expect "\n"; type "d\033nits\r"
 }
 
+proc magdmp_switches {} {
+    respond "KL10P=" "n\r"
+    respond "TM10BP=" "n\r"
+    # 340P=y doesn't work yet.
+    respond "340P=" "n\r"
+}
+
 proc bootable_tapes {} {
     global emulator_escape
 
     respond "*" ":midas .;magdmp bin.ka_syseng;magdmp\r"
     respond "PTRHRI=" "n\r"
-    respond "KL10P=" "n\r"
-    respond "TM10BP=" "n\r"
-    respond "340P=" "n\r"
+    magdmp_switches
     expect ":KILL"
 
     respond "*" $emulator_escape
