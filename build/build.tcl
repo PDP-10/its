@@ -1477,6 +1477,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
 expect ":KILL"
 
+# FACTOR
+respond "*" ":midas sys1;ts factor_sysen3;factor\r"
+expect ":KILL"
+
 # compile lisp compiler
 respond "*" ":link comlap;cdmacs fasl,cd.fas >\r"
 respond "*" "complr\013"
