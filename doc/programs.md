@@ -50,6 +50,7 @@
 - EMACS, editor.
 - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
 - EXPN/VRFY - query remote SMTP server.
+- FACTOR, factor integers.
 - FAIL, assembler from SAIL.
 - FCDEV, talk to LispM file server.
 - FDIR, fast directory listing.
