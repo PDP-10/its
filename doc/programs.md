@@ -23,7 +23,7 @@
 - CHADEV, Chaosnet jobdev (binary only).
 - CHARFC/CHARFS, Chaos RFC.
 - CHATST, Chaos test.
-- CHESS2, Greenblatt chess program.
+- CHESS2, Alan Baisley's Tech II chess program.
 - CHTN, CFTP, Chaosnet TELNET and FTP support.
 - COMIFY, convert HEX to COM format.
 - COMPLR, lisp compiler.
@@ -106,7 +106,7 @@
 - NUDIR, create user directory.
 - NWATCH, small watch display.
 - OBS, observe system activities.
-- OCM, chess program.
+- OCM, Richard Greenblatt's Mac Hack VI chess program.
 - OCTPUS, print character representations.
 - OS, realtime TTY spy.
 - PALX, PDP-11 cross assembler.
