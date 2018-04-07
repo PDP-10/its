@@ -1118,6 +1118,24 @@ expect ":KILL"
 respond "*" ":midas sys1;ts wumpus_games; wumpus\r"
 expect ":KILL"
 
+# Jotto
+respond "*" ":cwd games\r"
+respond "*" ":midas jotto\r"
+expect ":KILL"
+respond "*" ":job jotto\r"
+respond "*" ":load jotto bin\r"
+# Run initialisation code to open the TTY channels.
+respond "*" "erase0\033bbeg\033g"
+# Patch in the filename DSK;JOTTO DICT.
+type "utopen/\0331'   dsk\033\r"
+type "b/\0331'jotto\033\r"
+type "c/\0331'dict\033\r"
+# Run the dictionary loader, skipping its filename setup code.
+type "beg7\033g"
+# Dump out TS JOTTO including the dictionary.
+respond ". words" ":pdump sys1;ts jotto\r"
+respond "*" ":kill\r"
+
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
