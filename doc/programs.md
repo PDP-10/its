@@ -83,6 +83,7 @@
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
 - LIMERI, print limerics.
+- LIMSER, Chaosnet limeric service.
 - LISP, lisp interpreter and runtime library (autoloads only).
 - LOADP, displays system load.
 - LOCK, shut down system.

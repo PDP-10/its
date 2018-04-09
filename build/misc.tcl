@@ -99,6 +99,10 @@ respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
 respond "Use what filename instead?" "eak; lims >\r"
 expect ":KILL"
 
+respond "*" ":midas sysbin;_eak;limser\r"
+expect ":KILL"
+respond "*" ":link device;chaos limeri,sysbin;limser bin\r"
+
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
 respond "*" ":link sys2;ts =,sys;ts srccom\r"
