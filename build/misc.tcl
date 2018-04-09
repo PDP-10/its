@@ -95,6 +95,10 @@ respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
 respond "Use what filename instead?" "ecc;quotes >\r"
 expect ":KILL"
 
+respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
+respond "Use what filename instead?" "eak; lims >\r"
+expect ":KILL"
+
 respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
 expect ":KILL"
 respond "*" ":link sys2;ts =,sys;ts srccom\r"
