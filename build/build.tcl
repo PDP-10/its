@@ -1495,7 +1495,7 @@ respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
 expect ":KILL"
 
 # FACTOR
-respond "*" ":midas sys1;ts factor_sysen3;factor\r"
+respond "*" ":midas sys1;ts factor_rz;factor\r"
 expect ":KILL"
 
 # compile lisp compiler
