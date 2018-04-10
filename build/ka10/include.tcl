@@ -1,5 +1,5 @@
 proc start_dskdmp_its {} {
-    start_dskdmp
+    start_dskdmp build/sims/boot
 
     respond "DSKDMP" "its\r"
     expect "\n"; type "\033g"

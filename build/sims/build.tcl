@@ -6,9 +6,17 @@ proc start_salv {} {
     expect "\n"; send "t\033salv\r"
 }
 
-proc start_dskdmp {} {
+proc start_dskdmp args {
+    puts [llength $args]
     quit_emulator
-    uplevel #0 {spawn ./tools/sims/BIN/ka10 build/sims/boot}
+    set ini ""
+    if {[llength $args] == 1} {
+        set ini [lindex $args 0]
+    } {
+        set ini "build/sims/boot2"
+    }
+    set foo "spawn ./tools/sims/BIN/ka10 $ini"
+    uplevel #0 $foo
 }
 
 proc mount_tape {file} {
