@@ -2122,6 +2122,11 @@ respond "*" ":midas liblsp;_gsb;ttyvar\r"
 respond "Use what filename instead?" "lisp;\r"
 expect ":KILL"
 
+# scrmbl and unscr
+respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
+expect ":KILL"
+respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
+
 bootable_tapes
 
 # make output.tape
