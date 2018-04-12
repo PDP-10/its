@@ -1,3 +1,4 @@
+set build [pwd]/build
 cd build/klh10
 
 set emulator_prompt "KLH10"

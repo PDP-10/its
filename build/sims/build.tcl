@@ -1,3 +1,4 @@
+set build [pwd]/build
 set emulator_escape "\005"
 
 proc start_salv {} {
