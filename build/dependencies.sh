@@ -1,4 +1,4 @@
-if test -n "$GITLAB_CI"; then
+if test -n "$GITLAB_CI" -o -n "$CIRCLECI"; then
     sudo() {
         "$@"
     }
@@ -9,9 +9,10 @@ install_linux() {
     sudo apt-get install -my expect
     # For GitLab CI
     sudo apt-get install -my git make gcc libncurses-dev autoconf
-    if test "$EMULATOR" = simh; then
-	sudo apt-get install -y simh
-    fi
+    case "$EMULATOR" in
+        simh) sudo apt-get install -y simh;;
+        sims) sudo apt-get install -y libx11-dev libxt-dev;;
+    esac
 }
 
 "$1"
