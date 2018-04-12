@@ -10,7 +10,6 @@ proc start_salv {} {
 }
 
 proc start_dskdmp args {
-    puts [llength $args]
     quit_emulator
     set ini ""
     if {[llength $args] == 1} {
