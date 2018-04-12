@@ -44,12 +44,11 @@ proc quit_emulator {} {
 }
 
 proc initialize_comsat {} {
-    # commented out because you cannot run COMSAT initialization without network
-    # support
-    #respond "*" ":job comsat\r"
-    #respond "*" ":load .mail.;comsat launch\r"
-    #respond "*" "debug/-1\r"
-    #type "mfinit\033g"
+    respond "*" ":job comsat\r"
+    respond "*" ":load .mail.;comsat launch\r"
+    respond "*" "debug/-1\r"
+    type "mfinit\033g"
+    respond "*" ":kill\r"
 }
 
 source build/ka10/include.tcl
