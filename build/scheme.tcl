@@ -13,7 +13,7 @@ respond "==>" "(quit)"
 respond "*" ":scheme;scheme\r"
 respond "==>" {(schload "scheme; rabbit")}
 respond "==>" {(comfile "scheme; rabbit")}
-expect -timeout 1000 "COMPILE TIME:"
+expect -timeout 3600 "COMPILE TIME:"
 respond "==>" "(quit)"
 respond "*" ":complr\r"
 respond "_" "scheme;_rabbit lisp\r"
