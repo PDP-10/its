@@ -22,6 +22,8 @@ respond "*" ":link quux;scheme macros, schmac fasl\r"
 respond "*" ":link quux;scheme uuohan, schuuo fasl\r"
 respond "*" ":lisp scheme (dump)\r"
 
+# Fails the build, disabled for now.
+if 0 {
 # Rabbit Scheme compiler
 respond "*" ":scheme;scheme\r"
 respond "==>" {(schload "scheme; rabbit")}
@@ -37,3 +39,4 @@ respond "==>" {(schload "scheme; rabbit fasl")}
 respond "==>" "(dumpit)"
 respond "Dump anyway" " "
 respond "TS RABBIT" "\r"
+}
