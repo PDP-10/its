@@ -457,6 +457,9 @@ if {$env(BASICS)!="yes"} {
     source $build/scheme.tcl
 }
 
+respond "*" ":midas sys3;ts lsrprt_sysen1; lsrprt\r"
+expect ":KILL"
+
 bootable_tapes
 
 # make output.tape

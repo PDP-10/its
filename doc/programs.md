@@ -87,6 +87,7 @@
 - LOOKUP, looks up user info in INQUIR database.
 - LOSS (device).
 - LSPEED, set tty line parameters.
+- LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
 - MACSYMA, symboling manipulation system.
 - MAXTUL, tools for managing Macsyma.

@@ -1,0 +1,377 @@
+;-*- midas -*-
+
+title lsrprt
+
+.qmtch==1			;make "<text>" handle text
+
+a=1
+b=2
+c=3
+d=4
+e=5
+f=6
+t=7
+chr=10				;character being read
+t1=11
+t2=12
+t3=13
+t4=14
+t5=15
+t6=16
+sp=17				;stack pointer
+p=17				;for RMS's lossage
+
+tyoc==11			;establish an output channel
+lsrc==12			;channel for LSRTNS to hack
+
+lsrpag==100			;moderately moby pages for INQUIRE (20 of them)
+pdleng==100			;lots of PDL space
+
+argi==1000			;immediate argument
+val==2000			;value return
+errret==3000			;error return
+cnt==4000			;control
+cnti==5000			;control immediate
+
+
+;;; Inquire database hacking routines
+
+$$ULNM==0			;don't want LSRLNM
+$$ULNP==0			;nor last-name-prefix matcher
+$$UNAM==0			;don't want LSRNAM either
+
+lookf==100000	;1 => read stuff into $uname, etc instead of %uname, etc.
+		;set while scanning through the file and don't want to
+		;clobber the info on the selected user.
+
+.insrt DSK:SYSENG;LSRTNS >
+
+define syscal a,b,c=<calerr>
+	.call [setz ? sixbit/a/ ? b ? setz+<errret,,0>+c] termin
+
+define terpri chan=tyoc		;terpri on channel
+	.iot chan,[^M]
+	.iot chan,[^J]
+termin
+
+go:      move sp,[-pdleng,,pdl]	;initialize our stack pointter
+         syscal open,[cnti,,<.uao+%tjdis>  ;open the terminal so that
+	              argi,,tyoc	       ;control-p codes work
+		      [sixbit /TTY/]]
+           .lose			;we can't do much without the tty
+getjcl:  .break 12,[5,,jclbuf]	;get our JCL
+	 move a,[440700,,jclbuf]  ;get a byte pointer to it in a
+	 move b,[440600,,uname]	;and one to our destination, maybe
+	 setzm uname
+	 movei c,6
+nxtchr:  ildb chr,a		;get first character in chr
+	 cain chr,40		;is it a space?
+	   jrst nxtchr		;yes, go back for more
+	 cain chr,33		;is it an escape
+	   jrst [setom legalf	;yes, set up for legality check
+	         jrst cont]
+         cain chr,42		;is it a double-quote?
+	   jrst [setom groupf	;yes, set up for group search
+	         ildb chr,a	;get next character in chr
+		 caile chr,140	;canonicalize lower-case to upper-case
+		   caile chr,172
+		      caia
+		         subi chr,40
+	         movem chr,group	;the group ID is stored in GROUP
+		 jrst cont]
+	 cain chr,43		;is it a number-sign?
+	   jrst [setom countf	;yes, set up for group count
+	         setzm count	;initialize count
+	         ildb chr,a	;get next character in chr
+		 caile chr,140	;canonicalize lower-case to upper-case
+		   caile chr,172
+		      caia
+		         subi chr,40
+		 movem chr,group	;the group ID is stored in GROUP
+		 jrst cont]
+	cain chr,52		;is it an asterisk?
+	  jrst [setom allf	;set up to print everybody
+		jrst cont]
+	caig chr,40		;is it some illegal character?
+	  jrst [movei a,[asciz /
+LSRPRT takes JCL, the form of which determines its operation.
+
+:lsrprt "<group>" lists all the entries in the inquire database whose
+     group designators match the given one.  The group designator is
+     the one character abbreviation used in inquire.
+
+:lsrprt <uname> tells which group the given user is in.
+
+:lsrprt #<group> prints out the number of entries in the inquire database
+     whose group designators match the given one.
+
+:lsrprt <esc> lists all entries in the inquire database whose group
+     designators are illegal.
+/]				;yes, print documentation, and quietly,
+                pushj sp,type7	;almost gratefully,
+		.logout 1,]	;expire.
+
+guname: setom unamef
+	cail chr,100
+	 andi	chr, 37
+	xori	chr, 40
+	idpb	chr, b
+	sojle	c, inull
+	ildb	chr, a
+	caile	chr, 40
+	jrst	guname
+inull:	clear	chr,
+pad:	idpb	chr, a
+	sojg	c, pad
+
+
+
+cont:   movei a,lsrc		;get lsrtns channel in a
+	move b,[-20,,lsrpag]	;get aobjn pointer to free pages in b
+	pushj sp,lsrtns"lsrmap	;map in inquire database
+	  .lose
+	move e,lsrtns"datfpg	;get first data page in file in e
+	lsh e,10.		;convert to address
+	move b,unamef
+	jumpe b,nxtlsr
+	move b,uname
+	pushj sp,lsrtns"lsrunm
+	  jrst [movei a,[asciz /ANot in inquire database.A/]
+	        pushj sp,type7
+		jrst finish]
+	movem b,f
+	move t,uname
+	movem t,unm
+	pushj sp,getgrp
+	pushj sp,print
+	jrst finish
+
+nxtlsr: movei a,lsrc		;restore in case we modify it later on
+	move b,e		;get copy of file address in b
+	pushj sp,lsrtns"lsrget	;get core address in b
+	  .lose
+	move f,b		;and save in f
+	pushj sp,getunm		;get his uname in unm
+	pushj sp,getgrp		;get his group in grp
+	skipe unamef		;did he give us a uname to look up?
+	  jrst [move a,uname	;yes, get a copy of supplied uname
+	        came a,unm	;and compare with this entry's uname
+		  jrst next	;not the same, go to next
+		pushj sp,print	;same, print it out
+		jrst finish]	;and we're done
+	skipe legalf		;did he ask for a legality check?
+	  jrst [pushj sp,legalp  ;yes, check for legality
+	          pushj sp,print  ;not legal, print entry out
+		jrst next]	;and go to next entry
+	skipe allf		;did he ask for everybody?
+	  jrst [pushj sp,print	;yes, print entry out
+		jrst next]	;and go to next entry
+				;so he must have asked for the members of some group
+	came chr,grp		;is this person in that group?
+          jrst next		;nope, get next one
+	pushj sp,print		;yes, print him out
+next:   pushj sp,advanc		;try to advance to next one
+	  jrst [skipn unamef
+	          jrst finish
+		movei a,[asciz /ANot in inquire database.A/]
+		pushj sp,type7
+		jrst finish]
+	jrst nxtlsr		;and try again
+
+getunm: movei a,lsrtns"I$UNAME	;get item number
+	move b,f		;get core address of entry
+	pushj sp, lsrtns"lsritm	;get b.p. to item in b
+	  .lose
+	aos b			;next word
+	hrli b,440700		;make it an ascii b.p.
+	move t1,[440600,,a]	;sixbit b.p. to a
+	setz a,			;clear a for accumulation
+gtunm1: ildb c,b		;get first character
+	jumpe c,gtunm2		;is it the end (^@)
+	subi c,40		;make it sixbit
+	tlne t1,770000
+	  idpb c,t1
+	jrst gtunm1
+gtunm2:	movem a,unm
+cpopj:	popj sp,
+
+getgrp: movei a,lsrtns"I$GRP	;get item number
+	move b,f		;get core address in b
+	pushj sp, lsrtns"lsritm
+	  jrst [move c,0
+	        jrst gtgrp1]
+        ildb c,a		;get group in c
+gtgrp1: movem c,grp
+	popj sp,
+
+;if e has the file address of an entry, and b the real address,
+;advance e to point to the next entry.  no skip => there is no next.
+advanc:	hlrz a,(b)
+	add e,a
+	add b,a
+	hlrz a,(b)
+	jumpn a,popj1
+	popj p,
+
+popj.1:	aos (sp)		;increment return address
+	popj sp,		;and return
+popj1=jrst popj.1		;and define our symbol
+
+
+legalp: move d,grp
+	move t,0
+	cain d,"@"
+	  movei t,[asciz /Alias for another person/]
+	cain d,"A"
+	  movei t,[asciz /Artificial Intelligence Lab/]
+	cain d,"C"
+	  movei t,[asciz /Theory Group/]
+	cain d,"L"
+	  movei t,[asciz /LCS/]
+	cain d,"P"
+	  movei t,[asciz /Plasma Fusion Center/]
+	cain d,"B"
+	  movei t,[asciz /Educational Computing Group/]
+	cain d,"V"
+	  movei t,[asciz /NIL Development/]
+	cain d,"O"
+	  movei t,[asciz /Program of some sort/]
+	cain d,"Z"
+	  movei t,[asciz /Clinical Decision Making/]
+	cain d,"S"
+	  movei t,[asciz /MIT student,staff,faculty/]
+	cain d,"T"
+	  movei t,[asciz /Tourist/]
+	cain d,"U"
+	  movei t,[asciz /Authorized MACSYMA/]
+	cain d,"X"
+	  movei t,[asciz /Former staff or faculty/]
+	cain d,"K"
+	  movei t,[asciz /Collaborating researcher/]
+	cain d,"$"
+	  movei t,[asciz /Foreign Wizard/]
+        cain d,"+"
+	  movei t,[asciz /System Hacker/]
+	cain t,0
+	  jrst [movei t,[asciz /Random/]
+	        movem t,lnggrp
+		popj sp,]
+	movem t,lnggrp
+	aos (sp)
+	popj sp,
+
+
+print:  skipe unamef
+	  jrst [terpri
+	        move a,unm
+		pushj sp,type6
+		movei a,[asciz / is a /]
+		pushj sp,type7
+		pushj sp,legalp
+		  jfcl
+		move a,lnggrp
+		pushj sp,type7
+		movei a,[asciz / type.A/]
+		pushj sp,type7
+		popj sp,]
+	skipe countf
+	  jrst [aos count
+	        popj sp,]
+	skipn allf
+	  skipe groupf
+	    jrst [terpri
+	          move a,unm
+		  pushj sp,type6
+		  popj sp,]
+	skipe legalf
+	  jrst [move a,unm	;get the uname
+	        camn a,nobody	;is it ______, if so, don't print it.
+		  popj sp,
+		terpri
+		pushj sp,type6
+		.iot tyoc,[11]
+		move a,grp
+		caie a,0
+		  jrst [.iot tyoc,grp
+		        popj sp,]
+	        popj sp,]
+	.lose
+
+finish: skipe countf
+	  jrst [move a,count
+	        pushj sp,type10
+		.iot tyoc,[" "]
+		move a,group
+		movem a,grp
+		pushj sp,legalp
+		  jfcl
+		move a,lnggrp
+		pushj sp,type7
+		movei a,[asciz / types.A/]
+		pushj sp,type7
+		jrst finsh1]
+finsh1: .close lsrc,
+	skipe debug
+	  .value
+	.logout 1,
+	.lose
+
+;type6 assumes that a contains the sixbit to type out, and that b
+;contains then channel on which to type it out.  Clobbers t1 and t2.
+
+type6:  setzb t1,t2		;clear both out
+	move t2,a		;get our own copy of a
+type6a:	lshc t1,6		;concat t1,t2 and lsh 6
+	addi t1,40
+	.iot tyoc,t1
+	jumpe t2,cpopj		;if done, return
+	setz t1,
+	jrst type6a		;and go back for more
+
+type8:	move t1,a
+type8a: idivi t1,10
+	push sp,t2
+	skipe t1
+	  pushj sp,type8a
+	pop sp,t1
+	addi t1,60
+	.iot tyoc,t1
+        popj sp,
+
+type10:	move t1,a
+typ10a: idivi t1,10.
+	push sp,t2
+	skipe t1
+	  pushj sp,typ10a
+	pop sp,t1
+	addi t1,60
+	.iot tyoc,t1
+        popj sp,
+
+type7:  hrli a,440700
+        movem a,ascbp
+type7a: ildb a,ascbp
+	jumpe a,cpopj
+	.iot tyoc,a
+	jrst type7a
+
+pdl:    block pdleng
+jclbuf: block 10.
+nobody: sixbit /______/
+debug:  0
+ascbp:  0
+lnggrp: 0
+legalf: 0
+groupf: 0
+allf:	0
+group:  0
+grp:    0
+unamef: 0
+uname:  0
+unm:    0
+countf: 0
+count:  0
+calerr: 0
+
+
+	end go
