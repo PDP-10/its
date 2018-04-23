@@ -61,6 +61,7 @@
 - FRETTY, display list of free TTYs.
 - FTPS, FTP Server.
 - FTPU, FTP Client.
+- GCMAIL, delete old files from .MAIL.
 - GETSYM, copy all symbols from running ITS to a file.
 - GMSGS, copy system messages to mail file.
 - H3MAKE, a job that requests DRAGON to build host table.
