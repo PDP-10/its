@@ -104,6 +104,7 @@ Some major applications:
 - Emacs, editor
 - Mac Hack VI and Tech II, chess programs
 - Maclisp, interpreter and compiler
+- Muddle, interpreter
 - Macsyma, symbolic math
 - Midas, assembler
 - PDP-11 simulator
