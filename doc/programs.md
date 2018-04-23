@@ -102,6 +102,7 @@
 - MODEMS, modems gragon.
 - MSPLIT, split a file into smaller parts.
 - MTBOOT, make bootable tapes.
+- MUDDLE, MDL interpreter.
 - NAME, Shows logged in users and locations, aka FINGER.
 - NETIME, network time dragon.
 - NICNAM/NICWHO, look up someone in the ARPAnet directory.
