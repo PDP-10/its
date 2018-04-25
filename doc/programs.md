@@ -33,6 +33,7 @@
 - CROSS, cross assembler for micros.
 - CTIMES, Chaosnet time server.
 - CTIMSR, Chaosnet time server.
+- D, SUDS drawing program
 - DATE, print date and time.
 - DATSRV, server for RFC 867 Daytime protocol.
 - DCROCK, digital watch.
@@ -82,6 +83,7 @@
 - JEDGAR, counter spying tool.
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
+- LAY, SUDS layout program.
 - LIMERI, print limerics.
 - LIMSER, Chaosnet limeric service.
 - LISP, lisp interpreter and runtime library (autoloads only).
@@ -109,6 +111,7 @@
 - NAME, Shows logged in users and locations, aka FINGER.
 - NETIME, network time dragon.
 - NICNAM/NICWHO, look up someone in the ARPAnet directory.
+- NODIPS, SUDS wirelister (without DIP definitions).
 - NUDIR, create user directory.
 - NWATCH, small watch display.
 - OBS, observe system activities.
@@ -117,6 +120,7 @@
 - OS, realtime TTY spy.
 - PALX, PDP-11 cross assembler.
 - PANDA, user account management program.
+- PC, SUDS printed circuit board program.
 - PDSET, set time and date.
 - PEEK, system monitoring.
 - PFTHMG, Puff the magic dragon.
@@ -190,5 +194,6 @@
 - WHO%, list index/uname/jname/%time in sorted list.
 - WHOLIN, mode line for display terminals (with date/time/job/etc info).
 - WHOSEN, print author of last send.
+- WL, SUDS wirelister.
 - WUMPUS, Hunt the Wumpus game.
 - X, Y, Z, remember DDT command and re-execute it.

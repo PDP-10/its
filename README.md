@@ -110,6 +110,7 @@ Some major applications:
 - PDP-11 simulator
 - Scheme, interpreter
 - Spacewar!, game
+- Stanford University Drawing System
 - TECO, editor
 - TOPS-10 and WAITS emulator
 
