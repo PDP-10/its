@@ -451,6 +451,19 @@ expect ":KILL"
 respond "*" ":link device;chaos telnet,sysbin;telser bin\r"
 respond "*" ":link device;chaos supdup,sysbin;telser bin\r"
 
+# decuuo
+respond "*" ":midas decsys;_decuuo\r"
+expect ":KILL"
+respond "*" ":job decuuo\r"
+respond "*" ":load decsys;decuuo bin\r"
+respond "*" "purify\033g"
+respond "TS DEC" "\r"
+respond "*" ":kill\r"
+respond "*" ":link sys;ts dec\021 *,must; be here\r"
+
+respond "*" ":midas decsys;_decbot\r"
+expect ":KILL"
+
 if {$env(BASICS)!="yes"} {
     source $build/misc.tcl
     source $build/lisp.tcl

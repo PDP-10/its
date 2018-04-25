@@ -297,19 +297,6 @@ respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 # rmtdev
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
 
-# decuuo
-respond "*" ":midas decsys;_decuuo\r"
-expect ":KILL"
-respond "*" ":job decuuo\r"
-respond "*" ":load decsys;decuuo bin\r"
-respond "*" "purify\033g"
-respond "TS DEC" "\r"
-respond "*" ":kill\r"
-respond "*" ":link sys;ts dec\021 *,must; be here\r"
-
-respond "*" ":midas decsys;_decbot\r"
-expect ":KILL"
-
 # Compile ADVENT and dump it out with DECUUO.
 respond "*" ":cwd games\r"
 respond "*" ":dec sys:f40\r"
