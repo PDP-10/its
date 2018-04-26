@@ -392,26 +392,22 @@ respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
 expect ":KILL"
 
 # stktrn
-respond "*" ":fail sail;stktrn rel_sail;stktrn >\r"
-respond "*" "\032:kill\r"
+respond "*" ":cwd sail\r"
+respond "*" ":fail stktrn\r"
 
 # jobdat
-respond "*" ":fail sail;jobdat rel_sail;jobdat >\r"
-respond "*" "\032:kill\r"
+respond "*" "jobdat\r"
 
 # fail
-respond "*" ":fail sail;fail rel_sail;fail >\r"
+respond "*" "fail\r"
 respond "*" "\032:kill\r"
-respond "*" ":delete sail; fail bin\r"
-respond "*" ":stink\r"
-respond "\n" "m sail;jobdat rel\033l\033\033"
-respond "\n" "m sail;stktrn rel\033l\033\033"
-respond "\n" "m sail;fail rel\033l\033\033"
-respond "\n" "jfail\033\033"
-respond "\n" "d\033\033"
-respond "\n" "\033\0331l decsys;decbot bin\r"
+respond "*" ":delete fail bin\r"
+respond "*" ":stink fail\r"
+respond "\n" "\177"
+respond "??" "\033\0331l decsys;decbot bin\r"
 respond "*" ".jbsa/strt\r"
-respond "'" "\033y sys;ts fail\r"
+respond ":" "56/1000\r"
+respond "\n" "\033y sail; fail bin\r"
 respond "*" ":kill\r"
 
 # who%
