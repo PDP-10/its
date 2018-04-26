@@ -10,7 +10,8 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       spcwar rwg libmax rat z emaxim rz maxtul aljabr cffk das ell ellen \
       jim jm jpg macrak maxdoc maxsrc mrg munfas paulw reh rlb rlb% share \
       tensor transl wgd zz graphs lmlib pratt quux scheme gsb ejs mudsys
-DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc chprog
+DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
+      chprog sail
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon graphs
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
