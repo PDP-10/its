@@ -14,7 +14,7 @@ proc type s {
     sleep .1
     foreach c [split $s ""] {
         send -- $c
-        if [string match {[a-z]} $c] {
+        if [string match {[a-zA-Z0-9]} $c] {
 	    expect -nocase $c
 	} else {
 	    expect "?"
