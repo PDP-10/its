@@ -30,69 +30,74 @@ MAGFRM=${PWD}/tools/dasm/magfrm
 
 H3TEXT=$(shell cd build; ls h3text.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
+OUT=out/$(EMULATOR)
 
-all: $(SMF) out/$(EMULATOR).stamp tools/supdup/supdup
+all: $(SMF) $(OUT)/stamp tools/supdup/supdup
 
-out/klh10.stamp out/simh.stamp: out/rp0.dsk
+out/klh10/stamp out/simh/stamp: $(OUT)/rp0.dsk
 	touch $@
 
-out/sims.stamp: out/rp03.2 out/rp03.3
+out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
 	touch $@
 
-out/rp0.dsk: build/simh/init out/minsys.tape out/salv.tape out/dskdmp.tape build/build.tcl out/sources.tape build/$(EMULATOR)/stamp
+$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
 	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
-out/rp03.2 out/rp03.3: out/ka-minsys.tape out/magdmp.tap out/sources.tape
+$(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
-out/magdmp.tap: $(MAGFRM)
+$(OUT)/magdmp.tap: $(MAGFRM)
 	cd bin/ka10/boot; $(MAGFRM) @.ddt @.salv > ../../../$@
 
-out/minsys.tape: $(ITSTAR)
-	mkdir -p out
+$(OUT)/minsys.tape: $(ITSTAR)
+	mkdir -p $(OUT)
 	cd bin/ks10; $(ITSTAR) -cf ../../$@ _ sys
 	cd bin; $(ITSTAR) -rf ../$@ sys
 
-out/ka-minsys.tape: $(ITSTAR)
-	mkdir -p out
+$(OUT)/ka-minsys.tape: $(ITSTAR)
+	mkdir -p $(OUT)
 	cd bin/ka10; $(ITSTAR) -cf ../../$@ _ sys
 	cd bin; $(ITSTAR) -rf ../$@ sys
 
-out/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp src/syshst/$(H3TEXT)
-	mkdir -p out
+$(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
+	mkdir -p $(OUT)
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
+	cd $(OUT); $(ITSTAR) -rf ../../$@ system syshst
 	-cd user; $(ITSTAR) -rf ../$@ *
 
-out/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
-	mkdir -p out
+$(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
+	mkdir -p $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(NSALV)
 
-out/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
-	mkdir -p out
+$(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
+	mkdir -p $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
 start: build/$(EMULATOR)/start
 	ln -s $< $*
 
 build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
+	mkdir -p $(OUT)/system
 	cp=0; ca=0; \
 	test $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
 	x=`echo $(IP) | tr . ,`; \
 	sed -e "s/%IP%/$$x/" \
 	    -e 's/%NETMASK%/$(NETMASK)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
-	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > src/system/config.203
+	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > $(OUT)/system/config.203
 	touch $@
 
 build/simh/stamp: $(SIMH) start
-	cp build/simh/config.* src/system
+	mkdir -p $(OUT)/system
+	cp build/simh/config.* $(OUT)/system
 	touch $@
 
 build/sims/stamp: $(KA10) start
-	cp build/sims/config.* src/system
+	mkdir -p $(OUT)/system
+	cp build/sims/config.* $(OUT)/system
 	touch $@
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
@@ -103,7 +108,8 @@ build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s|%CHAOSA%|$$ca|" < $< > $@
 
-src/syshst/$(H3TEXT): build/$(H3TEXT)
+$(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
+	mkdir -p $(OUT)/syshst
 	test $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
 	sed -e 's/%IP%/$(IP)/' \
 	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
@@ -142,4 +148,4 @@ $(SMF):
 	git submodule update --init `dirname $@`
 
 clean:
-	rm -rf out start build/*/stamp src/system/config.* src/syshst/h3text.*
+	rm -rf out start build/*/stamp

@@ -95,6 +95,7 @@ proc magdmp_switches {} {
 
 proc bootable_tapes {} {
     global emulator_escape
+    global out
 
     respond "*" ":midas .;magdmp bin.ka_syseng;magdmp\r"
     respond "PTRHRI=" "n\r"
@@ -102,7 +103,7 @@ proc bootable_tapes {} {
     expect ":KILL"
 
     respond "*" $emulator_escape
-    create_tape "out/magdmp.tape"
+    create_tape "$out/magdmp.tape"
 
     type ":magfrm\r"
     respond "?" "KA\r"

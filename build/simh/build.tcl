@@ -1,4 +1,5 @@
 set build [pwd]/build
+set out "out/$env(EMULATOR)"
 set emulator_escape "\005"
 
 proc start_salv {} {
@@ -14,7 +15,8 @@ proc restart_nsalv {} {
 }
 
 proc start_dskdmp {} {
-    respond "sim>" "at tu2 out/dskdmp.tape\r"
+    global out
+    respond "sim>" "at tu2 $out/dskdmp.tape\r"
     respond "sim>" "b tu2\r"
     respond "MTBOOT" "\033g"
 }

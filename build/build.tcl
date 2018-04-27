@@ -471,7 +471,7 @@ bootable_tapes
 # make output.tape
 
 respond "*" $emulator_escape
-create_tape "out/output.tape"
+create_tape "$out/output.tape"
 type ":dump\r"
 respond "_" "dump links full list\r"
 respond "LIST DEV =" "tty\r"

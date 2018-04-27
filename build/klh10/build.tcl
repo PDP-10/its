@@ -1,4 +1,5 @@
 set build [pwd]/build
+set out "out/$env(EMULATOR)"
 cd build/klh10
 
 set emulator_prompt "KLH10"
