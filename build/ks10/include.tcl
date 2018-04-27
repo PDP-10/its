@@ -22,6 +22,7 @@ proc mark_packs {} {
 
 proc prepare_frontend {} {
     global emulator_escape
+    global out
 
     type ":ksfedr\r"
     respond "File not found" "create\r"
@@ -55,7 +56,7 @@ proc prepare_frontend {} {
     respond "*" ":login db\r"
     sleep 1
     type $emulator_escape
-    mount_tape "out/sources.tape"
+    mount_tape "$out/sources.tape"
 }
 
 proc frontend_bootstrap {} {
@@ -133,11 +134,12 @@ proc magdmp_switches {} {
 
 proc bootable_tapes {} {
     global emulator_escape
+    global out
 
     respond "*" ":link kshack;good ram,.;ram ram\r"
     respond "*" ":link kshack;ddt bin,.;@ ddt\r"
     respond "*" $emulator_escape
-    create_tape "out/ndskdmp.tape"
+    create_tape "$out/ndskdmp.tape"
     type ":kshack;mtboot\r"
     respond "Write a tape?" "y"
     respond "Rewind tape first?" "y"
@@ -146,7 +148,7 @@ proc bootable_tapes {} {
     expect ":KILL"
 
     respond "*" $emulator_escape
-    create_tape "out/nnsalv.tape"
+    create_tape "$out/nnsalv.tape"
     type ":kshack;mtboot\r"
     respond "Write a tape?" "y"
     respond "Rewind tape first?" "y"

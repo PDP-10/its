@@ -1,4 +1,5 @@
 set build [pwd]/build
+set out "out/$env(EMULATOR)"
 set emulator_escape "\005"
 
 proc start_salv {} {
