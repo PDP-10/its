@@ -34,6 +34,7 @@ respond "*" ":link draw; ug61c 999999, wl; ug61c >\r"
 respond "*" ":link sys1; ts d, datdrw; d bin\r"
 respond "*" ":link sys1; ts wl, datdrw; wl bin\r"
 respond "*" ":link sys1; ts pc, datdrw; pc bin\r"
+respond "*" ":link sys1; ts scnv, datdrw; scnv bin\r"
 
 # The drawing program needs WL; BOARDS REL
 respond "*" ":cwd wl\r"
@@ -115,3 +116,6 @@ respond "*" "XRESIDENT\r"
 respond "GO ON." "Y\r"
 respond "WL BIN" "\r"
 respond "*" ":kill\r"
+
+respond "*" ":midas datdrw;_draw; scnv\r"
+expect ":KILL"
