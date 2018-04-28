@@ -145,6 +145,7 @@
 - SALV, old file system tool for KA and KL.
 - SCANDL, TTY OUTPUT SPY.
 - SCHEME, Scheme interpreter.
+- SCNV, convert plotter files to XGP scan files.
 - SCRAM, encypt/decrypt file.
 - SCRMBL/UNSCR, scramble/unscramble file.
 - SEND, REPLY, replacements for DDT :SEND.
