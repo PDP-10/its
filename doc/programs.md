@@ -198,3 +198,4 @@
 - WL, SUDS wirelister.
 - WUMPUS, Hunt the Wumpus game.
 - X, Y, Z, remember DDT command and re-execute it.
+- XXFILE, feed scripted input to a STY session.

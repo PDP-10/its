@@ -726,3 +726,12 @@ respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
 respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
 expect ":KILL"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
+
+# XXFILE
+respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
+expect ":KILL"
+respond "*" ":job xxfile\r"
+respond "*" ":load sysbin;xxfile bin\r"
+respond "*" "ttyop1\033b\033g"
+expect ":PDUMP SYS2;TS XXFILE"
+type ":kill\r"
