@@ -4,6 +4,8 @@
 - ACCLNK, sets com-link accept bit for specified TTY.
 - ACOUNT, dummy account program used for users from safe sites.
 - ADVENT, (Colossal Cave) Adventure by Will Crowther.
+- ADV350, 350-point Adventure.
+- ADV448, 448-point Adventure.
 - ARCCPY, copies and old-format archive, converting to new format.
 - ARCDEV, transparent file system access to archive files.
 - ARCSAL, archive salvager.
@@ -180,6 +182,7 @@
 - TIMOON, displays the time and phase of the moon.
 - TIMSRV, RFC 868 network time protocol.
 - TMPKIL, clean out old files in .TEMP.;.
+- TREK, Star Trek game.
 - TTLOC, Advertises physical location of logged in users.
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
 - TTYSWP, swap TTYs.
