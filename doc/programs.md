@@ -181,6 +181,7 @@
 - TIMES, TCP time server.
 - TIMOON, displays the time and phase of the moon.
 - TIMSRV, RFC 868 network time protocol.
+- TJ6, typesetting software.
 - TMPKIL, clean out old files in .TEMP.;.
 - TREK, Star Trek game.
 - TTLOC, Advertises physical location of logged in users.

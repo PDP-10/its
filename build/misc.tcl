@@ -787,3 +787,13 @@ respond "*" ":load sysbin;xxfile bin\r"
 respond "*" "ttyop1\033b\033g"
 expect ":PDUMP SYS2;TS XXFILE"
 type ":kill\r"
+
+# TJ6
+respond "*" ":midas sysbin;_tj6;tj6\r"
+expect ":KILL"
+respond "*" ":job tj6\r"
+respond "*" ":load sysbin; tj6 bin\r"
+respond "*" "purify\033g"
+respond "DSK: SYS; TS NTJ6" "\r"
+respond "*" ":kill\r"
+respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
