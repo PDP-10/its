@@ -798,3 +798,9 @@ respond "*" "purify\033g"
 respond "DSK: SYS; TS NTJ6" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
+
+# Versatec spooler
+# This has some harmless unresolved symbols (FOO, XE4).
+respond "*" ":midas sys3;ts versa_dcp; versa\r"
+expect ":KILL"
+# respond "*" ":link channa; rakash v80spl,sys3; ts versa\r"
