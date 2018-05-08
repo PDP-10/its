@@ -262,6 +262,13 @@ ifg <a-b>,[<b-a>+]a!termin
 
 commen ~	Packages and subroutines
 
+Package JCL
+
+  GO()
+	Non-spooler mode: parses input filenames from the JCL, and
+	outputs them either as Gould scan files using the HARGLD
+	device, or (with /D) as	SUPDUP graphics.
+
 Package SPOOLR
 
   WAIT()
@@ -391,6 +398,8 @@ Package UTIL	-- Random junk that is sometimes useful
 
 Package LOG	-- Makes entries in log file
 
+  OPNTTY()
+	Write log messages to the TTY instead of a log file
   LOG(X)
 	X is pointer to address of format string followed by arguments
   CLOSE()
@@ -494,7 +503,7 @@ go:	move p,[-lpdl,,pdl-1]	;initialize PDL
 	.suset [.rxjname,,xjname']
 	move xjname
 	camn [sixbit /versa/]
-	 jrst [setzm spoolp ? jrst gonosp]
+	 jrst [call jcl"go ? jrst exit]
 	call spoolr"init	;"initialize the spooler
 	movei x,string"catcha	;"catch all
 	call util"catch		;"install it
@@ -523,46 +532,9 @@ goloop: call spoolr"nextf	;"get the next file
 golooe:	call util"uncatch	;"remove the BADREQ catch
 	jrst goloop
 
-gonosp:	movei pfcv80"pfcfil	;"
-	movem spoolr"device	;"
-	call pfcv80"init	;"
-	 .break 16,
-
-	call tv"tvinit		;"
-
-	call chaos"init		;"
-
-define $open chan,dev,fn1,fn2,dir
-	syscal open,[[.bii,,chan]
-		[sixbit/dev/] ? [sixbit/fn1/]
-		[sixbit/fn2/] ?	[sixbit/dir/]]
-	 .lose
-termin
-
-	$open dskich,dsk,pfcddv,foo,dcp
-	call ddv"ddv		;"
-
-	$open dskich,dsk,dragon,fplots,dcp2
-	call tek"tek7		;"
-
-	$open dskich,dsk,pfcddv,1,.glpr.
-	call ddv"ddv		;"
-
-	$open dskich,dsk,foog,ards,dcp
-	call ards"ards		;"
-
-	$open dskich,dsk,logain,press,cindyr
-	call press"press	;"
-
-	$open dskich,dsk,chaos,xgp,dcp
-	call xgp"xgp		;"
-
-	$open dskich,dsk,chaos,press,dcp
-	call press"press	;"
-
 go2:	.break 16,
 	.logout 1,
-	.break 16,160000
+exit:	.break 16,160000
 	.value
 
 
@@ -588,6 +560,104 @@ init:	setzm var...
 
 cpopj:  return
 
+
+.begin jcl
+
+.vector jbuf(100)		;JCL string
+.scalar jdev,jfn1,jfn2,jdir	;filename
+.scalar jcount			;number of files processed
+
+$$RFN==-1
+$$SWITCH==-1
+.insrt syseng; rfn >
+
+rsixtp:	caie a,"/		;allow switches
+	 cain a,"(
+	  aos (p)
+	cain a,",		;allow multiple filenames
+	 aos (p)
+	return
+
+switch:	cain a,"D		;SUPDUP mode
+	 setzm spoolp
+	return
+
+go:	setom jcount		;init to -1
+	call log"opntty		;log messages to the TTY
+
+	setzm jbuf
+	.break 12,[..rjcl,,jbuf]
+	skipn jbuf		;no JCL?
+	 jrst [ movei x,[[asciz \Usage: :VERSA [/D] FILE 1,FILE 2,...\]]
+	        call log"log
+		return ]
+
+	move [sixbit/dsk/]	;filename defaults
+	movem jdev
+	setzm jfn1
+	move [sixbit/>/]
+	movem jfn2
+	.suset [.rsname,,jdir]
+
+	movei b,jdev
+	move d,[440700,,jbuf]
+next:	call rfn"rfn		;parse filename
+	push p,a		;save terminating char
+	push p,d		;and pointer
+
+	aose jcount		;only do setup the first time
+	 jrst rest
+	skipe spoolp		;want SUPDUP output? (/D)
+	 jrst nod		;no
+
+	movei pfcv80"pfcfil	;/D; set up for SUPDUP
+	movem spoolr"device
+	call pfcv80"init
+	 .lose
+
+	call tv"tvinit
+	call chaos"init
+	jrst rest
+
+nod:	movei hargld"hargld	;no /D; set up for HARGLD
+	movem spoolr"device
+
+rest:	syscal open,[[.bii,,dskich] ? jdev ? jfn1 ? jfn2 ? jdir]
+	 jrst [ movei x,[[asciz /Couldn't open ~6:~6;~6 ~6/]
+			jdev ? jdir ? jfn1 ? jfn2]
+		call log"log
+		.lose ]
+
+	syscal rfname,[movei %jself ? movei dskich
+			movem jdev ? movem jfn1
+			movem jfn2 ? movem jdir]
+	 .lose
+
+	hlrz x,jfn2		;look up FN2 in gtype table
+	movei y,spoolr"gtype
+	call util"assoc
+	 skipa			;not found
+	jrst found
+	hlrz x,jfn1		;how about FN1?
+	movei y,spoolr"gtype
+	call util"assoc
+	 jrst [ movei x,[[asciz /Unknown filetype in ~6:~6;~6 ~6/]
+			jdev ? jdir ? jfn1 ? jfn2]
+		call log"log
+		.lose ]
+
+found:	tlz z,-1
+	call @z			;call the handler
+
+	pop p,d
+	pop p,a
+	caie a,",		;any more filenames?
+	 return
+
+	ibp d			;skip the comma and parse again
+	jrst next
+
+.end
 
 .begin spoolr
 
@@ -5611,6 +5681,14 @@ open2:	move t,[440700,,tmpbuf]
 	 jrst open8
 	jrst open2
 open8:	.close logtmp,
+	setom isopen
+	return
+
+opntty:	skipe isopen
+	 return
+	syscal open,[[.uao,,logfil]
+		[sixbit /tty   /]]
+	 .lose
 	setom isopen
 	return
 
