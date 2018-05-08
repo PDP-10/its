@@ -193,6 +193,7 @@
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.
 - USQ, unsqueeze/uncram a file.
+- VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VV/VJ/DETREE, list jobs.
 - XHOST, tool for replacing host nicnames with real hostnames.
 - WHAT, humorous quips to various "what" questions.
