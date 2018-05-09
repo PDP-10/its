@@ -786,7 +786,8 @@ respond "*" ":job xxfile\r"
 respond "*" ":load sysbin;xxfile bin\r"
 respond "*" "ttyop1\033b\033g"
 expect ":PDUMP SYS2;TS XXFILE"
-type ":kill\r"
+expect ">>"
+respond "   " ":kill\r"
 
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
