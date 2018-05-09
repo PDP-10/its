@@ -1,6 +1,6 @@
 set build [pwd]/build
 set out "out/$env(EMULATOR)"
-set emulator_escape "\005"
+set emulator_escape "\034"
 
 proc start_salv {} {
     uplevel #0 {spawn pdp10 build/simh/init}

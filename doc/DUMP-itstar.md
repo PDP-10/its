@@ -2,13 +2,12 @@
 
 ### Saving ITS files and extract them using itstar
 
-- Mount a tape image in the emulator.  For KLH10, type Control-\\, and
-  then
+- Mount a tape image in the emulator.  Type Control-\\, and then for KLH10
 
        devmount mta0 files.tape create
        continue
 
-  For SIMH, type Control-E, and then
+  For SIMH, type
 
        attach tu0 files.tape
        continue
@@ -18,12 +17,12 @@
   wild card.  Finish with an empty line.  When DUMP has finished
   writing the files, type `quit` to exit.
 
-- Unmount the tape image.  For KLH10, type Control-\\, and
+- Unmount the tape image.  Type Control-\\, and then for KLH10
 
        devunmount mta0
        continue
 
-  For SIMH, type Control-E, and then
+  For SIMH, type
 
        detach tu0
        continue
@@ -42,12 +41,12 @@
 
        itstar -cf files.tape foo bar
 
-- Mount the tape image in the emulator.  For KLH10, type Control-\\ and
+- Mount the tape image in the emulator.  Type Control-\\, and then for KLH10
 
        devmount mta0 files.tape
        continue
 
-  For SIMH, type Control-E, and then
+  For SIMH, type
 
        attach tu0 files.tape
        continue
