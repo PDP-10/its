@@ -67,7 +67,7 @@ $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	mkdir -p $(OUT)
 	rm -f src/*/*~
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
-	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
+	#cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
 	cd $(OUT); $(ITSTAR) -rf ../../$@ system syshst
 	-cd user; $(ITSTAR) -rf ../$@ *
