@@ -844,3 +844,10 @@ respond "*" ":load sysbin;glp bin\r"
 respond "*" "debug/0\r"
 type ":pdump sys2;ts glp\r"
 respond "*" ":kill\r"
+
+# XGPDEV and GLPDEV
+respond "*" ":midas device;jobdev xgp_sysen2;xgpdev\r"
+expect ":KILL"
+respond "*" ":midas /t device;jobdev glp_sysen2;xgpdev\r"
+respond "with ^C" "GLP==1\r\003"
+expect ":KILL"
