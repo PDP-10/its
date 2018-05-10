@@ -1,0 +1,1627 @@
+
+;-*-MIDAS-*-
+
+	title XQUEUE XGP/GLP queuer
+	subttl Definitions
+
+; Mark Crispin, AI, July, 1976
+
+;  Queues requests to the XGP spooler.  This program is invoked in
+; one of three ways: :XGP <single-command>, XGP^K <command-dialog>,
+; or via mail to XGP-Spooler at MIT-AI(mail must be headerless).
+
+; If assembled as a Gould spooler, use :GLP or GLP^K.
+; (install MC:TS GLP by reassembling with GLP=1)
+
+; Insert my macro library
+
+.insrt MRC;MACROS >
+
+;  AC definitions.  F is used for bit flags. W(word), X, Y, and Z are
+; temporaries, clobberable at any time.  A, B, and C are somewhat
+; more permanent.  P, the push down pointer, is defined in MACROS > .
+; I is a counter for the number of characters in the last SIXBIT word.
+
+acdef. [f w x y z a b c d e i lp cp]
+
+;  I/O channels.  chtti/chtto are TTY input/output channels, chdsk is a disk
+; hack channel, and chque is the queueing channel.
+
+acdef. [chtti chtto chdsk chque cherr]
+.hkill chtti,chtto,chdsk,chque,cherr
+
+; Assembly switches
+
+nd. pdllen==100.	; length of pushdown list
+nd. ttibfl==400.	; length of TTY input buffer
+nd. lsrmxp==40.		; maximum # of pages for INQUIR;LSR1 > in core
+nd. lprlen==100.	; maximum # of lines in a single queue
+nd. patlen==100.	; length of patch area
+nd. datlen==300.	; length of one queue request
+nd. notbfl==10.		; length in words of maximum /notify argument.
+nd. txtbfl==100		; length of TXTBUF (used for reading from file to be printed).
+nd. maxfnt==16.		; number of fonts allowed (for squishing).
+nd. glp==0		; assembling for the GLP spooler.
+nd. spldir=='.XGPR.	; spooling directory
+nd. deffn1==%zeros	; default FN1
+nd. hacker==('RMS)	; current XGP spooler maintainer
+nd. hpfsiz==5.		; Cutoff point for high priority files
+nd. lpfsiz==30.		; Cutoff point for low priority files
+nd. f$aipr==-1		; Non-zero to enable AI extra priority
+
+ifn glP, [ spldir=='.GLPR. ? hacker==('JLK) ? f$aipr==0]
+
+; Bit flags in F
+
+f%==1,,525252
+f%tty==400000		; We have the tty.
+f%jcl==200000		; We got JCL.
+f%live==100000		; do not commit suicide when finished queueing
+f%thes==40000		; if a ;THESIS request
+f%prio==20000		; if a ;PRIORITY request
+f%short==10000		; This request forced into queue 1 by ;plot, ;scan, etc.
+f%file==4000		; We have a file name to include in the ;STATUS line.
+f%sqsh==2000		; File should be squished and ;KSUBSET commands made.
+f%lpri==1000		; This is a ;LOWPRI request - force queue 3.
+
+f%init==f%file\f%prio\f%thes\f%short\f%sqsh\f%lpri	; Flags cleared for each new file.
+
+
+	subttl Data area and macros
+
+	loc 100				; conventional ITS start of code
+
+debug:	-1				; non-zero if debugging
+downp:	0				; non-zero if spooling to be disallowed
+whyhak:	block 40			; if DOWNP set, this is ASCIZ of reason why queueing
+					; is not allowed.  Should end in CRLF if not null.
+					; The file .XGPR.;XGP NOTICE is also printed.
+
+corbeg==.				; beginning of area cleared at startup.
+
+quedir:	block 1				; directory where queues are to be stored
+machin:	block 1				; which machine being run on
+msname:	block 1				; this job's SNAME
+xuname:	block 1				; this job's XUNAME
+uname:	block 2				; XUNAME in ASCII
+group:	block 1				; this user's group
+device:	block 1				; selected device
+fn1:	block 1				; selected FN1
+fn2:	block 1				; selected FN2
+sname:	block 1				; selected SNAME
+filsiz:	block 1				; size of file
+fnmbuf:	block 10			; buffer for converting filenames to string.
+savepc:	block 1				; save of .JPC on a hit bug
+notbuf:	block notbfl+1			; nonzero => argument of /notify switch.
+fntdev:	0				; Device, fn1, fn2 and sname of font file.
+fntfn1:	0
+fntfn2:	0
+fntsnm:	0
+
+pdl:	block pdllen			; pushdown list
+
+queptr:	0				; ptr for stuffing quebuf.
+oqptr:	0				; Saves queptr before each input line, in case error.
+quebuf:	block datlen			; current queue request accumulated here.
+ttibuf:	block datlen			; Commands for one queue rq buffered here from tty.
+lgibln==10
+lgibuf:	block lgibln			; Read uname here, if not logged in.
+pfnbln==30.
+pfnbuf:	block pfnbln			; Buffer for printing filenames, and err device
+
+sqshtb:	block 200			; Squish table.  One word per ASCII character.
+					; In each word, bit n says char is used in font n.
+
+txtptr:	0				; B.P. for fetching from TXTBUF.
+txtcnt:	0				; Number of characters in TXTBUF.
+txtbuf:	block txtbfl			; Buffer for reading from file to be printed.
+txt1bf:	0	;-1 => access pointer at beginning of file and buffer empty.
+		;> 0 => first bufferfull of file is in txtbuf,
+		; and this is the number of characters in that bufferfull.
+		;0 => txtbuf is past the beginning of file.
+
+corend==.-1				; end of area cleared at startup.
+
+pat:	block patlen			; patch area
+patche:	-1
+patch==pat				; beginning of free patch area
+
+lstasc==376				; Mask for last ASCII character in a word.
+
+; Macro to output an ASCII string.  It may not have unbalanced
+; brackets or any backslashes in the string argument.
+;	type [<string>]
+
+define type string
+	movei d,[asciz /string/]
+	pushj p,outstr
+termin
+
+; Macro to insert an ASCII string in the queue.
+
+define queue string
+	movei d,[asciz /string/]
+	pushj p,questr
+termin
+
+	subttl Command parser and machine equivalence tables
+
+; Command and command dispatch tables
+
+;  Entries in the table are created by using the text accumulation
+; mechanism in MACROS >.  The format is:
+;
+; cmd <command>,<dispatch>
+;
+; <command>	is the command that XQUEUE is to handle specially.  The
+;		normal action is to assume that a command merely sets a
+;		flag, so it should be held until an action command occurs.
+;
+; <dispatch>	is the address that the command should dispatch to for
+;		processing.  If the command wants to scan for a filespec
+;		and queue now (;LIST), it should skip twice.
+;		If the command is interpreted entirely within XQUEUE (;CANCEL)
+;		it should not skip at all.
+;		If it wants to be sent over and end the queue file but
+;		inhibit opening the text file, and force the queue entry into queue 1,
+;		it should go to SAMPLE, setting f%short, and skipping twice, a la ;LIST.
+;		Normally, commands should skip once.
+; To prohibit using the command as a switch in a filename,
+; put SETZ in front of its dispatch.
+
+define cmnds
+ifn glp, cmd ARDS,kards         ; print an ARDS graphics file
+cmd AUTCUT,popj1
+ifn glp, cmd BACKGROUND,popj1
+cmd BOTMAR,popj1
+cmd CANCEL,setz cancel		; ;CANCEL flush a request
+ifn glp, cmd COPIES,popj1
+cmd DELETE,popj1
+ifn glp, cmd DPLT,kplot	        ; output a DPLT file (from SUDS)
+cmd FFCUT,popj1
+ifn glp, cmd FORTRAN,popj1
+cmd HEADER,setz popj1
+ife glp, cmd HEIGHT,popj1
+ifn glp, cmd HW,popj1	        ; hack for historical reasons
+ifn glp, cmd IMAGE,popj2
+cmd KILL,setz sample		; ;KILL kill the spooler
+cmd KSET,setz popj1
+cmd KSUBSET,setz popj1
+cmd LFTMAR,popj1
+cmd LIST,popj2
+cmd LOWPRI,lowpri
+ifn glp, cmd LPT,popj2         ; output the file in LPT mode
+cmd LSP,popj1
+cmd NLINES,popj1
+ifn glp, cmd NOCUT,popj1
+ifn glp, cmd NOHEADING,popj1
+cmd NOTIFY,knotify
+ifn glp, cmd OUTPUT,popj1
+ife glp, cmd PLOT,kplot
+cmd PRINT,popj2
+cmd PRIORITY,priset		; ;PRIORITY set output priority
+cmd QUIT,setz quit
+cmd ROTATE,popj1
+cmd SAMPLE,sample
+ifn glp, cmd SCALE,popj1
+ife glp, cmd SCAN,kscan
+ife glp, cmd SHOW,popj1
+cmd SIZE,popj1
+cmd SKIP,popj1
+ife glp, cmd SNDFNT,popj1
+cmd SQUISH,ksquish
+ife glp, cmd TEST,popj1
+ifn glp, cmd TEK,ktek
+ife glp, cmd THESIS,thesis		; ;THESIS use thesis forms
+ifn glp, cmd THICK,popj1
+cmd TOPMAR,popj1
+ifn glp, cmd TRUNCATE,popj1
+cmd TXTCMD,popj1
+ife glp, cmd VERSE,popj1
+cmd VSP,popj1
+ifn glp, cmd WIDTH,popj1
+ifn glp, cmd WRAPAROUND, popj1
+cmd X0,popj1
+cmd Y0,popj1
+ifn glp, cmd ^CONTROLS,popj1
+termin
+
+define cmd cmnd,dsptch
+ .1stwd sixbit/!cmnd!/
+termin
+comtab:	cmnds				; generate SIXBIT table of commands
+	sixbit/______/			; terminate table for scanner
+
+define cmd cmnd,dsptch
+	dsptch
+termin
+dsptab:	cmnds				; generate dispatch addresses for command args
+numcom==:.-dsptab			; number of commands
+
+; Table of SIXBIT masks used in finding unique abbreviations
+
+msktab:	sixbit/      /
+	sixbit/     _/
+	sixbit/    __/
+	sixbit/   ___/
+	sixbit/  ____/
+	sixbit/ _____/
+
+	subttl Startup and user group lookup
+
+; Initialize everything.  Compute the machine name, etc.
+
+XQUEUE:	movx p,pdl(-pdllen)		; load pdp
+	store %zeros,corbeg,corend	; clear impure core,...
+	skipn debug			; debug version?
+	 skipa x,[spldir]		; no, load name of XGP spooler directory
+	  movx x,hacker			; yes, put it on current hacker's directory
+	movem x,quedir			; save as name of directory to write into
+	uget XUNAME,xuname		; get my XUNAME
+	syscal SSTATU,[repeat 5,%clval x; system status
+		       %clval machin]	; the machine I'm on
+	 .lose %lssys			; ...lose...
+	uget SNAME,y			; get my SNAME
+	uget OPTION,x			; and program options
+	tlnn x,%opddt			; is DDT my superior?
+	 move y,xuname			; no, load my user name
+	movem y,msname			; and remember it
+	pushj p,usrchk			; Find this user's group name.
+	jrst jclini
+
+	subttl TTY/JCL initialization
+
+;  Look for a JCL string.  If there is one, gobble down the JCL and process
+; it.  Be careful that if F%TTY is off(meaning that no TTY is available) the job
+; does not have the TTY for output.  The idea is that XQUEUE can run as an
+; inferior of a dragon(ie, from COMSAT if mailed to XGP-SPOOLER@AI).
+
+jclini:	setzb f,b			; clear flags,char counter
+	uget OPTION,x			; get my option bits
+	setzm ttibuf
+	tlne x,%opcmd			; did I get a JCL command?
+	 .break 12,[..rjcl,,ttibuf]	; yes, gobble down a buffer
+	skipe ttibuf
+	 pushj p,jclprs			; If we have JCL, paw it over.
+
+; Find out whether we have a TTY to get commands from in case there is no JCL.
+ttycmd:	uget TTY,x			; get my .TTY variable
+	tlnn x,%tbnot			; do I have the TTY?
+	 syscal OPEN,[clctl. .uai	; open in unit ASCII input
+		      clarg. chtti	; TTY input channel
+		      clarg. ('TTY)]	; device TTY:
+	  jrst notty			; Open fails, we can't use the tty.
+	syscal OPEN,[clctl. .uio\%tjdis	; open in unit ASCII output with ^P option
+		     clarg. chtto		; TTY output channel
+		     clarg. ('TTY)]	; device TTY:
+	 .lose %lsfil
+	tlo f,f%tty			; Remember that we have a TTY.
+	syscal TTYVAR,[%climm,,chtto ? ['TTYSTS] ? %clout,,a]
+	 jrst notty
+	tlo a,%tscle			; Make control-L echo as ^L, not as clear screen.
+	syscal TTYVAR,[%climm,,chtto ? ['TTYSTS] ? a]
+	 .lose %lsfil
+notty:	skipe downp			; is the XGP spooler being hacked?
+	 jrst cantq			; yes, can't queue anything
+	tlo f,f%live
+	tlnn f,f%jcl			; If no JCL, type XQUEUE.version.
+	 pushj p,announ
+	hllo x,xuname			; If not logged in, ask for user name.
+	aosn x
+	 pushj p,notlgi
+	tlne f,f%jcl			; If have JCL, just go parse it.
+	 jrst prsini
+	jrst fetch			; Else start reading commands.
+
+; Output header; {Debug} XQUEUE.version
+
+announ:	skipn debug			; debugging version?
+	 jrst pgmver			; no, type program name+version only
+	type [Debug ]			; yes, warn this is a debugging version
+pgmver:	
+ife glp,[ movx y,'XQUEUE
+]					; movx screws .else unless there are brackets.
+.else    movx y,'GQUEUE			; load name of this program
+	pushj p,outsix			; and output it
+	.iot chtto,[".]			; type a period
+	movx y,%version			; load version
+	pjrst outsix			; and output that too
+
+;Preprocess JCL to make sure it ends with a CRLF, and set RB.PTR to
+;point at the end of it.
+jclprs:	tlo f,f%jcl			; If we have JCL, remember that fact.
+	move a,[440700,,ttibuf]
+	movem a,rubout"rb.prs+rbblok
+jclpr1:	ildb b,a			; Put a CRLF at the end of it.
+	caie b,^C
+	 jumpn b,jclpr1
+	movei b,^M
+	idpb b,a
+	movei b,^J
+	idpb b,a
+	movem a,rubout"rb.ptr+rbblok	; Remember a pointer to just after that CRLF.
+	popj p,
+
+; Grovel over INQUIR data base for this user's user group.
+
+usrchk:	movei a,chdsk
+	move b,[-lsrmxp,,lsr_-10.]	; load pointer to core I'm allocating
+	pushj p,lsrtns"lsrmap		; map in INQUIR;LSR1 >
+	 jrst random
+	move b,xuname			; search for this user.
+	movei a,chdsk
+	pushj p,lsrtns"lsrunm
+	 jrst random			; not found => he is a random.
+	movei a,lsrtns"i$grp
+	pushj p,lsrtns"lsritm		; found him => find his "group" item.
+	 jrst random			; no group => assume he's random
+	ildb x,a			; else get the group character from the group item.
+	caie x,<" >			; assume random if space
+	 cain x,^@			; or if item is empty.
+random:	  movx x,"-			; dash to mean unknown type person
+	movem x,group			; and remember his user group
+	.close chdsk,			; free up channel
+	popj p,
+
+; Here to demand login
+
+notlgi:	tlnn f,f%tty			; do I have the TTY?
+	 jrst death			; then I lose
+	type [AUser name:]
+	movei a,chtto
+	movei b,rbblok			; Read the uname, doing rubout processing.
+	move d,[010700,,lgibuf-1]	; Must not use TTIBUF, since JCL may be there.
+	movem d,rubout"rb.beg+rbblok
+	addi d,lgibln
+	movem d,rubout"rb.end+rbblok
+	pushj p,rubout"init
+notlg2:	pushj p,rubout"read
+	jumpl a,notlg2
+	move z,[440700,,lgibuf]
+	pushj p,get1wd			; Now turn what we read to sixbit.
+	uset XUNAME,w			; set my XUNAME
+	movem w,xuname
+	movem w,msname
+	uset SNAME,w			; set my SNAME
+	pjrst usrchk			; Go get the user's group.
+
+;get from the library the routines for accessing LSR1.
+
+lsrtns"$$ulnm==0		; we don't need these parts of lsrtns
+lsrtns"$$ulnp==0
+lsrtns"$$unam==0
+
+.insrt syseng;lsrtns
+
+;Start reading the lines of a new queue request from the TTY.
+fetch:	move p,[-pdllen,,pdl]
+	tlne f,f%live			; If we were fed a ^C, or
+	 tlne f,f%jcl			; if we had JCL, and it ran out,
+	  jrst death			; just commit suicide.
+	tlnn f,f%tty			; have the TTY
+	 jrst death			; bug if no
+	.iot chtto,[^P]			; and a new line
+	.iot chtto,["A]			; before command lines
+	.iot chtto,["#]
+	movei a,chtto
+	movei b,rbblok
+	move c,[010700,,ttibuf-1]
+	movem c,rubout"rb.beg(b)
+	addi c,datlen-1
+	movem c,rubout"rb.end(b)
+	setzm rubout"rb.prs(b)		; Cause all flags to be cleared, under nxtlin.
+	pushj p,rubout"init		; Initialize for rubout proc.  Get TTY characteristics.
+
+;Read some more lines of an unfinished queue request from the TTY.
+nxtlin:	tlne f,f%live			; If we were fed a ^C, or
+	 tlne f,f%jcl			; if we had JCL, and it ran out,
+	  jrst death			; just commit suicide.
+	tlnn f,f%tty			; have the TTY
+	 jrst death			; bug if no
+	movei b,rbblok
+	pushj p,rubout"read	;Read line, doing rubout processing.  Add to data in DATA.
+	jumpl a,fetch		;Over-rubout => just try again.
+	skipe rubout"rb.prs(b)	;Was already-parsed stuff rubbed out?
+	 jrst parse		; No => resume parsing, assuming only new line needs parsing.
+	move a,rubout"rb.beg(b)
+	movem a,rubout"rb.prs(b)
+	jrst prsini		; Else reparse everything from the beginning,
+
+;Here to start parsing a new queue request.  Reinitialize all data on the request, first.
+prsini:	store %zeros,filsiz		; clearing all flags in case the things that set them
+	tlz f,f%init			; have been rubbed out.
+	move x,msname			; load up my default SNAME
+	movem x,sname			; and make it the queuer default
+	move x,machin			; load up this machine name
+	movem x,device			; and make it the default device
+	store deffn1,fn1		; default FN1
+	setzm fn2
+	move x,[440700,,quebuf]
+	movem x,queptr			; So far the queue stuff to be written is empty.
+	setzm notbuf			; Clear notbuf (no /notify switch).
+	move c,[notbuf,,notbuf+1]
+	blt c,notbuf+notbfl-1
+	jrst parse
+
+;Read a character from the TTY for Rubout"Read.
+rubout"inchr:
+	.iot chtti,a			; gobble down a single character
+	caie a,^C			; ^C?
+	 popj p,
+	tlz f,f%live			; Yes, say suicide after this command,
+	pushj p,crlf			; and type a CRLF.
+	movei a,^M			; Aside from this, ^C is just like CR.
+	popj p,
+
+crlf:	.iot chtto,[^M]
+	.iot chtto,[^J]
+	popj p,
+
+rubout"outchr:
+	cain a,^P		;Output, suppressing specialness of ^P.
+	 jrst [	.iot chtto,[^P]
+		.iot chtto,["P]
+		popj p,]
+	.iot chtto,a
+	popj p,
+
+rubout"display:			;Output, allowing ^P to be special.
+	.iot chtto,a
+	popj p,
+
+rubout"dispat:			;Dispatch routine for Rubout"Read to call on each character.
+	cain a,^C
+	 jrst rubout"break
+	cain a,^H
+	 jrst rubout"rubout
+	jrst rubout"rb$dsp
+
+rubout"prompt:
+	.iot chtto,["#]
+	popj p,
+
+rubout"$$brkins==1
+rubout"$$prompt==1
+rubout"$$ctlech==1
+
+.insrt syseng;rubout
+
+;Argument block for calling Rubout.
+rbblok:	block rubout"rb.len
+
+; After Rubout"Read has obtained some more input, parse it.
+; If we come across a final command, write the queue request.
+; If we run out of input before finding a final command,
+; go back to NXTLIN to get more input.
+
+parse:	move z,rubout"rb.prs+rbblok	; Get pointer to stuff left to parse.
+	camn z,rubout"rb.ptr+rbblok	; There's no more stuff => read more.
+	 jrst nxtlin
+	move c,queptr			; Save quebuf pointer in case
+	movem c,oqptr			; an error makes us flush anything this line generated.
+	pushj p,spcfls			; flush spaces
+	move y,z			; (crock) load up scratch copy of buffer pointer
+	ildb c,y			; and peek at the first character
+	cain c,^J
+	 jrst feedln			; Ignore null lines.
+	jumpe c,feedln
+	caie c,";			; Is this line a spooler command?
+	 jrst prsfnm
+	pushj p,splrcm			; Yes, decode it.
+	 jrst fetch			; No skip => ;CANCEL;  prompt and start new queue request.
+	 jrst feedln			; 1 skip => pass it along, but read more lines.
+	 				; 2 skips => ;LIST, etc.  Takes filename, ends rq.
+
+;Here after seeing a command such as ;LIST.  If no filename follows, it is just
+;sent over into the queue request.  If a filename follows, we send over the
+; ;LIST command by itself, then parse the filename as if it had been alone.
+feedcm:	pushj p,spcfls
+	move a,rubout"rb.prs+rbblok	; Send over what we have read so far,
+feedc1:	ildb c,a
+	camn a,z
+	 jrst feedc2
+	idpb c,queptr
+	jrst feedc1
+
+feedc2:	movei a,^M			; terminated as a separate line,
+	idpb a,queptr
+	movei a,^J
+	idpb a,queptr
+	movem z,rubout"rb.prs+rbblok	; and mark it fully handled.
+	jrst prsfnm			; Then process the filename that follows.
+
+;This line is the name of a file to print (or plot or list or sample or scan, etc).
+prsfnm:	movei b,device
+	pushj p,rfname			; Parse the filename,
+	push p,e
+	movsi b,'dsk			;Init the sticky font file name defaults now,
+	movem b,fntdev			;since this is outside the loop that reads them.
+	move b,[sixbit /fonts/]
+	movem b,fntsnm
+prsfn4:	caie a,^J
+	cain a,^M			;if font filenames follow,
+	 jrst prsfn3
+	movei b,fntdev			;parse them and see if they exist.
+	movsi a,'kst			;This also processes any switches inside them.
+	movem a,fntfn2
+	pushj p,rfname
+ife glp,[
+	move b,machin			;Only AI gets new features - RMS.
+	came b,[sixbit /ai/]
+	 jrst prsfn4
+]
+	syscal open,[[.bii,,chdsk] ? fntdev ? fntfn1 ? fntfn2 ? fntsnm]
+	 jrst fntfnf
+	jrst prsfn4
+
+prsfn3:	pop p,e
+	tlnn e,17
+	 jrst ignln3			; No text filename => ignore (but keep the switches).
+	pushj p,fnfeed			; Now feed over the line, discarding switches (already processed)
+	tlo f,f%file			; say mention it in the ;STATUS line,
+	jrst queuer			; and queue the file.
+
+; Read a file name off Z into filename block <- B.  Returns RFN flags in E.
+; Clobbers D.  Returns terminator in A and C.
+rfname:	setz e,
+	cain c,^M
+	 popj p,
+	move d,z
+	pushj p,rfn"rfn
+	move z,d
+	move c,a
+	popj p,
+
+rfn"psixtp:
+rfn"rsixtp:
+	caie a,"/
+	 cain a,"_
+	  aos (p)
+	cain a,",
+	 aos (p)
+	popj p,
+
+rfn"$$rfn==1
+rfn"$$pfn==1
+rfn"$$switch==1
+
+.insrt syseng;rfn
+
+feedln:	pushj p,feedl2
+	jrst parse
+
+;Feed this line which we just parsed into the queue file.
+feedl2:	move z,rubout"rb.prs+rbblok
+feedl1:	ildb c,z
+	idpb c,queptr
+	caie c,^J
+	 jrst feedl1
+gobble:	movem z,rubout"rb.prs+rbblok
+	popj p,
+
+error:	tlo f,f%live			; Here after error, to ignore line and ignore any ^C.
+	tlne f,f%jcl			; Error in JCL commands => suicide.
+	 jrst death
+
+;After an error occurs.  Discard the line from the input buffer.
+ignlin:	move c,oqptr			; Flush any writing this line
+	movem c,queptr			; did into QUEBUF.
+ignln2:	tlne f,f%jcl
+	 jrst ignln3
+	movei b,rbblok			; If reading from TTY,
+ignln1:	pushj p,rubout"dbpptr		; Flush the last line from the buffer,
+	 jrst nxtlin
+	ldb c,c
+	caie c,^J
+	 jrst ignln1
+	move p,[-pdllen,,pdl]		; Reset stack, since error messages break away to ignlin
+	jrst nxtlin			; read input to replace what lost.
+
+;Here to mark entire line being read as already handled.
+ignln3:	move z,rubout"rb.prs+rbblok
+ignln4:	ildb c,z			; Just start at the beginning and skip over it.
+	caie c,^J			; Don't bother removing it from ttibuf.
+	 jrst ignln4
+	movem z,rubout"rb.prs+rbblok
+	jrst parse
+
+;When we have just read a line containing a filename and optional fonts, and maybe switches,
+;feed the fonts over into quebuf as a ;KSET command.
+;Discard the switches since they have already been processed.
+;Discard the filenames since they still need defaulting processing
+;(for choosing between XGP and >), and therefore will be handled specially later.
+;Y is nonzero if we have already seen a "_" and put ";KSET " into quebuf.
+fnfeed:	move z,rubout"rb.prs+rbblok
+	setz y,
+fnfee1:	ildb x,z
+	cain x,"/			;"/" starts a switch.  Don't feed the switch.
+	 jrst fnfdsw
+fnfee6:	caie x,"_			;"_" starts fonts.  Start feeding now.
+	 jrst fnfee4
+	move y,[440700,,[asciz /;KSET /]]
+fnfee5:	ildb x,y
+	jumpe x,fnfee1
+	idpb x,queptr
+	jrst fnfee5
+
+fnfee4:	skipe y				;if no "_" seen yet, don't feed.
+	 idpb x,queptr
+	cain x,^Q			;^Q in filenames quotes / and _.
+	 jrst fnfee2
+	caie x,^J
+	 jrst fnfee1
+	movem z,rubout"rb.prs+rbblok	;After feeding the whole line, mark it "handled".
+	popj p,
+
+fnfee2:	ildb x,z
+	jumpe y,fnfee1
+	idpb x,queptr
+	jrst fnfee1
+
+fnfdsw:	ildb x,z			;Skip over a switch, not feeding it over.
+	cain x,",			;Only a comma, space or ctl char ends a switch.
+	 jrst fnfee1
+	caie x,"_
+	 caig x,40
+	  jrst fnfee6
+	jrst fnfdsw
+
+;Process "/" switches in filenames.
+switch:	push p,c			; In RFN, C holds file block addr.
+	add d,[070000,,]		; Back b.p. in D over first char of switch name,
+	skipge d			; so DECODE can read it.
+	 sub d,[430000,,1]
+	move z,d
+	pushj p,get1wd			; Read a word of sixbit into W.
+	camn w,[sixbit /L/]		; "L" is allowed, for "LIST", as a switch
+	 move w,[sixbit /LIST/]		; even though not unique as abbreviation.
+	pushj p,decod1			; Decode as a spooler command.
+	 jrst badsw			; Unknown name gets error message.
+	skipge dsptab(y)		; Not all commands are allowed as switches.
+	 jrst badsw1
+	pushj p,@dsptab(y)		; Call the routine for the switch.
+	 jrst [	move a,c		; No skip => assume command routine did all
+		jrst swit6]		; that needs to be done.  Put nothing in queue file.
+	 jfcl				; 1-skip and 2-skip commands are ok.
+	move d,z
+	movei a,";			; Now copy the switch name into the queue file.
+	idpb a,queptr
+	move y,comtab(y)		; Put in the full name, even if an abbreviation was
+	pushj p,swtque			; specified, in case XGPSPL has commands we don't.
+swit5:	move a,c			; Put terminator in A to reuse, if not colon.
+	caie c,":			; Peek at next char to see whether switch has arg.
+	 jrst swit1
+	movei a,40			; It has an arg:  copy that over too,
+swit3:	idpb a,queptr			; after a separating space.
+	ildb a,z			; The arg ends at the next space, underscore,
+	caile a,40			; comma, or slash.
+	 cain a,",
+	  jrst swit1
+	cain a,"_
+	 jrst swit1
+	caie a,"/			; So skip until there, to see how much we should send.
+	 jrst swit3
+swit1:	push p,a
+	movei a,^M			; Put a CRLF in the que file buffer
+	idpb a,queptr			; to terminate the command we have just added.
+	movei a,^J
+	idpb a,queptr
+	pop p,a				; Return the switch terminator to RFN
+swit6:	move d,z			; to be reprocessed.  Update RFN's b.p.
+	pop p,c
+	jrst popj1
+
+;Output sixbit word in Y down QUEPTR.
+swtque:	setz x,
+	rotc x,6
+	addi x,40
+	idpb x,queptr
+	jumpn y,swtque
+	popj p,
+
+badsw:	type [Error; Unknown switch name
+]
+	jrst error
+
+badsw1:	type [Error; Some spooler-commands may not be switches
+]
+	jrst error
+
+; Here to scan after a ; to see if it is a spooler command.
+
+splrcm:	ibp z				; (grumble) because of losing parse code
+	pushj p,decode
+	 jrst badcom
+	jrst @dsptab(y)
+
+;Read from b.p. in Z a command name, and decode as a spooler command.
+;No skip => not recognized.
+;Skip => Y has index in DSPTAB.  Either way, C has terminating character.
+
+decode:	pushj p,get1wd			; get one sixbit word in w, padded with 0's
+decod1:	jumpge w,cpopj			; null or illegal word, crap out
+	move x,w			; copy it into x
+	ior x,msktab(i)			; but make it padded with 1's
+
+;  Look for unique match in table of specially known commands.  If this routine
+; throws you, it actually is quite simple.  It takes the command in two copies,
+; one padded by 0's as normal, and the other padded with 1's.  Now, for a command
+; to be a match, with unique abbreviations allowed, there must be one and only
+; one command whose value is between these two, unless an exact match is also
+; an abbreviation of another.
+
+	movx y,(,,-numcom)		; load command table AOBJN pointer
+	camle w,comtab(y)		; a match?
+	 aobjn y,.-1			; no, not yet
+	jumpge y,cpopj			; error return if no match
+	camn w,comtab(y)		; exact match?
+	 jrst popj1		; yes, don't foul up if also abbreviation
+	caml x,comtab(y)		; a match at all?
+	 camle x,comtab+1(y)		; a unique match?
+	  jrst cpopj			; no, complain about bad command
+	jrst popj1
+
+; /Notify:foo@bar
+
+knotify:
+	caie c,":
+	 popj p,
+	move b,[440700,,notbuf]
+knot2:	ildb c,z
+	caie c,"/
+	 cain c,",
+	  popj p,
+	caie c,"_
+	 cain c,^M
+	  popj p,
+	came b,[010700,,notbuf+notbfl-1]
+	 idpb c,b
+	jrst knot2
+
+; Here is ;Squish or /Squish.
+
+ksquish:
+	tlo f,f%sqsh
+	jrst popj1
+
+; Here if ;Thesis command given
+
+thesis:	tlo f,f%thes			; remember this as a thesis request
+	jrst popj2			; and return for filename
+
+; Here if ;Priority command given
+priset:	tlo f,f%prio			; enable priority
+	jrst popj2			; and return for filename
+
+; ;LOWPRI command given.
+lowpri:	tlo f,f%lpri			; Set flag to force queue 3.
+	jrst popj2
+
+; Here if ;PLOT, ;SCAN or ;SAMPLE.
+kscan:	skipa x,['SCN,,]
+kplot:	 movsi x,'PLT
+	jrst sampl1
+
+ktek:	skipa x,['TEK,,]
+kards:	move x,[sixbit/ARDS/]
+	jrst sampl1
+
+sample:	movsi x,'kst
+sampl1:	skipn fn2
+	 movem x,fn2
+	tlo f,f%short			; Force into queue 1;  don't open the text file.
+	jrst popj2			; Skip twice, saying filename may follow on same line.
+
+	subttl SIXBIT input
+
+; Here to pick up a SIXBIT word in W, length in I, terminator in C, off bp in Z, clobbers X
+
+get1wd:	movx i,<wid. '_>		; max # of chars in a SIXBIT word
+	movx w,%zeros			; initially null word
+	movx x,<point. 6,w>		; load pointer to first char in word
+gt1wd1:	pushj p,charin			; get a character
+	 popj p,			; hit a break
+	subx c,<" >			; SIXBITify
+	idpb c,x			; and save in word
+	sojg i,gt1wd1			; continue until packed
+	pushj p,charin			; gobble another character
+	 popj p,			; finally hit a break!
+	jrst .-2			; keep on trying
+
+; Here to gobble down a character, and skip if SIXBIT
+
+charin:	ildb c,z			; get a character
+	cail c,140
+	 subi c,40
+	caie c,":			; An arg for a switch
+	 cain c,"/			; or another switch
+	  popj p,			; terminates a switch name.
+	caie c,"_			; End of filespec terminates switch.
+	 caig c,40
+	  popj p,
+	jrst popj1
+
+;  Here to flush any spaces(for after a ; or :).  This routine isn't as cretinous
+; as it looks; how many people put 69 spaces after delimiters???
+
+spcfls:	move y,z			; copy byte pointer
+spcfl1:	move z,y			; Advance Z past the spaces, not past terminator.
+	ildb x,y			; get a character
+	caie x,^M			; Keep going if skippable.
+	 cain x,^I
+	  jrst spcfl1
+	cain x,40
+	 jrst spcfl1
+	popj p,
+
+popj3:	aos (p)
+popj2:	aos (p)
+popj1:	aos (p)				; bump return PC(skip return)
+cpopj:	popj p,				; and return(non-skip return)
+
+	subttl Actual queuer
+
+; Here to determine the queue priority.  We also squish if necessary.
+; /THESIS forces queue T, /LOWPRI forces queue 3,
+; /PLOT or /SCAN forces queue 1, /PRI forces front of queue 1,
+; else for total random users use queue 3.
+; Else find out how big the file is, then
+; put small files(nHPFSIZ blocks) in queue 1, medium sized files
+; (HPFSIZ<nLPFSIZ blocks) depending upon user group(AI lab people in queue 1,
+; others in queue 2), and large files(> LPFSIZ blocks) in queue 3.
+
+queuer:	tlne f,f%short			; /PLOT, /SCAN, etc. are special.
+	 jrst alysrt
+	skipe fn2			; If user didn't specify the fn2,
+	 jrst queue2
+	syscal OPEN,[clctl. .bai	; try XGP and then >.
+		     clarg. chdsk
+		     device ? fn1 ? [sixbit /xgp/] ? sname]
+	 jrst queue1
+	move z,[sixbit /xgp/]
+	movem z,fn2
+	jrst queue3
+
+queue1:	move z,[sixbit />/]
+	movem z,fn2
+queue2:	syscal OPEN,[clctl. .bai	; XGP file not fount.  Use user's name.
+		     clarg. chdsk	; DSK hack channel
+		     device ? fn1 ? fn2 ? sname]; user specified file
+	 jrst fnferr			; error about file not available
+queue3:	setom txt1bf			; Say file's access pointer is at the front.
+	pushj p,prschk			; Barf if this looks like a press file.
+	pushj p,txtbeg
+	pushj p,txti			; Read 1 char to load up TXTBUF.
+	move y,txtbuf			; Read 1st word of file.
+	tdz y,[ascii/ /#ascii/     /]	; uppercaseify if necessary
+	camn y,[ascii/;NOXG/]		; does file begin with ;NOXGP ?
+	 pushj p,qconfm			; yes, it requires confirmation
+	pushj p,sqchk			; Look at ;-commands in file for a ;SQUISH.
+	tlne f,f%sqsh
+	 pushj p,prescn			; Squish the file if that is wanted.
+	syscal FILLEN,[clarg. chdsk	; Put file's length in FILSIZ.
+		       %clval filsiz]
+	 setzm filsiz
+	tlne f,f%thes			; Thesis forms always go into thesis queue.
+	 jrst [	movx x,'QT
+		jrst aitype]
+	tlne f,f%lpri
+	 jrst [	movx x,'Q3		; /LOWPRI files always go in Q3.
+		jrst aitype]
+	movx x,'Q1			; assume queue 1 to start with
+	skipn y,filsiz
+	 jrst qusrgp			; Length unknown.  Treat as medium size file.
+	move z,group			; get user group to see if random
+	caie z,"-			; is this a random?
+	 caile y,lpfsiz*2000		; moby type file?
+	  jrst [movx x,'Q3		; yes, LOW priority
+		jrst aitype]		; and queue it
+	caig y,hpfsiz*2000		; small type file?
+	 jrst aitype			; all small files are AI files
+qusrgp:
+ifn F$AIPR,[	; code for giving AI users high priority
+	move z,group			; load up my user group
+	caie z,"A			; AI lab?
+	 cain z,"L			; LOGO?
+	  jrst aitype			; then an AI type
+	caie z,"*			; RMS?
+	 cain z,"H			; PLASMA group?
+	  jrst aitype			; AI Lab too.
+	cain z,"<			; Very Small Data Bases too.
+	 jrst aitype
+]		; F$AIPR
+	movx x,'Q2			; no, normal priority
+	jrst aitype			; and fall through
+
+;Handle /PLOT, /SCAN etc. files which don't need the normal defaulting
+;or squishing, and have the queue computed differently.
+alysrt:	movei x,'Q1			; Q1 if normal forms
+	tlne f,f%lpri
+	 movei x,'Q3			; Q3 if /LOWPRI
+	tlne f,f%thes
+	 movei x,'QT			; QT if thesis forms
+
+; Write the actual queue command file.  First, open up a temporary on AI:.XGPR.;
+; X contains the sixbit FN1 to use (for the queue this should go in)
+
+aitype:	skipe debug			; if debugging...
+	 movx x,'XQTEST			; then always use an FN1 of XQTEST
+	push p,x			; save selected file name
+	syscal OPEN,[clctl. .uao	; open in single ASCII output
+		     clarg. chque	; QUEue channel
+ife glp,	     clarg. sixbit/AI/	; on the AI machine
+ifn glp,	     clarg. sixbit/MC/	; on the MC machine
+		     clarg. '_QUEUE	; FN1 of _QUEUE
+		     clarg. 'OUTPUT	; FN2 of OUTPUT
+		     quedir]		; on to the queueing directory
+	 jrst aidown			; damnit, AI is down
+	syscal TRANS,[device ? fn1 ? fn2 ? sname	;Process any translations.
+		%clout,,device ? %clout,,fn1 ? %clout,,fn2 ? %clout,,sname]
+	 .lose %lssys			; Use the translated names in writing the queue file.
+	pushj p,status			; Write out a ;STATUS command
+	pushj p,notify			; Write out a ;NOTIFY command
+	pushj p,deflin			; Write out a ;DEFAULT command
+	tlne f,f%sqsh
+	 pushj p,qksubs			; Write ;KSUBSET commands if we squished the file.
+
+; Write out the actual command that was typed in
+
+	setz a,
+	idpb a,queptr
+	movei d,quebuf
+	pushj p,questr			;First the switches and fonts
+	pushj p,quecr
+	move d,[440700,,pfnbuf]
+	movei b,device
+	pushj p,rfn"pfn			;and then the filenames as defaulted.
+	movei d,pfnbuf
+	pushj p,questr
+	pushj p,quecr
+
+; retrieve the desired file-name
+; And enter it in the queues
+	pop p,x
+	move b,[sixbit />/]		; queue group priority
+	tlze f,f%prio			; is this a priority request?
+	 jrst [	movx x,'Q1		; yes, force priority to be
+		movx b,sixbit/0/	;  next file to be printed...
+		syscal OPEN,[clarg. chdsk	; OPEN up DSK hack channel
+ife glp,		     clarg. sixbit/AI/; on the AI machine
+ifn glp,		     clarg. sixbit/MC/	;or MC
+			     x ? b ? quedir]; for the priority queue
+		 jrst .+1		; can queue, no previous
+		jrst cantq]		; can't queue, give stange message
+	syscal RENMWO,[clarg. chque	; rename while open on the QUE channel
+		       x ? b]		; queue priority group/group priority
+	 jrst aidown			; AI/IMP crashed???
+	pushj p,pqnum			; Type out the "queue number" the file got.
+	.close chque,			; and queue it
+ife glp,[
+	move a,machin			; On AI, print sizes of queues.
+	camn a,[sixbit /ai/]		; Other machines don't get new features.
+]
+	 pushj p,pqsize			; Besides, this implementation would be too slow.
+	jrst fetch			; Now maybe get another TTY command
+
+pqnum:	tlnn f,f%tty			; do I have the TTY?
+	 jrst cpopj			; nope, no typeout
+	syscal RFNAME,[clarg. chque	; get file name
+		       repeat 3,%clval y]; get FN2 into Y
+	 jrst cpopj			; losey lose
+	lshc x,-<wid. '_>		; make a QIN in Y
+	push p,x
+	type [Request queued as QIN ]
+	pop p,x
+	pushj p,outsix			; output QIN
+	jrst crlf			; and a terpri
+
+; Suicide routine
+
+death:	skipe debug			; never suicide if debugging!
+	 .value				; debugging return
+	.logout 1,			; suicide
+
+; Write out the ;Status command in the form:
+;	;Status UNAME<tab>MACHINE-NAME<sp>USER-GROUP<sp>DATE<sp>TIME<sp>FILE-SIZE<tab>FILENAME
+; ex:	;Status MRC	AI A 07/19/76 17:19:00 20	AI:MRC;FOO BAR
+
+status:	queue [;Status ]		; start out ;Status line
+	move y,xuname			; load up my XUNAME
+	pushj p,quesix			; and put that in the queue
+	.iot chque,[^I]			; stick a tab in the queue
+	move y,machin			; get the name of this machine
+	pushj p,quesix			; and stick that in
+	.iot chque,[" ]			; delimit with space
+	.iot chque,group			; display user group
+	.iot chque,[" ]			; and another space
+	.rdatim y,			; get date/time in SIXBIT
+repeat 2,[push p,y			; save rest of time
+	  andx y,sixbit/__/		; lose all but top two characters
+	  pushj p,quesix		; and output the two characters
+	  .iot chque,[":]			; output a delimiter
+	  pop p,y			; restore rest of time
+	  lsh y,wid. '_'_		; and remove top two characters
+]	pushj p,quesix			; add in the seconds
+	.iot chque,[" ]			; delimit with a space
+	move y,z			; shove the date up to be mangled
+	rot y,wid. '_'_			; cretin YYMMDD format
+repeat 2,[push p,y			; save rest of date
+	  andx y,sixbit/__/		; lose all but top two characters
+	  pushj p,quesix		; display those two
+	  .iot chque,["/]			; and output a delimiter
+	  pop p,y			; restore rest of date
+	  lsh y,wid. '_'_		; and remove the top two characters
+]	pushj p,quesix			; now add in the year
+	.iot chque,[" ]			; stick in a space
+	move x,filsiz			; get the size of this request
+	pushj p,quenum			; and type it out
+	tlnn f,f%file			; If we know the name of the file to be printed,
+	 jrst quecr
+	.iot chque,[^I]			; include it in the status line.
+	pushj p,quefil
+	jrst quecr			; and stick in a cr/lf
+
+;Output the filenames into the queue file.
+quefil:	move b,device
+	move a,machin
+	camn b,['DSK,,]
+	 movem a,device
+	movei b,device
+	move d,[440700,,fnmbuf]
+	pushj p,rfn"pfn			; Convert text file name to a string.
+	move d,[440700,,fnmbuf]
+	jrst queasc			; Output that string.
+
+; Write out the ;Notify line in the form:
+;	;Notify MACHINE-NAME,UNAME Your file ... is being printed.
+
+notify:	queue [;Notify ]		; insert command to notify luser
+	move y,machin			; load machine name
+	pushj p,quesix			; and write it out
+	.iot chque,[",]			; and write a delimiting comma
+	skipn notbuf
+	 jrst notif1
+	movei d,notbuf			; If who to notify is specified, use that.
+	pushj p,questr
+	jrst notif2
+	
+notif1:	uget UNAME,y			; want name logged in under this time
+	uget OPTION,x			; but get option variable
+	tlnn x,%opddt			; and make sure superior is DDT
+	 move y,xuname			; it ain't, so use XUNAME
+	pushj p,quesix			; and output it
+notif2:	tlnn f,f%file
+	 jrst [	ife glp, queue [ Your XGP output has started.]
+		ifn glp, queue [ Your GLP output has started.]
+		jrst quecr]
+	queue [ Your printout of ]
+	pushj p,quefil
+	queue [ has started.]
+	jrst quecr			; and stick in a cr/lf
+
+; Write out the ;Default line in the form:  ;Default MACHINE:MSNAME;
+
+deflin:	queue [;Default ]		; start the ;Default line
+	move y,machin			; use machine name for device
+	pushj p,quesix			; and output it
+	.iot chque,[":]			; output delimiter
+	move y,msname			; get my default SNAME
+	pushj p,quesix			; and output it
+	.iot chque,[";]			; output delimiter
+	jrst quecr			; and a cr/lf
+
+; Write ;KSUBSET commands into the queue file if we have squished.
+qksubs:	move b,[-maxfnt,,0]
+;Write a ;KSUBSET command to save the info on the font w/ number in rh(B).
+qksub1:	movsi c,400000
+	movn x,b
+	lsh c,(x)		;C gets the SQSHTB bit for the font we will do next.
+	movsi x,-200
+	tdne c,sqshtb(x)	;Are all chars of the font needed (default state)?
+	 aobjn x,.-1
+	jumpge x,qksub4		;Yes => there is no need for a KSUBSET cmd for this font.
+	jumpge x,qksub4		;there is no font for this font number, and write no KSUBSET.
+	movei d,[asciz /;KSUBSET /]
+	pushj p,questr
+	hrrz x,b
+	pushj p,quenum		;Output font number.
+	setz a,
+qksub2:	hrli a,-40		;Output 4 32-bit octal numbers
+	movei d,[asciz / /]
+	pushj p,questr
+	setz x,
+qksub3:	lsh x,1
+	tdne c,sqshtb(a)	;32 characters go into making up each number.
+	 iori x,1
+	aobjn a,qksub3
+	pushj p,queoct		;Output number in octal.
+	caie a,200		;and go on to the next 32 characters.
+	 jrst qksub2
+	pushj p,quecr
+qksub4:	aobjn b,qksub1		;Do this for each font.
+	popj p,
+
+;Type out the sizes of the queues.
+pqsize:	tlnn f,f%tty			; do I have the TTY?
+	 jrst cpopj			; nope, no typeout
+	movei a,'Q1
+	pushj p,pqs1
+	movei a,'Q2
+	pushj p,pqs1
+	movei a,'Q3
+	pushj p,pqs1
+	movei a,'QT
+	pushj p,pqs1
+	jrst crlf
+
+;A contains the FN1 for a queue.  Print out how many entries are in it
+;unless it is empty.
+pqs1:	syscal open,[[.bii,,chdsk] ? ['dsk,,] ? a ? [sixbit />/] ? quedir]
+	 popj p,
+	syscal rfname,[%climm,,chdsk ? %clout,,b ? %clout,,b ? %clout,,b]
+	 .lose %lsfil
+	pushj p,pqsnum
+	push p,b
+	syscal open,[[.bii,,chdsk] ? ['dsk,,] ? a ? [sixbit /</] ? quedir]
+	 .lose %lsfil
+	syscal rfname,[%climm,,chdsk ? %clout,,b ? %clout,,b ? %clout,,b]
+	 .lose %lsfil
+	pushj p,pqsnum
+	pop p,c
+	subm c,b
+	aos b
+	cain b,1
+	 jrst [	type [1 entry in queue ]
+		jrst pqs2]
+	pushj p,dectyp
+	type [ entries in queue ]
+pqs2:	andi a,77
+	addi a,40
+	.iot chtto,a
+	type [.  ]
+	popj p,
+
+;Type in decimal the number in B.
+dectyp:	idivi b,10.
+	hrlm c,(p)
+	skipe b
+	 pushj p,dectyp
+	hlrz c,(p)
+	addi c,"0
+	.iot chtto,c
+	popj p,
+
+;Turn the number in decimal SIXBIT form in B into an actual number in B.
+pqsnum:	setz d,
+pqsnu1:	setz c,
+	rotc b,6
+	imuli d,10.
+	addi d,-'0(c)
+	jumpn b,pqsnu1
+	move b,d
+	popj p,
+
+; Here to confirm queueing of a file beginning with ;NOXGP
+
+qconfm:	tlnn f,f%tty			; do I have the TTY?  If no, can't ask so go ahead.
+	 popj p,
+	type [Note; Printed copies of this file are available.
+Are you SURE you want to queue it?]
+	.iot chtti,y			; get a character
+	caie y,^M			; CR?
+	 pushj p,crlf			; and CR now
+	caie y,"Y			; yes?
+	 cain y,"y			; allow either case...
+	  popj p,
+	jrst fetch			; Otherwise, cancel this command.
+
+; Here to queue a carriage return/line feed sequence
+
+quecr:	.iot chque,[^M]			; CR
+	.iot chque,[^J]			; LF
+	popj p,				; and return
+
+; Output to queue file the asciz string <- b.p. in D.  Clobbers X, Y, Z.
+
+questr:	hrli d,440700
+queasc:	move x,d
+	setz z,
+queas1:	ildb y,x
+	skipe y
+	 aoja z,queas1
+	syscal SIOT,[%climm,,chque ? d ? z]
+	 .lose %lsfil
+	popj p,
+
+; Here to queue a decimal number in X, clobbers X and Y
+
+quenum:	jumpl x,bug			; bug if < 0!!
+	idivx x,10.			; get out a digit
+	push p,y			; save it
+	caie x,				; got all digits?
+	 pushj p,quenum			; not yet
+	pop p,x				; retrieve a digit
+	addx x,"0			; ASCIIify
+	.iot chque,x			; output it
+	popj p,				; and return/go for more
+
+; Queue an octal number in X.  Clobbers X and Y.
+
+queoct:	jumpl x,bug			; bug if < 0!!
+	idivx x,10			; get out a digit
+	push p,y			; save it
+	caie x,				; got all digits?
+	 pushj p,queoct			; not yet
+	pop p,x				; retrieve a digit
+	addx x,"0			; ASCIIify
+	.iot chque,x			; output it
+	popj p,				; and return/go for more
+
+; Here to queue a SIXBIT word in Y, clobbers Y and X
+
+quesix:	movx x,%zeros			; clear out garbage from before
+	rotc x,wid. '_			; gobble down a SIXBIT character
+	addx x,<" >			; ASCIIify
+	.iot chque,x			; output it to the queue
+	jumpn y,quesix			; and continue for more
+	popj p,				; done, return
+
+; Here to flush a request previously entered - ;Cancel command
+
+cancel:	caie c,<" >			; expect a space after command
+	 jrst canluz			; syntax lossage
+	pushj p,charin			; get queue number
+	 jrst canluz			; syntax lossage if not SIXBIT
+	caie c,"T			; thesis?
+	 cain c,"t			; (handle all flavors)
+	  jrst canwin			; yes, win on cancelling it
+	cail c,"1			; better be between 1
+	 caile c,"3			; and 3 inclusive to be valid
+	  jrst canluz			; nope, lose
+canwin:	addx c,<sixbit/    Q/-" >	; convert to SIXBIT queue name(ie, Qn)
+	movem c,fn1			; and save it away
+	pushj p,get1wd			; now get the sequence number withing that queue
+	jumpe w,canluz			; lose if null(no good way for numeric checking)
+	caie c,^M			; insist on an EOL
+	 jrst canluz			; lost
+	syscal DELETE,[
+ife glp,		clarg. sixbit/AI/; flush request on AI machine
+ifn glp,		clarg. sixbit/MC/	;or MC
+		       fn1 ? w		; queue class/priority
+		       clarg. spldir]	; spooling directory
+	 caia				; lost
+	  jrst cpopj			; win
+	type [Error; Request does not exist
+]
+	jrst error			; and continue
+
+canluz:	type [Error; Improper syntax for ;CANCEL
+]
+	jrst error
+
+; ;QUIT command: interrupt and requeue the file printing now.
+; Do a ;CANCEL nnn first if you want it to be cancelled.
+quit:
+ife glp,[
+	move a,[sixbit/AICLI/]		; Use device name AICLI if not on AI.
+	movsi b,(sixbit/AI/)
+	camn b,machine			; Use just CLI if on AI.
+	 movsi a,'CLI
+	syscal open,[[.uao,,chdsk] ? a ? [sixbit/XGP/] ? [sixbit/XGPSPL/]]
+]
+ifn glp,[
+	move a,[sixbit/MCCLI/]		; Use device name MCCLI if not on MC.
+	movsi b,(sixbit/MC/)
+	camn b,machine			; Use just CLI if on MC.
+	 movsi a,'CLI
+	syscal open,[[.uao,,chdsk] ? a ? [sixbit/GLP/] ? [sixbit/GLPSPL/]]
+]
+	 jrst [	type [Spooler not in operation
+]
+		jrst error]
+	.close chdsk,
+	popj p,
+
+; Here if random syntax error
+
+synerr:	type [Error; Command syntax error
+]
+	jrst error			; and continue if allowed to
+
+; Here to lose if XGPSPL is being hacked
+
+cantq:	tlnn f,f%tty
+	 jrst death
+ife glp,[
+	type [Error; Sorry, XGP queueing temporarily forbidden
+]
+	syscal OPEN,[	[.uai,,chdsk] ? [SIXBIT /AI/]
+			[SIXBIT /XGP/] ? [SIXBIT /NOTICE/]
+			[SIXBIT /.XGPR./]]
+]
+
+.else [	type [Error; Sorry, GLP queueing temporarily forbidden
+]
+	syscal OPEN,[	[.uai,,chdsk] ? [SIXBIT /MC/]
+		      	[SIXBIT /GLP/] ? [SIXBIT /NOTICE/]
+		      	[SIXBIT /.GLPR./]]
+]
+	 jrst cantq1
+cantq2:	.iot chdsk,a			; Print the file which contains the reason
+	andi a,-1			; why the XGP is down (AI:.XGPR.;XGP NOTICE,
+	caie a,^L			; which XGP^F also prints).
+	 cain a,^C
+	  jrst cantq1
+	.iot chtto,a
+	jrst cantq2
+
+cantq1:	movei d,whyhak
+	pushj p,outstr			; Print any additional explanation patched in.
+	jrst death			; Commit suicide rather than obey commands.
+
+; Here to lose if AI is down
+
+aidown:	
+ife glp,[ type [Error; AI or IMP is down...please try again later
+]]
+.else [ type [Error;  MC or IMP is down...please try again later
+]]
+	jrst death			; AI is probably down...lose
+
+; Here to warn if cannot access file
+
+fntfnf:	skipa b,[fntdev]	;Font file
+fnferr:	 movei b,device		;Text file
+	skipn fn1			; was an FN1 ever specified?
+	 jrst synerr			; no, then burp
+	move d,[440700,,pfnbuf]
+	pushj p,rfn"pfn			; Put filenames into pfnbuf
+irpc char,,[ - ]
+	movei a,"char			;followed by " - " and the error message.
+	idpb a,d
+termin
+	syscal OPEN,[%climm,,cherr ? ['ERR,,] ? %climm,,1]
+	 .lose %lsfil
+	movei a,100.
+	syscal SIOT,[%climm,,cherr ? d ? a]
+	 .lose %lsfil
+	.close cherr,
+	setz a,				; The string we read from ERR ends with a ^L.
+	dpb a,d				; Flush it, and make the string asciz.
+	movei d,pfnbuf
+	pushj p,outstr			; and output the whole thing as an asciz string.
+	jrst error			; and go again if I can
+
+; Here for invalid command
+
+badcom:	type [Error; Invalid command
+]
+	jrst error			; and go again if I can
+
+; Squish the text file (if called for by a ;SQUISH).
+; Scan through the file to see which characters of which fonts are really used.
+; The information is put in SQSHTB.
+; Later, SQSHTB will be transformed into ;KSUBSET commands in the queue file.
+
+prescn:	pushj p,txtbeg
+	setzm sqshtb		;clear bit table
+	move a,[sqshtb,,sqshtb+1]
+	blt a,sqshtb+177
+	skipa e,[400000,,0]	;initially in font 0
+prsc0:	 iorm e,sqshtb(a)	;here if char is actually used (set bit)
+prsc1:	pushj p,txti		;gobble char from file
+	jumpl a,cpopj		;exit on eof
+	jrst @.+1(a)
+		prsc1		;null
+	repeat 7, prsc0		;normal guys
+	repeat 3, prsc1		;bs, tab, lf
+		prsc0		;^K (normal)
+	repeat 2, prsc1		;ff, cr
+	repeat 176-^M, prsc0	;normal guys
+		prsc2		;rubout (xgp escape)
+
+
+prsc2:	pushj p,txti		;xgp escape.  Read escaped character.
+	jumpl a,cpopj		;EOF??
+	jrst @.+1(a)
+		prsc0		;normal
+		prsc3		;xgp escape 1 (gobbles n bytes)
+		prsc3c		;xgp escape 2 (gobbles 1 byte)
+		prsc3b		;xgp escape 3 (gobbles 2 bytes)
+		prsc11		;xgp escape 4 (gobbles 11. bytes)
+	repeat 3, prsc1		;reserved
+	repeat 3, prsc0		;bs, tab, lf -- normal
+		prsc1		;reserved
+	repeat 2, prsc0		;ff, cr -- normal
+	repeat 37-^M, prsc1	;reserved
+	repeat 137, prsc0	;normal guys
+		prsc0		;rubout -- normal
+
+
+prsc3:	pushj p,txti		;escape 1.  Read command character.
+	jumpl a,cpopj		;EOF??
+	jrst @prst(a)
+prst:	repeat 40, prsc3a	;     font select
+		prsc3b		;40   column select (2 bytes)
+		prsc3c		;41 ! underscore (1 byte)
+		prsc3c		;42 " line space (1 byte)
+		prsc3c		;43 # absolute base line adj (1 byte)
+		prsc1		;44 $ page number (no bytes)
+		prsc3d		;45 % heading (count, then n bytes)
+		prsc1		;46 & start underline (no bytes)
+		prsc3c		;47 ' stop underline (1 byte)
+		prsc3c		;50 ( interchar spacing (1 byte)
+		prsc3b		;51 ) variable width underline (2 bytes)
+		prsc3c		;52 * relative base line adjust (1 byte)
+prstl==.-prst
+	repeat 200-prstl, prsc1 ;reserved
+
+prsc3a:	movsi e,400000		;font select
+	movns a
+	lsh e,(a)
+	jrst prsc1
+
+prsc3b:	pushj p,txti		;skip 2 bytes
+prsc3c:	pushj p,txti		;skip 1 byte
+	jrst prsc1
+
+prsc3d:	pushj p,txti		;skip n bytes
+	skipa d,a
+prsc11:	 movei d,11.		;skip 11. bytes
+prsc3e:	sojl d,prsc1
+	pushj p,txti
+	jrst prsc3e
+
+;Look through the semicolon commands in the first page of the input file for a ;SQUISH.
+
+sqchk:	move a,device		;But first, if we are not on AI and the file is,
+	and a,[777700,,]	;it would be more efficient to let the spooler squish.
+ife glp, came a,[sixbit /ai/]
+.else    came a,[sixbit /mc/]
+	 jrst sqchk0
+	move a,machin
+ife glp, camn a,[sixbit /ai/]
+.else    camn a,[sixbit /mc/]
+	 jrst sqchk0
+	tlz f,f%sqsh		;So if that's the case, don't look in file for ;SQUISH
+	popj p,			;and if the user gave it as a switch, just pass to spooler.
+
+;Here we actually look for a ;SQUISH in the file.
+sqchk0:	pushj p,txtbeg		;Position at front of text file.
+	movei d,200.		;Give up after 200. lines, in case file has no pages.
+sqchk2:	pushj p,sqchkl		;Read another line from the file.  1st 5 chars in C.
+	 popj p,		;End of page => stop reading commands.
+	sojle d,cpopj
+	came c,[asciz /;SQUI/]	;If we find a ;SQUISH, then
+	 jrst sqchk2
+	tlo f,f%sqsh		;say that we should pre-squish the file
+	popj p,			;and stop looking.
+
+sqchkl:	move b,[440700,,c]	;Read a line from the text file, storing 1st 5 chars in C.
+	setz c,			;Skip unless we reach end of the 1st page of the file.
+sqchk3:	pushj p,txti
+	jumpe a,sqchk3		;ignore nulls
+	jumpl a,cpopj		;eof means there wasn't another line.
+	caie a,^C
+	 cain a,^L		;End of first page means give up.
+	  popj p,
+	cain a,^J		;LF means we have finished a line; skip.
+	 jrst popj1
+	cain a,^M		;CR shouldn't become part of the line.
+	 jrst sqchk3
+	tlne b,760000		;Everything else should.
+	 idpb a,b
+	jrst sqchk3
+
+;Reposition to beginning of text file if that is possible;  otherwise, reopen it.
+txtbeg:	skiple a,txt1bf		;If the first bufferfull is still in TXTBUF,
+	 jrst [	movem a,txtcnt	;simply say it is still there.
+		move a,[440700,,txtbuf]
+		movem a,txtptr
+		popj p,]
+	setom txt1bf		;Else say that the next bufferfull read will be the first one.
+	setom txtcnt
+	syscal rfpntr,[%climm,,chdsk ? %clout,,a]
+	 jrst txtbe1
+	.access chdsk,[0]
+	popj p,
+
+txtbe1:	syscal open,[[.bai,,chdsk] ? device ? fn1 ? fn2 ? sname]
+	 .lose %lsfil
+	popj p,
+
+;here to get one character from text buffer
+txti:	sosge txtcnt
+	 jrst txtbfi
+	ildb a,txtptr
+	popj p,
+
+txtbfi:	move a,[-txtbfl,,txtbuf]	;Attempt to refill text file buffer.
+	.iot chdsk,a
+	camn a,[-txtbfl,,txtbuf]
+	 jrst cpopj		;If no input available, return with A negative.
+	movei a,-txtbuf(a)
+	imuli a,5		;Else, put number of characters read into TXTCNT
+	movem a,txtcnt
+	skiple txt1bf		;If TXT1BF is -1 (this bufferfull is 1st), set it to
+	 setzm txt1bf		;number of chars read;  if TXT1BF is positive
+	skipe txt1bf		;(prev. bufferfull was the first), set it to 0
+	 movem a,txt1bf		;(now not at beginning of file).
+	move a,[440700,,txtbuf]
+	movem a,txtptr		;and restart fetching from top of buffer.
+	jrst txti
+
+;Get an error if this file is not a text file.
+prschk:	pushj p,txtbeg		;Position to front of file.
+	pushj p,txti		;Read first char (just to fill up txtbuf).
+	move a,[-txtbfl,,txtbuf]
+	setz b,
+	ior b,(a)
+	aobjn a,.-1
+	trne b,17
+	 popj p,
+	move d,[440700,,pfnbuf]
+	movei b,device
+	pushj p,rfn"pfn			; Put filenames into pfnbuf
+	movei d,pfnbuf
+	pushj p,outstr
+	movei d,[asciz / - NOT A TEXT FILE
+/]
+	pushj p,outstr
+	jrst error
+
+;Type out the asciz string D points at.  Clobbers D.  No-op if no TTY to type on.
+outstr:	tlnn f,f%tty
+	 popj p,
+	push p,x
+	push p,y
+	hrli d,440700
+	push p,d
+	setz y,
+outst1:	ildb x,d
+	caie x,
+	 aoja y,outst1
+	pop p,d
+	syscal SIOT,[%climm,,chtto ? d ? y]
+	 .lose %lsfil
+	pop p,y
+	pop p,x
+	popj p,
+
+; Here to type a SIXBIT word in Y, clobbers Y and X
+
+outsix:	movx x,%zeros			; clear out garbage from before
+	rotc x,wid. '_			; gobble down a SIXBIT character
+	addx x,<" >			; ASCIIify
+	.iot chtto,x			; output it to the queue
+	jumpn y,outsix			; and continue for more
+	popj p,				; done, return
+
+; Here when a bug strikes(paranoia code can jump here)
+
+bug:	uget JPC,savepc			; save last jump PC(very useful!)
+ife glp,[
+	.value [asciz/:Error; XQUEUE bug.  Please do :Bug XGP describing circumstances.Sl
+yDSK:CRASH;XQUEUE >
+:Vk /]]
+.else [
+	.value [asciz/:Error; GQUEUE bug.  Please do :Bug GLP describing circumstances.Sl
+yDSK:CRASH;GQUEUE >
+:Vk /]]
+	.lose				; and die
+
+;Dump self.
+instal:	setzm debug			; this is now a debugged version
+ife glp,[.value [asciz/yAI:SYS;TS XGP
+/]]
+.else [.value [asciz/yMC:SYS2;TS GLP
+/]]
+
+; Random end of core stuff
+
+...lit:	constants			; literals
+	variables			; variables
+
+lsr=<.+1777>&-2000			; start of LSR1 mapped pages
+
+	end XQUEUE			; *** The End ***

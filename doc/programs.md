@@ -72,6 +72,7 @@
 - FTPU, FTP Client.
 - GCMAIL, delete old files from .MAIL.
 - GETSYM, copy all symbols from running ITS to a file.
+- GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.
 - GO, the Go board game.
 - GUESS, a very silly game.
 - GMSGS, copy system messages to mail file.
