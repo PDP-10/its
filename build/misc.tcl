@@ -823,3 +823,7 @@ expect ":KILL"
 # DDT subroutines
 respond "*" ":midas sys3;ts cmd_dcp; cmd\r"
 expect ":KILL"
+
+# XGP spooler
+respond "*" ":midas sys2;ts xgpspl_sysen2;xgpspl\r"
+expect ":KILL"

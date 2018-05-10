@@ -219,5 +219,6 @@
 - WL, SUDS wirelister.
 - WUMPUS, Hunt the Wumpus game.
 - X, Y, Z, remember DDT command and re-execute it.
+- XGPSPL, spooler for the Xerox Graphics Printer.
 - XXFILE, feed scripted input to a STY session.
 - YAHTZE, the game of Yahtze.
