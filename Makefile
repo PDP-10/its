@@ -12,7 +12,7 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       tensor transl wgd zz graphs lmlib pratt quux scheme gsb ejs mudsys \
       draw wl taa tj6
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
-      chprog sail draw wl pc tj6
+      chprog sail draw wl pc tj6 share
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
       graphs draw datdrw
 
