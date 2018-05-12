@@ -42,7 +42,6 @@ This information was collected from SYSTEM; CONFIG >
 - D/A converters
 - Old LPT (Data Products)
 - New LPT - line printer (ODEC)
-- Gould LPT
 - COD - Morse code oputput
 - Calcomp plotter
 - Stanford keyboard
@@ -61,6 +60,7 @@ This information was collected from SYSTEM; CONFIG >
 - Chaosnet (through DL10)
 - DTE20
 - DC76 - terminal controller
+- Gould printer (through IO-11)
 
 ### KS10
 
