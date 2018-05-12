@@ -1,9 +1,9 @@
 | Year | Versions | Comment
 | --- | --- | ---
-| 1966 |1? | PDP-6
-| 1968 | 350
+| 1967 | 1? | PDP-6
+| 1968 | 350-444
 | 1969 | 530 | KA10 support?
-| 1970? | | Virtual memory
+| 1970 | | Virtual memory
 | 1971 | 672-703 | Arpanet support
 | 1972 | 720-724
 | 1973 | 785-850
