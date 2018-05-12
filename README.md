@@ -89,6 +89,7 @@ There are some short introductions for beginners:
 - [DDT debugging newbie guide](doc/debugging.md)
 - [Hello MIDAS](doc/hello-midas.md)
 - [DUMP and itstar](doc/DUMP-itstar.md)
+- [Games](doc/games.md)
 
 A list of [known ITS machines](doc/machines.md).
 
