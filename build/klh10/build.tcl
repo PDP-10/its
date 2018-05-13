@@ -5,6 +5,10 @@ cd build/klh10
 set emulator_prompt "KLH10"
 set emulator_escape "\034"
 
+proc start_emulator {} {
+    uplevel #0 {spawn ./kn10-ks-its nsalv.ini}
+}
+
 proc start_salv {} {
     uplevel #0 {spawn ./kn10-ks-its nsalv.ini}
     expect "EOF"

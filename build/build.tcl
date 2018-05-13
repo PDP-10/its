@@ -4,6 +4,12 @@ if {![info exists env(BASICS)]} {
     set env(BASICS) "no"
 }
 
+# If the environment variable STAGE2 is set to "yes", build everything
+# that was not built in the basics stage.
+if {![info exists env(STAGE2)]} {
+    set env(STAGE2) "no"
+}
+
 proc abort {} {
     puts ""
     puts "The last command timed out."
@@ -112,26 +118,36 @@ expect_after timeout abort
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
-source build/mark.tcl
+if {$env(STAGE2)!="yes"} {
+    source $build/mark.tcl
+} else {
+    start_emulator
+    start_dskdmp
+    expect "\n"; type "its\r"
+}
 
 expect "\n"; type "\033g"
 pdset
 
 respond "*" ":login db\r"
 sleep 1
+type ":vk\r"
 
-source build/basics.tcl
+if {$env(STAGE2)!="yes"} {
+    source $build/basics.tcl
+}
 
 if {$env(BASICS)!="yes"} {
     source $build/misc.tcl
     source $build/lisp.tcl
     source $build/scheme.tcl
+    source $build/muddle.tcl
+    source $build/sail.tcl
 }
 
-source $build/muddle.tcl
-source $build/sail.tcl
-
-bootable_tapes
+if {$env(STAGE2)!="yes"} {
+    bootable_tapes
+}
 
 # make output.tape
 
@@ -140,7 +156,11 @@ create_tape "$out/output.tape"
 type ":dump\r"
 respond "_" "dump links full list\r"
 respond "LIST DEV =" "tty\r"
-respond "TAPE NO=" "1\r"
+if {$env(STAGE2)!="yes"} {
+    respond "TAPE NO=" "1\r"
+} else {
+    respond "TAPE NO=" "2\r"
+}
 expect -timeout 3000 "REEL"
 respond "_" "rewind\r"
 respond "_" "icheck\r"

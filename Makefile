@@ -42,6 +42,13 @@ out/klh10/stamp out/simh/stamp: $(OUT)/rp0.dsk
 out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
 	touch $@
 
+stage2: $(OUT)/stamp2
+
+$(OUT)/stamp2: $(OUT)/stamp
+	mv $(OUT)/output.tape $(OUT)/stage1.tape
+	STAGE2=yes PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+	touch $<
+
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
 	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 

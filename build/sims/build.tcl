@@ -2,6 +2,10 @@ set build [pwd]/build
 set out "out/$env(EMULATOR)"
 set emulator_escape "\034"
 
+proc start_emulator {} {
+    uplevel #0 {spawn ./tools/sims/BIN/ka10 build/sims/init}
+}
+
 proc start_salv {} {
     uplevel #0 {spawn ./tools/sims/BIN/ka10 build/sims/init}
     expect "MAGDMP\r\n"; send "l\033ddt\r"
