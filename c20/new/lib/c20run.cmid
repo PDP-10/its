@@ -1,0 +1,439 @@
+;
+;	c20run - runtime support for C programs
+;
+
+title c20run
+.insrt c:minsrt
+
+.global $argc,$argv
+.global chntab,prctab,lowlim,hilim
+
+pdlsiz==20000				; desired pdl size
+
+;
+;	start-up routine
+;
+
+begin":	move	a,[440700,,[0]]	; null string
+	rscan			; set rscan buffer to null
+start:	skipa	
+	setom	cclflg		;set ccl flag if started at +1
+	reset
+
+;activate the interrupt system
+	movei	1,.fhslf
+	move	2,[levtab,,chntab]
+	sir
+	movei	1,.fhslf
+	eir
+	movei	1,.fhslf
+	move	2,[000400,,000000]	;enable pdl overflow channel
+	aic
+
+;activate arithmetic exception trapping
+	movei t1,.fhslf
+	movei t2,.swart
+	movei t3,trapb
+	swtrp
+
+;initialize free storage allocator
+	skipe	lowlim		; if restarting, don't init free storage
+	 jrst	r1		; system.
+	move	p,pdlbot	; start runtime stack
+	movei	ep,(p)		; first frame pointer
+	move	a,seg3hi"	; top of symbol table
+	addi	a,1000		; get ready to ...
+	lsh	a,-9.		;  turn it into a page number
+	movem	a,lowlim	; and mark as lower memory bound
+	move 	a,[.fhslf,,770]	; we are going to find out if DDT is here
+	rmap
+	came 	a,[-1]		;does this page exist? yes -> DDT loaded
+	skipa 	a,[760]		;top of core if DDT is loaded
+	movei 	a,1000		;top of core if DDT isn't loaded
+	movem	a,hilim		;is upper memory bound 
+	ccall	ainit		;initialise the storage allocator
+
+r1:	mcall	setup
+
+restart:
+	ccall	main,[$argc,[[$argv]]]	;run the users program
+	ccall	exit,[[[0]]]	;and go home (this never returns)
+				
+
+;
+;	interrupt handlers
+;
+
+pdlsrv:
+	hrroi 	a,[asciz/?Fatal stack overflow - Can't continue
+/]
+	psout
+	haltf
+	jrst 	pdlsrv
+	debrk
+
+
+;
+;	trap handler
+;	mostly from R.Gorin, DEC-20 Assy. Lang. Prog.
+
+acp==16				;holds pointer to saved AC's during trap
+
+;pc flags
+pc%ovf==400000,,0		;overflow
+pc%cy0==200000,,0		;carry 0
+pc%cy1==100000,,0		;carry 1
+pc%fov==40000,,0		;floating overflow
+pc%bis==20000,,0		;byte increment suppression
+pc%usr==10000,,0		;user mode
+pc%uio==4000,,0			;user iot mode
+pc%lip==2000,,0			;last instruction public
+pc%afi==1000,,0			;address failure inhibit
+pc%atn==600,,0			;apr trap number
+pc%fuf==100,,0			;floating underflow
+pc%ndv==40,,0			;no divide
+
+fl%ndv==1,,0			;flag for floating divide error
+
+;messages for possible traps
+trpmsg:	pc%ovf+[asciz /%Integer Overflow /]
+	pc%fov+[asciz /%Floating Overflow /]
+	pc%ndv+[asciz /%Integer Division by Zero /]
+	pc%fuf+[asciz /%Floating Underflow /]
+	fl%ndv+[asciz /%Floating Division by Zero /]
+trpmln==.-trpmsg
+
+;table of fp instructions and where they store their results.
+; used to zero result in case of fp underflow.
+acf==1				;result in ac
+ddf==2				;result in AC,AC+1
+mmf==4				;result in memoru
+
+define fopxx op
+	f!op	acf		;;result in ac
+	f!op!m	mmf		;;result in memory
+	f!op!b	mmf\acf		;;result in both
+	f!op!r	acf		;;result in ac
+	f!op!ri	acf		;;result in ac
+	f!op!rm mmf		;;result in memory
+	f!op!rb	mmf\acf		;;result in both
+	df!op	acf\ddf		;;result in ac,ac+1
+termin
+
+fxutab:	fopxx ad
+	fopxx sb
+	fopxx mp
+	fopxx dv
+	fsc acf
+fxutln==.-fxutab
+
+;register saver
+savacs: adjsp p,17		;allocate stack space for ac's
+	movem 16,0(p)		;save ac16
+	movei 16,-16(p)		;source,,dest
+	blt 16,-1(p)		;save AC's
+	movei acp,-16(p)	;set up pointer to saved AC's
+	pushj p,@-17(p)		;go do whatever
+	skipa			;non-skip return, avoid aos
+	aos -20(p)		;skip return, we will too
+	movsi 16,-16(p)		;restore saved AC's
+	blt 16,16
+	adjsp p,-20		;untrash stack
+	popj p,
+
+
+trphnd:	pushj p,trapnt		;process trap
+	xjrstf trapb+.arpfl	;return from whence we came
+
+trapnt:	pushj p,savacs		;safety first
+	move b,trapb+.arpfl	;get saved flags
+	and b,[pc%ovf\pc%fov\pc%ndv\pc%fuf]	;just interesting ones
+	tlne b,(pc%fuf)		;underflow?
+	tlz b,(pc%ovf\pc%fov)	;yes, don't bitch about overflow
+	tlne b,(pc%fov)		;floating overflow?
+	tlz b,(pc%ovf)		;yes, don't bitch about integer overflow
+	tlne b,(pc%ndv)		;divide by 0?
+	tlz b,(pc%ovf)		;don't bitch about overflow
+	tlne b,(pc%ndv)		;divide by 0?
+	tlzn b,(pc%fov)		;and floating point error?
+	skipa			;nope
+	tlc b,(pc%ndv\fl%ndv)	;yes, mark floating divide error
+
+;scan table to print message
+	movsi d,-trpmln		;get table length
+trpnt1:	tdnn b,trpmsg(d)	;flag set for this message?
+	jrst trpnt2		;nope
+	hrro a,trpmsg(d)	;yes, get message
+	psout			;print it
+trpnt2:	aobjn d,trpnt1		;loop till done
+	hrroi a,[asciz /at PC = /]	;print PC
+	psout
+	movei a,.priou
+	move b,trapb+.aropc	;get trap PC
+	subi b,1		;point to losing instr
+	movei c,10		;octal
+	nout
+	jfcl			;don't lose
+	hrroi a,[asciz /
+/]
+	psout
+
+	move b,trapb+.arpfl	;get flags again
+	tlne b,(pc%fuf)		;special processing for underflow
+	pushj p,dofxu
+	hrlzi b,(pc%ovf\pc%fov\pc%ndv\pc%fuf\fl%ndv)
+	andcam b,trapb+.arpfl	;zero out flags
+	popj p,			;thats all...
+
+
+;routine to fix up result on floating pt underflow
+dofxu:	movsi d,-fxutln		;length of opcode table
+	ldb a,[.bp 777000,trapb+.arpfl]	;get opcode of losing instr
+dofxu1:	ldb b,[.bp 777000000000,fxutab(d)]	;get opcode from table
+	camn a,b		;match
+	jrst dofxu2		;yes, go fix
+	aobjn d,dofxu1		;no, try again
+	hrroi a,[asciz /?Runtime error: Unknown Instruction in Trap Routine
+/]
+	psout
+	haltf			;lose badly
+	popj p,
+
+;here with d pointing to correct entry in fp instr table
+dofxu2:	hrrz a,fxutab(d)	;get result flags
+	ldb b,[.bp 740,trapb+.arpfl]	;get ac field of instr
+	cail b,16		;SP or FP register?
+	jrst dofxe1		;yes, shouldn't happen
+	add b,acp		;offset to saved AC's
+	trnn a,acf		;result in AC?
+	jrst dofxu3		;no, don't do anything
+	setzm (b)		;yes, clear saved copy of AC
+
+dofxu3:	trnn a,mmf		;result in memory?
+	jrst dofxu4		;no
+	hrrz b,trapb+.arefa	;yes, get in-section result address
+	hlrz d,trapb+.arefa	;get section number of result
+	caig b,16		;skip if not an AC address
+	caile d,1		;skip if it is an AC address
+	jrst dofxu6		;not an AC address, leave
+	add b,acp		;offset to saved copy of AC
+	setzm (b)		;zero it
+	jrst dofxu4
+
+dofxu6:	setzm @trapb+.arefa	;memory location. zero it
+
+dofxu4:	trnn a,ddf		;result also in AC+1?
+	jrst dofxu5		;no
+	ldb b,[.bp 740,trapb+.arpfl]	;AC field of instr again
+	addi b,1		;next ac
+	cail b,16		;shouldn't be 16 or 17
+	jrst dofxe1		;error if so
+	add b,acp		;point to saved AC's
+	setzm (b)		;zero result
+dofxu5:	popj p,			;all done
+
+;here if result appears to be in SP or FP registers
+dofxe1:	hrroi a,[asciz /?Runtime Error: Trap Points to SP or FP
+/]
+	psout
+	haltf
+	popj p,			;keep going if he wants
+
+;
+;	exit routines
+;
+
+centry	%exit,[cc]		;exit without cleaning up files
+	move a,cc		;can be continued
+	haltf
+	return
+
+;; Functions to turn arithmetic traps on and off. They are on by
+;;  default, but must be turned off if you want to catch arithmetic
+;;  exceptions with the software interrupt system.
+
+;activate arithmetic exception trapping
+centry %tpon
+	movei t1,.fhslf
+	movei t2,.swart
+	movei t3,trapb
+	swtrp
+	return
+
+;turn it off
+centry %tpoff
+	movei t1,.fhslf
+	movei t2,.swart
+	setzm t3
+	swtrp
+	return
+
+
+centry	exit,[cc]
+	ccall	closall		; close all c files
+	move	a,cc
+
+	move	c,a		; save return code
+	seto	a,
+	closf			; close all files
+	 jfcl
+	move	a,c
+	haltf			; commit suicide
+.exit1:	hrroi	a,[asciz/?Can't continue from exit() call
+/]
+	psout
+	haltf
+	jrst	.exit1
+
+
+
+;
+;	number conversion 
+;
+
+cfix":	
+	movm	0,-1(p)
+	fadr	0,[.499999]
+	fix	0,0
+	skipge	-1(p)
+	 movns	0
+	movem	0,-1(p)
+	popj	p,
+
+cfloat":
+	fltr	0,-1(p)
+	movem	0,-1(p)
+	popj	p,
+
+;	impure area
+
+.idata
+
+mdata	cclflg
+	0			; -1 if started from CCL
+timing:	block	1		; timing flag
+exiter:	block	1		; exit routine (for timing)
+pdl":	block	pdlsiz		; the stack
+
+chntab:	0,,intr0		;unavailable, reserved for debugger
+	0,,intr1
+	0,,intr2
+	0,,intr3
+	0,,intr4
+	0,,intr5
+	0,,intr6
+	0,,intr7
+	0,,intr8
+	1,,pdlsrv		; pdlov handler
+	0,,intr10
+	0,,intr11
+	0,,intr12
+	0,,intr13
+	0,,intr14
+	0,,intr15
+	0,,intr16
+	0,,intr17
+	0,,intr18
+	0,,intr19
+	0,,intr20
+	0,,intr21
+	0,,intr22
+	0,,intr23
+	0,,intr24
+	0,,intr25
+	0,,intr26
+	0,,intr27
+	0,,intr28
+	0,,intr29
+	0,,intr30
+	0,,intr31
+	0,,intr32
+	0,,intr33
+	0,,intr34
+	0,,intr35
+.code
+intr0:	jsr	intr
+intr1:	jsr	intr
+intr2:	jsr	intr
+intr3:	jsr	intr
+intr4:	jsr	intr
+intr5:	jsr	intr
+intr6:	jsr	intr
+intr7:	jsr	intr
+intr8:	jsr	intr
+	jsr	intr
+intr10:	jsr	intr
+intr11:	jsr	intr
+intr12:	jsr	intr
+intr13:	jsr	intr
+intr14:	jsr	intr
+intr15:	jsr	intr
+intr16:	jsr	intr
+intr17:	jsr	intr
+intr18:	jsr	intr
+intr19:	jsr	intr
+intr20:	jsr	intr
+intr21:	jsr	intr
+intr22:	jsr	intr
+intr23:	jsr	intr
+intr24:	jsr	intr
+intr25:	jsr	intr
+intr26:	jsr	intr
+intr27:	jsr	intr
+intr28:	jsr	intr
+intr29:	jsr	intr
+intr30:	jsr	intr
+intr31:	jsr	intr
+intr32:	jsr	intr
+intr33:	jsr	intr
+intr34:	jsr	intr
+intr35:	jsr	intr
+
+; note: only one level of interrupts permitted (level 3)!
+begint":
+intr:	0			; clobbered by jsr
+	movem	0,intsav	; save all registers 
+	movei	0,intsav+1
+	hrli	0,1
+	blt	0,intsav+p
+	hrrz	1,intr		; find out interrupt number
+	subi	1,intr0+1
+	movem	1,intnum
+	pushj	p,@prctab(1)	; call routine 
+	hrli	0,intsav+1
+	hrri	0,1
+	blt	0,p
+	move	0,intsav
+	setzm	intnum
+	debrk
+endint":
+
+.idata
+levtab:	pclev1
+	pclev2		; not used currently
+	pclev3
+
+pclev1":block	1
+pclev2":block	1
+pclev3":block	1
+
+intsav:	block	p+1
+pdlbot:	<-pdlsiz,,pdl>
+pdltop:	pdl+pdlsiz-1
+
+prctab:	0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0 ? 0
+	0 ? 0 ? 0 ? 0 ? 0 ? 0 ?	0 ? 0 ? 0 ? 0 ? 0 ? 0
+	0 ? 0 ? 0 ? 0 ? 0 ? 0 ?	0 ? 0 ? 0 ? 0 ? 0 ? 0
+
+intnum":0
+lowlim:	0
+hilim:	0
+
+trapb:	0
+	0
+	0
+	0,,trphnd
+
+patch:	block 100
+
+end	start

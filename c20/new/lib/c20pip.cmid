@@ -1,0 +1,312 @@
+;
+;	C20PIP - TOPS-20 implementation of pipes using shared files
+;
+; The technique is to use a circular buffer within a shared file.  The
+; first few words of the file are set aside for interlocking purposes,
+; with the reader and writer (there must be only one of each) each
+; mapping a single page at a time.
+
+title c20pip
+.insrt c:minsrt
+
+;; offsets into data structure
+
+o.jfn==	0		;; jfn of file
+o.hdr==	1		;; pointer to header page
+o.buf==	2		;; pointer to buffer page
+o.wrt==	3		;; flag indicating direction
+o.ptr==	4		;; position
+o.siz==	5		;; total size
+
+;; offsets into header page
+
+p.size==  0		;; total size of the file (always even pages)
+p.free==  1		;; number of free slots (for writer)
+p.used==  2		;; number of words avail to reader
+p.flgs==  3		;; flags
+ p%wcls==  1		;; writer has closed
+ p%rcls==  2		;; reader has closed
+p.strt==  4		;; first used word
+
+;;	mkpipe () => return address of new structure
+
+centry	mkpipe,[],[q]
+	ccall	malloc,[[[o.siz]]]
+	movem	a, q
+	setom	o.jfn(a)
+	ccall	pg%get,[[[1]]]
+	jumpe	a, mk$bd1
+	move	b, q
+	movem	a, o.hdr(b)
+	ccall	pg%get,[[[1]]]
+	jumpe	a, mk$bd2
+	move	b, q
+	movem	a, o.buf(b)
+	move	a, b
+	return
+mk$bd2:	move	b, q
+	move	b, o.hdr(b)
+	ccall	pg%ret,[b]
+mk$bd1:	ccall	free,[q]
+	movni	a, 1
+	return
+
+;;	spipe (pipe, jfn, writing, size)
+;;		setup given pipe to use stated jfn and direction
+;;		size is size of pipe if writing, ignored if reading
+
+centry	spipe,[pipe,jfn,writing,size]
+	move	a, pipe
+	skipl	o.jfn(a)	; should be in newly allocated state
+	 jrst	s$bad
+	move	b, jfn
+	movem	b, o.jfn(a)
+	skipe	writing
+	 jrst	swrite
+	setzm	o.wrt(a)
+srtry:	hrlz	a, jfn
+	ffufp			; wait until page 0 exists
+	 caia
+	  jrst	spmap
+	movei	a, 100.		; wait for writer
+	disms
+	jrst	srtry
+
+spmap:	hrlz	a, jfn		; map in first page
+	move	b, pipe
+	move	b, o.hdr(b)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	movsi	c, (pm%rd\pm%wr)	; read/write access
+	pmap
+	 erjmp	s$bad
+	move	b, pipe
+	move	b, o.buf(b)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	pmap			; map to buffer slot, too
+	 erjmp	s$bad
+	move	a, pipe
+	movei	b, p.strt
+	movem	b, o.ptr(a)
+	movei	a, 1
+	return
+
+swrite:	setom	o.wrt(a)
+	move	b, o.hdr(a)
+	move	c, size
+	addi	c, 777		; round up
+	trz	c, 777
+	movem	c, p.size(b)	; init header
+	subi	c, p.strt
+	movem	c, p.free(b)
+	setzm	p.used(b)
+	setzm	p.flgs(b)
+	movei	a, (b)		; map the page out
+	lsh	a, -9.
+	hrli	a, .fhslf
+	hrlz	b, jfn
+	movsi	c, (pm%rd\pm%wr)
+	pmap
+	 erjmp	s$bad
+	jrst	spmap
+
+s$bad:	movei	a, 0
+	return
+
+;;	rdpipe (pipe, bp, max)
+;;		reads up to max units into given byte pointer
+;;		returns number read; must be > 0 unless eof
+
+centry	rdpipe,[pipe,bp,max]
+	move	a, pipe
+	skipn	o.wrt(a)
+	 skipg	max
+	  jrst	rd$bad
+	movn	c, o.ptr(a)	; how much left in current page ?
+	andi	c, 777
+	jumpn	c, rdsome
+	move	b, o.hdr(a)	; get next page
+	move	c, o.ptr(a)
+	camge	c, p.size(b)	; wrap around ?
+	 jrst	rnwrap
+	movei	c, p.strt	; yes
+	movem	c, o.ptr(a)
+rnwrap:	lsh	c, -9.
+	move	b, o.buf(a)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	hrl	a, o.jfn(a)
+	hrri	a, (c)
+	movsi	c, (pm%rd\pm%wr)
+	pmap
+	 erjmp	rd$bad
+	move	a, pipe
+	move	b, o.ptr(a)
+	andi	b, 777
+	movei	c, 1000
+	subi	c, (b)
+rdsome:	camle	c, max		; more than requested ?
+	 move	c, max
+	move	b, o.hdr(a)	; see how much available
+rdwait:	skipe	d, p.used(b)
+	 jrst	rdcont
+	movei	a, p%wcls	; writer done ?
+	tdne	a, p.flgs(b)
+	 jrst	rdeof		; yep ...
+	movei	a, 100.		; wait a little
+	disms
+	move	a, pipe
+	jrst	rdwait
+
+rdcont:	camle	c, d		; min again
+	 move	c, d
+	move	d, o.ptr(a)	; blt data
+	andi	d, 777
+	add	d, o.buf(a)
+	hrli	d, (d)
+	hrr	d, bp		; get dest
+	add	c, bp
+	blt	d, -1(c)
+	sub	c, bp
+	movn	d, c
+	addm	d, p.used(b)	; decrement amount used
+	addm	c, p.free(b)	; increment amount free
+	addm	c, o.ptr(a)	; bump pointer
+	movei	a, (c)		; return amount transferred
+	return
+
+rdeof:	tdza	a, a		; got none
+rd$bad:	 movni	a, 1
+	return
+
+;;	wrpipe (pipe, bp, amt)
+;;		writes given amt to given pipe from byte pointer bp
+
+centry	wrpipe,[pipe,bp,amt]
+wrloop:	move	a, pipe
+	skipe	o.wrt(a)
+	 skipg	amt
+	  jrst	wr$bad
+	movn	c, o.ptr(a)	; how much left in current page ?
+	andi	c, 777
+	jumpn	c, wrsome
+	move	b, o.hdr(a)	; get next page
+	move	c, o.ptr(a)
+	camge	c, p.size(b)	; wrap around ?
+	 jrst	wnwrap
+	movei	c, p.strt	; yes
+	movem	c, o.ptr(a)
+wnwrap:	lsh	c, -9.
+	move	b, o.buf(a)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	hrl	a, o.jfn(a)
+	hrri	a, (c)
+	movsi	c, (pm%rd\pm%wr)
+	pmap
+	 erjmp	wr$bad
+	move	a, pipe
+	move	b, o.ptr(a)
+	andi	b, 777
+	movei	c, 1000
+	subi	c, (b)
+wrsome:	camle	c, amt		; more than requested ?
+	 move	c, amt
+	move	b, o.hdr(a)	; see how much available
+wrwait:	skipe	d, p.free(b)
+	 jrst	wrcont
+	movei	a, p%rcls	; reader done ?
+	tdne	a, p.flgs(b)
+	 jrst	wreof		; yep ...
+	movei	a, 100.		; wait a little
+	disms
+	move	a, pipe
+	jrst	wrwait
+
+wrcont:	camle	c, d		; min again
+	 move	c, d
+	move	d, o.ptr(a)	; blt data
+	andi	d, 777
+	add	d, o.buf(a)
+	hrl	d, bp
+	movei	a, (d)
+	addi	a, (c)
+	blt	d, -1(a)
+	move	a, pipe
+	movn	d, c
+	addm	d, p.free(b)	; decrement amount free
+	addm	c, p.used(b)	; increment amount used
+	addm	c, o.ptr(a)	; bump pointer
+	addm	c, bp		; update count and buffer pointer
+	addb	d, amt
+	jumpn	d, wrloop	; loop for more ?
+	movei	a, 1		; return ok
+	return
+
+wreof:	tdza	a, a		; got none
+wr$bad:	 movni	a, 1
+	return
+
+;;	clpipe (pipe)
+;;		closes the indicated pipe
+
+centry	clpipe,[pipe]
+	move	a, pipe
+	movei	c, p%rcls
+	skipe	o.wrt(a)
+	 movei	c, p%wcls
+	move	b, o.hdr(a)
+	iorb	c, p.flgs(b)
+	trc	c, p%rcls\p%wcls
+	trnn	c, p%rcls\p%wcls	; are we second to close ?
+	 jrst	clkill
+	push	p, pipe
+	pushj	p, cunmap	; no, unmap and close
+	pop	p, a
+	move	a, o.jfn(a)
+	closf
+	 jrst	cl$bad
+clclr:	move	a, pipe
+	move	a, o.hdr(a)
+	ccall	pg%ret,[a]
+	move	a, pipe
+	move	a, o.buf(a)
+	ccall	pg%ret,[a]
+	ccall	free,[pipe]
+	movei	a, 1
+	return
+
+clkill:	push	p, pipe
+	pushj	p, cunmap	; unmap pages
+	pop	p, a
+	move	a, o.jfn(a)
+	hrli	a, (co%nrj)	; don't release jfn
+	closf
+	 jrst	cl$bad
+	hrli	a, (df%exp)
+	delf			; delete and expunge file
+	 jrst	cl$bad
+	jrst	clclr
+
+cunmap:	movni	a, 1		; unmap pages from fork
+	move	b, -1(p)	; get pipe pointer
+	move	b, o.hdr(b)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	movei	c, 0
+	pmap
+	 erjmp	cl$bd1
+	move	b, -1(p)
+	move	b, o.buf(b)
+	lsh	b, -9.
+	hrli	b, .fhslf
+	pmap
+	 erjmp	cl$bd1
+	popj	p,
+cl$bd1:	pop	p, a		; flush inner return address
+	pop	p, a		; and argument
+cl$bad:	movei	a, 0
+	return
+
+end
