@@ -81,14 +81,21 @@ proc build_macsyma_portion {} {
     respond "302615" "(load \"maxdoc;mcldat\")"
     respond "302615" "(load \"libmax;module\")"
     respond "303351" "(load \"libmax;maxmac\")"
-    respond "307161" "(todo)"
+    expect "307161"
+    send "(todo)"
+    expect "(todo)"
     sleep 10
-    type "(todoi)"
+    send "(todoi)"
     sleep 10
-    type "(mapcan #'(lambda (x) (cond ((not (memq x\r"
+    expect "(todoi)"
+    sleep 10
+    send "(mapcan "
+    expect "(mapcan "
+    type "#'(lambda (x) (cond ((not (memq x\r"
     type "'(SETS TRANSS MTREE TRHOOK EDLM)\r"
     type ")) (doit x)))) (append todo todoi))"
-    expect -timeout 1000 {
+    set timeout 1000
+    expect {
 	";BKPT" {
 	    type "(quit)"
 	}
@@ -96,6 +103,7 @@ proc build_macsyma_portion {} {
 	    type "(quit)"
 	}
     }
+    set timeout 100
 }
 
 set timeout 100
