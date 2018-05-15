@@ -793,3 +793,16 @@ respond "*" ":link liblsp;vsaid fasl,lisp;\r"
 respond "*" ":midas liblsp;_gsb;ttyvar\r"
 respond "Use what filename instead?" "lisp;\r"
 expect ":KILL"
+
+# Lisp display library
+respond "*" ":midas lisp; slave fasl_l; slave\r"
+expect ":KILL"
+
+# Lisp display slave, PDP-6 and PDP-10 versions.
+respond "*" ":midas sys; atsign 6slave_sysen2; ld10\r"
+respond "   PDP6F = " "1\r"
+expect ":KILL"
+respond "*" ":midas sys; atsign 10slav_sysen2; ld10\r"
+respond "   PDP6F = " "0\r"
+respond "GT40F=" "0\r"
+expect ":KILL"
