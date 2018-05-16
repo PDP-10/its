@@ -12,7 +12,8 @@ to operate ITS systems to this day.
 
 Some notable ITS features:
 
-- Hosted the first versions of Emacs, Zork, Macsyma, Maclisp, and Scheme
+- Hosted the first versions of Emacs, Zork, Macsyma, Maclisp, Scheme, and
+  multi-player Maze War
 - Virtual memory
 - User-space device drivers
 - Networking: TCP/IP, ARPAnet, Chaosnet
@@ -108,6 +109,7 @@ Some major applications:
 - Maclisp, interpreter and compiler
 - Muddle, interpreter
 - Macsyma, symbolic math
+- Maze War, game
 - Midas, assembler
 - PDP-11 simulator
 - Scheme, interpreter

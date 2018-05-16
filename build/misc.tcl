@@ -906,6 +906,18 @@ respond "@" "imlac; m iml_sysbin; maze bin\r"
 respond "@" "\032"
 type ":kill\r"
 
+respond "*" ":midas sysbin;_klh; mazser\r"
+respond "NPTCL=" "1\r"
+respond "DEBUG=" "1\r"
+respond "STATS=" "1\r"
+expect ":KILL"
+respond "*" ":job maze\r"
+respond "*" ":load sysbin; mazser bin\r"
+respond "*" ":start init\r"
+respond "M IML" "\r"
+respond ":PDUMP" "games; ts maze\r"
+respond "*" ":kill\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"

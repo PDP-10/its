@@ -131,6 +131,7 @@
 - MAGFRM, create tapes for use with MAGDMP.
 - MAIL, mail sending client.
 - MAILT, allows editing mail (from :MAIL) in EMACS.
+- MAZE, Maze War game.
 - MAZLIB, maze game for EMACS.
 - MCL, subsystem for compiling individual Macsyma files.
 - METER, displays system metering information.
