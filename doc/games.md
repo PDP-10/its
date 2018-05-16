@@ -20,6 +20,10 @@ a five-letter word.  To play this, type `:jotto`.
 This is Richard Greenblatt's chess program.  Type `:chprog;ocm` to play.
 For instructions, see CHPROG; OCM ORDER.
 
+### Maze War
+
+First multi-user first person shooter.  Type `:games;maze` to play.
+
 ### MAZLIB
 
 This is a maze game for EMACS.  To play, start EMACS and type

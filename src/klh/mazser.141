@@ -1,0 +1,2308 @@
+TITLE MAZE
+
+; PDP-10 Half of MAZE Game, by Dave Lebling (January, 1974)
+; Much altered by Ken Harrenstien (KLH @ MIT-AI) since.
+
+; MAZE COMMANDS:  These are typed on the command line.  Any number may
+; be typed.
+
+;   C - evade usage restrictions.  this is for debugging purposes.
+;	normally MAZE can only be played on weekends and from 8pm to
+;	8am during the week.
+
+;   I - causes input from imlac to be scripted to the file <sname>;MAZIN >.
+
+;   L - informs the program that you are already loaded, and therefore
+;	do not need the auto-load feature.
+
+;   O - causes output to imlac to be scripted to the file <sname>;MAZOUT >.
+
+;   Q - brings up MAZE in quiet mode.  that implies that no loading be
+;       done and output be done to the TTY in ascii mode.  useful for
+;	debugging.
+
+;   R - causes MAZE to come up as a ROBOT.  does a :PROCED when it is
+;	done initializing.  typing control-G to a robot causes him to
+;	die and leave the game gracefully.
+
+;   S - causes MAZE to record info about use, specifically time, user name,
+;	and tty #.
+
+; Additionally, the first player up has the option of loading an alter-
+; nate maze.  Typing CRLF to the query forgoes that option.  Otherwise
+; a file specification of the file to be used should be typed.  The file
+; itself is expected to contain 32. words of description, each word 16.
+; bits right-justified.  A bit that is on defines a wall, a bit that is
+; zero defines a hallway.
+
+; MAZE PROTOCOL:  Whenever certain ascii characters are received, the
+; program expects the next several (from one to about 10) to be argu-
+; ments to those characters.  The first argument in all cases is the
+; ID# of the IMLAC originating the command.  ID#s run from 1 to 8.
+
+; PLAYER LEAVES GAME		; sent out when cntrl-Z typed.
+;  001
+;  <ID# of player leaving>
+
+; PLAYER MOVED			; defines position.  see new protocol.
+;  002
+;  <ID# of player moving>
+;  <new direction \ 100>
+;  <new X coord \ 100>
+;  <new Y coord \ 100>
+
+; PLAYER DIED			; announced with glee by shooting imlac.
+;  003
+;  <ID# of shooting player>
+;  <ID# of victim>
+
+; ANNOUNCE NEW PLAYER		; this is actually inserted in buffers by the 10.
+;  004
+;  <ID# of new player>
+;  <6 characters of ID name (login name)>
+;  <4 characters of score, 2 for, 2 against, \ 100>
+
+; any other characters received by IMLAC MAZE are displayed in a four
+; line ring ("talk") buffer at the bottom of the display, unless "new protocol" is
+; in effect; this protocol echoes only 010-017 and 040-137 inclusive, all
+; other codes have some significance under the new protocol.
+
+; NEW PROTOCOL for MOVING
+;	The lower 3 bits of char are taken as ID of originator, and
+;	the upper 4 bits designate an action as follows:
+
+; 02x - Turn right
+; 03x - Turn left
+; 14x - Turn around
+; 15x - Move forward 1 step in current direction
+; 16x - Move backward 1 step etc.
+; 17x - Reserved, no function.
+
+; Hence, one character serves to transmit "relative movement" information which
+; amounts to a much more efficient way of communicating with the imlacs.  The
+; program is I/O and not CPU bound.
+
+.MLLIT==1
+
+DEFINE SETF TEXT,FLG		;useful set-flag macro!
+IFDEF FLG,.STOP
+.TAG FOOBAR 
+PRINTC "TEXT
+FLG="
+.TTYMAC FLAG
+IFSE FLAG,YES,FLG==1
+IFSE FLAG,NO,FLG==0
+IFSE FLAG,Y,FLG==1
+IFSE FLAG,N,FLG==0
+IFNDEF FLG,FLG==FLAG
+TERMIN
+IFNDEF FLG,.GO FOOBAR
+TERMIN
+
+; assembler conditionals
+	SETF [Fast protocol?]NPTCL		; when set, use new protocol
+	SETF [Debug error checking?]DEBUG	; when set, put in extra error checking
+	SETF [Stats?]STATS			; when set, keep stats on MAZE use
+
+; ac definitions
+
+FLAGS=0			; program flags
+A=1
+B=2
+C=3
+D=4
+E=5			; offset of impure page! don't touch!
+T=6			; super temporary, assume clobbered by all subr. calls.
+;=7			;
+G=10			; used by interrupt routines only.
+H=11			;   "
+I=12			;   "
+
+TO=13			; holds state of TTY output buffer
+ID=14			; hold id for use in general routines
+ME=15			; hold id number of this player
+FLGNUM=16		; buffer change flag (local copy)
+
+P=17			; pdl pointer
+
+	; paging hackery.
+IPAG==2			; # of global impure page
+IOFF==IPAG*2000
+PPAG==IPAG+1		; # of page beginning global pure
+POFF==PPAG*2000
+
+	; program flags
+LOADED==1		; maze program already loaded, don't load it again
+QUIET==2		; not using an imlac (debug)
+SCRIN==4		; script input to <uname>;MAZREC > (debug)
+SCROUT==10		; script output to <uname>;MAZOUT > (debug)
+ROBBY==20		; ROBOT player
+CHEAT==40		; play during day
+SPYSTA==100		; collect spy statistics
+
+	; random definitions
+TTYS==9.		; number of players (one is global buffer)
+BUFSIZ==50		; size of console input buffers
+TYIMSK==1		; tty interrupt mask bit
+
+	; call uuo definitions
+CIMM==1000,,0		; immediate argument
+CRTN==2000,,0		; return argument
+CERR==3000,,0		; return error code
+CTL==4000,,0		; control
+CTLI==5000,,0		; immediate control
+
+	; channels
+TYIC==1			; tty input channel
+TYOC==2			; tty output channel
+SCRI==3			; input script channel
+SCRO==4			; output script channel
+LCI==5			; loading input
+LCO==6			; loading output
+
+; macro for system calls
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT /A/ ? B ((SETZ))]
+TERMIN
+
+; macro for reducing pain
+DEFINE PUSHAE AC,LIST
+IRP LOC,,[LIST]
+PUSH AC,LOC
+TERMIN
+TERMIN
+DEFINE POPAE AC,LIST
+IRP LOC,,[LIST]
+POP AC,LOC
+TERMIN
+TERMIN
+
+; macros to output text
+DEFINE TYPE ARG
+	MOVEI	A,[ASCIZ ARG]
+	PUSHJ	P,LINOUT
+TERMIN
+DEFINE	TYPECR	ARG
+	MOVEI	A,[ASCIZ ARG]
+	PUSHJ	P,LINCR
+TERMIN
+
+; Random macro to make defaulting filenames easier.
+DEFINE DEFULT LOC,DEFARG
+	SKIPN LOC
+	JRST [MOVEM A,LOC ? MOVE A,DEFARG ? EXCH A,LOC ? JRST .+1]
+TERMIN
+;	* LOCAL IMPURE VARIABLES *
+LOC 42
+	JSR TTYINT	; interrupt handler vector
+
+LOC 100
+	; push down stack
+PDLNTH==50		; length of pdl
+PDL:	BLOCK PDLNTH	; pdl
+OUTBUF:	BLOCK 7
+
+; variables for alternate maze reading and loading
+
+; command buffer -- for reading name of alternate MAZE file
+COMLNG==20.		; length of command buffer
+COMMND:	BLOCK COMLNG	; command buffer
+COMPTR:	440700,,COMMND	; byte pointer into command buffer
+
+; loading buffer
+LODSIZ==1000		; size of loading buffer
+LODBUF:	BLOCK LODSIZ
+OB:	440700,,LODBUF+100
+
+; TTY output buffer (SIOT faster than unit mode)
+TTYSIZ==200.		;buffer up 200 chars
+TTYBUF:	BLOCK <TTYSIZ+4>/5
+TTYPTR:	440700,,TTYBUF
+TTYCNT:	0		;countdown of chars in buffer.
+
+; variables for care and feeding of imlac program in core.
+IMLLEN:	0			; length in wds of imlac prgm, if in core at IMLPRG.
+IMLPGP:	0			; holds -<# pgs>,,imlpag  for use in freeing the core.
+
+
+; local byte pointers into global buffers
+BPSPTR:	-TTYS,,BPS
+BPS:	BLOCK TTYS
+
+; information about this player
+
+FIRST:	0		; non-zero if first player
+MYNAME:	0		; sixbit of my uname (or ROBOTn)
+MYBIT:	0		; 1 lsh'ed by my id-1 (ID 3 => 4)
+QNAME:	0		; name we want (typed in by "name")
+MYSNAM:	0		; sname which job had on startup.  used to open script files.
+
+; tty interrupt dispatch
+
+TTYINT:	0
+	0
+	MOVEI I,TYIC
+	.ITYIC I,		; get interrupting char if any
+	 .DISMIS TTYINT+1	; nothing?
+	PUSH P,A
+	.IOT TYIC,A		; something there, get the char.
+IFN DEBUG,[
+	CAILE A,177
+	 JSR BUGHLT
+]
+	PUSHJ P,@CHRVEC(A)	; go do routine
+NOMSG:	POP P,A
+	.DISMIS TTYINT+1	; return
+
+; Character vectoring table.  fast and simple (and all that room in the page
+; was going to waste anyway...)
+
+CHRVEC:	CPOPJ			; 000 - nil
+	GETOUT			; 001 - Player left game
+	NEWLOC			; 002 - Player moved
+	MURDER			; 003 - Player was shot
+	CPOPJ			; 004 - New player in game(ignore, imlac never sends)
+	CPOPJ			; 005 - nil
+	CPOPJ			; 006 - nil
+	SUICID			; 007 - ^G, kill self and return to DDT
+IFN NPTCL,[
+REPEAT 10,COMTLK		; 010-017 echoed to talk buffer.
+REPEAT 10,NCMDIR		; 020-027 New Protocol "turn right"
+REPEAT 10,NCMDIR		; 030-037 New Protocol "turn left"
+REPEAT 100,COMTLK		; 040-137 echoed to talk buffer.
+REPEAT 10,NCMDIR		; 140-147 New Protocol "turn around"
+REPEAT 10,NCMFWD		; 150-157 New Protocol "move forward"
+REPEAT 10,NCMBKD		; 160-167 New Protocol "move backward"
+REPEAT 10,CPOPJ			; 170-177 nil
+]
+IFE NPTCL,[
+REPEAT 170,COMTLK		; 010-177 echoed in talk buffer
+]
+CPOPJ:	POPJ P,
+
+DBUGSW:	DEBUG			; set nonzero if debugging.
+
+BUGHLT:	0			;halt here if bug hit.
+	.VALUE			;should not try to return anything but chars 40-137!
+	JRST @BUGHLT		;if $P'd, try to continue.
+
+;  * quit *
+
+QUIT:	0			; JSR'd to, so can tell where we came from
+	SKIPE DBUGSW
+	 .VALUE			;don't die if debugging.
+	.VALUE	[ASCIZ ".JPC/
+:KILL "]
+	JRST	.-1		; if continued, .value again
+;	* ROBOT PLAYER VARIABLES *
+
+; firing variables
+ATIME:	0		; if nonzero, time when fired bullet arrives
+ALOCN:	0		; if nonzero, where robot was when bullet fired
+AVICTI:	0		; if nonzero, id bits of possible victims
+
+; macro variables
+ANEXT:	0		; if non-zero, next time we move, do this
+APEEK:	0		; turn-around-and-peek probability, 0 - 40
+
+DOZE:	40		; time between robot moves * 4, initially 1/3 second
+
+SEEDHI:	0		; seeds for random number generator
+SEEDLO:	0
+
+; robot move decision data
+
+AHEAD:	0		; views in four directions
+ARIGHT:	0		; 0    -- wall immediately ahead
+ABACK:	0		; n,,m -- n is number of squares before wall
+ALEFT:	0		;         m is id bits of people who can be seen
+
+AHMOVE:	0		; coords to use to actually do four possible
+ARMOVE:	0		; things
+ABMOVE:	0
+ALMOVE:	0
+
+AHPROB:	0		; value and later normalized probability for
+ARPROB:	0		; each possible move
+ABPROB:	0
+ALPROB:	0
+
+FFIPAG==<.+1777>/2000	;first free locally impure page.
+;	* GLOBAL IMPURE *
+
+LOC IOFF		; page 2
+
+; the maze that the game is in, where to find it  
+; (note that if global maze exists, specs here are ignored and global is used.)
+SCN1:	0		; name1 (0 if using default assembled maze)
+SCN2:	0		; name2
+SCDIR:	0		; user
+SCDEV:	0		; device
+
+; definitions for use in loading alternate mazes
+MAZSIZ==40		; number of words in a maze
+MAZIML==<12+<40*4>+12+<2*4>+6+4>/5	; number of words after imtraning
+MAZBEG==10020		; location of beginning of maze in imlac
+
+; flag that something happened
+FLGGLO:	0		; aos'ed for every message
+
+; global information tables
+
+GPSPTR:	-TTYS,,<.-IOFF>+1	; pointers into global input buffers
+GPS:	440700,,GB0-IOFF(E)
+	440700,,GB1-IOFF(E)
+	440700,,GB2-IOFF(E)
+	440700,,GB3-IOFF(E)
+	440700,,GB4-IOFF(E)
+	440700,,GB5-IOFF(E)
+	440700,,GB6-IOFF(E)
+	440700,,GB7-IOFF(E)
+	440700,,GB8-IOFF(E)
+
+GGPPTR:	-TTYS,,<.-IOFF>+1	; guaranteed good pointers into global input buffers
+GGP:	440700,,GB0-IOFF(E)
+	440700,,GB1-IOFF(E)
+	440700,,GB2-IOFF(E)
+	440700,,GB3-IOFF(E)
+	440700,,GB4-IOFF(E)
+	440700,,GB5-IOFF(E)
+	440700,,GB6-IOFF(E)
+	440700,,GB7-IOFF(E)
+	440700,,GB8-IOFF(E)
+
+GBSPTR:	-TTYS,,<.-IOFF>+1	; console buffers
+GBS:
+GB0:	BLOCK BUFSIZ
+GB1:	BLOCK BUFSIZ
+GB2:	BLOCK BUFSIZ
+GB3:	BLOCK BUFSIZ
+GB4:	BLOCK BUFSIZ
+GB5:	BLOCK BUFSIZ
+GB6:	BLOCK BUFSIZ
+GB7:	BLOCK BUFSIZ
+GB8:	BLOCK BUFSIZ
+
+; global player information
+
+; id name
+IDSPTR:	-TTYS,,<.-IOFF>+1	; sixbit (uname of each player)
+IDS:	BLOCK TTYS
+
+; score
+SCRPTR:	-TTYS,,<.-IOFF>+1	; left half times winner, right half times dead
+SCORE:	BLOCK TTYS
+
+; dead
+DEAPTR:	-TTYS,,<.-IOFF>+1	; non-zero when a player is dead
+DEAD:	BLOCK TTYS
+
+; coordinates
+COOPTR:	-TTYS,,<.-IOFF>+1	; left half is direction, right offset in maze
+COORD:	BLOCK TTYS
+
+; buffer locks
+LCKPTR:	-TTYS,,<.-IOFF>+1	; -1 implies buffer locked -- don't read from it
+LOCKED:	BLOCK TTYS
+
+; the maze itself
+
+; it is 512. words long (16. wide by 32. high).  normally the assembled
+; in version is used, but if an alternate maze is used it is loaded in
+; on top.
+
+; -1 == wall
+;  0 -- empty square
+;  n -- id bits of all those in this square ORed together
+
+; macro to make a "row" of the maze
+; bits in argument that are 1 become filled squares, 0 bits become empty
+; squares.  note that the entire border is filled in!
+DEFINE ROWMAK RRR
+RR=RRR
+REPEAT 16.,[
+ IFE <RR&100000>, 0
+ IFN <RR&100000>, -1
+ RR=RR_1
+]
+TERMIN
+
+LAMAZE:	0		; -1 implies this is already set up (only used if
+			; non-standard maze being used
+
+; the maze itself
+AMAZE:	ROWMAK 177777
+	ROWMAK 106401
+	ROWMAK 124675
+	ROWMAK 121205
+	ROWMAK 132055
+	ROWMAK 122741
+	ROWMAK 106415
+	ROWMAK 124161
+	ROWMAK 121405
+	ROWMAK 135775
+	ROWMAK 101005
+	ROWMAK 135365
+	ROWMAK 121205
+	ROWMAK 127261
+	ROWMAK 120205
+	ROWMAK 106765
+	ROWMAK 124405
+	ROWMAK 166575
+	ROWMAK 122005
+	ROWMAK 107735
+	ROWMAK 120001
+	ROWMAK 135575
+	ROWMAK 105005
+	ROWMAK 125365
+	ROWMAK 125225
+	ROWMAK 121265
+	ROWMAK 105005
+	ROWMAK 135375
+	ROWMAK 100201
+	ROWMAK 135675
+	ROWMAK 110041
+	ROWMAK 177777
+
+; stuff from here to end of page is located for benefit of random programs
+; that want to get at maze data; same reason applies to use of indexed
+; (by E) pointers, so that global tables can be mapped to other addresses
+; by other programs.
+
+LOC IOFF+1737
+ESSPTR:	-9.,,<.-IOFF>+1		; Table filled with either a NOP or POPJ
+ESSWS:	REPEAT 9.,ESPOPJ	; E & S instruction, so it can detect
+				; (non) existence of players.
+ESNOP==20,,0		; E&S NOP indicates player active
+ESPOPJ==22,,0		; E&S POPJ indicates nonexistent
+
+LOC IOFF+1757
+UNMPTR:	-9.,,<.-IOFF>+1		; so can tell actual unames of players.
+UNM:	BLOCK 9.
+
+IFN STATS,[
+; more or less positive identification of this page as a MAZE page.
+LOC IOFF+1776
+	SIXBIT /MAZE/
+	SIXBIT /EZAM/
+]
+;	* SHARED PURE *
+
+LOC POFF			; pure pages start here
+
+; the default file containing an IMTRANed version of the IMLAC half of the
+; program.  Not used unless INITializing or there is no imlac program
+; resident in core, in which case this is tried.
+IMLDIR:	SIXBIT /IMLAC /		; directory
+IMLDEV:	SIXBIT /DSK/
+IMLFN1:	SIXBIT /M/
+IMLFN2:	SIXBIT /IML/
+
+; default file containing alternate maze.
+MAZDEV:	SIXBIT /DSK/
+MAZDIR:	SIXBIT /IMLAC/
+MAZFN1:	SIXBIT //		;NO STANDARD FN1 FOR MAZE FILE
+MAZFN2:	SIXBIT /MAZE/
+
+; command character definitions
+
+%OUT==1				; leave game
+%MOV==2				; move
+%DIE==3				; player dead
+%NEW==4				; new player enters game
+
+%COMSZ==4			; max old-protocol value
+
+; pointers to beg of each global input buffer
+GSSPTR:	-TTYS,,GSS		; reset routines use these
+GSS:	440700,,GB0-IOFF(E)
+	440700,,GB1-IOFF(E)
+	440700,,GB2-IOFF(E)
+	440700,,GB3-IOFF(E)
+	440700,,GB4-IOFF(E)
+	440700,,GB5-IOFF(E)
+	440700,,GB6-IOFF(E)
+	440700,,GB7-IOFF(E)
+	440700,,GB8-IOFF(E)
+
+; "pointer values" upon which to reset global buffer ptrs.
+GSSEND:	010700,,<BUFSIZ-1>+GB0-IOFF(E)
+	010700,,<BUFSIZ-1>+GB1-IOFF(E)
+	010700,,<BUFSIZ-1>+GB2-IOFF(E)
+	010700,,<BUFSIZ-1>+GB3-IOFF(E)
+	010700,,<BUFSIZ-1>+GB4-IOFF(E)
+	010700,,<BUFSIZ-1>+GB5-IOFF(E)
+	010700,,<BUFSIZ-1>+GB6-IOFF(E)
+	010700,,<BUFSIZ-1>+GB7-IOFF(E)
+	010700,,<BUFSIZ-1>+GB8-IOFF(E)
+
+
+; Handy-dandy quik-ref table of player-ID bit masks
+IDBITB:	0
+	REPEAT 8.,1_.RPCNT
+; here to join game and then enter loop
+
+JOIN:	PUSHJ	P,NEWGUY	; initialize a new player
+
+; now set local ptrs to same as global ones
+; we use pointers from a table set up at end of each command -- this
+; ensures lack of gross timing errors when loser is caught will pants down
+	MOVE	C,GGPPTR	; aobjn pointer to "good" global pointers
+	ADDI	C,IOFF
+	MOVE	B,BPSPTR	; aobjn pointer to local pointer table
+SETLU1:	MOVE	A,(C)
+	MOVEM	A,(B)
+	AOBJN	C,.+1
+	AOBJN	B,SETLU1
+
+; hang waiting for a message -- our copy of message count different
+; from global means one has arrived
+THELUP:	PUSHJ P,TTYFRC		; force out any TTY output generated
+	CAMN	FLGNUM,FLGGLO	; hang on flgglo changing
+	 .HANG			; means message has occurred
+	MOVE	FLGNUM,FLGGLO	; copy it to flgnum
+
+; first look to see if we're dead
+	SKIPN	DEAD(ME)
+	 JRST	BUFTOP		; not dead, thank goodness
+	HRRZ	A,COORD(ME)	; dead. get coord
+IFN DEBUG,[
+	CAIL	A,1000
+	 JSR BUGHLT
+]
+	MOVE	B,IDBITB(ME)	; and set up bit to
+	ANDCAM	B,AMAZE(A)	; remove us from global maze.
+	MOVEI A,45.		; allow 1.5 sec for imlac's "died" display to
+	.SLEEP	A,		; finish.
+	SETZM	DEAD(ME)	; and make us alive again
+
+; loop through buffers
+BUFTOP:	MOVSI ID,-TTYS		; aobjn ptr thru buffs, start with global id 0
+
+; our buffer?
+CHKQUE:	CAIN	ME,(ID)		; ignore our own buffer
+	 JRST	BUFLUP
+	MOVE	C,BPS(ID)	; get local buffer pointer
+
+; global pointer same as local and buffer not locked?
+QUELUP:	CAME	C,GPS(ID)	; same as global?
+	 SKIPE	LOCKED(ID)	; don't if he is locked
+	  JRST	BUFLUP		; bptrs same or his is locked
+
+; output chars from buffer until pointer same as local one
+	ILDB	A,C		; get next character
+	PUSHJ	P,TTYO		; put it out
+	CAMN	C,GSSEND(ID)	; reached end of buffer?
+	 MOVE	C,GSS(ID)	; yes, reset to beginning (wraparound)
+	MOVEM	C,BPS(ID)
+	JRST	QUELUP		; loop
+
+; here to move to next buffer
+BUFLUP:	AOBJN	ID,CHKQUE	; loop
+	JRST	THELUP		; reenter main loop at the hang
+;	* JOIN GAME *
+
+; first check if this is someone reentering after lossage (crash of
+; IMLAC program, for instance)
+NEWGUY:	MOVE	A,IDSPTR	; aobjn pointer to id names
+	ADDI	A,IOFF
+	AOBJN	A,.+1		; skip talk buffer
+	MOVE	B,(A)
+	CAMN	B,MYNAME	; same as my name?
+	 JRST	NEWID		; yes, just reuse it
+	AOBJN	A,.-3		; loop
+
+; not reentering, so just find zero id slot.
+	MOVE	A,IDSPTR
+	ADDI	A,IOFF
+	AOBJN	A,.+1		; ignore talk buffer
+	SKIPN	(A)		; zero?
+	 JRST	NEWID		; yes
+	AOBJN	A,.-2		; loop
+
+; no room -- i'm not sure if this will even type out reasonably.
+	TYPECR	[Sorry, game is full now, try again later]
+	 JSR	QUIT		; kill job
+
+; here we have a new id
+NEWID:	HRRZS	A		; points to slot in id table
+	SUBI	A,IDS		; get offset -- it will be id number
+	MOVE	ME,A		; id of new player
+
+; set up global data
+; ME/ my id number
+	MOVE	A,MYNAME	; my id name
+	MOVEM	A,IDS(ME)	; put it out
+	.SUSET	[.RUNAM,,A]
+	MOVEM	A,UNM(ME)
+	SETZM	DEAD(ME)	; i'm alive!
+
+; send out new player message
+; sent out on TTY so our IMLAC will be informed -- remember that what
+; goes in our buffer is ignored by us
+	SETOM	LOCKED(ME)	; lock buffer
+	MOVEI	A,%NEW		; command
+	PUSHJ	P,TTYO		; type it, as our IMLAC must be told too
+	PUSHJ	P,PUT		; new player
+
+; new player's id number
+	MOVE	A,ME
+	PUSHJ	P,TTYO
+	PUSHJ	P,PUT		; new player's id number
+
+; now output name of new player
+	MOVE	B,MYNAME	; sixbit of my name
+	MOVE	C,[440600,,B]
+OIDLP:	ILDB	A,C
+	ADDI	A,40
+	PUSHJ	P,TTYO
+	PUSHJ	P,PUT
+	CAME	C,[000600,,B]
+	 JRST	OIDLP		; loop
+
+; now send score
+	MOVE	B,SCORE(ME)	; my score
+	MOVE	C,SCBPTR	; byte pointers
+OSCRXX:	LDB	A,(C)
+	IORI	A,100
+	PUSHJ	P,TTYO
+	PUSHJ	P,PUT
+	AOBJN	C,OSCRXX
+
+; loop through everyone who is active
+; to get new player up to date
+	MOVEI	C,1		; start with id one, ignore talk buffer
+IDTOP:	CAME	C,ME		; if me, ignore
+	 SKIPN	A,IDS(C)	; player exists?
+	JRST	IDLOOP		; no
+
+; output someone's id and position
+; from our IMLAC's point of view they are new players
+	MOVEI	A,%NEW
+	PUSHJ	P,TTYO
+	MOVE	A,C
+	PUSHJ	P,TTYO
+; now id name and position if any
+	MOVE	B,IDS(C)	; id name
+	PUSHJ	P,OSIX
+	MOVE	B,SCORE(C)	; score
+	PUSHJ	P,OSCORE
+	MOVE	A,C		; A/ id of who we send
+	SKIPE	B,COORD(C)	; B/ position
+	PUSHJ	P,SENDB		; sends a position in COORD format
+
+IDLOOP:	CAIE	C,TTYS-1	; done?
+	 AOJA	C,IDTOP		; no, loop
+
+; now let the losers read it
+	MOVE	A,GPS(ME)
+	MOVEM	A,GGP(ME)	; set up first guaranteed good pointer.
+	MOVE A,[ESNOP]
+	MOVEM A,ESSWS(ME)	; now tell E&S we're alive.
+	SETZM	LOCKED(ME)	; unlock the buffer
+	AOS	FLGGLO		; indicate a message sent
+	POPJ	P,		; return
+
+SENDB:	PUSH	P,A
+	MOVEI	A,%MOV
+	PUSHJ	P,PUT
+	PUSHJ	P,TTYO
+	MOVE	A,(P)		; get ID of person to move
+	PUSHJ	P,PUT
+	PUSHJ	P,TTYO
+	HLRZ	A,B		; get direction
+	IORI	A,100
+	PUSHJ	P,PUT
+	PUSHJ	P,TTYO
+	LDB	A,[000400,,B]	; get x coord
+	IORI	A,100
+	PUSHJ	P,PUT
+	PUSHJ	P,TTYO
+	LDB	A,[040500,,B]	; get y coord
+	IORI	A,100
+	PUSHJ	P,PUT
+	PUSHJ	P,TTYO
+	POP	P,A
+	POPJ	P,
+
+
+; * ROUTINES TO EXECUTE UPON IMLAC INPUT ARE HERE *
+; These routines are interrupt driven and clobber G,H,I with
+; reckless abandon.  In general the only acc smashed which is shared with
+; non-interrupt routines is A; it and any others are saved.
+; Robots make no use of these routines, as they get their information
+; directly from the global-impure tables.
+
+DEFINE CMINIT
+	SETOM LOCKED(ME)	; lock buffer
+	PUSHJ P,PUT		; put command in buffer
+TERMIN
+
+PJRST==JRST		; replaces pushj p, foo ? popj p,  with pjrst foo
+
+; Interrupt routines PJRST here when done - standard return.
+ENDMES:	MOVE	A,GPS(ME)	; end of message, update "good" buffer pointer
+	MOVEM	A,GGP(ME)
+	SETZM	LOCKED(ME)	; unlock buffer
+	AOS	FLGGLO		; signal that we sent a message
+	POPJ P,
+
+; control G means leave game gracefully if possible, abruptly if must.
+SUICID:	MOVEI	A,%OUT
+	PUSHJ	P,PUT		; send "OUT" message
+	MOVE	A,ME		; and say its me
+	JRST	GETOU1		; go die, never return.
+
+COMTLK:	PUSHJ P,TPUT		; put char in talk buffer (global id 0)
+				; this is only place where anything is inserted in it.
+	PJRST ENDMES		; return
+
+; New Protocol uses single character for any change of direction or
+;position.  Old protocol used 5 chars per change.  Hopefully reduction
+;of I/O (the limiting factor) will approach 1/5 over old mode.
+
+; Bits 1.7-1.6	If both 0 or both 1, rest of character is a command.
+; Bits 1.6-1.4	Command #.
+;		= 0	Old style protocol command
+;		= 1	Reserved
+;		= 2	Turn Right (no move)
+;		= 3	Turn Left (no move)
+;		= 4	Flip over (no move)
+;		= 5	Move Forward (no turn)
+;		= 6	Move Backward (no turn)
+;		= 7	Reserved
+; Bits 1.3-1.1	Player ID.
+
+IFN NPTCL,[
+DEFINE NCMINI
+	MOVE	G,A
+	TRZ	G,100		; remove any such bit
+	LSHC	G,-3		; get command # in g
+	LSH	H,-33.		; and player ID in h
+	CAIE	H,-1(ME)	; check, should be our own ID (0-7 cmp'd with 1-8)
+	 POPJ P,		; ugh, isn't us, ignore char.
+	SETOM LOCKED(ME)	; ah, lock buffer
+	PUSHJ P,PUT		; insert command.
+TERMIN
+
+	; Change Direction
+NCMDIR:	NCMINI
+	SETZM DEAD(ME)
+	HLRZ A,COORD(ME)	;get direction already existing
+IFN DEBUG,[
+	CAILE A,3
+	 JSR BUGHLT
+]
+	MOVE A,@(G)[	0 
+			0
+		(A)[1 ? 2 ? 3 ? 0]	;get new direction for right-turn
+		(A)[3 ? 0 ? 1 ? 2]	;for left turn
+		(A)[2 ? 3 ? 0 ? 1]]	;for flip-over.
+	HRLM A,COORD(ME)
+	PJRST ENDMES
+
+	; Move Backward
+NCMBKD:	HLRZ I,COORD(ME)
+IFN DEBUG,[
+	CAILE I,3
+	 JSR BUGHLT
+]
+	MOVE I,(I)[2 ? 3 ? 0 ? 1]	; set direction to move backwards
+	JRST NCMFW1
+
+	; Move Forward
+NCMFWD:	HLRZ I,COORD(ME)		; for fwd move, just get direction.
+IFN DEBUG,[
+	CAILE I,3
+	 JSR BUGHLT
+]
+NCMFW1:	NCMINI
+	SETZM DEAD(ME)
+	HRRZ G,COORD(ME)	;get our coordinate
+IFN DEBUG,[
+	CAIL G,1000
+	 JSR BUGHLT
+]
+	MOVE H,IDBITB(ME)	;get our id bit
+	ANDCAM H,AMAZE(G)	;remove us from that coordinate
+	; now separate x, y and adjust according to direction
+	IDIVI G,16.		;get y in g, x in h (0,0 is upper left)
+	XCT (I)[SOS G	;go north, decrement y
+		AOS H	;go east, increment x
+		AOS G	;go south, increment y
+		SOS H]	;go west, decrement x
+	DPB G,[040500,,H]	; overlay Y onto X (loses only if X neg)
+	ANDI H,777		; for which purpose safety mask is made.
+	HRRM H,COORD(ME)	;update global offset
+	MOVE A,IDBITB(ME)
+	IORM A,AMAZE(H)		;put us back in maze
+	PJRST ENDMES
+
+] ;END OF IFN NPTCL
+
+
+;	* COMMAND HANDLERS *
+
+;	* PLAYER QUIT *
+
+; this command takes a single argument, the id of the guy who is quitting.
+; the ID, SCORE, and COORDINATE are zeroed.  the buffer is unlocked, and
+; the player is removed from the global maze.  the job is then killed.
+
+GETOUT:	CMINIT
+	.IOT	TYIC,A		; read argument (id# of who quit)
+GETOU1:	PUSHJ	P,PUT		; enter here to kill robot
+
+; if not me who quit, don't do anything to our stuff
+	CAME	A,ME
+	 PJRST	ENDMES
+
+; zero information about this loser
+	MOVE A,[ESPOPJ]
+	MOVEM A,ESSWS(ME)	; tell E&S we're not there
+	SETZM	IDS(ME)
+	SETZM	SCORE(ME)
+	SETZM	COORD(ME)
+	AOS	FLGGLO
+	SETZM	LOCKED(ME)
+	MOVE	A,ME
+	PUSHJ	P,REMOVE
+	.LOGOUT			;try to logout, in case disowned.
+	.BREAK 16,140000	; tell DDT to kill us.
+	JRST .-2
+
+;	* PLAYER MOVED *
+
+; this command gives a new location for us.  first argument is id of
+; who moved (thanx to gat you can move other people!)  rest of arguments
+; are direction (N=0, E=1, S=2, W=3), and an X and Y coordinate within
+; the maze of the new location (X=0-15, Y=0-31).  all but the id are
+; ORed with 100 so that the ascii is always good.
+
+NEWLOC:	CMINIT
+	.IOT	TYIC,A		; get id of who moved
+IFN DEBUG,[
+	CAIL	A,10
+	 JSR BUGHLT		; if arg bad.
+]
+	PUSHJ	P,PUT		; put it out in buffer
+	SETZM	DEAD(A)		; if we moved we ain't dead yet!
+	PUSHJ	P,REMOVE	; remove us from old position
+
+; set up id bit of who moved
+	MOVE	G,IDBITB(A)	; pluck from handy table
+
+; new direction
+	.IOT	TYIC,A		; get direction
+	PUSHJ	P,PUT		; put it out
+	ANDI	A,3		; AND it down to 3 bits
+	HRLM	A,COORD(ME)	; put out as new direction
+; new x loc
+	.IOT	TYIC,A		; get x
+	PUSHJ	P,PUT		; put it out
+	MOVE	H,A		; save x loc
+	ANDI	H,17		; AND it down to 4 bits (0-15)
+; new y loc
+	.IOT	TYIC,A		; get y
+	PUSHJ	P,PUT		; put it out
+	ANDI	A,37		; AND it to 5 bits (0-31)
+
+; update coordinate and global maze
+	LSH A,4			; y*16 + x = offset in global maze
+	ADD	A,H
+	HRRM	A,COORD(ME)	; put out as new offset
+	IORM	G,AMAZE(A)	; add us to global maze using id bit and offset (a)
+	PJRST	ENDMES
+
+;	* PLAYER DIED *
+
+; player was shot.  message is originated by shooter, and comes in as
+; his id, id of who was shot.  updates SCORE of each.  left half is
+; times you were murderer, right is times you were victim.
+
+MURDER:	CMINIT
+	.IOT	TYIC,A		; get id of murderer
+IFN DEBUG,[
+	CAIL	A,10
+	 JSR BUGHLT
+]
+	MOVSI	G,1		; aos his score of kills
+	ADDM	G,SCORE(A)
+	PUSHJ	P,PUT		; put him out
+	.IOT	TYIC,A		; id of victim
+IFN DEBUG,[
+	CAIL	A,10
+	 JSR BUGHLT
+]
+	AOS	SCORE(A)	; aos his score of deaths
+	SETOM	DEAD(A)		; make him dead
+	PUSHJ	P,PUT		; put him out
+	PJRST	ENDMES
+
+; adding and removing people in global maze (somewhat localized for debugging)
+
+; remove a guy from global maze (only done by guy himself either at
+; end of game or if he notices he's dead or if he moves)
+; A/ guy to remove
+REMOVE:
+
+IFN DEBUG,[
+	CAIL A,10
+	 JSR BUGHLT
+]
+	PUSH	P,B
+	PUSH	P,C
+	HRRZ	B,COORD(A)	; get his coordinate
+	MOVE 	C,IDBITB(A)	; and his bit
+IFN DEBUG,[
+	CAIL B,1000
+	 JSR BUGHLT
+]
+	ANDCAM	C,AMAZE(B)	; AND to remove him
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+; put a guy into global maze
+; A/ offset into global maze
+; B/ id bit of guy to add
+ADDGUY:
+
+IFN DEBUG,[
+	CAIL A,1000
+	 JSR BUGHLT
+]
+	IORM	B,AMAZE(A)	; OR his id bit into global maze
+	POPJ	P,
+;	* OUTPUT ROUTINES *
+
+;  * output single character to TTY *
+
+TTYO:	IDPB A,TO		;deposit character in buffer
+	SOSLE TTYCNT		;drop through if buffer full
+	 POPJ P,
+
+	; Force tty buffer out.
+TTYFRC:	MOVEI TO,TTYSIZ
+	SUBB TO,TTYCNT		;get # of chars to output
+	JUMPE TO,TTYFR2
+	MOVE TO,TTYPTR
+	TRNE FLAGS,SCROUT
+	 PUSHJ P,OSRCIP
+	SYSCAL SIOT,[CIMM TYOC ? TO ? TTYCNT]
+	 JSR QUIT
+TTYFR2:	MOVEI TO,TTYSIZ
+	MOVEM TO,TTYCNT
+	MOVE TO,TTYPTR
+	POPJ P,
+	
+
+	; script crlf if old-style command character
+OSRCIP:	PUSH P,A
+	PUSH P,B
+	.IOT SCRO,["|]
+	MOVE B,TTYCNT
+OSCRI2:	ILDB A,TO
+	CAILE	A,%COMSZ
+	 JRST	.+3
+	.IOT	SCRO,[15]
+	.IOT	SCRO,[12]
+; script space if not command character
+	CAILE	A,%COMSZ
+	 .IOT	SCRO,[40]
+; now convert to number and output
+	LDB	T,[060300,,A]
+	IORI	T,"0
+	.IOT	SCRO,T
+	LDB	T,[030300,,A]
+	IORI	T,"0
+	.IOT	SCRO,T
+	LDB	T,[000300,,A]
+	IORI	T,"0
+	.IOT	SCRO,T
+	SOJG B,OSCRI2
+	MOVE TO,TTYPTR
+	POP P,B
+	POP P,A
+	POPJ	P,
+
+; here to script input
+ISCRIP:	TRNN	FLAGS,SCRIN	; if scripting, do other hair
+	 POPJ	P,
+	.IOT	SCRI,[40]
+; now convert to number and output
+	LDB	T,[060300,,A]
+	IORI	T,"0
+	.IOT	SCRI,T
+	LDB	T,[030300,,A]
+	IORI	T,"0
+	.IOT	SCRI,T
+	LDB	T,[000300,,A]
+	IORI	T,"0
+	.IOT	SCRI,T
+	POPJ	P,
+
+; here to script a crlf
+SICRLF:	TRNN	FLAGS,SCRIN
+	 POPJ	P,
+	.IOT	SCRI,[^M]
+	.IOT	SCRI,[^J]
+	POPJ	P,
+
+;  * output a character into a global buffer *
+
+; put a character out into talk buffer
+TPUT:	PUSH	P,ID
+	SETZ	ID,
+	PJRST	PUT1
+
+; put character out in my buffer
+PUT:	PUSH	P,ID
+	MOVE	ID,ME		; for buffer pointer update
+
+PUT1:
+IFN DEBUG,[
+	PUSH	P,B		; CHECK VALIDITY OF PTR
+	HRRZ	B,GPS(ID)
+	CAIGE	B,GB0-IOFF
+	 JSR BUGHLT
+	CAILE	B,GB8+BUFSIZ-IOFF
+	 JSR BUGHLT
+	POP	P,B
+]
+	IDPB	A,GPS(ID)	; put out character
+	PUSHJ	P,ISCRIP
+	PUSH	P,A		; update buffer pointer
+IFN DEBUG,[
+	CAIL ID,10
+	 JSR BUGHLT
+]
+	MOVE	A,GPS(ID)
+	CAMN	A,GSSEND(ID)	; buffer pointer at end of buffer?
+	 MOVE	A,GSS(ID)	; if so, reset (wraparound to beg)
+	MOVEM	A,GPS(ID)
+	POP	P,A
+	POP	P,ID
+	POPJ	P,
+
+;  * output sixbit to tty *
+
+OSIX:	PUSH	P,I
+	MOVE	I,[440600,,B]
+OSIXLP:	ILDB	A,I
+	ADDI	A,40
+	PUSHJ	P,TTYO
+	CAME	I,[000600,,B]
+	 JRST	OSIXLP
+	POP	P,I
+	POPJ	P,
+
+;  * output score to tty *
+
+OSCORE:	PUSH	P,I
+	MOVE	I,SCBPTR
+OSCRLP:	LDB	A,(I)
+	IORI	A,100
+	PUSHJ	P,TTYO
+	AOBJN	I,OSCRLP
+	POP	P,I
+	POPJ	P,
+
+SCBPTR:	-4,,.+1
+	300600,,B
+	220600,,B
+	060600,,B
+	000600,,B
+
+;  * output messages *
+
+LINCR:	PUSHJ	P,LINOUT
+	.IOT	TYOC,[15]
+	POPJ	P,
+
+LINOUT:	PUSH	P,A
+	HRLI	A,440700
+LOUP:	ILDB	T,A		; pick up letter
+	JUMPE	T,FINZ		; zero if done
+	CAIE	T,^J
+	 .IOT	TYOC,T		; output letter
+	JRST	LOUP		; back for more
+FINZ:	POP	P,A
+	POPJ	P,
+
+;	* ROBOT PLAYER SETUP *
+
+; proceed the job
+ROBOT:	.VALUE	[ASCIZ /:PROCED
+/]
+
+; find an id number
+	MOVE	A,IDSPTR
+	ADDI	A,IOFF
+	AOBJN	A,.+1		; ignore talk buffer
+	SKIPN	(A)
+	 JRST	ROBID
+	AOBJN	A,.-2
+	JSR	QUIT		; kill job, no room
+
+; here we have a new id
+ROBID:	HRRZS	A
+	SUBI	A,IDS
+	MOVE	ME,A		; id of new player
+
+; send new player message
+	SETOM	LOCKED(ME)
+	PUSHJ	P,SICRLF
+	MOVEI	A,%NEW		; new player
+	PUSHJ	P,PUT
+	MOVE	A,ME		; id #
+	PUSHJ	P,PUT
+; name is "ROBOTn", where n is id number
+IRPC	X,,[ROBOT]
+	MOVEI	A,"X
+	PUSHJ	P,PUT
+TERMIN
+	MOVE	A,ME
+	IORI	A,60
+	PUSHJ	P,PUT
+
+; set up id slot, MYNAME, and MYBIT
+	SKIPN	A,QNAME
+	 MOVE	A,[SIXBIT /ROBOT0/]
+	PUSHJ	P,NAMEX
+	AOJA	A,.-1
+	MOVEM	A,IDS(ME)	; id name slot
+	MOVEM	A,MYNAME	; local copy of our name
+	.SUSET	[.RUNAM,,A]
+	MOVEM	A,UNM(ME)
+	MOVE	A,ME
+	MOVEI	B,1
+	LSH	B,-1(A)
+	MOVEM	B,MYBIT		; id bit -- word with bit # "ID" one
+
+; send my score
+	MOVE	B,SCORE(ME)
+	MOVE	I,SCBPTR
+ROBSCR:	LDB	A,(I)
+	IORI	A,100
+	PUSHJ	P,PUT
+	AOBJN	I,ROBSCR
+	MOVE	I,GPS(ME)	; set up "good" pointer to our global buffer
+	MOVEM	I,GGP(ME)
+	MOVE A,[ESNOP]
+	MOVEM A,ESSWS(ME)	; tell E&S we're alive.
+	SETZM	LOCKED(ME)	; unlock buffer
+;	* ROBOT PLAYER LOOP *
+
+; comes here to restart after dying
+ROBNEW:	SOS	A,DOZE		; go a little faster to compensate for dying
+	CAIGE	A,4		; can't get faster than four, though
+	 AOS	DOZE
+	SETZM	DEAD(ME)	; make us alive again
+	MOVE	A,ME
+	PUSHJ	P,REMOVE	; remove corpse from maze
+
+; random start up position
+ROBRAN:	PUSHJ	P,RANDOM	; random direction
+	ANDI	A,3		; 3 bits
+	MOVE	B,A		; save it
+	PUSHJ	P,RANDOM	; random position
+	ANDI	A,777		; 9 bits
+ROBRLP:	SKIPL	AMAZE(A)	; space in maze not wall?
+	 JRST	ROBLOC		; exit
+	SOJE	A,ROBRAN	; wall, go back one
+	JRST	ROBRLP		; loop
+
+; put out new location
+ROBLOC:	HRL	A,B		; direction in left half
+	MOVEM	A,COORD(ME)	; xy coord
+	HRRZS	A		; A/ coord
+	MOVE	B,MYBIT		; B/ id bit
+	PUSHJ	P,ADDGUY	; add to global maze
+	PUSHJ	P,SENDME	; send out my position
+
+; loop for robot player
+
+ROBLUP:	SKIPE	DEAD(ME)	; am i dead?
+	 JRST	ROBNEW		; yes, better do something about it
+	PUSHJ	P,AUTO		; do something
+	MOVE	A,DOZE		; sleep for a while
+	LSH	A,-2		; doze for DOZE/4
+	.SLEEP	A,
+
+; pending shot?
+	SKIPN	ATIME		; if non-zero, a shot is pending
+	 JRST	ROBLUP		; no, just loop
+	.RDTIME	A,		; time
+	CAMGE	A,ATIME		; two seconds passed?
+	 JRST	ROBLUP		; no, loop
+	PUSHJ	P,ADEAD		; kill anyone left there
+	SETZM	ATIME		; no more shot
+	JRST	ROBLUP		; loop
+;	* ROBOT PLAYER DECISION ROUTINES *
+
+; decides on and executes a move for the robot
+AUTO:	PUSHJ	P,ASETUP	; set up moves and "vision" data
+	SKIPE	ATIME		; skip if no pending shot
+	 JRST	AMOVE		; pending shot, can't fire again
+
+; fire at anyone visible
+AFIRE:	HRRE	A,AHEAD		; look for visible people ahead
+	JUMPLE	A,AMOVE		; no one visible
+
+; someone visible
+	SETZM	ANEXT		; flush any pending "macro"
+	MOVEM	A,AVICTI	; victims
+	MOVE	A,COORD(ME)	; my current position
+	MOVEM	A,ALOCN		; save it
+	.RDTIME	A,
+	ADDI	A,60.		; two seconds from now we will check them
+	MOVEM	A,ATIME		; save it
+	POPJ	P,		; return
+
+; couldn't fire, so we move instead
+AMOVE:	MOVE	A,ME		; get my id #
+	PUSHJ	P,REMOVE	; remove from the global maze
+	SKIPN	ANEXT		; skip if we already have a move planned
+	 JRST	AMOVE1		; nope
+
+; here to use pre-planned move
+	MOVE	A,ANEXT		; get pre-planned move
+	SETZM	ANEXT		; remove "macro"
+	JRST	AMOVE2		; go use it
+
+; here to figure out a move
+AMOVE1:	PUSHJ	P,AVALUE	; returns the "best" move in A
+
+; here to actually do a move
+AMOVE2:	MOVEM	A,COORD(ME)	; new position
+	HRRZS	A		; coordinate
+	MOVE	B,MYBIT		; my id bit
+	PUSHJ	P,ADDGUY	; add myself back into maze
+	PUSHJ	P,SENDME	; and send out new location
+	POPJ	P,		; return
+;	* ROBOT PLAYER MOVE SELECTOR *
+
+; returns a move based on a random selection weighted as follows (where N
+; is the number of squares before a wall is hit in a given direction):
+
+; move forward:	10*N, or N if other players are visible
+; turn right:	10*N
+; turn left:	10*N
+; turn back:	1
+
+; algorithm is such that robot never turns to face a blank wall, and if
+; he turns to look down a corridor, he always advances at least one square
+; into the corridor.
+
+AVALUE:	PUSH	P,B
+	PUSH	P,C
+	SETZM	AHPROB		; zero value/probability locations
+	SETZM	ARPROB
+	SETZM	ABPROB
+	SETZM	ALPROB
+	SETZ	C,		; zero value total
+
+; move forward
+	MOVE	A,AHEAD		; view forward
+	JUMPE	A,AVALR		; negative -- wall
+	HLRZ	B,A		; empty squares
+	HRRZS	A		; visible people
+	SKIPN	A		; any visible?
+	 IMULI	B,10		; no, weight by 10
+	MOVEM	B,AHPROB	; value of move forward
+	ADD	C,B		; update total of values
+
+; turn right
+AVALR:	MOVE	A,ARIGHT	; view right
+	JUMPE	A,AVALB		; anything?
+	HLRZ	B,A		; get number of squares
+	IMULI	B,10		; weight by 10
+	MOVEM	B,ARPROB	; value of move right
+	ADD	C,B		; update total
+
+; turn back
+AVALB:	MOVE	A,ABACK		; view back
+	JUMPE	A,AVALL		; wall?
+	MOVEI	B,1		; currently just value of 1
+	MOVEM	B,ABPROB
+	ADD	C,B		; update total
+
+; turn left
+AVALL:	MOVE	A,ALEFT		; view left
+	JUMPE	A,AVALN		; wall?
+	HLRZ	B,A		; free squares
+	IMULI	B,10		; weight by 10
+	MOVEM	B,ALPROB	; value of turn left
+	ADD	C,B		; update total
+
+; normalize the values to numbers between 0 and 1000
+; which mark off the boundaries between probabilities.
+AVALN:				; C/ total of values
+
+IRP AX,,[AHPROB,ARPROB,ABPROB,ALPROB]
+	MOVE	A,AX		; get value
+	PUSHJ	P,NORMAL	; normalize
+	ADDB	A,B		; total
+	MOVEM	A,AX		; put it back out
+TERMIN
+
+; remainder of 1000. in B
+	PUSHJ	P,RANDOM	; get random number between 0 and 1000.
+	IDIVI	A,1000.		; remainder ends up in B
+
+; move forward?
+	CAML	B,AHPROB	; less than ahead number?
+	 JRST	ARCHK		; nope
+	MOVE	A,AHMOVE	; move forward!
+	JRST	AVALX		; return
+
+; turn right?
+ARCHK:	CAML	B,ARPROB	; less than turn right number?
+	 JRST	ABCHK
+	MOVE	A,ARMOVE	; turn right
+	PUSHJ	P,DOMOVE	; and always go forward after that
+	MOVEM	B,ANEXT		; put out as "macro"
+	JRST	AVALX
+
+; turn around
+ABCHK:	CAML	B,ABPROB	; turn around?
+	 JRST	ALCHK		; nope
+	MOVE	A,ABMOVE	; get turn
+	JRST	AVALX
+
+; turn left
+ALCHK:	CAML	B,ALPROB	; turn left?
+	 JRST	ANULL		; nope
+	MOVE	A,ALMOVE
+	PUSHJ	P,DOMOVE	; after left turn always move forward
+	MOVEM	B,ANEXT		; put out as "macro"
+	JRST	AVALX
+
+; no move, do nothing -- happens sometimes due to roundoff errors
+ANULL:	MOVE	A,COORD(ME)	; just return current position
+
+; check to see if better to do quick turn around to look for people
+; sneaking up on us
+AVALX:	HLRZ	B,COORD(ME)	; current direction
+	HLRZ	T,A		; new direction
+	CAME	T,B		; directions same?
+	 JRST	AVAL1		; no, zero apeek
+; directions same, should we turn around?
+	AOS	APEEK
+	EXCH	B,A
+	PUSHJ	P,RANDOM	; random number
+	EXCH	B,A
+	ANDI	B,37		; make it between 0 and 37
+	CAMLE	B,APEEK		; less than apeek?
+	 JRST	AVALXX		; nope, don't peek
+	MOVE	A,COORD(ME)	; yes, peek.  instead of what we were
+	MOVEM	A,ANEXT		; going to do, return "back" move and
+	MOVE	A,ABMOVE	; then turn back to current position next time
+AVAL1:	SETZM	APEEK		; zero peek count -- either turned or peeked
+
+; return move in A -- equals coordinates of player after move made
+AVALXX:	POP	P,C
+	POP	P,B
+	POPJ	P,
+; find out who died -- called 2 seconds after a shot was fired.
+; anyone still visible from where we fired the shot will be dead.
+; send out messages indicating they are dead.
+ADEAD:	PUSHAE P,[A,B,C]
+	MOVE	A,ALOCN		; pick up where we were
+	PUSHJ	P,SEE		; find out who is visible
+	AND	A,AVICTIM	; keep only those who were visible before
+	JUMPLE	A,JFFXIT	; exit if everyone got away
+
+; tell them they're dead
+	MOVE	B,A		; save id bits of who dies
+
+JFFLUP:	JFFO	B,JFFDO		; find first bit
+JFFXIT:	POPAE P,[C,B,A]		; exit, no bits on anymore
+	POPJ	P,
+
+; here a bit was found in victim word, so tell him he's dead
+JFFDO:	MOVNS	C		; -<number of leading zeros>
+	ADDI	C,36.		; bit position of loser = id#
+	MOVE	A,C		; get id# into A
+	PUSHJ	P,ADIE		; die!
+; now turn off that bit from victim word
+	MOVEI	A,1
+	LSH	A,-1(C)		; C is number of bit that should be on
+	TRZ	B,(A)
+	JRST	JFFLUP		; and loop to find next victim
+
+; kill a specific hacker, id# in a
+; whenever robot kills someone, he slows down a little bit, to compensate
+; for being so good.  idea is that eventually he reaches an equilibrium
+; with caliber of his opposition.
+ADIE:	SKIPE	DEAD(A)		; skip only if not already dead
+	 POPJ	P,
+	SETOM	LOCKED(ME)	; lock buffer
+	PUSHJ	P,SICRLF
+	PUSH	P,A		; save his id#
+	MOVEI	A,%DIE		; send player died message
+	PUSHJ	P,PUT
+	MOVE	A,ME		; my id (as murderer)
+	PUSHJ	P,PUT
+	POP	P,A		; recover his id
+	PUSHJ	P,PUT		; send it (as victim)
+	SETOM	DEAD(A)		; make him dead
+	AOS	SCORE(A)	; increment times killed for victim
+	MOVSI	T,1
+	ADDM	T,SCORE(ME)	; and increment my count of wins.
+	AOS	DOZE		; slow me down a bit, i'm getting too good
+	MOVE	T,GPS(ME)	; and update "good" buffer pointer
+	MOVEM	T,GGP(ME)
+	SETZM	LOCKED(ME)	; unlock buffer
+	AOS	FLGGLO		; and indicate message sent
+	POPJ	P,		; return
+; checks for those who can be seen from a given place
+; pass coord-like contents in A, returns those who can be seen
+
+SEE:	PUSHAE P,[B,C,D]
+	HRRZ	B,A		; B/ coordinate
+	HLRZ	C,A		; C/ direction
+	SETZB	A,D		; A/ people visible
+				; D/ number of squares
+IFN DEBUG,[
+	CAILE B,777
+	 JSR BUGHLT
+	CAILE C,3
+	 JSR BUGHLT
+]
+SEELUP:	XCT	AFORW(C)	; move forward
+	SKIPGE	AMAZE(B)	; wall?
+	 JRST	SEERX		; yes, exit
+
+; add to information we are gathering
+SEEADD:	IOR	A,AMAZE(B)	; add new victims
+	AOS	D		; add another square
+	JRST	SEELUP		; loop
+
+; normal exit
+SEERX:	HRL	A,D		; return A/ <squares>,,<people>
+	POPAE P,[D,C,B]
+	POPJ	P,
+; pick up our position and collect view in each direction and create
+; move we would use if we moved/turned in that direction.
+ASETUP:	PUSHAE P,[A,B]
+
+; forward move
+	MOVE	A,COORD(ME)
+	MOVE	B,A
+	MOVEM	A,AHMOVE	; for the moment, move ahead is noop
+	PUSHJ	P,SEE		; what is ahead?
+	MOVEM	A,AHEAD		; save it
+	JUMPE	A,ASETU1	; if wall, go on to right turn
+	HLRZ	A,AHMOVE	; no wall, figure out what move ahead
+	MOVE	B,AHMOVE	; would be by executing appropriate
+	XCT	AFORW(A)	; instruction from AFORW table
+	MOVEM	B,AHMOVE	; real forward move
+; turn right
+ASETU1:	MOVE	B,COORD(ME)
+	PUSHJ	P,ASTURN	; do turn
+	MOVEM	A,ARMOVE	; result of right turn
+	PUSHJ	P,SEE		; what is to right?
+	MOVEM	A,ARIGHT
+; turn back
+	PUSHJ	P,ASTURN	; do turn
+	MOVEM	A,ABMOVE	; result of back turn
+	PUSHJ	P,SEE		; what is behind us?
+	MOVEM	A,ABACK
+; turn left
+	PUSHJ	P,ASTURN	; do turn
+	MOVEM	A,ALMOVE	; result of left turn
+	PUSHJ	P,SEE		; what is off to left?
+	MOVEM	A,ALEFT
+; exit
+	POPAE P,[B,A]
+	POPJ	P,
+
+; instructions to move in NESW direction
+AFORW:	SUBI	B,1._4		; move to north
+	AOS	B		; move to east
+	ADDI	B,1._4		; move to south
+	SOS	B		; move to west
+
+; turn to next direction
+ASTURN:	ADD	B,[1,,0]	; just aos direction
+	AND	B,[3,,777]	; and AND back to legal information
+	MOVE	A,B		; return in A and B
+	POPJ	P,
+; normalize to 1000.
+; A/ value to normalize
+; C/ total of values being normalized
+NORMAL:	PUSH	P,B
+	IMULI	A,1000.		; multiply times 1000
+	IDIV	A,C		; and divide by total of values
+	POP	P,B
+	POPJ	P,
+
+; random number generator stolen from HAKMEM
+RANDOM:	PUSH	P,B
+	MOVE	A,SEEDHI
+	MOVE	B,SEEDLO
+	MOVEM	A,SEEDLO
+	LSHC	A,35.
+	XORB	A,SEEDHI
+	MOVMS	A
+	POP	P,B
+	POPJ	P,
+
+; given a direction/coordinate in A, returns new coordinate in B
+DOMOVE:	PUSH	P,A
+	MOVE	B,A		; coord into B
+	HLRZS	A		; direction
+	XCT	AFORW(A)	; move forward
+	POP	P,A
+	POPJ	P,
+
+; send current location from COORD(id#)
+; A/ an id #
+SENDA:	PUSH	P,B
+	MOVE	B,A		; into B
+IFN DEBUG,[
+	CAILE B,7
+	 JSR BUGHLT
+]
+	SETOM	LOCKED(B)	; lock buffer
+	MOVEI	A,%MOV		; move command
+	PUSHJ	P,PUT		; put it out
+	MOVE	A,B		; id#
+	PUSHJ	P,PUT		; put it
+	HLRZ	A,COORD(B)	; direction
+	IORI	A,100
+	PUSHJ	P,PUT		; put it
+	LDB	A,[000400,,COORD(B)]	; x coordinate
+	IORI	A,100
+	PUSHJ	P,PUT		; put it
+	LDB	A,[040500,,COORD(B)]	; y coordinate
+	IORI	A,100
+	PUSHJ	P,PUT		; put it
+	PUSH P,GPS(B)		; set up "good" global buffer pointer
+	POP P,GGP(B)		; core-core transfer.
+	SETZM	LOCKED(B)	; unlock buffer
+	AOS	FLGGLO		; and indicate message sent
+	POP	P,B
+	POPJ	P,
+
+; same as SENDA but always uses local ID #
+SENDME:	PUSH	P,A
+	PUSHJ	P,SICRLF
+	MOVE	A,ME		; get id of me
+	PUSHJ	P,SENDA		; and send
+	POP	P,A
+	POPJ	P,
+
+CONSTANTS			;try to keep most commonly ref'd stuff in 1 page.
+VARIABLES
+
+; start up
+
+START:	MOVEI	E,IOFF			; OFFSET of impure page
+	MOVE	P,[-PDLNTH,,PDL]	; set up pdl pointer
+
+	.RDTIME	A,			; seeds for random number generator
+	MOVEM	A,SEEDHI
+	MOVE	A,[3.14159]
+	MOVEM	A,SEEDLO
+
+	.BREAK	12,[5,,COMMND]		; get command line that started us
+	.SUSET	[.RUNAM,,MYNAME]	; get our uname -- (id unless robot or id given)
+	.SUSET	[.RSNAM,,MYSNAM]	; get initial sname for use by script-file opens
+	.SUSET	[.SSNAM,,MYNAME]	; and set sname to uname, to wipe out traces
+					; of where loaded from.  might be set to name
+					; which player uses in maze, but too obvious.
+
+
+; read command line and set flag bits in FLAGS appropriately
+
+RESTRT:	MOVE	A,[440700,,COMMND]
+	SETZ FLAGS,
+
+COMRED:	ILDB B,A			; get next character from command line
+	CAIL B,"a			; convert to uppercase
+	 CAILE B,"z
+	  CAIA
+	SUBI B,40
+	CAIGE B,40			; halt on any cntrl (null, ^M, etc)
+	 JRST	TTYOPN			; no more
+
+	CAIN B,""			; " -- read name
+	 PUSHJ	P,NAMRED
+	CAIN B,"L			; L -- don't load IMLAC program
+	 TRO FLAGS,LOADED
+	CAIN B,"I			; I -- script input to "<sname>;MAZIN >"
+	 JRST [	TRO	FLAGS,SCRIN
+		.CALL	ISCOPN		; open file to script input from imlac
+		 JSR	QUIT
+		JRST	.+1]
+	CAIN B,"O			; O -- script output to "<sname>;MAZOUT >"
+	 JRST [	TRO	FLAGS,SCROUT
+		.CALL	OSCOPN		; open fie to script output to imlac
+		 JSR	QUIT
+		JRST	.+1]
+	CAIN B,"Q			; Q -- don't output at all (debugging)
+	 TRO	FLAGS,QUIET
+	CAIN B,"R			; R -- this player is a robot
+	 TRO	FLAGS,ROBBY
+	CAIN B,"C			; C -- evade usage restrictions
+	 TRO	FLAGS,CHEAT
+IFN STATS,[
+	CAIN B,"S			; S -- Spy statistics
+	 TRO FLAGS,SPYSTA
+]
+	JRST	COMRED			; loop to read another character
+
+
+ISCOPN:	SETZ ? SIXBIT /OPEN/ ? [.UAO,,SCRI] ? ['DSK,,0]
+	[SIXBIT /MAZIN/] ? [SIXBIT />/] ? SETZ MYSNAM
+
+OSCOPN:	SETZ ? SIXBIT /OPEN/ ? [.UAO,,SCRO] ? ['DSK,,0]
+	[SIXBIT /MAZOUT/] ? [SIXBIT />/] ? SETZ MYSNAM
+; open ttys for initial interaction
+TTYOPN:
+IFN STATS,[
+	TRNE FLAGS,SPYSTA
+	 PUSHJ P,REINIT			;WRITE OUT INCRIMINATING INFO
+]
+	.OPEN	TYIC,[.UAI,,'TTY]
+	 JSR	QUIT
+	.OPEN	TYOC,[.UAO,,'TTY]
+	 JSR	QUIT
+
+; output name of program and ground rules
+	TYPECR	[MAZE.76]
+
+; see if legitimate to play.  time must be right and user must be real
+; DMS user (ie, he must have a directory)
+	TRNE	FLAGS,CHEAT
+	 JRST	QSHARE			; don't bother, he's cheating
+
+; does he have a directory?  open it and see
+	SYSCAL OPEN,[CIMM LCI ? ['DSK,,0]
+		[SIXBIT /.FILE./] ? [SIXBIT /(DIR)/] ? MYNAME]
+	 SKIPA
+	JRST	TIMCHK
+
+; doesn't have a directory, so he can't play
+	TYPECR	[Sorry, MAZE is not available at this time.]
+	JSR	QUIT			; leave game
+
+; is it night or weekend?  if not, can't play
+TIMCHK:	.CLOSE	LCI,			; close channel open to dir
+	.RLPDT	A,
+	LDB	C,[320300,,B]		; get day of week
+	CAIE C,0			; skip if sunday
+	 CAIN C,6			; don't skip if saturday
+	  JRST	QSHARE			; you can play! you lucky devil
+
+; its not weekend, but maybe its night time
+	.RTIME	A,			; what time is it?
+	CAML	A,[SIXBIT /080000/]	; before 8am?
+	 CAML	A,[SIXBIT /200000/]	; after 8pm?
+	  JRST	QSHARE			; he can play, by god!
+
+; time of day is wrong
+	TYPECR	[Sorry, you cannot play MAZE during the day, come back later.]
+	JSR	QUIT			; die horribly
+; This stuff needs to be $G'd before PDUMP'ing so that
+; the mapping from file will happen correctly, and so there will be an
+; imlac program available...
+%CBLOK==2000	;not defined in MIDAS yet
+INIT:	MOVEI	P,PDL
+;	SYSCAL CORBLK,[CIMM %CBPRV ? [-1] ? CIMM PPAG]
+;	 .VALUE
+;	SYSCAL CORBLK,[CIMM %CBNDW ? [-1] ? CIMM IPAG]
+;	 .VALUE
+	.OPEN TYIC,[.UAI,,'TTY]
+	 .VALUE
+	.OPEN TYOC,[.UAO,,'TTY]
+	 .VALUE
+	TYPECR	[Give filespec of IMTRANed imlac program]
+INIT2:	TYPE	[(CR for DSK:IMLAC;M IML): ]
+	PUSHJ	P,RCMD
+	PUSHJ	P,SCNAME		; parse filename
+	DEFULT SCDEV,IMLDEV
+	DEFULT SCDIR,IMLDIR
+	DEFULT SCN1,IMLFN1
+	DEFULT SCN2,IMLFN2
+
+; now have filespec to pull imlac program from.  Open channel
+	SYSCAL OPEN,[[.BII,,LCI] ? SCDEV ? SCN1 ? SCN2 ? SCDIR]
+	 JRST [	TYPECR [Can't open file, try again.]
+		JRST INIT2]
+	SYSCAL FILLEN,[CIMM LCI ? CRTN IMLLEN]	;get length of file
+	 .VALUE					;ugh bletch!
+
+; Have LCI channel ready, now read into core at IMLPAG.
+	MOVE C,IMLLEN		; get # wds in imlac progm
+	ADDI C,1777		; round up to # pages
+	IDIVI C,2000
+	MOVN A,C		;keep # pgs in C for later use
+	HRLZS A
+	HRRI A,IMLPAG		; now have -<# pgs>,,page # to start at.
+	MOVEM A,IMLPGP		; store ptr. for when freeing.
+	SYSCAL CORBLK,[CIMM %CBNDW ? [-1] ? A ? [%JSNEW]] ;get pgs for imlac pgm storage
+	 .VALUE			; failed.
+	MOVN A,IMLLEN
+	HRLZS A
+	HRRI A,IMLPRG		; now fix up aobjn for input
+	.IOT LCI,A		; get pgm
+	.CLOSE	LCI,		; won, close it.
+
+	MOVE A,[COMMND,,COMMND+1]	; zero command buffer before
+	SETZM COMMND			; dumping.
+	BLT A,COMMND+COMLNG-1
+
+	; at this point should have finished all mods to core.
+	SYSCAL CORBLK,[CIMM %CBPRV+%CBNDW+%CBLOK ? [-1] ? CIMM 0] ;ensure locked
+	 .VALUE
+	MOVEI A,FFIPAG
+	CAIL A,IPAG		;if page 1 isn't used,
+	 JRST INIT4
+	SYSCAL CORBLK,[CIMM 0 ? [-1] ? CIMM FFIPAG]	;then flush it.
+	 .VALUE
+INIT4:	SYSCAL CORBLK,[CIMM %CBNDW+%CBPUB+%CBLOK	; make page 2 global impure.
+		[-1] ? CIMM IPAG]
+	 .VALUE
+
+	; Now form aobjn for call to purify all global pure pages.
+	MOVE A,C		; find # pgs used for imlac pgm storage
+	ADDI A,IMLPAG		; get page # of first non-pure
+	SUBI A,PPAG		; find # of pages to purify
+	MOVNS A,A
+	HRLZS A
+	HRRI A,PPAG
+	SYSCAL CORBLK,[CIMM %CBPRV+%CBLOK ? [-1] ? A]	; make pages private & locked
+	 .VALUE				; (OK since only 3 or so)
+
+	TYPECR [Mapping done, now dump.]
+	.VALUE [ASCIZ /:PDUMP /]
+	.VALUE [ASCIZ /:KILL /]		;in case he tries to $P
+
+
+; free the pages occupied by resident imlac program.
+IMLPGF:	PUSH	P,A
+	SKIPL	A,IMLPGP		; get the AOBJN page ptr
+	 JRST	POPAJ
+	SYSCAL CORBLK,[CIMM 0 ? [-1] ? A]	;flush them!
+	 JSR	QUIT
+	SETZM	IMLLEN
+	SETZM	IMLPGP			; clear all indicators to existence of page
+POPAJ:	POP	P,A
+	POPJ	P,
+; set up sharing properly -- all MAZEs have same high segment
+; automagically, but they manually share page 2, where all the goodies
+; are
+
+; get sharer of my first high-seg page, if any
+QSHARE:	SYSCAL CORTYP,[CIMM PPAG ? CRTN A ? CRTN B] ; find out state of high seg page
+	 JSR	QUIT		; call failed, die
+	MOVEM	B,FIRST		; save result for later misuse
+	JUMPG	B,GETHIM	; if >0, is job number of sharer
+
+; result was -1, therefore we are first one up -- make page 2 writeable,
+; shared, and locked.
+	SYSCAL CORBLK,[CIMM %CBNDW+%CBPUB+%CBLOK ? [-1] ? CIMM IPAG]
+	 JSR	QUIT		; failed, die
+
+; now tell him he is winner, ask if wants special maze
+	TYPECR	[You are the first rat in - specify maze file to use]
+	TYPE	[(CR for standard maze):]
+ASKMAZ:	PUSHJ	P,RCMD		; read command line
+	PUSHJ	P,SCNAME	; parse it
+
+; hack defaults: "DSK:IMLAC;xxxxx MAZE"
+	SKIPN	SCN1
+	 JRST	START2		; if no fn1 given, use default (assembled)maze.
+	DEFULT SCDEV,MAZDEV
+	DEFULT SCDIR,MAZDIR
+	DEFULT SCN2,MAZFN2
+	PUSHJ P,GETMAZ		; try to get it
+	 JRST [	TYPE [Couldn't get maze, try again:]
+		JRST ASKMAZ]
+	SETOM LAMAZE		; indicate global maze set up.
+	JRST	START2		; now that we have hacked defaults, load
+
+; get global writeable page 2; all other than first up come here.
+; job number of sharer we want is in B
+GETHIM:	TRO	B,400000	; get it bit
+	SYSCAL CORBLK,[CIMM %CBNDW+%CBPUB+%CBLOK
+		[-1] ? CIMM IPAG ? B ? CIMM IPAG]	;get it
+	 JSR	QUIT		; lost, die
+
+; inform loser of his state
+	TYPECR	[You are joining a game already in progress]
+	JRST	START2
+
+
+; now load console if he didn't ask you not to
+; unless funny bits on, we always load the IMLAC half of the program
+; if non-standard maze being used, we read that even when funny bits
+; are on if we are first up, so that global copy of maze can be initialized.
+; in general, maze not loaded for ROBBY (player is robot), LOADED (player
+; claims to be loaded already), and QUIET (for debugging).
+
+; name ok?
+START2:	SKIPN	A,QNAME		; gave his own name?
+	 JRST	STARTL
+	PUSHJ	P,NAMEX		; skip if name is unique.
+	AOJA	A,.-1		; AOS it until it is.
+	MOVEM	A,MYNAME
+
+; load it
+STARTL:	TRNE FLAGS,ROBBY\LOADED\QUIET
+	 JRST START3		; skip MAZE loading if requested.
+	TYPECR [Hang on!]
+	MOVEI A,60.		; wait a couple sec so he can read typeout.
+	.SLEEP A,
+	PUSHJ	P,LOADER	; load the MAZE program itself
+	PUSHJ	P,LODMAZ	; load global maze into imlac
+START3:	PUSHJ	P,IMLPGF	; free the pages occupied by imlac prog (if it existed)
+	TRNE	FLAGS,ROBBY	; if robot, don't open TTYs
+	 JRST	ROBOT		; and go off into special routine.
+
+	; open TTY for playing.
+	.OPEN	TYIC,[.UII,,'TTY]	; normal input
+	 JSR	QUIT
+	TRNE	FLAGS,QUIET		; skip if not quiet mode
+	 JRST [	.OPEN TYOC,[.UAO,,'TTY]	; quiet, use "normal" ASCII
+		 JSR QUIT
+		JRST JOIN]
+	.OPEN	TYOC,[40+.UIO,,'TTY]	; super-image output.
+	 JSR	QUIT
+	SYSCAL TTYGET,[CIMM TYIC	; make superimage on input also.
+		 CRTN A ? CRTN B ? CRTN C]
+	 JSR QUIT
+	TLO C,2				; set superimage input bit.
+	SYSCAL TTYSET,[CIMM TYIC ? A ? B ? C]
+	 JSR QUIT
+
+	; Final initialization.
+	MOVEI TO,TTYSIZ
+	MOVEM TO,TTYCNT			; set count of chars in output buffer
+	MOVE TO,TTYPTR			; and set up ptr
+	.SUSET [.SMASK,,[TYIMSK]]	;enable TTY interrupt only
+	.SUSET [.SMSK2,,[0]]
+
+; start IMLAC program at 10000
+	MOVEI	A,30.		; sleep for half a sec. first
+	.SLEEP	A,
+	.IOT	TYOC,[^A]
+	.IOT	TYOC,[^F]
+	.RESET TYIC,		;reset input so anything he typed before start is zapped
+	.SUSET [.SPICLR,,[-1]]	;and now enable input ints!
+	JRST	JOIN
+
+;		** ALTERNATE MAZE LOADING ROUTINES **
+
+; start up a load -- open tty for output, start 40 loader, sleep for
+; one second
+
+LSTART:	.OPEN	LCO,[40+.BIO,,'TTY]	; superimage block output
+	 .VALUE
+	MOVE	A,[477777,,[ASCII /   /]]
+	.IOT	LCO,A			; start console at 40.
+	MOVEI	A,30.
+	.SLEEP	A,
+	POPJ	P,
+
+; load the maze program
+
+LOADER:	SKIPE	IMLLEN		; if no imlac prog in core, get from default file.
+	 JRST	FLOADR		; ah, pull from core.
+	SYSCAL OPEN,[[.BII,,LCI] ? IMLDEV ? IMLFN1 ? IMLFN2 ? IMLDIR]
+	 JSR	QUIT		; open failed, die
+	PUSHJ	P,LSTART
+	PUSHJ	P,LOAD
+	.CLOSE LCI,
+	.CLOSE LCO,
+	POPJ	P,
+
+; given an channel (LCI) output it to the TTY
+
+LOAD:	MOVE	A,[-LODSIZ,,LODBUF]
+	MOVE	B,A
+	.IOT	LCI,A
+	MOVE	C,B
+	MOVE	B,A
+	HLLZS	A
+	SUBM	C,A
+	.IOT	LCO,A
+	JUMPGE	B,LOAD
+	.CLOSE	LCI,
+	POPJ	P,
+
+
+; load maze program from our own core and flush pages.
+FLOADR:	PUSHJ	P,LSTART
+	PUSHJ	P,FLOAD
+	.CLOSE	LCO,
+	POPJ	P,
+
+; "fast load" or "fake load" as you wish.
+FLOAD:	PUSH	P,A
+	MOVN	A,IMLLEN
+	HRLZS	A
+	HRRI	A,IMLPRG	; make AOBJN to imtran'd file in core.
+	.IOT	LCO,A
+	POP	P,A
+	POPJ	P,
+	
+
+
+; load the global maze into imlac over top of dummy one.
+
+LODMAZ:	TRNE	FLAGS,ROBBY\LOADED\QUIET
+	 POPJ	P,		; don't load if flags disagree.
+	PUSHAE P,[A,B,C,D]
+	PUSHJ	P,LSTART	; start the load
+
+; load the block loader
+	SYSCAL OPEN,[[.BII,,LCI] ? ['DSK,,0]
+		[SIXBIT /IMLAC/] ? [SIXBIT /BLKLDR/] ? [SIXBIT /IMLAC/]]
+	 JSR	QUIT
+	PUSHJ	P,LOAD		; load it
+
+; fake up LODBUF by munching global maze back into maze-file format.
+	PUSHJ	P,MSETDN
+	MOVE	A,[440700,,LODBUF+100]
+	MOVEM	A,OB
+
+; IMTRAN the loaded file and output it to imlac
+	MOVEI	A,MAZSIZ	; count of words in block
+	PUSHJ	P,EMIT2
+; set up address
+	MOVEI	A,MAZBEG	; address to load block
+	PUSHJ	P,EMIT4
+; do checksum
+	MOVE	A,[-MAZSIZ,,LODBUF]
+	PUSHJ	P,CHKSUM	; also does fake indirect hack
+	MOVE	D,A		; save checksum
+; output good words
+	MOVE	C,[-MAZSIZ,,LODBUF]
+DATLUP:	MOVE	A,(C)		; get a word
+	PUSHJ	P,EMIT4		; output it
+	AOBJN	C,DATLUP	; and loop
+; output checksum
+	MOVE	A,D
+	PUSHJ	P,EMIT4		; output it
+
+; output auto-start block
+	MOVEI	A,2		; two words long
+	PUSHJ	P,EMIT2
+	MOVEI	A,37713		; address to load
+	PUSHJ	P,EMIT4
+	MOVEI	A,113714	; 3713/ JMP @3714
+	PUSHJ	P,EMIT4
+	MOVEI	A,101		; 3714/ 101
+	PUSHJ	P,EMIT4
+	MOVEI	A,114015	; checksum
+	PUSHJ	P,EMIT4
+
+; here to write out block of count and address -1, which indicates
+; loading is done
+	SETO	A,
+	PUSHJ	P,EMIT2		; two chars of count
+	SETO	A,
+	PUSHJ	P,EMIT4		; four chars of location
+
+; now output the imtraned file
+	MOVE	A,[-MAZIML,,LODBUF+100]
+	.IOT	LCO,A
+	.CLOSE	LCO,
+
+; exit from maze loader
+LODMAX:	POPAE P,[D,C,B,A]
+	POPJ	P,
+; GETMAZ - pulls file defined by SCDIR, SCDEV, SCN1,SCN2 into LODBUF
+;and munches into global maze format.
+
+GETMAZ:	PUSH	P,A
+	SYSCAL OPEN,[[.BII,,LCI] ? SCDEV ? SCN1 ? SCN2 ? SCDIR]
+	 JRST POPAJ		; non-skip return if lose.
+	MOVE	A,[-LODSIZ,,LODBUF]
+	.IOT	LCI,A				; ZAP
+	.CLOSE	LCI,
+	PUSHJ	P,MSETUP			; convert into global format
+	POP	P,A
+	AOS (P)			; skip return if win.
+	POPJ	P,
+	
+; given an alternate maze in LODBUF, we update the global maze in AMAZE
+; in this routine.  for each word, a one bit is a wall, a zero bit is a hallway.
+MSETUP:	PUSHAE P,[A,B,C,D]
+	MOVE	B,[-MAZSIZ,,LODBUF]	; aobjn pointer to words
+	SETZ	C,		; offset in AMAZE
+; loop through words
+MSET1:	MOVEI	D,100000	; first bit
+	MOVE	A,(B)		; get a word
+; loop through bits
+MSET2:	SETZM	AMAZE(C)	; assume zero
+	TDNE	A,D		; is it?
+	SETOM	AMAZE(C)	; no, make it -1
+	AOS	C		; move to next word of AMAZE
+	LSH	D,-1		; next bit mask
+	JUMPN	D,MSET2		; loop if mask still non-zero
+	AOBJN	B,MSET1		; loop for next word after mask runs out
+; return
+	POPAE P,[D,C,B,A]
+	POPJ	P,
+
+; given global maze, reverse MSETUP and form a maze-file formatted buffer
+;in LODBUF.
+MSETDN:	PUSHAE P,[A,B,C,D]
+	MOVE	B,[-MAZSIZ,,LODBUF]
+	SETZ	C,
+MSETD1:	MOVEI	D,100000
+	SETZ	A,
+MSETD2:	SKIPGE	AMAZE(C)	; test cell in maze
+	IORI	A,(D)		; -1 means filled, set bit in word.
+	AOJ	C,		; increment offset into global maze
+	LSH	D,-1
+	JUMPN	D,MSETD2	;loop til 16-bit wd done
+	MOVEM	A,(B)		; store wd in lodbuf
+	AOBJN	B,MSETD1
+	POPAE P,[D,C,B,A]
+	POPJ	P,
+
+;	* IMTRAN UTILITY ROUTINES *
+
+; emit a character -- right most 4 bits of word
+; A/ character
+EMIT:	IORI	A,100		; make it right sort of ascii
+	IDPB	A,OB
+	POPJ	P,
+
+; emit 2 characters -- right most 8 bits of word
+; A/ 2 characters
+EMIT2:	PUSH	P,B
+	MOVE	B,A
+	LDB	A,[040400,,B]	; get first char
+	PUSHJ	P,EMIT		; output
+	LDB	A,[000400,,B]	; get second char
+	PUSHJ	P,EMIT		; output
+	POP	P,B
+	POPJ	P,
+
+; emit four characters -- rightmost 16 bits of word
+; A/ four characters
+EMIT4:	PUSHAE P,[B,C,D]
+	MOVE	B,A
+	MOVE	C,[200400,,B]	; abptr
+	MOVNI	D,4		; count
+	; loop through four chars
+EMIT4L:	ILDB	A,C		; get it 
+	PUSHJ	P,EMIT		; output it
+	AOJL	D,EMIT4L	; loop til done
+	POPAE P,[D,C,B]
+	POPJ	P,
+
+; do checksum on a block
+; A/ cptr to block
+CHKSUM:	PUSHAE P,[B,C]
+	MOVE	B,A
+	SETZ	A,
+CHK1:	MOVE	C,(B)
+	TLZE	C,20
+	 TRO	C,100000
+	ANDI	C,177777
+	MOVEM	C,(B)
+	ADD	A,C
+	CAILE	A,177777
+	 AOS	A
+	ANDI	A,177777
+	AOBJN	B,CHK1
+	POPAE P,[C,B]
+	POPJ	P,
+;	* COMMAND READER *
+
+; used to read names of files and such
+RCMD:	MOVE	B,[440700,,COMMND]
+	MOVEM	B,COMPTR
+	MOVEI	C,0
+RCMD1:	.IOT	TYIC,A
+	CAIN	A,177
+	 JRST	RUB
+	IDPB	A,B
+	CAML	B,[350700,,COMMND+COMLNG-1]
+	 JRST	RCFUL
+	CAIL	A,40
+	 AOJA	C,RCMD1
+RCMDX:	MOVEI	A,0
+	IDPB	A,B
+	POPJ	P,
+
+RCFUL:	MOVEI	A,15
+	IDPB	A,B
+	JRST	RCMDX
+
+RUB:	SOJL	C,RCMD
+	LDB	A,B
+	.IOT	TYOC,A
+	ADD	B,[070000,,]
+	TLNE	B,400000
+	 ADD	B,[347777,,-1]
+	JRST	RCMD1
+
+;	* PARSE A FILE SPEC READ IN *
+
+SCNAME:	SETZM	SCN1
+	SETZM	SCN2
+	SETZM	SCDEV
+	SETZM	SCDIR
+	MOVSI	C,-4
+SCNGET:	PUSHJ	P,GETSYL
+	CAIN	A,':
+	 MOVEM	B,SCDEV
+	CAIN	A,';
+	 MOVEM	B,SCDIR
+	JUMPG	A,SCNGET
+	MOVEM	B,SCN1(C)
+	JUMPL	A,SCNX
+	AOBJN	C,SCNGET
+SCNX:	popj p,
+	SKIPE	A,SCDEV
+	 HLRM	A,(D)
+	SKIPE	A,SCN1
+	 MOVEM	A,1(D)
+	SKIPE	A,SCN2
+	 MOVEM	A,2(D)
+	SKIPN	SCDIR
+	 POPJ	P,
+	MOVE	A,SCDIR
+	MOVEM	A,3(D)
+	POPJ	P,
+;  * parse a syllable from a command line *
+
+GETSYL:	PUSH	P,[0]
+	MOVE	B,[440600,,(P)]
+GETSLP:	PUSHJ	P,GETCCA
+	JUMPE	A,GETSX		; no char
+	CAIN	A,
+	 JRST	GETQOT
+	SUBI	A,40
+	JUMPL	A,GETSX
+	JUMPE	A,GETSP
+	CAIE	A,':
+	 CAIN	A,';
+	  JRST	GETSX
+GETSPT:	CAIL	A,100
+	 SUBI	A,40
+	TLNE	B,770000
+	 IDPB	A,B
+	JRST	GETSLP
+GETQOT:	PUSHJ	P,GETCCA
+	SUBI	A,40
+	JUMPGE	A,GETSPT
+	JRST	GETSX
+GETSP:	TLNE	B,400000
+	 JRST	GETSLP
+GETSX:	POP	P,B
+	POPJ	P,
+
+;  * get a character from command line *
+GETCCA:	ILDB	A,COMPTR
+	JUMPE	A,GETZER
+	CAIE	A,14
+	 CAIN	A,12
+	  JRST	GETCCA
+	CAIE	A,15
+	 POPJ	P,
+GETZER:	PUSH	P,COMPTR
+	SETZ	T,
+	IDPB	T,COMPTR
+	POP	P,COMPTR
+	POPJ	P,
+
+NAMRED:	PUSH	P,B
+	PUSH	P,C
+	SETZ	B,
+	MOVE	C,[440600,,B]
+NAMRLP:	ILDB	T,A
+	CAIL T,40
+	 CAIN T,""
+	  JRST	NAMEND
+	CAIGE T,100
+	 JRST	.+3
+	SUBI T,40
+	JRST	.-3
+	IDPB T,C
+	JRST	NAMRLP
+NAMEND:	SKIPE	B
+	 MOVEM	B,QNAME
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+
+NAMEX:	PUSH	P,B
+	MOVE	B,IDSPTR
+	ADDI	B,IOFF
+	CAMN	A,(B)
+	 JRST	NAMEXX
+	AOBJN	B,.-2
+	AOS	-1(P)
+NAMEXX:	POP	P,B
+	POPJ	P,
+
+IFN STATS,[
+REINIT:	PUSHAE P,[A,B,C,D]
+REC1:	SYSCAL OPEN,[[100000+.BIO,,LCI]		;WRITEOVER MODE
+		['DSK,,0] ? [SIXBIT /.TTYS_/]
+		[SIXBIT /LOADED/] ? [SIXBIT /IMLAC/]]
+	 JRST	TRYAGN
+	SYSCAL FILLEN,[CIMM LCI ? CRTN A]
+	 JRST	ENDREC
+	SYSCAL ACCESS,[CIMM LCI ? A]
+	 JFCL
+	MOVE	D,[440700,,OUTBUF]
+	.SUSET	[.RUNAM,,A]
+	MOVE	C,A
+	PUSHJ	P,OUTSIX
+	MOVE	A,[SIXBIT /      /]
+	PUSHJ	P,OUTSIX
+	.RDATI	A,
+	PUSHJ	P,OUTSIX
+	MOVE	A,[SIXBIT /      /]
+	PUSHJ	P,OUTSIX
+	MOVE	A,B
+	PUSHJ	P,OUTSIX
+	MOVE	A,[ASCII /   
+/]
+	MOVEM	A,OUTBUF+6
+	MOVE	A,[-7,,OUTBUF]
+	.IOT	LCI,A
+ENDREC:	.CLOSE LCI,
+	POPAE P,[D,C,B,A]
+	POPJ	P,
+
+TRYAGN:	SYSCAL OPEN,[[.BIO,,LCI] ? ['DSK,,0]		;TRY NON-WRITEOVER
+		[SIXBIT /.TTYS_/] ? [SIXBIT /LOADED/]
+		[SIXBIT /IMLAC/]]
+	 JRST	ENDREC
+	.CLOSE	LCI,
+	JRST	REC1
+
+OUTSIX:	PUSH	P,B
+	MOVE	B,[440600,,A]
+	ILDB T,B
+	ADDI T,40
+	IDPB T,D
+	CAME B,[600,,A]
+	 JRST	.-4
+	POP	P,B
+	POPJ	P,
+]
+CONSTANTS
+VARIABLES
+
+
+; See IMLLEN and IMLPGP and INIT and FLOADR for details of imlac-program residence.
+IMLPAG==<.+1777>/2000		; page # where imlac program gets stored in core
+				; (force to page boundary)
+IMLPRG==IMLPAG*2000		; corresponding address
+
+	END	START
+
