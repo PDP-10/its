@@ -656,7 +656,7 @@ respond "   PDP6F = " "1\r"
 expect ":KILL"
 respond "*" ":midas sys; atsign 10slav_sysen2; ld10\r"
 respond "   PDP6F = " "0\r"
-respond "GT40F=" "0\r"
+respond "GT40F=" "1\r"
 expect ":KILL"
 
 # animal
