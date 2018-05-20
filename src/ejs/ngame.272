@@ -1,0 +1,2023 @@
+;-*-midas-*-
+
+.symtab 2000,15000		;allocate some space for symbols
+
+if1 TITLE GAME -- I wouldn't assemble this if I were you
+if2 TITLE GAME -- You might really create a mess
+
+;;; Here is the imfamous GAME program munged by EJS
+;;; Please don't fool with it unless you know what you are doing.
+
+.qmtch==1			;make "<text>" handle text
+
+a=1				;temporary
+b=2				;temporary
+c=3				;temporary
+d=4
+e=5
+f=6
+t=7
+chr=10				;character being read
+ea=11				;effective address of UUO's
+opc=12				;op code of UUO's
+ac=13
+u1=14				;uuo temporary 1
+u2=15				;uuo temporary 2
+u3=16				;uuo temporary 3
+sp=17				;stack pointer
+
+dski==3				;dsk input channel
+dsko==4				;dsk output channel
+usrc==7				;usr input and utility channel
+uout==10			;usr output and fucked channel
+tyic==13			;can't use channel 1
+tyoc==14			;establish an output channel
+lsrc==15			;channel for LSRTNS to hack
+
+lsrpag==100			;moderately moby pages for INQUIRE (20 of them)
+intval==30.			;# of seconds between real-time interrupts
+pdleng==100			;lots of PDL space
+dsklen==1000
+
+opcode=.bp <777_33 0,0>		;opcode field
+accum=.bp <0 17,0>		;accumulator field
+index=.bp <0 0,(17)>		;index register
+
+
+argi==1000			;immediate argument
+val==2000			;value return
+errret==3000			;error return
+cnt==4000			;control
+cnti==5000			;control immediate
+
+call=pushj sp,			;make things easier on ourselves
+ret=popj sp,			;  ditto
+tyi==.iot			;  likewise
+tyo==.iot			;  and once again
+
+loc 100
+gloss:	jrst gloss1		;our loss handler
+ttyint:	jrst tyint		;tty interrupt handler
+loss=<jrst @gloss>		;loss handler stuff
+
+;;; Date and time handling routines
+
+$$abs==1			;want the absolute time routines
+p==17				;RMS's convention
+.insrt DSK:SYSENG;DATIME >
+
+;;; Inquire database hacking routines
+
+$$ULNM==0			;don't want LSRLNM
+$$ULNP==0			;nor last-name-prefix matcher
+$$UNAM==0			;don't want LSRNAM either
+.insrt DSK:SYSENG;LSRTNS >
+
+;;; Here are the variables for the load check feature
+
+mvsldu==40.			;minimum fair share is 40%
+mvusrs==18.			;maximum number of users is 18.
+
+;;; Some handy macros
+
+define save locs
+	irp foo,,[locs]
+	push sp,foo
+termin termin	
+
+define restor locs
+	irp foo,,[locs]
+	pop sp,foo
+termin termin
+
+
+define terpri chan=tyoc		;terpri on channel
+	tyo chan,[^M]
+	tyo chan,[^J]
+termin
+
+define text *string*
+!.length |string|,,[asciz |string|]!termin
+
+define ascnt *string*
+![text /string/]!termin
+
+define	type *string*
+	sioto tyoc,<ascnt /string/> 
+termin
+
+define death *string*
+	die <ascnt /string/>
+termin
+
+define norm7 c			   ;normallize a 7-bit byte pointer
+        skipge c
+          sub c,[430000,,1]
+termin
+
+define decbp c			   ;decrement byte pointer
+	add c,[70000,,]		   ;back up the byte pointer
+	skipge c		   ;did we cross a word boundary?
+	  sub c,[430000,,1]	   ;then fix it
+termin
+
+;;; Some macros for uuo handling
+
+define tabdef name
+	define name cruft
+	 cruft
+        termin
+
+
+     define a!name more
+	 name [define name cruft
+			cruft
+			more]
+               termin
+     termin
+termin
+
+;;; Very useful DO statement
+
+define	do stuff,else,\label
+    define ddoo exit
+           jrst [stuff
+		 jrst label]
+     !else!
+
+label::
+    termin
+ddoo <jrst label>
+termin
+
+;;; For evaluating system variables
+
+define seval a,b		;get value of symbol B in A
+	move a,[squoze 0,/b/]
+	.eval a,
+	  loss
+termin
+
+define eval a,b
+	seval a,b
+	hrl a,a			;move to left
+	hrri a,a		;destination is a
+	.getloc a,		;get it into a
+termin				;done!
+
+;;; The next macro is for making system calls
+
+define syscal a,b,c=<calerr>
+	.call [setz ? sixbit/a/ ? b ? setz+<errret,,0>+c] termin
+
+;;; Some cruft for uuo hacking
+
+tabdef utab
+uuonum==1
+
+define uuodef name,op,oper
+    define uuodex [op1=[pushj sp,]]
+	   autab [name=<.-uuotab>_33
+                  op1 u!name]
+    termin
+	oper
+	uuodex op
+termin
+
+.fooo==.
+loc 40
+UUO:	0			;traping UUO goes here.
+	jsr uuoh		;go handle uuo's
+	-intlng,,tsint		;abjon ptr to interrupt table
+
+loc .fooo
+
+intspc=100*100+5
+tsint:	intspc,,sp
+	0 ? 1_tyic ? 0 ? 0 ? ttyint
+	%piioc ? 0 ? 0 ? 0 ? ignore  ;for unknown IOC interrupts
+	0 ? -1,,0 ? 0 ? 0 ? dhandl
+	%pirlt ? 0 ? %pirlt ? -1 ? realt  
+		     ;don't allow recursive real-time interrupts
+		     ;if we get them we must be screwd
+intlng==.-tsint
+
+ignore:	type /AGot an unknown IOC interrupt.  Continuing...A/
+
+disbye:	syscal dismis,[cnti,,intspc  ;just go back to what you were doing
+		       sp]
+          loss
+
+dismis=jrst disbye
+
+;;;Here is the UUO handler
+
+uuoh:	0			;saved PC
+	save [uuo,uuoh,ea,opc,ac,u1,u2,u3]  ;save our AC's
+	ldb opc,[opcode uuo]	;get the opcode
+	cail opc,utabl		;is it legal?
+	  die [text /BAD USER UUO/]	;nope
+	ldb ac,[accum uuo]	;yep
+	hrrz ea,uuo		;get the effective address
+	xct uuotab(opc)		;and dispatch on it
+	restor [u3,u2,u1,ac,opc,ea,uuoh,uuo]  ;restore our AC's
+	jrst @uuoh		;return
+
+
+;;; Here are our UUO definitions
+
+uuodef sioto,,[
+usioto:	hrli u1,440700		;ascii string pointer
+	hrr u1,(ea)		;get address of string
+	hlrz u2,(ea)		;get length of string
+	movem u2,siotl		;move it to memory so it can be cleared
+	syscal siot,[ac		;ac has channel
+		u1
+		siotl]
+	 loss		;lost.
+	popj sp,		;return
+siotl:	0
+]
+
+;;; This UUO types text and kills job, unless in debug mode, in which
+;;;    case it types out the text and .values
+
+uuodef die,jrst,[
+udie:	caie ea,0		;if typing
+	 sioto tyoc,(ea)	; type it
+	skipe debug		;are we debuggin?
+	 .value			;yes, just return
+	.logout 1,
+	loss			;how the hell did this happen?
+]
+
+;;;Output sixbit as ascii on specified channel
+
+uuodef 6type,,[
+U6type: setzb u1,u2		;u1=u2+1
+	move u2,(ea)		;get our operand
+U6toa1:	lshc u1,6		;isolate off character
+	addi u1,40		;make it ascii
+	syscal iot,[ac ? u1]	;print it out
+	  loss
+	jumpe u2,cpopj		;if nothing left, return
+	setz u1,		;clear it
+	jrst U6toa1		;go back for more
+cpopj:
+	ret			;and we're all done
+]
+
+;;; print out a decimal number
+
+uuodef deca,,[
+udeca:	move u1,(EA)		;get number in U1
+decpnt:	idivi u1,10.		;figure first digit
+	push sp,u2		;push remainder
+	skipe u1		;done?
+	 pushj sp,decpnt		;no compute next one
+decpn1:	pop sp,u1		;yes, take out in opposite order
+	addi u1,60		;make ascii
+        syscal iot,[ac ? u1]
+          loss
+	popj sp,		;and return for the next one.
+]
+
+;;;  Convert number to ascii rep of octal and print it out
+
+uuodef 8type,,[
+u8type:	move u1,(ea)		;get number in U1
+octpnt:	idivi u1,10		;figure first digit
+	push sp,u2		;push remainder
+	skipe u1		;done?
+	 pushj sp,octpnt	;no compute next one
+octpn1:	pop sp,u1		;yes, take out in opposite order
+	addi u1,60		;make ascii
+	syscal iot,[ac ? u1]	;type it out
+	  loss			;  huh?
+	popj sp,		;and return for the next one.
+]
+
+
+;;; Some random locations
+
+debug:	0			;is in main block so user can reference
+tyo1c:	1			;will be reset to one on every tyo
+calerr:	0			;error return code
+
+;;; Here is our PDL
+
+pdl:	[.status tyoc,a
+	skipn a,
+	type /APDL Underflow.A/]
+	  loss
+	block pdleng		;PDL area
+
+;;; Inferior hacking stuff
+
+c1.cnt:	%pival+%pic.z+%pibrk+%pidcl
+c1.ded:	%pi1pr+%pib42+%pipar
+class2:	%pitrp+%pifet+%pitty+%pidis+%piilo+%piioc+%pioob+%pimpv+%pimar
+c1.2:	%pi1pr+%pibrk+%pib42+%pipar+%pival+%pic.z+%pitrp+%pifet+%pitty+%pidis+%piilo+%piioc+%Pioob+%pimpv+%pimar+%pidcl
+
+dhandl:
+	syscal usrvar,[argi,,usrc	;get his interrupts
+		['PIRQC ']
+		val,,a]
+	 loss
+	syscal usrvar,[argi,,usrc	;get mask for type 2 interrupts
+		['MASK  ']
+		val,,b]
+	 loss
+	and b,class2		;b<-class two which are enabled
+	tdz a,b			   ;remove them from our interrupt word
+	and a,c1.2		;remove class 3 interrupts
+	move b,a		;get a copy
+	tdz a,c1.cnt		;remove ones we'll handle
+	 jumpn a,fatal		;go handle fatal variety
+	trne b,%pibrk		;is the a .BREAK
+	 jrst break		;go handle
+	trne b,%pival		;is this a .VALUE?
+	  jrst [.dtty
+		  jfcl
+		 jrst value]		;go handle
+	tdne b,[%pic.z+%pidcl]	;control-Z ?
+	  skipa
+	jrst [.dtty
+		jfcl
+		type  /ABug in Inferior Interrupt HandlerA/
+		   loss]
+	syscal usrvar,[argi,,usrc	;reset his PIRQC
+		['APIRQC']
+		b]
+	 loss
+goback:	syscal dismis,[cnti,,intspc
+		sp
+		argi,,retloc]
+	  loss
+retloc:	type /AReturned from your game.A/
+	.dtty			;take tty away from inferior
+	skip
+	setzm ttyflg		;remember we have it back for good
+	ret
+
+define usrmem usrc,dest,a,b
+	syscal corblk,[cnti,,%cbwrt	;may as well get write if we can
+		argi,,0		;no XORing in my program!
+		argi,,%jself
+		argi,,377	;mega moby page
+		argi,,usrc	;from usrc channel job
+		a]		;at location a
+	 loss
+	move dest,(b)<377*2000>	;and get it
+termin
+
+define	uread usrc,loc
+	.access usrc,loc
+	syscal iot,[argi,,usrc
+		loc]
+	 loss
+termin
+
+define uwrite usrc,loc,dat
+	.access usrc,loc
+	syscal iot,[argi,,usrc
+		dat]
+	 loss
+termin
+
+define	addrup ind,rh,index,\foo,foo1
+	jumpe index,foo1		;if non-zero index
+	  uread usrc,index	;get value of index
+	  add rh,index		;and add it in
+foo1::	jumpn ind,[uread usrc,rh	;if we're indirecting
+		jrst foo]	;do the indirection
+foo::
+termin
+
+define pagmak a
+	andi a,-1		;clear left half
+	lshc a,-12		;split off page number from rest
+	lsh <a+1>,12-44		;and make remainder
+termin
+
+break:	syscal usrvar,[argi,,usrc	;turn off the interrupt
+		['APIRQC']
+		[%pibrk]]
+	 loss
+	syscal usrvar,[argi,,usrc	;get location of break
+		['UPC   ']
+		val,,a]
+	 loss
+	subi a,1		;back up to the .BREAK
+	move e,a		;move to where we have two adjacent ac's
+	pagmak e		;a <- page#, f <- loc in page
+	usrmem usrc,a,e,f	;a <- contents of memory
+	ldb b,[accum a]		;b <- accumulator
+	ldb c,[index a]		;c <- index
+        ldb e,[opcode a]
+	hlr d,a			;clear d, getting left half of a
+	andi d,(@)		;and with indirect bit
+	andi a,-1		;a <- address field
+
+        cain e,<.ldb opcode,.logout>
+	  caie a,33
+	    caia
+	      jrst brdie
+	cain b,12		;is it a .BREAK 12, ?
+	  jrst brk12		;yes
+        caie b,16		;is it garbage?
+	  jrst unbrk		;go handle unknown break
+brdie:	.uclose usrc,		;it must have been asking to die since we
+				;told it we weren't a DDT
+	jrst infdon
+
+define JCL *lcj*
+move a,[text /lcj/]
+movem a,jclptr
+termin
+
+jclptr:	0
+
+brk12:	addrup d,a,c		;ind,addr,ix
+	move e,a		;move to where we have room
+	move c,a		;and hold in C for error messages
+	pagmak e		;e <- page #, f <- loc in page
+	usrmem usrc,a,e,f	;get from his memory the location pointed to
+	jumpl a,[hlrz a,a	;if writing
+		caie a,400005	; if clearing JCL
+		  jrst [setzm jclptr	;clear it and
+			jrst infdon]	;be done
+		type /ABarf:  Inferior trying to write!A/  ;complain
+		jrst infdon]	;and be done
+	hlrz b,a		;get operation
+	hrrz d,a		;and address
+	trne d,200000		;is it block mode?
+	 jrst [type /ABarf:  Inferior trying to use block mode .BREAK 12,
+.BREAK 12,/
+		 jrst addprt]	;go print out err message
+	cail b,brktbl		;is it out-of-range?
+	 jrst unbrk1
+	xct brktb(b)
+
+addprt:	8type tyoc,c		;type address
+	sioto tyoc,[text "/   "]  ;"open" location with form
+	8type tyoc,b		;and type the contents
+	type /,,/		;in halfword mode
+	8type tyoc,d		;so we can read it easier
+	terpri tyoc	;CRLF
+	jrst infdon	;and give up
+
+unbrk1:	type /ABarf:  Inferior trying to use a .BREAK 12, I can't handle.
+.BREAK 12,/
+	jrst addprt
+
+brktb:	jrst unbrk1
+	jrst unbrk1
+	jrst unbrk1
+	jrst symptr
+	jrst unbrk1
+	jrst getjcl
+brktbl==.-brktb
+
+symptr:	caig d,17		;is it an AC?
+	 jrst [uwrite uout,d,[0]	;yep, do it the dangerous way
+		jrst infcnt]
+	move e,d		;get more space to work in and save d for error
+	pagmak e		;compute page in a and word in f
+	syscal corblk,[cnti,,%cbndw	;need write access
+		argi,,0
+		argi,,%jself
+		argi,,377
+		e]
+	 jrst jclovf		;go gripe
+	add f,<377_22>		;make absolute in our space
+	setzm (f)		;and set the appropriate word to 0
+	jrst infcnt		;and continue
+
+getjcl:	move e,d		;get more space and save d for error
+	pagmak e
+	syscal corblk,[cnti,,%cbndw	;need write access
+		argi,,0		;no XORing, please
+		argi,,%jself	;map into ourself
+		argi,,376	;at the highest possible location
+		argi,,usrc	;our inferior's
+		e]		;page which is contained in A
+	  jrst jclovf
+	aos e			;get next page too
+	hlrz a,jclptr		;get length pointer of JCL
+	addi a,4
+	idivi a,5		;(ptr+4)/5==length in words
+	add a,f			;the final loc
+	cail a,2000		;overflow?
+	 jrst [syscal corblk,[cnti,,%cbndw	;need writing
+			argi,,0		;barf, no XOR, please
+			argi,,%jself
+			argi,,377	;very moby
+			argi,,usrc	;our very inferior inferior
+			e]		;and the next page
+		  jrst jclovf	;complain of indigestion
+		jrst jcljcl]	;go write JCL
+
+;a -- absolute ending address
+;b -- operation
+;c -- effective address of .BREAK
+;d -- right half of contents of ea of .break
+;e -- page number in inferior of JCL buffer
+;f -- loc in that page
+
+jcljcl:	addi a,<376_12>		;make end addr. point into our page map
+	addi f,<376_12>		;make the dest. address point into our map
+	hrr e,f			;and put in right half for blt
+	hrl e,jclptr		;get our source for the BLT from the JCLPTR
+	blt e,-1(a)		;and perform the transfer
+	skipe ttyflg		;if it had the tty
+	 jrst infcnt
+	jrst infdon		;else just dismiss
+
+infcnt:	setom ttyflg		;remember where the TTY went
+;	.atty usrc,		;give it to him
+;	 jrst [.dtty 		;get it back
+;		.atty usrc,	;and try again
+;		  loss		;nope, we're screwed somehow
+;		jrst infcn1]	;good, one with the show
+
+	call start
+
+infcn1:	syscal dismis,[cnti,,intspc
+		sp]
+	  loss
+	
+jclovf:	type /AInferior tried to read into pure or non-existant memory
+.BREAK 12,/
+	jrst addprt		;tell him about loss
+
+unbrk:	type /AInferior gave an unknown .BREAK
+.BREAK /
+
+addrtp:	8type tyoc,b		;type out the address stuff
+	tyo tyoc,[","]		;type out the comma
+	caie d,0	;indirect?
+	 tyo tyoc,["@"]	;type it
+
+	caie a,0	;rh nonzero?
+	  8type tyoc,a		;type the right half
+
+	jumpn c,[tyo tyoc,["("]	;type the (
+	         8type tyoc,c	;type the index
+		tyo tyoc,[")"]
+		jrst ubrk1]
+
+ubrk1:	type / >>> /
+	addrup d,a,c		;compute effective address
+	8type tyoc,a		;and print it
+	terpri tyoc
+	jrst infdon
+
+value:	syscal usrvar,[argi,,usrc	;turn off the interrupt
+		['APIRQC']
+		[%PIVAL]]
+	  loss
+	type /AInferior .VALUE'd...Continuing...A/
+	jrst infdon
+
+fatal:  .dtty
+	  jfcl
+	type /AInferior got a Fatal Interrupt.A/
+	.uclose usrc,
+	jrst infdon
+
+infdon:	setzm ttyflg		;remember we have it back for good
+	syscal dismis,[cnti,,intspc
+		sp]
+	  loss
+
+start:	syscal usrvar,[argi,,usrc	;copy his old state
+		['OPTION']
+		val,,a]
+	 loss
+	tlz a,optcmd+optbrk	;clear the OPTCMD bit (+ the OPTBRK since LISP
+				;demands it!)
+	skipe jclptr		;if there is JCL
+	 tlo a,optcmd+optbrk	;set it again
+	syscal usrvar,[argi,,usrc	;and set it up
+		['OPTION']
+		a]		;write it back again
+	  loss
+
+	syscal usrvar,[argi,,usrc	;GO!
+		['USTP  ']
+		argi,,0]
+	  loss
+
+	ret
+ttygo:
+	call start
+	setom ttyflg		;remember we gave it away
+	.atty usrc,		;give up the TTY and wait for return
+	 skipe ttyflg		;what?
+	.hang			;until return of TTY
+	.dtty			;make SURE that we have the TTY
+	 ret
+	 ret
+
+nttygo:
+	syscal usrvar,[argi,,usrc
+		['USTP  ']
+		argi,,0]
+	  loss
+	ret
+
+istrt:	0
+
+define infcr chan,name,fn1,fn2,sname,device,f.loss=loss,page=-1,handle=dhandl
+	push sp,a		;save a for local use
+	.status usrc,a		;look at the channel
+	caie a,0		;if there is nothing open
+	  .uclose usrc,		;kill it
+
+	syscal open,[cnti,,0	;create a job
+		argi,,usrc
+		['USR   ']
+		myunam
+		[sixbit /name/]]
+	  loss
+	syscal open,[cnti,,.uio	;and an output channel to it (ugh!)
+		argi,,uout
+		['USR   ']
+		myunam
+		[sixbit /name/]]
+	  loss
+
+	syscal open,[cnti,,.uii	;open a file to load into it
+		argi,,dski
+		[sixbit /DEVICE/]
+		[sixbit /FN1/]
+		[sixbit /FN2/]
+		[sixbit /SNAME/]]
+	 f.loss
+
+	syscal load,[argi,,usrc	;load it
+		argi,,dski]
+	  loss
+
+	syscal iot,[argi,,dski	;get starting address
+		argi,,a]	;in a
+	 loss
+	andi a,-1		;ignore the JRST part
+
+	syscal close,[argi,,dski]	;close it
+	 loss
+
+	movem a,istrt		;and save the ADDR in ISTRT
+
+	syscal usrvar,[argi,,usrc	;make it start there
+		['UPC   ']
+		a]		;a has address
+	 loss
+
+	syscal usrvar,[argi,,usrc	;get what bit to enable
+		['INTB  ']
+		val,,a]
+	 loss
+
+	syscal usrvar,[argi,,%jself	;and enable it
+		['IMSK2 ']
+		a]
+	 loss
+	pop sp,a
+
+termin
+
+infkil:	push sp,a		;get A free
+	.status usrc,a		;is there an inferior?
+	jumpe a,[type /AYou don't have a game to kill.A/
+		pop sp,a	;restore A
+		ret]		;and give up.
+	pop sp,a		;restoer a
+	setzm ttyflg		;remember we have it back for good
+	.uclose usrc,		;kill it
+	type /AGame Killed.A/	;say it
+	ret			;return
+
+
+uuotab:	loss
+	utab
+utabl==.-uuotab
+	consta			;dump out constants table
+
+popj.1:	aos (sp)		;increment return address
+	popj sp,		;and return
+popj1=jrst popj.1		;and define our symbol
+
+
+%sllog==1			;bit to indicate not-logged-in
+%sldil==2			;bit to indicate coming in from a dialup line
+%sload==4			;bit to indicate over-stepping a load boundary
+%slcls==10			;bit to indicate closed
+%sldet==20			;we've been detached
+
+;;; When he types an undefined character execute this
+
+uhuh:	type /AType ? for list of commands.A/
+	move sp,[-pdleng,,pdl]	;reset the pdl
+	jrst cloop		;back to cloop
+
+huh=jrst uhuh			;throw to top level loop
+
+;;; Here is where we tell it where star trek is
+
+if1,[
+printc /Star Trek:  /
+.TTYMAC notty=notty,pine=pine,dir=games
+
+;;; Here is the star trek macro
+
+define star 
+	type /CStar Trek
+Please Hold On.....A/
+	infcr ursc,.mctrk,notty,pine,dir,dsk,jrst strlos
+	syscal tranad,[cnti,,3	;input and output
+			argi,,usrc	;do it to our inferior
+			[-4,,['DSK   '
+				'      '
+				'DAT   '
+				'      ']]
+			[-4,,['AR8   '
+				'      '
+				'      '
+				'GAMES  ']]]
+	  loss
+
+	jrst ttygo		;go do it
+termin
+termin
+
+
+printc /Adventure (2):  /
+.TTYMAC notty=notty,pine=pine,dir=games
+
+define ADVENT
+	type /CAdventure....
+Please Hold On....A/
+	infcr ursc,.ADV.,notty,pine,dir,dsk,jrst advlos
+	jrst ttygo		;go do it
+termin
+termin
+
+printc /Adventure (1.5):  /
+.TTYMAC rotty=rotty,rine=rine,dir=games
+
+define ADVNBS
+     type/ CAdventure....
+Please Hold On....A/
+     infcr ursc,.ADV.,rotty,rine,dir,dsk,jrst advlos
+     jrst ttygo
+termin
+termin
+]
+
+;;; Our log file routine
+
+Define tattle [FILE],&MESS
+	push sp,[[file ? text mess]]
+	call asshol
+	pop sp,nulll
+termin
+
+
+;;; Here is the start of the game program
+
+go:	move sp,[-pdleng,,pdl]	;initialize our push stack
+	syscal open,[cnti,,.uii	;open tty for input
+			argi,,tyic
+			[sixbit /TTY/]]
+	  loss
+	syscal open,[cnti,,<.uao+%tjdis>  ;open tty for output
+		argi,,tyoc
+		[sixbit /TTY/]]
+	  loss
+        call ldcal		;get initial numbers
+	.suset [.runame,,myunam]	     ;get our name
+	move a,myunam			     ;move it into a
+	camn a,[sixbit /EJS/]		     ;if we're EJS, must be debugging
+	   do [move a,logfld		     ;switch all the tattle files
+	       movem a,logfil+1		     ;to test files.
+	       move a,delfld
+	       movem a,delfil+1
+	       move a,badfld
+	       movem a,badfil+1]
+	camn a,[sixbit /TEST/]		     ;if we're TEST, must be debugging
+	   do [move a,logfld		     ;switch all the tattle files
+	       movem a,logfil+1		     ;to test files.
+	       move a,delfld
+	       movem a,delfil+1
+	       move a,badfld
+	       movem a,badfil+1]
+	call fndfil			     ;check to see it he was bad
+	.suset [.roption,,a]		     ;get current .OPTION var
+	ior a,[(optint+optopc)]		     ;we want new interrupts and
+	.suset [.soption,,a]		     ;and backed up pc
+	syscal usrvar,[argi,,%jself	     ;enable IOC errors to ignored them
+		['IMASK ']
+		[%piioc]]
+	 loss
+
+begin:	setzm initld			     ;this is first time through
+	call ctmf			     ;has he altered things
+	call whois			     ;check for reasonable user
+	  call dbging			     ;  we're debugging 
+	call sttw			     ;enable loadchecking
+        setom initld			     ;ok, we've gone through once
+        syscal close,[argi,,1]	;close 1, incase we were re-loaded
+          skip				     ;  ignore any errors
+	.suset [.rjname,,a]		     ;see what we are.
+	camn a,['ADVENT']		     ;are we a substitute ADVENT?
+	  do [.suset [.rsuppro,,a]	     
+		 jumpl a,[syscal usrvar,[argi,,%jself	;if top level become
+					  ['JNAME ']	;a HACTRN
+					  ['HACTRN']]	;but don't allow
+							;duplicates 
+                          jrst [tattle logfil,/   AHG/
+                                death /
+You seem to be already logged in with a GAME.A/]
+			exit]	;exits all the way to the top ...
+		type /AChanging name of job to GAME!A/
+				;if not top level, gotta hope it's a DDT
+		.value [asciz /gameJ.gameJP/]]
+
+	syscal ttyset,[argi,,tyic	     ;and store it
+		ttyst1
+		ttyst2]
+	  loss
+	.suset [.simask,,[%pirlt]]  ;enable timer interrupts
+	.suset [.simsk2,,[1_tyic]]	     ;enable interrupts on the channel
+	skipn pzhjkw+10.		     ;has he cheated us
+	  jrst mechan			     ;  yes, he has, kill him
+
+	type /CGame selection program version /  ;type out this greeting
+	6type tyoc,[.FNAM2]		     ;and type out the version number
+	terpri tyoc			     ;do a CRLF
+
+	tattle logfil,/+  STG/		     ;log him in!
+
+	syscal open,[cnt,,inctl		     ;try to open notes file
+			argi,,dski
+			['DSK   ']
+			['GAME  ']
+			['NOTES ']
+			['GAMES  ']]
+		jrst cont		     ;  not there, skip it
+
+	call [move a,[notcbl,,copblk]	     ;print out notes file
+	    blt a,copend
+	    jrst copy]
+
+cont:	type /AType ? for help.A/	     ;help him out a bit
+cloop:	type /A>/			     ;prompt him
+	skipn pzhjkw+10.		     ;is he cheating?
+	   jrst mechan			     ;  yes, flush him
+	tyi tyic,chr			     ;read a chr
+	caile chr,140			     ;is it uppercase?
+	 subi chr,40			     ;  no, convert it to uppercase
+	skipn wkjhzp+5			     ;is he cheating?
+	   jrst mechan			     ;  yes, flush him
+	xct optab(chr)			     ;and act on it
+	call ctmf			     ;check things out
+	call whois			     ;check for reasonable user
+	  call dbging			     ;we're debugging 
+	call sttw			     ;enable loadchecking
+	jrst cloop			     ;and go back for more
+
+;;; *****************************************************************
+;;;     			OPTAB
+;;; *****************************************************************
+
+optab:	huh			;^@
+	call gdoc		;^A -- List games
+	call [.status usrc,a
+		jumpe a,[type /AYou do not have a game to continue!A/
+			ret]
+		type /AReturning to your game...A/
+		jrst ttygo]	;^B -- Back to previous game
+	call pdoc		;^C -- List program commands
+	call del		;^D -- Delete GAME program
+	huh			;^E
+	huh			;^F
+	huh			;^G
+	huh			;^H
+	call instal		;^I -- Install new GAME program
+	huh			;^J
+	call infkil		;^K -- Kill previous game
+	call ctype		;^L -- Clear screen
+	huh			;^M
+	huh			;^N
+	huh			;^O
+	call [.status usrc,a	;is it open
+		jumpe a,[type /AYou don't have a game to proceed.A/
+			ret]
+		type /AProceeding the game.  I won't know if it needs the TTYA/
+		jrst nttygo]	;^P -- Proceed previous game
+	call [type /AAre you sure you want to quit? (Y or N)  /
+		tyi tyic,a	;get a character
+;;;		tyo tyoc,a	;and echo it
+		caie a,131	;is it Y
+		  cain a,171	;or y?
+		    jrst [type /Yes./
+		          tattle logfil,/*  QTG/
+		          death /AQuitting...bye!A/]
+		type /No.A/
+		ret]		;^Q -- Quit the GAME program
+	huh			;^R
+	call [setzm ttyoff	;^S -- turn on our TTY when it get's read
+		ret]
+	huh			;^T
+	huh			;^U
+	huh			;^V
+	huh			;^W
+	huh			;^X
+	huh			;^Y
+	type /CYou are at the top level of the GAME program.A/
+				;^Z -- Get to top level of GAME
+	huh			;
+	huh			;^\
+	huh			;^]
+	huh			;^^
+	huh			;^_
+	huh			; Space
+	huh			;!
+	huh			;"
+	huh			;#
+	huh			;$
+	huh			;%
+	huh			;&
+	huh			;'
+	huh			;(
+	huh			;)
+	huh			;*
+	huh			;+
+	huh			;,
+	huh			;-
+	call [type /CThink
+Type "?" for help.
+Please Hold On.....A/
+		jcl /DSK:games;THINK (INIT)
+/
+		infcr usrc,.THNK,ts,q,sys,dsk
+		jrst ttygo]	;. -- Play Think
+	huh			;/
+	huh			;0
+	huh			;1
+	huh			;2
+	huh			;3
+	huh			;4
+	huh			;5
+	huh			;6
+	call [type /CGuess!
+Please Hold On.....A/
+		infcr usrc,.guess,ts,guess,games,dsk
+		jrst ttygo]	;7 KMP's crock
+	huh			;8
+	huh			;9
+	huh			;:
+	huh			;;
+	huh			;<
+	huh			;=
+	huh			;>
+	call help		;? -- List help documentation
+	huh			;@
+	call [ADVENT]		;A -- Play Adventure
+	call [type /CChess
+Please Hold On.....A/
+		infcr usrc,.ches2,ts,chess2,games,dsk
+		jrst ttygo]	;B -- Play Baisly's Chess program
+	call [type /CChess
+Please Hold On.....A/
+		infcr usrc,.chess,ts,ocm,games,dsk
+		jrst ttygo]	;C -- Play Greenblatt's Chess program
+	call [type /CDOCTOR
+End your input with two carriage returns.
+Please Hold On......A/
+		jcl /DSK:games;ELIZA (INIT)
+/
+		infcr usrc,.doc.,ts,Q,sys,dsk
+		jrst ttygo
+		ret]		;D -- Play Doctor
+	call [type /CChase...
+Do you want documentation?  (Y or N)  /
+		tyi tyic,a
+		tyo tyoc,a
+		caie a,131
+		  cain a,171
+		    call [move a,[chacbl,,copblk]
+			blt a,copend
+			jrst copy]
+		call [type /AHold on a sec....A/
+		      ret]
+		jcl /DSK:games;CHASE (INIT)
+/
+		infcr usrc,.chas.,ts,q,sys,dsk
+		jrst ttygo
+		ret]		;E -- Play Chase
+	call [type /CBackgammon
+Please Hold On.......A/
+		infcr usrc,.backg,ts,bkg,games,dsk
+		jrst ttygo]	;F -- Play Backgammon (an F?)
+	call [type /CGo
+Please Hold On........A/
+		jcl /DSK:games;GO (INIT)
+/
+		infcr usrc,.go,ts,q,sys,dsk
+		jrst ttygo]	;G -- Play Go
+	huh			;H
+	huh			;I
+	call [type /CJotto
+Please Hold On.......A/
+		infcr usrc,.jotto,ts,jotto,sys1,dsk
+		jrst ttygo]	;J -- Play Jotto
+	call [type /CAnimal
+Please Hold On........A/
+		infcr usrc,.animl,ts,animal,games,dsk
+		jrst ttygo]	;K -- Play KMP's Animal
+	call [type /CYou dirty Old Man You.A/
+		infcr usrc,.SEX.,TS,LIMMER,sys2,dsk
+		jrst ttygo]	;L -- Print out a Limerick
+        call [ADVNBS]			;M -- Play Adventure 1.5
+	call [type /CNimlin
+Please Hold On.....A/
+		infcr usrc,.nimln,ts,nimlin,games,dsk	;create
+		jrst ttygo]	;N -- Play Nimlin
+	call [type /COthello
+Please Hold On......A/
+		infcr usrc,.orth.,ts,o,games,dsk
+		jrst ttygo]	;O -- Play Othello
+	call [type /CKMP's Psychiatrist
+Please Be Patient, the Doctor will be right with you.....A/
+		jcl /DSK:games;DOC >
+/
+ 		infcr usrc,.psych,ts,q,sys,dsk
+		jrst ttygo]	;P -- Play KMP's Psychiatrist
+	call [type /CQubic
+Please Hold On......A/
+		jcl /DSK:games;QB (INIT)
+/
+		infcr usrc,.qubic,ts,q,sys,dsk
+		jrst ttygo]	;Q -- Play Qubic
+		huh		;R 
+	call [star]		;S -- Play Star Trek
+	call [type /CStone (This only works on a display)
+Please Hold On.....A/
+		jcl /DSK:games;STONE (INIT)
+/
+		infcr usrc,.stone,ts,q,sys,dsk
+		jrst ttygo]	;T -- Play Stone
+	call [type /CSPROUTS!
+Do you want documentation?  (Y or N)  /
+		tyi tyic,a
+		tyo tyoc,a
+		caie a,131
+		  cain a,171
+		    call [move a,[spdcbl,,copblk]
+			blt a,copend
+			jrst copy]	;JRST hack
+		call [type /AHold on a sec...A/
+		      ret]
+		infcr usrc,.sprt.,ts,sprout,games,dsk
+		jrst TTYGO]	;U -- Play Sprouts
+	huh			;V
+	call [type /CWumpus
+Please Hold On.....A/
+		infcr usrc,.WUMP,TS,wumpus,sys1,dsk
+		jrst ttygo]	;W -- Play Wumpus
+	call [type /CWumpus Advisor
+Please Hold On......A/
+		jcl /DSK:games;WA (INIT)
+/
+		infcr usrc,.WA.,TS,Q,SYS,dsk
+		jrst ttygo]	;X -- Play Wumpus Advisor
+	call [type /CYahtzee
+Please Hold On.......A/
+		jcl /DSK:games;YAHTZE (INIT)
+/
+		infcr usrc,.yahtz,ts,q,sys,dsk
+		jrst ttygo]	;Y -- Play Yahtzee
+        call [type /CZork??  (Ha!)A/
+		infcr usrc,zork,ts,zork,sys3,dsk
+		jrst ttygo]	;Z
+	huh			;[
+	huh			;\
+	huh			;]
+	huh			;^
+	huh			;_
+	huh			;`
+	huh			;a
+	huh			;b
+	huh			;c
+	huh			;d
+	huh			;e
+	huh			;f
+	huh			;g
+	huh			;h
+	huh			;i
+	huh			;j
+	huh			;k
+	huh			;l
+	huh			;m
+	huh			;n
+	huh			;o
+	huh			;p
+	huh			;q
+	huh			;r
+	huh			;s
+	huh			;t
+	huh			;u
+	huh			;v
+	huh			;w
+	huh			;x
+	huh			;y
+	huh			;z
+	huh			;{
+	huh			;|
+	huh			;}
+	huh			;~
+	huh			;Rubout
+
+;;; ******************************************************************
+;;;			END OF OPTAB
+;;; ******************************************************************
+
+;;; Now here comes the Delete Routine
+
+del:	call turstp		;is he a turist?
+	  caia			;  no, skip
+	    huh			;     yep, make believe we don't know
+				;     what he's talking about
+	type /
+Note:  A record is kept of those who use this command.  This command
+deletes the GAME program.  Do not use it unless you have a very good
+reason.  Randoms should not use it at all.  Are you certain that you
+want to delete the master copy of the GAME program? (Y or N)  /	
+
+	tyi tyic,a		;read a character
+	caile a,132		;is it uppercase?
+	  subi a,40		;  no, make it then
+	caie a,"Y"		;is it a "Y"
+	  jrst [type /ASo what are you playing around with fire for?A/
+		ret]		;tell him he's an asshole
+	type /ADeleting...A/  ;make him think that the process takes
+	tattle delfil,/Deleted the game program     /  ;a long time to 
+	syscal delete,[[sixbit /DSK/]  ;do.  actually we just want to rat
+		       [sixbit /TS/]   ;on him!  dirty of us isn't it?
+		       [sixbit /GAME/]
+		       [sixbit /GAMES/]]
+	  jfcl
+	tattle logfil,/   DFL/	;well, as long as the bastard deleted the
+	death /ASo long, it is deletedA/  ;game program, we might as
+				;well kill him
+pzhjkw: block 15			     ;one of our nasty locations
+
+;;; here is the code for installing a new version of game
+
+instal:	call turstp		;is he a turist?
+	  caia			;  nope, skip
+	    huh			;yep, we don't know this command
+	type /
+Note:  A record will be kept of those who use this command.  Don't use it 
+unless you have a good reason.  Randoms are not to use it at all.  Are you 
+certain that you want to clobber this version with maybe a bad one?
+(Y or N)  /
+
+	tyi tyic,a		;get his response
+	caile a,132		;is it capitalized?
+	 subi a,40		;  no, well capitalize it!
+	caie a,"Y"		;if it is not y
+	  jrst [type /ASo what are you playing around with fire for?A/
+		ret]
+	type /AInstalling new version of the GAME program.A/
+				;let him know we're working on it
+	tattle delfil,/Installed new version of Game/	;rat on him
+	move a,[instbl,,copblk]	;well let's copy it in now
+	blt a,copend
+	call copy		;ok, let's copy it in
+	type /AOk, done!A/	;let him know we're finished.
+	ret			;and return to cloop
+wkjhzp: block 12			     ;here is another nasty location
+
+;;; Ok, here are the all important Help routines
+
+hlpflg:  0			;flag to tell if he's seen it yet
+
+help:	skipn hlpflg		;only if this is the first time
+	type /C
+Type <control>A to list games that are available.
+Type <control>C to list the program commands
+/
+
+	skipe hlpflg		;from now on, be brief
+	type /C
+^A -- List games
+^C -- List program commands  
+/
+
+	setom hlpflg		;he's seen it once--let's be brief
+	ret			;go back to command loop
+
+;;; Here is the Documentation for the Games
+
+gdoc:	type /CYou choose a game by typing a single character as follows:
+
+A -- Adventure II	           M -- Adventure I.V
+B -- Baisley's Chess Program	   N -- Nimlin
+C -- Greenblatt's Chess Program	   O -- Othello
+D -- Doctor			   P -- KMP's Psychiatrist
+E -- Chase (W. Kornfeld's)	   Q -- Qubic
+F -- Backgammon			   S -- Star Trek
+G -- Go				   T -- Stone (for displays only)
+J -- Jotto			   U -- Sprouts
+K -- Animal II			   W -- Wumpus
+L -- Limerick			   X -- Wumpus Advisor
+. -- Think			   Y -- Yahtzee
+7 -- Guess!			   Z -- Zork!
+^A -- Lists games available
+^C -- Lists program commands
+/
+	ret
+
+;;; Here is the documentation for the Program commands
+
+pdoc:	type /CProgram commands:
+^A -- List games available
+^B -- Back to previous game
+^C -- List these commands
+^G -- Revert to command loop
+^K -- Kill previous game
+^P -- Proceed job without the TTY
+^Q -- Quit the GAME program
+^S -- Stop typeout
+?  -- List help commands available
+
+/
+	ret
+
+;;; Here is the routine to write out the log files
+
+asshol:	move d,-1(sp)
+	move a,(d)
+	syscal open,[cnti,,.uao+100000	;open in write-over mode
+		argi,,dsko
+		[sixbit /DSK/]	;DEV
+		0 ,(a)		;FN1, on the stack
+		0 ,1(a)		;FN2
+		0 ,2(a)]	;DIR
+	jrst [syscal open,[cnti,,.uao	;this time we'll create it
+			argi,,dsko
+			['DSK   ']
+			0 ,(a)
+			0 ,1(a)
+			0 ,2(a)]	;it's all done with mirrors
+		  ret		;something's screwed, oh well
+		jrst barfln]	;go continue barfing
+
+barfln:	syscal fillen,[argi,,dsko	;find length
+		val,,a]		;in a
+	 .lose 1000
+	syscal access,[argi,,dsko	;and go to end of file
+		a]		;(which is in a)
+	 .lose 1000
+	.suset [.runame,,a]	;get our UNAME
+	6type dsko,a		;write uname
+	tyo dsko,[^I]		;write a tab
+	sioto dsko,1(d)		;write message
+	sioto dsko,[text / at /]	;write " at "
+	.rdatim a,		;get time in a, date in b
+	6type dsko,b		;write date
+	tyo dsko,[40]		;write a space
+	6type dsko,a		;write time
+        sioto dsko,[text / == /]  ;type this divider
+        move a,frshr		;get fair share in a
+        deca dsko,a		;type out the fair share
+     sioto dsko,[text /\/]
+     move a,mxsldu
+     deca dsko,a
+        tyo dsko,[40]		;type a space
+        move a,nusrs		;get number of users
+        deca dsko,a		;type is out
+     sioto dsko,[text /\/]
+     move a,mxusrs
+     deca dsko,a
+        sioto dsko,[text / -- /]  ;type out this divider
+	movs a,load		;get load in a
+	8type dsko,a		;type out the load
+	terpri dsko		;crlf
+	syscal close,[argi,,dsko]	;close the file
+	ret			;and even this is to be ignored
+	ret			;return
+
+;;; Here is the code for going back to a Game
+
+back:	.status usrc,a		;check status of inferior 
+	jumpe a,[type /AYou don't have a game to go back to!A/
+		ret]		;he didn't have one
+	type /AReturning to game.A/	;tell him we're going back to it
+	jrst ttygo		;go back and play
+
+;;; Here is the loss handler stuff
+
+gloss1:	skipe debug		;debugging?
+	  .value		;yes....give warning
+				;^G quit's enter here
+pdlfix:	.dtty			;make sure we have the TTY
+	  jfcl
+	setzm ttyoff		   ;turn on the TTY
+	setzm ttyflg ;keep the TTY
+	move sp,[-pdleng,,pdl]
+	move a,[-2,,[.sdf1,,[0] ? .sdf2,,[0]]]
+	.suset a		;undefer the world
+	jrst cloop
+
+;;; Interrupt handler stuff
+tyint:	push sp,a		;must save regs since we might not do it
+	movei a,tyic		;get our interrupt char
+	.ityic a,		;into a, but don't flush it
+          jrst tycnt		;huh?  just ignore the interrupt, we'll get it
+				;again soon if we really should
+	cain a,7		;if char is a ^G
+				;this will restart with a message
+	  jrst [.reset tyoc,	;reset the output
+		.reset tyic,	;reset the input
+		type /AQUITA/
+		jrst pdlfix]
+	caie a,^S		;check for spurious
+	  jrst tycnt		;yep, ignore
+	.reset tyoc,		;throw away typeout
+	setzm siotl	;and stop typeing
+	setom ttyoff		;turn off the TTY
+	skipe ttyflg		;are we copying to TTY?
+	  do [setzm outcnt	;  clear SIOT count
+		setom remain]	;  claim last input SIOT didn't fill buffer
+tycnt:	pop sp,a		;get them back
+	syscal dismis,[cnti,,intspc
+		sp]
+	  loss
+	  loss
+
+ttyoff:	0
+ttyst1:	020202,,020202
+ttyst2:	030202,,020202
+
+
+quit:	move sp,[-pdleng,,pdl]	;reset PDL
+	.reset tyic,		;reset the input
+	type /AQUITA/	;tell him what he hit
+	jrst cloop		;and go back to the command loop
+
+;;; This is for the clear screen, display version stuff
+
+ctype:	type /CGAME./		;clear screen and type our name
+	6type tyoc,[.fnam2]	;type version number
+	terpri tyoc		;do a carriage return
+	ret			;and return
+
+;;; Some hacker tried to assemble it, or somebody deleted Star Trek
+
+strlos:	type /
+Someone is hacking.  I don't know where Star Trek is.  Sorry!A/
+				;tell him about it
+	jrst quit		;and quit
+
+;;; Some hacker tried to assemble this, or deleted Adventure
+
+advlos:	type /
+Someone is hacking.  I don't know where Adventure is.  Sorry!A/
+				;tell him about it
+	jrst quit		;and quit
+
+
+;;; This is the copy data
+
+copblk::
+
+bytlen:	0			;size of bytes to XFER
+
+inctl:	.uii
+INDEV:	'DSK   '
+INFN1:	0
+INFN2:	0
+INDIR:	0
+
+outctl:	0
+outdev:	'DSK   '
+outfn1:	0
+outfn2:	0
+outdir:	0
+copend==.-1
+
+;;; Copy stuff for the GAME NOTES file
+
+notcbl: offset copblk-.
+
+bytlen: 7
+
+inctl:  .uai
+indev:  'DSK   '
+infn1:  'GAME  '
+infn2:  'NOTES '
+indir:  'GAMES  '
+
+outctl: .uao
+outdev: 'TTY   '
+outfn1: 'FOO   '
+outfn2: 'BAR   '
+outdir: 'BAZ   '
+
+offset 0
+
+;;; Copy stuff for the Install routine
+
+instbl:	offset copblk-.
+
+bytlen:	44			;length of bytes to XFER
+
+inctl:	.uii
+INDEV:	'DSK   '
+INFN1:	'NGAME '
+INFN2:	'BIN   '
+INDIR:	'EJS   '
+
+outctl:	.uio
+outdev:	'DSK   '
+outfn1:	'TS    '
+outfn2:	'GAME  '
+outdir:	'GAMES  '
+
+offset 0
+
+
+;;; Copy stuff for the Sprouts documentation
+
+spdcbl:	offset copblk-.
+
+Bytlen:	7			;length of bytes to XFER
+
+inctl:	.uai
+INDEV:	'DSK   '
+INFN1:	'SPROUT'
+INFN2:	'RULES '
+INDIR:	'GAMES '
+
+outctl:	.uao
+outdev:	'TTY   '
+outfn1:	'FOO   '
+outfn2:	'BAR   '
+outdir:	'BAZ   '
+
+offset 0
+
+;;; Copy stuff for the Chase documentation
+
+chacbl:	offset copblk-.
+
+Bytlen:	7			;length of bytes to XFER
+
+inctl:	.uai
+INDEV:	'DSK   '
+INFN1:	'CHASE '
+INFN2:	'INFO  '
+INDIR:	'GAMES  '
+
+outctl:	.uao
+outdev:	'TTY   '
+outfn1:	'FOO   '
+outfn2:	'BAR   '
+outdir:	'BAZ   '
+
+offset 0
+
+constants
+
+;;; Here is the actual copying routine
+
+copy:	syscal open,[cnt,,inctl	;open input file in appropriate mode
+			argi,,dski
+			indev
+			infn1
+			infn2
+			indir]
+	  jrst [type /ANo new version available.  Forgot to assemble it?A/
+		ret]		;lost, tell him
+	syscal open,[cnt,,outctl	;open output file in apprpriate mode
+			argi,,dsko
+			outdev
+			['_GAME_']
+			['_COPY_']	
+			outdir]
+	  jrst [type /ASituation somehow screwed on output.  Barf!A/
+		syscal close,[argi,,dski]
+		 .lose 1000
+		ret]		;what happened?
+	save [a,b,c,d]
+	move a,outdev		;get where it's going to...
+	camn a,['TTY   ']	;TTY?
+	  setom ttyflg		; then set the flag
+	move a,bytlen		;get our byte length
+	move b,[440000,,dskbuf]	;shell of a byte pointer to DSKBUF
+	dpb a,[.bp (7700),b]	;fill it in
+	movem b,bytdst		;save our byte pointer for later
+	movei b,44		;36/bytesize*wordsize is buffer size in bytes
+	idiv b,a
+	imuli b,dsklen
+	movem b,bufsiz		;and save it for posterity
+morcop:	move a,bytdst		;get our byte pointer
+	move b,bufsiz		;and our buffer size
+	syscal siot,[argi,,dski
+		a
+		b]
+	  do [syscal close,[argi,,dski]
+		  jfcl
+		syscal close,[argi,,dsko]
+		  jfcl
+		jrst copret]
+	move c,bytdst		;get another copy of our byte pointer
+	move d,bufsiz		;lets figure out how many were moved
+	sub d,b			;look MA, no random +1 or -1 's!  (ITS WINS!!)
+	movem d,outcnt		;move these out to storage so we can win on
+	movem b,remain		;output resets
+	call c.cadj		;check for teco cretinism
+	
+	syscal siot,[argi,,dsko
+  		c
+		outcnt]
+	  do [syscal close,[argi,,dski]
+		  .lose 1000
+		syscal close,[argi,,dsko]
+		  .lose 1000
+		jrst copret]
+	move b,remain		;how much do we have left?
+	cain b,0		;zero?  Are we really done?
+	  jrst morcop		; nope, copy some more
+	syscal close,[argi,,dski]
+	 skip			;ignore
+	syscal renmwo,[argi,,dsko
+		outfn1
+		outfn2]
+	 jfcl			;ignore
+	syscal close,[argi,,dsko]
+	 jfcl			;ignore
+
+copret:	setzm ttyflg		;we aren't typing now.
+	restor [d,c,b,a]	;restore our accumulators
+	ret			;and continue letting him play with us
+
+bufsiz:	0			;size of buffer in bytes
+bytdst:	0			;byte the dust.  pointer to buffer start
+remain:	0			;# of bytes unused in buffer
+outcnt:	0			;# of bytes remaining to be SIOT'ed
+ttyflg:	0			;set non-zero when we do a TTY output
+dskbuf:	block dsklen
+
+;;; This part checks the time file to see if it's been long enough since
+;;; the time when the last person who was kicked off, tried.  The rationale
+;;; behind this is that the system load will probably vary within the
+;;; 10 minute interval, so let's just assume that it is loaded.
+
+
+constants				     ;nonsense
+
+rltclk:	60.*120.			;every two minutes
+	block 3
+
+flushp:	0			;set to count of times till logout
+warned:	0			;set to count of times till end of probation
+
+
+;;; **********************************************************************
+;;; Here is the real time interrupt routine
+;;; **********************************************************************
+
+realt:	.dtty			;get the TTY back
+	  jfcl
+	save [a,c,siotl,ttyoff]	;save the ac's and siot count -- we may have
+				;been typing.  Also save ttyoff so we can
+				;it on now
+	setzm ttyoff		;turn it on!
+	call ctmf		;has he tried to cheat us
+	call chkit		;let's check the load
+
+	movei a,30.*5		;continue playing, at least in 
+	.sleep a,		;five seconds.
+	restor [ttyoff,siotl,c,a]  ;restore everything
+ttydis:	skipe ttyflg ;did the inferior have the bastard?
+	  .atty usrc,		   ;  yep, hack away
+	    jfcl		   ;    ?
+	dismis			   ;back to whatever depths we came from
+
+
+timfls: skipn initld		;don't print # if not initial try
+	  do [tattle logfil,/#  SLD/]	;note the fact--he was not allowed on
+	skipe initld		;don't print - if initial time
+	  do [tattle logfil,/-  SLD/]	;note the fact--he was thrown off
+	call chkopn		;open the check file
+	syscal dskupd,[argi,,dski]	;set the creation date to now
+	  loss			;  huh?
+	syscal sdmpbt,[argi,,dski ? argi,,1]	;make it look dumped
+	  loss			;huh?
+	.close dski,		;close the file
+	skipe initld		;is this the first time around?
+   	  death/
+I'm afraid the system has become too loaded to continue playing games.  Please
+try again later.  Goodbye.
+/				;no
+	skipn initld		;is this the first time around?
+	  death/
+I'm afraid the system is too loaded for playing games.  Please try again later.
+/				;yes
+	loss			;we should never get here
+
+
+;;; Here are the definitions of the log files
+
+delfld: sixbit /DELTST/		;we're debugging, don't use
+logfld: sixbit /LOGTST/		;  regular log files
+badfld: sixbit /BADTST/
+delfil:	sixbit /   ASS/ ? sixbit /   DEL/ ? sixbit /EJS/
+logfil: sixbit /   ASS/ ? sixbit /   LOG/ ? sixbit /EJS/
+badfil: sixbit /   ASS/ ? sixbit /   BAD/ ? sixbit /EJS/
+
+myunam:	0			;place to put his UNAME
+initld:  0			;flag to see if initially thrown off
+load:  0			;place to put load
+nulll: 0			;junk location
+
+
+whotab:	sixbit /hic/
+	sixbit /cstacy/
+	sixbit /chris/
+	sixbit /rwk/
+	sixbit /kmp/
+	sixbit /don/
+	sixbit /bern/
+	sixbit /ejs/
+wholen==.-whotab
+
+ctmf:   save [b,c]		;save these ac's
+	movei c,0		;clear accumulator
+	movsi b,-wholen		;get or aobjn pointer
+whofoo:	add c,whotab(b)		;add them up
+	aobjn b,whofoo		;and repeat
+	movem c,summ		;store sum
+	came c,flunk		;is he trying to cheat us?
+	  jrst [tattle badfil,/Tried to patch the GAME binary/
+	        call wrtfil
+		death /
+It is exceptionally distasteful to patch programs to get past attempts at
+security.  Because of this, you have lost the privilege of using the GAME
+program.  Your actions have been recorded and if they persist, they might
+result in some action being taken towards taking away your account here 
+on MC.  Good bye.A/]
+	restor [c,b]
+	ret
+
+summ:  0			;place to store accumulated total
+
+
+whois:	movsi b,-wholen		;AOBJN ptr to table of winning users
+	move a,myunam		;get his uname
+whois0:	camn a,whotab(b)	;is it a winner?
+	  ret			;  yes, skip the load checking
+	aobjn b,whois0		;no, maybe try another
+	popj1			;no good, skip upon returning
+
+turstp:	movei a,lsrc		;tell what channel we can hack.
+	move b,[-20,,lsrpag]	;and what pages it can hack
+	call lsrtns"lsrmap	;map in the INQUIR database
+	  jrst lsrskp		;  Well, can't, pretend he's a T
+	.suset [.runame,,a]	;get our uname
+	.suset [.rxuname,,b]	;who the fuck we aren't
+	move t,b		;save the beggar
+	tdz t,a			;heuristic test for hackers
+	caie t,0		;is he obviously not who he claims?
+	  jrst lsrskp		;  yep!
+	movei a,lsrc		;channel it's open on
+	call lsrtns"lsrunm	;find the turkey
+	  jrst lsrskp		;  not found, boy, what a turkey.
+	movei a,lsrtns"I$GRP	;hack his group
+	call lsrtns"lsritm	;find his group
+	  jrst lsrskp		;  no group!
+	.close lsrc,		;don't need it any more
+	ildb b,a		;get his group
+	caige b,40		;is it printing?
+	  popj1			;  no, total turkey
+	caie b,"O"		;does he claim to be non-human?
+	  cain b,"o"
+	    jrst [tattle logfil,/   NHF/
+		  death /AYou claim to be non-human.  And at least where
+I come from non-humans don't play games.  So I'm afraid I'll have to say
+good-bye to you.  Please update your inquire entry.A/]
+
+	caie b,"T"		;is it a T?
+	  cain b,"t"		;  Does INQUIR ever generate this?
+	    popj1
+	caie b,"R"		;is it a Random?
+	  cain b,"r"		;  or very Random?
+	    popj1
+	ret			;not a tourist, (he claims)
+
+lsrskp:	.close lsrc,		;close the channel!
+	   popj1			;skip!
+
+dbging:	setom pzhjkw+10.	;set this flag
+	setom wkjhzp+5		;  and this one
+	skipe dbg1		;do we want discrete load checking
+	  call chkld		;  yes
+	skipe dbg2		;do we want continuous load checking
+	  call onint		;  yes
+	skipe dbg3		;do we want both?
+	  skipe dbg1		;  do we need to turn on discrete?
+	    caia		;    no, skip and continue
+	      call chkld	;    yes, turn on discrete
+	skipe dbg3		;do we want both?
+	  skipe dbg2		;  do we need to turn on interrupts?
+	    caia		;    no, skip and continue
+	      call onint	;    yes, turn on interrupts
+	popj1			;and skip return
+
+dbg1:	0			;these are the debug flags
+dbg2:	0
+dbg3:	0
+
+flunk:  735370,,712671		;what it should be
+
+onint:	push sp,a		;save it just in case
+	move a,[200000,,rltclk]	;get our interrupt intervar
+	setom wkjhzp+5
+	.realt a,		;turn it on
+	pop sp,a		;restore the ac
+	ret			;and return
+
+
+mechan: tattle badfil,/Was hacking the GAME program/
+	call wrtfil
+	death /C
+I'm becoming rather irritated with your hacking.  The games are only to be
+used during certain times of the day when the system is not loaded.  Because
+of your hacking, you will be restricted from using the GAME program for a
+few days.  Sorry, but playing games is a privilege.
+/
+
+kldcp=setom pzhjkw+10.
+pcdlk=setzm pzhjkw+10.
+delta=setom wkjhzp+5
+atled=setzm wkjhzp+5
+
+wrtfil:	syscal open,[cnti,,.uao	;try to open our rat file
+		argi,,dski			
+		['dsk   ']
+		['_game_']
+		  myunam
+		['.temp.']]
+	   jfcl			;if it fails don't worry about it
+	.close dski,		;close the channel
+	ret			;and return
+
+fndfil: syscal open,[cnti,,.uai	;check to see if the file exists
+		argi,,dski
+		['dsk   ']
+		['_game_']
+		  myunam
+		['.temp.']]
+	   ret			;if not, don't worry about it--he's ok.
+	tattle badfil,/Tried again after being warned/
+	death /C
+You have been warned--you are not to play the GAME program any more.
+Any further warnings will result in reconsideration of your account here
+on MC.  A/
+
+;;; Routine for goddamn fucking TECO that doesn't set FILLEN for end of file
+;;; like it ought to.  This means it writes out cretinouse ^C's at the end
+;;; to pad the word!  Also, the ERR device ends off with a ^L, so we flush
+;;; those too!
+
+c.cadj:	save [a,b,c]		;save our ac's 
+	move a,foobp		;get the possibly cretinouse byte pointer
+	tlne a,004000		;is it a full-word pointer?
+	  hrli a,010700		;  yes, make it a ascii pointer
+	movei b,5		;at most 5 of the losers
+	setz c,			;count the beggars
+	norm7 a			;back up to last one
+c.caj0:	ldb chr,a		;get the possibly offensive character
+	caie b,c.caj0		;find another?
+	exch c,outcnt		
+	subm c,outcnt
+	restor [c,b,a]		;restore our ac's
+	ret			;nope that's all
+
+
+;;; For the normal user, these start up the load checking stuff
+
+sttw:	call chkld		;check the load
+	call onint		;enable the interrupts
+	ret			;and return
+
+;;; Here is the load checking scheme.  It uses the loadch routine.
+
+chkld:	call chkopn			     ;open the time file
+					     ; or create it if necessary
+	syscal rfdate,[argi,,dski
+		       val,,a]		     ;get it's reference date
+	  loss				     ;got a problem, no?
+	.close dski,			     ;don't need the channel any more
+	setom pzhjkw+10.		     ;he's got this far
+	move b,[3.*60.]			     ;get interval
+	call datime"timadd		     ;calculate end of period
+	syscal rqdate,[val,,b]		     ;get current time
+	  caia				     ;  not available
+	    camn b,[-1]			     ;    not available?
+	      jrst [tattle logfil,/?  TNA/   
+		    death /AYou can't use GAME just yet, please wait a bit./]
+
+;;;that wasn't very nice but oh well, hopefully it won't happen too often
+
+	camg b,a		      ;has somebody been thrown off recently?
+	  call mbyfls
+	call chkit
+	ret
+
+;;; This part tries to open the file to see if someone has been thrown off
+;;; within the past 10 minutes.
+
+chkopn:	syscal open,[cnti,,.uai	;let's try to open the time file
+		    argi,,dski
+		    ['dsk   ']	;yep, this is where it is hackers
+		    ['   tim']
+		    ['   chk']
+		    ['ejs   ']]
+	  jrst [syscal open,[cnti,,.uao	;unfortunately, somebody
+				        ;tried to delete it
+		       argi,,dski	;oh well, just create another
+		       ['dsk   ']	;one.  It won't hurt us any
+		       ['   tim']
+		       ['   chk']
+		       ['ejs   ']]
+		  loss		;if we can't, then we have a problem
+		jrst .+1]
+	ret			;return
+
+mbyfls: skipn initld		;is this the first load check?
+	  jrst timfls		;  yes, kill him without countdown
+	sosn flushp		;are we at end of final countdown?
+	  jrst timfls		;  yep, kill him
+	skipl flushp		;are we in the middle of final countdown?
+	   ret			;  yep, just return
+	sosn warned		;is this the end of probation period
+	  jrst warn1		;  yep, give him final warning
+	skipl warned		;are we in the middle of warning period?
+	  ret
+	type/A
+The system is becoming loaded.  If this continues for another couple minutes,
+I'm afraid I will have to ask you to leave.A/
+
+	movei e,4		;four interrupts is 8 minutes
+	movem e,warned		;save for count down
+	ret
+
+warn1:  type /
+I'm sorry but the system has become too loaded, I'm afraid I can give you
+only a few minutes to save your game or finish up.A/
+
+	movei e,2		;two interrupts is it (4 minutes)
+	movem e,flushp		;let him be flushed
+	ret			;and return
+
+chkit:  call ldcal		;get the data
+	setom pzhjkw+10.	;set some flags
+	setom wkjhzp+5		;  ditto
+        move a,load		;get our load flags
+	tlne a,%sllog		;is he logged in?
+	  jrst [tattle logfil,/   NLI/
+	        death /AYou must log in to play games!A/]
+	tlne a,%sldil		;is this a dialup line?
+	  jrst [tattle logfil,/   WOD/
+	        death /
+Due to the scarcity of dialup lines, we do not permit playing games from
+them.  If you are not an authorized user, you are not to use them at all.
+/]
+	tlne a,%slcls		;are we closed?
+          jrst [tattle logfil,/   WTD/
+                death /
+Games are not to be played at this time of day.
+Please give up.  Our hours are:
+
+Mon-Fri 8:00 pm to 8:00 am
+Saturday and Sunday all day.
+Holidays all day.
+
+See you then!
+/]
+	tlne a,%sldet		;are we detached?
+	  .logout 1,		;  yes, kill this job
+	tlne a,%sload		;are we loaded?
+	  call mbyfls		;  yes, maybe flush him then
+	tlnn a,%sload		;
+	  call mbybet		;maybe tell him that things got better
+	ret
+
+mbybet: skipe warned		;if we have been warned
+	  do [type /
+The load has gotten a little better now.  So you may continue
+for a while.A/
+	      setzm flushp	;  then reset flags
+	      setzm warned]	
+	ret			;and return
+
+ldcal:  save [e,f]		;save our ac's 
+        call loadch		;set our flags
+        movem a,load		;and store away the flags
+	eval e,SLOADU		;Get inverse fair share
+        movei f,10000.		; fair share = 10000./sloadu.
+        idivm f,e		; calculate it
+        movem e,frshr		;store this as frshr
+	eval e,SUSRS		;Get the number of users
+        movem e,nusrs		;store this as nusrs
+        restor [f,e]		;restor our ac's
+        ret			;and return
+
+;;; A routine to check the system load.  Right half of A gets load units
+;;; left half gets flags for dialup lines, detached tree, or not logged in
+
+loadch:	save [b,c,e]		;save our accumulators
+	setz a,			;clear a to receive our results
+	.suset [.runame,,uname]	;check our UNAME....
+	hllz e,uname		;look at left half of uname for '___'
+	camn e,[-1,,0]		;are we logged in?
+	 tlo a,%sllog		;no, note the fact
+	.suset [.rcnsl,,ttynum]	;we have to check for detached or dialups
+	move e,ttynum		;get our tty num
+	caig e,			;do we have one?
+	  tlo a,%sldet		;no, note the fact
+	movei b,1		;let's figure out which we are
+	lsh b,(e)		;as a bit in the word
+	tdne b,dilmsk		;are we a dialup?
+	  tlo a,%sldil		;yes, note the fact
+        move e,frshr		;get the fair share
+        camg e,mxsldu		;is it greater than the max?
+	  tlo a,%sload		;note the fact
+        move e,nusrs		;get the number of users
+	caml e,mxusrs		;is it greater than the max?
+	  tlo a,%sload		;note the fact
+	.rtime e,		;get time
+	camge e,t.open		;if before 8:00 am
+	 jrst gobak		;it's OK
+	camle e,t.clos		;if it's after 8:00 pm
+	  jrst gobak		;it's OK
+	.ryear b,		;get date stuff
+	ldb e,[.bp (003400),b]	;this byte
+	cain e,0		;if not Sunday
+	  jrst gobak		;it's Sunday, let him go.
+	cain e,6		;if not Saturday
+	  jrst gobak		;it's Saturday, let him go.
+	call holdyp		;is it a holiday?
+	  jrst nopen		; tell him we're closed!
+
+gobak:	restor [e,c,b]		;restore our ac's
+	ret			;and return it
+
+nopen:	tlo a,%SLCLS
+	  jrst gobak
+
+holdyp:	movsi e,-hldys		;aobjn ptr
+	.rdate b,		;get the year
+holdy1:	camn b,(e)hldy		;is it a holiday?
+	 popj1			;yes, skip
+	aobjn e,holdy1		;no, loop?
+	 ret			;no, not a holiday
+
+hldy:
+	'801013'                ;Columbus day an *MY* birthday
+	'801111'                ;Veteran's Day
+	'801127'                ;Thanksgiving Day
+	'801225'                ;Christmas Day
+	'810101'                ;New Year's Day
+	'810216'                ;Washington's Birthday
+	'810420'                ;Patriot's Day
+	'810525'                ;Memorial Day
+	'810704'                ;Independence Day
+hldys==.-hldy
+
+t.open:	sixbit /080000/		;opening time
+t.clos:	sixbit /200000/		;closing time
+
+mxsldu:	mvsldu			;maximum fair share
+mxusrs: mvusrs			;maximum number of users
+nusrs: 0			;running number of users
+frshr: 0			;running fair share
+uname:	0			;save the UNAME here to check for login etc.
+dilmsk:	1_1+1_3+1_4+1_5+1_6+1_7+1_10+1_11+1_12+1_13+1_14
+ttynum:	0			;save our TTY number here to check for dialup
+
+;;; More random locations
+
+foobp:  0			;location for byte pointer
+versio:	.fnam2
+
+	end go		;can you believe it, we are done!
+
+

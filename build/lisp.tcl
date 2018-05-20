@@ -806,3 +806,32 @@ respond "*" ":midas sys; atsign 10slav_sysen2; ld10\r"
 respond "   PDP6F = " "0\r"
 respond "GT40F=" "0\r"
 expect ":KILL"
+
+# animal
+respond "*" ":midas games;_lsrrtn\r"
+expect ":KILL"
+respond "*" "complr\013"
+respond "_" "games;_games;parse\r"
+respond "_" "games;_games;pattrn\r"
+respond "_" "games;_games;words\r"
+respond "_" "games;_games;word\r"
+respond "_" "games;_games;animal 133\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" "l\013"
+respond "Alloc?" "n"
+respond "*" "(load '((games) animal fasl))"
+respond "53694." "(dump '((games) ts animal))"
+expect "KILL"
+
+# think
+respond "*" "complr\013"
+respond "_" "games;_games;think\r"
+respond "_" "\032"
+type ":kill\r"
+
+# wa
+respond "*" "complr\013"
+respond "_" "games;_games;wa 10\r"
+respond "_" "\032"
+type ":kill\r"

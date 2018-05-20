@@ -6,6 +6,7 @@
 - ADVENT, (Colossal Cave) Adventure by Will Crowther.
 - ADV350, 350-point Adventure.
 - ADV448, 448-point Adventure.
+- ANIMAL, an animal guessing game.
 - ARCCPY, copies and old-format archive, converting to new format.
 - ARCDEV, transparent file system access to archive files.
 - ARCSAL, archive salvager.
@@ -19,11 +20,13 @@
 - BDAY, happy birthday demon.
 - BINPRT, display information about binary executable file.
 - BITPRT, print JCL as bits.
+- BKG, a backgammon game.
 - BYE, say goodbye to user. Used in LOGOUT scripts.
 - CALPRT, decode a .CALL instructions CALL block.
 - CC, C compiler (binary only).
 - CHADEV, Chaosnet jobdev (binary only).
 - CHARFC/CHARFS, Chaos RFC.
+- CHASE, a 2-player maze game.
 - CHATST, Chaos test.
 - CHESS2, Alan Baisley's Tech II chess program.
 - CHTN, CFTP, Chaosnet TELNET and FTP support.
@@ -45,11 +48,13 @@
 - DIRDEV, list directories, sorted or subsetted.
 - DIRED, directory editor (independent from EMACS DIRED).
 - DMPCPY, crach dump copy dragon.
+- DOCTOR, KMP's psychiatrist game.
 - DP Device, 7-bit conversions?
 - DQ Device, for doing hostname resolutions. Used by COMSAT.
 - DSKDEV, D - short disk device.
 - DSKUSE, disk usage information.
 - DUMP/LOAD, tape backup and restore.
+- ELIZA, the original psychiatrist game
 - EMACS, editor.
 - EXECVT, convert 20x.exe (SSAVE) file to ITS BIN (PDUMP) file.
 - EXPN/VRFY - query remote SMTP server.
@@ -66,6 +71,8 @@
 - FTPU, FTP Client.
 - GCMAIL, delete old files from .MAIL.
 - GETSYM, copy all symbols from running ITS to a file.
+- GO, the Go board game.
+- GUESS, a very silly game.
 - GMSGS, copy system messages to mail file.
 - H3MAKE, a job that requests DRAGON to build host table.
 - HEXIFY, convert COM file into Intel HEX format.
@@ -114,6 +121,7 @@
 - NAME, Shows logged in users and locations, aka FINGER.
 - NETIME, network time dragon.
 - NICNAM/NICWHO, look up someone in the ARPAnet directory.
+- NIMLIN, a game of unknown features.
 - NODIPS, SUDS wirelister (without DIP definitions).
 - NUDIR, create user directory.
 - NWATCH, small watch display.
@@ -121,6 +129,7 @@
 - OCM, Richard Greenblatt's Mac Hack VI chess program.
 - OCTPUS, print character representations.
 - OS, realtime TTY spy.
+- OTHELLO, the original Othello game -- simpler than Go.
 - PALX, PDP-11 cross assembler.
 - PANDA, user account management program.
 - PC, SUDS printed circuit board program.
@@ -139,6 +148,7 @@
 - PTY, pseudo-tty.
 - PWMAIL, a limited version of MAIL when not yet logged in under PWORD.
 - PWORD, replacement for sys;atsign hactrn that requires registered logins.
+- QB, the game of Qubic.
 - QUOTE, prints out a random quote.
 - REATTA, reattaches disowned jobs to terminal.
 - REDRCT, redirect IP routing.
@@ -158,11 +168,13 @@
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
 - SPELL, ESPELL spell checker.
+- SPROUTS, the topological game invented by Convay.
 - SRCCOM, Compares/merges source files, compares binary files.
 - SRDATE, set reference date on a file.
 - STINK, linker.
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
+- STONE, the old African game of stones.
 - STY, pseudo-terminal for multiple sessions.
 - STYLOG, convert PTY output file into ascii file.
 - SUPDUP, Supdup client.
@@ -178,6 +190,7 @@
 - TELNET, Telnet client.
 - TELSER, Telnet/Supdup server.
 - TEN50, TOPS-10 emulator.
+- THINK, think-a-dot game.
 - TIME, displays date/time/uptime and other info.
 - TIMES, TCP time server.
 - TIMOON, displays the time and phase of the moon.
@@ -197,6 +210,7 @@
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VV/VJ/DETREE, list jobs.
 - XHOST, tool for replacing host nicnames with real hostnames.
+- WA, a Wumpus advisor game.
 - WHAT, humorous quips to various "what" questions.
 - WHO%, list index/uname/jname/%time in sorted list.
 - WHOLIN, mode line for display terminals (with date/time/job/etc info).
@@ -205,3 +219,4 @@
 - WUMPUS, Hunt the Wumpus game.
 - X, Y, Z, remember DDT command and re-execute it.
 - XXFILE, feed scripted input to a STY session.
+- YAHTZE, the game of Yahtze.
