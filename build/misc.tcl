@@ -95,9 +95,11 @@ respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
 respond "Use what filename instead?" "ecc;quotes >\r"
 expect ":KILL"
 
-respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
+respond "*" ":midas sys2;ts limeri_sysen1;limeri\r"
 respond "Use what filename instead?" "eak; lims >\r"
 expect ":KILL"
+
+respond "*" ":link sys2;ts limmer,sys2;ts limeri\r"
 
 respond "*" ":midas sysbin;_eak;limser\r"
 expect ":KILL"
@@ -433,6 +435,19 @@ type "beg7\033g"
 # Dump out TS JOTTO including the dictionary.
 respond ". words" ":pdump sys1;ts jotto\r"
 respond "*" ":kill\r"
+
+# ngame
+respond "*" ":midas games;ts game_ejs;ngame\r"
+respond "Star Trek: " "ts,trek,games\r"
+respond "Adventure (2): " "ts,adv448,games\r"
+respond "Adventure (1.5): " "ts,adv350,games\r"
+expect ":KILL"
+respond "*" ":link sys3;ts game,games;ts game\r"
+respond "*" ":link info;o.info,_info_;\r"
+
+# guess
+respond "*" ":midas games;ts guess_games;guess\r"
+expect ":KILL"
 
 # ten50
 respond "*" ":midas sys3;ts ten50_mrc; ten50\r"

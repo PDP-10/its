@@ -14,7 +14,7 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ inquir mudman system xfont
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
-      graphs draw datdrw fonts fonts1 fonts2
+      graphs draw datdrw fonts fonts1 fonts2 games
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
 
