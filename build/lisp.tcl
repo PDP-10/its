@@ -835,3 +835,9 @@ respond "*" "complr\013"
 respond "_" "games;_games;wa 10\r"
 respond "_" "\032"
 type ":kill\r"
+
+# chase
+respond "*" "complr\013"
+respond "_" "games;_chase\r"
+respond "_" "\032"
+type ":kill\r"
