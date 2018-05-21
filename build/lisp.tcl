@@ -808,8 +808,6 @@ respond "GT40F=" "0\r"
 expect ":KILL"
 
 # animal
-respond "*" ":midas games;_lsrrtn\r"
-expect ":KILL"
 respond "*" "complr\013"
 respond "_" "games;_games;parse\r"
 respond "_" "games;_games;pattrn\r"
