@@ -131,13 +131,6 @@ if {$env(BASICS)!="yes"} {
 source $build/muddle.tcl
 source $build/sail.tcl
 
-respond "*" ":midas sys3;ts lsrprt_sysen1; lsrprt\r"
-expect ":KILL"
-
-respond "*" ":midas sysbin;_sra; gcmail\r"
-expect ":KILL"
-respond "*" ":link dragon; hourly gcmail,sysbin; gcmail bin\r"
-
 bootable_tapes
 
 # make output.tape
