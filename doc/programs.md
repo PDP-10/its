@@ -33,6 +33,7 @@
 - COMIFY, convert HEX to COM format.
 - COMPLR, lisp compiler.
 - COMSAT, Mail server.
+- CMD, DDT subroutines.
 - CREATE, creates a text file in your home directory from console input.
 - CROCK, analog watch.
 - CROSS, cross assembler for micros.

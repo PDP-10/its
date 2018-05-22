@@ -819,3 +819,7 @@ respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 respond "*" ":midas sys3;ts versa_dcp; versa\r"
 expect ":KILL"
 # respond "*" ":link channa; rakash v80spl,sys3; ts versa\r"
+
+# DDT subroutines
+respond "*" ":midas sys3;ts cmd_dcp; cmd\r"
+expect ":KILL"
