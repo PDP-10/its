@@ -138,6 +138,10 @@ respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
 respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
 respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 
+respond "*" ":midas sysbin;_sra; gcmail\r"
+expect ":KILL"
+respond "*" ":link dragon; hourly gcmail,sysbin; gcmail bin\r"
+
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "N\r"
 expect ":KILL"
