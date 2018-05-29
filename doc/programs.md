@@ -116,7 +116,7 @@
 - MCL, subsystem for compiling individual Macsyma files.
 - METER, displays system metering information.
 - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
-- MLIFE, Bill Gosper's Conway Life.
+- MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems gragon.
 - MSPLIT, split a file into smaller parts.
 - MTBOOT, make bootable tapes.
