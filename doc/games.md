@@ -22,7 +22,7 @@ For instructions, see CHPROG; OCM ORDER.
 
 ### MLIFE
 
-This is a Conway Game of Life by Bill Gosper.  Type `:rwg;mlife` run
+This is a Conway Game of Life by Mike Speciner.  Type `:rwg;mlife` run
 run it.
 
 ### Spacewar
