@@ -90,6 +90,7 @@ There are some short introductions for beginners:
 - [Hello MIDAS](doc/hello-midas.md)
 - [DUMP and itstar](doc/DUMP-itstar.md)
 - [Games](doc/games.md)
+- [Printing](doc/printing.md)
 
 A list of [known ITS machines](doc/machines.md).
 
