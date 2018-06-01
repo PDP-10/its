@@ -462,6 +462,10 @@ respond "*" ":link sys1;ts %,sys1;ts who%\r"
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
 
+# Phil Budne's PALX Game of Life.
+respond "*" ":cwd budd\r"
+respond "*" ":palx live palx\r"
+
 # itsdev
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
 respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
