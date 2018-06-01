@@ -100,6 +100,7 @@
 - LIMERI, print limerics.
 - LIMSER, Chaosnet limeric service.
 - LISP, lisp interpreter and runtime library (autoloads only).
+- LIVE, PALX Game of Life.
 - LOADP, displays system load.
 - LOCK, shut down system.
 - LOOKUP, looks up user info in INQUIR database.
