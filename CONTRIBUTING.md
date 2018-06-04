@@ -4,7 +4,7 @@
 
 - Initially, we try to stay close to the "Public ITS" distribution.
 
-- A pull request should adress one, and only one, concern.  For
+- A pull request should address one, and only one, concern.  For
   example, adding a program or bug fix.
 
 - Individual commits within a pull request should consist of atomic
