@@ -533,6 +533,24 @@ respond "(C1)" "quit();"
 
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
 
+### build ctensr for macsyma
+respond "*" "macsym\013"
+respond "(C1)" "translate_file(\"sharem\\;packg >\");"
+respond "(C2)" "quit();"
+respond ":KILL" "complr\013"
+respond "_" "sharem;packg fasl_packg trlisp\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" "macsym\013"
+respond "(C1)" "translate_file(\"tensor\\;ctensr funcs\");"
+respond "Type ALL;" "all;"
+respond "Type ALL;" "all;"
+respond "(C2)" "quit();"
+respond ":KILL" "complr\013"
+respond "_" "share;ctensr fasl_tensor;ctensr trlisp\r"
+respond "_" "\032"
+type ":kill\r"
+
 ### more lisplib stuff
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;%print\r"
