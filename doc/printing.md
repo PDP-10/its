@@ -16,13 +16,13 @@ TJ6 is a typesetting program, in the same tradition as TJ-2, RUNOFF
 and roff. It justifies paragraphs of text, and produces output either
 in plain text or XGP format. Here is a simple example of an XGP file:
 
-```
+<pre>
 .xgp
 .font 0 times 12rom
 .font 1 times 12bold
 .twinch 4
 .center
-No. 1190. ^F1A Flan of Puff Paste.^F0
+No. 1190. <kbd>^F</kbd>1A Flan of Puff Paste.<kbd>^F</kbd>0
 
 .adjust
 Make half a pound of puff paste, roll twelve times till nearly worn
@@ -38,7 +38,10 @@ you have any trimmings of paste left from a previous day it may be
 used instead of making fresh.
 
 (From Alexis Soyer, "The Gastronomic Regenerator".)
-```
+</pre>
+
+(<code><kbd>^F</kbd></code> means the single character control-F.
+To type this in Emacs, enter control-Q control-F.)
 
 Save this file as `DEMO 1`, and format it with:
 
@@ -82,12 +85,12 @@ though.
 
 To plot `FOO DRW` into the pen plotter file `FOO PLT`:
 
-```
+<pre>
 :d
-^Ci FOO DRW
-^Fw FOO PLT
-^Z:kill
-```
+<kbd>^C</kbd>i FOO DRW
+<kbd>^F</kbd>w FOO PLT
+<kbd>^Z</kbd>:kill
+</pre>
 
 To convert all `PLT` files in the current directory into printable
 `SCN` files:
