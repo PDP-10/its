@@ -82,15 +82,16 @@ proc build_macsyma_portion {} {
     respond "302615" "(load \"libmax;module\")"
     respond "303351" "(load \"libmax;maxmac\")"
     expect "307161"
-    send "(todo)"
-    expect "(todo)"
-    sleep 10
-    send "(todoi)"
-    sleep 10
-    expect "(todoi)"
-    sleep 10
-    send "(mapcan "
-    expect "(mapcan "
+    type "(todo)"
+    expect ") \r"
+    type "(todoi)"
+    expect {
+	") \r" {
+	}
+        "NIL" {
+	}
+    }
+    type "(mapcan "
     type "#'(lambda (x) (cond ((not (memq x\r"
     type "'(SETS TRANSS MTREE TRHOOK EDLM)\r"
     type ")) (doit x)))) (append todo todoi))"
