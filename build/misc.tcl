@@ -827,6 +827,12 @@ expect ":KILL"
 # Write the RAM file to the front end filesystem:
 # :klfedr write ucode;u1 ram
 
+# KS10 microcode.
+# It doesn't seem to work very well when purified.
+respond "*" ":kshack;micro kshack;mcr 262=kshack;its,ks10,simple,flt,extend,inout,itspag,pagef\r"
+expect ":KILL"
+respond "*" ":copy kshack; mcr ram, .; ram ram\r"
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"

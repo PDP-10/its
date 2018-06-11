@@ -1,0 +1,424 @@
+; -*- Fundamental -*-
+
+.TOC	"ITS PAGE REFILL CODE"
+
+.IF/ITS
+
+CLEANUP DONE	"END STATE, SKIP IRPT, J/PFTRAP"
+CLEANUP AND TRAP	"[AR]_WORK[SV.VMA], SKIP/TRAP CYCLE, J/CLTRP"
+
+;ITS page table entry:
+; (when shifted left once the valid bit, cache bit, write bit and page
+; number will be in the right place for loading the hardware.)
+PTE VALID/=<91>			;2.8	(internal to the microcode)
+PTE AGE/=<94>			;2.5
+	ALL=1			; (actually a field of length 1)
+PTE WRITE/=<94>			;2.5	(internal to the microcode)
+PTE CACHE/=<95>			;2.4
+PTE PAGE/=<98:107>		;2.1 - 1.1
+
+;Hardware page table control bits:
+PT VALID/=<90>			;2.9
+PT WRITE/=<93>			;2.6
+PT CACHE/=<94>			;2.5
+PT PAGE/=<97:107>		;2.2 - 1.1
+	EVEN=3776
+	ALL=3777
+
+;	VMA flags:			Page fail word flags:
+;4.9	User mode			User mode
+;FORCE USER
+;4.8	Exec mode			Nonexistent IO register
+NONEXISTENT IO REGISTER/=<91>		;J/IOW5
+;4.7	Instruction fetch		Nonexistent memory
+NONEXISTENT MEMORY/=<92>		;J/PFD
+;4.6	Read				Uncorrectable memory error
+UNCORRECTABLE MEMORY ERROR/=<93>	;J/PFD, J/BADDATA
+;4.5	Write test
+;WRITE TEST
+;4.4	Write				Memory write
+;WRITE CYCLE
+;4.3					2.9 from page table entry	
+;4.2	Don't cache			2.8 from page table entry
+PAGE ACCESS/=<96:97>
+;4.1	Physical			Physical
+;PHYSICAL
+;3.4 - 1.1 Address			Address
+ADDRESS HIGH/=<104:107>
+	MEMORY=3		;20 bits of physical memory address.
+	IO=17			;22 bits of IO address.
+	ALL=17
+
+;	(These VMA flags only from DP:)
+;3.8	IO cycle			IO cycle
+;IO CYCLE
+;3.7	WRU cycle
+;3.6	Vector cycle
+;3.5	Byte cycle			IO byte cycle
+;IO BYTE
+
+;	(These VMA flags only from #:)
+;3.9 - 3.7 XCTR control
+;3.6 Hack for AREAD: DROM supplies 4.6 - 4.4 and 3.4
+;3.5 Ignore 4.9 - 3.7 from # and use 4.9 - 3.5 from DP instead.
+;3.4 Load the VMA
+;3.3 Extended address:  Use 3.4 - 3.1
+;3.2 Wait: Start a cycle.
+;3.1 Hack for BWRITE: DROM supplies 3.2
+
+	.DCODE
+257:	IOT,	AC,	J/UUO257	;Used to be MAP
+	.UCODE
+
+1553:
+UUO257:	UUO
+
+;The hardware comes here with a page fail or pending interrupt:
+3777:
+PAGE-FAIL:
+	WORK[SV.AR]_[AR]
+	;;INTERRUPT-TRAP macro (which nobody uses) does the above and comes
+	;;here:
+ITRAP:	WORK[SV.ARX]_[ARX]	;J/MVSKP
+	WORK[SV.BRX]_[BRX]
+	[BRX]_VMA		;BRX: FLAGS,,VMA
+	WORK[SV.VMA]_[BRX],
+	 SKIP IRPT		;See if interrupt (saves a dispatch)
+=0000
+PFD:	DBM/PF DISP, DBUS/DBM,	;Puts page fail condition on
+	 AD/D, DEST/PASS, 4T,	;DP 18-21.
+	 DISP/DP LEFT, J/PFD	;Dispatch on it.
+=0001	WORK[SV.BR]_[BR],	;(1) Interrupt
+	 J/PF-INT
+=0011	[BRX]_IO DATA,		;(3) Parity
+	 AD PARITY OK/0,	;Don't look at parity.
+	 J/BADDATA
+=0101	[BRX]_[100000] XWD 0,	;(5) NXM 
+	 J/HARD
+=0111	[BRX]_[140000] XWD 0,	;(7) NXM & Parity
+	 J/HARD
+=1000	WORK[SV.BR]_[BR],	;(10) Read-only page
+	 J/PFMAP
+=1001	WORK[SV.BR]_[BR],	;[123] (11) 1 ms timer and movsrj
+	 J/PF-INT
+=1010	WORK[SV.BR]_[BR],	;(12) Nonexistent page
+	 J/PFMAP
+=1011	WORK[SV.BR]_[BR],	;(13) Exec/User mismatch
+	 J/PFMAP
+=
+
+;Here is how a hard memory error is handled:
+BADDATA:
+	WORK[BADW0]_[BRX]	;Save bad word.
+	[BRX]_[040000] XWD 0
+	;;I/O failures come here from J/IOW5 with 200000 in BRX:
+HARD:	WORK[SV.BR]_[BR]	;Finally save BR
+=0	[BR]_VMA,		;VMA for page fail word.
+	 CALL [ABORT]		;Clear page fault condition. 
+	[BR]_[BR].AND.#,	;Save interesting flags:
+	 FORCE USER/1, PHYSICAL/1,
+	 IO CYCLE/1, IO BYTE/1,
+	 ADDRESS HIGH/ALL, HOLD RIGHT
+=	[BRX]_[BRX].OR.[BR]	;BRX: Page fail word
+	PAGE FAIL TRAP
+
+;Here is what happens when the initial dispatch on the page fail condition
+;tells us an interrupt is pending:
+PF-INT:	SKIP IRPT		;Timer trap?
+=00	[AR]_WORK[TIME1],	;Yes:  Get low word.
+	 SPEC/CLRCLK,		; Clear clock flag.
+	 CALL [TOCK]		; Do the update.  TOCK returns 2.
+	CLEANUP AND TRAP	;No:  External interrupt.  Jump away
+	ABORT MEM CYCLE		;Clear 1ms flags.
+=
+.IF/PCST			;Take a PC sample every millisecond
+	[AR]_WORK[SV.VMA]	;Recover VMA and flags
+	[ARX]_WORK[PCST], SKIP DP0	;Skip if PC sampling is enabled
+=0	[ARX]_WORK[SV.ARX], J/PAGE-CONTINUE1	;Disabled or table full
+	[BR]_PC WITH FLAGS	
+	TL [AR], FETCH/1	;Skip if PC points at current instruction
+=0	[BR]_[BR]-1, HOLD LEFT	;No, back up the PC that gets stored
+	WORK[PCST]_[ARX]+[XWD1]	;Increment the AOBJN pointer
+	[ARX] LEFT_0		;Clear high bits of physical address damn it
+	VMA_[ARX], VMA PHYSICAL WRITE	;Store PC into sample table
+	MEM WRITE, MEM_[BR], J/PAGE-CONTINUE
+.IFNOT/PCST
+	[AR]_WORK[SV.VMA],	;Restore VMA and continue where 
+	 J/PAGE-CONTINUE	; we left off.
+.ENDIF/PCST
+
+;Here we handle a soft page failure.  BRX contains VMA FLAGS,,VMA.
+PFMAP:	ABORT MEM CYCLE		;Clear page fail condition.
+	TL [BRX], WRITE TEST/1	;Write test?
+=0	[BRX]_[BRX].OR.#,	;Yes: Turn into simple write.
+	 WRITE CYCLE/1, HOLD RIGHT
+	[BRX]_[BRX].AND.#,	;Save interesting flags:
+	 FORCE USER/1, WRITE CYCLE/1, PHYSICAL/1,
+	 ADDRESS HIGH/MEMORY, HOLD RIGHT
+=	[AR]_[BRX],		;Copy virtual address and
+	 SC_9.			;prepare to shift 11 places.
+=0
+PFMAP1:	[AR]_[AR]*.5,		;Right adjust page #
+	 STEP SC, J/PFMAP1
+	[AR]_[AR].AND.# CLR LH,	;AR: index off DBR
+	 #/77
+=	READ [BRX], SKIP DP0	;User ref?
+=0	READ [BRX], SKIP DP18,	;Exec high ref?
+	 J/EXEC-DBR
+	READ [BRX], SKIP DP18,	;User high ref?
+	 J/USER-DBR
+=
+
+=0
+USER-DBR:
+	[AR]_[AR]+WORK[DBR1],	;User low
+	 J/GOTDBR
+	[AR]_[AR]+WORK[DBR2],	;User high
+	 J/GOTDBR
+=
+
+=0
+EXEC-DBR:
+	[AR]_[AR]+WORK[DBR4],	;Exec low
+	 J/GOTDBR
+	[AR]_[AR]+WORK[DBR3],	;Exec high
+	 J/GOTDBR
+=
+
+;BRX: Original VMA FLAGS,,VMA modified as for a page fail word.
+;AR: Address of page table word.
+GOTDBR:	VMA_[AR], START READ, VMA PHYSICAL
+	MEM READ, [BR]_MEM
+	TR [BRX], #/2000	;Odd?
+=0	[ARX]_[BR],		;Yes: entry is in right half, just copy it
+	 J/PTWRH		; into ARX.
+	[ARX]_[BR] SWAP,	;No: entry is in left half, so copy in ARX
+	 J/PTWLH		; is swapped first.
+=
+
+PTWRH:	[BR]_[BR].AND.NOT.#,	;BR gets the word to write back with the 
+	 PTE AGE/ALL,		; age bits cleared in the right half.
+	 HOLD LEFT,
+	 SKIP DP18, J/PTWTST	;Test 2.9 of entry.
+
+PTWLH:	[BR]_[BR].AND.NOT.#,	;BR gets the word to write back with the 
+	 PTE AGE/ALL,		; age bits cleared in the left half.
+	 HOLD RIGHT,
+	 SKIP DP0, J/PTWTST	;Test 2.9 of entry.
+
+=0
+PTWTST:	TR [ARX], #/200000, J/PTWTS0	;0X: Test 2.8
+	TR [ARX], #/200000, J/PTWTS1	;1X: Test 2.8
+=
+
+=0
+PTWTS0:	[BRX]_[BRX].OR.#,	;01: Read only
+	 PAGE ACCESS/1,		;Indicate that in page fail word.
+	 HOLD RIGHT,
+	 J/READ-ONLY
+	PAGE FAIL TRAP		;00: Not accessible.
+=
+
+=0
+PTWTS1:	[ARX]_[ARX].OR.#,	;11: Read/Write
+	 PTE WRITE/1,		;Set Writable bit in page table. 
+	 HOLD LEFT,
+	 J/PAGE-REFILL
+	[BRX]_[BRX].OR.#,	;10: Read/Write/First
+	 PAGE ACCESS/2,		;Indicate that in page fail word.
+	 HOLD RIGHT,
+	 J/READ-ONLY
+=
+
+READ-ONLY:
+	TL [BRX],		;Were we perhaps trying to write?
+	 WRITE CYCLE/1
+=0	PAGE FAIL TRAP		;That would be a problem wouldn't it!
+	[ARX]_[ARX].AND.NOT.#,	;Clear writable bit in page table.
+	 PTE WRITE/1,
+	 HOLD LEFT,
+	 J/PAGE-REFILL
+=
+
+;BRX: Original VMA FLAGS,,VMA modified as for a page fail word.
+;AR: Address of page table word.
+;ARX: Half formed page table entry in right half.
+;BR: Original page table word with the age bit set.
+PAGE-REFILL:
+	VMA_[AR],		;Prepare to put the word back.
+	 START WRITE,
+	 VMA PHYSICAL
+	MEM WRITE,		;Write it back.
+	 MEM_[BR]
+	[AR]_WORK[SV.VMA]	;AR: For PAGE-CONTINUE to use.
+	[BR]_[AR].AND.NOT.#,	;Clear bits which start a cycle.
+	 READ CYCLE/1, WRITE CYCLE/1,
+	 WRITE TEST/1, HOLD RIGHT
+	[BR]_[AR].AND.NOT.#,	;Make DEC page number even.
+	 #/1000, HOLD LEFT
+	VMA_[BR], 3T, DP FUNC/1	;Restore VMA and set User according to
+				;what it was.
+	[ARX]_([ARX].OR.#)*2,	;Set Valid bit and shift into position.
+	 3T, PTE VALID/1,
+	 LOAD PAGE TABLE	;Load page table on next instruction.
+	[ARX]_[ARX].AND.# CLR LH,	;Mask out all but the correct
+	 PT VALID/1, PT WRITE/1,	; bits.  Make the DEC physical
+	 PT CACHE/1, PT PAGE/EVEN	; page number even.
+	[BR]_[BR].OR.#,		;Make DEC page number in VMA odd.
+	 #/1000, HOLD LEFT
+	VMA_[BR], 3T, DP FUNC/1	;Restore VMA again for the odd page.
+	[ARX]_[ARX].OR.#,	;Then the odd physical page.
+	 #/1, HOLD LEFT,
+	 LOAD PAGE TABLE	;Load page table on next instruction.
+	READ [ARX],
+	 J/PAGE-CONTINUE
+
+;Return to interrupted microinstruction after a successful page table
+;reload or a timer trap.  AR should contain the right VMA to restart the
+;memory cycle.
+PAGE-CONTINUE:
+	[ARX]_WORK[SV.ARX]	;Restore saved stuff
+PAGE-CONTINUE1:
+	[BR]_WORK[SV.BR]
+	[BRX]_WORK[SV.BRX]
+	VMA_[AR],		;MAKE MEM REQUEST
+	 DP FUNC/1, 3T,		;FROM DATA PATH
+	 WAIT/1			;WAIT FOR PREVIOUS CYCLE TO
+				; COMPLETE. (NEED THIS TO 
+				; START ANOTHER CYCLE)
+	[AR]_WORK[SV.AR],
+	 RETURN [0]
+
+;;; Here we have hair to back us out of an instruction in case we have to
+;;; deliver a page fault or an interrupt.  Think of it as micro PCLSRing.
+;;; Anybody who comes to this page to deliver a page fault better have set
+;;; up BRX to contain the right page fail word first.  Cleanup handlers
+;;; better not smash it either.
+
+;PAGE FAIL TRAP macro does:
+;	TL [FLG], FLG.PI/1,	;PI cycle?
+;	 J/PFT
+=0
+PFT:	HALT [IOPF]		;Yes: IO Page Failure
+	CLEANUP AND TRAP	;No: deliver hard page fault.
+=
+
+;CLEANUP AND TRAP macro does:
+;	[AR]_WORK[SV.VMA],
+;	 SKIP/TRAP CYCLE,	;See if trap cycle.
+;	 J/CLTRP
+=0
+CLTRP:	TL [AR], FETCH/1,	;Is this an instruction fetch?
+	 J/CLTRP1
+	[AR]_WORK[TRAPPC]	;This is a trap cycle.
+=	READ [AR], LOAD FLAGS,	;Restore PC flags.
+	 J/CLDISP
+
+=0
+.IF/1PROC			;Fault/interrupt while in instruction fetch
+CLTRP1:	TL [FLG], FLG.2PROC/1, J/CLTRP2
+.IFNOT/1PROC
+CLTRP1:	CLEANUP DONE		;Instruction fetch:  Everything is clean.
+.ENDIF/1PROC
+	;;Many things jump here to backup the PC and cleanup.
+FIXPC:	[PC]_[PC]-1, HOLD LEFT
+=	;;Many things jump here to cleanup.
+CLDISP:	READ [FLG], DBUS/DP, DISP/DP, 3T, J/CLEANUP
+	;;CLEANUP DISP macro (which nobody uses) does the above.
+
+.IF/1PROC
+=0
+CLTRP2:	TAKE 1-PROCEED TRAP	;Take one-proceed trap instead of this one
+	CLEANUP DONE
+.ENDIF/1PROC
+
+=0000
+CLEANUP:	;;Dispatch table to cleanup after a page fault or interrupt.
+CLEANED:	;;J/BLT-CLEANUP	;(0) Normal case:  No more cleanup needed.
+	CLEANUP DONE		;Go deliver page fault or interrupt.  
+=0001	[AR]_WORK[SV.ARX],	;(1) BLT
+	 J/BLT-CLEANUP
+				;(2) Unused.
+=0011	STATE_[EDIT-SRC],	;(3) SRC IN STRING MOVE
+	 J/STRPF
+=0100	STATE_[EDIT-DST],	;(4) DST IN STRING MOVE
+	 J/STRPF
+=0101	STATE_[SRC],		;(5) SRC+DST IN STRING MOVE
+	 J/BACKD
+=0110	STATE_[EDIT-DST],	;(6) FILL IN MOVSRJ
+	 J/STRPF4
+=0111	STATE_[EDIT-SRC],	;(7) DEC TO BIN
+	 J/PFDBIN
+=1000	STATE_[EDIT-SRC],	;(10) SRC+DST IN COMP
+	 J/CMSDST
+=1001	END STATE, J/BACKS	;(11) EDIT SRC FAIL
+=1010	END STATE, J/BACKD	;(12) EDIT DST FAIL
+=1011	STATE_[EDIT-SRC],	;(13) SRC+DST IN EDIT
+	 J/BACKD
+=
+
+;CLEANUP DONE macro does:
+;	END STATE, SKIP IRPT, J/PFTRAP
+=0
+PFTRAP:	TR [PI],		;Here to deliver page fault after cleanup.
+	 PI.IP1/1, PI.IP2/1,	; This hack figures out what 3 locations to
+	 PI.IP3/1, PI.IP4/1,	; use to deliver the page fault.
+	 J/PFTDSP
+	TAKE INTERRUPT		;Here to deliver interrupt after cleanup.
+				; J/PI after setting FLG.PI
+=
+
+=0
+PFTDSP:	TR [PI], PI.IP1/1, PI.IP2/1, J/PFTDS1
+	TR [PI], PI.IP5/1, PI.IP6/1, J/PFTDS0
+=0
+PFTDS1:	TR [PI], PI.IP1/1, J/PFTD11
+	TR [PI], PI.IP3/1, J/PFTD10
+=0
+PFTDS0:	TR [PI], PI.IP5/1, J/PFTD01
+	TR [PI], PI.IP7/1, J/PFTD00
+=0
+PFTD11:	[AR]_0 XWD [443], J/PFTRAP1
+	[AR]_0 XWD [446], J/PFTRAP1
+=0
+PFTD10:	[AR]_0 XWD [451], J/PFTRAP1
+	[AR]_0 XWD [454], J/PFTRAP1
+=0
+PFTD01:	[AR]_0 XWD [457], J/PFTRAP1
+	[AR]_0 XWD [462], J/PFTRAP1
+=0
+PFTD00:	[AR]_0 XWD [465], J/PFTRAP1
+	[AR]_0 XWD [440], J/PFTRAP1
+=
+
+PFTRAP1:
+	[AR]_[AR]+[EBR],	; Where to store PFW
+	 VMA PHYSICAL WRITE
+	MEM WRITE,		; Store PFW
+	 MEM_[BRX]
+.IF/1PROC
+=0**	NEXT [AR] PHYSICAL WRITE,	; Where to store old PC
+	 CALL [STORE-INT-PC]
+.IFNOT/1PROC
+	NEXT [AR] PHYSICAL WRITE	; Where to store old PC
+	[BR]_PC WITH FLAGS	; Get old PC
+	MEM WRITE,		; Store old PC
+	 MEM_[BR]
+.ENDIF/1PROC
+	[AR]_[AR]+1,		; Where to get new PC
+	 VMA PHYSICAL READ,
+	 J/GOEXEC
+
+.IF/1PROC
+STORE-INT-PC:
+	[BR]_PC WITH FLAGS	; Get old PC
+	TL [FLG], FLG.1PROC/1	; Was the instruction being one-proceeded?
+=0	[BR]_[BR].OR.#, OIPBIT/1,	;It was, turn pc flag back on
+	 HOLD RIGHT, J/STORE-INT-PC-2
+STORE-INT-PC-1:
+	MEM WRITE, MEM_[BR], RETURN [4]
+STORE-INT-PC-2:
+	[FLG]_[FLG].AND.NOT.#, FLG.1PROC/1,	;Clear 1-proceed flags
+	 FLG.2PROC/1, HOLD RIGHT, J/STORE-INT-PC-1
+.ENDIF/1PROC
+.ENDIF/ITS
