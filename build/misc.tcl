@@ -798,6 +798,23 @@ respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
 expect ":KILL"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 
+# KL10 microcode assembler
+respond "*" ":midas sysbin;_syseng;micro\r"
+expect ":KILL"
+respond "*" ":job micro\r"
+respond "*" ":load sysbin; micro bin\r"
+respond "*" ":start purify\r"
+respond "TS MICRO" "sys; ts micro\r"
+respond "*" ":kill\r"
+
+# Microcode ASCIIzer and binarator converter.
+respond "*" ":midas sysbin;_syseng;cnvrt\r"
+expect ":KILL"
+respond "*" ":link sys1;ts mcnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"
