@@ -1,6 +1,7 @@
 - 11SIM, PDP-11 emulator.
 - 20XCVT, convert TOPS-20 CSAVE file to PDUMP.
 - @, cross reference generation tool.
+- ACNVRT/MCNVRT/PCNVRT/UCNVRT, asciizer and binarator.
 - ACCLNK, sets com-link accept bit for specified TTY.
 - ACOUNT, dummy account program used for users from safe sites.
 - ADVENT, (Colossal Cave) Adventure by Will Crowther.
@@ -116,6 +117,7 @@
 - MAILT, allows editing mail (from :MAIL) in EMACS.
 - MCL, subsystem for compiling individual Macsyma files.
 - METER, displays system metering information.
+- MICRO, microcode assembler.
 - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems gragon.
