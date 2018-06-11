@@ -815,6 +815,10 @@ respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
 respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
 respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
 
+# KS10 microcode assembler
+respond "*" ":midas kshack;ts micro_micro\r"
+expect ":KILL"
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"
