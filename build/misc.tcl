@@ -819,6 +819,14 @@ respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
 respond "*" ":midas kshack;ts micro_micro\r"
 expect ":KILL"
 
+# KL10 microcode.
+respond "*" ":micro ucode;u1=ucode;its,define,macro,basic,skpjmp,shift,arith,fp,byte,io,eis,blt\r"
+expect ":KILL"
+respond "*" ":ucnvrt ucode; u1\r"
+expect ":KILL"
+# Write the RAM file to the front end filesystem:
+# :klfedr write ucode;u1 ram
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"
