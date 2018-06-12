@@ -902,3 +902,7 @@ expect ":KILL"
 # KL10 front end dumper
 respond "*" ":midas dsk0:.;@ fedump_kldcp; fedump\r"
 expect ":KILL"
+
+# PDP-11 linker.
+respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
+expect ":KILL"
