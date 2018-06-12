@@ -88,6 +88,7 @@
 - HOSTS3, the host table compiler.
 - HSNAME, displays user's HSNAME.
 - HSNDEV, HSNAME device.
+- IO-11, PDP-11 I/O processor.
 - IDLE, list idle users.
 - IFILE, Chaosnet file service.
 - INIT, a helper program for LOGIN, LOGOUT, and other script files.

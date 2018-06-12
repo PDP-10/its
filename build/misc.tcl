@@ -942,3 +942,32 @@ respond "cpusw=" "2\r"
 respond "ndsk=" "1\r"
 respond "dsksw=" "3\r"
 expect ":KILL"
+
+# IO-11
+respond "*" ":palx dsk0:.;ioelev ai_system;ioelev\r"
+respond "MACHINE NAME =" "AI\r"
+expect ":KILL"
+
+respond "*" ":palx dsk0:.;ioelev mx_system;ioelev\r"
+respond "MACHINE NAME =" "MX\r"
+expect ":KILL"
+respond "*" ":11stnk\r"
+# Rumour has it 11DDT 14K should be used, but then 11STNK barfs on
+# KLDCP.  KLRUG works better.
+respond "*" "R"
+respond "FILENAME" "\r"
+respond "*" "L"
+respond "FILENAME" "kldcp; kldcp bin\r"
+respond "*" "L"
+respond "FILENAME" ".; ioelev mx\r"
+respond "*" "A"
+respond "FILENAME" ".temp.; ioelev bin\r"
+expect ":KILL"
+respond "*" ":pcnvrt .temp.; ioelev bin\r"
+expect ":KILL"
+# Write the file to the front end filesystem:
+# :klfedr write .temp.; ioelev a11
+
+# The MX-DL IOELEV won't assemble due to CHADD being undefined.
+# Maybe roll back to IOELEV 431, or fix it in new version 433.
+# Maybe link with 11DDT 16K.
