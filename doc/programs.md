@@ -96,6 +96,7 @@
 - JEDGAR, counter spying tool.
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
+- KLFEDR, KL10 frontend directory tool.
 - LAY, SUDS layout program.
 - LD10, Lisp display slave.
 - LIMERI, print limerics.
