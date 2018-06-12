@@ -898,3 +898,7 @@ expect ":KILL"
 # KL10 front end directory tool
 respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
 expect ":KILL"
+
+# KL10 front end dumper
+respond "*" ":midas dsk0:.;@ fedump_kldcp; fedump\r"
+expect ":KILL"
