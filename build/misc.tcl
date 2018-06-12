@@ -758,6 +758,10 @@ respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
 
+# VTTIME
+respond "*" ":midas sys1;ts vttime_rvb;vttime\r"
+expect ":KILL"
+
 # DEVICE; CHAOS TIME
 respond "*" ":midas device;chaos time_syseng;ctimsr\r"
 expect ":KILL"
