@@ -931,3 +931,7 @@ respond "TT10SW=" "0\r"
 respond "VT05SW=" "0\r"
 respond "DEBSW=" "0\r"
 expect ":KILL"
+
+# KL10 diagnostics console program.
+respond "*" ":palx kldcp; kldcp\r"
+expect ":KILL"
