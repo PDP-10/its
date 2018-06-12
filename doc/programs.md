@@ -65,6 +65,7 @@
 - FCDEV, talk to LispM file server.
 - FDIR, fast directory listing.
 - FED, font editor.
+- FEDUMP, KL10 front end dumper.
 - FIDO, watch for system events and bark.
 - FILE, Chaosnet file server.
 - FIND, search for files.
