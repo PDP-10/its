@@ -894,3 +894,7 @@ expect ":KILL"
 respond "*" ":midas /t device;jobdev glp_sysen2;xgpdev\r"
 respond "with ^C" "GLP==1\r\003"
 expect ":KILL"
+
+# KL10 front end directory tool
+respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
+expect ":KILL"
