@@ -975,3 +975,12 @@ expect ":KILL"
 # TV-11
 respond "*" ":palx dsk0:.;_system;tv\r"
 expect ":KILL"
+
+# 11BOOT
+respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
+respond "with ^C" "APR==0\r\003"
+expect ":KILL"
+# Note, must be run with symbols loaded.
+respond "*" ":cwd .\r"
+respond "*" "11boot\033\013"
+expect ":KILL"
