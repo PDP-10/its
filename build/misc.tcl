@@ -906,3 +906,7 @@ expect ":KILL"
 # PDP-11 linker.
 respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
 expect ":KILL"
+
+# KL10 front end debugger.
+respond "*" ":palx dsk0:.;_syseng; klrug\r"
+expect ":KILL"

@@ -99,6 +99,7 @@
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
 - KLFEDR, KL10 frontend directory tool.
+- KLRUG, KL10 frontend debugger.
 - LAY, SUDS layout program.
 - LD10, Lisp display slave.
 - LIMERI, print limerics.
