@@ -211,6 +211,7 @@
 - TJ6, typesetting software.
 - TMPKIL, clean out old files in .TEMP.;.
 - TREK, Star Trek game.
+- TV-11, Knight TV PDP-11.
 - TTLOC, Advertises physical location of logged in users.
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
 - TTYSWP, swap TTYs.

@@ -971,3 +971,7 @@ expect ":KILL"
 # The MX-DL IOELEV won't assemble due to CHADD being undefined.
 # Maybe roll back to IOELEV 431, or fix it in new version 433.
 # Maybe link with 11DDT 16K.
+
+# TV-11
+respond "*" ":palx dsk0:.;_system;tv\r"
+expect ":KILL"
