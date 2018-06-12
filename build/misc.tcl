@@ -935,3 +935,10 @@ expect ":KILL"
 # KL10 diagnostics console program.
 respond "*" ":palx kldcp; kldcp\r"
 expect ":KILL"
+
+# KL10 NTSDDT.
+respond "*" ":midas dsk0:.;@ ntsddt_system;ddt\r"
+respond "cpusw=" "2\r"
+respond "ndsk=" "1\r"
+respond "dsksw=" "3\r"
+expect ":KILL"
