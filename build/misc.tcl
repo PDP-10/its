@@ -984,3 +984,7 @@ expect ":KILL"
 respond "*" ":cwd .\r"
 respond "*" "11boot\033\013"
 expect ":KILL"
+
+# STUFF
+respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
+expect ":KILL"
