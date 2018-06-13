@@ -189,6 +189,7 @@
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
 - STONE, the old African game of stones.
+- STUFF, load code into PDP-11 through 10-11 interface.
 - STY, pseudo-terminal for multiple sessions.
 - STYLOG, convert PTY output file into ascii file.
 - SUPDUP, Supdup client.
