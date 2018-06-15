@@ -130,6 +130,7 @@
 - MLDEV, MLSLV, Allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems gragon.
+- MSEND, send to many users.
 - MSPLIT, split a file into smaller parts.
 - MTBOOT, make bootable tapes.
 - MUDDLE, MDL interpreter.

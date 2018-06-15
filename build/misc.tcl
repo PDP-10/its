@@ -851,6 +851,10 @@ expect ":PDUMP SYS2;TS XXFILE"
 expect ">>"
 respond "   " ":kill\r"
 
+# MSEND
+respond "*" ":midas sysbin;_sysen2;msend\r"
+expect ":KILL"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
