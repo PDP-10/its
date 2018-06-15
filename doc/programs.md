@@ -117,6 +117,7 @@
 - LSPEED, set tty line parameters.
 - LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
+- MACN80, Z80 cross assembler.
 - MACSYMA, symboling manipulation system.
 - MAXTUL, tools for managing Macsyma.
 - MAGDMP, standalone program loader/dumper for magtape.
