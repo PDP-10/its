@@ -854,6 +854,11 @@ respond "   " ":kill\r"
 # MSEND
 respond "*" ":midas sysbin;_sysen2;msend\r"
 expect ":KILL"
+respond "*" ":job msend\r"
+respond "*" ":load sysbin;msend bin\r"
+respond "*" "ttyopn\033b\033g"
+expect ">>"
+respond "   " ":kill\r"
 
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
