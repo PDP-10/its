@@ -911,8 +911,9 @@ expect ":KILL"
 respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
 expect ":KILL"
 
-# KL10 front end debugger.
-respond "*" ":palx dsk0:.;_syseng; klrug\r"
+# KL10 front end debugger.  Put it in the same directory as the
+# "MX" IOELEV.
+respond "*" ":palx sysbin;_syseng; klrug\r"
 expect ":KILL"
 
 # PDP-11 debugger.
@@ -947,12 +948,16 @@ respond "ndsk=" "1\r"
 respond "dsksw=" "3\r"
 expect ":KILL"
 
-# IO-11
-respond "*" ":palx dsk0:.;ioelev ai_system;ioelev\r"
+# IOELEV, PDP-11 doing I/O for the PDP-10 host.
+# First, the "AI" IOELEV, also known as CHAOS-11.
+# STUFF prefers to have it in the "." directory.
+respond "*" ":palx dsk0:.;_system;ioelev\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
-respond "*" ":palx dsk0:.;ioelev mx_system;ioelev\r"
+# The KL10 console "MX" IOELEV.  Put it in SYSBIN as to not conflict
+# with the "AI" IOELEV.
+respond "*" ":palx sysbin;_system;ioelev\r"
 respond "MACHINE NAME =" "MX\r"
 expect ":KILL"
 respond "*" ":11stnk\r"
@@ -963,7 +968,7 @@ respond "FILENAME" "\r"
 respond "*" "L"
 respond "FILENAME" "kldcp; kldcp bin\r"
 respond "*" "L"
-respond "FILENAME" ".; ioelev mx\r"
+respond "FILENAME" "sysbin; ioelev bin\r"
 respond "*" "A"
 respond "FILENAME" ".temp.; ioelev bin\r"
 expect ":KILL"
@@ -972,11 +977,11 @@ expect ":KILL"
 # Write the file to the front end filesystem:
 # :klfedr write .temp.; ioelev a11
 
-# The MX-DL IOELEV won't assemble due to CHADD being undefined.
-# Maybe roll back to IOELEV 431, or fix it in new version 433.
-# Maybe link with 11DDT 16K.
+# The KL10 "MX-DL" IOELEV won't assemble due to CHADD being undefined.
+# Maybe roll back to IOELEV 431, or fix it in new version 433.  Maybe
+# link with 11DDT 16K.
 
-# TV-11
+# TV-11.  STUFF prefers it to be in the "." directory.
 respond "*" ":palx dsk0:.;_system;tv\r"
 expect ":KILL"
 
@@ -985,9 +990,11 @@ respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
 respond "with ^C" "APR==0\r\003"
 expect ":KILL"
 # Note, must be run with symbols loaded.
-respond "*" ":cwd .\r"
+# Takes IOELEV BIN and KLRUG BIN from the current directory.
+respond "*" ":cwd sysbin\r"
 respond "*" "11boot\033\013"
 expect ":KILL"
+respond "*" ":move sysbin;@ boot11, .;\r"
 
 # STUFF
 respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
