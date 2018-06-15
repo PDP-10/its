@@ -258,6 +258,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts cross_syseng;cross\r"
 expect ":KILL"
 
+# MACN80
+respond "*" ":midas sys3;ts macn80_gz;macn80\r"
+expect ":KILL"
+
 # dired
 respond "*" ":midas sys;ts dired_sysen2;dired\r"
 expect ":KILL"
