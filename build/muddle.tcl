@@ -16,7 +16,7 @@ respond "*" ":midas ts stinkm_stink\r"
 expect ":KILL"
 
 respond "*" ":xfile assem xfile\r"
-expect "Assembly done!"
+expect -timeout 300 "Assembly done!"
 
 respond "*" ":print mudsav; ..new. (udir)\r"
 type ":vk\r"
