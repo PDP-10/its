@@ -12,7 +12,9 @@ respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
-expect -timeout 2000 "EINIT"
+expect -timeout 1000 -exact { -> DSK: EMACS; [PURE]}
+expect -timeout 1000 -exact { -> DSK: EMACS; [PRFY]}
+expect -timeout 1000 -exact { -> DSK: EMACS; EINIT}
 respond ":EJ" "\033xgenerate\033emacs;aux\033emacs1;aux\r"
 respond ":EJ" "\030\003"
 respond "*" ":kill\r"
