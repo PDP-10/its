@@ -66,6 +66,9 @@ $(OUT)/ka-minsys.tape: $(ITSTAR)
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	mkdir -p $(OUT)
 	rm -f src/*/*~
+	touch -d 1981-10-06T19:03:37 'bin/emacs/einit.:ej'
+	touch -d 1981-09-19T21:42:56 'bin/emacs/[pure].162'
+	touch -d 1981-03-31T20:41:45 'bin/emacs/[prfy].173'
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
