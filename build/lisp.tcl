@@ -471,6 +471,7 @@ respond ";BKPT" "(quit)"
 respond "*" ":midas maxtul;ts mcl_mcldmp midas\r"
 respond "*" ":link maxtul;.good. complr,sys;ts complr\r"
 respond "*" ":link liblsp;gcdemn fasl,lisp;\r"
+respond "*" ":link maxtul;ts utmcl,maxtul;ts mcl\r"
 
 respond "*" "complr\013"
 respond "_" "mrg;macros\r"
@@ -535,21 +536,17 @@ respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
 
 ### build ctensr for macsyma
 respond "*" "macsym\013"
-respond "(C1)" "translate_file(\"sharem\\;packg >\");"
-respond "(C2)" "quit();"
-respond ":KILL" "complr\013"
-respond "_" "sharem;packg fasl_packg trlisp\r"
-respond "_" "\032"
-type ":kill\r"
+respond "(C1)" "compile_lisp_file(translate_file(\"sharem\\;packg >\")\[2\]);"
+respond "(C2)" "compile_lisp_file(translate_file(\"tensor\\;ctensr funcs\")\[2\]);"
+respond "Type ALL;" "all;"
+respond "Type ALL;" "all;"
+respond "(C3)" "quit();"
+
+### build eigen for macsyma
 respond "*" "macsym\013"
-respond "(C1)" "translate_file(\"tensor\\;ctensr funcs\");"
-respond "Type ALL;" "all;"
+respond "(C1)" "compile_lisp_file(translate_file(\"share\\;eigen >\")\[2\]);"
 respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
-respond ":KILL" "complr\013"
-respond "_" "share;ctensr fasl_tensor;ctensr trlisp\r"
-respond "_" "\032"
-type ":kill\r"
 
 ### more lisplib stuff
 respond "*" "complr\013"
