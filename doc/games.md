@@ -20,6 +20,12 @@ a five-letter word.  To play this, type `:jotto`.
 This is Richard Greenblatt's chess program.  Type `:chprog;ocm` to play.
 For instructions, see CHPROG; OCM ORDER.
 
+### MAZLIB
+
+This is a maze game for EMACS.  To play, start EMACS and type
+<code><kbd>M-X</kbd>Load Library<kbd>$</kbd>mazlib</code>, then
+<code><kbd>M-X</kbd> Maze Run</code>.
+
 ### MLIFE
 
 This is a Conway Game of Life by Mike Speciner.  Type `:rwg;mlife` run

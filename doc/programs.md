@@ -125,6 +125,7 @@
 - MAGFRM, create tapes for use with MAGDMP.
 - MAIL, Mail sending client.
 - MAILT, allows editing mail (from :MAIL) in EMACS.
+- MAZLIB, maze game for EMACS.
 - MCL, subsystem for compiling individual Macsyma files.
 - METER, displays system metering information.
 - MICRO, microcode assembler.
