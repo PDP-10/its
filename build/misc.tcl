@@ -1110,3 +1110,7 @@ expect ":KILL"
 # GEORGE
 respond "*" ":midas sys3;ts george_syseng;george\r"
 expect ":KILL"
+
+# MONIT
+respond "*" ":midas sys;ts monit_syseng;monit\r"
+expect ":KILL"

@@ -143,6 +143,7 @@
 - MLDEV/MLSLV, allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems dragon.
+- MONIT, lightweight ATSIGN HACTRN replacement without debugging support.
 - MSEND, send to many users.
 - MSPLIT, split a file into smaller parts.
 - MTBOOT, make bootable tapes.
