@@ -729,6 +729,10 @@ respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
 expect ":KILL"
 respond "*" ":link dragon;hourly uptime,sysbin;uptime bin\r"
 
+# SHUTDN
+respond "*" ":midas sys3;ts shutdn_bawden;shutdn\r"
+expect ":KILL"
+
 # HEXIFY
 respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
 expect ":KILL"
