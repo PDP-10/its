@@ -228,7 +228,7 @@
 - UNTALK, split-screen comm-link program.
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.
-- USQ, unsqueeze/uncram a file.
+- USQ/TYPESQ, unsqueeze/uncram or type a file.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VTTIME, display running time on the terminal.
 - VV/VJ/DETREE, list jobs.

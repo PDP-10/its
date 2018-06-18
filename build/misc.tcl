@@ -748,6 +748,7 @@ expect ":KILL"
 # USQ
 respond "*" ":midas sys2;ts usq_sysen3;usq\r"
 expect ":KILL"
+respond "*" ":link sys2;ts typesq,sys2;ts usq\r"
 
 # SCRAM
 respond "*" ":midas sys2;ts scram_rwk;scram\r"
