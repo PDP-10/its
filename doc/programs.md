@@ -182,6 +182,7 @@
 - SENDS, Chaosnet SEND server.
 - SENSOR, sends censor.
 - SENVER, Chaosnet SEND server.
+- SHUTDN, shut down ITS.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
 - SPELL, ESPELL spell checker.
