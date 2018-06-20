@@ -840,6 +840,12 @@ respond "*" ":midas liblsp;_gsb;ttyvar\r"
 respond "Use what filename instead?" "lisp;\r"
 expect ":KILL"
 
+# MLMAC
+respond "*" "complr\013"
+respond "_" "lisp;_lspsrc;mlmac\r"
+respond "_" "\032"
+type ":kill\r"
+
 # Lisp display library
 respond "*" ":midas lisp; slave fasl_l; slave\r"
 expect ":KILL"
