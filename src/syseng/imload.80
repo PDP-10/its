@@ -1,0 +1,1350 @@
+TITLE IMLOAD 50
+; P.D.LEBLING  26 JAN 73  (20 NOV 74) (26 JAN 75 - JLK)
+; ADDED SCPOS, DETACH-ATTACH HACKERY, UNAME SPEC, FAST START,
+; 8BIT LOADING - JLK JAN. 76
+
+IFNDEF .MLLIT,.ERR ASSEMBLE WITH MMIDAS
+.MLLIT==1
+
+; CORE SIZE OF TERMINAL IS THE ASSEMBLY PARAMETER "MAXADR"
+
+; Takes an input specification (or JCL)like midas.
+; Has two modes, IMLOAD and IMTRAN
+; Loads MIDAS BIN, dumped (DDT), or IMTRAN'ed files
+
+; For IMLOAD:
+; The file specified in the second argument is sent to the device specified in 
+;   the first argument.
+; Default for first argument is TTY:
+; Default for second argument is DSK:IMLAC;SSV4B >
+; Default for second file name is IML.
+
+; For IMTRAN:
+; The file specified in the second argument is imtraned and sent to the file
+; specified in the first argument
+; Default for second argument is "DSK:<sname>;<nam1> IML"
+; DEFINITIONS
+
+; channels
+
+TIN==1			; tty input channel
+TOUT==2			; tty output channel
+IN==3			; input channel
+OUT==4			; output channel
+USRI==5
+ACKIN==6
+ACKOUT==7
+; acs
+
+A=1			; ac for character count
+B=2
+C=3			; pointer for ildb
+D=4			; pointer for idpb
+E=5			; ptr for file spec
+F=6			; for forming file names
+G=7
+H=10
+
+OADDR==10		; last interesting address
+CNT=11			; count of words in block
+ADDR=12			; address loading
+
+LC==13			; count of characters per line
+CC=14			; count of chars in buffer
+OB=15			; byte ptr for output buffer
+
+ARGP=16
+P=17			; pdl pointer
+
+; misc.
+
+NCR=400000		; don't send CR
+NRELD=200000		; not usual reload
+
+IBI=6			; image block input
+HDRSIZ=46		; size of midas block loader
+MAXADR=37777		; SET FOR 16K CORE.  SHOULD BE PART
+			; OF BLKLDR FILE??
+BLKLDR=MAXADR-77		; LOAD ADDRESS FOR BLKLDR
+; VARIABLES
+
+; stack
+
+PDL:	BLOCK	20
+
+; i/o buffers
+
+LINSIZ==68.			; number of chars between carriage returns
+BUFWRD==<LINSIZ+2>		; number of words to hold twice that many
+BUFCHR==5*BUFWRD
+
+COMLNG==210			; length of command buffer
+COMMND:				; input buffer is also command buffer
+INBUF:	BLOCK	1000		; input buffer
+OUTBUF:	BLOCK	BUFWRD		; output buffer
+
+; file name parser temporaries
+
+SCN1:	0			; name 1
+SCN2:	0			; name 2
+SCDEV:	0			; dev:
+SCUSR:	0			; usr;
+
+COMPTR:	0			; byte pointer into command buffer
+
+; default file names
+DEFPTR:	-10,,.+1
+	SIXBIT /   DSK/
+	SIXBIT /.PRGM./
+MYTTY:	SIXBIT /T00   /
+	SIXBIT /IMLAC /
+	SIXBIT /  GTTY/
+	SIXBIT /DELETE/
+	SIXBIT /THIS  /
+	SIXBIT /      /
+
+DEFPT1:	-10,,.+1
+	SIXBIT /   DSK/
+	SIXBIT /.PRGM./
+	SIXBIT /IML   /
+	SIXBIT /IMLAC /
+	SIXBIT /  GTTY/
+	SIXBIT /DELETE/
+	SIXBIT /THIS  /
+	SIXBIT /      /
+
+MEMK:	SIXBIT/   16K/		;TELLS USER WHICH VERSION
+
+INFLG:	0
+OUTFLG:	0
+
+; input file
+INFIL:	BLOCK 3		; keep these 8 words together and in this order!
+INSNM:	0
+; output file
+OUTFIL:	BLOCK 3
+OUTSNM:	0
+
+MAXTTY=40			; maximum Tnm
+
+; job name
+DUMP:	0			; load file bin (0) or dump (-1) ?
+JOBNAM:	0			; IMTRAN or IMLOAD ?
+UNAME:	0
+JNAME:	0
+	0
+; start of actual code
+
+START:	TRZ	G,NCR+NRELD
+	MOVE	P,[-17,,PDL]
+	SETZM	COMMND
+	MOVE	A,[COMMND,,COMMND+1]
+	BLT	A,COMMND+COMLNG-1
+	MOVE	A,[440700,,COMMND]
+	MOVEM	A,COMPTR
+
+; open tty for communication with user
+
+	.OPEN	TOUT,[SIXBIT/  1TTY/]
+	JRST	LOSE
+	.OPEN	TIN,[SIXBIT/   TTY/]
+	JRST	LOSE
+	.BREAK	12,[5,,COMMND]
+
+; imload or imtran?
+
+	.SUSET	[.RJNAM,,A]
+	MOVEM	A,JOBNAM	; save job name
+	CAMN	A,[SIXBIT /IMTRAN/]
+	JRST	HTRAN		; if imtran
+	JRST	HLOAD		; if imload
+; here for doing imload
+;  nm   --> Tnm
+;  crlf --> TTY
+
+; find out who we are
+HLOAD:	.SUSET	[.RIOC+TIN,,A]
+	HLRZS	A
+	ANDI	A,77
+	LDB	0,[030300,,A]
+	IORI	0,'0
+	DPB	0,[300600,,MYTTY]
+	LDB	0,[000300,,A]
+	IORI	0,'0
+	DPB	0,[220600,,MYTTY]
+
+; get magic .break command line
+	SKIPE	COMMND
+	 JRST	LPARSE
+	HRRI ARGP,[ASCIZ /IMLOAD./]
+	PUSHJ P,LINOUT
+	HRRI	ARGP,[.FNAM2]
+        PUSHJ	P,SIXOUT
+	HRRI ARGP,MEMK
+	PUSHJ P,SIXCR
+; print instructions
+	HRRI	ARGP,[ASCIZ /  TYPE ? FOR HELP.
+/]
+	PUSHJ	P,LINCR
+	JRST	LFILIN
+
+; read command line
+
+LFILI1:	HRRI	ARGP,[ASCIZ //]
+	PUSHJ	P,LINCR
+; prompt
+LFILIN:	.IOT	TOUT,["@]
+	PUSHJ	P,RCMD		; read command line
+; parse command line
+
+; zero out file blocks
+LPARSE:	SETZM	INFIL
+	SETZM	UNAME
+	SETZM	JNAME
+	SETOM	TTYNUM
+	MOVE	0,[INFIL,,INFIL+1]
+	BLT	0,OUTSNM
+; read output destination
+	MOVE	D,[OUTFIL,,INFIL]
+	PUSHJ	P,SCNAME
+; read input source
+	MOVE	D,[70,,INFIL]
+	PUSHJ	P,SCNAME
+
+; were two specs given?
+	SETZ	A,
+	IOR	A,OUTFIL
+	IOR	A,OUTFIL+1
+	IOR	A,OUTFIL+2
+	IOR	A,OUTFIL+3
+	MOVEM	A,OUTFLG
+	SETZ	A,
+	IOR	A,INFIL
+	IOR	A,INFIL+1
+	IOR	A,INFIL+2
+	IOR	A,INFIL+3
+	MOVEM	A,INFLG
+
+	SKIPN	OUTFLG
+	JRST	TRYIN
+TRYOUT:	MOVEI	B,OUTFIL
+	PUSHJ	P,CHKDEV
+	 JRST LOPER1
+	PUSHJ P,SETOUT
+TRYIN:	SKIPN	INFLG
+	JRST	TRYDEF
+	MOVEI	B,INFIL
+	PUSHJ	P,CHKDEV
+	JRST	TRYDEF
+	SETZM	INFLG
+	SETOM	OUTFLG
+	SETZM	INFIL
+	SETZM	INFIL+1
+	SETZM	INFIL+2
+	PUSHJ P,SETOUT
+
+TRYDEF:	MOVE	A,DEFPTR
+	SKIPE	INFLG
+	MOVE	A,DEFPT1
+	MOVEI	B,INFIL		; real file block pointer
+
+DEFLUP:	MOVE	0,(A)		; get default
+	SKIPN	(B)		; is real one zero?
+	MOVEM	0,(B)		; if so, use default
+
+	AOS	B		; next one
+	AOBJN	A,DEFLUP	; next default
+
+	JRST	LOPN		; go do open
+
+SETOUT:	HRRM	A,OUTFIL
+	SETZM	OUTFIL+1
+	SETZM	OUTFIL+2
+	POPJ P,
+
+; check for just number, or tty spec without ":" after
+; B/ dptr to file spec block
+CHKDEV:	PUSH	P,B
+
+; try device first
+	SKIPN	A,(B)
+	JRST	TRYNM1
+; device given.  if not Txx, then single spec is input file
+; if is Txx, then spec is output, ignore name1, name2
+	LDB	0,[140600,,A]
+	CAIE	0,'T
+	 JRST CHKXI1
+; is Txx, so all we get out of this is "Txx:"
+	JRST	CHKXIT
+
+; maybe a uname spec
+CHKUNM:	CAIE B,OUTFIL
+	 JRST CHKXI1
+	SKIPN A,3(B)
+	 MOVE A,1(B)
+	CAME A,1(B)
+	SKIPN G,1(B)
+	MOVE G,['HACTRN]
+	.CALL [SETZ ? SIXBIT /OPEN/ ? 1000,,USRI ? 5000,,10 
+                    ? ['USR,,] ? A ? SETZ G]
+	 SKIPA
+	JRST GETTMN
+	MOVE G,['HACTRO]
+	.CALL [SETZ ? SIXBIT /OPEN/ ? 1000,,USRI ? 5000,,10 
+                    ? ['USR,,] ? A ? SETZ G]
+	
+	 JRST CHKXI1		; job not there i guess
+				; also we assume not detached if jname is HACTRN
+GETTMN:	.USET USRI,[.RCNSL,,0]
+	JUMPL 0,CHKXI1		; no tty attached to this user (message?)
+	HRRZM 0,TTYNUM		; save for detaching
+	MOVEM A,UNAME		; ditto
+	ANDI 0,70		; convert number to sixbit code
+	LSH 0,3
+	IORI 0,2020
+	MOVE A,TTYNUM
+	ANDI A,7
+	IOR A,0
+	IORI A,(SIXBIT /T00/)
+	JRST CHKXIT
+	
+; check name1 in infil
+TRYNM1:	SKIPN	A,1(B)
+	 SKIPE  A,3(B)
+	SKIPE	2(B)		; if name2 also given,
+	JRST	CHKXI1		; then its a file name so we exit
+
+; typed "." ?
+	CAME	A,[SIXBIT /./]	; is it "." ?
+	JRST	CHKTNN
+	HRRZI	A,(SIXBIT /TTY/)	; make name1 TTY
+	JRST	CHKXIT
+
+; did he type "TTY" or "Tnm" ?
+; did he type "TTY" ?
+CHKTNN:	MOVSS	A
+	CAIN	A,(SIXBIT /TTY/)	; typed "TTY"
+	JRST	CHKXIT
+	CAIL	A,(SIXBIT /T00/)
+	CAILE	A,(SIXBIT /T77/)
+	SKIPA
+	JRST	CHKTNM
+
+; did he just type a number "00" to "77" or "0" to "7" ?
+	MOVE	A,1(B)
+	AND	A,[000077,,-1]
+	JUMPN	A,CHKUNM
+	MOVE	A,1(B)
+	ROT	A,14
+	CAIL	A,(SIXBIT / 00/)
+	CAILE	A,(SIXBIT / 77/)
+	SKIPA
+	JRST	ORTNM
+	TRNE	A,77
+	JRST	CHKUNM
+	ROT	A,-6
+	CAIL	A,(SIXBIT /  0/)
+	CAILE	A,(SIXBIT /  7/)
+	JRST	CHKUNM
+ORTNM:	IORI	A,(SIXBIT /T00/)	; make it Txx
+
+CHKTNM:	SKIPL TTYNUM			; convert tmn to a number for detach hackery
+	 JRST CHKXIT			; already got it
+	HRRZ B,A
+	ANDI B,7
+	HRRZ C,A
+	LSH C,-3
+	ANDI C,70
+	ADD B,C
+	MOVEM B,TTYNUM'	
+	
+CHKXIT:	AOS	-1(P)
+	HRLZM	A,MYTTY
+CHKXI1:	POP	P,B
+	POPJ	P,
+
+;  must distinguish between whether or not opening to TTY of
+;  some sort, or to DSK:
+
+; loading tty or tnm?
+LOPN:	HRRZ	B,OUTFIL
+	SETZ	H,		; flag off if TTY being loaded
+	CAIE	B,<SIXBIT/   TTY/>
+	SETO	H,		; flag goes on if Tnm being loaded
+
+; open for input -- image block input
+INOPN:	MOVEI	0,IBI
+	HRLM	0,INFIL
+
+; if opening DSK:.PRGM. xxx IMLAC;, then it's default and we give him
+; four chances to win....
+	MOVE	0,INSNM
+	CAME	0,[SIXBIT /IMLAC /]
+	JRST	INOPN1
+	MOVE	0,INFIL+1
+	CAME	0,[SIXBIT /.PRGM./]
+	JRST	INOPN1
+
+; here for loading normal prog, more or less, try user's dir first
+; try <user>;.PRGM. Tnm, then try
+;     <user>;.PRGM. NORMAL, then try
+;     IMLAC;.PRGM. Tnm, then try
+;     IMLAC;.PRGM. NORMAL, then QUIT!
+
+	.SUSET	[.RUNAM,,A]
+	.SUSET	[.SSNAM,,A]
+	.OPEN	IN,INFIL
+	SKIPA
+	JRST	LOOK
+; here to try with second name "normal"
+	PUSH	P,INFIL+2
+	MOVE	0,[SIXBIT /NORMAL/]
+	MOVEM	0,INFIL+2
+	.OPEN	IN,INFIL
+	JRST	.+3
+	POP	P,INFIL+2
+	JRST	LOOK		; really a loser, ain't it?
+
+; now try it in regular directory
+	POP	P,INFIL+2
+	.SUSET	[.SSNAM,,INSNM]	; set sname
+	.OPEN	IN,INFIL
+	SKIPA
+	JRST	LOOK
+; here if normal console -- apparently!
+	MOVE	0,[SIXBIT /NORMAL/]
+	MOVEM	0,INFIL+2
+
+; here for final, last, ultimate try (or first if not loading more or
+; less normal program...)
+INOPN1:	.SUSET	[.SSNAM,,INSNM]
+	.OPEN	IN,INFIL
+	JRST	LOPERR		; really a loser, ain't it?
+; start loading -- both for tty and not-tty
+
+; find out what sort of frob we will be loading from
+LOOK:	MOVE	A,[-1,,C]	; read first word into C
+	.IOT	IN,A
+
+; standard block loader?
+	CAMN	C,[ASCIZ /!blk /]
+	JRST	ASCMOD		; yes, go do usual loop
+
+; if not blk ldr, then maybe midas output file?
+	AND	C,[700340,,0]	;pick up io opcode
+	CAMN	C,[DATAI 0,0]
+	JRST	BINMOD		; yup, go do it
+
+; if "JRST 1" then good words start immediately
+	CAME	C,[JRST 1]
+	JRST NXT
+	SETOM DUMP
+	JRST	BINMO1
+
+; if negative implies just ^C in file
+NXT:	CAMN	C,[-1,,C]
+	JRST	FINIS
+
+; sri format?
+	AND	C,[777774,,0]
+	CAME	C,[33572_20.]
+	JRST CORIMG
+	PUSHJ	P,SRIMOD
+	JRST	FINIS
+
+; just give up
+CORIMG:	MOVEI	ARGP,[ASCIZ / FILE IS NOT BIN, DUMP, OR IMTRAN FORMAT?
+ ASSUMED CORE IMAGE BINARY.  LOAD ANYWAY? (Y or N): /]
+	PUSHJ	P,LINOUT
+	.IOT	TIN,
+	CAIE	0,"Y
+	CAIN	0,"y
+	SKIPA
+	JRST	LFILI1
+; reopen for input
+	.OPEN	IN,INFIL
+	JRST	LOPERR
+
+	HRRI	ARGP,[ASCIZ //]
+	PUSHJ	P,LINCR
+	JRST	CORMOD
+
+CORMOD:	MOVEI ARGP,[ASCIZ / CORE IMAGE MODE DOESN'T WORK YET./]
+	PUSHJ P,LINOUT
+	JRST LFILI1
+
+; * LOADING SRI FILES *
+
+X=7
+BC=12
+
+SRIMOD:	.OPEN	IN,INFIL
+	JRST	LOPERR
+	PUSHJ	P,OUTOPN
+	SKIPE	H
+	.VALUE	PRODIS
+	PUSHJ	P,CNTSET
+	PUSHJ	P,OIMLDR
+	PUSHJ	P,SRIRD
+	JRST	FINIS
+	PUSHJ	P,GET16
+	.VALUE
+	CAIE	A,33572	
+	.VALUE
+
+; start a block
+SRIDMS:	SETZM	CKS
+	PUSHJ	P,GET8
+	JRST	SRIEND
+	JUMPE	A,SRIEND
+	MOVN	CNT,A		; word count
+	PUSHJ	P,EMIT2
+	PUSHJ	P,GET16
+	.VALUE
+	PUSHJ	P,EMIT4
+WRDLUP:	PUSHJ	P,GET16
+	.VALUE
+	PUSHJ	P,CHKWRD
+	PUSHJ	P,EMIT4
+	AOJN	CNT,WRDLUP
+	MOVE	A,CKS
+	PUSHJ	P,EMIT4
+	JRST	SRIDMS
+
+; output autostart
+SRIEND:	MOVEI	A,2
+	PUSHJ	P,EMIT2
+	MOVEI	A,37713
+	PUSHJ	P,EMIT4
+	MOVEI	A,113714
+	PUSHJ	P,EMIT4
+	MOVEI	A,100
+	PUSHJ	P,EMIT4
+	MOVEI	A,<113714+100>
+	PUSHJ	P,EMIT4
+	JRST	PRGEN1
+
+CHKWRD:	PUSH	P,B
+	MOVE	B,CKS
+	ADD	B,A
+	CAILE	B,177777
+	AOS	B
+	ANDI	B,177777
+	MOVEM	B,CKS
+	POP	P,B
+	POPJ	P,
+
+CKS:	0
+
+GET16:	PUSHJ	P,GET8
+	.VALUE
+	LSH	A,8.
+	PUSH	P,A
+	PUSHJ	P,GET8
+	.VALUE
+	IOR	A,(P)
+	POP	P,0
+	AOS	(P)
+	POPJ	P,
+
+GET8:	JUMPE	BC,GETX+1
+	ILDB	A,X
+	AOJN	BC,GETX		; ran out?
+
+; ran out of bytes, get more
+	SKIPE	EOF		; done?
+	JRST	GETX		; yes
+
+SRIRD:	MOVNI	BC,<4*1000>
+	MOVE	X,[441000,,INBUF]
+	MOVE	B,[-1000,,INBUF]
+	.IOT	IN,B		; get them
+	JUMPL	B,GETEND	; eof?
+
+GETX:	AOS	(P)		; skip
+	POPJ	P,		; no skip
+
+; eof
+GETEND:	SETOM	EOF		; EOF
+	.CLOSE	IN,		; close channel
+
+	HLRES	B
+	AOS	B		; one more word for insurance
+	IMULI	B,4
+	SUB	BC,B		; buffer size minus unused bytes
+	JRST	GETX		; return
+
+EOF:	0			; if -1, eof has been read
+
+; * LOADING BIN OR DUMP FILES *
+
+; flush MIDAS block loader
+BINMOD:	MOVE	A,[-HDRSIZ,,INBUF]
+	.IOT	IN,A
+
+; proced, disown, if not "TTY:"
+BINMO1:	PUSHJ	P,OUTOPN
+	SKIPE	H
+	.VALUE	PRODIS
+
+; output block loader, then data
+	PUSHJ	P,CNTSET
+	PUSHJ	P,OIMLDR
+	PUSHJ	P,BLKLUP
+	.CLOSE	IN,		; close channel and exit
+	JRST	FINIS
+
+PRODIS:	ASCIZ /:PROCED
+:DISOWN
+/
+
+; * LOADING IMTRAN'ED FILES *
+
+; proced, disown, if not "TTY:"
+ASCMOD:	PUSHJ	P,OUTOPN
+	SKIPE	H
+	.VALUE	PRODIS
+
+; loop for ascii mode files
+ALOOP:	MOVE	A,[-200,,INBUF]
+	MOVE	B,A
+	.IOT	IN,A
+	PUSHJ	P,SETBUF
+	.IOT	OUT,A
+	JUMPGE	B,ALOOP		; loop if end of file not found
+
+ADONE:	.CLOSE	IN,		; close channel
+
+; * EXIT *
+; close output channel and kill
+FINIS:	.CALL	RESETY
+	JRST	LOSE
+	.CLOSE OUT,
+	SKIPN ATTCH		; REATTACH IF NECESSARY
+	 JRST LOSE
+	MOVE A,TTYNUM
+	TRO A,400000
+ 	.CALL [SETZ ? 'ATTACH ? 1000,,USRI ? A ? 3000,,B ? 405000,,400000]
+	 JFCL
+LOSE:	.LOGOUT
+	.VALUE	[ASCIZ /:KILL
+/]
+
+; given iot pointer in B and used one in A
+; sets up output iot pointer
+SETBUF:	MOVE	C,B
+	MOVE	B,A		; save used iot pointer
+; set up output iot
+	HLLZS	A
+	SUBM	C,A
+	POPJ	P,
+
+; initialize counts for crlf and buffer output
+CNTSET:	MOVNI	LC,LINSIZ		; number of chars per line before crlf
+	MOVNI	CC,BUFCHR		; number chars that fit in the output buffer
+	MOVE	OB,[440700,,OUTBUF]
+	POPJ	P,
+
+LOPERR:	PUSHJ	P,OPERR
+	JRST	LFILIN
+LOPER1:	PUSHJ	P,OPER1
+	JRST	LFILIN
+
+
+RESETY:	400000,,0
+	SIXBIT /CNSSET/
+	[OUT]
+	[-1]
+	[-1]
+	CONSTP
+	400000,,COMWRD
+; open for output
+OUTOPN:	SETZ ATTCH'
+	MOVEI	0,'G
+	HRLM	0,OUTFIL
+	.SUSET	[.SSNAM,,OUTSNM]
+	.OPEN	OUT,OUTFIL
+	 JRST	CHKTTY		; CHECK TO SEE IF TTY NEEDS DETACHING
+
+; grovel console communicate mode
+OUTOP1:	.CALL	RCNSTP			; gets console type
+	 JRST	LOSE
+	.CALL	SETCOM		; disables communicate mode
+	 JRST	LOSE
+
+; in case it has %tpcbs on, better set the allocation to infinity
+	.CALL	SCPOS
+	 JRST	LOSE
+
+; open an input file to receive acknowledgement of boot loader start
+	.CLOSE TIN,
+	MOVEI 0,7004	; IMAGE INPUT, DON'T WAIT FOR CHAR
+	HRLM 0,OUTFIL
+	.OPEN ACKIN,OUTFIL
+	 JRST LOSE	; THIS REALLY SHOULDN'T LOSE!!
+
+; start imlac at bootstrap if we can.
+; send out %tdqot to quote 232 which is the imlac interrupt char
+; followed by ^a. terminals not receiving 8 bit codes should
+; interpret ^z as this interrupt function.
+
+	MOVEI A,45
+	HRLM A,OUTFIL
+	.OPEN ACKOUT,OUTFIL
+	 JRST LOSE
+	MOVE A,[441000,,B] ; 8BIT
+	MOVE B,[<232_20.>+<1_12.>]	; SHOULD CHECK %TDQOT FOR NON SIMLACS.
+
+	.CALL [SETZ ? SIXBIT /SIOT/ ? 1000,,ACKOUT ? A ? SETZ [3]]
+	 JRST LOSE
+	MOVEI A,2
+	.SLEEP A,	; JUST A LITTLE NAP
+
+; SEE IF ANY ACKNOWLEDGEMENT WAS SENT
+	.IOT ACKIN,A
+ACKCHR==6
+	CAIN A,ACKCHR	; IS IT THE OFFICIAL ACKNOWLEDGEMENT CHAR?
+	 POPJ P,
+
+; PRINT MESSAGE OF WARNING OR INSTRUCTION
+PROMPT:	HRRI	ARGP,[ASCIZ / START TERMINAL AT LOC. 40 (60 ON A PDS-4) WITHIN 5 SECONDS!
+/]
+	SKIPE	H
+	MOVEI	ARGP,[ASCIZ / START TERMINAL TO BE LOADED AT 40 (60 ON A PDS-4).
+ TYPE ANY CHARACTER ON THIS CONSOLE WHEN READY./]
+	PUSHJ	P,LINOUT
+
+	SKIPN H
+	 JRST NAP
+	.OPEN	TIN,[SIXBIT/   TTY/]
+ 	 JRST LOSE 
+	.IOT TIN,
+	CAIN 0,33	; PRETEND TO BE LOADING THIS TTY IF ALT
+	 SETZ H,
+	POPJ P,
+
+; if "TTY:" snooze for five seconds
+NAP:	MOVEI	150.
+	.SLEEP
+	POPJ	P,
+; ******************************************************************
+; ARGUMENTS FOR TTY CODE CALLS
+; ******************************************************************
+
+RCNSTP:	400000,,0
+	SIXBIT /CNSGET/
+	[OUT]
+	2000,,0
+	2000,,COMWRD'
+	402000,,CONSTP'		; saves communicate state for later restoration
+
+SETCOM:	400000,,0
+	SIXBIT /CNSSET/
+	[OUT]
+	[-1]
+	[-1]
+	CONSTP'
+	400000,,[10000,,0]
+
+SCPOS:	SETZ
+	SIXBIT /SCPOS/
+	[OUT]
+	1000,,0
+	1000,,0
+	SETZ [-1]		; SET TTY OUTPUT TO INFINITY IN CASE 
+				; INTELL. TERMINAL PROTOCOL USED
+
+
+CHKTTY:	.SUSET [.RIOS+OUT,,A]	; SEE WHY OPEN FAILED
+	HLRZS A
+	CAIE A,10		; IF DEVICE NOT AVAILABLE, MUST BE IN USE
+	 JRST LOPER1		; FAILED FOR SOME OTHER REASON
+
+; WE ASSUME THAT OPEN WILL NOT FAIL WITH DEVICE NOT AVAILABLE
+; UNLESS TMN IS IN USE BY SOMEONE'S JOB TREE.
+	SKIPN UNAME		; IF WE ALREADY HAVE THE UNAME
+	 JRST GETTTY
+	.CALL [SETZ ? SIXBIT /OPEN/ ? 1000,,USRI ? 5000,,10 
+		    ? ['USR,,] ? UNAME ? SETZ ['HACTRN]]
+	SKIPA			; IF HACTRN DOESN'T EXIST, DO IT THE LONG WAY
+	JRST DETTTY
+
+GETTTY:	MOVE D,TTYNUM		; GET JOB INDEX ASSOC. WITH TTY
+	TRO D,400000
+	.CALL [SETZ ? 'TTYGET ? D ? 2000,,B ? 2000,,C ? SETZM A]
+	 JRST LOSE
+	SKIPGE A		
+	 JRST LOPER1		; ALREADY DETACHED.  OPEN LOST
+				; FOR SOME OTHER REASON
+; NOW LOOP OPENNING THE USR DEVICE AND LOOKING AT .SUPPR UNTIL
+; WE GET -1 INDICATING THE TOP OF THE TREE
+; A HAS THE JOB NUMBER.
+
+JOBLP:	HRRZS A
+	TRO A,400000
+	.CALL [SETZ ? SIXBIT /OPEN/ ? 1000,,USRI ? 5000,,10 
+		    ? ['USR,,] ? A ? SETZI ]
+	 JRST LOSE
+	.USET USRI,[.RSUPPR,,A]
+	JUMPG A,JOBLP
+; GOT USRI OPEN TO TOP JOB OF HIS TREE (FOR LATER ATTACHING).  NOW ASK HIM IF HE 
+; REALLY WANTS TO DETACH THE GUY
+	HRRI	ARGP,[ASCIZ /DETACH /]
+	PUSHJ	P,LINOUT
+	.USET USRI,[.RUNAM,,UNAME]
+	HRRI ARGP,UNAME
+	PUSHJ P,SIXOUT
+	.IOT TOUT,[40]
+	.USET USRI,[.RJNAM,,JNAME]
+	HRRI ARGP,JNAME
+	PUSHJ P,SIXOUT
+	HRRI ARGP,[ASCIZ / (Y OR N)?/]
+	PUSHJ P,LINOUT
+	.IOT TIN,A
+	.IOT TOUT,[15]
+	ANDI A,37
+	CAIE A,31
+	 JRST LOPER1
+; DETACH THAT JOB TREE AND SUPPRESS CONSOLE FREE MESSAGE
+DETTTY:	.CALL [SETZ ? 'DETACH ? 5000,,20 ? SETZI USRI]
+	 JFCL
+	SETOM ATTCH
+	.OPEN OUT,OUTFIL		;TRY AGAIN
+	 JRST LOPER1		; GIVE UP!!
+	JRST OUTOP1
+; here to do IMTRAN
+;  default is "DSK:<nam1> IML" for output
+HTRAN:	SKIPE	COMMND
+	JRST	TPARSE
+
+	HRRI	ARGP,[SIXBIT /IMTRN-/ ? .FNAM2 ? 0]
+	PUSHJ	P,SIXCR
+; and instructions
+	HRRI	ARGP,[ASCIZ /   Type "<destination file>_<source file>"./]
+	PUSHJ	P,LINCR
+TFILIN:	.IOT	TOUT,["@]
+	PUSHJ	P,RCMD
+
+; read a destination and a source
+TPARSE:	MOVE	D,[OUTFIL,,INFIL]
+	PUSHJ	P,SCNAME
+	MOVE	D,[70,,INFIL]
+	PUSHJ	P,SCNAME
+
+; hack defaults
+	MOVEI	A,(SIXBIT /DSK/)
+	SKIPN	INFIL
+	HRRZM	A,INFIL
+	MOVSI	A,(SIXBIT /BIN/)
+	SKIPN	INFIL+2
+	MOVEM	A,INFIL+2
+	SKIPN	INSNM
+	.SUSET	[.RSNAM,,INSNM]
+; any field not specified on output will be
+; set equal to input spec
+	MOVE	A,INFIL
+	MOVE	B,INFIL+1
+	MOVSI	C,(SIXBIT /IML/)
+	MOVE	D,INFIL+3
+	SKIPN	OUTFIL
+	HRRM	A,OUTFIL
+	SKIPN	OUTFIL+1
+	MOVEM	B,OUTFIL+1
+	SKIPN	OUTFIL+2
+	MOVEM	C,OUTFIL+2
+	SKIPN	OUTFIL+3
+	MOVEM	D,OUTFIL+3
+; opens files and does translate into output file
+
+; open input file
+	MOVEI	0,IBI		; image block input
+	HRLM	0,INFIL
+	.SUSET	[.SSNAM,,INSNM]	; set sname
+	.OPEN	IN,INFIL	; do open
+	JRST	TOPERR		; open failed
+
+; open output file
+	MOVEI	'G		; super image output
+	HRLM	0,OUTFIL
+	.SUSET	[.SSNAM,,OUTSNM]	; set sname
+	.OPEN	OUT,OUTFIL	; do open
+	JRST	TOPER1		; open failed
+
+; get type of file
+	SETOM	DUMP
+JRST1:	MOVE	A,[-1,,C]	; get first word
+	.IOT	IN,A
+	JUMPL	A,BADFOR
+	CAMN	C,[JRST 1]
+	JRST	TRANS
+; sri format?
+	AND	C,[777774,,0]
+	CAMN	C,[33572_20.]
+	PUSHJ	P,SRIMOD
+
+	SETZM	DUMP		; if first word not jrst 1 then not dump file
+	JRST	JRST1
+
+; here if file is neither bin or dump format
+BADFOR:	MOVEI	A,[ASCIZ / FILE IS NOT BIN OR DUMP FORMAT, CANNOT TRANSLATE./]
+	PUSHJ	P,LINCR
+	JRST	ENDTRN
+
+; flush block loader, output imldr and file
+TRANS:	PUSHJ	P,CNTSET
+	PUSHJ	P,OIMLDR	; loader
+	PUSHJ	P,BLKLUP	; file
+
+; here to close channels and loop
+ENDTRN:	.CLOSE	IN,		; close channel and loop
+	.CLOSE	OUT,
+	JRST	TFILIN		; loop
+
+TOPERR:	PUSHJ	P,OPERR
+	JRST	TFILIN
+TOPER1:	PUSHJ	P,OPER1
+	JRST	TFILIN
+; * OUTPUT BLOCK LOADER *
+
+; here to output block loader
+OIMLDR:	.SUSET	[.SSNAM,,[SIXBIT /IMLAC /]]
+	.OPEN	10,[SIXBIT /  &DSKIMLAC BLKLDR/]
+	JRST	BLKERR
+; here we loop through the block loader
+	MOVE	A,[-200,,INBUF]
+	MOVE	B,A
+	.IOT	10,A
+	PUSHJ	P,SETBUF
+	PUSHJ	P,FIXWRD
+LSTTRN:	.IOT	OUT,A
+	.CLOSE	10,
+	POPJ	P,
+
+; can't find block loader
+BLKERR:	MOVEI	A,[ASCIZ / CAN'T OPEN "IMLAC;IMLAC BLKLDR"./]
+	PUSHJ	P,LINCR
+	POP	P,0		; we are in subroutine now
+	JRST	ENDTRN		; exit
+
+
+; here to take care of control C read in
+FIXWRD:	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	MOVNI	D,5
+	SOS	B
+	HRLI	B,440700
+	MOVE	C,B
+CHKC:	ILDB	0,B
+	CAIN	0,3
+	JRST	CTLC
+	IDPB	0,C
+	AOJN	D,CHKC
+	JRST	FIXIT
+
+CTLC:	MOVEI	0,40
+	IDPB	0,C
+	AOJN	D,.-1
+
+FIXIT:	POP	P,D
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+; * TRANSLATE BLOCKS *
+
+; here to output actual file
+BLKLUP:	SETO	OADDR,
+BIGLUP:	MOVE	A,[-1,,B]	; get first word
+	.IOT	IN,A		;  of a block
+	MOVE	A,B
+	JUMPGE	A,PRGEND	;  so we exit
+; here to process a block
+;  B/ -n,,location
+	HRRZ	ADDR,B		; address to load at
+
+; do we need to fill in holes?
+	JUMPL	OADDR,SETCNT	; can't have hole on first block!
+	SKIPE	DUMP		; only fill holes in dump files!
+	CAMN	ADDR,OADDR	; blocks contiguous?
+	JRST	SETCNT
+	CAIGE	ADDR,BLKLDR	; no, but don't fill to top of universe!
+	JRST	STHOLE		; no, just go grovel
+
+; make fake hole block after  highest address below BLKLDR
+	PUSHJ	P,TOPHOL	; calculate size of hole below BLKLDR
+	JRST	DOHOLE
+
+; here to fill in holes
+STHOLE:	MOVE	A,ADDR		; new address
+	SUB	A,OADDR		; difference
+	CAILE	A,377		; refuse to do gross holes!
+	JRST	SETCNT
+
+DOHOLE:	PUSHJ	P,HOLE
+
+SETCNT:	HLRE	A,B
+	MOVNS	A
+	MOVE	CNT,A		; count of words in block
+
+; create new last interesting address
+	MOVE	OADDR,ADDR	; address loading at
+	ADD	OADDR,CNT	; plus words loaded
+
+; set up count
+SMALUP:	MOVE	B,CNT
+	CAILE	B,200		; max of 200 words
+	MOVEI	B,200
+	SUB	CNT,B
+	MOVE	A,B
+	PUSHJ	P,EMIT2
+
+; set up address
+	MOVE	C,ADDR
+	ADD	ADDR,B
+	MOVE	A,C
+	PUSHJ	P,EMIT4
+
+; create iot pointer to get rest of block
+	MOVNS	B
+	HRLS	B
+	HRRI	B,INBUF		; buffer
+	MOVE	C,B		; save it
+	.IOT	IN,B		; do actual iot
+
+; do checksum
+	MOVE	A,C
+	PUSHJ	P,CHKSUM	; also does fake indirect hack
+	MOVE	D,A		; save checksum
+
+; output good words
+DATLUP:	MOVE	A,(C)		; get a word
+	PUSHJ	P,EMIT4		; output it
+	AOBJN	C,DATLUP	; and loop
+
+; output checksum
+	MOVE	A,D
+	PUSHJ	P,EMIT4		; output it
+	JUMPG	CNT,SMALUP		; and loop
+
+; flush checksum at end of real block
+	MOVE	B,[-1,,0]
+	.IOT	IN,B
+
+	JRST	BIGLUP		; loop
+;	* AFTER ALL BLOCKS OUTPUT *
+
+; here is end of good words
+; output a block of count -1 and location -1
+PRGEND:	CAIGE	OADDR,BLKLDR
+	SKIPN	DUMP
+	JRST	PRGEN1
+
+; here to fill part of final hole
+	PUSHJ	P,TOPHOL		; calculate size of top hole
+	PUSHJ	P,HOLE
+
+; here to write out block of count and address -1
+PRGEN1:	SETO	A,
+	PUSHJ	P,EMIT2		; two chars of count
+	SETO	A,
+	PUSHJ	P,EMIT4		; four chars of location
+; here to output rest of output buffer
+	MOVE	A,CC
+	ADDI	A,BUFCHR
+	SKIPG	A
+	POPJ	P,
+	IDIVI	A,5
+	JUMPE	B,EVENUP
+; here to even out to word boundary
+	SETZM
+	IDPB	0,OB
+	SOJG	B,.-1
+	AOS	A
+EVENUP:	MOVNS	A
+	HRLS	A
+	HRRI	A,OUTBUF
+	.IOT	OUT,A
+	POPJ	P,		; and exit
+; output a crlf and reset count
+DOCRLF:	MOVEI	15		; cr
+	IDPB	0,OB
+	AOSL	CC
+	PUSHJ	P,PUTBUF
+	MOVEI	12		; lf
+	IDPB	0,OB
+	AOSL	CC
+	PUSHJ	P,PUTBUF
+	MOVNI	LC,LINSIZ		; CRLF every N characters
+	POPJ	P,
+
+; output a hole-filling block
+; a/ count of zeros
+; oaddr/ address of block
+HOLE:	PUSH	P,B
+	MOVEI	B,1(A)		; save count of zeros (+ one for cks)
+	PUSHJ	P,EMIT2		; count of zeroes
+	MOVE	A,OADDR		; address
+	PUSHJ	P,EMIT4		; emit it
+; put out right number of zeroes as special block
+ZERLUP:	SETZ	A,		; zero
+	PUSHJ	P,EMIT4		; out
+	SOJG	B,ZERLUP	; done?
+	POP	P,B		; yes, restore acs and go back to normal
+	POPJ	P,
+
+; here to calculate size of top hole
+TOPHOL:	MOVEI	A,BLKLDR
+	SUB	A,OADDR
+	CAILE	A,40
+	MOVEI	A,40
+	POPJ	P,
+
+; here to write out outbuf
+PUTBUF:	MOVE	A,[-BUFWRD,,OUTBUF]
+	.IOT	OUT,A
+	MOVNI	CC,BUFCHR
+	MOVE	OB,[440700,,OUTBUF]
+	POPJ	P,		; return
+
+; emit a character -- right most 4 bits of word
+EMIT:	IORI	A,100		; make it right sort of ascii
+IEMIT:	IDPB	A,OB
+	AOSL	CC
+	PUSHJ	P,PUTBUF
+	AOSL	LC
+	PUSHJ	P,DOCRLF	; and crlf if 0
+	POPJ	P,
+
+; emit 2 characters -- right most 8 bits of word
+EMIT2:	PUSH	P,B
+	MOVE	B,A
+	LDB	A,[040400,,B]	; get first char
+	PUSHJ	P,EMIT		; output
+	LDB	A,[000400,,B]	; get second char
+	PUSHJ	P,EMIT		; output
+	POP	P,B
+	POPJ	P,
+
+; emit four characters -- rightmost 16 bits of word
+EMIT4:	PUSH	P,B
+	PUSH	P,C
+	PUSH	P,D
+	MOVE	B,A
+	MOVE	C,[200400,,B]	; abptr
+	MOVNI	D,4		; count
+; loop through four chars
+EMIT4L:	ILDB	A,C		; get it 
+	PUSHJ	P,EMIT		; output it
+	AOJL	D,EMIT4L	; loop til done
+	POP	P,D
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+; do checksum on a block
+CHKSUM:	PUSH	P,B
+	PUSH	P,C
+	MOVE	B,A
+	SETZ	A,
+CHK1:	MOVE	C,(B)
+	TLZE	C,20
+	TRO	C,100000
+	ANDI	C,177777
+	MOVEM	C,(B)
+	ADD	A,C
+	CAILE	A,177777
+	AOS	A
+	ANDI	A,177777
+	AOBJN	B,CHK1
+	POP	P,C
+	POP	P,B
+	POPJ	P,
+; * ERRORS *
+
+; here if can't open output file
+OPER1:	HRRI	ARGP,[ASCIZ / OUTPUT OPEN FAILED:
+(1) IF CONSOLE TO BE RELOADED IS NOT TTY IT MUST HAVE 
+    ITS JOB TREE DETACHED FROM IT.
+(2) DEVICE, UNAME, OR JOB SPECIFICATION MIGHT BE ERRONEOUS./]
+	JRST	.+2
+; here if can't open input file
+OPERR:	HRRI	ARGP,[ASCIZ / INPUT OPEN FAILED./]
+	PUSHJ	P,LINCR
+; try again
+	POPJ	P,
+
+; print message and ask question:
+; skip if answer yes, no skip if no
+
+DECIDE:	PUSHJ	P,LINOUT
+DECIN:	.IOT	TIN,		; get a character
+	.IOT	TOUT,[15]	; output a crlf
+; look at result
+	CAIE	"Y	
+	CAIN	"y
+	JRST	CPOPJ1
+	CAIE	"N
+	CAIN	"n
+	POPJ	P,
+; not Y or N, so ask again
+	HRRI	ARGP,[ASCIZ /Y OR N ?/]
+	PUSHJ	P,LINOUT
+	JRST	DECIN
+
+CPOPJ1:	AOS	(P)
+	POPJ	P,
+; command reader
+RCMD:	MOVE	B,[440700,,COMMND]
+	MOVEM	B,COMPTR
+	MOVEI	C,0
+RCMD1:	.IOT	TIN,A
+	CAIN A,"?
+	JRST HELP
+	CAIN A,^K
+	JRST RCCLN
+	CAIN	A,^Q
+	JRST	LOSE
+	CAIN	A,177
+	JRST	RUB
+	CAIN	A,^L
+	JRST	RCLEAR
+	IDPB	A,B
+	CAML	B,[350700,,COMMND+COMLNG-1]
+	JRST	RCFUL
+	CAIL	A,40
+	AOJA	C,RCMD1
+RCMDX:	MOVEI	A,0
+	IDPB	A,B
+	POPJ	P,
+
+RCFUL:	MOVEI	A,15
+	IDPB	A,B
+	JRST	RCMDX
+
+RCLEAR:	.IOT	TOUT,[^P]
+	.IOT	TOUT,["C]
+RCDIS:	.IOT	TOUT,["@]
+	MOVE	ARGP,COMPTR
+	PUSHJ	P,LINOUT
+	JRST	RCMD1
+
+RUB:	SOJL	C,RCMD
+	MOVEI	A,0
+	DPB	A,B
+	.IOT	TOUT,[^P]
+	.IOT	TOUT,["X]
+	ADD	B,[070000,,]
+	TLNE	B,400000
+	ADD	B,[347777,,-1]
+	JRST	RCMD1
+
+HELP:	HRRI ARGP,[ASCIZ / If you are just reloading terminal Tmn, just type mn<cr>
+or <cr> if reloading this terminal (TTY).
+Otherwise give <output device>_<input file spec> <cr>.
+Output device defaults to TTY if omitted. "T" and-or ":" may be
+left off the device specification of Tmn:
+The input file defaults to IMLAC;.PRGM. NORMAL.  If first file
+name is given, the second name defaults to IML.
+Default output file for IMTRAN is IML.
+Example - Load IML:IMLAC;ED4 IML into T30:, type 30_IML:ED4<cr>
+/]
+	PUSHJ P,LINCR
+	JRST RCDIS
+
+RCCLN:	HRRI ARGP,[ASCIZ //]
+	PUSHJ P,LINCR
+	JRST RCDIS
+; here to get file name from command line
+SCNAME:	SETZM	SCN1
+	SETZM	SCN2
+	SETZM	SCDEV
+	SETZM	SCUSR
+	MOVSI	C,-4
+SCNGET:	PUSHJ	P,GETSYL
+	CAIN	A,':
+	MOVEM	B,SCDEV
+	CAIN	A,';
+	MOVEM	B,SCUSR
+	CAIE	A,'_
+	JRST	SCNGT1
+	MOVEM	B,SCN1(C)
+	JRST	SCNX1
+SCNGT1:	JUMPG	A,SCNGET
+	MOVEM	B,SCN1(C)
+	JUMPL	A,SCNX
+	AOBJN	C,SCNGET
+	SKIPA
+
+SCNX1:	MOVSS	D	; found a left arrow
+SCNX:	SKIPE	A,SCDEV
+	HLRM	A,(D)
+	SKIPE	A,SCN1
+	MOVEM	A,1(D)
+	SKIPE	A,SCN2
+	MOVEM	A,2(D)
+	SKIPN	SCUSR
+	POPJ	P,
+	MOVE	A,SCUSR
+	MOVEM	A,3(D)
+	POPJ	P,
+; get a syllable from command line
+
+GETSYL:	PUSH	P,[0]
+	MOVE	B,[440600,,(P)]
+GETSLP:	PUSHJ	P,GETCCA
+	JUMPE	A,GETSX		; no char
+	CAIN	A,
+	JRST	GETQOT
+	SUBI	A,40
+	JUMPL	A,GETSX
+	JUMPE	A,GETSP
+	CAIN	A,'_
+	JRST	GETSX
+	CAIE	A,':
+	CAIN	A,';
+	JRST	GETSX
+GETSPT:	CAIL	A,100
+	SUBI	A,40
+	TLNE	B,770000
+	IDPB	A,B
+	JRST	GETSLP
+
+GETQOT:	PUSHJ	P,GETCCA
+	SUBI	A,40
+	JUMPGE	A,GETSPT
+	JRST	GETSX
+
+GETSP:	TLNE	B,400000
+	JRST	GETSLP
+GETSX:	POP	P,B
+	POPJ	P,
+
+GETCCA:	ILDB	A,COMPTR
+	JUMPE	A,GETZER
+	CAIE	A,14
+	CAIN	A,12
+	JRST	GETCCA
+	CAIE	A,15
+	POPJ	P,
+GETZER:	PUSH	P,COMPTR
+	SETZ	0,
+	IDPB	0,COMPTR
+	POP	P,COMPTR
+	POPJ	P,
+; output messages here
+
+SIXOUT:	TROA	G,NCR
+LINOUT:	TROA	G,NCR			;SWITCH FOR NO CR
+SIXCR:	SKIPA	A,[440600,,]
+LINCR:	HRLI	A,440700
+	HRR	A,ARGP			;SET UP ILDB PTF
+LOUP:	ILDB	0,A			;PICK UP LETTER
+	JUMPE	FINZ		;ZERO IF DONE
+	TLNN	A,100		;SKIP FI 7 BIT BYTE, (ASCII)
+	ADDI	40		;NOT 7BITS, MAKE 6->7
+	.IOT	TOUT,0		;OUTPUT LETTER
+	JRST	LOUP		;BACK FOR MORE
+FINZ:	TRZN	G,NCR
+	.IOT	TOUT,[^M]
+	POPJ	 P,
+
+	END START
