@@ -869,6 +869,11 @@ respond "*" "ttyopn\033b\033g"
 expect ">>"
 respond "   " ":kill\r"
 
+# IMLOAD and IMTRAN
+respond "*" ":midas sys1; ts imload_syseng; imload\r"
+expect ":KILL"
+respond "*" ":link sys1; ts imtran, sy1s; ts imload\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
