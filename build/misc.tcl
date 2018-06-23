@@ -850,6 +850,8 @@ respond "*" ":kshack;micro kshack;mcr 262=kshack;its,ks10,simple,flt,extend,inou
 expect ":KILL"
 respond "*" ":copy kshack; mcr ram, .; ram ram\r"
 
+update_microcode
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"

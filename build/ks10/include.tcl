@@ -162,3 +162,15 @@ proc bootable_tapes {} {
     respond "Input file" ".;nsalv bin\r"
     expect ":KILL"
 }
+
+proc update_microcode {} {
+    type ":ksfedr\r"
+    respond "!" "write\r"
+    respond "Are you sure" "yes\r"
+    respond "Which file" "ram\r"
+    expect "Input from"
+    sleep 1
+    respond ":" ".;ram ram\r"
+    respond "!" "quit\r"
+    expect ":KILL"
+}
