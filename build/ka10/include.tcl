@@ -120,3 +120,6 @@ proc bootable_tapes {} {
     respond "_" "Q"
     expect ":KILL"
 }
+
+proc update_microcode {} {
+}
