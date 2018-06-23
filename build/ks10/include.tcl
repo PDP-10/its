@@ -30,6 +30,12 @@ proc prepare_frontend {} {
     set dir $expect_out(1,string)
     type "write\r"
     respond "Are you sure" "yes\r"
+    respond "Which file" "ram\r"
+    expect "Input from"
+    sleep 1
+    respond ":" ".;ram ram\r"
+    respond "!" "write\r"
+    respond "Are you sure" "yes\r"
     respond "Which file" "bt\r"
     expect "Input from"
     sleep 1
