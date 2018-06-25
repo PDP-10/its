@@ -701,6 +701,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts comify_sysen3;comify\r"
 expect ":KILL"
 
+# CRC
+respond "*" ":midas sys3;ts crc_gren; crc\r"
+expect ":KILL"
+
 # TMPKIL
 respond "*" ":midas sys2;ts tmpkil_syseng;tmpkil\r"
 expect ":KILL"
