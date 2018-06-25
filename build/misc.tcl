@@ -459,6 +459,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts munch_sysen2;munch\r"
 expect ":KILL"
 
+# PI
+respond "*" ":midas sys3;ts pi_rwg; ran\r"
+expect ":KILL"
+
 # Hunt the Wumpus
 respond "*" ":midas sys1;ts wumpus_games; wumpus\r"
 expect ":KILL"
