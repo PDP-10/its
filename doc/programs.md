@@ -199,6 +199,7 @@
 - STUFF, load code into PDP-11 through 10-11 interface.
 - STY, pseudo-terminal for multiple sessions.
 - STYLOG, convert PTY output file into ASCII file.
+- SUPARD, draw ARDS graphics to SUPDUP.
 - SUPDUP, Supdup client.
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.

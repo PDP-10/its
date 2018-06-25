@@ -906,3 +906,14 @@ respond "*" ":lisp math; kermit dumper\r"
 respond "to dump.|" "(kermit-dump)"
 expect ":KILL"
 respond "*" ":link sys3;ts kermit,math;\r"
+
+# SUPDUP ARDS
+respond "*" ":complr\r"
+respond "_" "dcp;sgincl\r"
+respond "_" "dcp;supard\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":lisp\r"
+respond "Alloc?" "n"
+respond "*" {(load "dcp;supard")}
+respond "system program" "(bootstrap)"
