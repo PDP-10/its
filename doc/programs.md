@@ -39,6 +39,7 @@
 - COMPLR, Lisp compiler.
 - COMSAT, mail server.
 - CMD, DDT subroutines.
+- CRC, compute file CRC.
 - CREATE, creates a text file in your home directory from console input.
 - CROCK, analog watch.
 - CROSS, cross assembler for micros.
