@@ -1,0 +1,277 @@
+;;; -*-Mode:lisp;Package:user;Base:8-*-  
+
+;;; SUPDUP Graphics include file
+
+#+LISPM (defmacro +tyo (a b) `(funcall ,b ':tyo ,a))
+#+NIL   (defmacro +tyo (a b) `(sfa-call ,b ':raw-tyo ,a))
+#+NIL   (eval-when (eval load compile)
+	   (pkg-create-package 'supdup)
+	   (pkg-create-package 'tv)
+	   )
+	       
+(declare (special sgttyo sgos
+		  sg-current-x sg-current-y sg-xor-ior
+		  sg-next-must-be-absolute
+		  )
+	 )
+
+(defvar sgttyo
+  #+PDP10 (open "tty:" '(out image tty))
+  #+LISPM (funcall terminal-io
+		   ':eval-inside-yourself 'supdup:chaos-stream)
+  #+NIL   standard-output
+  )
+(defvar sgos sgttyo)
+
+(defvar sg-current-x 0) (defvar sg-current-y 0) (defvar sg-xor-ior 'ior)
+
+(defconst %TDGRF #o231) (defconst %TDNOP #o210) (defconst %TDRST #o230)
+
+(defconst tv:alu-ior 0) (defconst tv:alu-andcam #o40) (defconst tv:alu-xor -1)
+(defconst %goMVR #o001) (defconst %goMVA #o021)
+(defconst %goXOR #o002) (defconst %goIOR #o022)
+(defconst %goSET #o003)
+(defconst %goMSR #o004) (defconst %goMSA #o024)
+(defconst %goINV #o006) (defconst %goVIS #o026)
+(defconst %goBNK #o007)
+(defconst %goCLR #o010)
+(defconst %go*LR #o101) (defconst %goDLR #o101) (defconst %goELR #o141)
+(defconst %go*LA #o121) (defconst %goDLA #o121) (defconst %goELA #o161)
+(defconst %go*PR #o102) (defconst %goDPR #o102) (defconst %goEPR #o142)
+(defconst %go*PA #o122) (defconst %goDPA #o122) (defconst %goEPA #o162)
+(defconst %go*RR #o103) (defconst %goDRR #o103) (defconst %goERR #o143)
+(defconst %go*RA #o123) (defconst %goDRA #o123) (defconst %goERA #o163)
+(defconst %go*CH #o104) (defconst %goDCH #o104) (defconst %goECH #o144)
+(defconst %go*SC #o105) (defconst %goDSC #o105) (defconst %goESC #o145)
+(defconst %go*RN #o106) (defconst %goDRN #o106) (defconst %goERN #o146)
+
+
+(defvar sg-tty-info '())
+
+#-NIL
+(defun sg-get-tty-info ()
+  (or sg-tty-info
+      (setq sg-tty-info
+	    (let* ((cnsget #+ITS (syscall 7 'cnsget tyo)
+			   #+Tops-20 '(47. 96. 0 0 0 0 #o31011040000)
+			   #+NIL     '(47. 96. 0 0 0 0 #o31011040000)
+			   )
+		   (smarts (nth 6 cnsget)))
+	      `((char-height ,(nth 0 cnsget))
+		(char-width  ,(nth 1 cnsget))
+		(height	     ,(* (nth 0 cnsget) (ldb #o3405 smarts)))
+		(width       ,(* (nth 1 cnsget) (ldb #o3004 smarts)))
+		(virtual     ,(plusp (logand smarts #o040000000)))
+		(blink       ,(plusp (logand smarts #o020000000)))
+		(xor         ,(plusp (logand smarts #o010000000)))
+		(rectangles  ,(plusp (logand smarts #o004000000)))
+		(sets        ,(plusp (logand smarts #o002000000)))
+		(graphics    ,(plusp (logand smarts #o001000000)))
+		(ginput      ,(plusp (logand smarts #o000400000)))
+		(hardcopy    ,(plusp (logand smarts #o000200000)))
+		(rasters     ,(plusp (logand smarts #o000040000))))))))
+
+#+NIL
+(defun sg-get-tty-info () 
+  (setq sg-tty-info '((char-height 47.) 
+		      (char-width  95.)
+		      (height	 #.(* 47. 12.))
+		      (width       #.(* 95. 08.))
+		      (virtual     ())
+		      (blink       ())
+		      (xor         #t)
+		      (rectangles  #t)
+		      (sets        ())
+		      (graphics    #t)
+		      (ginput      ())
+		      (hardcopy    ())
+		      (rasters     #t))))
+
+#.`(progn 'compile
+	  ,@(do ((names '((char-height char-height)
+			  (char-width  char-width)
+			  (height      height)
+			  (width       width)
+			  (virtual?    virtual)
+			  (blink?      blink)
+			  (xor?        xor)
+			  (rectangles? rectangles)
+			  (sets?       sets)
+			  (graphics?   graphics)
+			  (ginput?     ginput)
+			  (hardcopy?   hardcopy)
+			  (rasters?    rasters))
+			(cdr names))
+		 (funs '() (cons `(defun
+				    ,(implode
+				      (append (exploden 'sg-tty-info-)
+					      (exploden (caar names))))
+				    ()
+				    (cadr (assoc ',(cadar names)
+						 (sg-get-tty-info))))
+				 funs)))
+		((null names) funs)))
+
+(defun sg-tty-info-max-xy ()
+  (// (min (sg-tty-info-width) (sg-tty-info-height)) 2))
+
+(defvar sg-output-file '())
+
+(defun sg-file-output (filename)
+  (sg-revert-output)
+  (setq sg-output-file (open filename '(out ascii))))
+
+(defun sg-revert-output ()
+  (if sg-output-file (close sg-output-file))
+  (setq sg-output-file '()))
+
+
+(defun sg-can-i-do-it-relative? (x y)
+  (and (not (prog1 sg-next-must-be-absolute
+		   (setq sg-next-must-be-absolute '())))
+       (< (abs (- sg-current-x x)) #o100)
+       (< (abs (- sg-current-y y)) #o100)))
+(defun sg-out (n)
+  (+tyo n sgos)
+  (if (and sg-output-file (< n #o200))
+      (+tyo n sg-output-file)))
+(defun sg-short-out (n) (sg-out (logand n #o177)))
+(defun sg-long-out (n)
+  (sg-out (logand n #o177))
+  (sg-out (logand (lsh n -7) #o177)))
+(defun sg-with-write-mode (com alu)
+  (cond ((= alu tv:alu-xor)
+	 (or (eq sg-xor-ior 'xor) (sg-do '(xor)))
+	 (sg-out com))
+	('else
+	 (or (eq sg-xor-ior 'ior) (sg-do '(ior)))
+	 (sg-out (+ com alu)))))
+
+(defun sg-do (coms)
+  (do ((coms coms (cdr coms)))
+      ((null coms))
+    (caseq (car coms)
+      ((enter)   (sg-out %TDGRF) (setq sg-next-must-be-absolute t))
+      ((exit)	 (sg-out %TDNOP))
+      ((reset)   (sg-out %TDRST) (setq sg-xor-ior 'ior))
+      ((clear)	 (sg-out %goCLR))
+      ((xor)	 (sg-out %goXOR) (setq sg-xor-ior 'xor))
+      ((ior)	 (sg-out %goIOR) (setq sg-xor-ior 'ior))
+      )))
+
+
+(defun sg-set-point (x y)
+  (sg-move-absolute x y))
+(defun sg-move-to (x y)
+  (cond ((sg-can-i-do-it-relative? x y)
+	 (sg-move-relative (- x sg-current-x) (- y sg-current-y)))
+	('else (sg-move-absolute x y))))
+(defun sg-move-relative (dx dy)
+  (cond ((and (zerop dx) (zerop dy)))
+	('else (setq sg-current-x (+ sg-current-x dx)
+		     sg-current-y (+ sg-current-y dy))
+	       (sg-out %goMVR)
+	       (sg-short-out dx)
+	       (sg-short-out dy))))
+(defun sg-move-absolute (x y)
+  (setq sg-current-x x
+	sg-current-y y)
+  (sg-out %goMVA)
+  (sg-long-out x)
+  (sg-long-out y))
+
+(defun sg-draw-line (x1 y1 x2 y2 alu)
+  (sg-move-to x1 y1)
+  (sg-draw-to x2 y2 alu))
+(defun sg-draw-to (x y alu)
+  (cond ((sg-can-i-do-it-relative? x y)
+	 (sg-draw-relative (- x sg-current-x) (- y sg-current-y) alu))
+	('else
+	 (sg-draw-absolute x y alu))))
+(defun sg-draw-relative (dx dy alu)
+  (cond ((and (zerop dx) (zerop dy))
+	 (sg-point-relative dx dy alu))
+	('else
+	 (setq sg-current-x (+ sg-current-x dx)
+	       sg-current-y (+ sg-current-y dy))
+	 (sg-with-write-mode %go*LR alu)
+	 (sg-short-out dx)
+	 (sg-short-out dy))))
+(defun sg-draw-absolute (x y alu)
+  (setq sg-current-x x
+	sg-current-y y)
+  (sg-with-write-mode %go*LA alu)
+  (sg-long-out x)
+  (sg-long-out y))
+
+(defun sg-draw-rect (x1 y1 x2 y2 alu)
+  (sg-move-to x1 y1)
+  (sg-draw-rect-to x2 y2 alu))
+(defun sg-draw-rect-to (x y alu)
+  (cond ((sg-can-i-do-it-relative? x y)
+	 (sg-draw-rect-relative (- x sg-current-x) (- y sg-current-y) alu))
+	('else
+	 (sg-draw-rect-absolute x y alu))))
+(defun sg-draw-rect-relative (dx dy alu)
+  (cond ((and (zerop dx) (zerop dy))
+	 (sg-point-relative dx dy alu))
+	('else
+	 (setq sg-current-x (+ sg-current-x dx)
+	       sg-current-y (+ sg-current-y dy))
+	 (sg-with-write-mode %go*RR alu)
+	 (sg-short-out dx)
+	 (sg-short-out dy))))
+(defun sg-draw-rect-absolute (x y alu)
+  (setq sg-current-x x
+	sg-current-y y)
+  (sg-with-write-mode %go*RA alu)
+  (sg-long-out x)
+  (sg-long-out y))
+
+(defun sg-point (x y alu)
+  (cond ((sg-can-i-do-it-relative? x y)
+	 (sg-point-relative (- x sg-current-x) (- y sg-current-y) alu))
+	('else
+	 (sg-point-absolute x y alu))))
+(defun sg-point-relative (dx dy alu)
+  (setq sg-current-x (+ sg-current-x dx)
+	sg-current-y (+ sg-current-y dy))
+  (sg-with-write-mode %go*PR alu)
+  (sg-short-out dx)
+  (sg-short-out dy))
+(defun sg-point-absolute (x y alu)
+  (setq sg-current-x x
+	sg-current-y y)
+  (sg-with-write-mode %go*PA alu)
+  (sg-long-out x)
+  (sg-long-out y))
+
+(defun sg-select-set (number)
+  (sg-out %goSET)
+  (sg-out number))
+(defun sg-move-set-origin-rel (dx dy)
+  (sg-out %goMSR)
+  (sg-short-out dx)
+  (sg-short-out dy))
+(defun sg-move-set-origin-abs (x y)
+  (sg-out %goMSA)
+  (sg-long-out x)
+  (sg-long-out y))
+(defun sg-make-set-invisible ()
+  (sg-out %goINV))
+(defun sg-make-set-visible ()
+  (sg-out %goVIS))
+(defun sg-make-set-blink ()
+  (sg-out %goBNK))
+
+(defun sg-draw-runs (run-list alu)
+  (sg-with-write-mode %go*RN alu)
+  (mapcar 'sg-short-out run-list)
+  (sg-short-out 0))
+
+(defun sg-draw-chars (char-list alu)
+  (sg-with-write-mode %go*CH alu)
+  (mapcar 'sg-short-out char-list)
+  (sg-short-out 0))
+
+(defconst sgincl-loaded 't)
