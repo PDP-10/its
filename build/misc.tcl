@@ -881,6 +881,13 @@ respond "*" ":midas sys1; ts imload_syseng; imload\r"
 expect ":KILL"
 respond "*" ":link sys1; ts imtran, sys1; ts imload\r"
 
+# IMPRNT
+respond "*" ":midas sys1; ts imprnt_syseng; imprnt\r"
+expect ":KILL"
+respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
+respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
+respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
