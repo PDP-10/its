@@ -815,6 +815,11 @@ respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
 expect ":KILL"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 
+# KA10 maintenance
+respond "*" ":midas /t sys;ts 10run_sysen2; 10run\r"
+respond "with ^C" "TTY==120\r\003"
+expect ":KILL"
+
 # KL10 microcode assembler
 respond "*" ":midas sysbin;_syseng;micro\r"
 expect ":KILL"
