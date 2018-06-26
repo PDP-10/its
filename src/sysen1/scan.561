@@ -1,0 +1,3016 @@
+; -*- MIDAS -*-
+title SCAN -- TEX output to XGP SCAN file
+
+$debug==0			   ; we are not debugging
+.insrt system;chsdef >
+cs$win==10			   ; CHAOSnet window size
+
+x=0				   ; super temporary
+a=1				   ; argument register, value return
+b=2				   ; argument register
+c=3
+d=4
+e=5
+f=6
+bt=7				   ; # of bits left in word
+ch=11				   ; current character in font
+fn=12				   ; current font
+ct=13				   ; address of character tab in current font
+t=14				   ; temporary
+tt=15				   ; temporary
+cl=16				   ; points to current closure
+p=17
+
+fntmax==:200			   ; highest font number
+pdllen==:100			   ; moby PDL
+fbufln==:200			   ; 200 words for font input buffer
+tbufsz==:200			   ; 200 words for text input buffer
+jclsiz==:20			   ; 20 words for JCL and filename parsing
+
+fntc==:1			   ; read fonts on channel 1
+txti==:2			   ; read text input on channel 2
+scno==:3			   ; scan output on channel 3
+ttyo==:4			   ; error message output
+queo==:5			   ; queue file output
+chsi==:6			   ; CHAOSnet output
+chso==:7			   ; CHAOSnet output
+mapi==:10			   ; mapping channel
+
+call=:pushj p,
+ret=:popj p,
+
+Comment |
+MIT FONT FORMAT
+
+WORDS 0-1
+	KSTID
+	BYTE (9) COLUMN_POSITION_ADJUSTMENT,BASE_LINE (18) HEIGHT
+			;base line # rasters from top of character matrix
+REMAINDER OF FILE:  ONE BLOCK OF DATA FOR EACH CHARACTER
+	USER_ID
+			;NOT USED 4/10/74 but LOW ORDER BIT MUST BE 1
+	LEFT_KERN,,CODE
+			;Left Kern = amount to move left from the
+			;Logical left end of the character to the left edge
+			;of the raster.  + means move left, - move right.
+			;left kern always 0 for CMU
+	RASTER_WIDTH,,CHARACTER_WIDTH
+			;raster width always 0 for CMU
+			;Character Wdith = amount that the line bit position
+			;is increased by printing the character.
+	CHARACTER_MATRIX
+			;the matrix is stored 4 8-bit bytes per word so that
+			;ILDB with 8-bit byte size gets successive bytes.
+			;The bits are bit reversed in each byte (high order
+			;bit of character in low order bit of byte).
+			;the matrix is stored row by row.
+|
+
+define calblk op,args
+setz ? sixbit /OP/ ? args ((setz))
+termin
+
+define syscal op,args
+       .call [setz ? sixbit /OP/ ? args ((SETZ))]
+termin
+
+argi=:1000,,0
+val=:2000,,0
+erro=:3000,,0
+cnti=:5000,,0
+cnt=:4000,,0
+
+define type &string
+	move t,[440700,,[asciz string]]
+	movei tt,<.length string>
+	call typer
+termin
+
+;; error typer
+define etype &string
+	move t,[440700,,[asciz string]]
+	movei tt,<.length string>
+	call etyper
+termin
+
+define qtype &string
+       move t,[440700,,[asciz string]]
+       movei tt,<.length string>
+       .call qtypbl
+         .lose %lsfil
+termin
+
+
+
+define struct prefix,args
+   prefix==:,,-1
+   $$ZZ$$==0
+   irpw frob,,[args]
+	irps a,b,frob
+	   ife .irpcnt, prefix!!a==:$$ZZ$$
+	   ifse b,(,[
+	      irpc x,y,[frob]
+	        ifse x,(,{
+		  $$ZZ$$==$$ZZ$$+((y)
+		  .istop
+		}
+	      termin
+	   ]
+	   .else $$ZZ$$==$$ZZ$$+1
+	   .istop
+	termin
+   termin
+prefix!.ln==:$$ZZ$$
+expunge $$ZZ$$
+termin
+
+
+;;; Internal font data structures
+
+;; Font definition
+struct $fn,[
+       dev			   ; device name for font file
+       fn1			   ; FN1 for font file
+       fn2			   ; FN2 for font file
+       snm			   ; directory for font file
+       hit			   ; height of char in scan lines
+       sb0			   ; KSUBSET wd 0
+       sb1			   ; KSUBSET wd 1
+       sb2			   ; KSUBSET wd 2
+       sb3			   ; KSUBSET wd 3
+       chr(200)			   ; table of characters
+]
+
+;; characters.  Pointers to these are what goes in $FNCHR entries
+struct $ch,[
+       chr			   ; ascii for this char
+       fnt			   ; font this char corresponds to
+       krn			   ; Kern, in scan lines.  Positive is left
+       wid			   ; Width, in scan lines, to move "cursor"
+       rwd			   ; raster width.  # of bits per row
+       row			   ; AOBJN ptr to character rows (for humans)
+       rw1			   ; AOBJN ptr to first row (for $CE's)
+       ]
+
+;; Character Entities.  The active objects which write characters on scan lines
+struct $ce,[
+       fun			   ; functional handler
+       nxt			   ; next character entity in list
+       prv			   ; previous character entity in list
+       chr			   ; pointer to the character object
+       chm			   ; AOBJN ptr to raster array
+       wrd			   ; word to start writing on
+       lsh			   ; amount to shift left before starting
+       hit			   ; height remaining (scan lines before end)
+       ]
+
+;; Box Entities.  The active objects which draw black boxes on scan lines
+struct $be,[
+       fun			   ; functional handler
+       nxt			   ; next box entity in list
+       prv			   ; previous box entity in list
+       lbt			   ; left bits
+       rbt			   ; right bits
+       str			   ; place to put right bits
+       stl			   ; place to put left bits
+       one			   ; location of word to SETOM
+       blt			   ; AC for BLT of SETOM
+       ben			   ; end of BLT of SETOM
+       hit			   ; height remaining (scan lines before end)
+       ]
+
+
+loc 40				   ; UUO and interrupt vector
+	0
+	0			   ; no UUO's
+	-intlng,,tsint
+
+byelos:	0			   ; PC we lost at goes here
+	skipe debug		   ; debugging?
+	  .value		   ;   stay aroud to find out what happened
+	.logout
+
+losepc:	0			   ; address of losing .CALL for .CALL LOSE
+
+patch:	block 50		   ; plenty of patch space
+
+servep:	0			   ; -1 if we are a server?
+server:	0			   ; -1 asserts we are a debugging server
+
+filesw:	0			   ; -1 if we have an output file open
+
+pagnum:	0			   ; page number
+opgnum:	0			   ; number of pages output so far
+
+inqgrp:	"?			   ; INQUIR group, when we hack that
+
+thesis:	0			   ; -1 if we want ;THESIS option
+queue:	sixbit /    Q1/		   ; FN1 of queue file.  Made QT for thesis.
+
+machin:	-1			   ; sixbit machine we are on
+smachn:	-1			   ; sixbit machine queued from
+runame:	0			   ; local UNAME
+suname:	0			   ; who we are, who to notify.
+
+fntcnt:	-1			   ; # of fonts hacked so far
+
+fontab:	block fntmax		   ; table of fonts
+
+topmar:	0			   ; top margin, in scan lines
+botmar:	0			   ; bottom margin, in scan lines
+lftmar:	0			   ; left margin, in scan lines
+lsp:	0			   ; # of scan lines to move down on ^J
+
+scnwrd:	scnlin			   ; current word on scan line
+scnlsh:	0			   ; amount to LSHC before putting on scan line
+
+scnbot:	4100			   ; When we get here, cut the page
+goalin:	0			   ; line to process until before reading more
+scanum:	0			   ; current scan line number
+voff:	50.			   ; offset for page/file status line hack
+
+scnlpd:	0			   ; off-page, for sake of IORM's that don't
+				   ; look for the edge
+scnlin:	block 57		   ; one scan line
+scnrpd:	block 57		   ; off-page, for sake of IORM's that don't
+scnend::			   ; look for the edge (characters that fall
+				   ; off the end of the line)
+
+outhed:	0			   ; line number, length.  Must preceed OUTLIN
+outlin:	block 66		   ; space to write into before moving into
+outend:				   ; output buffer.
+outcnt:	0			   ; # of bytes room left in OUTLIN
+
+sndpkt:	getpkt			   ; unless over CHAOS net, sending is done by
+
+aichad==:2026			   ; AI chaosnet address
+
+;; packet opcodes
+%codko==:201			   ; open disk file
+%coioc==:202			   ; IOC error, disk full
+%cobye==:203			   ; BYE message, close disk file
+%copag==:204			   ; end of page, start new file
+%coini==:205			   ; initialize.
+$cpkdt==:441000,,%cpkdt		   ; Byte Pointer to data part
+
+falpnt:	0			   ; point in packet to back up to if
+				   ; run-length encoding exceeds length of
+				   ; image-mode line.
+falstk:	0			   ; stack pointer to back up to in above case
+
+runsts:	0			   ; 0 if counting zeros, -1 if counting ones
+pktptr:	pktdat-1		   ; packet is initially empty
+
+packet:
+pkthed::0			   ; holds opcode and size
+pktdes: 0			   ; ITS fills in this
+pktsrc:	0			   ; ITS fills in this
+pktnum:	0			   ; ITS fills in this
+pktdat:	block 172		   ; data area of packet buffer
+pktend::			   ; end of packet
+
+ctlpkt:	block 126.		   ; control packet.
+
+ife $debug,[
+outdev:	sixbit /AI/
+outdir:	sixbit /.XGPR./
+]
+.else [
+outdev:	sixbit /DSK/
+outdir:	sixbit /.TEMP./
+]
+outfn2:	<sixbit /SCAN.1/>-1	   ; SCAN is FN2 but we AOS it first
+
+quedir:	sixbit /.XGPR./
+quedev:	sixbit /AI/
+
+				   ; invoking the guy who reads packets.
+rfcslp:	[setom chsopn ? ret]	   ; what to do to complete connection
+chsopn:	0			   ; -1 if our connection is established
+
+fntfre:	1,,0			   ; start of next free font block
+fntbot:	1,,0			   ; bottom address of bottom font block page
+lowptr:	corend			   ; start of next free character-space word
+lowend:	<corend+1777>/2000*2000	   ; start of unallocated pages for char-space
+
+cefree:	0			   ; free-list for character entities
+befree:	0			   ; free-list for box entities
+enthed:	[.lose]			   ; dummy entity for entity list header
+entlst:	0			   ; list of active entities
+entprv:	0			   ; dummy previous list for entity list
+
+bytpos:	0			   ; how many bytes still to go on this raster
+bptput:	0			   ; 4-bit BP writing into raster line
+
+
+reverse: creverse		   ; reverse 8-bit byte (maybe using CIRC)
+36circ:	 circ a,36.		   ; XCT this instead of doing CIRC
+
+pdl:	[.lose]			   ; underflow trap
+	block pdllen		   ; PDL
+
+
+filblk::			   ; filename parser block
+$$DEV:	sixbit /DSK/
+$$FN1:	0
+$$FN2:	0
+$$SNM:	0
+
+fbufpt:	0			   ; AOBJN ptr to words still in FBUF
+fbuf:	block fbufln
+
+txteof:	0			   ; if non-zero, we've hit EOF on text input
+texbug:	0			   ; 0 means don't look for spurious null
+
+tbfcnt:	0			   ; count of characters in TBUF
+tbufbp:	0			   ; Byte pointer into TBUF
+tbuf:	block tbufsz+1		   ; include space in TBUF for lookahead!
+
+ifg .-2000 .ERR Low page has been overflowed
+loc 2000
+$$RFN==:1			   ; we want filename reader
+$$PFN==:1			   ; we want filename printer
+$$SWITCH==:1			   ; we want to hack switches
+.insrt syseng;rfn
+
+psixtp:	ret			   ; printed filenames we don't quote
+
+rsixtp:	caie a,"/		   ; / starts switches
+	  cain a,"(		   ;   so does (
+popj1:	    aos (p)
+cpopj:	ret
+
+tsint:	p
+	%piioc ? 0	? -1 ? -1 ? iocerr  ; hack IOC errors
+	0      ? 1_chsi	?  0 ?  0 ? chsint  ; hack input packets
+intlng==:.-tsint
+
+;; open file in mode in T, channel in TT
+filopn:	calblk OPEN,[cnt t ? argi (tt) ? $$DEV ? $$FN1 ? $$FN2 ? $$SNM]
+typblk:	calblk SIOT,[argi ttyo ? t ? tt]
+qtypbl:	calblk SIOT,[argi queo ? t ? tt]
+
+go:	.close 1,		   ; close the channel we were loaded with!
+	move p,[-pdllen,,pdl]	   ; get a PDL
+	.suset [.roption,,t]	   ; check the state of the world
+	tlo t,%opint\%opopc	   ; turn on winnage
+	.suset [.soption,,t]
+	syscal SSTATU,[val x ? val x ? val x ? val x ? val x ? val machin]
+	  .lose %lssys
+	.suset [.runame,,runame]   ; get who we are
+	move x,machin		   ; check which machine we are on
+	camn x,[sixbit /MC/]	   ; are we on MC?
+	  jrst [ movei x,putpkt	   ;   set things up to go over the chaos net
+		 movem x,sndpkt	   ;   by switching which routine we use
+		 .suset [.simsk2,,[1_chsi]]  ; accept CHAOS input interrupts
+		 jrst .+1]	   ; otherwise use AI: or disk
+	came x,[sixbit /MC/]	   ; unless this is MC
+	  .suset [.simask,,[%piioc]]  ; try to handle IOC errors
+	camn x,[sixbit /AI/]	   ; Are we on AI?
+	  jrst [move x,[sixbit /VISION/]  ; we try to use the VISION device
+	        movem x,outdev	   ; to put our moby temporary files
+		movem x,quedev	   ; also our tiny queue files
+		jrst .+1]
+	.suset [.rcnsl,,tt]	   ; get whether or not we're on a TTY
+	jumpl tt,serve		   ;   yes, go hack that trip
+	skipe server		   ; is this a debugging server?
+	  jrst serve		   ;   yes, be a server
+	syscal open,[cnti .uao\%tjdis ? argi ttyo ? [sixbit /TTY/]]
+	  .lose %lsfil
+	tlnn t,%OPCMD		   ; do we have JCL?
+	  jrst [ etype /AUse JCL!/
+		 .logout 1,]
+	.break 12,[..rjcl,,jclbuf] ; gobble our JCL
+	skipn jclbuf		   ; no JCL at all?
+	  jrst [ etype /AUse JCL!/
+		 .logout 1,]
+	.suset [.rsname,,$$SNM]	   ; MSNAME is default SNAME
+	move x,[sixbit /XGP/]
+	movem x,$$FN2		   ; default FN2 is XGP
+	setzm $$FN1		   ; must have FN1 specified!
+	move x,[sixbit /DSK/]	   ; default device is DSK:
+	movem x,$$dev
+	move d,[440700,,jclbuf]	   ; get our filename from the JCL buffer
+	movei b,filblk		   ; and put the parsed name in FILBLK
+	call rfn"rfn		   ; read the filename
+	movei b,filblk		   ; now take that parsed filename
+	move d,[440700,,jclbuf]	   ; and write it back out to JCLBUF
+	call rfn"pfn		   ; but this time cannonicalized
+
+	skipn $$fn1		   ; did we get a filename?
+	  jrst [ etype /APlease give the filename on the JCL line!/
+		 .logout 1,]
+	movei t,.uai		   ; Unit Image Ascii mode
+	movei tt,txti		   ; text input channel
+	.call filopn		   ; open the file
+	  jrst [ etype /AFile not found!/
+		 .logout 1,]
+	syscal RFDATE,[argi txti ? val a]  ; get the file date
+	  .lose %lsfil
+	move d,[440700,,srcdat]	   ; buffer for source file date
+	call timhak		   ; hack the time
+	syscal RQDATE,[val a]	   ; get the current date
+	  .lose %lssys
+	move d,[440700,,sqdate]	   ; time queued date
+	call timhak		   ; hack the time
+	move a,runame
+	move d,[440700,,name]
+	call 6bit		   ; write the sixbit UNAME to ascii
+	move a,machin
+	move d,[440700,,mname]
+	call 6bit		   ; write the sixbit machine name to ascii
+	move x,[[ .byte 8
+		  "X ? "G ? "P ? "S ? "C ? "N ? .byte ],,ctlpkt+%cpkdt]
+	blt x,ctlpkt+%cpkdt+1
+	movei x,aichad		   ; set the address to AI's CHOAS address
+	dpb x,[$cpkda ctlpkt]	   ; set the destination
+	movei a,ctlpkt
+	movei b,%corfc		   ; prepare to RFC the beggar
+	movei c,6		   ; 6 bytes
+	call makpkt		   ; send this packet, or do whatever with it
+
+	move tt,runame		   ; get our uname, to segment it into bytes
+	lshc t,40		   ; first 40 bits go in the first word
+	lsh t,4			   ; left justify it
+	movem t,ctlpkt+%cpkdt	   ; put it in the first data word
+	movem tt,ctlpkt+%cpkdt+1   ; put the rest in the next data word
+	move t,machin		   ; tell him what machine it's queued from
+	movem t,ctlpkt+%cpkdt+2
+	setzm ctlpkt+%cpkdt+3	   ; 0 means no thesis queue
+	skipe thesis		   ; do we want ;thesis?
+	  setom ctlpkt+%cpkdt+3
+	move t,[440700,,jclbuf]	   ; get our JCL argument
+	move tt,[441000,,ctlpkt+%cpkdt+4]  ; and put that into the packet
+jclcop:	ildb x,t		   ; get a byte
+	idpb x,tt		   ; put a byte
+	jumpn x,jclcop		   ; and continue until a null
+
+	move x,[jclbuf,,srcnam]	   ; copy this into our SRCNAM too.
+	blt x,srcnam+jclsiz-1	   ; so we can have it for the status line
+
+	movei a,ctlpkt
+	movei b,%coini		   ; operation is initialize
+	movei c,%cpmxc		   ; send an entire packet
+	call makpkt		   ; make and send the packet
+	call txtini		   ; initialize text input buffer
+	setom texbug		   ; gotta look out for null on first page
+
+kloop:	call tin		   ; get a charcter
+	cain a,^L		   ; start of page?
+	  jrst endttl		   ;   start our scan
+	caie a,";		   ; had better have font info, etc.
+	  jrst goblin		   ; barf
+	call 6read		   ; read a command name
+	camn a,[sixbit /KSET/]	   ; specification of character set?
+	  jrst kset		   ;   yes, read in the font names, etc.
+	camn a,[sixbit /KSUBSET/]  ; specification of SQUISH info?
+	  jrst ksubse		   ;   yes, read 4 octal words of squish info
+	camn a,[sixbit /TOPMAR/]   ; # of raster lines to leave blank?
+	  jrst ktopma		   ;   yes, read in an decimal # of scan lines
+	camn a,[sixbit /BOTMAR/]   ; # of scan lines to barf if not left blank
+	  jrst kbotma		   ;   yes, read in a decimal # of scan lines
+	camn a,[sixbit /LFTMAR/]   ; # of bits to leave blank at left
+	  jrst klftma		   ;   yes, read in a decimal # of bits
+	came a,[sixbit /LSP/]	   ; # of scan lines to move down on ^J
+	  camn a,[sixbit /VSP/]
+	    jrst klsp		   ;   yes, read in a decimal # of scan lines
+
+goblin:	call gobble		   ; gobble up the line
+	  jrst endttl		   ;   hit end-of-page, that's it!
+	jrst kloop		   ; keep reading commands
+
+gobble:	call tin		   ; get a char
+	caige a,0		   ; EOF here is absurd
+	  call badfil		   ;   no return, just barf
+	cain a,^L		   ; formfeed marks the end of the title page
+	  ret			   ;   so go process the fonts and get set up
+	caie a,^M		   ; end of line?
+	  jrst gobble		   ;   no, get another
+	call tin		   ; get the linefeed too
+	caie a,^J		   ; it IS a linefeed, isn't it?
+	  call badfil		   ;   no, barf at him (no return)
+	jrst popj1
+
+kset:	setzm jclbuf		   ; reuse the JCL buffer for font filenames
+	move x,[jclbuf,,jclbuf+1]
+	blt x,jclbuf+jclsiz	   ; clear out the entire buffer
+	move d,[440700,,jclbuf]	   ; Byte Pointer to send the filenames down
+	call kset0		   ; gobble up all the fonts
+	  jrst kset		   ;   still more fonts, keep on truckin'
+	jrst kloop		   ; and go process any other frobs
+
+kset0:	call tin		   ; read a char
+	caie a,^L		   ; FF in the middle of the command line?
+	  caige a,0		   ;   is it an EOF?
+	    call badfil		   ;	 no, barf at him
+	cain a,^M		   ; is it the end of the line?
+	  jrst [ call kset2	   ;   yes, parse, cons font, and return
+		 call tin	   ;   flush the line-feed
+		 jrst popj1]	   ;   and then return our final success
+	cain a,",		   ; is it the end of the filename?
+	  jrst [ call kset1	   ;   yes, process the font and gobble next
+		 ret]	   ;   and then process previous
+	cain d,[010700,,jclbuf+jclsiz-1]  ; end of JCL buffer?
+	  jrst [ etype /AFont file name too long!/
+		 call badfil	   ; no return
+		 .lose]
+	idpb a,d		   ; character is OK, send it along
+	jrst kset0		   ; and get another
+
+kset1:	call kset2		   ; parse the file, cons the font, and
+	ret			   ; and return to caller, to get next one
+
+kset2:	setzm $$fn1		   ; detect missing fonts by no FN1
+	aosg t,fntcnt		   ; count this as the next font
+	  skipn fontab+0	   ;   is this this font 0 and already loaded?
+	    caia		   ;     no, so must load this font,
+	      ret		   ;	   otherwise our work is done
+	cail t,fntmax		   ; too many fonts?
+	  jrst [ etype /AToo many fonts!/
+		 call badfil	   ; no return
+		 ret]		   ; if RETX'd, just punt
+	move t,[sixbit /KST/]
+	movem t,$$fn2		   ; reset the FN2 default
+	move t,[sixbit /DSK/]	   ; reset the DEV default
+	movem t,$$dev
+	skipn t
+	  .lose
+	move t,[sixbit /FONTS/]	   ; reset the directory default
+	movem t,$$snm
+	movei b,filblk		   ; point to the filename block
+	move d,[440700,,jclbuf]	   ; and to the buffer with the text
+	call rfn"rfn		   ; parse up the filenames
+	skipn $$fn1		   ; was there any filename?
+	  ret			   ;   no, no font for that number
+	
+	call makfnt		   ; make the font
+	move t,fntcnt		   ; find out it's font number
+	movem fn,fontab(t)	   ; remember it in the font table
+	ret
+
+ksubse:	setzm crflag		   ; say we haven't seen a CR yet
+	call rdec		   ; read a decimal number
+
+	skipn fn,fontab(a)	   ; get the font for this number
+	  jrst [ etype /A;KSUBSET for unspecified font!/
+		 call badfil	   ;   barf at him
+		 jrst goblin]	   ;   flush the line if continued
+	call roct		   ; read an octal subset word
+	movem a,$fnsb0(fn)
+	call roct
+	movem a,$fnsb1(fn)
+	call roct
+	movem a,$fnsb2(fn)
+	call roct
+	movem a,$fnsb3(fn)
+	skipn crflag		   ; if we haven't seen a CR yet
+	  jrst goblin		   ;   gobble the rest of the gubbish
+	jrst kloop		   ; keep on trucking
+
+getnum:	setzm crflag		   ; we haven't seen a CR yet
+	call rdec		   ; read a decimal number
+	skipe crflag		   ; if we have seen the end of the line,
+	  ret			   ;   we're all set
+	push p,a		   ; otherwise we have to flush the rest first
+	call gobble		   ; so gobble it up
+	pop p,a			   ; recover our return value
+	ret			   ; and return
+
+;; # of raster lines to leave at the top, bottom, and left side
+ktopma:	call getnum		   ; get the right margin
+	movem a,topmar		   ; remember it
+	jrst kloop		   ; look for more commands
+
+kbotma:	call getnum		   ; get the bottom margin
+	movem a,botmar		   ; remember it
+	jrst kloop		   ; look for more commands
+
+klftma:	call getnum		   ; get the left margin
+	movem a,lftmar		   ; remember it
+	jrst kloop		   ; look for more commands
+
+klsp:	call getnum		   ; get vertical spacing
+	movem a,lsp		   ; remember the crock
+	jrst kloop		   ; look for more commands
+
+;; loads a font, pointed to by FN, saving E, and counting the font in F
+
+fntlod:	push p,e		   ; save our AOBJN ptr
+	aos f			   ; count this font
+	push p,f		   ; save our count of fonts loaded
+	call fntget		   ; get the font
+	pop p,f			   ; recover our count of fonts loaded
+	pop p,e			   ; recover our AOBJN ptr
+	ret
+
+endttl:	setzm texbug		   ; TEX bug is behind us
+	movsi e,-fntmax		   ; AOBJN ptr to the fonts
+	setz f,
+	skipe puresw		   ; are we purified?
+	  add e,[1,,1]		   ;   don't hack font zero
+endtt1:	skipe fn,fontab(e)	   ; is there a font?
+	  call fntlod		   ;   yes, load it, counting it in F
+	aobjn e,endtt1
+
+	skipn fn,fontab		   ; pick up font 0
+	  jrst [ etype /ANo font 0 ??/
+		 call badfil
+		 jrst .+1]
+
+	movei ct,$fnchr(fn)	   ; get location of character tab in cur font
+	type /A/		   ; new line
+	move a,f		   ; get the # of fonts loaded
+	call decprt		   ; print the number
+	type / fonts loaded, /
+	move a,lowptr		   ; calculate how much space was needed
+	subi a,corend-1777	   ; for the characters
+	add a,[1,,0]		   ; and the font objects themselves
+	sub a,fntfre		   ; we want the answer in terms of blocks
+	idivi a,2000		   ; because that's easier to read
+	call decprt		   ; print the number
+	type / blocks used.
+/
+	setzm pagnum		   ; count pages
+;	skipn goalpg		   ; if we don't have a specific goal
+	  aos pagnum		   ;   1 is where we start
+	skipe goalpg		   ; do we have a starting page?
+	  call flpags		   ;   yes, flush some pages
+	move x,[377777,,777777]	   ; plus infinity
+	skipn goalpg		   ; do we want all pages?
+	  movem x,goalpg	   ;   yes, hack till P = infinity
+	setzm scnlpd		   ; clear the scan area
+	move x,[scnlpd,,scnlpd+1]  ; in case we've been re-started
+	blt x,scnend-1		   ; clear out the entire area
+
+nxtpag:	call tin		   ; get a character so we can check for EOF
+	jumpl a,tclos1		   ; EOF?  close it up now, but don't NXTPG0
+	push p,a		   ; no, save the character for our loop
+	call pagtyp		   ; type the page number
+	call status		   ; print the status line
+	pop p,a			   ; get back our buffered back character
+	call rdlin0		   ; hack this page
+	call nxtpg0		   ; force out rest of page and cut
+
+	aos t,pagnum		   ; get the page number, incrementing
+	camg t,goalpg		   ; have we printed our goal page?
+	  jrst nxtpag		   ;   no, hack the next page
+
+	ildb x,pagebp		   ; check the delimiter
+	cain x,"]		   ; is it the end of the page spec?
+	  jrst tclos1		   ;   yes, close up shop
+	call pagred		   ; find out what page to hack next
+	call flpags		   ; flush pages until that page
+	ildb x,pagebp		   ; get the next delimiter
+	cain x,"]		   ; is this the last page to be hacked?
+	  jrst [ move t,pagebp	   ;   copy the byte pointer
+		 idpb x,t	   ;   be sure we see the ] on the next pass
+		 jrst nxtpag]	   ;   on with the show
+	cain x,"-		   ; is this a page range?
+	  call pagred		   ;   find out the end of the page range
+	jrst nxtpag
+
+
+;;; flush a page of XGP output
+pagefl:	call tin		   ; get a character
+	jumpl a,tclos1		   ; at end of file, just end things
+	cain a,177		   ; rubout?
+	  jrst flxesc		   ; flush escape codes
+	caie a,^L		   ; end of page?
+	  jrst pagefl		   ;   no, just keep flushing
+	aos pagnum		   ; count pages flushed
+	ret			   ; yes, return!
+
+;; flush an XGP escape code
+flxesc:	call tin		   ; find out which XGP escape it is!
+	jumpl a,tclos1
+	cain a,^A		   ; XGP escape 1?
+	  jrst flxes1		   ;   hack that monster!
+	caie a,^N		   ; XGP escape 16?
+	  cain a,^B		   ;   XGP escape 2?
+	    jrst [ call tin ? jrst pagefl]  ; gobble one byte arg and continue
+	cain a,^C		   ; XGP escape 3?
+	  jrst [ call tin ? call tin ? jrst pagefl]  ; same, but two byte args
+	cain a,^D		   ; XGP escape 4?
+	  jrst [ repeat 11.,[? call tin] ? jrst pagefl]	 ; same, but 11. bytes
+	cain a,^F		   ; XGP escape 6?
+	  jrst [ call tin ? jrst pagefl]  ; just flush
+	caie a,^I		   ; tab?
+	  cain a,^J		   ;   Linefeed?
+	    jrst pagefl		   ;     just a quoting, no arguments to gobble
+	caie a,^M		   ; return?
+	  cain a,^L		   ;   FF?
+	    jrst pagefl		   ;     just a quoting
+	caie a,^H		   ; backspace?
+	  cain a,0		   ;   null?
+	    jrst pagefl		   ;     just a quoting
+	cain a,177		   ; rubout?
+	  jrst pagefl		   ;   just a quoting
+	call pagprt		   ; error, tell what page we're on
+flose:	etype /A>> Page skipper out of phase in XGP escape skipper.
+>> Either not TEX output or internal bug.
+/
+	jrst pagefl		   ; will get back in phase, eventually
+
+;; flush an XGP escape 1 code
+flxes1:	call tin		   ; find out which XGP escape 1 it is
+	jumpl a,tclos1		   ; end of file, just end it
+	caige a,40		   ; < 40 is font select of that font
+	  jrst pagefl		   ;   so go gobble more
+	caie a,40		   ; is it 40?
+	  jrst flose		   ;   no, don't understand, tell him so.
+	call tin		   ; yes, gobble two bytes
+	call tin		   ; of horizontal positioning info
+	jrst pagefl		   ; and flush rest of page
+
+flpags:	move t,pagnum		   ; check which page
+	caml t,goalpg		   ; are we to our page yet?
+	  ret			   ;   yes, that's it!
+	call pagefl		   ; flush a page
+	jrst flpags		   ; and check again
+
+;; read in a page number from our saved list of pages
+pagred:	push p,d		   ; we can be called from SWITCH, don't bash D
+	move d,pagebp		   ; get our pointer
+	setz a,			   ; we count in A
+pagrd0:	ildb x,d		   ; get a byte
+	cain x,"[		   ; open?
+	  jrst pagrd0		   ;   yes, ignore it
+	caige x,40		   ; is it a control?
+	  jrst pagrd9		   ;   yes, that's the end
+	cail x,"0
+	  caile x,"9
+	    jrst pagrd9		   ;     a delimiter?  that's it then
+	movem d,pagebp		   ; remember our bp as possible end of number
+	subi x,"0		   ; convert to number
+	imuli a,10.		   ; left shift one decimal digit
+	add a,x			   ; include this digit
+	jrst pagrd0		   ; keep reading
+
+pagrd9:	movem a,goalpg		   ; make that page our goal
+	pop p,d			   ; restore D
+	ret			   ; and return
+
+
+rdline:	call tin
+rdlin0:	jumpl a,tclose		   ; at end of file, close up shop
+	cain a,177		   ; rubout?
+	  jrst xgpesc		   ;   that's XGP escape
+	cain a,^M		   ; CR?
+	  jrst endlin		   ;   end of line
+	cain a,^J		   ; LF?
+	  jrst nxtlin		   ;   move down LSP lines
+	cain a,^L		   ; FF?
+	  ret			   ;   that is the end of this page!
+
+; it is a printing character, create a character entity for it.
+
+ordchr:	call chrhak		   ; hack a character for output
+	jrst rdline		   ; keep on reading the line
+
+;;; cons a character entry for character in A in font in FN (character table
+;;; pointer into font in CT) and put it on the list of stuff to print
+
+chrhak:	movei t,(a)		   ; copy the character
+	addi t,(ct)		   ; get location of char object ptr in font
+	skipn ch,(t)		   ; get the character object in CH
+	  jrst nochar		   ;   no character, complain!
+	call cealc		   ; cons up a character entity
+	movei cl,(a)		   ; get the closure in CL
+	movem ch,$cechr(cl)	   ; put pointer to the char obj into the ent
+	move t,$chrw1(ch)	   ; get AOBJN ptr to first line's bits
+	movem t,$cechm(cl)	   ; put it into the entity
+	move t,$fnhit(fn)	   ; get height of character
+	movem t,$cehit(cl)	   ; put that into the entity
+	move t,scnwrd		   ; get word of scan line to hack
+	movem t,$cewrd(cl)	   ; put that into the entity
+	movn t,scnlsh		   ; get amount to right-shift
+	sub t,$chkrn(ch)	   ; allow for the kern
+	idivi t,44		   ; convert to words and bits
+	jumpl tt,[ sos t	   ;   left kern moved over word, back up
+		   addi tt,44	   ;   to previous word, adjust shift
+		   jrst .+1]
+	addm t,$cewrd(cl)	   ; compensate for any word bounds moved over
+	movnm tt,$celsh(cl)	   ; remember how much to LSHC before IORMing
+	movn t,scnlsh		   ; get current bit offset
+	add t,$chwid(ch)	   ; calculate new one from character width
+	idivi t,44		   ; convert to bit and word offset
+	movnm tt,scnlsh		   ; bit offset
+	addb t,scnwrd		   ; and increment the word position
+	cail t,scnrpd		   ; is there an overflow?
+	  jrst [ skipn scnlsh	   ;   if there's no right shift
+		   caie t,scnrpd   ;     and it points to right edge
+		     caia
+		       jrst .+1	   ;	    that's highly marginal, but legal
+		 etype /A>> Line overflow.  Wrapping around to left margin.
+/
+		 movei t,scnlin	   ;   start it over at zero
+		 movem t,scnwrd	   ;   so he can see what went wrong, and so we
+		 setzm scnlsh	   ;   don't give infinite errors
+		 push p,silent	   ;   temporarily
+		 setzm silent	   ;   we unsilence output
+		 movei a,$CHECK	   ;   check out all the entities
+		 call ecalls	   ;   to see if we can find the culprit
+		 pop p,silent	   ;   restore silence
+		 jrst .+1]	   ; probably should have an ERROR list for
+				   ; sake of looking at the chars with errors
+
+	caige t,scnwrd		   ; underflow?
+	  jrst [ etype /A>> Line underflow.  Reseting to left margin.
+/
+		 setzm scnlsh	   ;   no right shift
+		 movei t,scnlin	   ;   start at left margin
+		 movem t,scnlsh	   ;   so we don't get infinite errors
+		 push p,silent	   ;   temporarily
+		 setzm silent	   ;   we unsilence output
+		 move a,$CHECK	   ;   check out all the entities
+		 call ecalls	   ;   to see if we can find the culprit
+		 pop p,silent	   ;   back to normal silence/verbosity
+		 jrst .+1]	   ;   probably should have an ERROR list
+
+	movei t,enthed		   ; make it point back to entity list header
+	movem t,$ceprv(cl)	   ; so removal works properly
+	movei t,(cl)		   ; copy entity pointer
+	exch t,entlst		   ; put this entity on the entity list
+	movem t,$cenxt(cl)	   ; linking it into the list
+	movem cl,$ceprv(t)	   ; make the old one point back here
+	ret			   ; that's it, all done!
+
+;; Carriage return.  End current line, start horizontal counters from beginning
+
+endlin:	move t,lftmar		   ; start again at the left margin
+	idivi t,44		   ; get that in terms of words and bits
+	movnm tt,scnlsh		   ; remember bits as neg amount to shift left
+	addi t,scnlin		   ; make the scan position absolute
+	movem t,scnwrd		   ; and remember that too
+	jrst rdline		   ; keep on reading characters
+
+;; Linefeed.  Move down LSP scan lines.
+
+nxtlin:	move x,lsp		   ; get # of scan lines to hack
+	add x,scanum		   ; get the goal scan #
+	movem x,goalin		   ; set the goal line to run entities to.
+	camle x,scanum		   ; unless we haven't moved down at all
+	  call movdwn		   ;   move down until we hit the goal
+	jrst endlin		   ; also perform a next-line
+
+;; XGP Escape.  Find out which XGP escape it is and handle
+
+xgpesc:	call tin		   ; next character is escape #
+	cain a,^A		   ; XGP escape 1? miscellaneous
+	  jrst xgpes1		   ;   yes, handle it
+	cain a,^B		   ; XGP escape 2? (rel position horizontal)
+	  jrst xgpes2		   ;   yes, handle it
+	cain a,^C		   ; XGP escape 3? (rel position vertical)
+	  jrst xgpes3		   ;   yes, handle it
+	cain a,^D		   ; XGP escape 4? (black rectangle)
+	  jrst xgpes4		   ;   yes, handle it
+;				   ; XGP escape 5 is unknown
+	caie a,^N		   ; XGP escape 16? (font switch)
+	  cain a,^F		   ;   XGP escape 6? (font switch)
+	    jrst xgpes6		   ;     yes, handle it
+	caie a,^I		   ; quotes tab
+	  cain a,^H		   ;   quotes backspace
+	    jrst ordchr		   ;     pretends it's an ordinary character
+	caie a,^J		   ; quotes linefeed
+	  cain a,0		   ;   quotes null
+	    jrst ordchr		   ;     pretends it's an ordinary character
+	caie a,^L		   ; quotes formfeed
+	  cain a,^M		   ;   quotes carriage carriage
+	    jrst ordchr		   ;     pretends it's an ordinary character
+	cain a,177		   ; quotes rubout as well
+	  jrst ordchr		   ;   pretends it's an ordinary character
+	call pagprt		   ; tell what page error is on
+	etype /A  >>Unknown XGP escape code
+/
+	call badfil		   ; lose lose
+	jrst ordchr		   ; just print it if he continues
+
+;; XGP escape 1.  We implement two flavours, one is font select (second byte
+;; < 40), the other is Absolute Horizontal Position (2 bytes)
+
+xgpes1:	call tin		   ; get what kind it is
+	caige a,40		   ; < 40 is font select
+	  jrst xgpes6		   ;   XGP escape 6 is font select
+	caie a,40		   ; we only understand 40, had better be 40
+	  jrst [ call pagprt	   ; tell what page error is on
+		 etype /A  >>Unknown XGP escape 1 code!
+/
+		 call badfil	   ;   barf at him
+		 jrst rdline]	   ;   ignore it if he continues
+;; horizontal position absolute command
+	call tin		   ; get high-order hpos bits
+	lsh a,7			   ; position them in their high-order place
+	push p,a		   ; remember them
+	call tin		   ; get low-order hpos bits
+	add a,(p)		   ; get the whole thing
+	sub p,[1,,1]		   ; flush the stack
+	idivi a,44		   ; convert to words and bits
+	addi a,scnlin		   ; make the word position absolute
+	movem a,scnwrd		   ; and salt it away
+	movnm b,scnlsh		   ; and salt away how much to LSH (negative)
+	jrst rdline		   ; and on with the loop
+
+;; XGP escape 6 ... read one byte of font # to make current font
+
+xgpes6:	call tin		   ; get font #.  One byte so must be legal
+	cail a,fntmax		   ; is it a legal font number?
+	  jrst [ push p,silent	   ;   temporarily
+		 setzm silent	   ;   we unsilence things
+		 call pagprt	   ;   tell what page error is on
+		 type /A  >>Illegal font number:  /
+		 call decprt	   ;   yes, print it
+		 call badfil	   ;   barf at him
+		 pop p,silent	   ;   un-un-silence
+		 jrst rdline]	   ;   continue processing input if proceeded
+	skipn fn,fontab(a)	   ; check this font out
+	  jrst [ push p,silent	   ;   temporarily
+		 setzm silent	   ;   we unsilence things
+		 call pagprt	   ; tell what page error is on
+		 type /A  >>Font # /
+		 call decprt	   ;   print it
+		 type / is used but not specified.
+/
+		 call badfil	   ;   barf at him
+		 pop p,silent	   ;   back to normal verbosity
+		 jrst rdline]	   ;   continue processing input if proceeded
+	movei ct,$fnchr(fn)	   ; get pointer to character table as well
+	jrst rdline		   ; keep on trucking
+
+;; XGP escape 2.  Read one byte, that's signed 7-bit #, columns to move right
+
+xgpes2:	call tin		   ; get the amount to move right
+	lsh a,44-7		   ; we've got to make it a 36-bit signed
+	ash a,7-44		   ; integer
+	call scnmov		   ; move the scan over that much
+	jrst rdline		   ; on with the line
+
+;; XGP escape 3.  Take two bytes data, 14-bit pos bit #, new scan line
+
+xgpes3:	call vpos		   ; do the vertical positioning
+	jrst rdline		   ; keep hacking this stuff
+
+vpos:	call 14read		   ; read a 14-bit number from TXTI
+	add a,voff		   ; if we're offsetting, include that
+	camge a,scanum		   ; it had better not be a move up
+	  jrst moveup		   ;   it is, go barf
+	camg a,scanum		   ; if we're already on that line
+	  ret			   ;   just do nothing
+	movem a,goalin		   ; remember it how far to move down to
+	jrst movdwn		   ; do that many columns and return
+
+;; read a 14 bit positive number from 2 bytes from TXTI, return in A
+
+14read:	call tin		   ; get the first byte of position
+	lsh a,7			   ; position it
+	push p,a		   ; save it for later
+	call tin		   ; get second byte of hpos
+	add a,(p)		   ; calculate entire number
+	sub p,[1,,1]		   ; flush the stack
+	ret			   ; return the number
+
+;; XGP escape 4, box drawing.
+;; ^?^Dyyxxzzzhhww; Y=vertical, X = horizontal, Z = zero (slant, actually, but
+;; not implemented) H = height, and W = width
+xgpes4:	call vpos		   ; do the vertical positioning (XGP ESC 3)
+	call bealc		   ; allocate a box
+	movei cl,(a)		   ; remember that as our closure
+	call 14read		   ; read the HPOS
+	push p,a		   ; save the result
+	call tin		   ; next 3 bytes we expect to be zero
+	jumpn a,es4bd2		   ; check it out
+	call tin
+	jumpn a,es4bd1
+	call tin
+	jumpn a,es4bd0
+	call 14read		   ; read the height in raster lines
+	movem a,$behit(cl)	   ; remember it in the structure
+	call 14read		   ; get the width in bits
+	pop p,t			   ; get the hpos in T
+	idivi t,44		   ; get the position in words and bits offset
+	addi t,scnlin		   ; make word position absolute
+	add a,tt		   ; get width relative to starting word
+	idivi a,44		   ; get width in terms of words and bits
+	addi a,(t)		   ; make word position absolute, not relative
+				   ;   to start of box!
+	cain a,(t)		   ; boundary condition (fits inside one word?)
+	  jrst [ move b,rhtmsk(b)  ;   get the bits, as far as they go on right
+		 and b,lftmsk(tt)  ;   don't go too far to left either
+		 movem b,$belbt(cl)  ; save it as the left mask
+		 movem b,$berbt(cl)  ; it's the right mask too
+		 movem t,$bestl(cl)  ; where to put left mask
+		 movem a,$bestr(cl)  ; The right mask will go in same place
+		 setzm $beone(cl)  ;   say don't do SETOM either
+		 jrst bnoblt]	   ;   mark as no blT, and hook into ENTLST
+
+;; At this point:
+;; A  contains the word where the right mask should write
+;; B  contains the number of bits which are one in the right-hand partial word
+;; T  contains the word where the left mask should write
+;; TT contains the number of bits which are zero in the left-hand partial word
+
+	move tt,lftmsk(tt)	   ; shift determines left edge bit pattern
+	move b,rhtmsk(b)	   ; extra bit count decides right bit pattern
+	movem tt,$belbt(cl)	   ; save that info away, left edge
+	movem b,$berbt(cl)	   ; right edge
+	movem a,$bestr(cl)	   ; where to put right edge word
+	movem t,$bestl(cl)	   ; where to put left edge word
+	subi a,1(t)		   ; <number of words to SETOM>
+	movns a			   ; negate for AOBJN ptr
+	hrli a,(a)		   ; get it where an AOBJN ptr belongs
+	hrri a,1(t)		   ; word after T is where it goes
+	movem a,$beone(cl)	   ; remember it in the entity
+	hlre t,a		   ; get 0,,<number of words to set again>
+	camge t,[-1]		   ; just one word?
+	  jrst [ movns t	   ;   no, get <number of words to SETOM>
+		 addi t,(a)	   ;   get final word of SETOM plus one
+		 sos t		   ;   allow for the zero-origin now
+		 movem t,$beben(cl)  ; remember the end word to BLT into
+		 move t,$beone(cl)  ;   prepare to BLT it into place
+		 hrlzi a,(t)	   ;	from where it went
+		 hrri a,1(t)	   ;	to next word
+		 movem a,$beblt(cl)  ; that's the AC to BLT with
+		 jrst bhook]	   ;   and now to hook it into the entity list
+;; one word of SETOM or less, don't do a BLT
+bnoblt:	setzm $beben(cl)	   ; end word may as well be zero
+	setzm $beblt(cl)	   ; this notes:  NO BLT!
+
+;; hook in the entity into the free list
+bhook:	movei t,enthed		   ; make it point back to entity list header
+	movem t,$beprv(cl)	   ; so removal works properly
+	movei t,(cl)		   ; copy entity pointer
+	exch t,entlst		   ; put this entity on the entity list
+	movem t,$benxt(cl)	   ; linking it into the list
+	movem cl,$beprv(t)	   ; make the old one point back here
+	jrst rdline		   ; keep on trucking
+
+
+pagtyp:	move a,pagnum		   ; count pages
+	type /APage /
+	call decprt		   ; print them too.
+	type /.
+/
+	ret
+
+
+;; macros used by the STATUS routine
+
+; SSTRT <buffer> prints the contents of <buffer>, which should be an ASCIZ frob
+define sstrt loc
+	move a,[440700,,loc]
+	call $sstrt
+termin
+
+;; STYPE /string/ prints the string to the page
+define stype &string
+	move a,[440700,,[asciz string]]
+	call $sstrt
+termin
+
+
+;;; the STATUS routine prints status info on the top 1/4 in of each page
+;;; to identify it.
+status:	skipn voff		   ; if we're not hacking status lines
+	  setzm scanum		   ;   start at the top of the page
+	skipn t,voff		   ; if we're not having a status line
+	  jrst stats9		   ;   just do the page initialization part
+	subi t,13.+12.		   ; we back off enough for the line plus a bit
+	movem t,scanum		   ; that's where we start our scan lines
+	push p,fn		   ; bind the font accross the status line
+	push p,ct		   ; bind the character table pointer too
+	move fn,fontab+0	   ; we use font 0
+	movei ct,$fnchr(fn)	   ; get address of the character table
+	setzm scnlsh		   ; we just start on word boundaries
+	movei x,<<200.+43>/44>+scnlin  ; we start one inch from left margin
+	movem x,scnwrd
+	stype /TEX file "/
+	sstrt srcnam		   ; tell what file it is
+	stype /", dated /
+	sstrt srcdat		   ; tell when the file was created
+	stype /,    queued by /
+	sstrt name		   ; tell who did it
+	stype / at /
+	sstrt mname		   ; tell where he did it from
+	stype /.     Time = /
+	sstrt sqdate		   ; tell when he did it
+	stype /.    /
+	sstrt scnvrs		   ; tell what scan version this is
+	movei x,<<1600.-250.+43>/44>+scnlin  ; move edge (1 1/4 in. from left)
+	movem x,scnwrd
+	stype /Page /
+	move a,pagnum		   ; get the number
+	call sdectp		   ; type it
+	stype /./		   ; period too.
+	pop p,ct		   ; restore the pointer into the font's
+				   ; character table
+	pop p,fn		   ; restore the font to what was being used
+
+stats9:	move x,topmar		   ; now find where we start real text
+	add x,voff		   ; allowing for our offset
+	aos x			   ; move past those
+	movem x,goalin		   ; that's where to move to
+	jrst movdwn		   ; move down there, and return
+
+;; take a byte pointer in A, write it as text on the page
+$sstrt:	push p,a		   ; save Byte pointer on stack, ACs are hacked
+$sstr0:	ildb a,(p)		   ; get a character
+	cain a,40		   ; is it a space?
+	  call $$spac		   ;   hack horizontal motion
+	jumpe a,[pop p,a ? ret]	   ; null byte marks EOL
+	call chrhak		   ; add the character to the queue
+	jrst $sstr0		   ; and loop until EOL
+
+;; we loop, counting spaces, and then move our position that much.
+;; takes characters from a byte pointer at -1(P)
+$$spac:	setz c,			   ; we count number of spaces in C
+$$spc0:	addi c,10		   ; space width
+	ildb a,-1(p)		   ; get the next character
+	cain a,40		   ; still a space?
+	  jrst $$spc0		   ;   yes, keep counting
+	movei t,(c)		   ; get the count, including the initial one
+	idivi t,44		   ; convert to words and bits of motion
+	addm t,scnwrd		   ; words
+	sub tt,scnlsh		   ; amount of right shift
+	movei t,(tt)		   ; shuffle
+	idivi t,44		   ; (0/1) word overflow
+	addm t,scnwrd
+	movnm tt,scnlsh		   ; amount of left shift
+	ret			   ; return character found in A
+
+;;; take a number in A, and put it on the page as a number
+sdectp:	movms a			   ; get absolute value (paranoia)
+sdecpn:	idivi a,10.		   ; figure first digit
+	push p,b		   ; push remainder
+	skipe a			   ; done?
+	  call sdecpn		   ;   no compute next one
+
+	pop p,a			   ; yes, take out in opposite order
+	addi a,60		   ; make ascii
+	call chrhak		   ; add it to the queue
+	ret			   ; and return for the next one.
+
+
+nxtshp:	call pktout		   ; send out the packet and fall through
+	jrst nxtpg1		   ; back to work on the loop
+
+nxtpg0:	call movdwn		   ; move down to there
+	skipe scnlpd		   ; any underflow on the left?
+	  jrst [ push p,silent	   ;   unsilence output for the error
+		 setzm silent
+		 call pagprt	   ;   tell what page error occured on
+		 etype /A >>Line underflow detected.
+/
+		 movei a,$CHECK	   ;   check all the characters for which ones
+		 call ecalls	   ;   map $CHECK over them
+		 setzm scnlpd	   ;   clear it out
+		 pop p,silent
+		 jrst .+1]
+	move t,[-47,,scnrpd]	   ; AOBJN ptr to right-hand padding
+rchk:	skipe (t)		   ; anything get put there?
+	  jrst [ push p,silent
+		 setzm silent
+		 push p,t	   ;   don't let PAGPRT clobber our AOBJN ptr
+		 call pagprt	   ;   tell what page error occured on
+		 etype /A >>Line overflow detected.
+/
+		 movei a,$CHECK	   ;   check all the boxes for which ones suck
+		 call ecalls	   ;   map $CHECK over all the boxes
+		 pop p,t
+		 setzm (t)	   ;   clear out the bashed padding
+		 pop p,silent
+		 jrst rchked]	   ;   don't barf every time on single line
+	aobjn t,rchk		   ; check next line
+	jrst nxtpg1		   ; if it's all OK, no need to BLT
+
+rchked:	setzm scnlpd		   ; clear out the line, including padding
+	move x,[ scnlpd,,scnlpd+1 ]  ; propogate the zero
+	blt x,scnend
+
+nxtpg1:	aos t,pktptr		   ; get pointer to area of packet buffer
+	cail t,pktend		   ; is it beyond the end of the packet?
+	  jrst nxtshp		   ;   yes, ship out the packet
+	move x,[.byte 20 ? 2 ? 0 ? .byte]  ; command word is two PDP-11 words
+	movem x,(t)		   ; set that in the buffer
+	move x,scanum		   ; get the scan line to cut it on
+	tro x,100000		   ; set the PDP-11 sign bit to signal page cut
+	dpb x,[042000,,(t)]	   ; and put that in the command word in buffer
+	aos pktptr		   ; PKTOUT expects it to have been incremented
+	call pktout		   ; send it as a data packet
+	movei a,packet		   ; point to our packet
+	movei b,%copag		   ; operation is new_page
+	movei c,4		   ; 4 bytes of data:  page number
+	move x,pagnum		   ; get the page number
+	dpb x,[044000,,%cpkdt(a)]  ; and stuff it into the packet-to-be
+	call makpkt		   ; send out the packet by whatever means
+	skipn cl,entlst		   ; do we still have things trying to print?
+	  ret			   ;   no, we're all set, now for next page
+
+;; lost, barf at him and flush active characters.
+
+	push p,silent		   ; we want to type out
+	setzm silent
+	call pagprt		   ; tell what page error is on
+	etype /A >>Page too long!  Truncating /
+	skipe debug		   ; if we're debuging
+	  .value		   ;   we want to have a look now
+	setz a,			   ; count it
+	push p,a		   ; save our count
+kkloop:	movei a,$KILL		   ; operation is KILL (delete self)
+	call @(cl)		   ; perform it
+	aos (p)			   ; count it
+	skipe cl,entlst		   ; still more?
+	  jrst kkloop		   ;   yes, keep killing
+	move a,(p)		   ; get the count from the stack
+	call decprt		   ; type it
+	type / character/
+	pop p,a			   ; restore count, reset stack
+	caig a,1		   ; more than one?
+	  jrst [ type /.  /
+		 pop p,silent
+		 jrst badfil]	   ; barf at him
+	type /s.  /
+	pop p,silent
+	jrst badfil		   ; barf barf lose lose
+				   ; and on with the show
+
+;; Handler for Character Entities
+cehack:	cain a,$LINE		   ; is this a line operation?
+	  jrst celine		   ;   yes, hack it
+	cain a,$KILL		   ; is this a KILL operation?
+	  jrst cekill		   ;   yes, delete it from the list
+	cain a,$CHECK		   ; check for out-of-range?
+	  jrst cechk		   ;   yes, print message if out of range,
+	call pagprt		   ; tell what page the error is on
+	etype /A >>> BUG:  Unknown operation for character entity.
+/
+	skipe debug		   ; are we debugging?
+	  .value		   ;   yes, wait for debugger to have a look
+	move cl,$cenxt(cl)	   ; point to the next one
+	ret			   ; return it
+
+;; Put one line of a character entity on the line
+celine:	move c,$cechm(cl)	   ; get AOBJN ptr to raster matrix
+	move a,$cewrd(cl)	   ; get the word to put it on
+	move b,$celsh(cl)	   ; get amount to shift
+ceiorm:	move t,(c)		   ; get the word to IORM
+	setz tt,		   ; overflow word starts out empty
+	lshc t,(b)		   ; shift it
+	iorm t,(a)		   ; deposit it
+	iorm tt,1(a)		   ; and the overflow from the shift
+	aos a			   ; next word
+	aobjn c,ceiorm		   ; next, if any
+
+	sosg $cehit(cl)		   ; next line
+	  jrst cekill		   ;   no more, flush self!
+	hll c,$cechm(cl)	   ; prepare for same # words next time
+	movem c,$cechm(cl)	   ; except from later in raster array
+cexit:	move cl,$cenxt(cl)	   ; point to this one's successor
+	ret			   ; that's it, return
+
+;; kill a Character entity.
+cekill:	call kkill		   ; delete it from the entity list
+	exch cl,a		   ; The new one is now current
+	move t,cefree		   ; get the current free list
+	movem t,$cenxt(a)	   ; make this one point to old free list
+	movem a,cefree		   ; make this one head of free list
+	ret			   ; that's it!
+
+;; check a character entity, printing what it is if found.
+cechk:	move ch,$cechr(cl)	   ; get pointer to the character involved
+	move x,$cewrd(cl)	   ; get where it's supposed to output
+	hlre tt,x		   ; get how much there is
+	sub x,tt		   ; get last word hacked
+	move t,$chrwd(ch)	   ; get the raster width
+	idivi t,44		   ; get bits remainder
+	subi tt,44		   ; get amount to LSH before next word
+	camg tt,$celsh(cl)	   ; next word?
+	  aos x			   ;   yes, count the overflow word
+	move t,$cewrd(cl)	   ; now that we've calculated everything
+	caige t,scnlin		   ; check for underflow
+	  jrst cechk1		   ;   good thing we did, too!
+	caige x,scnrpd		   ; is this an overflow?
+	  jrst cexit		   ;   no, just return now
+cechk1:	push p,silent		   ; temporarily
+	setzm silent		   ; enable typeout
+	type /A >>Character off page:  "/
+	move a,$chchr(ch)	   ; get the ascii character code
+	call chrprt		   ; print the character
+	type /" in font /
+	push p,fn		   ; remember our current font
+	move fn,$chfnt(ch)	   ; get the font to go with this character
+	call fntprt		   ; print out the font number
+	pop p,fn		   ; recall the current font
+	type /.  Horizontal = /
+	move a,$cewrd(cl)	   ; get where it starts
+	imuli a,44		   ; in terms of bits
+	sub a,$celsh(cl)	   ; including the shift
+	call decprt		   ; print it
+	type /
+/
+	pop p,silent		   ; restore typeout state
+	jrst cekill		   ; kill this one so don't get more errors
+
+chrprt:	cain a,177		   ; is it a rubout?
+	  jrst [ .iot ttyo,["^]	   ;   yes, print as ^?
+		 movei a,"?
+		 jrst .+1]
+	caige a,40		   ; is it a control frobie?
+	  jrst [ .iot ttyo,["^]	   ;   yes, tell him which character
+		 addi a,40	   ;   convert to upper case non-control
+		 jrst .+1]
+	.iot ttyo,a		   ; type the character now
+	ret			   ; that's it
+
+;; Handler for Box Entities.
+behack:	cain a,$LINE		   ; is this a scan-line request?
+	  jrst beline		   ;   yes, hack it.
+	cain a,$KILL		   ; is this a request to kill self?
+	  jrst bekill		   ;   yes, do so.
+	cain a,$CHECK		   ; check out this box for bounds?
+	  jrst bechk		   ;   check it out.
+	call pagprt		   ; tell where the error occured
+	etype /A >>> BUG:  Unknown operation for box entity.
+/
+	skipe debug		   ; are we debugging?
+	  .value		   ;   yes, wait for debugger to have a look
+bexit:	move cl,$benxt(cl)	   ; point to the next one
+	ret			   ; return it
+;; Put bits of a box on the raster line
+beline:	move x,$belbt(cl)	   ; get the left mask
+	move t,$bestl(cl)	   ; and where it goes
+	iorm x,(t)		   ; put it there
+	move x,$berbt(cl)	   ; get the right mask
+	move t,$bestr(cl)	   ; get where it goes
+	iorm x,(t)		   ; set it
+	skipl t,$beone(cl)	   ; check if we're SETOMing anything
+	  jrst noblt		   ;   nope, we're all done
+	setom (t)		   ; OK, set that bit
+	skipn t,$beblt(cl)	   ; are we going to BLT?
+	  jrst noblt		   ;   no, we're all done
+	skipn tt,$beben(cl)	   ; get the end too
+	  .lose			   ;   take this out some day
+	blt t,(tt)		   ; extend the SETOM'd word
+
+;; now count down till time to stop drawing boxes
+noblt:	sosg $behit(cl)		   ; count the lines we've done this
+	  jrst bekill		   ;   it's the end, kill self
+	move cl,$benxt(cl)	   ; next entity
+	ret			   ; return it
+
+;; Kill a Box Entity.
+bekill:	call kkill		   ; delete it from the entity list
+	exch cl,a		   ; The new one is now current
+	move t,befree		   ; get the current free list
+	movem t,$benxt(a)	   ; make this one point to old free list
+	movem a,befree		   ; make this one head of free list
+	ret			   ; that's it!
+
+;; check a box for fitness
+bechk:	move a,$bestl(cl)	   ; is it underflow?
+	caige a,scnlin		   ; check...
+	  jrst badbox
+	move a,$bestr(cl)	   ; is it overflow?
+	caige a,scnrpd		   ; check against buffer bounds
+	  jrst bexit		   ;   it's OK, return
+
+badbox:	push p,silent		   ; temporarily
+	setzm p,silent		   ; enable typeout
+	etype /A >>Box off page:  Horizontal = /
+	subi a,scnlin		   ; find out how many
+	imuli a,44		   ; as bits, to nearest word
+	move t,$belbt(cl)	   ; get left bits
+	jffo t,.+1		   ; count bit displacement
+	addi a,(tt)		   ; include that too, to make it exact
+	call decprt		   ; print it
+	etype /.
+/
+	pop p,silent
+	jrst bekill		   ; kill the son of a bitch
+
+movdwn:	move t,scanum		   ; check the current scan line
+movdw1:	caml t,goalin		   ; there yet?
+	  ret			   ;   already there, keep trucking
+	skipn entlst		   ; is there nothing to go on the line?
+	  jrst [ move t,goalin	   ;   then we can take a short-cut
+		 movem t,scanum	   ;   by simply jumping to that point
+		 ret]		   ;   since no need for blank lines
+
+	movei a,$LINE		   ; operation is LINE
+	call ecalls		   ; call the entities
+	call shpout		   ; ship out the line
+	setzm scnlin		   ; clear it from left to right, leave padding
+	move x,[scnlin,,scnlin+1]  ; extend the 0 at SCNLPD to rest of line
+	blt x,scnrpd-1		   ; to start of right padding
+	aos t,scanum		   ; next line
+	jrst movdw1		   ; and keep moving
+
+;; perform an operation on each entity on ENTLST.  Takes operation in A
+ecalls:	skipn cl,entlst		   ; start at the head of the list
+	  ret			   ;   no entities, that's easy!
+	push p,a		   ; remember the operation
+
+ecall0:	move a,(p)		   ; get the operation
+	call @(cl)		   ; call the current entity
+	jumpn cl,ecall0		   ; if there's a new current entity, call that
+	sub p,[1,,1]		   ; throw away the operation from the stack
+	ret			   ; return
+
+;; Take the scan line and put it into the packet, sending if necessary
+
+shpout:	setzm outlin		   ; clear the output line
+	move x,[outlin,,outlin+1]  ; extend the zeros across the board
+	blt x,outend-1		   ; to the very end
+
+	move x,[.byte 20 ? 66*2 ? 0 ? .byte]
+	movem x,outhed		   ; set up the output header
+	move x,scanum		   ; get line number
+	dpb x,[042000,,outhed]	   ; set it in the output line
+	call runout		   ; do run-length encoding, if possible
+	ret
+
+;;; come here (with stack adjusted) to do image mode encoding instead of
+;;; run length, if buffer room is insufficient
+imageo:	move a,[.byte 10 ? 2 ? 0 ? .byte]  ; 0,2 means enter image mode
+	xct 36circ		   ; prepare for later CIRCing of this
+	movem b,outlin		   ; put this at the start of the line
+	
+	movsi tt,-65		   ; AOBJN ptr to the output buffer
+	move t,[440400,,scnlin]	   ; intput Byte pointer is from scan line
+	jrst byte2		   ; The first 2 bytes are already out there
+
+shplop:
+       	repeat 10,[
+ife .rpcnt-4,byte2:
+	ildb x,t		   ; get a byte
+	dpb x,shpobp+.rpcnt	   ; output that byte
+] ; END REPEAT 10,
+
+	aobjn tt,shplop		   ; and do that for all bytes
+	jrst pktcpy		   ; copy the line to the packet buffer
+; falls through
+
+pktshp:	call pktout		   ; send the packet and fall through again
+
+;; now we have an encoded line, copy it to the packet buffer
+
+pktcpy:	aos tt,pktptr		   ; get pointer to area of packet buffer
+	addi tt,65		   ; we'll take 66 words of that space
+	cail tt,pktend		   ; is it beyond the end of the packet?
+	  jrst pktshp		   ;   yes, ship out the packet
+	exch tt,pktptr		   ; exchange our line for the new free pointer
+
+	move a,outhed		   ; get output header
+	movem a,(tt)		   ; write it out
+	aos tt			   ; count that word
+
+	movsi t,-65
+circlp:	move a,outlin(t)	   ; get a word
+	xct 36circ		   ; reverse the bits (SHIT!)
+	movem b,(tt)		   ; put out the fixed word into the packet
+	aos tt
+	aobjn t,circlp		   ; next?
+
+	ret			   ; that's all, I guess
+
+;; ship out a packet and output a scan line run-length encoded.
+runshp:	aos pktptr		   ; PKTOUT expects caller to have incremented
+	call pktout		   ; send the packet.  Fall through
+
+;; output a scan line run-length encoded.  Clobbers almost all AC's
+
+runout:	move x,pktptr		   ; remember where we start in case we run
+	movem x,falpnt		   ; out of space and revert to image mode.
+	cail x,pktend-66	   ; do we need more room? (66 is max can take)
+	  jrst runshp		   ;   yes, get it
+	move x,p		   ; get current stackpointer
+	movem x,falstk		   ; so we can fail back to this level
+	aos t,pktptr		   ; allocate a word for scan line and length
+	setzm (t)		   ; zero it for now
+	aos t,pktptr		   ; word for two bytes 0,0 (run-length)
+	setzm (t)		   ; make sure the two bytes are zero
+	setzb c,runsts		   ; we are initially white, looking for black
+				   ; C gets bit count
+	movei d,2		   ; byte counter, 2 zero bytes already
+	movsi e,-57		   ; hack all 57 words of scan line
+	movei f,65*4-2		   ; maximum number of bytes before try image
+runou1:	move a,scnlin(e)	   ; get a new word
+	movei bt,44		   ; start out with 44 bits uncounted in word
+	skipe runsts		   ; are we counting ones?
+	  xor a,[-1]		   ;   then make the 0's 1's to mark the end
+runou5:	jffo a,[ addi c,(b)	   ;   count the bits before the first 1
+		 subi bt,(b)	   ;   that many fewer bits to count
+		 jumpe bt,runou8   ;   that's the end of the word, find next
+		 aose runsts	   ;   toggle RUNSTS's state
+		   setom runsts	   ;     was zero, make -1
+		 movei t,(b)	   ;   copy the # of bits found
+		 move b,runsts	   ;   prepare to shift in 0's or 1's as needed
+		 lshc a,(t)	   ;   adjust position to be zero
+		 xor a,[-1]	   ;   toggle it for next state
+		 push p,a	   ;   remember the frob we're looking at
+		 call runcnt	   ;   send the run count out to the packet
+		 pop p,a	   ;   get back the frob we're looking at
+		 jrst runou5]	   ;   on with the loop!
+	addi c,(bt)		   ; all the remaining bits count now
+runou8:	aobjn e,runou1		   ; we're done with this word
+	skipe runsts		   ; if we're black
+	  call runcnt		   ;   finish up with this mode
+	cail c,57*44		   ; is this an entire line?
+	  jrst sndnul		   ;   A blank line, don't bother sending
+	setz c,			   ; send zero bytes
+	call runcnt		   ; to end up in command mode
+	call runcnt		   ; send out three null bytes
+	call runcnt		   ; god knows why!
+	movei c,1		   ; dunno why we do this either
+	call runcnt		   ; but we do!
+	andi d,3		   ; be sure to be mod 4
+	setz a,			   ; must pad the rest with 0 bytes
+	jrst .+1(d)		   ; deposit whichever need it
+	  jrst runxit		   ;   full house, no padding needed
+	  dpb a,runbyt+1	   ;   pad second byte
+	  dpb a,runbyt+2	   ;   pad thrid
+	  dpb a,runbyt+3	   ;   pad fourth
+runxit:	move x,pktptr		   ; get the current packet pointer
+	sub x,falpnt		   ; how much have we advanced?
+	lsh x,1			   ; in terms of PDP-11 words, please
+	aos t,falpnt		   ; recover where we wrote to
+	dpb x,[242000,,(t)]	   ; so set the length
+	move x,scanum		   ; get the scan number
+	dpb x,[042000,,(t)]	   ; and set it in the output buffer
+	ret			   ; that's all!
+
+;; at this point the run-encoded line should be ready
+
+;; ** NOTE ** -- this takes arg in C, not in A
+;; output the count of bits in C, as expected by the PDP-11.  If needs more
+;; than 54. words, should punt and cause an image line to be generated.
+;; clobbers A, resets C to zero
+
+runcnt:	movei a,(c)		   ; get count to send
+	caile a,377		   ; we can't send more than 377
+	  movei a,377		   ;   so enforce this limit
+	subi c,(a)		   ; but account for however much we can send
+	call sndbyt		   ; send the byte (from A)
+	jumpe c,cpopj		   ; if we sent the entire thing, return
+	setz a,			   ; we didn't send it all, now must send a 0
+	call sndbyt		   ; to indicate none of the alternate color
+	jrst runcnt		   ; but more of this color to come
+
+;; send out a single byte to the packet
+sndbyt:	sojl f,sndfal		   ; if we run out of bytes, fall back to image
+	trnn d,3		   ; is this a fresh word?
+	  jrst sndalc		   ;   yes, allocate a word to write into
+	andi d,3		   ; eliminate any over-run
+	move t,pktptr		   ; get the word to write into
+	dpb a,runbyt(d)		   ; and write into the apropriate byte
+	aos d			   ; next byte
+	ret			   ; and return
+
+sndalc:	aos t,pktptr		   ; get the new word to write into
+	dpb a,runbyt+0		   ; and write into the apropriate byte
+	movei d,1		   ; next byte
+	ret			   ; and return
+
+sndfal:	move p,falstk		   ; restore the stack back to failure point
+	move x,falpnt		   ; back up the packet location to old loc
+	movem x,pktptr
+	jrst imageo		   ; resort to image output
+
+;;; don't bother sending this line, it's null
+sndnul:	move p,falstk		   ; throw out to where we were called from
+	move x,falpnt		   ; back up the packet buffer to where it was
+	movem x,pktptr
+	ret			   ; return to our caller, having done nothing
+
+runbyt:	241000,,(t)		   ; first byte is the second byte
+	341000,,(t)		   ; second is the first
+	041000,,(t)		   ; third is the last
+	141000,,(t)		   ; and last is the third, what a crock
+
+;; Set the size and opcode of a data packet, and ship it out to the receiver.
+
+pktout:	movei a,packet		   ; give a pointer to the packet
+	movei b,%codat		   ; data output
+	move c,pktptr		   ; find the end of the data
+	subi c,pktdat		   ; find out how many PDP-10 words are in use
+	lsh c,2			   ; get number of bytes in use
+	call makpkt		   ; send out the packet by whatever means
+	movei x,pktdat-1	   ; meanwhile, start the packet out at
+	movem x,pktptr		   ; beginning.
+	ret
+
+;; the routine to send a packet over the chaos net.
+putpkt:	skipn chsopn		   ; is our connection open?
+	  jrst chsblk		   ;   check and wait if needed
+putpk1:	syscal PKTIOT,[argi chso ? argi (a)]  ; send it
+	  .lose %lsfil		   ;   lost somehow?
+	ret			   ; that's it!  Easy, wasn't it!
+
+chsblk:	ldb t,[$cpkop (a)]	   ; get the opcode
+	cain t,%corfc		   ; RFC's are sent while state is closed
+	  jrst chsini		   ;   so go open channel, then PKTIOT
+	movei t,30.*60.		   ; normally we time out after a minute
+	skipe debug		   ; but if we're debugging,
+	  move t,[377,,777777]  ;   we'll wait forever
+	syscal NETBLK,[ argi chso ? argi %csrfs ? t  ; wait
+			val tt]	   ; and get our state when we wake up
+	  .lose %lsfil
+	cain tt,%csopn		   ; is it open now?
+	  setom chsopn		   ; note that we've found it open
+	cain tt,%csopn		   ; is it open?
+	  jrst putpk1		   ;   yes, now do I/O
+	
+	hrrz t,chstat(tt)	   ; get a byte pointer to an apropriate
+	hrli t,440700		   ; message
+	hlrz tt,chstat(tt)	   ; and get a count as well
+	.call typblk		   ; type it
+	  .lose %lsfil
+	skipn debug	
+	  .logout		   ;   byebye
+	.lose
+
+define tabent &string
+	<.length string>,,[asciz string]
+termin
+chstat:	tabent /A>> Error:  CHAOSnet connection closed./
+	tabent /A>> Error:  Very confused network:  Listen./
+	tabent /A>> Error:  Very confused network:  RFC-received./
+	tabent /A>> Error:  CHAOSnet timeout./
+	tabent /A>> Error:  Why are we barfing about an OK connection?/
+	tabent /A>> Error:  CHAOSnet connection broken by receipt of "LOS" packet/
+	tabent /A>> Error:  Incomplete CHAOSnet transmision (AI is not responding)/
+
+chsini:	syscal CHAOSO,[argi chsi ? argi chso ? argi cs$win]
+	  .lose %lsfil
+	jrst putpk1		   ; now send the packet for real now
+
+;; the routine to make and send a packet.  Takes packet in A,
+;; opcode in B and length in C.
+
+makpkt:	dpb b,[$cpkop (a)]	   ; set the opcode for the packet
+	dpb c,[$cpknb (a)]	   ; set the byte count
+	jrst @sndpkt		   ; send out the packet
+
+
+;; This is the packet reciever.  Takes address of packet in A
+getpkt:	ldb x,[$cpkop (a)]	   ; get the opcode for the packet
+	cain x,%codat		   ; is this a data packet?
+	  jrst dskout		   ;   yes, write the data to disk
+	cain x,%corfc		   ; is this an RFC packet?
+	  jrst rfcopn		   ;   yes, initialize stuff
+	cain x,%cobye		   ; is this a BYE packet?
+	  jrst byebye		   ;   yes, close the file and finish up
+	cain x,%copag		   ; end of page?
+	  jrst clsfil		   ;   yes, start up a new page
+	cain x,%coini		   ; get initialization info?
+	  jrst inipkt		   ;   yes, so copy out that info
+	cain x,%cocls		   ; close?
+	  jrst chclos		   ;   hack a closed connection
+	cain x,%colos		   ; LOS packet?
+	  jrst chlost		   ;   handle the lossage
+	cain x,%coioc		   ; IOC error?
+	  jrst iocinf		   ;   inform the user
+	etype /A
+-----------------------------
+Unknown CHAOSnet message.
+-----------------------------
+/
+	.lose
+
+;; handle a closed CHAOSnet connection
+chclos:	setom closed		   ; note that it has been closed
+	skipe servep
+	  jsr byelos		   ;   then go away
+	skipe gone		   ; have we told it to go away?
+	  jrst [ pop p,x	   ;   yes, so pop off our return address
+		 jrst chsdis]	   ;   yes, so ignore it and dismis from our
+				   ;   caller 
+	etype /A
+----------------------------------------
+The CHAOSnet connection has been closed.
+/
+	jrst chlos0
+
+;; Tell the user of the arival of a LOS packet.
+chlost:	skipe servep		   ; are we a server?
+	  jsr byelos		   ;   yes, go away
+	type /A
+-------------------------------------------------------------
+The CHAOS connection has lost.  The reason returned by AI is:
+/
+chlos0:	move a,[$cpkdt inpkt]	   ; pointer to the ASCII reason for complaint
+chlos1:	ildb x,a		   ; get a byte
+	trne x,200		   ; 200 bit on?
+	  jrst chlos5		   ;   that's the end of the text
+	jumpe x,chlos5		   ; if it's a 0, that marks the end too
+	.iot ttyo,x		   ; type the character
+	jrst chlos1		   ; next?
+
+chlos5:	etype /A
+-------------------------------------------------------------
+
+/
+	.logout 1,
+
+;; handle an %COIOC packet informing of an IOC error
+iocinf:	skipe servep		   ; are we a server?
+	  .lose			   ;   how the fuck???
+	etype /A
+-------------------------------------------------------------
+AI's DISKS ARE FULL!
+This program will wait two minutes and try again, hoping that
+the XGP will delete some of the files it has sent already.
+If your files are way down in the queue, it may be advisable
+to wait for a time before proceeding this job, to avoid
+leaving AI high and dry with no disk space.
+-------------------------------------------------------------
+
+/
+	ret
+
+rfcopn: skipe servep		   ; If we're not a server, or
+	  skipe server		   ;   if we're an inferior server
+	    ret			   ;     we can't log in, rest is meaningless
+	ldb tt,[$cpksa (a)]	   ; get the source address
+	lsh tt,33		   ; 3 rightmost digits, left justified
+	setz t,
+	lshc t,3		   ; a digit
+	lsh t,3			   ; space
+	lshc t,3		   ; another digit
+	lsh t,3			   ; more space
+	lshc t,3		   ; more digit
+	lsh t,6			   ; save space for the C in the name
+	.suset [.ruind,,tt]	   ; get our user index
+	lsh tt,35		   ; left justify the user index
+	lsh t,2			   ; sligtly less space than usual
+	lshc t,4		   ; digit
+	lsh t,3			   ; space
+	lshc t,3		   ; another digit
+	add t,[sixbit /000C00/]	   ; turn digits into sixbit!
+login:	syscal LOGIN,[t ? [sixbit /MIT-MC/] ? t]
+	  jrst [ aos t ? jrst login]
+	.suset [.sjname,,[sixbit /XGPSCN/]]
+	.suset [.ssname,,[sixbit /XGPSCN/]]
+	ret			   ; just return, at this stage
+
+;; did we get an initialization packet?
+inipkt:	move t,%cpkdt(a)	   ; get the first word of data
+	move tt,%cpkdt+1(a)	   ; get the second word of data
+	lsh t,-4		   ; concatenate
+	lshc t,4		   ; and malign
+	movem t,suname		   ; and remember this, it's our user's name!
+	.suset [.ssname,,t]	   ; for sake of PEEK
+	move tt,%cpkdt+2(a)	   ; get the machine name
+	movem tt,smachn		   ; remember that too
+	skipe %cpkdt+3(a)	   ; thesis queue?
+	  jrst [ setom thesis
+		 move tt,[sixbit /    QT/]
+		 movem tt,queue
+		 jrst .+1]
+	move t,[441000,,%cpkdt+4(a)]  ; get pointer to this wonderful data
+	move tt,[440700,,srcnam]   ; and copy it to a buffer as our source name
+iniput:	ildb x,t		   ; get the character
+	idpb x,tt		   ; save the character
+	jumpn x,iniput		   ; and if it's not null (end-of-string), save
+	ret
+
+byebye: call clsfil		   ; close and rename the file
+	setom closed		   ; in case we're local, say connection closed
+	skipn servep		   ; are we a server?
+	  ret			   ;   no, return to caller
+	skipe debug		   ; debugging?
+	  .value
+	.logout 1,		   ; bye-bye
+
+;; close and rename the current output file
+clsfil:	skipn filesw		   ; do we have a file really there?
+	  ret			   ;   no, just return now
+	ldb tt,[044000,,%cpkdt(a)] ; get the page number
+	movem tt,opgnum		   ; and salt away for later use
+	move t,suname
+	syscal OPEN,[ cnti .uii
+		      argi mapi
+		      [sixbit /DSK/]
+		      [sixbit /  SCAN/]
+		      [sixbit /  QFN2/]
+		      [sixbit /DEVICE/]
+		      erro x]
+	  call fn2los		   ; if it loses, fix it maybe
+	syscal CORBLK,[ cnti %cbndr\%cbndw
+			argi 0
+			argi %jself
+			argi fn2pag
+			argi mapi  ; open on MAPI
+			argi 0]	   ; page 0 in the file
+	  .lose %lssys
+
+getnam:	aosn t,fn2pag*2000	   ; first word of file is our frobie!
+	  jrst getnam		   ;   0 not a good name!
+	camn t,[sixbit />/]	   ; don't use ">" either!
+	  jrst getnam
+	camn t,[sixbit /</]	   ; "<" also funny
+	  jrst getnam
+
+	syscal PGWRIT,[cnti 1 ? argi fn2pag]  ; write the page out
+	  .lose %lssys
+	syscal RENMWO,[ argi scno
+			suname
+			t
+			erro x]
+	  .lose %lsfil			
+	syscal RFNAME,[ argi scno ? val $$dev ? val $$fn1
+			val $$fn2 ? val $$snm]
+	  .lose %lsfil
+	.close scno,		   ; close the file, all done with it
+	.close mapi,		   ; all done with it!
+	syscal CORBLK,[ cnti 0 ? argi 0
+			argi %jself ? argi fn2pag]
+	  .lose %lssys			
+	setzm filesw		   ; note we don't have an output file open
+
+	move x,$$dev		   ; check out the device
+	camn x,[sixbit /DSK/]	   ; does it say DSK: ?
+	  move x,machin		   ;   then make it point to this machine!
+	movem x,$$dev
+	movei b,filblk
+	move d,[440700,,jclbuf]
+	call rfn"pfn		   ; make a human (and XGP) readable filename
+	syscal open,[ cnti .uao ? argi queo
+		      quedev ? [sixbit /_scanq/] ? [sixbit /output/]
+		      quedir]
+	  call novisn		   ;   If it fails, maybe try a different dev
+	qtype /;Status /
+	move a,suname		   ; get our name
+	call q6type		   ; type it out
+	.iot queo,[^I]		   ; [TAB]
+	move a,smachn		   ; next comes machine queued on
+	call q6type
+	.iot queo,[40]
+	.iot queo,inqgrp	   ; print our INQUIR group
+	.iot queo,[40]		   ; space
+	.rdatim a,		   ; get date and tyme
+	move tt,[440600,,a]	   ; Byte Pointer to date and tyme
+	movei c,":
+	call datprt
+	.iot queo,[40]		   ; space between time and date
+	move tt,[300600,,b]	   ; last 4 digits first
+repeat 2,[
+repeat 2,[
+	ildb t,tt		   ; get a byte
+	addi t,40
+	.iot queo,t]		   ; send it out
+	.iot queo,["/]]		   ; separate for times or date, as needed
+	move tt,[440600,,b]	   ; first two digits last
+repeat 2,[
+	ildb t,tt
+	addi t,40
+	.iot queo,t]
+
+	qtype / 1 page	/	   ; print size, and tab over
+
+	move a,[440700,,jclbuf]	   ; get the filename from the output buffer
+	call qstrt		   ; send it onto QUEO
+
+	qtype / (p/
+	move a,opgnum		   ; get the page number
+	call qdecpr		   ; write it out
+	qtype /)
+;Notify /
+	move a,smachn		   ; get what machine the user is on
+	call q6type		   ; type that out
+	.iot queo,[",]
+	move a,suname		   ; find out who we are
+	call q6type		   ; for the sake of replies
+	qtype / Page /
+	move a,opgnum		   ; get the output page number
+	call qdecpr		   ; tell him which page is coming out
+	qtype / of /
+
+	move a,[440700,,srcnam]	   ; now we tell him which file is being hacked
+	call qstrt		   ; copy it onto QUEO
+	qtype / is being printed now.
+;Scan
+;Delete
+/
+	skipe thesis		   ; Are we hacking thesis?
+	  jrst [ qtype /;Thesis
+/
+		 jrst .+1]
+	move a,[440700,,jclbuf]	   ; JCLBUF contains our scan file
+	call qstrt		   ; copy out the filename to output
+	qtype /
+/
+	syscal renmwo,[argi queo ? Queue ? [sixbit />/]]
+	  .lose %lsfil
+	.close queo,		   ; all done, file is now queued
+	ret
+
+
+;; expects an error code in X.  If the preceeding call failed, create
+;; the file DSK:DEVICE;  SCAN   QFN2 with 1 block
+
+fn2los:	sos (p)			   ; back up the PC
+	sos (p)			   ; to point to the .CALL
+	caie x,%ensfl		   ; No such file?
+	  jrst opnlos		   ;   nope, don't understand this error!
+	syscal CORBLK,[ cnti %cbndr\%cbndw  ; grab a fresh page
+			argi 0
+			argi %jself
+			argi fn2pag
+			argi %jsnew]
+	  .lose %lssys
+	syscal OPEN,[ cnti .uio
+		      argi mapi
+		      [sixbit /DSK/]
+		      [sixbit /  SCAN/]
+		      [sixbit /  QFN2/]
+		      [sixbit /DEVICE/]]
+	  .lose %lssys		      
+	move t,[444400,,fn2pag*2000]
+	movei tt,2000
+	syscal SIOT,[argi mapi ? t ? tt]
+	  .lose %lsfil
+	ret			   ; return to try again
+
+;; takes a Byte Pointer in A, and copies ASCIZ string to QUEO
+qstrt:	ildb t,a		   ; get a character
+cpysrc:	.iot queo,t		   ; write it
+	ildb t,a		   ; get a character
+	jumpn t,cpysrc		   ; maybe repeat.  Null terminates
+	ret
+
+datprt:
+repeat 2,[
+repeat 2,[
+	ildb t,tt		   ; get a byte
+	addi t,40
+	.iot queo,t]		   ; send it out
+	.iot queo,c]		   ; separate for times or date, as needed
+repeat 2,[
+	ildb t,tt
+	addi t,40
+	.iot queo,t]
+	ret
+
+;; pick another pack to try if original choice was not available
+;; expects X to contain the error code
+
+novisn:	sos (p)			   ; back up the PC
+	sos (p)			   ; to the preceeding instruction
+	caie x,%ENAPK		   ; is the error "Pack not mounted"?
+	  jrst opnlos		   ;   No, go complain
+	move x,outdev		   ; what device are we hacking now?
+	camn x,[sixbit /AI/]	   ; are we already hacking the AI device?
+	  .lose			   ;   Huh?  Should be Device Not Available
+	camn x,[sixbit /SECOND/]   ; are we hacking the SECOND: device?
+	  move x,[sixbit /DSK/]	   ; try ordinary primary, and lots of luck!
+	camn x,[sixbit /VISION/]   ; are we hacking the VISION: device?
+	  move x,[sixbit /SECOND/] ;   try the SECOND: next
+	movem x,outdev		   ; use that for scan files
+	movem x,quedev		   ; and queue files
+	ret			   ; return to try again!
+
+opnlos:	move x,(p)		   ; get losing PC
+	move losepc		   ; remember it
+	movei x,%lsfil		   ; lossage-code = file
+	hrlm x,(p)		   ; set up the word on top of stack to have
+	movss (p)		   ; <pc>,,<losage-code>
+	pop p,x			   ; collect it in X
+	syscal LOSE,[ cnti 5	   ; so losing SYSCAL LOSE can lose
+		      x ? losepc]
+	  .lose %lssys		   ;   HUH?
+
+
+;; open a file to write data to
+
+opnfil:	syscal OPEN,[ cnti .uio ? argi scno ? outdev
+		      [sixbit /_SCAN_/] ? [ sixbit /OUTPUT/] ? outdir
+		      erro x]
+	  call novisn		   ;  backs up and retries
+	setom filesw		   ; note the file is open
+
+;; Packet with address in A contains data to be written to disk.
+
+dskout:	skipn filesw		   ; do we have an output file?
+	  jrst opnfil		   ;   no, open it first
+	ldb tt,[$cpknb (a)]	   ; get # of bytes used in data
+	addi tt,3		   ; prepare for roundoff
+	idivi tt,4		   ; get # of PDP10 words we're hacking
+	move t,[444400,,%cpkdt(a)] ; get pointer to the data
+	syscal SIOT,[argi scno ? t ? tt]  ; send the data out to disk
+	  .lose %lsfil
+	ret			   ; done
+
+tclose:	call nxtpg0		   ; do and end-of-page bit
+tclos1:	setom gone		   ; say it's OK for server to vanish
+	movei a,packet		   ; this is in the data packet (why not?)
+	movei b,%cobye		   ; tell other end to finish up
+	setz c,			   ; no data
+	call makpkt		   ; send this packet out
+	type /ARun time = /
+	.suset [.rrunt,,a]	   ; get the run time
+	idivi a,<1000./4>	   ; get mili-seconds of run time
+	call decprt		   ; print the mili-seconds
+	type / milli-seconds.
+All pages queued.
+/
+	skipe debug		   ; debugging?
+	  .lose
+	skipn closed		   ; has it been queued?
+	  .hang			   ;   not yet, wait for it!
+	.logout 1,		   ; bye-bye!
+
+;; ship-out output byte pointers
+shpobp:	140400,,outlin(tt)
+	100400,,outlin(tt)	   ; second from end is first byte
+	040400,,outlin(tt)
+	000400,,outlin(tt)	   ; last byte is next
+	340400,,outlin(tt)
+	300400,,outlin(tt)	   ; leftmost becomes rightmost, that's next
+	240400,,outlin(tt)
+	200400,,outlin(tt)	   ; last one is here.....what a crock this is
+
+$nxt==$cenxt			   ; all should be the same
+$prv==$ceprv
+ifn $cenxt-$benxt,.FATAL Entity structures incompatible
+ifn $ceprv-$beprv,.FATAL Entity structures incompatible
+
+;; Delete an entity from the ENTLST.  Expects entity to delete in CL,
+;; puts it's successor in A.  Does not add to the freelist
+
+kkill:	move t,$nxt(cl)		   ; get next frobbie
+	move tt,$prv(cl)	   ; get previous frobbie
+	movem t,$nxt(tt)	   ; previous exists.  Set it's next.
+	skipe t			   ; if no next, don't try setting it
+	  movem tt,$prv(t)	   ;   next exists, set it's previous
+	movei a,(t)		   ; return the next in A
+	ret			   ; return it.
+
+;; Atom table
+$KILL:	sixbit /KILL/
+$LINE:	sixbit /LINE/
+$CHECK:	sixbit /CHECK/
+
+;; Table of bit masks according to # of zeros left justified, for left edge of
+;; box
+lftmsk:	repeat 44,	<1_<44-.rpcnt>>-1
+
+;; Table of bit masks according to # of ones left justified for right edge of
+;; box 
+rhtmsk:	repeat 44,	-1_<44-.rpcnt>
+
+;; barf if the dX misfeature of XGP Escape 4 is used
+
+es4bd2:	call tin		   ; flush a byte of the sequence
+es4bd1:	call tin		   ; flush a byte of the sequence
+es4bd0:	call pagprt		   ; tell which page lost
+	etype /A >>Unimplemented mis-feature of XGP Escape 4 encountered!
+/
+	call badfil		   ; go barf at him some more
+	call tin		   ; flush a byte of the sequence
+	jrst tin		   ; flush a byte of the sequence and return
+
+;; Barf if move up
+
+moveup:	call pagprt		   ; tell him where it happened
+	etype /A >> Attempt to move up.  Ignored.
+/
+	jrst badfil		   ; barf some more, and return	
+
+;; Take amount to move right in A, and adjust SCNLSH and SCNWRD
+
+scnmov:	sub a,scnlsh		   ; get total amount to right shift
+	idivi a,44		   ; convert to words (in A) and bits (in B)
+	addm a,scnwrd		   ; adjust the word position
+	movnm b,scnlsh		   ; and the scan position as a left shift
+	ret
+
+;; print a font number
+fntprt:	movsi t,-fntmax
+fntpr1:	camn fn,fontab(t)	   ; is this the font?
+	  jrst [ movei a,(t)	   ; get the font # in A
+		 call decprt	   ; type it
+		 ret]
+	aobjn t,fntpr1		   ; next font
+	call pagprt		   ; tell him where
+	etype /A  >>AIII!!!  Font in use but unknown!  What a screw, this can't happen!
+/
+	ret
+
+nochar:	push p,silent		   ; temporarily
+	setzm silent		   ;   enable output
+	push p,a		   ; remember the character
+	call pagprt		   ; tell him where
+	etype /A  >>Character "/
+	pop p,a			   ; remember the character
+	.iot ttyo,a
+	etype /" not found in font #/
+	movsi t,-fntmax		   ; AOBJN ptr to the fonts
+nochr1:	camn fn,fontab(t)	   ; is this the font?
+	  jrst [ movei a,(t)	   ; get the font # in A
+		 call decprt	   ; type it
+		 type /
+/
+		 pop p,silent
+		 ret]
+	aobjn t,nochr1		   ; next font
+	etype /
+  >>AIII!!!  Current font unknown!  Setting to font 0
+/
+	move fn,fontab		   ; totally arbitrary, should never happen
+	pop p,silent		   ; restore output status
+	ret
+
+pagprt:	push p,silent		   ; temporarily enable output
+	setzm silent
+	etype /A >>Error on page /
+	move a,pagnum		   ; get the page number
+	call decprt		   ; print it
+	etype /.
+/
+	pop p,silent
+	ret
+
+badfil:	etype /AWhat is the gubbish of an input file you're feeding me?
+Are you >>SURE<< this is TEX output?
+/
+	skipe debug
+	  .lose
+	.logout 1,
+
+serve:	setom servep		   ; note that we're a server
+	movei x,putpk1		   ; instead of calling ourself with packets
+	movem x,sndpkt		   ; we send the over to the user side!
+	.suset [.simask,,[%piioc]] ; be sure we can handle IOC errors
+	syscal CHAOSO,[argi chsi ? argi chso ? argi cs$win]
+	  .lose %lsfil
+	movei x,%colsn		   ; we want to listen
+	dpb x,[$cpkop ctlpkt]	   ; so we set up the control packet
+	move x,[ .byte 8 ? "X ? "G ? "P ? "S ? .byte ]  ; as a LISTEN packet
+	movem x,ctlpkt+%cpkdt	   ; for the XGPSCN protocol
+	move x,[ .byte 8 ? "C ? "N ? .byte ]
+	movem x,ctlpkt+%cpkdt+1
+	movei x,6		   ; byte count is six
+	dpb x,[$cpknb ctlpkt]
+	syscal PKTIOT,[argi chso ? argi ctlpkt]	 ; send the packet (LISTEN)
+	  .lose %lsfil
+	skipe debug		   ; unless we're debugging
+	  move t,[377777,,777777]  ;   in which case we'll wait forever
+	movei t,30.*60.		   ; sixty seconds max time to wait for it
+	syscal NETBLK,[ argi chsi ? argi %cslsn ? t  ; wait until it's open or
+			val tt]	   ; or for a minute max
+	  .lose %lsfil
+	caie tt,%csrfc		   ; did it time out?
+	  jsr byelos		   ;   yes, just go away quietly
+	movei x,%coopn		   ; say we accept the charges
+	dpb x,[$cpkop ctlpkt]	   ; by giving him a OPN opcode
+	setz x,			   ; I think a byte count of zero
+	dpb x,[$cpknb ctlpkt]	   ; will work, since we don't much care...
+	syscal PKTIOT,[argi chso ? argi ctlpkt]	 ; send the packet (OPEN)
+	  .lose %lsfil
+	movei t,30.*60.		   ; wait up to a minute
+	syscal NETBLK,[ argi chsi ? argi %csrfc ? t  ; wait for it to change
+			val tt]	   ; hopeing for a OPEN state now
+	  .lose %lsfil
+	caie tt,%csopn		   ; is it OPEN now?
+	  jsr byelos		   ;   no, must have timed out or lost
+	
+servlp:	syscal PKTIOT,[argi chsi ? argi packet]	 ; get info in return
+	  .lose %lsfil
+	movei a,packet
+	call getpkt		   ; gobble the packet
+	jrst servlp		   ; keep doing this
+
+;;; FILBLK contains the filenames for this font.  Create a font-object, return
+;;; it in FN
+
+makfnt:	move fn,fntfre		   ; get bottom of last allocated font
+	subi fn,$fn.ln		   ; get bottom of this font
+	movem fn,fntfre		   ; remember it
+	camge fn,fntbot		   ; have we gone over a page boundary?
+	  call fntalc		   ;   yes, allocate the page
+	hrlzi tt,(fn)		   ; we first clear out the entire entry
+	hrri tt,1(fn)		   ; by copying zero into next location
+	setzm (fn)		   ; there's the zero.
+	blt tt,$fn.ln-1(fn)	   ; blt the entire character object
+	move x,$$DEV
+	movem x,$fndev(fn)	   ; remember the filename in the font
+	move x,$$FN1
+	movem x,$fnfn1(fn)
+	move x,$$FN2
+	movem x,$fnfn2(fn)
+	move x,$$snm
+	movem x,$fnsnm(fn)
+	setom $fnsb0(fn)	   ; by default we load all the characters of
+	setom $fnsb1(fn)	   ; a font, unless we're told otherwise
+	setom $fnsb2(fn)	   ; by a ;KSUBSET <n> frobie
+	setom $fnsb3(fn)	   ; a 1 bit means to load the char
+	ret
+
+;; FNTGET loads in the data for the font-object in FN
+
+fntget:	skipn $fnsb0(fn)	   ; if non of the characters are used
+	  skipe $fnsb1(fn)	   ;   as determined by the ;KSUBSET info
+	    jrst fntgt0
+	skipn $fnsb2(fn)
+	  skipe $fnsb3(fn)
+	    caia
+	      ret		   ;       then we don't bother loading
+
+fntgt0:	syscal OPEN,[ cnti .uii ? argi fntc  ; open the file for the font
+		      $fndev(fn)
+		      $fnfn1(fn)
+		      $fnfn2(fn)
+		      $fnsnm(fn)]
+	  .lose %lsfil
+	setzm fbufpt		   ; invalidate font buffer
+	call fin		   ; throw away garbage word
+	call fin		   ; get size, etc.
+	hrrz x,a		   ; get the height
+	movem x,$fnhit(fn)	   ; remember the height in the font
+	call fin		   ; get a word, well either be -1 or have 1
+				   ; bit on.
+	jumple a,fnteof		   ; end of font file?
+fntchr:	call rdchar		   ; get a character from the file
+	jumple a,fnteof		   ; end of font file?
+	jrst fntchr		   ; and try reading another
+
+fnteof:	.close fntc,
+	ret
+
+; Allocate a new page for fonts
+; clobbers X,A
+
+fntalc:	move x,fntbot		   ; get current bottom page
+	subi x,2000		   ; calculate new one
+	movem x,fntbot		   ; remember for next time
+	caige x,lowend		   ; this had better be above low core
+	  jrst [ call pagprt	   ;   tell him where it happened
+		 etype /A  >> URK!!!!  Ran out of core!
+>> Fatal error.
+/
+		 .logout 1,]
+	idivi x,2000		   ; get page number in X
+	syscal CORBLK,[argi %cbndw\%cbndr ? argi %jself ? x ? argi %jsnew]
+	  .lose %lssys		   ;   just barf, for now
+	ret
+
+; initialize font input buffer
+fbfin0:	move t,[444400,,fbuf]	   ; read in info into FBUF
+	movei tt,fbufln		   ; up to FBUFLN words of it
+	syscal SIOT,[argi fntc ? t ? tt]  ; from FNTC
+	  .lose %lsfil
+	subi tt,fbufln		   ; calculate -<# of words in buffer>
+	jumpe tt,badfnt		   ; if EOF, must be a bad font file
+	hrlzi tt,(tt)		   ; put -count in LH for AOBJN ptr
+	hrri tt,fbuf		   ; AOBJN ptr into FBUF
+	movem tt,fbufpt		   ; and that's our pointer
+	ret
+
+fbfini: call fbfin0		   ; refill the buffer, and fall through
+
+; read in a word from the font.  Note that for efficiency the CHRGBL routine
+; contains a copy of this routine.  If this is updated, it should be as well
+
+fin:	skipl tt,fbufpt		   ; get pointer into the buffer
+	  jrst fbfini		   ;   ran out of stuff, re-fill the buffer
+	move a,(tt)		   ; get the word we were looking for
+	add tt,[1,,1]		   ; increment to next word
+	movem tt,fbufpt		   ; and remember for next time
+	ret
+
+badfnt:	etype /ABad format in font file./
+	skipe debug
+	  .lose
+	.logout
+
+;; makchr makes a character object, returning it in CH
+
+makchr:	move ch,lowptr		   ; get pointer to new character
+	movei x,(ch)		   ; and copy to caluclate
+	addi x,$ch.ln		   ; where next goes
+	movem x,lowptr		   ; remember it
+	camle x,lowend		   ; before the page boundary?
+	  jrst pagalc		   ;   no, gotta get more space
+	setzm (ch)		   ; we start out with the character being
+	hrlzi x,(ch)		   ; blank, zeroing out all
+	hrri x,1(ch)		   ; the entries
+	blt x,$ch.ln-1(ch)	   ;   >>> !! ZAP !! <<<
+	ret
+
+rdchar:	call fin		   ; get the next word (kern,,code)
+	movei t,(a)		   ; copy the character
+	idivi t,40		   ; get word and bit in word for KSUBSET test
+	movns tt		   ; negate for shift right
+	movsi b,20000		   ; left most significant bit
+	lsh b,(tt)		   ; THE bit!
+	addi t,$fnsb0(fn)	   ; get location of mask
+	tdnn b,(t)		   ; Is this bit on?
+	  jrst chrgbl		   ;   No, just gobble this char
+	call makchr		   ; make a character to get all this
+	movem fn,$chfnt(ch)	   ; point back at the font so we can debug
+	hrrzm a,$chchr(ch)	   ; remember the character code for debugging
+	movei t,$fnchr(fn)	   ; locative to character table of font
+	addi t,(a)		   ; locative to this char in table
+	skipe (t)		   ; it had better still be empty
+	  .lose			   ;   no?  Bug!  (or bad file!)
+	movem ch,(t)		   ; put this char in the table
+	hlre t,a		   ; get kern, as full word
+	movem t,$chkrn(ch)	   ; remember the kern
+	call fin		   ; get next word
+	hrrz t,a		   ; get character width
+	movem t,$chwid(ch)	   ; and remember that.
+	hlrz t,a		   ; get raster width
+	cain t,0		   ; if not there
+	  hrrz t,a		   ;   user character width instead
+	movem t,$chrwd(ch)	   ; remember this as width of rasters
+	addi t,43		   ; round up
+	idivi t,44		   ; get # of words used
+	movns t			   ; negate it
+	push p,t		   ; save for later
+	imul t,$fnhit(fn)	   ; get -1*<the total size of raster array>
+	hrls t			   ; put it in left half for AOBJN ptr
+	hrr t,lowptr		   ; make it an AOBJN ptr to the array
+	movem t,$chrow(ch)	   ; remember it for people's sake
+	pop p,t			   ; get -<size of single raster>
+	hrls t			   ; put it in left half for AOBJN ptr
+	hrr t,lowptr		   ; AOBJN ptr to first row of raster array
+	movem t,$chrw1(ch)	   ; remember it for $CE's
+	setzm bytpos		   ; note we're at start of raster
+getrow:	call fin		   ; get a word
+	trne a,1		   ; Is this the end of the char?
+    	  ret			   ;   yes, maybe end of file too
+	move d,a		   ; move into a more permanent AC
+	move e,[441000,,d]	   ; Byte Pointer into that word
+	movei c,4		   ; there are 4 of these bytes
+getwr2:	ildb a,e		   ; get the first byte
+	call @reverse		   ; reverse the bits
+	call putbyt		   ; put the byte away as part of whatever line
+	sojg c,getwr2		   ; if more bytes in this word, check them too
+	jrst getrow		   ; get another word to go with it
+
+
+;; GUBBLE a character.  Throw it away.  Take no space.
+;; note that this contains a virtual copy of the FIN routine
+
+chrgbl:	call fin		   ; throw away raster width,,char width
+	move tt,fbufpt		   ; get pointer to our buffer
+chrgb1:	skipl tt		   ; are we at the end of the buffer?
+	  jrst [ call fbfin0	   ;   ran out of stuff, re-fill the buffer
+		 jrst chrgb1]	   ;   and keep on gubbling
+	move a,(tt)		   ; get the word we were looking for
+	add tt,[1,,1]		   ; increment to next word
+	movem tt,fbufpt		   ; and remember for next time
+	trnn a,1		   ; end of character definition?
+	  jrst chrgb1		   ;   no, keep on gubbling
+	movem tt,fbufpt		   ; salt away the buffer pointer for later
+	ret			   ; yes, end of GUBBLE
+
+putbyt:	sosge bytpos		   ; count bytes
+	  jrst bptalc		   ;   no more on this line, next word
+	movei t,(a)		   ; copy the byte where we can hack
+	lshc t,-4		   ; split it into two bytes
+	lsh tt,-40		   ; both right justified
+	idpb t,bptput		   ; write out the byte
+	idpb tt,bptput		   ; in such a way to completely fill the word
+	ret			   ; that's it!
+
+;; allocate raster more words for character array
+bptalc:	move t,$chrwd(ch)	   ; get raster width
+	addi t,7		   ; prepare for rounding-up division
+	idivi t,10		   ; T <- # of 8-bit bytes needed for this frob
+	movem t,bytpos		   ; that's how often to reset
+	move t,$chrwd(ch)	   ; get raster width in bits
+	addi t,35.		   ; prepare for rounding-up division
+	idivi t,36.		   ; T <- # of words needed for this raster
+	push p,t		   ; remember how long our entry is
+	move tt,lowptr		   ; get where free word is now
+	push p,tt		   ; remember where our entry is
+	hrli tt,440400		   ; make Byte Pointer to new line
+	movem tt,bptput		   ; to put half-bytes down
+	addb t,lowptr		   ; update to be after what we have now
+	caml t,lowend		   ; do we need more space?
+	  call pagalc		   ;   yes, must allocate a new page
+	pop p,tt		   ; recover where start of entry is
+	pop p,t			   ; recover count
+	movns t			   ; negate count
+	hrli tt,(t)		   ; turn TT into AOBJN ptr to new words
+bptclr:	setzm (tt)		   ; clear a word
+	  aobjn tt,bptclr	   ; if still more words, keep on clearing
+	jrst putbyt		   ; all set for next line, resume PUTBYT
+
+;;; Allocate page for lower core.
+pagalc:	move x,lowend		   ; get first non-available location
+	addi x,2000		   ; make it point to next page
+	camle x,fntbot		   ; there had better be no overlap with upper
+	  jrst [ call pagprt	   ;   tell him where it happened
+		 etype /A  >> URK!!!  Ran out of core.
+  >> Fatal error.
+/
+		 .logout 1,]	   ;   Oh well.
+	exch x,lowend		   ; and save it away
+	lsh x,-10.		   ; get this page #
+	syscal CORBLK,[argi %cbndw\%cbndr ? argi %jself ? x ? argi %jsnew]
+	  .lose %lssys		   ;   just barf, for now, if no core
+	move x,lowptr		   ; now before we leave
+	camle x,lowend		   ; we had better check that there's enough
+	  jrst pagalc		   ;   no, better allocate another page
+	ret			   ; got the core, return
+
+
+;;; allocate a character entity, return it in A
+cealc:	skipe a,cefree		   ; are there any already made, free?
+	  jrst [ move x,$cenxt(a)  ;   yes, find next in chain
+		 movem x,cefree	   ;   make it the head of free-list
+		 ret]		   ;   and return our entity.
+	movei a,$ce.ln		   ; length in A
+	call lowalc		   ; allocate a block that long of low core
+	movei x,cehack		   ; address of handler for a character entity
+	movem x,$cefun(a)	   ; put that info in the entity
+	ret			   ; return it, let caller fill in the rest
+
+;; Allocate a box entity, return it in A
+bealc:	skipe a,befree		   ; are there any already made, free?
+	  jrst [ move x,$benxt(a)  ;   yes, find next in chain
+		 movem x,befree	   ;   make it the head of free-list
+		 ret]		   ;   and return our entity.
+	movei a,$be.ln		   ; length in A
+	call lowalc		   ; allocate a block that long of low core
+	movei x,behack		   ; address of handler for a character entity
+	movem x,$befun(a)	   ; put that info in the entity
+	ret			   ; return it, let caller fill in the rest
+
+;; Take size to allocate in A, allocate that much low core, return pointer to
+;; it in A
+
+lowalc:	push p,lowptr		   ; get pointer to low core
+	addb a,lowptr		   ; allocate the core
+	camle a,lowend		   ; is it off the end of last page?
+	  call pagalc		   ;   yes, allocate a new page
+	pop p,a			   ; return result in A, as always
+	ret
+
+; operations to reverse a 36 bit word
+circ36:	circ a,36.
+rvrs36:	call nrevr1		   ; reverse without CIRC
+
+;; NREVR1 reverses the bits in A, leaving result in A and B without using CIRC
+
+nrevr1:	movss b,a		   ; swap halves, get a copy
+	and a,[000777,,000777]	   ; one half
+	and b,[777000,,777000]	   ; the other half
+	lsh a,11		   ; swap
+	lsh b,-11		   ; swap with other half
+	iorb a,b		   ; result in A and B
+	move t,a		   ; this swap has bits that don't move
+	and t,[020020,,020020]	   ; so need a third word that gets just those
+	and a,[740740,,740740]	   ; one half
+	and b,[017017,,017017]	   ; other half
+	lsh a,-4		   ; swap
+	lsh b,4			   ; swap with other half
+	ior a,t			   ; put the stationary bits in A
+	iorb a,b		   ; result in A and B
+	and a,[631463146314]	   ; one half
+	and b,[146314631463]	   ; other half
+	lsh a,-2		   ; swap
+	lsh b,2			   ; swap with other half
+	iorb a,b		   ; result in A and B
+	and a,[525252,,525252]	   ; one half
+	and b,[252525,,252525]	   ; the better half
+	lsh a,-1		   ; swap
+	lsh b,1			   ; swap with the other half
+	iorb a,b		   ; result in A and B
+	ret
+
+;; reverse an 8-bit-byte, contained in A.  Clobbers B, and uses CIRC
+crever:	circ a,36.		   ; reverse
+	setz a,			   ; flush any garbage from B
+	lshc a,10		   ; recover our byte
+	ret			   ; that's it!
+
+;; reverse an 8-bit-byte, contained in A, with no CIRC instruction.  Clobbers B
+nrever:	move b,a		   ; get a copy
+	andi a,17		   ; low 4 bits
+	andi b,360		   ; high 4 bits
+	lsh a,4			   ; make them high
+	lsh b,-4		   ; make them low
+	iorb a,b		   ; result in both
+	andi a,125		   ; lower bits by pairs
+	andi b,252		   ; higher bits by pairs
+	iorb a,b		   ; result in A and B
+	ret			   ; that's it!
+
+;;; Read in a character from the text input file, return it in A
+
+tin:	sosge tbfcnt		   ; is there still stuff in the buffer?
+	  jrst tbfget		   ;   no, fill it up
+	ildb a,tbufbp		   ; get a character
+	cain a,^M		   ; terpri?
+	  setom crflag		   ;   yes, let it be known it came
+	skipn texbug		   ; do we have to look out for TEX bug?
+	  ret			   ;   no, just return it
+	jumpe a,tin		   ; yes, if it's null try again
+	ret			   ; otherwise we've got it
+
+;;; fill the Text input buffer from TXTI
+
+tbfget:	skipe txteof		   ; have we already hit EOF?
+	  jrst [ move a,[-1]	   ;   yes, return a -1
+		 ret]		   ;   to denote EOF
+	move x,tbuf+tbufsz	   ; get previous look-ahead
+	movem x,tbuf		   ; and make it current
+	move t,[440700,,tbuf+1]	   ; Byte Pointer into TBUF
+	movei tt,tbufsz*5	   ; # of bytes read into TBUF
+	syscal SIOT,[argi txti ? t ? tt]  ; read in more stuff
+	  .lose %lsfil
+	jumpn tt,teofck		   ; if end of file, go check it out
+	movei tt,tbufsz*5	   ; otherwise, we got full buffer
+	movem tt,tbfcnt		   ; but don't include lookahead
+	move t,[440700,,tbuf]	   ; and we take our input from the start of
+	movem t,tbufbp		   ; the buffer, at last time's lookahead
+	jrst tin		   ; and go gobble input
+
+;; got an EOF, check for gubbish (^C's) at the end of the file, in case
+;; the file was edited with losing TECO
+
+teofck:	pushj p,teofc1		   ; back up to the last real char
+	move t,[440700,,tbuf]	   ; we gobble from the start of the buffer
+	movem t,tbufbp		   ; so point there
+	movei t,<tbufsz+1>*5	   ; trying to read full buffer, plus lookahead
+	subi t,(tt)		   ; but were short (tt) bytes
+	movem t,tbfcnt		   ; so this is how many we have left
+	jrst tin		   ; and go gobble real input
+
+txtini:	move t,[440700,,tbuf]	   ; we don't have any look-ahead yet
+	movei tt,<tbufsz+1>*5	   ; so try to get some
+	syscal SIOT,[argi txti ? t ? tt]  ; read in some cruft
+	  .lose %lsfil
+	jumpn tt,txieof		   ; early EOF, gubble gubble
+	move t,[440700,,tbuf]	   ; get our characters from TBUF
+	movem t,tbufbp		   ; from the very start
+	movei tt,tbufsz*5	   ; don't count lookahead in # of characters
+	movem tt,tbfcnt		   ; in buffer (that's how it's lookahead!)
+	ret
+
+;; got an EOF while trying to get the look-ahead
+
+txieof:	move t,[440700,,tbuf]	   ; we gobble from the start of the buffer
+	movem t,tbufbp		   ; so point there
+	movei t,<tbufsz+1>*5	   ; trying to read full buffer plus look-ahead
+	subi t,(tt)		   ; but were short (tt) bytes
+	movem t,tbfcnt		   ; so this is how many we have left
+	ret			   ; end of buffer initialization
+
+
+;; common handler to back up Byte Pointer and count (in T and TT, respectively)
+;; to avoid the ^C GUBBLE TECO puts into files.
+
+teofc1:	setom txteof		   ; note we've hit EOF
+	.close txti,		   ; close it as well
+	ldb x,[360600,,t]	   ; did it fill a word?
+	caie x,1		   ; (i.e. only 1 bit to right)
+	  cain x,44		   ;   (or if we transfered nothing at all)
+	    caia		   ;      if so, might have been padded with ^C
+	      ret		   ;	    Else must be exact byte count, OK.
+	cain x,44		   ; is it a non-standard byte-pointer?
+	  jrst [ sos t		   ;   yes, back over word
+		 hrli t,010700	   ;   and give proper left half
+		 jrst .+1]
+tbaklp:	ldb x,t			   ; check the character
+	skipe x			   ; it it null
+	  cain x,^C		   ;   or a padding char?
+	    caia		   ;     yes, keep backing upt
+	      ret		   ;	   no, that's the end of the padding
+	add t,[070000,,0]	   ; yes, padding, so back up the byte pointer
+	aos tt			   ; and the count
+	jumpg t,tbaklp		   ; check for more padding
+
+	sos t			   ; word boundary, back up the pointer
+	hrli t,010700		   ; and point at the last byte in that word
+	jrst tbaklp		   ; and check for more padding
+
+;; read a word of 6bit from TIN, returning result in A
+
+6read:	setz a,			   ; our result
+	push p,a		   ; put our result on the stack
+	push p,[440600,,-1(p)]	   ; our byte pointer
+6read0:	call tin		   ; get a character
+	caige a,0		   ; EOF
+	  caie a,^L		   ;   or end-of-page
+	    caia		   ;     nope, must be OK
+	      call badfil	   ;	   yes, bletch, what are they doing?
+	caig a,40		   ; is it a for-real character?
+	  jrst 6aread		   ;   no, return
+	cail a,"a		   ; lower case?
+	  subi a,40		   ;   yes, upper-casify
+	subi a,40		   ; and 6-bitify
+	idpb a,(p)		   ; add our result in
+	tdnn a,-1(p)		   ; since no included spaces, last char=end
+	  jrst 6read0		   ;   no last yet, get a new character
+
+6read8:	call tin		   ; find the final delimiter
+	jumpl a,6aread		   ; eof, just return
+	caile a,40		   ; printing?
+	  jrst 6read8		   ;   yes, keep on gobbling
+	cain a,^M		   ; end of line?
+	  call tin		   ;   flush the ^J too.
+6aread:	
+	pop p,a			   ; throw away the Byte Pointer
+	pop p,a			   ; recover our return value
+	ret			   ; and return
+
+;; read a unsigned decimal number in from TXTI, return it in A
+
+rdec:	push p,b		   ; accumulate answer here
+	push p,c		   ; count
+	setz b,			   ; initially zero
+rdecx:	call tin		   ; cai
+	caie a,^I		   ; tab?
+	  cain a,40		   ;   or space?
+	    jrst rdecx		   ;     gobble another
+	skipa
+rdec0:	  call tin		   ; get a character
+	jumpe a,rdec0		   ; TEX bug, crock to get around, awful
+	caie a,^I		   ; tab
+	  cain a,40		   ;   or space
+	    jrst rdec9		   ;     mark the end (burma shave)
+	cain a,^M		   ; terpri
+	  jrst rdec8		   ;   then also exit
+	caig a,"9		   ; if not a digit
+	  caige a,"0
+	    jrst [ etype /ANon-digit where decimal number expected!/
+		   call badfil	   ;   barf at him
+		   jrst rdec9]	   ;   return what we have if continued
+	subi a,"0		   ; turn into a number
+	imuli b,10.		   ; previous gets shifted a digit
+	addi b,(a)		   ; and this gets included
+	jrst rdec0		   ; and read another digit
+
+rdec8:	call tin		   ; flush a ^J following a ^M?
+	caie a,^J		   ; really a ^J?
+	  jrst [ etype /AStray CR in header of file!/
+		 call badfil	   ;   barf at him
+		 jrst .+1]
+rdec9:	move a,b		   ; return value in standard return value AC
+	pop p,c			   ; recover our scratch AC's
+	pop p,b
+	ret			   ; and return our answer
+
+;; read an unsigned octal number from TXTI
+
+roct:	push p,b		   ; accumulate answer here
+	push p,c		   ; count
+	setz b,			   ; initially zero
+roctx:	call tin		   ; cai
+	caie a,^I		   ; tab?
+	  cain a,40		   ;   or space?
+	    jrst roctx		   ;     gobble another
+	skipa
+roct0:	  call tin		   ; get a character
+	jumpe a,roct0		   ; TEX bug, cludge
+	caie a,^I		   ; tab
+	  cain a,40		   ;   or space
+	    jrst rdec9		   ;     mark the end (burma shave)
+	cain a,^M		   ; terpri?
+	  jrst rdec8		   ;   yes, handle the ^J and return
+roct1:	caig a,"7		   ; if not a digit
+	  caige a,"0
+	    jrst [ etype /ANon-octal digit where octal number expected!/
+		   call badfil	   ;   barf at him
+		   jrst rdec9]	   ;   return what we have if continued
+	subi a,"0		   ; turn into a number
+	lsh b,3			   ; multiply B by 10
+	addi b,(a)		   ; and this gets included
+	jrst roct0		   ; and read another digit
+
+;; type number in A as a decimal number
+
+decprt:	skipe silent		   ; are we silenced?
+	  ret			   ;   yes, don't print anything!
+	move t,a		   ; get the number to print
+	caige t,0		   ; negative?
+	  .iot ttyo,["-]	   ; prefix with minus sign
+	movms t			   ; get absolute value
+decpnt:	idivi t,10.		   ; figure first digit
+	push p,tt		   ; push remainder
+	skipe t			   ; done?
+	 call decpnt		   ;   no compute next one
+
+	pop p,t			   ; yes, take out in opposite order
+	addi t,60		   ; make ascii
+	.iot ttyo,t		   ; type it
+	ret			   ; and return for the next one.
+
+;; type number in A as a decimal number
+
+qdecpr:	move t,a		   ; get the number to print
+	movms t			   ; get absolute value (paranoia)
+qdecpn:	idivi t,10.		   ; figure first digit
+	push p,tt		   ; push remainder
+	skipe t			   ; done?
+	 call qdecpn		   ;   no compute next one
+
+	pop p,t			   ; yes, take out in opposite order
+	addi t,60		   ; make ascii
+	.iot queo,t		   ; type it
+	ret			   ; and return for the next one.
+
+;; write a word of sixbit, in A, to QUEO
+q6type:	move tt,a		   ; copy the word
+q6typ0:	setz t,
+	lshc t,6		   ; get a byte
+	skipn t			   ; does it need quoting?
+	  .iot queo,[^Q]	   ;   yes, quote it
+	addi t,40		   ; convert it to ascii
+	.iot queo,t		   ; type it
+	jumpn tt,q6typ0		   ; if there's more, type that too
+	ret			   ; otherwise return
+
+purify:	move p,[-pdllen,,pdl]	   ; set up the PDL so we can call stuff
+	move a,versio		   ; get first file name
+	move d,[440700,,scnvrs]	   ; point to our version number
+	call 6bit		   ; start the renaming
+	movei x,40		   ; space
+	idpb x,d
+	move a,versio+1		   ; get our second name
+	call 6bit
+	setz x,			   ; now we deposit a trailing null
+	idpb x,d		   ; to mark the end
+
+	move t,[-<endpag-1>,,1]	   ; AOBJN ptr to pages to be made pure
+	setom puresw		   ; note that we've been purified
+	syscal CORBLK,[argi %cbndr ? argi %jself ? t]  ; purify
+	  .lose %lssys
+
+irp fnm,,[DSK,13VG,KST,FONTS]prt,,[$$dev,$$fn1,$$fn2,$$snm]
+	move x,[sixbit /fnm/]	   ; set up the filename table to point
+	movem x,prt		   ; our own-typeout font for internal use
+termin
+	call makfnt		   ; make the font
+	movem fn,fontab+0	   ; that's font zero
+	call fntlod		   ; load the font into core
+	move x,fntbot		   ; get address of bottom font page and start
+	movem x,fntfre		   ; allocating below that, will purify above
+	idivi x,2000		   ; get page number
+	move t,x		   ; copy the number
+	subi t,400		   ; get -<# of pages taken for fonts>
+	hrli x,(t)		   ; make an AOBJN ptr to the pages
+	syscal CORBLK,[argi %cbndr ? argi %jself ? x]  ; purify 
+	  .lose %lssys
+	move x,lowend		   ; get first unallocated page
+	movem x,lowptr		   ; allocate beginning there.
+	idivi x,2000		   ; turn it into a page number
+	subi x,<corend+1777>/2000  ; purify from first available page for pure
+	movns x			   ; make negative
+	hrlzs x			   ; (make an AOBJN ptr)
+	hrri x,fntpur		   ; AOBJN ptr to pages to purify
+	syscal CORBLK,[argi %cbndr ? argi %jself ? x]  ; purify
+	  .lose %lssys
+	.break 16,100000	   ; putrified.
+
+$$OUTF==:-1			   ; we want the fancy output routines
+$$OUTT==:-1			   ; we want the DOW tables
+$$ABS==:-1			   ; need this to get TIMDOW
+.insrt syseng;datime >
+
+
+;; routine to hack dates in a nice format.  Takes date word in A and
+;; Byte Pointer of where to put it in D
+
+timhak:	push p,a		   ; save for date
+	push p,d		   ; save for outputing to
+	call datime"timdow	   ; get the day of week
+	move b,datime"dowlng(b)	   ; get address of long name of day
+	hrli b,440700		   ; make it into a byte pointer
+	pop p,d			   ; get Byte pointer to output to
+	ildb x,b		   ; get byte
+datcop:	idpb x,d		   ; put byte
+	ildb x,b		   ; get byte
+	jumpn x,datcop		   ; copy some more
+	movei x,",		   ; comma
+	idpb x,d
+	movei x,40		   ; space
+	idpb x,d
+	pop p,a			   ; recover date
+	jrst datime"timeng	   ; hack the english time
+
+;; routine to take 6bit in A and Byte Pointer in D and deposit ascii for the
+;; sixbit
+6BIT:	move tt,a		   ; copy the word
+6bit0:	setz t,			   ; character accumulator
+	lshc t,6		   ; get first character
+	addi t,40		   ; make it into ASCII
+	idpb t,d		   ; send it out
+	jumpn tt,6bit0		   ; and get the next character, if any
+	ret
+
+;; this is the IOC error handler
+iocerr:	movem x,iocadr		   ; borrow X for a bit
+	move x,(p)		   ; get the PC at which the IOC error happened
+	exch x,iocadr		   ; and save it, restoring X
+	push p,t
+	push p,tt
+	push p,x
+	push p,a
+	push p,b
+	.suset [.rjpc,,iocjpc]	   ; remember our JPC
+	.suset [.rbchn,,x]	   ; find out which channel it was
+	cain x,scno		   ; disk output?
+	  jrst dskful		   ;   yes, probably full disks
+ioclos:	skipe servep		   ; are we a server?
+	  skipe debug		   ;   but before going away, are we debugging?
+	    caia		   ;     don't go, give a visible error
+	      .logout		   ;	   server can't report error, just die
+
+	pop p,b			   ; resore AC's so person debugging doesn't
+	pop p,a			   ; get confused
+	pop p,x
+	pop p,tt
+	pop p,t
+	syscal LOSE,[argi 1+.lz %piioc ? iocadr]  ; report the error to DDT
+	  .lose %lssys
+
+dskful:	.status scno,t		   ; get the status
+	ldb x,[330500,,t]	   ; get the error code
+	caie x,11		   ; disk full?
+	  cain x,14		   ;   directory full?
+	    jrst dskhng		   ;     wait a while and retry
+	jrst ioclos		   ; don't understand, go barf or die
+
+dskhng:	push p,c		   ; push the rest of the AC's that
+	push p,d		   ; SNDPKT routines might hack
+	push p,e
+	push p,f
+	movei x,%coioc		   ; opcode=full
+	dpb x,[$cpkop ctlpkt]	   ; use CTLPKT since probably hacking other
+	setz x,			   ; no data contained in an IOC packet
+	dpb x,[$cpknb ctlpkt]	   ; just existance
+	movei a,ctlpkt		   ; tell packet sender which packet to hack
+	call @sndpkt		   ; send it out
+	pop p,f			   ; restore the stack and AC's
+	pop p,e
+	pop p,d
+	pop p,c
+	move x,ioctim		   ; get time to wait
+	.sleep x,		   ; sleep and try again
+
+	pop p,b			   ; restore the AC's we had before
+	pop p,a
+	pop p,x
+	pop p,tt
+	pop p,t
+	syscal DISMIS,[p]	   ; dismis the interrupt
+	  .lose %lssys
+
+;; hack input packets
+chsint:	push p,x		   ; push a whole bunch of AC's so we can hack
+	push p,a
+	push p,b
+	push p,c
+	push p,d
+	push p,e
+	push p,f
+whyint:	syscal WHYINT,[argi chsi ? val tt ? val x ? val t]
+	  .lose %lssys
+	cain tt,%csrfc		   ; if state is RFC sent
+	  .value		   ;   I'd like to know about it, for now
+	hlrzs t			   ; get number of packets available
+	jumpe t,chsdis		   ; if no packets, don't try to read any!
+	syscal PKTIOT,[argi chsi ? argi inpkt]	; read in the packet!
+	  .lose %lsfil
+	movei a,inpkt		   ; tell GETPKT to hack it
+	call getpkt		   ; process it
+	jrst whyint		   ; check for more input packets.
+
+chsdis:	pop p,f
+	pop p,e
+	pop p,d
+	pop p,c
+	pop p,b
+	pop p,a
+	pop p,x
+	syscal DISMIS,[p]	   ; return from the interrupt
+	  .lose %lssys
+
+etyper:	.call typblk		   ; type out, ignoring what SILENT is set to
+	  .lose %lsfil
+	ret
+
+typer:	skipe silent		   ; are we silenced?
+	  ret			   ;   yes, don't type out unless it's an error
+	.call typblk		   ; type out
+	  .lose %lsfil
+	ret
+
+;;; process switch options  Gets character of switch in A, Byte Pointer to more
+;;; info in D
+switch:	cain a,"H		   ; does he want to suppress the header?
+	  jrst [ setzm voff ? ret] ;   just zero the vertical offset.
+	caie a,"Q		   ; Quiet running?
+	  cain a,"S		   ; silent running?
+	    jrst [ setom silent ? ret]  ; take note of that.  
+	cain a,"T		   ; Thesis Q?
+	  jrst [ setom thesis ? move a,[sixbit /    QT/] ? movem queue ? ret]
+	cain a,"P
+	  jrst pagopt		   ;   go handle page selection option
+	etype /AUnknown switch "/
+	.iot ttyo,a
+	etype /".
+/
+	ret
+
+;;; gobble in a page list and copy it to PAGBUF.  Takes Byte Pointer to input
+;;; in D.
+pagopt:	move a,[440700,,pagbuf]	   ; initialize pointer into page buffer
+	movem a,pagebp		   ; and keep a pointer for ourselves in A
+pagop0:	camn a,[010700,,pagbfe-1]  ; have we reached the end?
+	  jrst [ etype \A>> Too many page specifications.
+\
+		 .logout 1,]
+	ildb x,d		   ; get a character
+	caie x,40		   ; space?
+	  cain x,^I		   ;   tab?
+	    jrst pagop0		   ;     we ignore those
+	cail x,"0		   ; is it a digit?
+	  caile x,"9
+	    caia		   ;     no
+	      jrst pagop5	   ;	   yes, hack it
+	caie x,",		   ; comma?
+	  cain x,";		   ;   semi?
+	    jrst pagop5		   ;     those are valid separators
+	cain x,"-		   ; - is a valid delimiter
+	  jrst pagop5
+	caie x,"[		   ; is this an open
+	  cain x,"]		   ;   or a close?
+	    caia		   ;     yes
+	      jrst gibber	   ;	   no, gibberish
+pagop5:	idpb x,a		   ; write out the byte
+	caie x,"]		   ; unless that was the end of the spec
+	  jrst pagop0		   ;   get another
+pagop9:	call pagred		   ; set the first goal
+	ret			   ; the end, stop
+
+gibber:	caie a,^M		   ; terpri?
+	  cain a,^C		   ;   or other form
+	    jrst eol		   ;     of end?
+	caie a,^_		   ; ^_ marks end sometimes too
+	  cain a,0		   ;   also 0
+	    jrst eol
+	etype \A>> Gibberish in /P[....] switch option.  Should be
+>> page numbers separated by comma, or ranges as in "59-63".  I.e.
+>> /P[1-15,34,35,59-63]
+\
+	.logout 1,
+
+eol:	movei x,"]		   ; be sure that it gets terminated
+	idpb x,a		   ; by depositing an end mark
+	jrst pagop9		   ; done, return
+
+
+puresw:	0			   ; set to -1 before purification
+debug:	$debug			   ; -1 means don't kill self, etc.
+ioctim:	30.*60.*2		   ; wait two minutes before retrying
+				   ; after a disk full IOC error.
+scnvrs:	asciz /EXPERIMENTAL/	   ; goes into headers
+versio:	.fnam1
+	.fnam2
+constants
+endpur::
+loc <<.+1777>/2000>*2000	   ; round up to nearest page
+fn2pag==:./2000			   ; save a page for the FN2
+.==.+2000
+endpag==:./2000
+variables
+
+iocadr:	0			   ; address of last IOC error
+iocjpc:	0			   ; JPC when last IOC happened
+
+crflag:	0			   ; set to -1 whenever a CR is read on TXTI
+
+inpkt:	block 126.		   ; packet from server to user!
+
+jclbuf: block jclsiz		   ; plenty of room for a filename spec
+	1			   ; mark end of JCL buffer
+srcnam:	block jclsiz		   ; our parsed filename goes here
+
+srcdat:	block 10		   ; buffer for creation date of source file
+sqdate:	block 10		   ; date file was :SCAN'ed
+name:	block 2			   ; ascii version of UNAME
+mname:	0			   ; machine name
+silent:	0			   ; set to -1 inhibits printing
+goalpg:	0			   ; page we're looking for.  0 means all
+pagebp:	440700,,pagbuf		   ; Byte Pointer into page buffer for page
+				   ; range hacking
+pagbuf:	block 40		   ; large area for specifying lots of options
+pagbfe::			   ; end of page buffer
+gone:	0			   ; -1 means OK for server to vanish
+closed:	0			   ; -1 means that the server has closed
+
+corend:
+fntpur==:<corend+1777>/2000	   ; first page of font area that's safe to
+				   ; purify
+
+
+; Local Modes: :::
+; Comment Begin:;  :::
+; Comment Column:35 :::
+; End: :::
+end go

@@ -908,6 +908,15 @@ respond "*" ":midas sys3;ts versa_dcp; versa\r"
 expect ":KILL"
 # respond "*" ":link channa; rakash v80spl,sys3; ts versa\r"
 
+# SCAN
+respond "*" ":midas sysbin;_sysen1; scan\r"
+expect ":KILL"
+respond "*" ":job scan\r"
+respond "*" ":load sysbin; scan bin\r"
+respond "*" "purify\033g"
+respond "*" ":pdump sys3; ts scan\r"
+respond "*" ":kill\r"
+
 # DDT subroutines
 respond "*" ":midas sys3;ts cmd_dcp; cmd\r"
 expect ":KILL"

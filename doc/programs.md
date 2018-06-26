@@ -179,6 +179,7 @@
 - RMAIL, mail reading client.
 - RMTDEV, MLDEV for non-ITS hosts.
 - SALV, old file system tool for KA and KL.
+- SCAN, TEX output to XGP SCAN file.
 - SCANDL, TTY output spy.
 - SCHEME, Scheme interpreter.
 - SCNV, convert plotter files to XGP scan files.
