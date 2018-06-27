@@ -379,6 +379,10 @@ respond "*" ":midas /t games;ts chess2_rg;chess2\r"
 respond "with ^C" "TV==0\r\003"
 expect ":KILL"
 
+# Unknown chess
+respond "*" ":midas games;ts chess_as;chess\r"
+expect ":KILL"
+
 # Old chess?  Timesharing, no TV, no CHEOPS processor.
 respond "*" ":midas /t games;ts ocm_chprog;ocm\r"
 respond "with ^C" "DSPLY==0\r"

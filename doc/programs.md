@@ -33,6 +33,7 @@
 - CHARFC/CHARFS, Chaos RFC.
 - CHASE, a 2-player maze game.
 - CHATST, Chaos test.
+- CHESS, unknown chess program.
 - CHESS2, Alan Baisley's Tech II chess program.
 - CHTN/CFTP, Chaosnet TELNET and FTP support.
 - COMIFY, convert HEX to COM format.
