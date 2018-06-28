@@ -15,7 +15,7 @@ proc mark_packs {} {
     respond "PACK # =" "2\r"
     respond "PACK ID =" "2\r"
 
-    respond "DDT" "mark\033g"
+    respond "\n" "mark\033g"
     respond "UNIT #" "1"
     respond "#1?" "y"
     respond "NO =" "3\r"
@@ -23,6 +23,24 @@ proc mark_packs {} {
     respond "ALLOC =" "3000\r"
     respond "PACK # =" "3\r"
     respond "PACK ID =" "3\r"
+
+    respond "\n" "mark\033g"
+    respond "UNIT #" "2"
+    respond "#2?" "y"
+    respond "NO =" "0\r"
+    expect -timeout 300 "VERIFICATION"
+    respond "ALLOC =" "3000\r"
+    respond "PACK # =" "0\r"
+    respond "PACK ID =" "0\r"
+
+    respond "DDT" "mark\033g"
+    respond "UNIT #" "3"
+    respond "#3?" "y"
+    respond "NO =" "1\r"
+    expect -timeout 300 "VERIFICATION"
+    respond "ALLOC =" "3000\r"
+    respond "PACK # =" "1\r"
+    respond "PACK ID =" "1\r"
 }
 
 proc prepare_frontend {} {
@@ -77,9 +95,25 @@ proc peek_switches {} {
 }
 
 proc dump_nits {} {
+    # Run the new DSKDMP from disk here, to check that it works.
+    respond "DSKDMP" "dskdmp\r"
+
     respond "DSKDMP" "l\033ddt\r"
-    expect "\n"; type "t\033@ dskdmp\r"
-    expect "\n"; type "\033g"
+
+    # Since we bootstrap with a 2-pack ITS, we need to copy the MFD to
+    # the fresh packs.
+    expect "\n"; type "t\033salv\r"
+    expect "\n"; type "ucop\033g"
+    respond "UNIT #" "0"
+    respond "UNIT #" "2"
+    respond "OK?" "Y"
+    respond "DDT" "ucop\033g"
+    respond "UNIT #" "0"
+    respond "UNIT #" "3"
+    respond "OK?" "Y"
+    respond "DDT" "\033u"
+
+    # Now dump the new ITS.
     respond "DSKDMP" "t\033its bin\r"
     expect "\n"; type "\033u"
     respond "DSKDMP" "m\033@ salv\r"
