@@ -39,6 +39,7 @@
 - COMIFY, convert HEX to COM format.
 - COMPLR, Lisp compiler.
 - COMSAT, mail server.
+- COOKIE BEAR, prank.
 - CMD, DDT subroutines.
 - CRC, compute file CRC.
 - CREATE, creates a text file in your home directory from console input.
