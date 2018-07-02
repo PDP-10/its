@@ -478,6 +478,14 @@ expect ":KILL"
 respond "*" ":cwd budd\r"
 respond "*" ":palx live palx\r"
 
+# Cookie Bear
+respond "*" ":midas gls; ts check_gls; check\r"
+respond "DEBUGP==" "0\r"
+respond "ITEM:" "COOKIE\r"
+respond "SUBJECT:" "COOKIE\r"
+respond "NAME:" "BEAR\r"
+expect ":KILL"
+
 # itsdev
 respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
 respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
