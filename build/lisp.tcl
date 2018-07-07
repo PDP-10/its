@@ -525,6 +525,8 @@ respond "MAXIMUM TOOLAGE>" "gen-tags\r"
 respond "MAXIMUM TOOLAGE>" "quit\r"
 respond "*" "(quit)"
 
+respond "*" ":move macsym;macsym ntags,macsym tags\r"
+
 respond "*" "aljabr\033\023"
 respond "*" ":lisp\r"
 type "(load \"lisp;mlsub\")"
