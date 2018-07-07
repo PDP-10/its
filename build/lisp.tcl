@@ -537,6 +537,7 @@ respond "T" "(loader 1000)"
 respond "(C1)" "quit();"
 
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
+respond "*" ":link demo;manual demo,demo;manual >\r"
 
 ### build ctensr for macsyma
 # ejs: commented out until we can fix NXM error in KA10 emulator
