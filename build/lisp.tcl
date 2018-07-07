@@ -583,6 +583,13 @@ respond "_" "share;eigen fasl_share;eigen trlisp\r"
 respond "_" "\032"
 type ":kill\r"
 
+### build share;array fasl for macsyma
+
+respond "*" ":maxtul;mcl\r"
+respond "_" "share;_maxsrc;array\r"
+respond "_" "\032"
+type ":kill\r"
+
 ### more lisplib stuff
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;%print\r"
