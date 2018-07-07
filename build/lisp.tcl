@@ -851,6 +851,12 @@ respond "_" "lisp;_lspsrc;mlmac\r"
 respond "_" "\032"
 type ":kill\r"
 
+# DEFSET
+respond "*" "complr\013"
+respond "_" "lisp;_nilcom;defset\r"
+respond "_" "\032"
+type ":kill\r"
+
 # Lisp display library
 respond "*" ":midas lisp; slave fasl_l; slave\r"
 expect ":KILL"
