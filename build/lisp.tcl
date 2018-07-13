@@ -67,7 +67,7 @@ respond "_" "\032"
 type ":kill\r"
 
 respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;dbg rwk1\r"
+respond "_" "liblsp;_libdoc;dbg ejs2\r"
 respond "_" "liblsp;_libdoc;comrd kmp1\r"
 respond "_" "\032"
 type ":kill\r"
