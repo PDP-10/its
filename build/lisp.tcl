@@ -783,7 +783,7 @@ respond "*" ":delete liblsp;window unfasl\r"
 
 respond "*" "complr\013"
 respond "_" "\007"
-respond "*" "(load '((libdoc) set ira1))"
+respond "*" "(load '((libdoc) set ira10))"
 respond "T" "(maklap)"
 respond "_" "liblsp;_libdoc;askusr\r"
 respond "_" "liblsp;_pratt;cgrub\r"

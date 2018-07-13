@@ -1,0 +1,270 @@
+;	Wednesday  June 3,1981  16:00  NM+1D.10H.41M.54S.  -*- Lisp -*-
+
+;;; Functions for creating heirachical MACLISP dumps on ITS.
+;;; This will work with (STATUS FLUSH) either T or NIL.
+
+;;; Comments, complaints, suggestions, etc. to GSB@ML
+
+;;;  A pure dump is made by loading up functions and data into a lisp
+;;; which has had *PURE set to T and PURE either a small fixnum or
+;;; T.  (NIL will cause it to lose!)
+;;;  To dump, you probably want to (SETQ *PURE NIL), then call
+;;; PURE-SUSPEND (rather than SUSPEND) with 2 arguments,
+;;; one an argument to pass to suspend, and the name of the file to
+;;; pdump it to.  All components of the filename must be explicitly
+;;; specified, since this package needs to remember exactly which
+;;; file it was dumped to.  For this reason, it is preferable to
+;;; dump new versions with numeric second filenames, and have links
+;;; from the TS file to either a specific version or the '>' version.
+;;; (EG, LMS is dumped to DSK:LMS;.LMS > .  Note however that you
+;;; can't give '>' as a component to PURE-SUSPEND;  you must figure
+;;; out what version will be generated and specify it.  In most cases
+;;; this is done anyway, to figure out what your version number is.)
+
+;;; The primary operation here is the function COMMUNIZE, which
+;;; opens up all the files which the dump has been generated from,
+;;; and maps in pages from them so as to optimize sharing between
+;;; jobs which come from those files.
+;;; PURE-SUSPEND does a general purification, suspend, and communize.
+;;; It is reasonable to dump using SUSPEND yourself, and then call
+;;; COMMUNIZE.
+
+
+;;; Hackers note - 
+;;; This only maps in pure pages from a file, and only pages which are
+;;; not absolute.  (It does not recognize public pages though.)  
+;;; It will not clobber an impure page in the job with a pure page from
+;;; a file.  If, however, an earlier dump has had a patch put into a
+;;; pure area and the page has been repurified, then that change will
+;;; propagate to all dumps made from that one.
+;;; It is also willing to map a pure page in over a non-existent page,
+;;; in case you are going to do something perverse like flush portions of
+;;; your binary program space before saving.
+
+(defvar *sharing-file-list
+  ())
+
+(defvar *pure-suspend-ignore
+    (do ((i 0 (1+ i)) (l)) ((= i 256.) l)
+      (and (plusp (car (syscall 1 'cortyp i))) (setq l (cons i l)))))
+
+;This gets subrcalled with no args if non-null, just before suspend
+; gets called.  The idea being that unnecessary pages can be flushed
+; from the lisp (not counting (1) uuo-xct stuff or (2) lisp itself however)
+; but we don't need to support that by default.
+(defvar *pure-suspend-hook
+  nil)
+
+(defvar *pure-suspend-history
+  nil)
+
+
+(lap-a-list '(
+    (lap pure-suspend subr)
+    (args pure-suspend (nil . 2))
+	(push p a)
+	(push p b)
+	(movei a 0 b)
+    filename-recover
+	(pushj p fil6bt)
+	(movsi tt #o120000)	; (sixbit \*\)
+	(movsi d #o360000)			; (sixbit \>\)
+	(movsi r #o340000)	; (sixbit \<\)
+	(came tt 0 fxp)		; fn2 of "*"
+	  (camn tt -1 fxp)	; fn1 of "*"
+	    (jrst 0 filename-loses)
+	(came tt -2 fxp)	; dir of "*"
+	  (camn tt -3 fxp)	; dev of "*"
+	    (jrst 0 filename-loses)
+	(came d 0 fxp)		; fn2 of ">"
+	  (camn r 0 fxp)	; fn2 of "<"
+	    (jrst 0 filename-loses)
+	(came d -1 fxp)		; fn1 of ">"
+	  (camn r 0 fxp)	; fn1 of "<"
+	    (jrst 0 filename-loses)
+	(setzm 0 (special *pure))
+	(call 0 'pagebporg)
+	(movei a '0)
+	(movei b '0)
+	(movei c 'bporg)
+	(call 3 'purify)
+	(jsp r unfrob-one-pathname-component)
+	(push p a)
+	(jsp r unfrob-one-pathname-component)
+	(pop p b)
+	(jsp t %cons)
+	(jsp t %ncons)
+	(move b (special *sharing-file-list))
+	(jsp t %cons)
+	(movem a (special *sharing-file-list))
+	(pushj fxp record-dump-history)
+	(skipe a (special *pure-suspend-hook))
+	  (pushj p 0 a)
+	(pushj p dump-it)
+	(jrst 0 xcommunize)
+
+    record-dump-history
+	(pushj p list-up-data)
+	(move b (special *pure-suspend-history))
+	(jsp t %cons)
+	(push p a)
+	(popj fxp)
+
+    dump-it
+	(push p -3 p)
+	(push p -3 p)
+	(movni t 2)
+	(jcall 14. 'suspend)
+
+    list-up-data
+	(push p -1 p)
+	(movei a '(uname))
+	(call 15. 'status)
+	(push p a)
+	(movei a '(site))
+	(call 15. 'status)
+	(push p a)
+	(movei a '(date))
+	(call 15. 'status)
+	(push p a)
+	(movei a '(dayti))
+	(call 15. 'status)
+	(push p a)
+	(movni t 5)
+	(jcall 14. 'list)
+
+    (entry impure-suspend subr)
+    (args impure-suspend (nil . 2))
+	(push p a)
+	(push p b)
+	(pushj fxp record-dump-history)
+	(pushj p dump-it)
+	;Falls through
+
+	;Falls in
+    xcommunize
+	(pop p (special *pure-suspend-history))
+	(sub p (% 0 0 2 2))
+    (entry communize subr)
+    (args communize (nil . 0))
+    communize
+	(skipn ar1 (special *sharing-file-list))
+	  (jrst 0 communize-exit)
+    communization-loop
+	(hlrz a 0 ar1)
+	(hlrz a 0 a)
+	(hlrz b 0 a)
+	(jsp t frob-one-pathname-part)
+	(hrrz b 0 a)
+	(jsp t frob-one-pathname-part)
+	(movei tt 256.)
+	(push fxp (% 0))
+	(sojg tt (* -1))
+	(push fxp inhibit)
+	(setom 0 inhibit)
+	(*call 0 open-file-for-communization)
+	  (jrst 0 this-mapping-done)
+	(*iot 0 tt)
+	(jumpn tt communization-done) ; not a pdump file!
+	(movei tt 256.)
+	(hrri f -256. fxp)
+	(hrli f #o444400)
+	(*call 0 read-in-page-table)
+	  (*lose 0 #o1400)
+	(jumpn tt communization-done)	; didn't transfer 256. words
+	(movei f -256. fxp)	; ptr to page data
+	(movei r 1)		; page number in file
+	; TT has to be 0 here
+	;(setz tt)		; our page number
+    page-mapping-loop
+	(move d 0 f)				; page data
+	(jumple d page-map-next-1)	; negative = absolute, zero nxm
+	(andi d #o600000)
+	(caie d #o200000)	; read-only iff bit 2.8 = 1 and 2.9 = 0
+	  (jrst 0 page-map-next)
+	(move b (special *pure-suspend-ignore))
+    pure-suspend-ignore-loop
+	(hlrz c 0 b)
+	(camn tt 0 c)
+	  (jrst 0 page-map-next)
+	(hrrz b 0 b)
+	(jumpn b pure-suspend-ignore-loop)
+
+	(hrlzi d 0 tt)
+	(add d (% 0 0 t #o200))			; .rpmap,,t
+	(*suset 0 d)
+	(jumpl t page-map-next)
+	(*call 0 map-in-file-page)
+	  (*lose 0 #o1400)
+    page-map-next
+	(skipg d 0 f)
+	  (jrst 0 page-map-step)		; no page for this in file
+    page-map-next-1
+	(trne d #o600000)
+	  (aos 0 r)				; increment file page number
+    page-map-step
+	(aos 0 tt)				; inc pagenum
+	(caige tt 256.)
+	  (aoja f page-mapping-loop)	; increment data ptr & loop
+    this-mapping-done
+	(*close 0)
+	(pushj p intrel)
+	(sub fxp (% 0 0 260. 260.))	; 256. + 4 filename slots
+	(hrrz ar1 0 ar1)
+	(jumpn ar1 communization-loop)
+    communization-done
+    communize-exit
+	(move a (special *:truth))
+	(popj p)
+
+    unfrob-one-pathname-component
+	(jsp t fwcons-pop)
+	(movei b 0 a)
+	(jsp t fwcons-pop)
+	(jsp t %cons)
+	(jrst 0 0 r)
+
+    fwcons-pop
+	(pop fxp tt)
+	(jrst 0 fwcons)
+
+    filename-loses
+	(pushj p 6btnml)
+	(erint 2 (% sixbit |INCOMPLETE PATHNAME!|))
+	(movem a 0 p)
+	(jrst 0 filename-recover)
+
+    frob-one-pathname-part
+	(hlrz c 0 b)
+	(push fxp 0 c)
+	(hrrz c 0 b)
+	(push fxp 0 c)
+	(jrst 0 0 t)
+
+    map-in-file-page
+	(setz)
+	(sixbit corblk)
+	(movei 0 4096.)
+	(movei 0 #o777777) ; use me
+	(move 0 tt)	; my pagenum
+	(movei 0 0)	; channel number 0
+	(setz 0 r)	; page number in file
+
+    read-in-page-table
+	(setz)
+	(sixbit siot)
+	(movei 0 0)	; channel num
+	(move 0 f)	; byte pointer
+	(setz 0 tt)	; count
+
+    open-file-for-communization
+	(setz)
+	(sixbit open)
+	(movsi 0 4)	; unit image input
+	(movei 0 0)	; channel 0
+	(move 0 -260. fxp)	; device
+	(move 0 -258. fxp)	; fn1
+	(move 0 -257. fxp)	; fn2
+	(setz 0 -259. fxp)	; dir
+
+    nil))
