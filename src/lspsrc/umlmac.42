@@ -1,0 +1,352 @@
+;;;  UMLMAC    				-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;  *************************************************************************
+;;;  ***** MacLISP ******* Utility MacLisp MACros ****************************
+;;;  *************************************************************************
+;;;  ** (c) Copyright 1981 Massachusetts Institute of Technology *************
+;;;  *************************************************************************
+
+(herald UMLMAC /40)
+
+
+(include ((lisp) subload lsp))
+
+
+(eval-when (eval compile)
+  (mapc #'(lambda (x) (putprop x 'T 'SKIP-WARNING))
+	'(SELECTQ STRUCT-LET STRUCT-SETF))
+  (subload LOOP)
+  )
+
+
+(declare (*expr si:obsolete-form-msg))
+
+(def-or-autoloadable GENTEMP MACAID)
+(def-or-autoloadable SYMBOLCONC MACAID)
+(def-or-autoloadable si:obsolete-form-msg MLMAC)
+
+;;;; Random B.S.
+
+;;; MSETQ-..., for backwards compatibility
+;;; BIT-<TEST,SET,CLEAR>,  WHEN, UNLESS, 
+
+
+(defmacro MSETQ-CALL (&rest w)
+  (si:obsolete-form-msg 'msetq-call 'multiple-value)
+  `(MULTIPLE-VALUE ,.w))
+(defmacro MSETQ-RETURN (&rest w)
+  (si:obsolete-form-msg 'msetq-return 'values)
+  `(VALUES ,.w))
+
+
+;This is good.
+(DEFBOTHMACRO BIT-TEST (X Y)
+  `(NOT (= (BOOLE 1 ,X ,Y) 0)))
+;This should be dyked out.  (-> LOGIOR)
+(DEFBOTHMACRO BIT-SET (X Y)
+  `(BOOLE 7 ,X ,Y))
+;This too.  (-> LOGANDC1)
+(DEFBOTHMACRO BIT-CLEAR (X Y)
+  `(BOOLE 2 ,X ,Y))
+
+
+(DEFMACRO WHEN (P . C)
+  `(COND (,P . ,C)))
+(DEFMACRO UNLESS (P . C)
+  `(COND ((NOT ,P) . ,C)))
+
+;;;; SELECTQ
+
+(defvar SI:SELECTQ-TYPE-TESTERS '((FIXNUM . =) (BIGNUM . EQUAL)) )
+
+(defvar SI:SELECTQ-PREDICATES '((FIXNUM . FIXNUMP) (BIGNUM . BIGP) ))
+
+;;; We could all (FLONUM . =$) to SI:SELECTQ-TYPE-TESTERS, and
+;;;  (FLONUM . FLONUMP) to SI:SELECTQ-PREDICATES
+
+(defvar SI:SELECTQ-OTHERWISE-KEYWORDS '(T OTHERWISE :OTHERWISE))
+
+(defvar SI:SELECTQ-TYPEP-ALIST)
+
+(defvar SI:SELECTQ-VAR)
+
+
+(defmacro SELECTQ (key-form &rest clauses &aux types-used tem newclauses)
+  (cond 
+    ((or (null clauses) (memq (caar clauses) si:selectq-otherwise-keywords))
+      `(PROGN ,key-form () ,@(cdar clauses)))
+    ('T (loop as clause = (car clauses)
+	      as test = (car clause)
+	      until (memq test si:selectq-otherwise-keywords)
+	      as typed-alist = ()
+	      do (loop for key in (cond ((atom test) (list test)) (test))
+		       as type = (car (assq (typep key) 
+					    si:selectq-type-testers))
+		       unless (memq type types-used)
+		         do (push type types-used)
+		       unless (setq tem (assq type typed-alist))
+		         do (push (setq tem (ncons type)) typed-alist)
+		       do (nconc tem (list key)))
+	         (push (cons typed-alist (cdr clause)) newclauses)
+	      while (setq clauses (cdr clauses)))
+	(let* ((si:selectq-var (cond ((atom key-form) key-form) 
+				     ('T (si:gen-local-var () "Selector"))))
+	       (q (selectq-compile-1 newclauses types-used (cdar clauses))))
+	  (cond ((eq key-form si:selectq-var) q)
+		('T `((LAMBDA (,si:selectq-var) ,q) ,key-form)))))))
+
+(defun SELECTQ-COMPILE-1 (clauses types-used otherwisep)
+  (and (equal otherwisep '(())) (setq otherwisep ()))
+  (let ((si:selectq-typep-alist ())
+	(pre-test ())
+	(final-form ())
+	(type-vars ())
+	(type-vals ())
+	(type-inits ()))
+    (cond ((and (null (cdr types-used))
+		(or (null (car types-used)) (not otherwisep)))
+	     (or (null (car types-used))
+		 (setq pre-test `(,(cdr (assq (car types-used)
+					      si:selectq-predicates))
+				  ,si:selectq-var))))
+	  ('T (loop with var = ()
+		    for type in types-used
+		    when type
+		      do (si:gen-local-var var type)
+		         (push (cons type var) si:selectq-typep-alist)
+			 (push () type-vals)
+			 (push var type-vars)
+			 (push `(SETQ ,var 
+				      (,(cdr (assq type si:selectq-predicates))
+				       ,si:selectq-var))
+			       type-inits))))
+   (loop with nclauses = ()
+	 for xclause in clauses
+	 do (push (cons (cond ((not si:selectq-typep-alist)
+			         (selectq-one-hairy-predicate (caar xclause)))
+			      ('T (selectq-hairy-predicate (car xclause))))
+			(or (cdr xclause) '(())))
+		  nclauses)
+	 finally (and otherwisep (nconc nclauses (list `('T ,@otherwisep))))
+		 (setq final-form (cons 'cond nclauses)))
+    (and pre-test (setq final-form `(and ,pre-test ,final-form)))
+    (cond ((not (null (cdr type-inits))) (push 'OR type-inits))
+	  ('T (setq type-inits (car type-inits))))
+    `((LAMBDA ,type-vars ,type-inits ,final-form) ,@type-vals)))
+
+
+(defun SELECTQ-HAIRY-PREDICATE (type-alist &aux untyped)
+  (loop with clauses = ()
+	for entry in type-alist
+	do (cond ((not (null (car entry)))
+		    (push `(,(cdr (assq (car entry) si:selectq-typep-alist))
+			    ,(selectq-one-hairy-predicate entry))
+			  clauses))
+		 ('T (setq untyped entry)))
+	finally (and untyped
+		     (push (ncons (selectq-one-hairy-predicate untyped))
+			   clauses))
+		(return (cond ((cdr clauses)  `(COND ,.(nreverse clauses)))
+			      ((cdar clauses) `(AND ,.(car clauses)))
+			      ('T             (caar clauses))))))
+
+(defun SELECTQ-ONE-HAIRY-PREDICATE (entry)
+  ; Consider optimizing MEMQ.
+  (loop with fn = (or (cdr (assq (car entry) si:selectq-type-testers)) 'eq)
+	for k in (cdr entry)
+	collect `(,fn ,si:selectq-var ',k) into preds
+	finally (return (cond ((cdr preds) `(OR ,.preds))
+			      ('T (car preds))))))
+
+
+;;;; DOLIST, DOTIMES
+
+;(dolist (var list) body...)
+;Steps <var> through the elements of <list>.  <body> is a progbody;
+; tags and GO and RETURN are allowed.
+;In the future, there will be a third optional form in the iteration spec,
+; which will be evaluated to get the return value of the form.  This is
+; not supported currently to catch illegal or confused uses of that syntax
+; for some other purpose.
+(defmacro dolist (spec . body)
+  (cond ((or (atom spec)
+	     (atom (cdr spec))
+	     (cddr spec)
+	     (not (symbolp (car spec))))
+	 (error "Invalid binding spec for DOLIST" spec)))
+  (let ((l (gentemp)) (item (car spec)) (list (cadr spec)) (decls nil))
+    (setq decls (cond ((and body 
+			    (not (atom (car body)))
+			    (eq (caar body) 'DECLARE))
+		       (prog1 (cdar body) (pop body)))))
+    (cond ((not (null decls)) (setq decls (ncons `(DECLARE ,.decls)))))
+    `(do ((,l ,list (cdr ,l)) (,item)) ((null ,l))
+       ,.decls
+       (setq ,item (car ,l))
+       ,@body)))
+
+
+;(dotimes (var count) body...)
+;Repeat a number of times.  <count> evaluates to the number of times,
+; and <body> is executed with <var> bound to 0, 1, ...
+;Don't generate dummy variable if <count> is an integer.  We could also do
+; this if <count> were a symbol, but the symbol may get clobbered inside the
+; body, so the behavior of the macro would change.
+;In the future, there will be a third optional form in the iteration spec,
+; which will be evaluated to get the return value of the form.  This is
+; not supported currently to catch illegal or confused uses of that syntax
+; for some other purpose.
+(defmacro DOTIMES (iter-spec &rest body)
+  (let ((var nil)
+	(count nil)
+	(decls (cond ((and body 
+			   (not (atom (car body)))
+			   (eq (caar body) 'DECLARE))
+		      (prog1 (cdar body) (pop body))))))
+    (if (and (not (atom iter-spec))
+	     (not (atom (cdr iter-spec)))
+	     (null (cddr iter-spec)))
+	(setq var (car iter-spec) count (cadr iter-spec))
+	(error "Malformed iteration spec -- DOTIMES" iter-spec))
+    (or var (setq var (gentemp)))
+    (do () ((symbolp var))
+      (setq var (error '|Must be a variable -- DOTIMES|
+		       var 'WRNG-TYPE-ARG)))
+    (if (and (not (atom (setq count (macroexpand count))))
+	     (eq (car count) 'quote)
+	     (fixnump (cadr count)))
+	(setq count (cadr count)))
+    (let ((scrodp nil) (use-form count))
+      (if (not (fixnump count))
+	  (setq scrodp t use-form (gentemp)))
+      (let ((form `(DO ((,var 0 (1+ ,var)))
+		       ((NOT (< ,var ,use-form)))
+		     (declare (fixnum ,var) ,@decls)
+		     ,.body)))
+	(if scrodp
+	    `((lambda (,use-form)
+		(declare (fixnum ,use-form))
+		,form)
+	      ,count)
+	    form)))))
+
+
+;;;; with-open-file
+
+;;;					LispM Manual, 4th ed, p 365
+;;;
+;;; (WITH-OPEN-FILE ((var filename . options) . body) ...)
+;;;
+;;; Evaluates the BODY forms with the variable VAR bound to a stream which
+;;; reads or writes the file named by the value of FILENAME. OPTIONS may be
+;;; any number of keywords to be passed open. These options control whether
+;;; a stream is for input from an existing file or output to a new file,
+;;; whether the file is text or binary, etc. The options are the same as 
+;;; those which may be given to the OPEN function.
+;;;
+;;; When control leaves the body, either normally or abnormally (eg, via 
+;;; *THROW), the file is closed.
+;;;
+;;; NOTE: The LispM feature wherein the file is deleted if a throw is done
+;;;       is not currently supported and is not likely to be in the near
+;;;	  future. In any case, code using this compatibility macro should
+;;;	  not make assumptions about its behavior one way or the other on
+;;;	  this point. Please contact BUG-MACLISP if you have any troubles in
+;;;	  this regard.
+;;;
+;;; Because it always closes the file even when an error exit is taken,
+;;; WITH-OPEN-FILE is preferred over OPEN. Opening a large number of files
+;;; and forgetting to close them is anti-social on some file systems (eg, ITS)
+;;; because there are only a finite number of disk channels available which
+;;; must be shared among the community of logged-in users.
+;;;
+;;; Because the filename will be passed to OPEN, either a namestring or a
+;;; namelist will work. However, code intended to run on the LispM should
+;;; use only namestring format for files since that's all the LispM will
+;;; accept.
+;;;
+;;; NOTE: If an error occurs during the OPEN, the friendly behavior of the 
+;;;	  LispM (wherein a new filename is prompted for) will not occur.
+;;;	  Instead, the IO-LOSSAGE handler will run as for any OPEN, probably
+;;;	  resulting in an error breakpoint. Users are encouraged to verify
+;;;	  the existence of a file before invoking WITH-OPEN-FILE on it.
+
+(defmacro with-open-file ((var filename . options) &body body)
+  (cond ((not (symbolp var))
+	 (error
+	  "bad var. Syntax is: (with-open-file (var file . options) . body)"
+	  var)))
+  `(with-open-stream (,var (open ,filename ,@options))
+     ,@body)))
+
+
+;;;; with-open-stream
+
+;;;					Not documented in LispM Manual, 4th ed
+;;;
+;;; (WITH-OPEN-STREAM (var exp) . body)
+;;;
+;;; Like WITH-OPEN-FILE but exp may be an arbitrary form to accomplish the
+;;; OPEN. The result of evaluating EXP should be a file or sfa. BODY will be
+;;; evaluated in a context where VAR is bound to that file or sfa. 
+;;; Upon return, as with WITH-OPEN-FILE, the file or sfa will be closed.
+;;;
+;;; Note: This is a reasonably low-level primitive. If you don't know the
+;;;       which you want of WITH-OPEN-FILE or WITH-OPEN-STREAM, you almost
+;;;	  surely want WITH-OPEN-FILE.
+
+(defmacro with-open-stream (bindings &body body)
+  (cond ((or (atom bindings)
+	     (not (symbolp (car bindings))) ;var to bind
+	     (atom (cdr bindings))
+	     (not (null (cddr bindings))))
+	 (error "bad bindings. Syntax is: (WITH-OPEN-STREAM (var form) . body)"
+		bindings)))
+  (let (((var val) bindings)
+	(temp (gensym)))
+    `((lambda (,temp)
+	(unwind-protect (progn (without-interrupts (setq ,temp ,val))
+			       ((lambda (,var) ,@body) ,temp))
+			(if (or (filep ,temp)
+				(sfap  ,temp))
+			    (close ,temp))))
+      nil)))
+
+
+
+;;;; STRUCT-LET and STRUCT-SETF 
+
+
+(eval-when (eval compile)
+  (setq defmacro-displace-call '|defvst-construction/||)
+)
+
+
+;;; E.g. (STRUCT-LET (<structure-name> <struct-object-to-be-destructured>)
+;;		     ((var slot-name)			; or,
+;;		      (var-named-same-as-slot)		; or,
+;;		      var-named-same-as-slot 
+;;		      ...)
+;;		    . body)
+
+(defmacro STRUCT-LET ((struct-name str-obj) bvl &rest body)
+   (let (var slot-name accessor)
+	(setq bvl (mapcar 
+		   #'(lambda (e)
+		       (if (atom e) (setq e `(,e ,e)))
+		       (desetq (var slot-name) e)
+		       (or slot-name (setq slot-name var))
+		       (setq accessor (symbolconc struct-name '/- slot-name))
+		       `(,var (,accessor ,str-obj)))
+		   bvl))
+	`(LET ,bvl ,.body)))
+
+
+;;; E.g. (STRUCT-SETF (structure-name object) (slot-name value) ...)
+(defmacro STRUCT-SETF ((str-name str-obj) &rest l &aux slot-name accessor val)
+   `(PROGN ,. (mapcar 
+	       #'(lambda (x)
+		   (if (atom x) (setq x `(,x ,x)))
+		   (desetq (slot-name val) x)
+		   (setq accessor (symbolconc str-name '/- slot-name))
+		   `(SETF (,accessor ,str-obj) ,val))
+	       l)))
