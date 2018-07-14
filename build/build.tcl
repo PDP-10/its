@@ -93,7 +93,7 @@ proc build_macsyma_portion {} {
     }
     type "(mapcan "
     type "#'(lambda (x) (cond ((not (memq x\r"
-    type "'(TRANSS MTREE TRHOOK EDLM)\r"
+    type "'(TRANSS EDLM)\r"
     type ")) (doit x)))) (append todo todoi))"
     set timeout 1000
     expect {
