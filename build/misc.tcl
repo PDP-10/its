@@ -19,6 +19,15 @@ respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
 
+# system gen
+respond "*" ":midas /t dsk0:.;@ sysgen_syseng; system gen\r"
+respond "with ^C" "PI==4\r"
+respond "\n" "TTY==120\r"
+respond "\n" "DC==200\r"
+respond "\n" "UTC==210\r"
+respond "\n" "UTS==214\r\003"
+expect ":KILL"
+
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
 expect ":KILL"
 

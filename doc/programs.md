@@ -211,6 +211,7 @@
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.
 - SYSMSG, displays system messages.
+- SYSTEM GEN, low level DECtape formatting.
 - RABBIT, Scheme compiler.
 - TAGS, generate tags table for sources.
 - TALK/WHO/WHOJ/WHOM/USERS, list users.
