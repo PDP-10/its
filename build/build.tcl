@@ -77,13 +77,18 @@ proc build_macsyma_portion {} {
     respond "_" "\007"
     respond "*" "(load \"liblsp;iota\")"
     respond "274630" "(load \"maxtul;docgen\")"
-    respond "300052" "(load \"maxtul;mcl\")"
-    respond "302615" "(load \"maxdoc;mcldat\")"
-    respond "302615" "(load \"libmax;module\")"
-    respond "303351" "(load \"libmax;maxmac\")"
-    expect "307161"
+    respond "300064" "(load \"maxtul;mcl\")"
+    respond "302627" "(load \"maxdoc;mcldat\")"
+    respond "302627" "(load \"libmax;module\")"
+    respond "303363" "(load \"libmax;maxmac\")"
+    expect "307173"
     type "(todo)"
-    expect ") \r"
+    expect {
+	") \r" {
+	}
+        "NIL" {
+	}
+    }
     type "(todoi)"
     expect {
 	") \r" {
@@ -91,10 +96,7 @@ proc build_macsyma_portion {} {
         "NIL" {
 	}
     }
-    type "(mapcan "
-    type "#'(lambda (x) (cond ((not (memq x\r"
-    type "'(EDLM)\r"
-    type ")) (doit x)))) (append todo todoi))"
+    type "(mapcan #'(lambda (x) (doit x)) (append todo todoi))"
     set timeout 1000
     expect {
 	";BKPT" {
