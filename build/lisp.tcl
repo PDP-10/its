@@ -516,7 +516,6 @@ build_macsyma_portion
 build_macsyma_portion
 build_macsyma_portion
 build_macsyma_portion
-build_macsyma_portion
 
 respond "*" ":maxtul;maxtul\r"
 respond "MAXIMUM TOOLAGE>" "load-info\r"
