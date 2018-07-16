@@ -538,6 +538,8 @@ respond "142040" "(load \"aljabr;loader\")"
 respond "T" "(loader 1000)"
 respond "(C1)" "quit();"
 
+respond "*" ":copy aljabr;user profil,macsym\r"
+respond "*" ":link macsym;check fasl,ellen;\r"
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
 respond "*" ":link demo;manual demo,demo;manual >\r"
 respond "*" ":link manual;manual demo,demo;manual demo\r"
@@ -568,8 +570,6 @@ respond "_" "\032"
 type ":kill\r"
 respond "*" "macsym\013"
 respond "(C1)" "translate_file(\"tensor\\;ctensr funcs\");"
-respond "Type ALL;" "all;"
-respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
 respond ":KILL" "complr\013"
 respond "_" "share;ctensr fasl_tensor;ctensr trlisp\r"
@@ -586,10 +586,11 @@ respond "_" "share;eigen fasl_share;eigen trlisp\r"
 respond "_" "\032"
 type ":kill\r"
 
-### build share;array fasl for macsyma
+### build share;array fasl and ellen; check fasl for macsyma
 
 respond "*" ":maxtul;mcl\r"
 respond "_" "share;_maxsrc;array\r"
+respond "_" "ellen;check\r"
 respond "_" "\032"
 type ":kill\r"
 
