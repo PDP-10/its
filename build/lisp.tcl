@@ -537,7 +537,7 @@ respond "142040" "(load \"aljabr;loader\")"
 respond "T" "(loader 1000)"
 respond "(C1)" "quit();"
 
-respond "*" ":copy aljabr;user profil,macsym\r"
+respond "*" ":copy aljabr;user profil,macsym;\r"
 respond "*" ":link macsym;check fasl,ellen;\r"
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
 respond "*" ":link demo;manual demo,demo;manual >\r"
