@@ -29,6 +29,7 @@
 - BYE, say goodbye to user. Used in LOGOUT scripts.
 - CALPRT, decode a .CALL instruction's CALL block.
 - CC, C compiler (binary only).
+- CCONS, CONS console.
 - CHADEV, Chaosnet jobdev (binary only).
 - CHARFC/CHARFS, Chaos RFC.
 - CHASE, a 2-player maze game.

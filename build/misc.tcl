@@ -1082,6 +1082,12 @@ expect ":KILL"
 respond "*" ":palx sysbin;vxgp bin_sysen2;xgp\r"
 expect ":KILL"
 
+# CCONS.  STUFF prefers it to be in the CONS directory.
+respond "*" ":print cons;..new. (udir)\r"
+type ":vk\r"
+respond "*" ":palx cons;_lmcons;ccons\r"
+expect ":KILL"
+
 # 11BOOT
 respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
 respond "with ^C" "APR==0\r\003"
