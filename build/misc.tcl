@@ -1078,6 +1078,10 @@ expect ":KILL"
 respond "*" ":palx dsk0:.;_system;tv\r"
 expect ":KILL"
 
+# XGP-11.  STUFF prefers it to be SYSBIN; VXGP BIN.
+respond "*" ":palx sysbin;vxgp bin_sysen2;xgp\r"
+expect ":KILL"
+
 # 11BOOT
 respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
 respond "with ^C" "APR==0\r\003"
