@@ -82,6 +82,7 @@
 - FTPS, FTP server.
 - FTPU, FTP client.
 - GCMAIL, delete old files from .MAIL.
+- GEORGE, Locks DRAGON HOARD to hold PFTHMG at bay.
 - GETSYM, copy all symbols from running ITS to a file.
 - GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.
 - GLPDEV/XGPDEV, device for viewing GLPSPL/XGPSPL printer queues.
