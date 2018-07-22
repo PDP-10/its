@@ -1102,3 +1102,7 @@ respond "*" ":move sysbin;@ boot11, .;\r"
 # STUFF
 respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
 expect ":KILL"
+
+# GEORGE
+respond "*" ":midas sys3;ts george_syseng;george\r"
+expect ":KILL"
