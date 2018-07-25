@@ -1004,6 +1004,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
 expect ":KILL"
 
+# CARPET, remote PDP-11 debugger through Rubin 10-11 interface.
+respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
+expect ":KILL"
+
 # KL10 front end debugger.  Put it in the same directory as the
 # "MX" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
