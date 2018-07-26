@@ -197,6 +197,7 @@
 - MUDINQ, Muddle inquirer.
 - MUNCH, TV-munching square.
 - NAME, shows logged in users and locations, aka FINGER.
+- NAMDRG, free TV display.
 - NETIME, network time dragon.
 - NETRFC, serve ARPANET connections.
 - NEWDEC, DECtape converter.
