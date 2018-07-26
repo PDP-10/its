@@ -1,0 +1,1238 @@
+;-*- Mode: MIDAS -*-
+
+TITLE WEBSER	; Simple Web Server -- install as DEVICE;TCP SYN120
+
+PORT==80.	; Official TCP port for WWW Server
+
+$$TEST==1	; Provide some test code
+
+PDLSIZ==20			; Stack size
+VARSIZ==30			; Variable heap size
+PATSIZ==20			; Patch area size
+ARGSIZ==10			; Function arguments stack size
+
+SIXBP==440600			; SIXBIT Byte Pointer
+ASCBP==440700			; ASCII Byte Pointer
+SPACE==40			; ASCII Space Character
+
+NETI==1				; Network read socket
+NETO==2				; Network write socket
+FILI==3				; File to send
+LOGO==4				; Log file
+
+
+LOC 100				; Here we go now
+
+DEBUG:	1			; Non-zero when debugging, <0 when testing
+
+DEFDEV:	SIXBIT /DSK/
+DEFFN1:	SIXBIT /MAIN/
+DEFFN2:	SIXBIT />/
+DEFDIR:	SIXBIT /.WWW./
+
+PATCH:	BLOCK PATSIZ		; Patch area
+PDL:	BLOCK PDLSIZ		; Push down stack
+VARS::	BLOCK VARSIZ		; Variable heap
+ARGS:	BLOCK ARGSIZ		; Function arguments
+
+
+				; Don't change the order of these
+U.INS=1				; UUO instruction bits
+U.E=2				; UUO effective address
+U.AC=3				; UUO accumulator address
+
+ARGV=4				; Function argument and return value
+ARGP=5				; Function argument stack pointer
+IX=6				; Generic save before use register
+
+%%RMIN==7			; First scratch register to allocate
+%%RMAX==16			; Last scratch register to allocate
+
+P=17				; Stack pointer
+
+%%UINS==40			; UUO instruction pickup
+%%UMIN==50			; First available UUO
+%%UMAX==77			; Last available UUO
+
+;; Any PUSHJ P, may clobber scratch registers;
+;; but UUO's may only clobber their dedicated registers,
+;; and 0, of course.
+
+%%REG==%%RMAX			; Next scratch register
+DEFINE REG NAME,(N=1		; Allocate scratch register(s)
+ IFG %%REG+N-%%RMAX,%%REG==%%RMIN
+ NAME==%%REG
+ %%REG==%%REG+N
+TERMIN
+
+%%VAR==0			; Variable area offset
+DEFINE VAR NAME,(N=1		; Declare variable
+ %%HERE==.
+ LOC VARS+%%VAR
+ NAME: BLOCK N
+ LOC %%HERE
+ %%VAR==%%VAR+N
+ IFG %%VAR-VARSIZ,ERROR "Too many variables, need larger VARSIZ"
+TERMIN
+
+%%UUO==%%UMIN			; Next available UUO
+DEFINE UUO NAME			; Declare function as UUO handler
+ NAME=<%%UUO_33>
+ %%HERE==.
+ LOC U.TAB-%%UMIN+%%UUO		; Just the right spot
+ JRST %%HERE
+ LOC %%HERE
+ %%UUO==%%UUO+1
+ IFG %%UUO-%%UMAX,ERROR "Too many UUOs"
+TERMIN
+
+
+U.TAB:	REPEAT 100-%%UMIN,JSR DEATH	; UUOS JRST from here
+
+
+	; UUO dispatch, JSR here from 41
+U.DISP:	0
+	HRRZ U.E,%%UINS			; Effective Address
+	LDB U.AC,[.BP <17_27>,,%%UINS]	; AC field
+	LDB U.INS,[.BP <77_33>,%%UINS]	; OP field
+	CAIL U.INS,%%UMIN		; If it's a good UUO
+	 XCT U.TAB-%%UMIN(U.INS)	;  dispatch from table
+	JSR DEATH			; otherwise die
+	JSR DEATH			; don't try to get back here either
+
+
+	; Interrupt dispatch, entered from 42
+TSINT:	0
+	0
+	JSR DEATH		; Any interrupt is cause for death.
+
+
+%HERE==.
+
+LOC 40
+	0				; UUO instruction
+LOC 41
+	JSR U.DISP			; UUO dispatch vector
+LOC 42
+	TSINT				; Interrupt dispatch vector
+
+LOC %HERE
+
+
+XXX==-1					; Patch point indicator
+
+
+DEFINE NTH (ADR,N)			; Byte pointer to ILDB Nth char
+ IFG N-5,<NTH <ADR+1>,<N-5>>	.STOP	; First, add whole words
+ IFG N,<.IBP <NTH ADR,<N-1>>>	.STOP	; Then bytes
+ .ELSE,<ASCBP,,ADR>		TERMIN	; Recursively until done
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; UUO ZSO* -- Zero terminated String Output -- Send to NETO
+;;
+;;	Depending on AC bits:
+;;
+;;	01: (E) is ADR of ASCIZ or ADR of [Byte Pointer]
+;;	02: Quote with %xx
+;;	04: Quote with &item;
+;;	10: Unused, always 0
+;;
+
+	; Send (quoted) ASCIZ string to NETO
+	; BP argument in (E) is not updated
+	; Never Skips
+UUO ZSO
+U.ZSO:	TRNE U.AC,01			; If it's a pointer
+	 MOVE U.E,0(U.E)		;  then fetch it
+	TLNN U.E,-1			; If it's an address
+	 HRLI U.E,ASCBP			;  Make it a pointer
+	MOVEM U.E,U.TMP			; and free up U.E
+	CAIA				; Don't send it yet
+U.ZS1::	 .IOT NETO,U.E			;  but after we picked it up
+U.ZS2::	ILDB U.E,U.TMP			; Get a char
+	JUMPE U.E,UUOF			; All done if NUL
+	TRNE U.AC,02			; If we need to quote w/ %
+	 JRST [	CAIN U.E,"%
+		 MOVE U.E,[ASCIZ "%25"]
+		CAIN U.E,":
+		 MOVE U.E,[ASCIZ "%3a"]
+		CAIN U.E,";
+		 MOVE U.E,[ASCIZ "%3b"]
+		CAIN U.E,SPACE
+		 MOVE U.E,[ASCIZ "%20"]
+		CAIN U.E,.ASCVL /"
+		 MOVE U.E,[ASCIZ "%22"]
+		JRST .+1]
+	TRNE U.AC,04			; If we need to quote w/ &
+	 JRST [	CAIN U.E,"&
+		 MOVE U.E,[ASCIZ "&amp;"]
+		CAIN U.E,"<
+		 MOVE U.E,[ASCIZ "&lt;"]
+		CAIN U.E,">
+		 MOVE U.E,[ASCIZ "&gt;"]
+		JRST .+1]
+	TLNN U.E,77000			; If it wasn't quoted,
+	 JRST U.ZS1			;  then just send it
+
+U.ZSQ::	SETZ U.INS,			; Clear to receive
+	LSHC U.INS,7			; one character from U.E
+	.IOT NETO,U.INS			; Send it out
+	JUMPN U.E,U.ZSQ			; Until all done
+	JRST U.ZS2			; Continue
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; UUO CSO -- Constant length String Output -- Send to NETO
+;;
+;;	AC field is length, (E) is address of ASCIZ,
+;;	except when AC is 0, then (E) is [Len,,Adr],
+;;	and when AC is 1 or 2, (E) is one or two chars, left adjusted
+;;
+
+
+	; Send fixed length string to NETO
+	; Never skips
+UUO CSO
+U.CSO:	JUMPE U.AC,[			; If AC is 0
+		HLRZ U.AC,0(U.E)	;  Fetch Len
+		HRRZ U.E,0(U.E)		;  And addr
+		JRST U.CS1]
+	CAIG U.AC,2			; else if AC is 1 or 2
+	 JRST [	HRLZM U.E,U.INS		;  save the string
+		MOVEI U.E,U.INS		;  and a pointer to it
+		JRST U.CS1]
+U.CS1::	HRLI U.E,ASCBP			; Make a byte pointer
+U.CS2::	.CALL [	SETZ			; Blast it out
+		SIXBIT /SIOT/
+		%CLIMM,,NETO
+		%CLIN,,U.E
+		%CLIN,,U.AC ((SETZ))]
+	 JSR DEATH			;  or die
+	JUMPG U.AC,U.CS2		; Until all done
+	JRST 2,@U.DISP			; Return to caller
+
+
+	; READ Line from channel AC into ADR in (E)
+	; Cuts off CRLF, NUL-terminates
+	; Saves number of characters read into (ADR-1)
+	; Skips if EOF w/ no data
+UUO READLN
+U.READ:	SETZM -1(U.E)			; Clear char count
+	HRRM U.E,U.AOS			; Patch AOS for char count
+	SOS U.AOS			; Length goes before buffer
+	DPB U.AC,[.BP <17_27>,,U.RD2]	; Patch .IOT
+	HRLI U.E,ASCBP			; Point to the buffer
+U.RD1::	SETZ U.INS,			; No CR seen yet
+U.RD2::	.IOT XXX,U.AC			; Get from patched channel
+	JUMPN U.INS,[			; If we have a CR in memory
+		CAIN U.AC,^J		;  and we just got a NL
+		 JRST U.RDZ		;   then we're done
+		IDPB U.INS,U.E		;  Otherwise, write the CR out
+		XCT U.AOS]		;  and count it
+	CAIN U.AC,^M			; If it's CR
+	 JRST [	MOVE U.INS,U.AC		;  remember it
+		JRST U.RD2]		;  and keep looking
+	JUMPL U.AC,U.RDZ		; Bail on EOF
+	IDPB U.AC,U.E			; Write it out
+U.AOS::	AOS XXX				; Increment patched char count
+	JRST U.RD1			; and continue
+
+U.RDZ::	CAIL U.E,			; If we read anything
+	 AOS U.DISP			;  then win
+	SETZ U.AC,			; NUL-
+	IDPB U.AC,U.E			; terminate
+	JRST 2,@U.DISP			; return to caller
+
+
+	; PUT FileName to string
+	; BP in (AC), sixbit in (E)
+	; Writes FN to string, w/o trailing spaces,
+	; followed by single ascii char in  (AC+1)
+	; Leaves (AC) pointing at (i.e. after) the last character
+	; Never skips
+UUO PUTFN
+U.PUTF:	MOVE U.E,0(U.E)			; Fetch sixbit
+U.PF1::	JUMPE U.E,[			; If empty, then we're done
+		MOVE U.INS,1(U.AC)	;  Get terminator
+		IDPB U.INS,0(U.AC)	;  write it to string
+		JRST 2,@U.DISP]		;  Return to caller
+	SETZ U.INS,			; Clear to receive
+	LSHC U.INS,6			; one sixbit char from U.E
+	ADDI U.INS,40			; Convert to ASCII
+	IDPB U.INS,0(U.AC)		; Write to string
+	JRST U.PF1			; Next
+
+
+	; GET FileName from string
+	; BP in (E) -> sixbit in (AC), terminator in (AC+1)
+	; GET FileName from string
+	; BP in (E) -> sixbit in (AC), terminator in (AC+1)
+	; Skips leading spaces; terminates on :, ;, space, or non-sixbit
+	; Leaves (AC) pointing at (i.e. after) the last character
+	; Skips if gubbage in string
+UUO GETFN
+U.GETF:	SETZM 0(U.AC)			; Clear result
+	HRLI U.AC,SIXBP			; Point to output
+U.GFS::	MOVE U.INS,0(U.E)		; Remember where we were
+	ILDB 0(U.E)			; Get next character
+	CAIN SPACE			; If it's space
+	 JRST U.GFS			;  then keep skipping
+U.GF1::	JUMPE U.GFL			; Bail on NUL
+	CAIN ^Q				; If it's quoted
+	 JRST [	ILDB 0(U.E)		;  then get next char
+		JUMPE U.GFL		;  Bail on NUL, but
+		JRST U.GFC]		;  otherwise don't look at it
+	CAIL "a				; If it's between a
+	 CAILE "z			;  and z
+	  CAIA				;   then
+	   SUBI 40			;    convert to uppercase
+	CAILE SPACE			; If it's space, or below
+	 CAILE "_			;  or higher than underscore
+	  JRST U.GFZ			;   then it's a terminator
+	CAIE ":				; If it's a colon
+	 CAIN ";			;  or a semicolon
+	  JRST U.GFZ			;   then it's a terminator
+U.GFC::	TLNN U.AC,770000		; If we have six chars already
+	 JRST U.GFL			;  then the word is too long
+	SUBI 40				; Convert to sixbit
+	IDPB U.AC			; Put it away
+	MOVE U.INS,0(U.E)		; Remember where we were
+	ILDB 0(U.E)			; Get next char
+	JRST U.GF1			; And do it again
+
+U.GFL::	MOVEM U.INS,0(U.E)		; Too far; back up
+U.GFZ::	CAIE 				; If we saw NUL
+	 CAIL U.AC,			;  or some data
+	  AOS U.DISP			;   then win
+	MOVEM 1(U.AC)			; Return terminator
+	JRST 2,@U.DISP			; All done
+
+
+	; String Match -- compare string by BP in AC to pattern at E
+	; A "?" in the pattern matches any char
+	; Skip if all of the pattern matches all of the string
+	; Does not update AC
+UUO SMATCH
+U.SM:	HRLI U.E,ASCBP			; Point to pattern
+	MOVE U.AC,0(U.AC)		; Point to string
+U.SM1:	ILDB U.INS,U.E			; Get next pattern char
+	ILDB U.AC			; Get next string char
+	CAIN U.INS,			; If both pattern char
+	 JUMPE UUOS			;  and string char are NUL, then win
+	JUMPE UUOF			; If only string char is NUL, then lose
+	CAIE U.INS,"?			; If pattern char is wild
+	 CAMN U.INS			;  or same as the string char
+	  JRST U.SM1			;   then keep looking
+	JRST 2,@U.DISP			; No match, lose
+		 
+	; Cut String and Test for Space
+	; IDPB a NUL using the BP in (E),
+	; then skip unless the next character is space
+UUO CSTS
+U.CUT:	SETZ				; Grab a NUL
+	IDPB 0(U.E)			; Cut it off
+	MOVE U.E,0(U.E)			; Don't touch it anymore
+	ILDB U.E			; Get next char
+	CAIE SPACE			; If it's not space
+	 AOS U.DISP			;  then win
+	JRST 2,@U.DISP			; Return to caller
+
+
+	; Read one hex digit using BP in E, and shift it into AC
+	; Assumes "0 < "A < "a
+	; Never skips -- garbage in, garbage out
+UUO GETHEX
+U.GETH:	ILDB 0(U.E)			; get a digit
+	CAIL "a				; If it's lowercase
+	 SUBI <"a-10.>			;  convert to binary
+	CAIL "A				; If it's uppercase
+	 SUBI <"A-10.>			;  convert to binary
+	CAIL "0				; If it's decimal
+	 SUBI "0			;  convert to binary
+	EXCH 0(U.AC)			; Get result
+	LSH 4				; multiply by 16
+	IORM 0(U.AC)			; add to new bits
+	JRST 2,@U.DISP			; Return to caller
+
+
+	; MoVe Multiple
+	; AC is length, LH(E) is target adr, RH(E) is source adr
+	; Copy length words
+	; Never skips
+UUO MVM
+U.MVM:	MOVS U.E,0(U.E)			; BLT wants source,,target
+	ADD U.AC,U.E			; Add the target to the length
+	BLT U.E,-1(U.AC)		; And blammo!
+	JRST 2,@U.DISP			; All done
+
+
+	; MoVe Defaults
+	; AC is length, LH(E) is target adr, RH(E) is source adr
+	; Copy length words where target is zero
+	; Skips if all words in the result are non-zero
+UUO MVDEF
+U.MVD:	MOVN U.AC,U.AC			; Negate the length
+	MOVE U.E,0(U.E)			; target,,source in U.E
+	HLR U.INS,U.E			; ,,target in U.INS
+	HRL U.INS,U.AC			; -len,,target in U.INS
+	SETZ U.AC,			; No zeros found yet
+U.MV1::	MOVE 0(U.INS)			; Pick up target word
+	JUMPN U.MV2			; If it's 0,
+	MOVE 0(U.E)			;  pick up source
+	MOVEM 0(U.INS)			;  write to target
+	CAIN				;  If still zero
+	 SETO U.AC,			;   flag failure
+U.MV2::	AOS U.E				; Next source
+	AOBJN U.INS,U.MV1		; Next target
+	JUMPE U.AC,UUOS			; If no zeros, then win
+	JRST 2,@U.DISP			; Lose
+
+
+U.CONS:					; Expand literals here
+CONSTANTS
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Arbitrary length Send String macros -- SxxxX "foo"
+;; ASCIZ send macros -- ZSOxx ADR
+;;						Direct	Pointer
+;;						-----+	------+
+;;	SSX	Send String			ZSO  |	ZSOP  |
+;;	SLX	Send String,CRLF		ZSOH |	ZSOHP | %Quoted
+;;	SLSX	Send CRLF,String		ZSOQ |	ZSOQP | &Quoted
+;;	SLLX	Send String,CRLF,CRLF		ZSOB |	ZSOBP | Both
+;;
+
+DEFINE $ASC $PRE=[],*$STR*,$POST=[]	; Build string, like ASCII
+ .BYTE 7
+ $PRE
+ IRPC $C,,[$STR]
+  .ASCVL /$C ? TERMIN
+ $POST
+ .BYTE ? TERMIN
+
+DEFINE $CRLF				; Line terminator
+ ^M ? ^J ? TERMIN
+
+DEFINE $$CRLF
+ $CRLF ? $CRLF ? TERMIN
+
+IRP $P,,[[],P]
+ $$P==.IRPCNT_0
+ IRP $Q,,[[],H,Q,B]
+  $$Q==.IRPCNT_1
+  ZSO!$Q!!$P=<ZSO\<$$P\$$Q>_27> ? TERMIN ! TERMIN
+
+DEFINE SSX &%%TXT&		; Send String
+ %%LEN==<.LENGTH %%TXT>
+ IFE %%LEN,			JFCL					?.STOP
+ IFLE %%LEN-2,			CSO %%LEN,(ASCII %%TXT)			?.STOP
+ IFLE %%LEN-17,			CSO %%LEN,[ASCII %%TXT]			?.STOP
+.ELSE,				CSO [%%LEN,,[ASCII %%TXT]]		?TERMIN
+
+DEFINE SLX &%%TXT&		; Send Line
+ %%LEN==<<.LENGTH %%TXT>+2>
+ IFE %%LEN-2,			CSO 2,<^M_13>\<^J_4>			?.STOP
+ IFLE %%LEN-17,			CSO %%LEN,[$ASC ,%%TXT,$CRLF]		?.STOP
+ .ELSE,				CSO [%%LEN,,[$ASC ,%%TXT,$CRLF]]	?TERMIN
+
+DEFINE SLSX &%%TXT&		; Send Linefeed and String
+ %%LEN==<<.LENGTH %%TXT>+2>
+ IFE %%LEN-2,			CSO 2,<^M_13>\<^J_4>			?.STOP
+ IFLE %%LEN-17,			CSO %%LEN,[$ASC $CRLF,%%TXT,]		?.STOP
+ .ELSE,				CSO [%%LEN,,[$ASC $CRLF,%%TXT,]]	?TERMIN
+
+DEFINE SLLX &%%TXT&		; Send Line Doublespaced
+ %%LEN==<<.LENGTH %%TXT>+4>
+ IFLE %%LEN-17,			CSO %%LEN,[$ASC ,%%TXT,$$CRLF]		?.STOP
+ .ELSE,				CSO [%%LEN,,[$ASC ,%%TXT,$$CRLF]]	?TERMIN
+
+
+DEATH:	0
+	SKIPE DEBUG
+	 .VALUE
+	.LOGOUT
+	JRST DEATH+1		; For Justin
+
+LOSE:	0			; Tell loser what went wrong
+	JRST ERR500
+
+
+POPJS:	AOS 0(P)		; Success return here
+POPJF:	POPJ P,			; Error return here
+
+UUOS:	AOS U.DISP		; UUO success return here
+UUOF:	JRST 2,@U.DISP		; UUO error return here
+
+U.TMP:	0			; UUO scratch
+
+
+VAR FILDEV			; From URL
+VAR FILFN1			; From URL
+VAR FILFN2			; From URL
+VAR FILDIR			; From URL
+
+VAR DEV				; For opening the file
+VAR FN1				; For opening the file
+VAR FN2				; For opening the file
+VAR DIR				; For opening the file
+
+VAR HEADER			; Set by FILOPN; XCT to begin sending data
+VAR SENDER			; Set by FILOPN; XCT to send data
+VAR TAILER			; Set by FILOPN; XCT to end sending data
+VAR FL.OPN			; Set when FILI open
+
+IPADDR:	0			; Client IP address (permanent)
+
+NAMBUF:	BLOCK 6			; Expand DEV:DIR;FN1 FN2 here
+
+BUFLEN: 0			; Number of characters read by READLN
+BUFFER:				; I/O scratch until end of page
+BUFSIZ==<2000-.>*5		; Size in bytes
+IFG BUFSIZ-400,BUFSIZ==400	; Still seeing a tendency to crash ITS
+
+DEFINE PRINT% (#X#)
+ PRINTX "X"
+TERMIN
+IF2,{
+ PRINT% BUFSIZ
+ PRINTX " bytes I/O Buffer available
+"}
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+LOC 2000	; Pure code only from here on
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+GO:	MOVE P,[-PDLSIZ,,PDL]		; Set up call stack
+	MOVE ARGP,[-ARGSIZ,,ARGS]	; Set up data stack
+	.SUSET [.SMASK,,[%PIIOC]]	; Handle IOC interrupts
+	PUSHJ P,NETOPN			; Open network sockets
+
+AGAIN:	MOVE IX,[-VARSIZ,,VARS]		; All variables
+CLR::	SETZM 0(IX)			; Set to zero
+	AOBJN IX,CLR			; Next
+
+	READLN NETI,BUFFER		; Get command line
+	 JSR LOSE			;  or bitch
+
+	PUSHJ P,WRTLOG			; Memories are made of this
+
+	MOVE BUFFER
+	CAME [ASCII "GET /"]		; The only command we know
+	 JSR LOSE
+
+	PUSHJ P,PARSE			; Get DEV: DIR; FN1 FN1
+	 JSR LOSE			;  or screw it
+	PUSHJ P,FILOPN			; Open and recognize
+
+	PUSHJ P,@HEADER			; Send file format header
+	PUSHJ P,@SENDER			; then copy all data
+	PUSHJ P,@TAILER			; then send the file format trailer
+
+	; NYI: keep link open for further requests (need HTTP version)
+DONE:	.CLOSE FILI,			; Clean up.
+	.NETS NETO,			; Force the output.
+	.CLOSE NETO,			; Disconnect.
+	.CLOSE NETI,			; Disconnect.
+	.LOGOUT				; Buh-bye now
+	JSR DEATH			; Give up already
+
+
+REG TRIES	; Remaining retries
+REG WAIT	; Time to sleep between tries
+REG STAT	; Connection status
+
+	; Open network sockets NETI and NETO
+	; Never skips; dies if unsuccessful
+NETOPN:	.CALL [	SETZ			; Open network sockets
+		SIXBIT /TCPOPN/
+		%CLIMM,,NETI
+		%CLIMM,,NETO
+		%CLIMM,,PORT
+		%CLIN,,[-1]
+		%CLIN,,[-1] ((SETZ))]
+	 JSR DEATH			;  or die.
+	MOVEI TRIES,52			; About half a minute
+	SETZ WAIT,			; Start quickly, 
+NET1::	AOS WAIT			; but back off each time
+	MOVE WAIT			; wait
+	.SLEEP				; a little
+	.CALL [	SETZ
+		SIXBIT /WHYINT/
+		%CLIMM,,NETO
+		%CLOUT,,
+		%CLOUT,,STAT ((SETZ))]
+	 .LOSE %LSSYS			; Shouldn't happen
+	CAIE STAT,%NSOPN		; If the connection is open
+	 CAIN STAT,%NSRFN		;  or RFNM wait on write link
+	  CAIA				;   then don't
+	   SOJG TRIES,NET1		;    keep waiting
+	CAIG TRIES,			; If timed out
+	 JSR DEATH			;  then die
+	.CALL [	SETZ			; Get user IP address
+		SIXBIT /RFNAME/
+		%CLIMM,,NETI
+		%CLOUT,,
+		%CLOUT,,
+		%CLOUT,,
+		%CLOUT,,IPADDR ((SETZ))]
+	 .LOSE %LSSYS			; Shouldn't happen
+	POPJ P,				; All set
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; We recognize files by array lookup, finding the three pieces that will
+;; be used to send the file.  Only the non-zero pieces in a matching entry
+;; are used, and only if not already set; we'll keep looking until all
+;; three are set.  The lookup structure has five parts:
+;;
+;; LH(0)  Goes into (HEADER), XCT for sending the file header and prefix
+;; LH(1)  Goes into (SENDER), XCT for sending the file data
+;; LH(2)  Goes into (TAILER), XCT for ending the sending of the file
+;; 
+;; RH(0)  [FN1 ? FN2], or first 3 chars of DEV
+;; RJ(1)  XCT recognizer, skips unless matching
+;; RH(2)  Reserved for future use
+;;
+
+LOOKUP:	HDRHTM	,,[SIXBIT /.FILE.(DIR)/]
+	SNDDIR	,,
+	ENDHTM	,,
+	
+	HDRHTM	,,'DIR
+	SNDDIR	,,
+	ENDHTM	,,
+
+	HDRHTM	,,[SIXBIT /M.F.D.(FILE)/]
+	SNDMFD	,,
+	ENDHTM	,,
+
+	HDRHTT	,,
+	SNDTXT	,,IS.HTM
+	POPJF	,,
+
+	HDRTXT	,,
+	SNDTXT	,,
+	POPJF	,,
+
+	;; NYI: binary files
+
+N.LOOK==<.-LOOKUP>/3
+
+
+
+REG X,3		; Halfword(s) under investigation
+REG OPN		; From FL.OPN
+
+	; Match the open file with the lookup row addressed by ARGV
+	; If matching, set any unset header/sender/trailer fields
+	; Skip if any fields remain unset after copying
+LOOK:	MOVE OPN,FL.OPN			; Grab the file open flag
+	HRRZ X,0(ARGV)			; Get the file names
+	JUMPE X,LOOKC			; Zero matches anything
+	TRNE X,770000			; If it has high bits set
+	 JRST [	HLRZ DEV		;  then it must be a device
+		CAIE X			;  If doesn't match
+		 POPJ P,		;   then lose
+		JRST LOOKC]		;  else keep looking
+	MOVE 0(X)			; If the first filename
+	JUMPE LOOK2			; is zero, then it matches anything
+	CAME FN1			; if it doesn't match
+	 POPJ P,			;  then lose
+LOOK2::	MOVE 1(X)			; If the second filename
+	JUMPE LOOKC			; is zero, then it matches anything
+	CAME FN2			; if it doesn't match
+	 POPJ P,			;  then lose
+LOOKC::	HRRZ X,1(ARGV)			; Get the recognizer
+	JUMPE X,LOOKZ			; Zero matches anything
+	CAIE OPN,			; If no file open
+	 PUSHJ P,@X			;  or it doesn't recognize the file
+	  POPJ P,			;   then lose
+LOOKZ::	HLRZ X+0,0(ARGV)		; Get the header function
+	HLRZ X+1,1(ARGV)		; Get the sender function
+	HLRZ X+2,2(ARGV)		; Get the trailer function
+	MVDEF 3,[HEADER,,X]		; Copy those that are unset
+	 POPJ P,			;  lose if any still unset
+	JRST POPJS			; Win
+
+
+REG C		; Character to check
+REG REWIND	; 0 to seek to
+
+	; Skip if the open file looks like it contains HTML
+IS.HTM:	.IOT FILI,C			; Look at the first char
+	SETZ REWIND,
+	.ACCESS FILI,REWIND		; Rewind the file
+	CAIN C,"<			; If it looks like <html>
+	 AOS 0(P)			;  then win
+	POPJ P,				; Done
+
+
+	; Figure out what type of file we're dealing with
+	; Sets HEADER/SENDER/TAILER and FL.OPEN
+	; Never skips
+FILOPN:	MVDEF 4,[DEV,,FILDEV]		; Use URL
+	 MVDEF 4,[DEV,,DEFDEV]		;  if not all set, use defaults
+	  JSR LOSE			;   which should all be set
+
+	SKIPE FILFN1			; If FN1 in the URL
+	 PUSHJ P,TRYOPN			;  then try the file we were given
+	  SKIPN FL.OPN			; If not open yet
+	   PUSHJ P,DEFOPN		;  then try a bunch of defaults
+
+	PUSH P,IX			; Save
+	MOVE IX,[-N.LOOK,,LOOKUP]	; Loop over the lookup structure
+OPENL::	HRRZ ARGV,IX			; Get the row address
+	ADDI IX,2			; Three words per item
+	PUSHJ P,LOOK			; Check for a match
+	 AOBJN IX,OPENL			;  or keep looking
+	MOVE IX				; Remember the result
+	POP P,IX			; Restore
+	JUMPN POPJF			; If we found a match, we're done
+	JSR LOSE			; Shouldn't happen
+
+
+	; Try to open the specified file,
+	; set FL.OPEN or skip if unsuccessful (yes, backwards!)
+TRYOPN:	MOVE FN1			; If the filename
+	CAME [SIXBIT /..NEW./]		; doesn't look scary
+	 .CALL [SETZ			;  then open the target file
+		SIXBIT /OPEN/
+		%CLBIT,,.UAI
+		%CLIMM,,FILI
+		%CLIN,,DEV
+		%CLIN,,FN1
+		%CLIN,,FN2
+		%CLIN,,DIR ((SETZ))]
+	  JRST POPJS			;   or fail
+	SETOM FL.OPN			; We now have a file to look at
+	POPJ P,				; Win
+
+
+	; Try opening various defaults
+	; Never skips
+DEFOPN:	PUSHJ P,TRYOPN			; Open the default
+	 POPJ P,			;  and win
+	SKIPE FILFN1			; If the loser gave us a filename
+	 PUSHJ P,SET404			;  then we'll have to disappoint him
+
+	MVM 2,[FN1,,[SIXBIT /.FILE.(DIR)/]] ; Try listing the dir
+	PUSHJ P,TRYOPN			; Open it
+	 POPJ P,			;  and win
+	SKIPE FILDIR			; If the loser gave us a directory
+	 PUSHJ P,SET404			;  then we'll have to disappoint him
+
+	MVM 2,[FN1,,[SIXBIT /M.F.D.(FILE)/]] ; Try the master file directory
+	PUSHJ P,TRYOPN			; Open it
+	 POPJ P,			;  and win
+	PUSHJ P,SET404			; This is very disappointing
+
+	MOVSI 'DSK			; Try the DSK: MFD
+	CAIN DEV			; Unless if we already did
+	 JRST OPNZ			;  then no point trying again
+	MOVEM DEV
+	PUSHJ P,TRYOPN			; This is our last hope
+	 POPJ P,			;  and win
+OPNZ:	MOVEI POPJF			; Can't send any file
+	MOVEM SENDER			; so use null sender function
+	POPJ P,				; Give up
+
+
+	; Flag that we need to send the dreaded 404
+SET404:	MOVEI HDR404
+	MOVEM HEADER
+	MOVEI ENDHTM
+	MOVEM TAILER
+	POPJ P,
+
+
+REG FN,2	; FNn
+TT==FN+1	; Terminator
+REG RP		; Read pointer
+REG WP		; Write pointer
+REG C		; Character
+REG I		; FNn counter
+
+	; Get DEV: DIR; FN1 FN2
+	; Skips if something sensible could be parsed
+PARSE:	; First, pass by the command and slash
+	MOVE RP,[ASCBP,,BUFFER]		; Read from input buffer
+	MOVE WP,RP			; and write there too
+PAR1::	ILDB C,RP			; Look at next char
+	JUMPE C,POPJF			; Bail at end of string
+	CAIE C,"/			; If it's not a slash
+	 JRST PAR1			;  then keep looking
+
+	; Then, take out %xx and trailing http gubbage
+PARX::	ILDB C,RP			; Get next char
+	CAIN C,"%			; If it's a hex escape
+	 JRST [	SETZ C,			;  clear to receive
+		GETHEX C,RP		;  first hex digit
+		GETHEX C,RP		;  second hex digit
+		JRST PAR2]		;  skip looking for HTTP/
+	CAIN C,SPACE			; If it's a space
+	 SMATCH RP,[ASCIZ "HTTP/?.?"]	;  and there's a trailing HTTP/x.y
+	  CAIA				;   then
+	   SETZ C,	  		;    cut it off
+PAR2::	IDPB C,WP			; Write char back
+	JUMPN C,PARX			; continue until NUL
+
+	; Finally, pick out the file name parts
+	MOVE RP,[ASCBP,,BUFFER]		; Read from start of input again
+	MOVSI I,-4			; Count FN1 FN2 DIR
+PARN::	GETFN FN,RP			; Get next name
+	 POPJ P,			;  or bail
+	JUMPE FN,POPJS			; If no more, then win
+	CAIN TT,";			; If it's a semicolon
+	 JRST [	MOVEM FN,FILDIR		;  then it's a directory
+		JRST PARN]		;  Next
+	CAIN TT,":			; If it's a colon
+	 JRST [	MOVEM FN,FILDEV		;  then it's a device
+		JRST PARN]		;  Next
+	AOBJP I,POPJF			; next FNn or fail if too many
+	MOVEM FN,FILDEV(I)		; Save it
+	JUMPE FN,POPJS			; Win if terminated by NUL
+	JRST PARN			; Next
+
+
+REG TYP		; Html or text
+
+	; Send success HTTP header for html or text
+	; Never skips
+HDRHTT:	MOVEI TYP,[ASCIZ "text/html"]
+	CAIA
+HDRTXT:	 MOVEI TYP,[ASCIZ "text/plain"]
+	PUSH ARGP,TYP
+	MOVEI ARGV,[ASCIZ "200 ask and thou shalt receive"]
+	;;Fall thru to SNDHDR 		; HTTP header is all we need
+
+	; Send appropriate HTTP header, using
+	; response message ASCIZ ptr in ARGV, MIME type ASCIZ ptr in 0(ARGP)
+	; Never skips
+SNDHDR:	SSX "HTTP/1.0 "
+	ZSO 0(ARGV)
+	SLSX "Content-Type: "
+	POP ARGP,TYP
+	ZSO 0(TYP)			; Mime type
+	SLLX ""				; Double CRLF
+	POPJ P,
+
+
+	; Begin an html message
+	; Never skips
+HDRHTM:	PUSHJ P,HDRHTT
+	SSX "<HTML><HEAD><TITLE>"
+	PUSHJ P,NAMPRN
+	ZSOQ NAMBUF
+	SLX "</TITLE></HEAD><BODY>"
+	POPJ P,
+
+
+	; End an html message
+	; Never skips
+ENDHTM:	SLX "</BODY></HTML>"
+	POPJ P,
+
+
+	; Tell the loser it's not there
+	; Include directory listing, if available
+	; Never skips
+HDR404:	MOVEI ARGV,[ASCIZ "404 no such file or directory"]
+	MOVEI [ASCIZ "text/html"]
+	PUSH ARGP,
+	PUSHJ P,SNDHDR			; HTTP header
+	SLX "<HTML><HEAD>"
+	SLX "<TITLE>404 - Page not found</TITLE>"
+	SLX "</HEAD><BODY>"
+	SSX "<H1>Unable to retrieve "
+	PUSHJ P,NAMPRN			; Expand the file name
+	ZSOQ NAMBUF			; and send it out
+	SLX "</H1><FONT size=+1>"
+	SLX "The web site you seek<BR>"
+	SLX "cannot be located but<BR>"
+	SLX "endless others exist<BR><BR></FONT>"
+	POPJ P,
+
+
+	; Sorry bub, you're screwed
+	; Never returns
+ERR500:	SLLX "HTTP/1.0 500 Sorry ERRROR"
+	SKIPE DEBUG
+	 .VALUE				; Stop and have a look at it
+	JRST DONE			; Can't trust the stack, just bail
+
+
+VAR DIRFN1	; Point at FN1
+VAR DIRFN2	; Point at FN2
+VAR TAIL	; Point at remainder
+
+	; Copy directory listing from FILI to NETO,
+	; Making file names clickable html
+	; Never skips
+SNDDIR:	PUSH P,IX			; Save for use as header index
+	MOVEI IX,2			; Start with the header
+DIRR::	READLN FILI,BUFFER		; Read a line
+	 JRST [ SSX "</PRE>"		;  If we saw EOF,
+		POP P,IX		;  restore
+		POPJ P,]		;  and we're done
+	MOVE BUFLEN			; Check the length
+	CAIG 2				; If it's too short
+	 JRST DIRL			;  it's gubbage
+	LDB [NTH BUFFER,1]		; Fetch the first char
+	CAIE SPACE			; If it's not space
+	 JRST [	XCT [	JFCL		;  \
+			SSX "<B>"	;  Send appropriate header
+			SSX "<H2>"](IX)	;  /
+		ZSOQ BUFFER		;  Send the line
+		XCT [	CAIA		;  \
+			SLX "</B><PRE>"	;  Close the header
+			SSX "</H2>"](IX);  /
+		 SOS IX			;   Select the next header, unless 0
+		JRST DIRL]		;  And we're done
+	MOVE [NTH BUFFER,5]		; Just before FN1
+	MOVEM DIRFN1			; hold on to that
+	CSTS DIRFN1			; Cut and check	for space
+	 JRST DIRR			;  if so, skip it
+	MOVE [NTH BUFFER,14]		; Just before FN2
+	MOVEM DIRFN2			; hold on to that
+	CSTS DIRFN2			; Cut and check	for space
+	 JRST DIRR			;  if so, skip it
+	MOVE [NTH BUFFER,23]		; Just after FN2
+	MOVEM TAIL			; That's where the end begins
+	SETZ				; Grab a NUL
+	IDPB TAIL			; Chop, hold on to the pointer
+	ZSOQ BUFFER			; Send first part
+	SSX " "				; followed by a space
+	SETZM FILFN2			; No FN2 yet
+	PUSH ARGP,DIRFN1		; Where to get FN1
+	MOVEI ARGV,FILFN1		; Where to put FN1
+	PUSHJ P,SNDREF			; Send clickable FN1
+	PUSH ARGP,DIRFN2		; Where to get FN2
+	MOVEI ARGV,FILFN2		; Where to put FN2
+	PUSHJ P,SNDREF			; Send clickable FN2
+	ZSOQP TAIL			; Send the rest of the line
+DIRL::	SLX ""				; Followed by a CRLF
+	JRST DIRR			; Next line
+
+
+
+	; Copy MFD listing from FILI to NETO
+	; Never skips
+	; NYI: nicer layout
+SNDMFD:	PUSH P,IX			; Save
+	PUSHJ P,NAMPRN			; Format the name
+	SSX "<H2>SV "			; NYI: look up machine name
+	ZSOQ NAMBUF			; So much trouble for this header
+	SSX "</H2>"			; Close header
+	SETZM FILFN1			; Don't put FN1 in the listing
+	SETZM FILFN2			; Don't put FN2 in the listing
+MFDR::	READLN FILI,BUFFER		; Read one directory name
+	 JRST [	POP P,IX		;  or, restore
+		POPJ P,]		;  All done
+	MOVE IX,[ASCBP,,BUFFER]		; Point to it
+	ILDB IX				; If the first char
+	CAIE SPACE			; isn't space
+	 JRST MFDR			;  then skip the line
+	PUSH ARGP,IX			; Where to get DIR
+	MOVEI ARGV,FILDIR		; Where to put DIR
+	PUSHJ P,SNDREF			; Send clickable DIR
+	SLX ""				; Followed by a CRLF
+	JRST MFDR			; Next
+
+
+VAR DIRP	; BP to ASCIZ FNn
+REG FN,2	; SIXBIT FN, and terminator
+REG FNP		; Address of where to store FNn
+
+	; GET FNn from BP from ARGP stack, store at address in (ARGV)
+	; Send clickable reference to NETO
+	; Never skips
+SNDREF:	POP ARGP,FNP			; Where to put FNn
+	MOVEM FNP,DIRP			; We'll need this later
+	GETFN FN,FNP			; Scan the name
+	 SETZ FN,			;  Drats,
+	JUMPE FN,[			;  it's gubbage
+		ZSOQP DIRP		;  Send it plain
+		SSX " "			;  and a space
+		POPJ P,]		;  Done
+	MOVEM FN,0(ARGV)		; Save the FNn
+	SSX '<A HREF="/'		; Start the link
+	PUSHJ P,NAMPRN			; Expand the file names
+	ZSOH NAMBUF			; And send them out
+	SSX '">'			; Close the tag
+	ZSOQP DIRP			; Send the name to click on
+	SSX "</A> "			; Close the tag
+	POPJ P,				; All done
+
+
+REG T,2		; Name pointer
+TT==T+1		; Terminator character
+
+	; Write DEV: DIR; FN1 FN2 to NAMBUF
+	; Never skips
+NAMPRN:	MOVE T,[ASCBP,,NAMBUF]		; Scratch here
+	MOVEI TT,":
+	SKIPE FILDEV			; If there's a DEV
+	 PUTFN T,FILDEV			;  then write DEV:
+	MOVEI TT,";
+	SKIPE FILDIR			; If there's a DIR
+	 PUTFN T,FILDIR			;  then write DIR;
+	SKIPE TT,FILFN2			; If there's an FN2
+	 MOVEI TT,SPACE			;  then separate by space
+	SKIPE FILFN1			; If there's an FN1
+	 PUTFN T,FILFN1			;  then write FN1 (and space)
+	SETZ TT,
+	SKIPE FILFN2			; If there's an FN2
+	PUTFN T,FILFN2			;  then write FN2, NUL
+NAM2::	SETZ				; Always NUL-
+	IDPB T				; terminate
+	POPJ P,				; Done
+
+
+REG LEN		; Remaining bytes to be copied
+REG CNT		; Number of bytes per block
+REG BP		; Pointer to data to send
+REG NB		; Counter of bytes to send per call
+
+	; Copy file from FILI to NETO
+	; Never skips
+	; NYI: this might hang if file is truncated while we're sending it
+SNDTXT:	.CALL [ SETZ			; Get file length
+		SIXBIT /FILLEN/
+		%CLIMM,,FILI
+		%CLOUT,,LEN ((SETZ))]
+	 JSR DEATH			; Shouldn't happen
+	JUMPLE LEN,POPJF		; Bail if the file is empty
+TXT1::	MOVE CNT,LEN			; Try it all
+	CAILE CNT,BUFSIZ		; Unless if it's too much
+	 MOVEI CNT,BUFSIZ		;  then just some
+	MOVE BP,[ASCBP,,BUFFER]		; Point to I/O buffer
+	MOVE NB,CNT			; Read this many
+TXT2::	.CALL [	SETZ			; from the file
+		SIXBIT /SIOT/		
+		%CLIMM,,FILI
+		%CLIN,,BP
+		%CLIN,,NB ((SETZ))]
+	 JSR DEATH			;  or lose
+	JUMPG NB,TXT2			; Keep filling until full
+	MOVE BP,[ASCBP,,BUFFER]		; Point to I/O buffer
+	MOVE NB,CNT			; Send this many
+TXT3::	.CALL [	SETZ			; to the net
+		SIXBIT /SIOT/
+		%CLIMM,,NETO
+		%CLIN,,BP
+		%CLIN,,NB ((SETZ))]
+	 JSR DEATH			;  or lose
+	JUMPG NB,TXT3			; Keep pushing until all out
+	SUB LEN,CNT			; Count it off
+	JUMPG LEN,TXT1			; Try again if there's more
+	POPJ P,				; until done
+
+
+REG TRIES	; Number of retries left
+REG WAIT	; Sleep time after each try
+REG ERR		; file open error code
+REG BUFP	; Command buffer pointer
+REG LEN		; File length
+
+	; Append command string to log file
+	; Never skip
+WRTLOG:	MOVEI TRIES,52			; About half a minute
+	SETZ WAIT,			; Start quickly
+	AOS WAIT			; then back off
+LOG1::	.CALL [	SETZ			; Open the log file
+		SIXBIT /OPEN/
+		%CLBIT,,.UAO\%DOWOV	; Overwrite
+		%CLIMM,,LOGO
+		%CLIN,,[SIXBIT /DSK/]
+		%CLIN,,[SIXBIT /ACCESS/]
+		%CLIN,,[SIXBIT /LOG/]
+		%CLIN,,[SIXBIT /.WWW./]
+		%CLERR,,ERR ((SETZ))]
+	 JRST [	CAIE ERR,%ENAFL		;  If there was an error (not lock)
+		 POPJ P,		;   sorry, no log
+		MOVE WAIT		;  wait
+		.SLEEP			;  a little
+		SOJGE TRIES,LOG1	;  then try again
+		POPJ P,]		;  Timeout -- sorry, no log
+	.CALL [ SETZ			; Get file length
+		SIXBIT /FILLEN/
+		%CLIMM,,LOGO
+		%CLOUT,,LEN ((SETZ))]
+	 .LOSE %LSFIL			; Shouldn't happen
+	.ACCESS LOGO,LEN		; Seek to EOF
+
+	PUSHJ P,LOGTIM			; Log current time
+	PUSHJ P,LOGADR			; and the address of the caller
+LOG2::	MOVE BUFP,[ASCBP,,BUFFER]	; Point at command string
+LOG3::	.CALL [	SETZ
+		SIXBIT /SIOT/
+		%CLIMM,,LOGO
+		%CLIN,,BUFP
+		%CLIN,,BUFLEN ((SETZ))]
+	 .IOT LOGO,["?]			;  oh, blah
+
+LOGZ::	.IOT LOGO,[^M]			; CR
+	.IOT LOGO,[^J]			; LF
+	.CLOSE LOGO,
+	POPJ P,				; All done
+
+
+REG DTM,2	; Date and time
+REG DTP		; Byte pointer to date and time
+REG SP		; Byte pointer to separators
+REG SEP		; Separator character
+REG C		; Datetime character
+
+	; Write timestamp to LOG, as 'YYYY-MM-DD hh:mm:ss '
+	; Never skips
+LOGTIM:	.IOT LOGO,["2]			; Hardcode the century
+	.IOT LOGO,["0]			; this will have to change eventually
+	.RDATIM DTM,			; get date and time
+	EXCH DTM,DTM+1			; We want the date first
+	MOVE DTP,[SIXBP,,DTM]		; point to the date
+	MOVE SP,[ASCBP,,[ASCIZ "-- :: "]] ; point to the separators
+TIMT::	ILDB SEP,SP			; Get a separator
+	JUMPE SEP,POPJF			; If it's NUL, the timestamp is done
+	ILDB C,DTP			; Get first digit
+	ADDI C,40			; Convert to sixbit
+	.IOT LOGO,C			; Write it out
+	ILDB C,DTP			; Get next digit
+	ADDI C,40			; Convert to sixbit
+	.IOT LOGO,C			; Write it out
+	.IOT LOGO,SEP			; Write the separator
+	JRST TIMT			; Next date part
+
+
+REG N1,4	; Hundreds digit
+N2==N1+1 	; Tens digit
+N3==N2+1	; Ones digit, reused below
+IP==N3+1	; IP address
+C==IP-1		; Shift digits from IP
+REG WIDTH	; Remaining field width
+REG IPP		; Byte ptr to IP# parts
+REG I		; Loop counter
+
+	; Write IPADDR to LOG, nicely formatted and padded to fix size
+	; Never skips
+LOGADR:	MOVEI WIDTH,16.			; Print fix width
+	MOVE IP,IPADDR			; Get the address
+	JUMPE IP,ADRS			; If it's 0, then leave it blank
+	TLNE IP,740000			; If it's more than 32 bits
+	 JRST ADR8			;  then it's not an IP#
+	MOVE IPP,[401000,,IPADDR]	; Point to address parts
+	MOVEI I,4			; Parts count
+ADRP::	ILDB N2,IPP			; Get next address part
+	IDIVI N2,10.			; Last digit in N3
+	MOVE N1,N2			; Make room
+	IDIVI N1,10.			; Digits now in N1-N3
+	JUMPE N1,ADR2			; Unless the first digit is a zero
+	ADDI N1,"0			;  convert to ascii
+	.IOT LOGO,N1			;  write it to the log
+	SOS WIDTH			;  and count it
+	CAIA				;  and keep writing
+ADR2::	 JUMPE N2,ADR1			; Unless the second digit is a zero
+	ADDI N2,"0			;  convert to ascii
+	.IOT LOGO,N2			;  write it
+	SOS WIDTH			;  and count it
+ADR1::	ADDI N3,"0			; Convert the last digit to ascii
+	.IOT LOGO,N3			; write it
+	SOS WIDTH			; and count it
+	SOJE I,ADRS			; Unless it's the last part
+	.IOT LOGO,[".]			;  write a separator
+	SOJG WIDTH,ADRP			;  count, and next
+	JSR DEATH			; Shouldn't happen
+
+ADR8::	MOVEI I,12.			; 12 octal digits in 36 bits
+	SUB WIDTH,I			; takes up so much space
+ADRN::	SETZ C,				; Clear to receive
+	LSHC C,3			; one digit from IP
+	ADDI C,"0			; Convert to ASCII
+	.IOT LOGO,C			; and write to log
+	SOJG I,ADRN			; Next digit
+ADRS::	.IOT LOGO,[SPACE]		; Pad with spaces
+	SOJG WIDTH,ADRS			; until field width reached
+	POPJ P,				; All done
+
+CONST:					; Expand literals here
+CONSTANTS
+
+
+IFN $$TEST,{				; Just Testing
+
+LOC 4000				; Next page
+
+REG BP,2
+TT==BP+1
+REG FN
+
+	; Exercise some UUOs
+UUOTST:	SETOM DEBUG
+	.OPEN NETO,[.UAO,,'TTY]
+	 .LOSE %LSFIL
+	IRP SSS,,[SSX,SLX,SLSX,SLLX]
+	 ZSO [ASCIZ "Testing SSS"]
+	 SLSX ""
+	 SSS ""
+	 SSS "A"
+	 SSS "BC"
+	 SSS "DEFGHI"
+	 SLX ""
+	TERMIN
+
+	SLSX "!"
+	SETZM BUFFER+1
+	MOVEI TT,"!
+	MOVE BP,[ASCBP,,BUFFER]
+	PUTFN BP,[SIXBIT /PUTFN/]
+	ZSO BUFFER
+
+	SLSX "!"
+	SETZM BUFFER+1
+	MOVE BP,[ASCBP,,[ASCIZ "GETFN"]]
+	GETFN FN,BP
+	CAIN TT,
+	 MOVEI TT,"!
+	MOVE BP,[ASCBP,,BUFFER]
+	PUTFN BP,FN
+	ZSO BUFFER
+
+	SLX ""
+	MOVE BP,[ASCBP,,[ASCIZ "FROBOZZ"]]
+	IRP PATTERN,,["FROBO","FROBOZZ","FROBOZZNIK","FROBOLL","FROBO??"]
+	 SSX PATTERN
+	 SMATCH BP,[ASCIZ PATTERN]
+	  JRST [SLX " LOSES"
+		JRST .+2]
+	   SLX " WINS"
+	TERMIN
+
+	SLLX ""	
+	ZSOBP [ASCBP,,[ASCIZ /(<&> %")/]]
+	SLLX ""
+	SLLX "That's all, folks!"
+	.VALUE
+	JRST UUOTST
+
+
+	; Get command from TTY instead of net
+WWWTST:	MOVE P,[-PDLSIZ,,PDL]
+	MOVE ARGP,[-ARGSIZ,,ARGS]
+	SETOM DEBUG
+	.OPEN NETI,[.UAI,,'TTY]
+	 .LOSE %LSFIL
+	.OPEN NETO,[.UAO,,'TTY]
+	 .LOSE %LSFIL
+	SSX "HTTP:="
+	JRST AGAIN
+
+T.CONS:
+}
+
+END GO

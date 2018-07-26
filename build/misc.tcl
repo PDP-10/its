@@ -310,6 +310,10 @@ respond "*" ":midas sysbin;_sysnet;datsrv\r"
 expect ":KILL"
 respond "*" ":link device;tcp syn015,sysbin;datsrv bin\r"
 
+# WEBSER
+respond "*" ":xfile hack;make webser"
+expect "*:kill"
+
 # mailt
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
