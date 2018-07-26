@@ -248,6 +248,7 @@
 - VV/VJ/DETREE, list jobs.
 - XHOST, tool for replacing host nicknames with real hostnames.
 - WA, a Wumpus advisor game.
+- WEBSER, HTTP server.
 - WHAT, humorous quips to various "what" questions.
 - WHO%, list index/uname/jname/%time in sorted list.
 - WHOLIN, mode line for display terminals (with date/time/job/etc info).
