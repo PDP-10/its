@@ -14,6 +14,11 @@ type one of:
 
 Checkers program by Alan Baisley. To play, type `:games;ckr`.
 
+### ITSter
+
+Donald Fisk wrote this implementation of a classic puzzle game for ITS
+in 2002. To play, type `:q games;itster (init)`.
+
 ### Jotto
 
 Two players, one of which is the computer, competes in first guessing
