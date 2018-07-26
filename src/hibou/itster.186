@@ -1,0 +1,341 @@
+;;; -*-LISP-*-
+;;;
+;;; Copyright (C) 2002 Donald Fisk
+;;;
+;;; This program is free software; you can redistribute it and/or modify
+;;; it under the terms of the GNU General Public License as published by
+;;; the Free Software Foundation; either version 2 of the License, or
+;;; (at your option) any later version.
+;;;
+;;; This program is distributed in the hope that it will be useful,
+;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;;; GNU General Public License for more details.
+;;;
+;;; You should have received a copy of the GNU General Public License
+;;; along with this program; if not, write to the Free Software
+;;; Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
+;;; USA
+
+;;;; The original game was written Alexey Pajitnov, Dmitry Pavlovsky
+;;;; and Vadim Gerasimov.   This implementation is independent of it,
+;;;; based on a specification I arrived at through playing the game
+;;;; often.   It is written in Maclisp for ITS.   To run it, start
+;;;; Maclisp `:LISP' and type `(load 'itster)' and then `(itster)' at
+;;;; the prompt.
+
+;;;; (rotation x y) contains the coordinates that the tile at (x . y) is
+;;;; rotated to, relative to the top left corner of the 4x4 grid
+;;;; containing the tile.
+
+(array rotation t 4 4)
+
+(defun init-rotation ()
+  (do ((x 0 (1+ x)))
+      ((= x 4))
+    (do ((y 0 (1+ y)))
+	((= y 4))
+      (store (rotation x y) (cons (- 3 y) x)))))
+
+(array shapes t 7)
+
+(defun init-shapes ()
+  (store (shapes 0) '((0 . 1) (1 . 1) (2 . 1) (3 . 1)))
+  (store (shapes 1) '((0 . 1) (1 . 1) (2 . 1) (1 . 2)))
+  (store (shapes 2) '((0 . 1) (1 . 1) (2 . 1) (2 . 2)))
+  (store (shapes 3) '((0 . 1) (1 . 1) (1 . 2) (2 . 2)))
+  (store (shapes 4) '((1 . 1) (2 . 1) (1 . 2) (2 . 2)))
+  (store (shapes 5) '((2 . 1) (3 . 1) (1 . 2) (2 . 2)))
+  (store (shapes 6) '((2 . 1) (0 . 2) (1 . 2) (2 . 2))))
+		   
+;;;; *current-shape* (i.e. the one currently falling) is a list of the
+;;;; coordinates of its tiles.   *x* and *y* are the coordinates of the top
+;;;; left corner of the 4x4 grid the shape is in.   The grid is useful when
+;;;; calculating the initial position of the shape, and when rotating it.
+
+(defvar +grid-x+ 10.)
+(defvar +grid-y+ 5)
+(defvar +num-columns+ 10.)
+(defvar +num-rows+ 22.)
+(defvar *current-shape*)
+(defvar *next-shape*)
+(defvar *x*)
+(defvar *y*)
+(defvar *score*)
+
+;;;; *heap* initially stores the positions of imaginary tiles at the
+;;;; perimeter of the rectangle the shapes fall in.   During the game,
+;;;; new tiles are added to heap when shapes land, and tiles are deleted
+;;;; from heap when rows are completely filled.
+
+(defvar *heap*)
+
+(defun init-heap ()
+  (setf *heap* '())
+  ;; Push on tiles to mark the perimeter of the grid.   The y coord of
+  ;; the last tile pushed = +num-rows+.   We can use this to tell which tiles
+  ;; fell and which tiles are perimeter markers.
+  (do ((y 0 (1+ y)))
+      ((= y +num-rows+))
+    (push (cons -1 y) *heap*)
+    (push (cons +num-columns+ y) *heap*))
+  (do ((x 0 (1+ x)))
+      ((= x +num-columns+))
+    (push (cons x +num-rows+) *heap*)))
+
+(defun make-random-shape ()
+  (mapcar #'(lambda (tile)
+	      (cons (+ *x* (car tile))
+		    (+ *y* (cdr tile))))
+	  (shapes (random 7))))
+
+(defun print-next-shape ()
+  (cursorpos 0 (* 2 +grid-x+))
+  (princ "Next:")
+  (draw-shape (mapcar #'(lambda (tile)
+			  (cons (car tile) (- (cdr tile) 5)))
+		      *next-shape*)))
+
+(defun get-new-current-shape ()
+  (setf *x* 3 *y* 0)
+  (if (boundp '*next-shape*)
+      (clear-shape (mapcar #'(lambda (tile)
+			       (cons (car tile) (- (cdr tile) 5)))
+			   *next-shape*))
+      (setf *next-shape* (make-random-shape)))
+  (setf *current-shape* *next-shape* *next-shape* (make-random-shape))
+  (print-next-shape)
+  *current-shape*)
+
+;;; Tries to move shape one column left (x-move = -1), one column right
+;;; (x-move = 1) or one row down (y-move = 1).
+;;; Returns NIL on failure.
+(defun move-shape (x-move y-move)
+  ;; First, compute the new positions of the tiles.
+  (let ((new-shape (mapcar #'(lambda (tile)
+			       (cons (+ x-move (car tile))
+				     (+ y-move (cdr tile))))
+			   *current-shape*)))
+    ;; See if any new positions are on the heap.
+    (do ((tiles new-shape (cdr tiles)))
+	((or (null tiles)
+	     ;; New tile position already on heap?
+	     (member (car tiles) *heap*))
+	 (if (null tiles)
+	     ;; No new tile positions on heap -- move it (and return
+	     ;; new value of *y*).
+	     (setf *current-shape* new-shape
+		   *x* (+ x-move *x*) *y* (+ y-move *y*))
+	     ;; Fail -- do nothing and return NIL.
+	     NIL)))))
+
+;;; Tries to rotate shape.   Returns NIL on failure.
+(defun rotate-shape ()
+  (let ((new-shape (mapcar #'(lambda (tile)
+			       ;; Nasty, but might as well reuse lambda var.
+			       (setf tile
+				     (rotation (- (car tile) *x*)
+					       (- (cdr tile) *y*)))
+			       (cons (+ (car tile) *x*)
+				     (+ (cdr tile) *y*)))
+			   *current-shape*)))
+    ;; See if any new positions are on the heap.
+    (do ((tiles new-shape (cdr tiles)))
+	((or (null tiles)
+	     ;; New tile position already on heap?
+	     (member (car tiles) *heap*))
+	 (if (null tiles)
+	     ;; No tile positions on heap -- return new value of
+	     ;; *current-shape*.
+	     (setf *current-shape* new-shape)
+	     ;; Fail -- do nothing and return NIL.
+	     NIL)))))
+
+(defun draw-tile (tile)
+  ;; Draw new position.
+  (cursorpos (+ +grid-y+ (cdr tile))
+	     (* 2 (+ +grid-x+ (car tile))))
+  (princ '[]))
+
+(defun draw-shape (shape) (mapc #'draw-tile shape))
+
+(defun clear-shape (shape)
+  ;; Clear previous positions if it can drop.
+  (mapc #'(lambda (tile)
+	    (cursorpos (+ +grid-y+ (cdr tile))
+		       (* 2 (+ +grid-x+ (car tile))))
+	    (princ '|  |))
+	shape))
+
+(defun remove-duplicates (x)
+  (cond ((null x) x)
+	((member (car x) (cdr x)) (remove-duplicates (cdr x)))
+	(T (cons (car x) (remove-duplicates (cdr x))))))
+
+(defun remove-whole-rows ()
+  ;; Get the rows *current-shape* helped to fill.
+  (do ((rows (remove-duplicates (mapcar #'cdr *current-shape*))
+	     (cdr rows))
+       (max-row 0))
+      ((null rows)
+       ;; Redraw heap.   First clear down to max-row.
+       (do ((row 0 (1+ row)))
+	   ((> row max-row))
+	 (cursorpos (+ +grid-y+ row) (* 2 +grid-x+))
+	 (princ "                    "))
+       ;; Now redraw the tiles down to max-row.
+       (do ((heap *heap* (cdr heap)))
+	   ((= (cdar heap) +num-rows+))
+	 (if (<= (cdar heap) max-row)
+	     (draw-tile (car heap)))))
+    (do ((heap *heap* (cdr heap))
+	 (count 0))
+	((= (cdar heap) +num-rows+)			;From here on, it's
+	 (if (= count +num-columns+)			; perimeter.
+	     ;; Row full.   Update score.
+	     (progn (setf *score* (1+ *score*))
+		    ;; Output new score at top of screen.
+		    (cursorpos 0 0)
+		    (format t "Score: ~a" *score*)
+		    ;; Update max row.
+		    (setf max-row (max max-row (car rows)))
+		    (do ((heap *heap* (cdr heap)))
+			((= (cdar heap) +num-rows+))
+		      (cond ((< (cdar heap) (car rows))
+			     ;; Shift tile down a row.
+			     (setf (cdar heap) (1+ (cdar heap))))
+			    ((= (cdar heap) (car rows))
+			     ;; Delete tile.
+			     (setf *heap* (delq (car heap) *heap*)))))
+		    ;; Go through (cdr rows), shifting down rows above
+		    ;; (car rows).
+		    (do ((remaining-rows (cdr rows) (cdr remaining-rows)))
+			((null remaining-rows))
+		      (if (< (car remaining-rows) (car rows))
+			  (setf (car remaining-rows)
+				(1+ (car remaining-rows))))))))
+      (if (= (cdar heap) (car rows))
+	  ;; Heap tile was in row.
+	  (setf count (1+ count))))))
+
+;;; Lowers shape and then responds to luser specified actions.
+;;; Returns NIL if the game is over (*y* = 0).
+(defun redraw-shape ()
+  (clear-shape *current-shape*)
+  ;; Always try to lower shape one line.
+  (if (or (move-shape 0 1)
+	  ;; Add shape to heap if it can't drop any further.
+	  (progn (mapc #'(lambda (tile) (push tile *heap*))
+		       *current-shape*)
+		 ;; Redraw the old shape.
+		 (draw-shape *current-shape*)
+		 (remove-whole-rows)
+		 (if (zerop *y*)
+		     NIL				;Fail => game over.
+		     ;; Create a new shape.
+		     (get-new-current-shape))))
+      ;; Still in the game.   Listen for luser specified actions.
+      (do ((char-to-read-p (listen) (listen))
+	   (key))
+	  ((zerop char-to-read-p)
+	   (draw-shape *current-shape*))
+	(setf key (readch))
+	;; These are not easy to locate and delete from screen, so use
+	;; unobtrusive ones.
+	(cond ((eq key '/,) (move-shape -1 0))		;Left 1.
+	      ((eq key '/.) (move-shape 1 0))		;Right 1.
+	      ((eq key '/`)
+	       ;; Lower shape.
+	       (do ()
+		   ((null (move-shape 0 1)))))
+	      ((eq key '/') (rotate-shape))
+	      ((eq key '/)
+	       ;; Useful if something overwrites screen.
+	       (refresh))))))
+
+(defun refresh ()
+  (cursorpos 'c)					;Clear screen.
+  (draw-perimeter)
+  (do ((heap *heap* (cdr heap)))
+      ((= (cdar heap) +num-rows+))
+    (draw-tile (car heap)))
+  (cursorpos 0 0)
+  (format t "Score: ~a" *score*)
+  (print-next-shape))
+
+(defun draw-perimeter ()
+  (cursorpos (1- +grid-y+) (1- (* 2 +grid-x+)))
+  (princ "+--------------------+")
+  (do ((line +grid-y+ (1+ line)))
+      ((= line (+ +grid-y+ +num-rows+))
+       (cursorpos line (1- (* 2 +grid-x+)))
+       (princ "+--------------------+"))
+    (cursorpos line (1- (* 2 +grid-x+)))
+    (princ "|                    |")))
+
+(defun itster ()
+  (cursorpos 'c)					;Clear screen.
+  (format t "~%To move left,          press ,~%~%")
+  (format t "To move right,         press .~%~%")
+  (format t "To rotate,             press '~%~%")
+  (format t "To drop onto the heap, press `~%~%")
+  (format t "Enter speed (if unsure, make it 5 or 10): ")
+  (let ((tick-length (quotient 1.0 (read))))
+    (cursorpos 'c)					;Clear screen.
+    (draw-perimeter)
+    (init-heap)
+    (init-rotation)
+    (init-shapes)
+    (setf *score* 0)
+    ;; Output new score at top of screen.
+    (cursorpos 0 0)
+    (format t "Score: ~a" *score*)
+    (get-new-current-shape)
+    (do ()
+	((null (redraw-shape)) (update-scores *score*))
+      (sleep tick-length))))
+
+(defun update-scores (score)
+  (let* ((f (open '(itster scores) 'in))
+	 ;; Read old hall of fame.
+	 (scores (read f)))
+    (close f)
+    (setf scores
+	  (sort (cons (list score
+			    (status uname)
+			    (status dow)
+			    (status date)
+			    (status daytime))
+		      scores)
+		#'(lambda (row1 row2) (> (car row1) (car row2)))))
+    (if (> (length scores) 10)
+	;; Remove lower score.
+	(rplacd (nthcdr 9 scores) '()))
+    (cursorpos 'c)					;Clear screen.
+    (format t "ITSter Hall of Fame~%===================~%")
+    (mapc #'(lambda (line)
+	      (let* ((score (car line))
+		     (uname (cadr line))
+		     (dow (caddr line))
+		     (date (cadddr line))
+		     (day (caddr date))
+		     (daytime (car (cddddr line))))
+		(format t
+			"~a ~a ~a ~a~a ~a, ~a ~a:~a:~a~%"
+			score uname dow
+			day
+			(if (member day '(11. 12. 13.))
+			    "th"
+			    (nth (remainder day 10.)
+				 '("th" "st" "nd" "rd" "th"
+					"th" "th" "th" "th" "th")))
+			(nth (1- (cadr date))
+			     '(Jan Feb Mar Apr May Jun
+				   Jul Aug Sep Oct Nov Dec))
+			(+ 2000. (car date))
+			(car daytime) (cadr daytime) (caddr daytime))))
+	  scores)
+    ;; Save new hall of fame.
+    (setf f (open '(itster scores) 'out))
+    (print scores f)
+    (close f)))

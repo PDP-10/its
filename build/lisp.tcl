@@ -883,6 +883,12 @@ respond "_" "games;_chase\r"
 respond "_" "\032"
 type ":kill\r"
 
+# ITSter
+respond "*" "complr\r"
+respond "_" "games;_hibou;itster\r"
+respond "_" "\032"
+type ":kill\r"
+
 # Kermit
 respond "*" ":link math;defset fasl,lisp;\r"
 respond "*" ":complr\r"

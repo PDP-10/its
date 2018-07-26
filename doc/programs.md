@@ -109,6 +109,7 @@
 - INQUPD, processes INQUIR change requests.
 - INSTAL, install executables on other ITS machines.
 - ITSDEV, ITS device server.
+- ITSTER, Donald Fisk's block-stacking puzzle game.
 - JEDGAR, counter spying tool.
 - JOBS, list jobs by category.
 - JOTTO, word-guessing game.
