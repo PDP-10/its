@@ -1112,5 +1112,7 @@ respond "*" ":midas sys3;ts george_syseng;george\r"
 expect ":KILL"
 
 # MONIT
-respond "*" ":midas sys;ts monit_syseng;monit\r"
+# The ERROR lines printed during assembly are locations of unlikely
+# runtime errors (e.g. not being able to open TTY:).
+respond "*" ":midas sys;ts monit_dmcg;monit\r"
 expect ":KILL"
