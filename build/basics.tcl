@@ -275,6 +275,12 @@ respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
 respond "*" ":link device;chaos name,sys;ts name\r"
 
+# Name Dragon
+respond "*" ":link syseng;tvkbd rooms, sysen2;\r"
+type ":vk\r"
+respond "*" ":midas sysbin;_sysen2;namdrg\r"
+expect ":KILL"
+
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"
 
