@@ -72,17 +72,22 @@ proc ip_address {string} {
     format "%o" $x
 }
 
+# Respond to the output from (load ...).
+proc respond_load { r } {
+    expect -re {[\r\n][0-9]+\.? *[\r\n]}
+    type $r
+}
+
 proc build_macsyma_portion {} {
     respond "*" "complr\013"
     respond "_" "\007"
     respond "*" "(load \"liblsp;iota\")"
-    respond "274630" "(load \"maxtul;docgen\")"
-    respond "300064" "(load \"maxtul;mcl\")"
-    respond "302627" "(load \"maxdoc;mcldat\")"
-    respond "302627" "(load \"libmax;module\")"
-    respond "303363" "(load \"libmax;maxmac\")"
-    expect "307173"
-    type "(todo)"
+    respond_load "(load \"maxtul;docgen\")"
+    respond_load "(load \"maxtul;mcl\")"
+    respond_load "(load \"maxdoc;mcldat\")"
+    respond_load "(load \"libmax;module\")"
+    respond_load "(load \"libmax;maxmac\")"
+    respond_load "(todo)"
     expect {
 	") \r" {
 	}
