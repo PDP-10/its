@@ -311,8 +311,8 @@ expect ":KILL"
 respond "*" ":link device;tcp syn015,sysbin;datsrv bin\r"
 
 # WEBSER
-respond "*" ":xfile hack;make webser"
-expect "*:kill"
+respond "*" ":xfile hack;make webser\r"
+expect -timeout 300 "*:kill"
 
 # mailt
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
