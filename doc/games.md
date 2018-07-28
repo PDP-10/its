@@ -6,8 +6,8 @@ There are three versions of Adventure installed: the original Crowther
 version, a 350-point version, and a 448-point version.  To play them,
 type one of:
 
-- `:games;advent`
-- `:games;adv340`
+- `:advent`
+- `:games;adv350`
 - `:games;adv448`
 
 ### Checkers
@@ -21,7 +21,7 @@ a five-letter word.  To play this, type `:jotto`.
 
 ### Mac Hack VI
 
-This is Richard Greenblatt's chess program.  Type `:chprog;ocm` to play.
+This is Richard Greenblatt's chess program.  Type `:games;ocm` to play.
 For instructions, see CHPROG; OCM ORDER.
 
 ### Maze War
@@ -36,7 +36,7 @@ This is a maze game for EMACS.  To play, start EMACS and type
 
 ### MLIFE
 
-This is a Conway Game of Life by Mike Speciner.  Type `:rwg;mlife` run
+This is a Conway Game of Life by Mike Speciner.  Type `:games;mlife` to
 run it.
 
 ### Spacewar
@@ -57,7 +57,7 @@ Notes:
 
 ### Tech II
 
-Chess program by Alan Baisley.  To play this, type `:rg;chess2` For
+Chess program by Alan Baisley.  To play this, type `:games;chess2`. For
 instructions, see CHPROG; CHESS2 ORDER.
 
 ### Trek
