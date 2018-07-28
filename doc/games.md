@@ -10,6 +10,10 @@ type one of:
 - `:games;adv340`
 - `:games;adv448`
 
+### Checkers
+
+Checkers program by Alan Baisley. To play, type `:games;ckr`.
+
 ### Jotto
 
 Two players, one of which is the computer, competes in first guessing

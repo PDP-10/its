@@ -402,6 +402,10 @@ respond "with ^C" "DSPLY==0\r"
 respond "\n" "CHEOPS==0\r\003"
 expect ":KILL"
 
+# CKR
+respond "*" ":midas games;ts ckr_agb;ckr\r"
+expect ":KILL"
+
 # Spacewar, standalone
 respond "*" ":midas /t dsk0:.;@ spcwar_spcwar; newwar\r"
 respond "with ^C" "APR==0\r"
