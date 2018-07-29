@@ -1,0 +1,411 @@
+; -*-PALX-*-
+.sbttl	Disk i/o
+
+.iif ndf  asmpr,  asmpr==0	; assume we can't print if we don't know how
+
+.if eq  sysdsk-drk
+lblk==512.			; no. of bytes per sector
+nsecto==12.			; no. of sectors per track
+ntrack==406.			; no. of tracks per disk
+.endc
+.if eq  sysdsk-drl
+lblk==256.			; no. of bytes per sector
+nsecto==40.			; no. of sectors per track
+ntrack==256.			; no. of tracks per disk
+.endc
+.if ne  nrx
+lblk==128.			; no. of bytes per sector
+nsecto==26.			; no. of sectors per track
+ntrack==77.			; no. of tracks per disk
+.endc
+
+
+; DOPENR sets up for reading from disk.
+dopenr:	mov 2(sp),dblock	; set block no. to first block to read
+	clr dbufc		; no characters in buffer yet
+	pop (sp)		; remove arg from stack
+	rts r5
+
+
+; DOPENW sets up for writing to disk.
+dopenw:	mov 2(sp),dblock	; set block no. to first block to write
+	mov #lblk,dbufc		; room for 512 (or 256) characters in block
+	mov pc,-(sp)		; set DBUFP to DBUF
+	add #dbuf-.,(sp)	; ...
+	mov (sp)+,dbufp		; ...
+	pop (sp)		; remove arg from stack
+	rts r5
+
+
+; DCLSW finishes up writing to the disk.
+dclsw:	cmp dbufc,#lblk		; something in buffer?
+	if ne,<
+  loop <    clrb @dbufp		; clear remainder of buffer
+	    inc dbufp
+	    dec dbufc
+	    rptl ne
+	    >
+	  push dblock		; DKWRIT arg: block no.
+	  jsr r5,dkwrit		; write out block
+	  >
+	rts r5
+
+
+; DGETW reads a word from the disk.
+dgetw:	push (sp)		; make room for return val
+	jsr r5,dgetb		; read low byte
+	movb (sp)+,2(sp)
+	jsr r5,dgetb		; read high byte
+	movb (sp)+,3(sp)
+	rts r5
+
+; DGETB reads a byte from the disk.
+dgetb:	push (sp)		; make room for return val
+	dec dbufc		; characters left to read in this block?
+	if mi,<			; none left, read next block
+	  push dblock		; DKREAD args: block no.
+	  jsr r5,dkread		; read block
+	  inc dblock		; increment block no.
+	  mov #lblk-1,dbufc	; 511 (or 255) bytes left to read
+          mov pc,-(sp)		; set DBUFP to DBUF
+	  add #dbuf-.,(sp)	; ...
+	  mov (sp)+,dbufp	; ...
+	  >
+	clr 2(sp)		; so high byte will be zero
+	movb @dbufp,2(sp)	; get character
+	inc dbufp		; move ptr to next
+	rts r5
+
+; DPUTW writes a word to the disk.
+dputw:	push 2(sp)		; DPUTB arg: byte
+	jsr r5,dputb		; write low byte
+	swab 2(sp)		; switch bytes and fall through
+				; to write high byte
+
+; DPUTB writes one byte to the disk.
+dputb:	movb 2(sp),@dbufp	; store character in buffer
+	inc dbufp		; move ptr to next character slot
+	dec dbufc		; buffer filled?
+	if eq,<			; yes, write it out
+	  push dblock		; DKWRIT args: block no.
+	  jsr r5,dkwrit		; write out this block
+	  inc dblock		; increment block no.
+	  mov #lblk,dbufc	; room for 512 (or 256) more characters
+	  sub #lblk,dbufp	; set DBUFP to DBUF
+	  >
+	pop (sp)		; remove arg from stack
+	rts r5
+
+.if eq  sysdsk-drk
+dkread:	push (sp)
+	mov #5,2(sp)
+	br rkrw
+
+dkwrit:	push (sp)
+	mov #3,2(sp)
+	br rkrw
+.endc
+.if eq	sysdsk-drl
+dkread:	push (sp)
+	mov #14,2(sp)
+	br rlrw
+
+dkwrit:	push (sp)
+	mov #12,2(sp)
+	br rlrw
+.endc
+.if ne  nrx
+dkread:	br rxread
+
+dkwrit:	br rxwrit
+.endc
+
+
+
+.sbttl  RL11 read/write
+; RLRW
+;
+;	ARGS:	                        VALS:
+;  SP ->op code				(none)
+;	block number
+
+.if eq sysdsk-drl
+rlrw:  jsr r5,save6		; save registers
+       mov 20(sp),r1		; get block number
+       clr r0			; clear track counter
+       mov #40.,r2		; there are 40. blocks per track
+       div r2,r0		; get number of tracks in r0
+       ash #6,r0		; mov into place for Cylinder address
+       bis r1,r0		; merge sector (in r1) with track
+       mov r0,20(sp)		; save converted disk address
+       mov pc,r1		; pointer to DBUF
+       add #dbuf-.,r1		; ...
+       mov #7,r4		; number of times to try recoverable errors
+;
+; reset the drive
+;
+
+loop <   mov #rlcsr,r5		; get address of CSR
+	 mov #13,4(r5)		; do a get status/reset drive
+	 mov #4,(r5)		; perform function
+  loop <   tstb (r5)		; has drive finished yet??
+           rptl pl		; no yet
+	   >
+         tst (r5)		; check for errors
+	 bmi rlerr		; go handle them
+	 jsr pc,rlseek		; seek to the right track
+
+; Now we can finally do the read/write operation!!!!!!!!!
+
+	 mov #-<lblk/2>,6(r5)	; set word count
+	 mov r1,2(r5)		; set bus address
+	 mov 20(sp),4(r5)	; set disk address
+	 mov 16(sp),(r5)	; perform function
+  loop <   tstb (r5)		; is the controller finished???
+	   rptl pl		; not yet if plus
+	   >
+	 tst (r5)		; test for errors
+	 exitl pl		; no error, we're through
+	 bit #140000,(r5)	; see if a disk error
+	 bne rlerr		; check out disk errors
+	 sorl r4		; try a few more times
+	 br rlerr
+	 >
+       jsr r5,rest6		; restore registers
+       pop (sp),(sp)		; remove args from stack
+       rts r5
+
+; perform a seek on the disk to the right track
+
+rlseek: push r0,r1,r2		; save registers
+	mov #10,(r5)		; execute read headers function
+loop <    tstb (r5)		; has drive finished yet????
+	  rptl pl		; not yet
+	  >
+	mov 6(r5),r0		; get current disk address
+	mov 20+10(sp),r1	; get desired disk address
+	bic #77,r1		; clear sector bits
+	bic #177,r0		; clear sector and surface bits
+	mov r1,r2		; copy desired disk address
+	bic #177677,r2		; isolate surface bit
+	ash #-2,r2		; position it for difference word in seek
+	bic #100,r1		; remove surface bit
+	sub r1,r0		; find difference word for seek operation
+	bcc 1$			; if CC actual >= desired position
+	neg r0			; make positive difference
+	bis #4,r0		; set bit to indicate move towards disk center
+1$:     inc r0			; set marker bit
+	bis r2,r0		; merge in surface bit
+	mov r0,4(r5)		; put difference word into RLDAR
+	mov #6,(r5)		; perform a seek function
+loop <    tstb (r5)		; has controller finished
+          rptl pl		; not yet
+	  >
+	pop r2,r1,r0		; restore registers
+	rts pc
+
+; perform error checking on the disk drive
+
+rlerr: 
+.if ne asmpr
+       print ^"
+RL01 disk error -- operation aborted
+"
+.endc
+       jmp dskerr
+
+.endc  ;eq sysdsk-drl
+
+
+
+; RKRW performs disk transfers of one sector.  It takes two args:
+; the block no. and operation code (3 for write, 5 for read).
+
+;	ARGS:				VALS:
+; SP ->	op code				(none)
+;	block no.
+
+.if eq sysdsk-drk
+rkrw:	jsr r5,save6		; save regs
+	clr r0			; divide block no. by 12
+	mov 20(sp),r1		; ...
+	div #12.,r0		; ...
+	ash #4,r0		; multiply quotient by 16
+	add r1,r0		; add remainder to get DAR
+	bis rknum,r0		; put in disk no.
+	mov pc,r1		; ptr to DBUF
+	add #dbuf-.,r1		; ...
+	mov #7,r5		; no. of times to retry recoverable errors
+loop <	  mov #rkcsr,r4		; ptr to RKCSR
+	  mov #1,(r4)		; controller reset
+  loop <    tstb (r4)		; wait for done
+	    rptl pl
+	    >
+	  mov #rkdar+2,r4	; ptr to RKDAR + 2
+	  mov r0,-(r4)		; set RKDAR
+	  mov r1,-(r4)		; set RKBAR
+	  mov #-<lblk/2>,-(r4)	; set RKWCR
+	  mov 16(sp),-(r4)	; set RKCSR, i.e. perform operation
+  loop <    tstb (r4)		; wait for done
+	    rptl pl
+	    >
+	  tst (r4)		; errors?
+	  exitl pl
+	  bit #166340,-(r4)	; recoverable error?
+	  if eq,<
+	    sorl r5		; yes, try a few times
+	    >
+.if ne asmpr
+	  print ^"
+Disk Error -- operation aborted
+"
+.endc
+	  jmp dskerr
+	  >
+	jsr r5,rest6		; restore regs
+	pop (sp),(sp)		; remove args from stack
+	rts r5
+
+rknum:	.word 0			; Using disk number zero because
+				; disk no. 1 (fixed) is not formatted
+.endc
+
+.sbttl	RX11 read/write
+
+.if ne  nrx
+; RXREAD
+
+;	ARGS:				VALS:
+; SP ->	block no.			(none)
+
+rxread:	push r0,r1,r2		; save regs
+	mov #rxcs,r0		; get bus address of RX11 controller
+	push 10(sp),#7		; RXRW args: block no., op code
+	bis rxnum,(sp)		; yes, set unit select in op code
+	jsr r5,rxrw		; initiate read
+loop <	  bit #40,(r0)		; wait for Done
+	  rptl eq
+	  >
+	tst (r0)		; Error?
+	bmi rxer
+	mov #10,r2		; no. of times to retry parity errors in Empty
+loop <	  mov #3,(r0)		; send Empty command
+	  mov pc,r1		; ptr to buffer
+	  add #dbuf-.,r1	; ...
+  loop <    bitb #240,(r0)	; test Transfer Request and Done bits
+	    rptl eq		; wait for one to set
+	    exitl pl		; Done?
+	    movb 2(r0),(r1)+	; no, Transfer Request, copy data byte
+	    rptl
+	    >
+	  tst (r0)		; Error (parity error in transfer from buffer)?
+	  exitl pl
+	  sorl r2		; retry Empty operation
+	  br rxer
+	  >
+	pop r2,r1,r0,(sp)	; restore regs, remove arg from stack
+	rts r5
+
+
+; RXWRIT writes a block on the floppy.
+
+;	ARGS:				VALS:
+; SP ->	block no.			(none)
+
+rxwrit:	push r0,r1,r2		; save regs
+	mov #rxcs,r0		; get bus address of RX11 controller
+	mov #10,r2		; no. of times to retry parity errors in Fill
+loop <	  mov #1,(r0)		; send Fill command
+	  mov pc,r1		; get ptr to buffer
+	  add #dbuf-.,r1	; ...
+  loop <    bitb #240,(r0)	; test Transfer Request and Done bits
+	    rptl eq
+	    exitl pl		; Done?
+	    movb (r1)+,2(r0)	; no, Transfer Request, load data byte
+	    rptl
+	    >
+	  tst (r0)		; Error (parity error in transfer to buffer)?
+	  exitl pl
+	  sorl r3		; retry Fill
+	  br rxer
+	  >
+	push 10(sp),#5		; RXRW args: block no., op code
+	bis rxnum,(sp)		; yes, set unit select in op code
+	jsr r5,rxrw		; initiate write
+loop <	  bit #40,(r0)		; wait for Done
+	  rptl eq
+	  >
+	tst (r0)		; Error?
+	bmi rxer
+	pop r2,r1,r0,(sp)	; restore regs, remove arg from stack
+	rts r5
+
+
+
+; RXRW issues a read or write command to the RX11.  If writing, the RX11
+; buffer should already be filled with the stuff to be written.  If reading
+; the RX11 buffer should be emptied afterward.  RXRW does not wait for the
+; read or write operation to complete.
+
+;	ARGS:				VALS:
+; SP ->	op code				(none)
+;	block no.
+
+rxrw:	push r2,r3		; save regs
+	clr r2			; divide block no. by 26 to get track
+	mov 10(sp),r3		; and sector addresses
+	div #nsecto,r2		; perform the division
+	asl r3
+	cmp r3,#nsecto
+	if his,<
+	  sub #nsecto-1,r3
+	  >
+	inc r3			; make sector address one based
+loop <	  bit #40,(r0)		; wait for Done
+	  rptl eq
+	  >
+	mov 6(sp),(r0)		; send read or write command
+loop <	  tstb (r0)		; wait for Transfer Request
+	  rptl pl
+	  >
+	mov r3,2(r0)		; send Sector address
+loop <	  tstb (r0)		; wait for Transfer Request
+	  rptl pl
+	  >
+	mov r2,2(r0)		; send Track address
+	pop r3,r2,(sp),(sp)	; restore regs, remove args from stack
+	rts r5
+
+rxer:	mov @#rxdb,r0
+	bit #1,r0
+	if ne,<
+.if ne asmpr
+	  print ^"
+CRC error detected reading diskette."
+.endc
+	  >
+	bit #2,r0
+	if ne,<
+.if ne asmpr
+	  print ^"
+Parity error detected on command or address data being transfered to RX01."
+.endc
+	  >
+.if ne  asmpr
+	jmp dskerr
+.iff
+	pop r2,r1,r0,(sp)
+	rts r5
+.endc
+
+rxnum:	.word 0			; disk no.
+
+.endc  ; ne nrx
+
+dbuf:	.blkb lblk	; disk sector buffer
+dblock:	.word 0		; block no. for next disk i/o
+dbufp:	.word 0		; ptr to next byte in disk buffer to read/write
+dbufc:	.word 0		; read: no. of characters remaining in buffer
+			; write: room left in buffer
+
+ 

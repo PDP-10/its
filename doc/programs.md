@@ -203,6 +203,7 @@
 - RIPDEV, replacement for MLDEV for no-longer-existing machines.
 - RMAIL, mail reading client.
 - RMTDEV, MLDEV for non-ITS hosts.
+- RUG, PDP-11 debugger.
 - SALV, old file system tool for KA and KL.
 - SCAN, TEX output to XGP SCAN file.
 - SCANDL, TTY output spy.
