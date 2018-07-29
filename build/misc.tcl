@@ -1036,6 +1036,12 @@ expect ":KILL"
 respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
 expect ":KILL"
 
+# URUG, GT40 debugger.
+respond "*" ":palx sysbin;_sysen2;urug\r"
+respond "=YES" "1\r"
+respond "37000" "37000\r"
+expect ":KILL"
+
 # KL10 front end debugger.  Put it in the same directory as the
 # "MX" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
