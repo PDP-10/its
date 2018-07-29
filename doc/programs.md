@@ -248,6 +248,7 @@
 - UNTALK, split-screen comm-link program.
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.
+- URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VTTIME, display running time on the terminal.
