@@ -26,13 +26,13 @@ Step by step guide on how to create a hello world in MIDAS.
     end start				  ;Specify entry point.
     ```
 
-3. Save it as `hello 1` (^X^S) and exit (^X^C).
+3. Save it as `hello 1` (<kbd>^X</kbd><kbd>^S</kbd>) and exit (<kbd>^X</kbd><kbd>^C</kbd>).
 
 4. Assemble it with MIDAS.
 
        :midas ts hello_hello
 
-5. Go back to EMACS with $P if you need to do edits.
+5. Go back to EMACS with ◊P if you need to do edits.
 
 6. Run the program.
 
