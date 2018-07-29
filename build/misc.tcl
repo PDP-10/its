@@ -1105,6 +1105,15 @@ expect ":KILL"
 respond "*" ":midas sys1; ts gtload_syseng; gtload\r"
 expect ":KILL"
 
+# RUG, PDP-11 debugger.
+respond "*" ":cwd pdp11\r"
+respond "*" ":palx rug\r"
+respond "?" "2\r"
+respond "?" "100000\r"
+respond "?" "1\r"
+respond "?" "1\r"
+expect ":KILL"
+
 # URUG, GT40 debugger.
 respond "*" ":palx sysbin;_sysen2;urug\r"
 respond "=YES" "1\r"

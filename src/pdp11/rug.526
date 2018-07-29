@@ -1,0 +1,3741 @@
+; RUG - PDP11 SYMBOLIC DEBUGGER   -*-PALX-*-
+versio==%fnam2
+
+.TITLE RUG
+
+.insrt pdp11;defs >
+
+
+setf ^"Start of RUG?",rugsa
+
+.if ne sys-lll
+setf ^"SA Disk (no)?",asmdsk
+.iif b asmdsk, asmdsk==0
+.endc
+.iif ndf asmdsk, asmdsk==0
+
+.if eq asmdsk
+  setf ^"RT11?",asmrt1
+ .iif b asmrt1, asmrt1==0
+
+  setf ^"Serial line?",asmsrl
+ .iif b asmsrl, asmsrl==0
+.endc
+
+.iif ndf asmRT1, asmRT1==0
+.iif ndf asmsrl, asmsrl==0
+
+.if ne asmrt1+asmsrl
+  setf ^"Program Dumping?",asmdmp
+ .iif b asmdmp, asmdmp==0
+.endc
+
+.iif ndf asmdmp, asmdmp==0
+
+setf ^"Simulator?",asmsim
+.iif b asmsim, asmsim==0
+
+trs==dzaddr
+
+.if ne  asmsim
+ndz==0
+trs==177560
+.endc
+
+.lif eq  ndz
+setf ^"Terminal address (0=177560)?",trs
+.iif b trs, trs==177560
+.iif eq trs, trs==177560
+
+.if eq ndz
+.if ne asmrt1
+setf ^"Console interrupt vector (0=60)?",icvec
+.iif b icvec, icvec==60
+.iif eq icvec, icvec==60
+.endc
+.endc
+
+; terminal type codes
+%tngl==-1	; Glass		Note, comparisons depend on Glass being
+%tntt==0	; TTY		less than 0 and TTY being 0.
+%tnsb==1	; StupidBee
+%tnvt==2	; VT52
+
+
+.macro	print text
+	jsr r5,types
+	  .string ^~text~
+.endm
+asmpr===1
+
+.macro	sout text
+	jsr r5,itypes
+	  .string ^~text~
+.endm
+
+
+nbpt==10		;number of breakpoints
+
+; flag word bits
+%regv==1		; regsiter value flag bit
+%half==2		; half killed
+%ndef==4		; undefined expression
+%nilv==10		; null expression
+
+.sbttl	RUG Initialization
+
+.=rugsa
+restrt:	mfps ups		; save processor status word
+	spl 7			; set high priority
+	mov sp,usp		; save stack ptr
+	clr upc			; clear PC since its unknown
+	mov #stack,sp		; setup RUG's stack
+.if eq ndz
+.if ne asmrt1
+	jsr pc,sistat		;save inital state for RT-11
+	jsr pc,sstat		; save rest of machine state
+.endc
+.endc
+	mov #rtrap4,@#4		; set bus error vector
+	mov #pr7,@#6		; ...
+.lif ne  ndz
+	jsr pc,dzini		; init DZ
+	tst bptset		; breakpoints set?
+	if ne,<
+	  jsr r5,rembrk		; remove breakpoints
+	  >
+	mov #-1,bptno		; indicate not stopped at breakpoint
+	jmp rugcmd
+
+rug:	spl 7			; RUG runs at high priority
+	clr ups			; set user PS
+	clr upc			; set user PC
+	clr usp			; set user SP
+	mov #stack,sp		; set RUG's stack ptr
+.if eq ndz
+.if ne asmrt1
+	jsr pc,sistat		;save inital state for RT-11
+	jsr pc,sstat		; save rest of machine state
+.endc
+.endc
+	mov #rtrap4,@#4		; set bus error vector
+	mov #pr7,@#6		; ...
+.lif ne  ndz
+	jsr pc,dzini		; init DZ
+	clr bptset		; indicate no breakpoints set
+	mov #-1,bptno		; set bpt no. to -1, not stopped at breakpoint
+	jsr r5,clrscn		; clear screen
+
+; get version no. in decimal:
+vn2==versio/100.
+vn1==<versio-<100.*vn2>>/10.
+vn0==<versio-<100.*vn2>>-<10.*vn1>
+
+.irp ra,\restrt
+.litrl ^|   .ascii "
+RUG "
+	    .byte vn2+60,vn1+60,vn0+60
+	    .asciz ".  Restart is ra'.
+"|,%.ptmp
+.endm
+	jsr r5,types
+	  .word	%.ptmp-.
+
+	jmp rugcmd
+
+
+.if ne  ndz
+dzini:	mov #dzaddr,r4		; DZ address
+	mov #20,(r4)		; initialize DZ
+loop <	  bit #20,(r4)		; wait for done
+	  rptl ne
+	  >
+	mov #dzlpar,r1		; ptr DZ line parameter table
+	mov #8.,r0		; no. of entries
+loop <	  mov (r1)+,2(r4)	; set DZ line parameters
+	  sorl r0
+	  >
+	mov #177401,4(r4)	; set data term rdys, enable line 0
+	mov #40,(r4)		; turn on receiver
+	rts pc
+.endc
+
+
+catchn:	mov r5,nxmcat
+	add (r5)+,nxmcat
+	rts r5
+
+rtrap4:	tst nxmcat
+	if ne,<
+	  mov nxmcat,(sp)
+	  rtt
+	  >
+	halt
+	rtt
+
+nxmcat:	.word 0
+
+; Insert Save6, Rest6, Mul and Div for non-EIS machines, and the dz param table
+.if ne <sys-mit>*<sys-mit44>
+; SAVE6 routine saves R0 through R5 on stack, R0 at top:
+; SP ->	R0
+;	R1
+;	R2
+;	R3
+;	R4
+;	R5
+; Call by JSR R5,SAVE6.  Restore regs by REST6 routine.
+
+save6:	push r4,r3,r2,r1,r0	; R5 already on stack by JSR.
+	jmp (r5)		; return.
+
+
+; REST6 routine restores R0 through R5 from stack, where
+; R0 is considered to be the top word of the stack (which is
+; how SAVE6 pushes the registers).  Call by JSR R5,REST6.
+; REST6 returns with the 6 words popped off the stack.
+
+rest6:	tst (sp)+		; forget old R5 contents.
+	pop r0,r1,r2,r3,r4	; restore other regs.
+	rts r5			; return and restore R5.
+.iff
+.insrt pdp11;stuff
+.endc
+
+.lif ne  asmdsk
+.insrt pdp11;sadisk
+
+.sbttl	RUG command decoder
+
+
+rugcmd: dskerr::		; disk errors come here too
+	print ^"
+*"				; prompt for reset
+	mov o.bw,oo.bw		; save byte/word open flag and
+	clr o.bw		; close all
+	mov pwmode,twmode	; reset temporary modes
+	mov pbmode,tbmode	; ...
+	mov pabsmd,tabsmd	; ...
+	mov pradix,tradix	; ...
+	br rcd2
+rcd1:	print ^"   "
+rcd2:	mov #stack,sp		;reset stack so errors can jump here
+	jsr pc,bufclr		;clear char buffer
+	clr altcnt		;no alts yet
+	clr argcnt
+	jsr r5,ininst		; try parsing input as an instruction first
+	  br rcd3
+	mov #buf,bufptr		; reread typein so far
+	jsr r5,exp		; interpret as an expression this time
+	pop cvflgs,r4
+	bit #%ndef,cvflgs	; undefined value?
+	bne err
+	bit #%nilv,cvflgs	; was expression null?
+	if eq,<
+	  mov r4,cvalue
+rcd3:	  inc argcnt		; no, one more arg
+	  >
+rcd4:	jsr pc,bufrdu		; get command character
+	mov #comls1,r1		; ptr to list of command characters
+	movb r0,ncom(r1)	; put char at end of list
+loop <	  cmpb r0,(r1)+
+	  rptl ne
+	  >
+	sub #comls1+1,r1	; get offset into list
+	asl r1			; multiply by two
+	jmp @comls2(r1)		; go to proper routine
+
+alt:	inc altcnt		;keep track of no of alts
+	br rcd4
+
+nxmerr:	print ^"--NXM"
+err:	print ^"?"		;error.
+	br rcd1
+
+.sbttl	Command routines
+
+; Process CR - close location.
+cr:	jsr pc,close		; close current location
+	jmp rugcmd		; return to decoder
+
+; Process LF - open next word.
+lf:	jsr pc,close		; close present cell if any
+	tst o.bw		; anything open?
+	if eq,<
+	  mov oo.bw,o.bw	; no, reset to prev open mode
+	  >
+	bit #%regv,clflgs	; location a register?
+	if eq,<
+	  add length,clocat	; no, move down length of cvalue
+	  >
+	else <
+	  inc clocat		; else only increment by one
+	  >
+lf1:	print ^"
+"
+	push clocat,clflgs	; SYM args: value, flags
+	jsr r5,sym		; typeout clocat
+	cmp o.bw,#1		; word or byte mode?
+	if ne,<
+	  print ^"/"
+	  >
+	else <
+	  print ^"\"
+	  >
+	jsr r5,open		; open clocat
+	jmp rcd1
+
+; Process ^ - open previous word.
+up:	jsr pc,close		;close open location
+	tst o.bw		;anything open?
+	if eq,<
+	  mov oo.bw,o.bw	;no, reset to prev open modes of
+	  >
+	bit #%regv,clflgs	; register location?
+	if eq,<
+	  sub o.bw,clocat	; no, subtract 1 or 2 for byte or word mode
+	  >
+	else <
+	  dec clocat		; register, subtract 1
+	  >
+	br lf1			;go do the rest
+
+
+; Process [ - open as no.
+onum:	mov #tycons,twmode
+	br oword
+
+; Process ] - open as symbol.
+osym:	mov #tysymb,twmode
+	br oword
+
+; Process \ - open byte.
+obyte:	mov #1,o.bw		; set byte mode
+	br obw
+
+tab:	mov cvalue,clocat
+	mov cvflgs,clflgs
+	br lf1
+
+; Process / - open word.
+oword:	mov #2,o.bw		; set word mode
+obw:	mov cvalue,clocat	; set address to open
+	mov cvflgs,clflgs	; set address flags
+	jsr r5,open
+	jmp rcd1
+
+; Process @ - Open location addressed by user PC as instr
+openpc:	mov upc,clocat		; make PC current location
+	clr clflgs		; clear current flags
+	mov #tyinst,twmode	; force instruction mode
+	br lf1
+
+; Process = - type out value as constant.
+equal:	push cvalue,cvflgs	; CONST args: value, flags
+	jsr r5,const		; type current value as constant
+	jmp rcd1
+
+
+; Process _ - retype q in symbolic mode.
+undscr:	jsr r5,tysymb
+	jmp rcd1
+
+
+; Process : - define label
+; Note: this command not interpreted through the regular command symbol
+; and jump tables, but by a special check at ininst
+label:	jsr pc,bufrd		; read the :
+	mov clocat,cvalue
+	mov clflgs,cvflgs
+	br def1
+
+; Process > - define symbol
+define:	jsr r5,gsym		; read symbol name
+def1:	jsr r5,def
+	jmp rcd1
+
+
+; DEF defines a symbol.
+def:	jsr r5,svalue		; find where symbol is in table
+	pop r0,*		; just get flags
+	mov sptr,r1		; ptr to symbol if defined
+	bit #%ndef,r0		; defined?
+	if ne,<
+	  mov stend,r1		; ptr to bottom of symbol table
+	  asl sbit		; move to next bit in flag words
+	  if eq,<		; end of group, create new group
+	    inc sbit		; put 1 in sbit
+	    mov r1,sflgp	; save ptr to register flag word
+	    sub #4,r1		; create two flag words
+	    clr 4(r1)		; clear all register flag bits
+	    mov #-1,2(r1)	; set all half killed bits
+	    >
+	  mov r1,stend		; save ptr to end
+	  sub #6,stend		; move down one symbol slot
+	  mov s1,-4(r1)		; set symbol name
+	  mov s2,-2(r1)		; ...
+	  >
+	mov cvalue,(r1)		; set value of symbol
+	mov sflgp,r4		; ptr to register flag word
+	bit #%regv,cvflgs	; check register flag, value a register?
+	if ne,<
+	  bis sbit,(r4)		; yes, set symbol's bit in register flags
+	  >
+	else <
+	  bic sbit,(r4)		; no, clear register-flag bit
+	  >
+	bit #%half,cvflgs	; check half killed flag
+	if ne,<
+	  bis sbit,-(r4)	; half killed, set symbol's bit in flag word
+	  >
+	else <
+	  bic sbit,-(r4)	; clear half killed bit
+	  >
+	rts r5
+
+
+; Process FOOK and FOOK - Kill defined symbol.
+kill:	cmp altcnt,#2		; half or full kill?
+	blo 1$
+	tst argcnt		; full kill, no arg?
+	if eq,< 		; no arg, kill all symbols
+	  mov #symtop,stend 	; move up end of symbol table ptr
+	  >
+	else <
+	  mov sptr,r4
+	  clr (r4)
+	  clr -(r4)
+	  clr -(r4)
+1$:	  mov sflgp,r4		;ptr to symbol's reg-flag word.
+	  bis sbit,-(r4)	;set half-kill bit in hkill word.
+	  >
+	jmp rcd1
+errj:	jmp err
+
+
+;process z, zero all of user core.
+zero:	cmp altcnt,#2		;see if we are $$z or not
+	bne errj
+.if eq asmrt1
+	clr r1			;zero from loc 0
+.iff
+	mov #1000,r1		;leave rt-11 alone!
+.endc
+loop <	  clr (r1)+
+	  cmp r1,stend		;to bottom of symtab
+	  rptl los
+	  >
+	jmp rcd1
+
+; Process the ":XXXXXX" commands -- NOT the label definition "LABEL:" which
+; is not handled thru the command table.  Name of command is 6 letters, two
+; rad50 words.  COLTAB is table of colon com routines. COLTAB is terminated
+; by -1 word, which is not a legal rad50 word.
+
+colon:	jsr r5,gsym		; get command name as 2 rad50 words in s1, s2
+	mov #coltab-6,r5	; ptr to com table
+loop <	  add #6,r5		; next command in table
+	  cmp (r5),#-1		; end of table? (-1 not legal rad50 word)
+	  exitl eq		; yes, command not found
+	  cmp (r5),s1		; match the command name?
+	  rptl ne		; no
+	  cmp 2(r5),s2
+	  rptl ne		; no
+	  jmp @4(r5)		; yes, to that routine
+	  >
+	jmp err			; command not found
+
+
+; :HELP lists the available : commands.
+colhlp:	mov #coltab,r5		;ptr into : command table.
+loop <	  print ^"
+"
+	  cmp (r5),#-1		;end of table?
+	  exitl eq		;yes.
+	  mov (r5)+,ainst	;no, 1st 3 letters.
+	  mov (r5)+,ainst+2	;last 3 letters.
+	  jsr r5,type50		;print rad50 : com name.
+	  tst (r5)+		;past ptr to routine.
+	  rptl
+	  >
+	jmp rugcmd
+
+;:EXIT returns to DSKLOD. In RT-11 it returns there.
+exit:	print ^"
+"
+.if eq asmrt1
+	.exit
+.endc
+.if ne asmrt1
+	jsr pc,ristat		;restore the state
+	.exit
+.endc
+
+.sbttl Breakpointing commands
+
+; B - Set breakpoint
+setbpt:	bit #%nilv,cvflgs
+	bne err2		;for now that command is meaningless
+	bit #1,cvalue
+	bne err2		;badness if odd address
+	jsr r5,delb		;delete any old breakpoint at this address
+	mov #bptadr,r4
+	mov #nbpt,r0
+loop <	  cmp (r4)+,#-1		;is this cell free?
+	  exitl eq		;jump if yes
+	  sorl r0
+	  br err2
+	  >
+	mov cvalue,-(r4)	;set breakpoint
+	mov #1,bptcnt-bptadr(r4)
+	jmp rcd1		;return
+
+
+; U - Delete breakpoint
+delbpt:	jsr r5,delb
+	jmp rcd1
+
+delb:	push r4			; save reg
+	clr r4
+loop <	  bit #%nilv,cvflgs
+	  if eq,<
+	    cmp cvalue,bptadr(r4)
+	    bne 1$
+	    >
+	  mov #-1,bptadr(r4)
+	  mov bpti,bptins(r4)	; reset contents of table
+	  clr bptcnt(r4)	; clear count
+1$:	  tst (r4)+
+	  cmp r4,#nbpt*2
+	  rptl lo		; done
+	  >
+	pop r4			; restore reg
+	rts r5
+
+err2:	jmp err
+
+
+
+; The :LISTB command prints a list of the breakpoints set, in
+; the same format used when breakpoint is hit.  In addition
+; the proceed count is printed if it is not 1.
+
+;E.g., "$3B;   FOO+4>>MOV  #4 , @#6"
+; or,  "$3B;   FOO+4>>MOV  #4 , @#6    ( 3 )"
+
+listb:	push clocat		; save current location
+	mov #bptadr,r5		; ptr to breakpoint address array
+	mov #'0,r0		; ascii of bpt no.
+loop <	cmp (r5),#-1		; this slot free?
+	if ne,<
+	  print ^"
+$"
+	  jsr r5,typec		; print bpt no.
+	  push r0		; save reg
+	  print ^"B; "
+	  mov (r5),clocat	; address of this breakpoint
+	  push (r5),#0		; SYMBOL args: value, flags
+	  jsr r5,symbol		; print as symbolic address <<
+	  print ^">>"
+	  jsr r5,openi		; print in instruction mode (CLOCAT)
+	  mov bptcnt-bptadr(r5),r0	; proceed count
+	  cmp r0,#1		; print count?
+	  if ne,<
+	    print ^"      ( "
+	    jsr r5,tnumbr	; print proceed count
+	    print ^" )"
+	    >
+	  pop r0		; restore reg
+	  >
+	inc r0			; next breakpoint
+	tst (r5)+
+	cmp r0,#'7		; done? (8 breaks, 0 - 7)
+	rptl le
+	>
+	print ^"
+"
+	pop clocat		; restore current location
+	jmp rugcmd
+
+.sbttl Mode decoding
+
+; Location typeout modes (word)
+
+; I - Instruction typeout mode
+imode:	mov #tyinst,r1
+	br setwm
+
+; C - Constant typeout mode
+cmode:	mov #tycons,r1
+	br setwm
+
+; S - Symbol typeout mode
+smode:	mov #tysymb,r1
+	br setwm
+
+; " - Ascii typeout mode
+amode:	mov #tyasci,r1
+	br setwm
+
+; & - Rad50 typeout mode
+rmode:	mov #tyrad5,r1
+;	br setwm
+
+setwm:	mov r1,semimd		; set semicolon mode
+	mov r1,twmode		; set temporary mode
+	cmp altcnt,#1
+	if hi,<
+	  mov r1,pwmode		; set permanent mode
+	  >
+	jmp rcd1
+
+
+; Location typeout modes (byte)
+
+; ` - Constant typeout mode
+cmodeb:	mov #tybcon,r1
+	br setbm
+
+; ' - Ascii typeout mode
+amodeb:	mov #tybasc,r1
+;	br setbm
+
+setbm:	mov r1,tbmode		; set temporary mode
+	cmp altcnt,#1
+	if hi,<
+	  mov r1,pbmode		; set permanent mode
+	  >
+	jmp rcd1
+
+
+; Address typeout modes
+
+; A - absolute addr mode
+absmd:	mov pc,tabsmd		; set temporary mode
+	cmp altcnt,#1
+	if hi,<
+	  mov pc,pabsmd		; set permanent mode
+	  >
+	jmp rcd1
+
+; $R - Relative addr mode
+relmd:	clr tabsmd		; set temporary mode
+	cmp altcnt,#1
+	if hi,<
+	  clr pabsmd		; set permanent mode
+	  >
+	jmp rcd1
+
+
+; O - Octal typeout mode
+soct:	mov #8.,tradix		; set temporary output radix to 8
+	cmp altcnt,#1
+	if hi,<
+	  mov #8.,pradix	; set permanent output radix to 8
+	  >
+	jmp rcd2
+
+; D - Decimal typeout mode
+sdec:	mov #10.,tradix		; set temporary output radix to 10
+	cmp altcnt,#1
+	if hi,<
+	  mov #10.,pradix	; set permanent output radix to 10
+	  >
+	jmp rcd2
+
+
+;semi-colon: retype $q in the most recently specified
+;temporary or permanent mode.
+semicn:	cmp altcnt,#1		; see if $; or $$;
+	blo 2$
+	beq 1$
+	mov semimd,pwmode	; set permanent mode
+1$:	mov semimd,twmode	; set temporary mode
+2$:	jsr r5,@semimd		; type out cvalue
+	jmp rcd1
+
+.sbttl Location opening
+
+open:	push r4			; save reg
+	mov clocat,r4		; current location
+	bit #%regv,clflgs	; current location a register?
+	if ne,<
+	  cmp r4,#nuregs-1	; check that its a valid register no.
+	  if hi,<
+	    jmp err
+	    >
+	  asl r4		; convert to address of saved value
+	  add #uregs,r4		; ...
+	  mov #2,o.bw		; force word mode
+	  cmp twmode,#tyinst	; instruction mode?
+	  if eq,<
+	    mov #tysymb,twmode	; don't open registers in instruction mode
+	    >
+	  >
+	mov r4,r0		; copy address
+	bic #1,(sp)		; make word address
+	mov #savls1,r1		; ptr to list of locations saved
+loop <	  cmp r0,(r1)+		; this location on the list?
+	  if eq,<
+	    ror r4		; save low bit of r4
+	    mov (r1),r4		; yes, put its actual address in r4
+	    adc r4		; restore low bit
+	    exitl
+	    >
+	  tst (r1)+		; skip over save address
+	  tst (r1)		; end of list?
+	  rptl ne
+	  >
+	bit #1,r4		; odd address?
+	if ne,<
+	  mov #1,o.bw		; yes, force byte mode
+	  >
+	mov r4,caddr		; save address for close
+	print ^"   "
+	clr cvflgs		; init current value flags
+	cmp o.bw,#1		; byte or word mode?
+	if ne,<
+	  push r4		; GETW arg: location
+	  jsr r5,getw		; get the word
+	  pop cvalue		; current value
+	  jsr r5,@twmode	; type out loc in current word mode
+	  >
+	else <
+	  push r4		; GETB arg: location
+	  jsr r5,getb		; get the byte
+	  pop cvalue		; current value
+	  mov #1,length		; all bytes are length 1
+	  jsr r5,@tbmode	; type out loc in current byte mode
+	  >
+	pop r4			; restore reg
+	rts r5
+
+; OPENI open location as an instruction
+openi:	push o.bw,twmode	; save modes
+	mov #2,o.bw		; force to word and instr mode
+	mov #tyinst,twmode
+	jsr r5,open
+	pop twmode,o.bw
+	rts r5
+
+; Close word or byte and exit, address in clocat.
+; Upon entering, r2 has numeric flag, r4 has contents.
+; If a byte or word is to be deposited into the open loc
+; then PUTWRD or PUTBYT is called.  (They will check
+; to see if the byte/word is to be put in core or on the
+; core-image.)
+
+close:	tst argcnt
+	beq 1$
+	cmp o.bw,#1		;closing byte, word, or none?
+	blo 1$			;0, nothing to close
+	if eq,<
+	  push caddr,r4		;change, this is addr, contents
+	  jsr r5,putb		;put byte away
+	  >
+	else <
+	  mov .lenth,length	; .lenth is length of input value
+	  push caddr,cvalue	;close instruction
+	  jsr r5,putw		;put val into @clocat
+	  cmp length,#2
+	  blos 1$		;return (no more to instr)
+	  push caddr
+	  add #2,(sp)		;next addr in instr
+	  push cvalue+2		;next part to deposit
+	  jsr r5,putw		;deposit next part of value
+	  cmp length,#4		;done this instr yet?
+	  blos 1$		;yes, return.
+	  push caddr		;no, one more time.
+	  add #4,(sp)
+	  push cvalue+4
+	  jsr r5,putw		;deposit last (3rd) part of
+	  >
+1$:	rts pc
+
+.sbttl	Typeout modes
+
+; Location typeout (word)
+
+; constant typeout
+tycons:	print ^"   "
+	mov #2,length		; length is 2 bytes
+	push cvalue,cvflgs	; CONST args: value, flags
+	jsr r5,const		; type current value as constant
+	rts r5
+
+; symbol typeout
+tysymb:	mov #2,length		; length is 2 bytes
+	push cvalue,cvflgs	; SYMBOL args: value, flags
+	jsr r5,symbol		; type current value as symbol
+	rts r5
+
+; ascii typeout
+tyasci:	mov #2,length		; two bytes
+	print ^|"|
+	movb cvalue,r0		; current value low byte
+	jsr r5,typec		; type ascii char
+	movb cvalue+1,r0	; current value high byte
+	jsr r5,typec		; type ascii char
+	rts r5
+
+; rad50 typeout
+tyrad5:	mov #2,length
+	print ^"&"
+	mov cvalue,ainst
+	clr ainst+2
+	jsr r5,type50
+	rts r5
+
+; instruction typeout
+tyinst:	mov #2,length		; start length at 2, may get larger
+	mov cvalue,r0
+	jsr r5,inst
+	  rts r5		;ok return
+	br tycons		;did not find one, print as number
+
+
+; Location typeout (byte)
+
+; constant mode
+tybcon:	mov cvalue,r0		; current value
+	jsr r5,tnumbr		; type as octal no.
+	rts r5
+
+; ascii mode
+tybasc:	print ^"'"		; type '
+	mov cvalue,r0		; current value
+	jsr r5,typec		; type as ascii character
+	rts r5
+
+.sbttl Search commands
+
+; SEARCHES -	$MSK   HAS THE MASK
+;		$MSK+2 HAS THE LOWER LIMIT
+;		$MSK+4 HAS THE UPPER LIMIT
+
+wsearc:	tst argcnt		; check for object found
+	beq err3		; error if no object
+	mov #2,o.bw		; set word mode
+	mov smask+2,r2		; set origin
+	mov smask,r4		; set mask
+	com r4			; complement so can bic
+loop <	  push r2		; GETW arg: location
+	  jsr r5,getw		; get word
+	  bic r4,(sp)		; apply mask
+	  cmp (sp)+,cvalue	; see if this is it
+	  if eq,<
+	    jsr r5,schtyp	; type location and value
+	    >
+.if eq  ndz
+	  tstb @ttycsr		; stop search if user types anything
+.iff
+	  tstb @#dzaddr		; stop search if user types anything
+.endc
+	  exitl mi
+	  add #2,r2		; move to next address
+	  cmp r2,smask+4	; check for end of search range
+	  rptl los
+	  >
+	jmp rcd1
+
+nsearc:	tst argcnt		; check for object found
+	beq err3		; error if no object
+	mov #2,o.bw		; set word mode
+	mov smask+2,r2		; set origin
+	mov smask,r4		; set mask
+	com r4			; complement so can bic
+loop <	  push r2		; GETW arg: location
+	  jsr r5,getw		; get word
+	  bic r4,(sp)		; apply mask
+	  cmp (sp)+,cvalue	; see if this is it
+	  if ne,<
+	    jsr r5,schtyp	; type location and value
+	    >
+.if eq  ndz
+	  tstb @ttycsr		; stop search if user types anything
+.iff
+	  tstb @#dzaddr		; stop search if user types anything
+.endc
+	  exitl mi
+	  add #2,r2		; move to next address
+	  cmp r2,smask+4	; check for end of search range
+	  rptl los
+	  >
+	jmp rcd1
+
+esearc:	tst argcnt		; check for arg
+	beq err3
+	mov #2,o.bw		; set word mode
+	mov smask+2,r2		; starting point for search
+loop <	  push r2		; GETW arg: location
+	  jsr r5,getw		; get word
+	  pop r0
+	  cmp r0,cvalue		; is (x) = k?
+	  beq 1$
+	  mov r0,r3		; calc (x)+x+2
+	  add r2,r3		; ...
+	  add #2,r3		; ...
+	  cmp r3,cvalue		; is (x)+x+2 = k?
+	  beq 1$
+	  movb r0,r0		; get low byte sign extended
+	  inc r0		; make offset from x+2
+	  asl r0		; ...
+	  add r2,r0
+	  cmp r0,cvalue		; is the result a proper relative branch?
+	  bne 2$
+1$:	  jsr r5,schtyp
+.if eq  ndz
+2$:	  tstb @ttycsr		; stop search if user types anything
+.iff
+2$:	  tstb @#dzaddr		; stop search if user types anything
+.endc
+	  exitl mi
+	  add #2,r2
+	  cmp r2,smask+4
+	  rptl los
+	  >
+	jmp rcd1
+
+err3:	jmp err
+
+
+schtyp:	mov r2,clocat
+	print ^"
+"
+	push r2,#0		; SYM args: value, flags
+	jsr r5,sym		; type address
+	print ^"/   "
+	push r2			; GETW arg: location
+	jsr r5,getw		; get word
+	pop cvalue
+	jsr r5,@twmode		; type contents
+	rts r5
+
+.sbttl	Program loading
+
+.if ne  asmrt1+asmsrl		; either RT11 or serial line loading
+dgetwa:	.word
+dgetba:	.word			; procedure variables to use for reading
+.if ne asmrt1
+				;get the rt11 macros
+	.insrt chsncp;rt11m
+
+defext:	.rad50 "BIN"
+	.rad50 "BIN"
+	.word 0,0
+	.even
+emtare:	.blkw 5			;for EMT traps to RT-11
+rdpnt:	.word bufend		;init so we read a block
+blkcnt:	.word 0			;block count is initially zero
+bufbeg:	.blkw 256.
+bufend=.
+.endc
+load:
+        mov sp,lodasp		; save stack for abortion
+  .if ne asmrt1*asmsrl
+	print ^" L for serial line; R for RT11 " ; type a space after $L
+	jsr pc,bufrdu		; get menu selection
+	print ^"
+"
+	cmpb r0,#'L		; serial line ?
+	beq 1$
+	cmpb r0,#'R		; RT11 file?
+	beq 2$
+	jmp rugcmd		;punt
+  .endc
+
+  .if ne asmrt1
+2$:
+	.settop #-2		;set top of core to address > than RMON
+				;which will give us as much core as possible
+	mov #go,46		;set up value for usr swapping
+	print ^" Input RT-11 File Specifier:
+"
+	jsr pc,ristat		;restore the state of the world
+	.csige #bufbeg,#defext,#0	;take input from terminal
+	jsr pc,sstat		;save the state of the world
+	mov lodasp,sp		;restore the stack
+	mov #dgetlb,dgetba	; set up for reading from RT-11 file
+	mov #dgetlw,dgetwa
+	mov #bufend,rdpnt	;initialize for first transfer
+	clr blkcnt		;clear the block count
+	br 10$			;start loading program
+  .endc
+1$:
+  .if ne asmsrl			; Handle serial line?
+	print ^" Input CSR addr of serial line ("
+	mov srlcsr,r0		; choose defaul CSR addr.  Previous choice
+	if eq,<
+	  mov ttycsr,r0		;  if we already had one, else console TTY
+	  >
+	mov r0,srlcsr		; prepare the default
+	jsr r5,tnumbr		; show default CSR address.
+	print ^"): "
+	jsr pc,bufclr		; backup to here on rubout
+	jsr r5,rnumbr		; read no., return no.,flags on stack
+	pop r0			; get possible CSR address
+	bit #%nilv,(sp)+	; did we read a number?
+	if eq,<
+	  mov r0,srlcsr
+	  >
+	print ^"
+^G aborts"
+	mov #getlb,dgetba	; set up for reading from DLV typ device
+	mov #getlw,dgetwa
+	cmp srlcsr,#160000	; see if it is a reasonable addr
+	bhis 10$
+	print ^" Bad CSR addr "	; complain
+	jmp rugcmd		; punt
+  .endc
+
+10$:	cmp altcnt,#1		; $$L?
+	if los,<
+	  bis #%nilv,cvflgs	; simulate an $U with no arg
+	  jsr r5,delb		; ie. clear all breakpoints
+	  mov #symtop,stend	; $L, clear core, flush symbols
+	  clr r1		; ptr to 1st memory location to clear
+	  clr (r1)		; zap location zero so uninited traps halt
+.if eq asmrt1
+	  mov #10,r1		; leave 4,6 alone (also 2 incidentally)
+.iff
+	  mov #1000,r1		;do not disturb rt-11
+.endc
+  loop <    clr (r1)+		; clear memory
+	    cmp r1,stend	; until bottom of symbol table
+	    rptl los
+	    >
+	  >
+	clr errcnt
+l1:	jsr r5,@dgetba		; look for header
+	cmp r0,#1		; is it 1?
+	bne l1
+	mov r0,r2		; initialize checksum
+	jsr r5,@dgetba		; next should be zero
+	tst r0
+	if ne,<
+	  inc errcnt
+	  br l1
+	  >
+l2:	jsr r5,@dgetwa		; get byte count
+	mov r0,r5		; r5 will have the byte count
+	jsr r5,@dgetwa		; get address
+	mov r0,r1
+	sub #6,r5		; correct byte count for stuff already read
+	if ne,<			; and handle start block specially
+  loop <    jsr r5,@dgetba	; get data byte
+	    mov #savls2,r3	; check address against saved addresses
+    loop <    cmp (r3)+,r1	; match a saved address?
+	      if eq,<
+	        mov (r3),r4	; address of place where saved
+		movb r0,(r4)+	; store into saved copy
+		tst (r1)+	; advance r1
+		dec r5		; grab another byte
+		beq l1		; but be prepared to punt this block if it
+		jsr r5,@dgetba	;  end on an odd byte
+		movb r0,(r4)	; store high byte of saved copy
+		br 3$
+		>
+	      tst (r3)+
+	      tst (r3)
+	      rptl ne
+	      >
+	    cmp r1,stend	; are we going to overwrite ourselves?
+	    if lo,<
+	      movb r0,(r1)+	; store
+	      >
+	    cmp r1,#lastlc	; see if we are above rug?
+	    if hi,<
+	      movb r0,(r1)+	; store
+	      >
+3$:	    sorl r5
+	    jsr r5,@dgetba	; get checksum
+	    tstb r2		; checksum zero?
+	    if ne,<
+	      inc errcnt	; increment error count if there was one
+	      >
+	    br l1		; next block
+	    >
+	  >
+	mov r1,starta
+	jsr r5,@dgetba		; get checksum
+	tstb r2			; checksum zero?
+	if ne,<
+	  inc errcnt
+	  >
+
+; now load symbols
+
+; find last symbol in symbol table and current flag words and mask
+	mov stbeg,r1		; ptr to one before start of symbol table
+	clr r3			; bit flag
+loop <	  sub #6,r1		; move ptr to next symbol
+	  cmp r1,stend		; check for end of symbol table
+	  exitl los
+	  asl r3		; next bit
+	  if eq,<		; if 16 symbols then get new flag word
+	    inc r3		; set bit 1 for first symbol
+	    mov r1,r4		; save ptr to register flag words
+	    sub #4,r1		; move symbol ptr past flag words
+	    >
+	  rptl
+	  >
+	; upon exiting this loop,
+	; R4 -> flag words, -2(r4) is half killed flags, (r4) reg flags
+	; R1 -> first unused symbol word
+	; R3 -> mask for flag bits of current symbol
+
+	jsr r5,@dgetba		; check for symbols
+	cmpb r0,#2		; any symbols?
+	if ne,<
+	  br lend
+	  >
+loop <    jsr r5,@dgetwa	; get 1st three chars of name
+	  push r0		; save them
+	  exitl eq		; zero word terminates
+	  jsr r5,@dgetwa	; get 2nd three chars of name
+	  push r0		; save them
+	  jsr r5,@dgetwa	; get flags
+	  mov r0,r5		; stick flags in R5 for easy access
+	  jsr r5,@dgetwa	; get value
+	  bit #10000,r5		; is this an undefined symbol?
+	  if ne,<		; yes,
+	    cmp (sp)+,(sp)+	; clear cruft off stack
+	    rptl		; and try for next symbol
+	    >
+	  asl r3		; next bit
+	  if eq,<		; if 16 symbols then get new flag word
+	    inc r3		; set bit 1 for first symbol
+	    mov r1,r4		; save ptr to register flag word
+	    sub #4,r1		; move symbol ptr past flag words
+	    clr (r4)		; clear register bits
+	    mov #-1,-2(r4)	; but initially set half kill bits
+	    >
+	  mov r0,(r1)		; save value
+	  mov (sp)+,-2(r1)	; save first word of RAD50 name
+	  mov (sp)+,-4(r1)	; 2nd word
+	  bit #20000,r5		; half killed?
+	  if ne,<
+	    bis r3,-2(r4)
+	    >
+	  else <
+	    bic r3,-2(r4)
+	    >
+	  bit #4000,r5		; register?
+	  if ne,<
+	    bis r3,(r4)
+	    >
+	  else <
+	    bic r3,(r4)
+	    >
+	  sub #6,r1		; move to next symbol
+	  mov r1,stend
+	  rptl
+	  >
+        br lend
+
+labort:	mov lodasp,sp		; unwind stack
+	print ^" LOADING ABORTED"
+lend:	print ^" Error count= "
+	mov errcnt,r0
+	jsr r5,tnumbr
+	jmp rugcmd
+
+; GETLB reads a byte from the serial line.  Adds it into checksum
+; stored in R2.  Returns byte read in R0
+getlb:	push r1,r3
+	mov srlcsr,r1
+	mov ttycsr,r3
+2$:	cmp r1,r3
+	beq 1$
+	tstb (r3)
+	if mi,<
+	  cmpb 2(r3),#7		; ^G aborts
+	  if eq,<
+	    pop r3,r1
+	    br labort
+	    >
+	  >
+1$:	tstb (r1)
+	bpl 2$
+	movb 2(r1),r0
+	bic #177400,r0		; mask down to just 8 bits
+	add r0,r2		; add it into checksum
+	pop r3,r1
+	rts r5
+
+; GETLW reads two bytes and assembles them into a word in R0
+getlw:	jsr r5,getlb		; get first byte, low order
+	push r0			; save it
+	jsr r5,getlb		; get high order byte, note that the high
+	swab r0			; byte is always guaranteed to be zero
+	add (sp)+,r0		; combine the two bytes into a word, note
+	rts r5			; no overlapping bits, no chance of carry
+.endc
+
+.if ne asmrt1
+; DGETLB reads a byte, adds to the checksum in R2 and returns the byte
+; in R0
+dgetlb:	cmp rdpnt,#bufend	;at end of buffer yet?
+	if his,<			;get byte
+	  .readw #emtare,#3,#bufbeg,#256.,blkcnt	;get data
+	  if cs,<		;no error
+	    tstb @#52		;did we read past the end of the file?
+	    if eq,<		;no.
+	      clr #bufbeg	;end of symbol table is a zero word
+	      clr #bufbeg+2	;ditto
+	      >
+	    else <
+	      print ^"I/O Error"
+	      jmp labort	;abort the loading
+	      >
+	    >
+	  inc blkcnt		;up the block count
+	  mov #bufbeg,rdpnt	;reset the read pointer
+	  >
+	movb @rdpnt,r0		;get the byte
+	inc rdpnt		;inc the pointer
+	bic #177400,r0		;clear out the high byte
+	add r0,r2		;add to checksum
+	rts r5			;done
+
+; DGETLW reads two bytes and assembles them into a word in R0
+dgetlw:	jsr r5,dgetlb		; get first byte, low order
+	push r0			; save it
+	jsr r5,dgetlb		; get high order byte, note that the high
+	swab r0			; byte is always guaranteed to be zero
+	add (sp)+,r0		; combine the two bytes into a word, note
+	rts r5			; no overlapping bits, no chance of carry
+.endc
+
+
+.sbttl	Program loading
+
+.if ne  asmdsk
+load:	print ^" "		; type a space after $L
+	jsr pc,bufclr		; backup to here on rubout
+	jsr r5,rnumbr		; read no.
+	pop r0,*		; vals: no., flags
+	cmp altcnt,#1		; $$L?
+	if los,<
+	  mov #symtop,stend	; $L, clear core, flush symbols
+	  clr r1		; ptr to 1st memory location to clear
+  loop <    clr (r1)+		; clear memory
+	    cmp r1,stend	; until bottom of symbol table
+	    rptl los
+	    >
+	  >
+	push r0			; DOPENR arg: block no.
+	jsr r5,dopenr		; open for reading
+l1:	jsr r5,dgetw		; get byte count
+	pop r0			; ...
+	if ne,<
+	  jsr r5,dgetw		; get address
+	  pop r1		; ...
+  loop <    jsr r5,dgetb	; get data byte
+	    cmp r1,stend	; are we getting too high?
+	    if lo,<
+	      movb (sp)+,(r1)+	; store
+	      >
+	    sorl r0
+	    >
+	  br l1			; next block
+	  >
+	jsr r5,dgetw		; get start address
+	pop starta		; ...
+	mov #4,r4		; ptr to bus error trap vector
+	mov (r4)+,sv4		; save bus error trap vector
+	mov (r4)+,sv6		; ...
+	mov #pr7,-(r4)		; setup RUG's bus error trap vector
+	mov #rtrap4,-(r4)	; ...
+
+; now load symbols
+
+loop <	  jsr r5,dgetw		; get 1st three chars of name
+	  pop s1
+	  exitl eq		; zero word terminates
+	  jsr r5,dgetw		; get 2nd three chars of name
+	  pop s2
+	  jsr r5,dgetw		; get value
+	  pop cvalue
+	  jsr r5,dgetw		; get flags
+	  pop cvflgs
+	  jsr r5,def		; define the symbol just read in
+	  rptl
+	  >
+	jmp rugcmd
+.endc
+	.sbttl Program Dumping
+
+.if ne <asmrt1+asmsrl>*asmdmp
+dmplow:	.word			;low address to dump
+dmphi:	.word			;high address to dump
+dputwa:	.word			; address of routine to put out a word
+dputba:	.word			; ditto for a byte
+dclose:	.word			;close file routine
+dump:
+.if ne asmrt1*asmsrl
+	print ^" L for serila line R for RT-11 "	;which to dump onto?
+	jsr pc,bufrdu		;get a menu selection
+	print ^"
+"
+	cmpb r0,#'L		;serial line?
+	beq 1$			;do serial line
+
+	cmpb r0,#'R		;do RT-11 file
+	beq 2$
+	jmp rugcmd		;huh?
+.endc
+
+.if ne asmrt1
+2$:
+
+	print ^" Input RT-11 File Specification: (foo.bin=)
+"
+	jsr pc,ristat		;restore the state of the world
+	.csige #bufbeg,#defext,#0	;take input from terminal
+	jsr pc,sstat		;save the state of the world
+	mov #dputlb,dputba	;setup for writing to RT-11 file
+	mov #dputlw,dputwa
+	mov #rt11cl,dclose
+	mov #bufbeg,rdpnt	;initialize to fill first buffer
+	clr blkcnt		;clear the block count
+	br actdmp		;continue dumping
+.endc
+
+.if ne asmsrl
+1$:
+	print ^" Input CSR addr of serial line ("
+	mov srlcsr,r0		;choose default CSR
+	if eq,<
+	  mov ttycsr,r0		;he has made no previous choice- use console
+	  >
+	mov r0,srlcsr		;setup default
+	jsr r5,tnumbr		;type out the number
+	print ^"): "
+	jsr pc,bufclr		;we backup to here on rubout
+	jsr r5,rnumbr		;read a number from the user
+	pop r0			;get the number read
+	bit #%nilv,(sp)+	;was it a number we got?
+	if eq,<
+	  mov r0,srlcsr
+	  >
+	print ^"
+^G aborts"
+	mov #putlb,dputba	;set up for reading from DLV type device
+	mov #putlw,dputwa
+	mov #srlcls,dclose	;close routine for a serial line
+	cmp srlcsr,#160000	;is this a reasonable number?
+	bhis actdmp
+	print ^" Bad CSR addr "	;complain to user
+	jmp rugcmd
+.endc
+
+actdmp:	mov dmplow,r3		;low address for dumping
+	mov dmphi,r4		;high address for dumping
+	mov sp,lodasp		;save the stack pointer for error returns
+
+loop <  mov r4,r1		;save high addr
+	sub r3,r1		;size in r1
+
+	if gt,<
+  loop<   tstb (r3)+		;see if the byte is zero
+	  bne 2$		;get one not zero?
+	  sorl r1
+	  >>
+	  br 4$
+
+2$:	dec r3			;back up
+4$:	clr r2			;clear out the checksum
+	cmp r3,r4		;anything to dump?
+	if lo,<
+	  mov r3,r1		;save pointer
+
+1$:
+	  .rept 5		;look for five of more zero bytes in a row
+	   cmp r1,r4		;at the end yet?
+	   if lo,<
+	     tstb (r1)+
+	     bne 1$
+	     >
+	  .endr
+	  sub r3,r1		;get size of block
+	  jsr pc,strtbl		;output block header
+	  mov r1,r0		;put out size of block
+	  add #6,r0		;account for the block header
+	  jsr r5,@dputwa
+	  mov r3,r0		;put out address of block
+	  jsr r5,@dputwa
+
+   loop <   movb (r3)+,r0	;get byte to output
+	    jsr r5,@dputba
+	    sorl r1
+	    >
+
+	  neg r2		;convert to proper checksum
+	  mov r2,r0		;output checksum
+	  jsr r5,@dputba
+	  >
+	cmp r3,r4
+	rptl lo
+	>
+
+	clr r2			;init checksum
+	jsr pc,strtbl		;output the block header
+	mov #6,r0		;block length of six
+	jsr r5,@dputwa
+	mov starta,r0		;put out start address
+	jsr r5,@dputwa
+	neg r2			;correct checksum
+	mov r2,r0
+	jsr r5,@dputba
+
+; Now dump symbols
+
+	mov #2,r0		; output a flag for symbols
+	jsr r5,@dputba
+	mov #symtop+6,r1	; ptr to before 1st symbol's value word
+	clr r3
+loop <	  sub #6,r1		; move ptr to next symbol
+	  cmp r1,stend		; beyond end of symbol table?
+	  exitl los
+	  asl r3		; get its bit in flag words
+	  if eq,<		; move to next group of 16 symbols
+	    inc r3		; set bit 1 for first symbol
+	    mov r1,r4		; save ptr to register flag word
+	    sub #4,r1		; move ptr over flag words to value cell
+				; of first symbol
+	    >
+	  tst -4(r1)		; anything there?
+	  rptl eq
+	  mov -4(r1),r0	
+	  jsr r5,@dputwa	; write out 1st three chars of name
+	  mov -2(r1),r0
+	  jsr r5,@dputwa	; write out 2nd three chars of name
+	  clr r0		; flag word
+	  bit r3,(r4)		; register value?
+	  if ne,<
+	    bis #4000,r0	; yes, set register flag in flag word
+	    >
+	  bit r3,-2(r4)		; half killed?
+	  if ne,<
+	    bis #20000,r0
+	    >
+	  jsr r5,@dputwa
+	  mov (r1),r0
+	  jsr r5,@dputwa	; write out symbol value
+	  rptl
+	  >
+	clr r0			; DPUTW arg: word
+	jsr r5,@dputwa		; write zero word to terminate symbols
+	jsr r5,@dclose		;close the file
+	jmp rugcmd
+
+strtbl:	mov #1,r0		;write out start block
+	jsr r5,@dputba
+	clr r0
+	jsr r5,@dputba
+	rts pc
+
+dabort:	mov lodasp,sp		;restore the sp
+	print ^" DUMPING ABORTED"
+	jmp rugcmd
+
+.if ne asmsrl
+; PUTLB writes a byte to a DLV type serial line
+putlb:	push r1,r3
+	mov srlcsr,r1		;get the csr in r1
+	mov ttycsr,r3		;get the console CSR in r3
+1$:	tstb (r3)		;is there a char?
+	if mi,<
+	  cmpb 2(r3),#7		;^G aborts
+	  if eq,<
+	    pop r3,r1		;pop off registers
+	    jsr r5,dclose	;close the file?
+	    br dabort		;dumping aborted
+	    >
+	  >
+	tstb 4(r1)		;can we send a char yet?
+	bpl 1$			;wait for char to arrive
+	movb r0,6(r1)		;get char
+	push r0			;save onto the stack;
+	bic #177400,(sp)	;mask to 8 bits
+	add (sp)+,r2		;accumulate checksum
+	pop r3,r1
+	rts r5
+
+; PUTLW writes out a word to the DLV type serial line
+putlw:	jsr r5,putlb		;output the low byte
+	swab r0			;swap the bytes
+	jsr r5,putlb		;send the high byte
+	rts r5			;done
+
+; SRLCLS closes the serial line by writing a zero byte
+srlcls: clr r0			;output a zero byte to end the file
+	jsr r5,putlw
+	rts r5			;done
+.endc
+
+.if ne asmrt1
+; DPUTLB write a byte to an RT-11 file open on channel 0.
+dputlb:	cmp rdpnt,#bufend	;at end of buffer yet?
+	if his,<		;put byte
+	  .writw #emtare,#0,#bufbeg,#256.,blkcnt	;put out data
+	  bcs wlos		;handle error
+	  inc blkcnt		;up the block count
+	  mov #bufbeg,rdpnt	;reset the pointer
+	  >
+	movb r0,@rdpnt		;get the byte
+	inc rdpnt		;bump the pointer
+	push r0			;save onto stack
+	bic #177400,(sp)	;clear out high byte
+	add (sp)+,r2		;add to checksum
+	rts r5			;done
+
+;DOUTLW writes a word as two bytes to the file open on channel 0
+dputlw: jsr r5,dputlb		;put out the low byte
+	swab r0			;swap the bytes
+	jsr r5,dputlb		;put out the high byte
+	rts r5			;done
+
+;RT11CL closes the RT-11 file open on channel 0.
+rt11cl:	cmp rdpnt,#bufbeg	;if the buffer is not empty then write it.
+	if ne,<
+	  .writw #emtare,#0,#bufbeg,#256.,blkcnt	;put out data
+	  if cs,<		;Tell user about I/O error
+wlos:	    print ^"I/O Error"
+	    .close #0		;close the file for good measure
+	    br dabort		;abort the dumping
+	    >
+	  >
+	.close #0
+	rts r5			;done
+.endc
+.endc
+
+.sbttl	Program Dumping
+
+.if ne  asmdsk
+; DUMP dumps core to the disk.  The format used is the same used by LOAD.
+dump:	print ^" "		; type a space after $L
+	jsr pc,bufclr		; backup to here on rubout
+	jsr r5,rnumbr		; read no.
+	pop r0,*		; vals: no., flags
+	push r0			; DOPENW arg: block no.
+	jsr r5,dopenw		; open dump area for writing
+	mov sv4,@#4
+	mov sv6,@#6
+	mov stend,r2		; lowest address used by RUG
+	clr -(r2)		; 6 bytes of zero to terminate dumping
+	clr -(r2)		; ...
+	clr -(r2)		; ...
+	clr r0			; ptr to 1st memory location
+	br 2$			; start scanning for nonzero location
+loop <	  mov r0,r1		; save ptr to current address
+	  clrb (r2)		; this insures scan doesn't go beyond end
+1$:
+	  .rept 5
+	    tstb (r1)+		; look for 5 or more zero bytes
+	    bne 1$
+	    .endr
+	  sub r0,r1		; calculate no. of bytes
+	  sub #5,r1		; correct for 5 zero bytes
+	  push r1		; DPUTW arg: word
+	  jsr r5,dputw		; write out byte count
+	  push r0		; DPUTW arg: word
+	  jsr r5,dputw		; write out address
+  loop <    movb (r0)+,-(sp)	; DPUTB arg: byte
+	    jsr r5,dputb	; write out data byte
+	    sorl r1
+	    >
+2$:	  movb #-1,(r2)		; this insures scan for nonzero ends
+  loop <    tstb (r0)+		; find nonzero byte
+	    rptl eq
+	    >
+	  dec r0
+	  cmp r0,r2		; this byte beyond dump range?
+	  rptl lo
+	  >
+	push #0			; DPUTW arg: word
+	jsr r5,dputw		; write jump block byte count
+	push starta		; DPUTW arg: word
+	jsr r5,dputw		; write start address
+	mov #rtrap4,@#4
+	mov #pr7,@#6
+
+; Now dump symbols
+
+	mov #symtop+6,r1	; ptr to before 1st symbol's value word
+	clr r2
+loop <	  sub #6,r1		; move ptr to next symbol
+	  cmp r1,stend		; beyond end of symbol table?
+	  exitl los
+	  asl r2		; get its bit in flag words
+	  if eq,<		; move to next group of 16 symbols
+	    inc r2		; set bit 1 for first symbol
+	    mov r1,r4		; save ptr to register flag word
+	    sub #4,r1		; move ptr over flag words to value cell
+				; of first symbol
+	    >
+	  tst -4(r1)		; anything there?
+	  rptl eq
+	  push -4(r1)
+	  jsr r5,dputw		; write out 1st three chars of name
+	  push -2(r1)
+	  jsr r5,dputw		; write out 2nd three chars of name
+	  push (r1)
+	  jsr r5,dputw		; write out symbol value
+	  clr -(sp)		; flag word
+	  bit r2,(r4)		; register value?
+	  if ne,<
+	    bis #%regv,(sp)	; yes, set register flag in flag word
+	    >
+	  bit r2,-2(r4)		; half killed?
+	  if ne,<
+	    bis #%half,(sp)
+	    >
+	  jsr r5,dputw
+	  rptl
+	  >
+	push #0			; DPUTW arg: word
+	jsr r5,dputw		; write zero word to terminate symbols
+	jsr r5,dclsw		; close write file
+	jmp rugcmd
+.endc
+
+.sbttl Go and Proceed commands
+
+; $G - Go
+go:	mov cvalue,r5		;get starting address
+	tst argcnt		;arg specified?
+	if eq,<
+	  mov starta,r5		;no, set start address from default
+	  >
+	bit #1,r5		;check low order bit
+	bne goerr		;error if odd number
+	cmp altcnt,#2		;set the default?
+	if eq,<
+	  mov r5,starta		;yes, set it to arg
+	  >
+	mov r5,upc		;set up new pc
+	cmp usp,stend		; make sure stack ptr is within bounds
+	bhi 1$
+	cmp usp,#402
+	if los,<
+1$:	  mov #1000,usp		; not in bounds, reset it
+	  >
+	jsr r5,setbrk		;set breakpoints
+	clr ssflag		;not single stepping
+	bic #20,ups		;make sure trap bit off
+	br contin		;start program
+
+goerr:	jmp err
+
+
+; $P - Proceed from a breakpoint 
+proced:	mov cvalue,r5
+	tst argcnt		; was count specified?
+	if eq,<
+	  mov #1,r5		; no count, use 1
+	  >
+	mov bptno,r0
+	if pl,<
+	  asl r0		; times two for word operations
+	  mov r5,bptcnt(r0)	; set proceed count
+	  >
+; come here from BPTH if count nonzero
+proc1:	clr ssflag
+	bis #20,ups		; set trace trap bit
+	mov pc,proflg		; now step over next instruction
+	br contin		; and then restore BPTs and continue
+
+; ^N - Single step
+sstep:	mov cvalue,count
+	tst argcnt		; arg specified?
+	if eq,<
+	  mov #1,count		; no arg, assume a single step
+	  >
+	mov pc,ssflag		; set single step flag
+	bis #20,ups		; set trace trap bit in PS
+	; fall through to CONTIN
+
+
+contin:	mov #14,r0		; ptr to trap vector
+	mov #bpth,(r0)+		; set breakpoint trap vector
+	mov #pr7,(r0)+		; high priority
+	jsr pc,rstat		; restore regs etc.
+	mov usp,sp		; restore user stack ptr
+	push ups,upc		; setup ps,pc for rti
+	rtt
+
+.sbttl Breakpoint
+
+bpth:	tst ssflag		; tracing?
+	if ne,<
+	  dec count		; count reached?
+	  if ne,<		; no
+	    bis #20,2(sp)	; make sure trace bit still on
+	    rtt			; keep going
+	    >
+	  >
+	pop upc,ups		; save pc and ps
+	mov sp,usp		; save stack ptr
+	mov #stack,sp		; setup RUG's stack
+	jsr pc,sstat		; save rest of machine state
+	tst proflg		; trace trap from proceed?
+	if ne,<
+	  bic #20,ups		; clear trace bit
+	  clr proflg		; clear flag
+	  jsr r5,setbrk		; set breakpoints
+	  jmp contin		; continue program
+	  >
+	mov upc,clocat		; set current location to after instruction
+	clr clflgs		; ...
+	tst ssflag		; single stepping?
+	if ne,<
+	  bic #20,ups		; clear T bit in user ps
+	  print ^"
+"
+	  br bph2
+	  >
+	jsr r5,rembrk		; remove breakpoints
+	sub #2,upc		; correct for incrementation of pc
+	sub #2,clocat		; ...
+	mov #nbpt*2-2,r4	; get a counter
+loop <	  cmp clocat,bptadr(r4)	; compare with list
+	  exitl eq		; jump if found
+	  sub #2,r4
+	  rptl ge		; re-loop until found
+	  print ^"
+BE; "
+	  mov #-1,bptno		; not stopped by breakpoint, set bpt no to -1
+	  br bph2
+	  >
+	dec bptcnt(r4)		; finished count?
+	bne proc1		; no, continue
+	mov #1,bptcnt(r4)	; set proceed count to 1
+	print ^"
+$"				; type "$nB;" where n is bpt no.
+	mov r4,r0		; get n*2
+	asr r0			; divide by two
+	mov r0,bptno		; save bpt no.
+	add #'0,r0		; convert breakpoint number
+	jsr r5,typec		; to ascii and type it
+	print ^"B; "
+bph2:	push clocat,#0		; SYMBOL args: value, flags
+	jsr r5,symbol		; print symbolic address <<
+	print ^">>"		; indicate RUG opened it
+	jsr r5,openi		; open as an instruction
+	jmp rcd1
+
+trap4:	tst @#42		; user program nxm catch set?
+	if ne,<
+	  mov @#42,(sp)		; set PC to throw to
+	  clr @#42		; clear catch
+	  rtt			; throw
+	  >
+	pop upc,ups		; save user PC and PS
+	mov sp,usp		; save user SP
+	mov #stack,sp		; setup RUG's stack
+	jsr pc,sstat		; save processor status
+	jsr r5,rembrk		; remove breakpoints if they're set
+	mov upc,clocat		; set current location to be that of trap
+	print ^"
+Trap through 4:
+"
+	br bph2
+
+
+; set breakpoints 0-7
+
+setbrk:	push r1			; save reg
+	com bptset		; test if breakpoints already set
+	if eq,<
+	  halt			; yes, RUG error
+	  >
+	mov #nbpt*2-2,r1	; restore all breakpoints
+loop <	  cmp bptadr(r1),#-1
+	  if ne,<
+	    mov @bptadr(r1),bptins(r1)	;save contents
+	    mov bpti,@bptadr(r1)	;replace with trap
+	    >
+	  sub #2,r1
+	  rptl pl		;re-loop until done
+	  >
+	pop r1			; restore reg
+	rts r5			;  then quit
+
+
+; remove breakpoints 0-7
+;   in the opposite order of setting
+
+rembrk:	push r1			; save reg
+	com bptset		; test if breakpoints set
+	if ne,<			; no, RUG error
+	  halt
+	  >
+	clr r1
+loop <	  cmp bptadr(r1),#-1
+	  if ne,<
+	    mov bptins(r1),@bptadr(r1)	;clear breakpoint
+	    >
+	  tst (r1)+
+	  cmp r1,#nbpt*2
+	  rptl lo
+	  >
+	pop r1			; restore reg
+	rts r5
+
+.sbttl	save/restore processor state
+
+; save processor state
+sstat:	mov r0,uregs		; save r0
+	mov #uregs+2,r0		; address of register save area
+	mov r1,(r0)+		; save r1-r5
+	mov r2,(r0)+
+	mov r3,(r0)+
+	mov r4,(r0)+
+	mov r5,(r0)+
+	mov #savls2,r1		; get list of locations to save
+loop <	  mov @(r1)+,@(r1)+	; save location in its save place
+	  tst (r1)		; end of list?
+	  rptl ne
+	  >
+.if eq  ndz
+	mov ttycsr,r1
+	mov (r1),svrcsr
+        mov 4(r1),svtcsr
+	bic #100,(r1)		; shut off interrupts
+	bic #100,4(r1)
+.endc
+	mov #rtrap4,@#4		; setup bus error trap
+	mov #pr7,@#6
+.lif ne  ndz
+	movb #1,dzaddr+4	; enable only line 0
+	rts pc
+
+; restore processor state
+rstat:
+.if ne  ndz
+loop <	  tst @#dzaddr		; wait for char to type
+	  rptl pl
+	  >
+.endc
+	mov #savls2,r1		; ptr to list of locations saved
+loop <	  mov @2(r1),@(r1)+	; restore location's value
+	  tst (r1)+		; skip over save location address
+	  tst (r1)		; end of list?
+	  rptl ne
+	  >
+.if eq  ndz
+loop <	  mov ttycsr,r1
+	  tstb 4(r1)		; wait for char to type
+	  rptl pl
+	  >
+	mov svrcsr,(r1)		; then restore device status registers
+	mov svtcsr,4(r1)
+.endc	
+	mov #4,r0
+	tst (r0)		; any bus error vector specified?
+	if eq,<
+	  mov #trap4,(r0)+	; no, setup one
+	  mov #pr7,(r0)+
+	  >
+	mov #uregs+2,r0		; ptr to register save area
+	mov (r0)+,r1		; restore r1-r5
+	mov (r0)+,r2
+	mov (r0)+,r3
+	mov (r0)+,r4
+	mov (r0)+,r5
+	mov uregs,r0		; restore r0
+	rts pc
+
+.if eq ndz
+.if ne asmrt1
+sistat:	
+	tst havsav		;have we saved before?
+	if eq,<
+	  mov @#trs,sircsr	;save the initial tty csr
+	  mov @#trs+4,sitcsr	;for both receiver and transmitter
+	  mov @#icvec,sicvec	;save the trasnmist and receive vectors
+	  mov @#icvec+2,sicvec+2
+	  mov @#icvec+4,sicvec+4
+	  mov @#icvec+6,sicvec+6
+	  mov @#100,sclock	;save the clock
+	  mov @#102,sclock+2
+	  mov #1,havsav		;we have saved values, never do it again
+	  >
+	rts pc
+ristat:
+	mov sircsr,@#trs	;restore the CSR
+	mov sitcsr,@#trs+4
+	mov sicvec,@#icvec	;and the initial interupr vectors
+	mov sicvec+2,@#icvec+2
+	mov sicvec+4,@#icvec+4
+	mov sicvec+6,@#icvec+6
+	mov sclock,@#100	;restore the clock
+	mov sclock+2,@#102
+	rts pc
+.endc
+.endc
+
+.sbttl	Instruction typeout - lookup
+
+inst:	mov #insts,r1		; start of instruction symbol table
+loop <	  mov r0,r2		; to save value
+	  tstb 1(r1)		; is it a flag
+	  if eq,<
+	    mov #6,wds2		; set in case its two words of RAD50
+	    tst (r1)+		; 2 word rad50 or change flag?
+	    beq 1$		; if eq then 2 word rad50
+	    mov (r1)+,r3
+	    mov (r1)+,r4
+	    rptl
+	    >
+	  mov #4,wds2
+1$:	  bic r3,r2		; apply mask
+	  cmp 2(r1),r2
+	  if eq,<
+	    sub #4,wds2		; zero if not 2 word rad50
+	    jmp (r4)
+	    >
+	  add wds2,r1
+	  cmp r1,#inste		; done?
+	  rptl los
+	  >
+	tst (r5)+		; return2
+	rts r5
+
+.sbttl	Instruction typein - lookup
+
+ininst:	jsr r5,gsym		; read instruction name
+	tst s1			; anything there?
+	beq 2$
+	jsr pc,bufpek		; special check to see if this is "label:"
+	cmp r0,#':
+	if eq,<
+	  jmp label
+	  >
+	mov #2,.lenth
+	mov #insts,r1		; start of instruction symbol table
+	clr r4
+loop <	  mov r0,r2		; to save value
+	  tstb 1(r1)		; is it a flag
+	  if eq,<
+	    mov #6,wds2		; set in case its two words of RAD50
+	    tst (r1)+		; 2 word rad50 or change flag?
+	    beq 1$		; if eq then 2 word rad50
+	    tst (r1)+		; skip mask word
+	    mov (r1)+,r3	; get address of typeout routine
+	    add -6(r1),r3	; add offset to get typein routine
+	    rptl
+	    >
+	  mov #4,wds2
+1$:	  cmp (r1),s1
+	  if eq,<
+	    cmp wds2,#6		; two words of rad50 in instruction name?
+	    if eq,<
+	      cmp 4(r1),s2	; yes, compare second part
+	      exitl eq
+	      >
+	    else <
+	      cmp s2,#6200	; 6200 = .rad50 "b  "
+	      if eq,<
+		mov #100000,r4
+		exitl
+		>
+	      tst s2
+	      exitl eq
+	      >
+	    >
+	  add wds2,r1
+	  cmp r1,#inste		; done?
+	  rptl los
+2$:	  tst (r5)+
+	  rts r5
+	  >
+	add 2(r1),r4		; get value of instruction
+	jmp (r3)		; goto proper typein routine
+
+.sbttl	Instruction typein/typeout routines
+
+; ADD/SUB typeout
+addsub:	jsr r5,typin
+	br arith1
+
+; double operand typeout (except ADD/SUB)
+arith:	jsr r5,bposs
+arith1:	push r0
+	asl r0
+	asl r0
+	swab r0			;get source bits in right place
+	bic #177700,r0
+	jsr r5,ssordd
+	pop r0
+dest1:	print ^","
+dest:	bic #177700,r0
+	jsr r5,ssordd
+	jmp back
+
+; double operand typein
+inop2:	jsr r5,spchk
+	mov r4,val
+	jsr r5,inssdd
+	pop r4
+jsr1:	swab r4
+	asr r4
+	asr r4
+	bis r4,val
+	jsr r5,comchk
+endin:	jsr r5,inssdd
+	bis (sp)+,val
+back2:	mov val,cvalue
+	mov val+2,cvalue+2
+	mov val+4,cvalue+4
+	mov .lenth,length
+	rts r5
+
+; single operand typeout
+singop:	jsr r5,bposs
+	br dest
+
+; signle operand typeout, no byte instructions
+singo1:	jsr r5,typin
+	br dest
+
+; single operand typein
+inop1:	jsr r5,spchk
+	mov r4,val
+	br endin
+
+; RTS typeout
+.rts:	jsr r5,typin
+	bic #177770,r0
+	push r0,#%regv
+	jsr r5,sym
+	jmp back
+
+; RTS typein
+inrts:	jsr r5,spchk
+	mov r4,val
+	jsr r5,getreg
+	add r4,val
+back3:	br back2
+
+
+errr:	jmp err
+
+; JSR/XOR typeout
+.jsr:	jsr r5,typin
+	push r0
+	rol r0
+	rol r0
+	swab r0
+	bic #177770,r0
+	jsr r5,ssordd
+	pop r0
+	jmp dest1
+
+; JSR/XOR typein
+injsr:	jsr r5,spchk
+	mov r4,val
+	jsr r5,getreg
+	br jsr1
+
+.if ne  eis
+; EIS instruction typeout
+.eis:	jsr r5,typin
+	push r0
+	bic #177700,r0
+	jsr r5,ssordd
+	print ^","
+	pop r0
+	ash #-6,r0
+	bic #177770,r0
+	jsr r5,ssordd
+	br back
+
+; EIS typein
+ineis:	jsr r5,spchk
+	mov r4,val
+	jsr r5,inssdd
+	bis (sp)+,val
+	jsr r5,comchk
+	jsr r5,getreg
+	ash #6,r4
+	bis r4,val
+	br back2
+.endc	; ne eis
+
+; Branch typeout
+.brchs:	jsr r5,typin
+	movb r0,r0
+	inc r0
+	asl r0
+	add clocat,r0
+	push r0,#0		; SYMBOL args: value, flags
+	jsr r5,symbol
+	jmp back
+
+; Branch typein
+inbrch:	jsr r5,spchk
+	mov r4,val
+	jsr r5,exp
+	pop r2,r4
+	bit #%ndef,r2
+	bne errr
+	sub clocat,r4
+	asr r4
+	dec r4
+	blt .neg
+	cmp r4,#177
+	bgt errr
+.neg:	cmp r4,#-177
+	ble errb		;absolute value of displ < 400
+	bic #177400,r4
+	bis r4,val
+bck4:	br back3
+
+.sob:	jsr r5,typin
+	push r0
+	bic #177077,r0
+	ash #-6,r0
+	push r0,#%regv
+	jsr r5,sym
+	print ^","
+	bic #177700,(sp)
+	dec (sp)
+	neg (sp)
+	asl (sp)
+	add clocat,(sp)
+	push #0
+	jsr r5,symbol
+	br back
+
+; SOB instruction
+insob:	jsr r5,spchk
+	mov r4,val
+	jsr r5,getreg
+	ash #6,r4
+	bis r4,val
+	jsr r5,comchk
+	jsr r5,exp
+	pop r2,r4
+	bit #%ndef,r2
+	bne errb
+	sub clocat,r4		; subtract instr address from branch dest
+	asr r4			; halve for word offset
+	bcs errb		; reject odd addresses
+	dec r4			; correct for usual branch offset
+	neg r4			; and branchs are always backwards
+	blt errb
+	cmp r4,#77
+	bgt errb
+	bic #177400,r4
+	bis r4,val
+	br bck4
+
+errb:	jmp errr
+
+.trap:
+.cntrl:	jsr r5,typin
+	rts r5
+
+incntr:	mov r4,val
+bck3:	br bck4
+back:	print ^"   "
+	rts r5
+
+comchk:	jsr pc,bufrd
+	cmp r0,#',
+	bne errb
+	rts r5
+
+spchk:	jsr pc,bufrd
+	cmp r0,#40
+	bne errb
+	rts r5
+
+getreg:	jsr r5,exp
+	pop r2,r4
+	cmp r4,#7
+	bhi errb
+	bit #%ndef+%nilv,r2
+	bne errb
+	rts r5
+
+
+bposs:	tst r0			; byte command?
+	bpl typin		; no
+	mov #6200,ainst+2	; .rad50 /b  /
+	br typ1
+
+typin:	clr ainst+2
+typ1:	mov (r1),ainst
+	tst wds2
+	if ne,<
+	  clr wds2
+	  mov 4(r1),ainst+2
+	  >
+	jsr r5,type50
+	print ^" "
+	rts r5
+
+cndcod:	clr ainst+2
+	mov (r1),ainst
+	jsr r5,type50		; type out instruction portion
+	print ^" "		; then a space
+	clr ainst		; flush instr once we've typed it out
+	mov r0,r2
+	ror r2
+	bcc noccc
+	add #3,ainst		;.rad50 /  c/
+noccc:	ror r2
+	bcc noccv
+	add #104600,ainst+2	;.rad50 /v  /
+noccv:	ror r2
+	bcc noccz
+	add #2020,ainst+2	;.rad50 / z /
+noccz:	ror r2
+	bcc noccn
+	add #16,ainst+2		;.rad50 /  n/
+noccn:	jsr r5,type50
+	br back
+
+ainst:	0
+	0
+
+inccdd:	mov r4,val
+	jsr r5,spchk
+1$:	jsr pc,bufrdu		; read an upper case char
+	mov #1,r2
+	mov #tbl,r3
+loop <	  cmpb r0,(r3)+
+	  if eq,<
+	    bis r2,val
+	    asl r2
+	    br 1$
+	    >
+	  asl r2
+	  tstb (r3)	;signals end of table
+	  rptl ne
+	  >
+	jsr pc,bufrrd		; if it wasn't a condition code, put it back
+	br bck3
+
+TBL:	.BYTE 'C
+	.BYTE 'V
+	.BYTE 'Z
+	.BYTE 'N
+wds2:	0	;left byte never zero
+
+.sbttl	Instruction typeout - addresses
+
+; SSORDD - types out a source or destination field of an instruction.
+;	ARGS:				VALS:
+; R0 -> address syllable in	  R0 -> effective address of source or dest
+;	 low 6 bits		  R1 -> flag word for R0 (ie.  %regv or not)
+; CLOCAT -> 1st word of instr	  R2 -> non-zero if deferred
+ssordd:	mov r0,r1		; copy arg
+	bic #177770,r1		; get register no.
+	ash #-3,r0		; get address mode
+	clr r2			; use as flag to say whether deferred
+	bit #1,r0		; deferred mode?
+	if ne,<
+	  mov pc,r2		; flag
+	  bic #1,r0		; clear bit, check if register deferred mode
+	  beq 5$		; register deferred mode, type (R)
+	  print ^"@"		; not register deferred, preceed with @
+	  >
+	add r0,pc		; decode mode
+	br 1$			; register
+	br 2$			; autoincrement
+	br 3$			; autodecrement
+	br 4$			; index
+1$:	jsr r5,regtyp		; type R
+	rts r5
+2$:	cmp r1,#7		; PC?
+	if eq,<
+	  print ^"#"		; type #N
+	  jsr r5,tinget		; get next word of instruction
+	  push #0		; SYM arg2: flags
+	  jsr r5,sym		; arg1 on stack from TINGET
+	  rts r5
+	  >
+	print ^"("		; type (R)+
+	jsr r5,regtyp
+	print ^")+"
+	rts r5
+3$:	print ^"-("		; type -(R)
+	jsr r5,regtyp
+	print ^")"
+	rts r5
+4$:	jsr r5,tinget		; get next word of instruction
+	cmp r1,#7		; PC?
+	if eq,<
+	  add clocat,(sp)	; make offset into absolute address
+	  add length,(sp)	; ...
+	  push #0		; SYM arg2: flags
+	  jsr r5,sym		; type A
+	  rts r5
+	  >
+	push #0			; SYM arg2: flags
+	jsr r5,sym		; arg1 on stack from TINGET
+5$:	print ^"("		; type x(R)
+	jsr r5,regtyp	
+	print ^")"
+	rts r5
+
+regtyp:	push r1,#%regv		; SYM args: value, flags
+	jsr r5,sym
+	rts r5
+
+tinget:	push (sp)		; slot for result
+	push clocat		; current location
+	add length,(sp)		; skip over first part of instruction
+	jsr r5,getw		; get next word
+	pop 2(sp)		; store in result slot
+	add #2,length		; instruction now another word long
+	rts r5
+
+.sbttl	Instruction typein - addresses
+
+inssdd:	push (sp)		; make slot for return val
+	clr 2(sp)		; initially zero
+	jsr pc,bufrd		; get next character
+	cmp r0,#'@
+	if eq,<
+	  bis #10,2(sp)		; @, turn on indirect bit in address
+	  jsr pc,bufrd		; get another character
+	  >
+	cmp r0,#'#
+	if eq,<
+	  jsr r5,exp
+	  pop r2,r4
+	  bit #%ndef+%regv+%nilv,r2
+	  bne erri
+	  bis #27,2(sp)
+	  jsr r5,appval
+	  rts r5
+	  >
+	cmp r0,#'-
+	if eq,<
+	  jsr pc,bufrd
+	  cmp r0,#'(
+	  beq 1$
+	  jsr pc,bufrrd
+	  >
+	cmp r0,#'(
+	beq 2$
+	jsr pc,bufrrd
+	jsr r5,exp
+	pop r2,r4
+	bit #%nilv,r2
+	bne erri
+	bit #%regv,r2
+	if ne,<
+	  cmp r4,#7
+	  bhi erri
+	  bis r4,2(sp)
+	  rts r5
+	  >
+	jsr pc,bufrd
+	cmp r0,#'(
+	if ne,<
+	  jsr pc,bufrrd
+	  sub clocat,r4
+	  sub .lenth,r4
+	  sub #2,r4
+	  bis #67,2(sp)
+	  jsr r5,appval
+	  rts r5
+	  >
+	jsr r5,appval
+	bis #60,2(sp)
+1$:	bis #40,2(sp)
+2$:	jsr r5,getreg
+	bis r4,2(sp)
+	jsr pc,bufrd
+	cmp r0,#')
+	bne erri
+	bit #60,2(sp)
+	if eq,<
+	  jsr pc,bufrd
+	  cmp r0,#'+
+	  if eq,<
+	    bis #20,2(sp)
+	    >
+	  else <
+	    bis #10,2(sp)
+	    jsr pc,bufrrd
+	    >
+	  >
+	rts r5
+
+erri:	jmp err
+
+appval:	mov .lenth,r0
+	mov r4,val(r0)
+	add #2,.lenth
+	rts r5
+
+
+val:	.word 0,0,0
+.lenth:	.word 0
+
+.sbttl	Expression reader
+
+; EXP
+exp:	push (sp),(sp)
+	jsr r5,term
+	pop 2+2(sp),4(sp)
+loop <	  jsr pc,bufrd
+	  cmp r0,#40		; space, binary plus
+	  beq 1$
+	  cmp r0,#'+
+	  if eq,<		; +, binary plus
+1$:	    jsr r5,term
+	    bis (sp)+,2+2(sp)
+	    add (sp)+,4(sp)
+	    rptl
+	    >
+	  cmp r0,#'-
+	  if eq,<		; -, binary minus
+	    jsr r5,term
+	    bis (sp)+,2+2(sp)
+	    sub (sp)+,4(sp)
+	    rptl
+	    >
+	  >
+	jsr pc,bufrrd		; reread unknown character
+	rts r5
+
+
+; TERM
+term:	push (sp),(sp)		; make slots for return vals
+	push r0,r2,r3		; save regs
+	jsr r5,fact
+	pop 10+2(sp),r3
+loop <	  jsr pc,bufrd
+	  cmp r0,#'*
+	  if eq,<		; *, binary multiply
+	    jsr r5,fact
+	    bis (sp)+,10+2(sp)
+	    mul (sp)+,r3
+	    rptl
+	    >
+	  cmp r0,#'!
+	  if eq,<		; !, binary divide
+	    jsr r5,fact
+	    bis (sp)+,10+2(sp)
+	    clr r2
+	    div (sp)+,r2
+	    mov r2,r3
+	    rptl
+	    >
+	  >
+	jsr pc,bufrrd		; reread unknown character
+	mov r3,12(sp)
+	pop r3,r2,r0		; restore regs
+	rts r5
+
+
+; FACT
+fact:	push (sp),(sp)		; make two result slots
+	clr 2(sp)		; clear flags word
+	jsr r5,rnumbr		; see if numeric
+	pop 4+2(sp),*
+	if eq,<
+	  rts r5		; numeric, reutrn value
+	  >
+	jsr pc,bufrd		; get input character
+	cmp r0,#'+
+	if eq,<			; +, unary plus
+	  jsr r5,fact
+	  pop 2+2(sp),4(sp)
+	  rts r5
+	  >
+	cmp r0,#'-
+	if eq,<			; -, unary minus
+	  jsr r5,fact
+	  pop 2+2(sp),4(sp)
+	  neg 4(sp)
+	  rts r5
+	  >
+	cmp r0,#''
+	if eq,<			; ', read ascii byte
+	  jsr pc,bufrd
+	  mov r0,4(sp)
+	  rts r5
+	  >
+	cmp r0,#'"
+	if eq,<			; ", read ascii word
+	  jsr pc,bufrd
+	  movb r0,4(sp)
+	  jsr pc,bufrd
+	  movb r0,5(sp)
+	  rts r5
+	  >
+	cmp r0,#'&
+	if eq,<			; &, read rad50 word
+	  jsr r5,get50
+	  pop 4(sp)
+	  rts r5
+	  >
+	cmp r0,#33		; check for Escape just so we can implment $Q
+	if eq,<
+	  jsr pc,bufrdu		; read one more ahead
+	  cmp r0,#'Q		; is it $Q
+	  if eq,<		; yes, evalutes to last value typed out
+	    mov cvalue,4(sp)
+	    clr 2(sp)		; is this better?
+;	    mov cvflgs,2(sp)
+	    rts r5
+	    >
+	  jsr pc,bufrrd		; wasn't $Q put, the char back
+	  >
+	jsr pc,bufrrd		; reread the character for RR50
+	jsr r5,rr50		; start of symbol?
+	  br 1$
+	jsr pc,bufrrd		; reread the character for GSYM
+	jsr r5,gsym		; read symbol
+	jsr r5,svalue		; get symbol value
+	pop 2+2(sp),4(sp)	; store results
+	rts r5
+; character not the start of a factor so return null value
+1$:	mov #%nilv,2(sp)	; null flag
+	rts r5			; and return
+
+
+; RNUMBR, reads a number
+; On return, SP -> numberP flag,
+;		   value
+rnumbr:	push (sp),(sp)		; create two result slots
+	push r0,r1,r2		; save regs
+	mov #%nilv,12(sp)	; initially no number
+	clr r1
+	clr r2
+loop <	  jsr pc,bufrd		; get input character
+	  cmp r0,#'0		; digit?
+	  exitl lo
+	  cmp r0,#'9
+	  exitl hi
+	  sub #'0,r0
+	  ash #3,r2
+	  add r0,r2
+	  mul #10.,r1
+	  add r0,r1
+	  clr 12(sp)
+	  rptl
+	  >
+	cmp r0,#'.
+	if eq,<
+	  tst 12(sp)
+	  bne 1$
+	  mov r1,10(sp)
+	  >
+	else <
+1$:	  mov r2,10(sp)
+	  jsr pc,bufrrd
+	  >
+	pop r2,r1,r0		; restore regs
+	rts r5
+
+
+; GSYM reads a symbol, converting it to rad50.
+; smashes R1
+;	VALS:			  ARGS:
+; reads own input	    S1 -> first word of rad50 symbol
+;			    S2 -> second word of rad50 symbol
+gsym:	jsr r5,get50		; read 1st word of rad50
+	pop s1			; copy result to return slot
+	jsr r5,get50		; read 2nd word of rad50
+	pop s2			; copy result to return slot
+loop <	  jsr r5,rr50		; read rad50 characters till no more
+	    exitl		; return for character not rad50
+	  rptl
+	  >
+	rts r5
+
+
+; GET50 reads up to 3 rad50 characters and packs them into a word.
+get50:	push (sp),r1		; make result slot, save reg
+	clr 4(sp)		; init rad50 word
+	jsr r5,rr50		; read rad50 character
+	  br 1$
+	mul #50*50,r1		; store in 1st position in word
+	add r1,4(sp)		; ...
+	jsr r5,rr50		; read rad50 character
+	  br 1$
+	mul #50,r1		; store in 2nd position in word
+	add r1,4(sp)		; ...
+	jsr r5,rr50		; read rad50 character
+	  br 1$
+	add r1,4(sp)		; store in 3rd position in word
+1$:	pop r1			; restore reg
+	rts r5
+
+
+; RR50 reads a ascii character and converts it to rad50.  If the
+; character is not rad50 RR50 doesn't skip and character is left
+; to be reread.  Character is left in R1.
+rr50:	jsr pc,bufrdu		; read upper case ascii character
+	clr r1			; starting rad50 character (added to below)
+	cmp r0,#'$
+	beq 1$
+	cmp r0,#'%
+	beq 2$
+	cmp r0,#'.
+	beq 3$
+	mov r0,r1		; numbers in below comments are octal
+	sub #'0,r1		; R1 = char-60 ('0)
+	blo 7$			; char < 60, not rad50 by now
+	cmp r1,#9.		; ('0-'9)? 60<=char<=72? 0<=R1<=12?
+	blos 4$			; yes, R1+36 (char-60+36) is a rad50 number
+	sub #'A-'0,r1		; R1 = R1-21 (char-101)
+	blo 7$			; 72<char<101, not rad50
+	cmp r1,#'Z-'A		; (A-Z)? 101<=char<=132? 0<=R1<=31?
+	blos 5$			; yes, R1+1 (char-101+1) is a rad50 alpha
+7$:	jsr pc,bufrrd		; reread the last character
+	rts r5
+1$:	add #33-35,r1		; $, rad50 = 33
+2$:	inc r1			; %, rad50 = 35
+3$:	add #34-36,r1		; ., rad50 = 34
+4$:	add #36-1,r1		; 0-9, rad50 = 36-47
+5$:	inc r1			; A-Z, rad50 =  1-32
+6$:	tst (r5)+		; return2
+	rts r5
+
+
+; SVALUE looks up symbol in S1 (2 words).  SFLGP is left pointing to the
+; register flag word in the symbol table for this symbol.  SBIT will have
+; a bit mask to specify the flag bit for this symbol in the flag words.
+; On return, SP -> flags,
+;		   value
+svalue:	push (sp),(sp)		; make room for return vals
+	push r1			; save reg
+	mov stbeg,r1		; ptr to before 1st symbol's value word
+	clr sbit
+loop <	  sub #6,r1		; move ptr to next symbol
+	  cmp r1,stend		; beyond end of symbol table?
+	  if los,<		; not found
+	    clr 6(sp)		; return zero
+	    mov #%ndef,4(sp)	; with undefined bit set
+	    exitl
+	    >
+	  asl sbit		; get its bit in flag words
+	  if eq,<		; move to next group of 16 symbols
+	    inc sbit		; set bit 1 for first symbol
+	    mov r1,sflgp	; save ptr to register flag word
+	    sub #4,r1		; move ptr over flag words to value cell
+				; of first symbol
+	    >
+	  cmp -4(r1),s1		; 1st word of rad50 same?
+	  rptl ne
+	  cmp -2(r1),s2		; 2nd word of rad50 same?
+	  rptl ne
+	  mov (r1),6(sp)	; found symbol, store value
+	  clr 4(sp)		; flag word
+	  bit sbit,@sflgp	; register value?
+	  if ne,<
+	    bis #%regv,4(sp)	; yes, set register flag in flag word
+	    >
+	  >
+	mov r1,sptr		; save ptr to symbol entry
+	pop r1			; restore reg
+	rts r5
+
+sptr:	.word 0
+sbit:	.word 0
+sflgp:	.word 0
+s1:	.word 0
+s2:	.word 0
+
+.sbttl	Symbol typeout
+
+; SYM is like SYMBOL but checks absolute/relative typeout mode first
+sym:	tst tabsmd		; absolute mode?
+	bne const
+	; fall through to symbol
+
+; SYMBOL searches the symbol table for a value greater than or equal
+; to the lookup value such that the difference is smaller than 200.
+; Types out SYMBOL+OFFSET from looked up value.
+;	ARGS:			VALS:
+; SP -> flag	       AINST -> symbol name in AINST & AINST+2
+;	value
+symbol:	jsr r5,save6		; save regs
+	clr ainst		; will still be zero if nothing found
+	mov stbeg,r1		; ptr to start of symbol table
+	clr r2			; value of last symbol found
+	clr r3			; bit in flag word for current symbol
+loop <	  sub #6,r1		; move ptr to next symbol
+	  cmp r1,stend		; check for end of symbol table
+	  exitl los
+	  asl r3		; next bit
+	  if eq,<		; if 16 symbols then get new flag words
+	    inc r3		; set bit 1 for first symbol
+	    mov r1,r4		; save ptr to register flag word
+	    sub #4,r1		; move ptr to before first symbol in this group
+	    >
+	  mov 20(sp),r0		; get value
+	  bit r3,-2(r4)		; if half killed then ignore it
+	  rptl ne
+	  sub (r1),r0		; compare symbol's value to lookup value
+	  rptl lo		; no good if smaller
+	  cmp r0,mxoff		; no good if difference is large
+	  rptl hi
+	  cmp (r1),r2		; no good if smaller than largest found
+	  rptl lo
+	  bit #%regv,16(sp)	; symbol's reg flag must = value's
+	  if eq,<
+	    bit r3,(r4)		; lookup value is not register
+	    rptl ne
+	    >
+	  else <
+	    bit r3,(r4)		; lookup value is register
+	    rptl eq
+	    tst r0		; no offsets used for register typeout
+	    rptl ne
+	    >
+	  mov -4(r1),ainst	; save symbol name
+	  mov -2(r1),ainst+2	; ...
+	  mov (r1),r2		; and value
+	  rptl
+	  >
+	tst ainst		; if zero, no symbol found
+	if ne,<
+	  jsr r5,type50		; type symbol name
+	  mov 20(sp),r0		; lookup value
+	  sub r2,r0		; calculate offset from symbol value
+	  beq 1$		; don't type offset if 0
+	  print ^"+"
+	  jsr r5,tnumbr		; type octal of r0
+	  >
+	else <
+	  push 20(sp),16+2(sp)	; CONST args: value, flags
+	  jsr r5,const		; type value as a constant
+	  >
+1$:	jsr r5,rest6		; restore regs
+	pop 2(sp),*		; remove args from stack
+	rts r5
+
+
+; CONST types its arg as a constant.  First arg is value, second is
+; flag word.
+const:	bit #%regv,2(sp)	; register value?
+	if ne,<
+	  print ^"%"		; % to indicate register value
+	  >
+	mov 4(sp),r0		; value arg
+	jsr r5,tnumbr		; type as octal no.
+	pop (sp),(sp)		; remove args from stack
+	rts r5
+
+.sbttl	Typeout routines
+
+; TNUMBR: type out number in R0, do not smash it
+tnumbr:	push r0			; save reg
+	jsr r5,1$
+	cmp tradix,#10.
+	if eq,<
+	  print ^"."		; decimal, follow typeout with point
+	  >
+	pop r0			; restore reg
+	rts r5
+1$:	push r1			; save reg
+	mov r0,r1		; setup for DIV instruction, ugh
+	clr r0			; ...
+	div tradix,r0		; stuff left to type in r0, this digit in r1
+	if ne,<
+	  jsr r5,1$		; output higher digits
+	  >
+	mov r1,r0		; make ascii
+	add #'0,r0		; ...
+	jsr r5,typec		; type it
+	pop r1			; restore reg
+	rts r5
+
+
+; TYPE50 converts AINST and AINST+2 from RAD50 to ASCII typeout
+type50:	push r0,r1		; save regs
+	clrb r50asc		; spaces become nulls
+	mov ainst,r1		; first word of RAD50
+	jsr r5,unpack
+	mov ainst+2,r1		; second word of RAD50
+	jsr r5,unpack
+	movb #40,r50asc		; restore spaces
+	pop r1,r0		; restore regs
+	rts r5
+
+unpack:	jsr r5,subl		; get first char in r0
+	  50*50
+	movb r50asc(r0),r0	; convert first to ascii
+	if ne,<
+	  jsr r5,typec		; type if not null
+	  >
+	jsr r5,subl		; get second char in r0, third in r1
+	  50
+	movb r50asc(r0),r0	; convert second to ascii
+	if ne,<
+	  jsr r5,typec		; type if not null
+	  >
+	movb r50asc(r1),r0	; convert third to ascii
+	if ne,<
+	  jsr r5,typec		; type if not null
+	  >
+	rts r5
+
+subl:	mov #-1,r0		; start count
+loop <	  inc r0		; count no. of subtractions
+	  sub (r5),r1
+	  rptl cc
+	  >
+	add (r5)+,r1		; subtracted once too often, so correct
+	rts r5
+
+r50asc:	.ascii " ABCDEFGHIJKLMNOPQRSTUVWXYZ$.%0123456789"
+
+.sbttl	Input buffering and rubout processing
+
+buf:	.blkb 78.	;buffer to store characters in
+	.byte -1	;marks end of buf
+	.even
+bufptr:	buf		;pts to next char to read in buf.
+buflst:	buf		;pts to next open slot in buf (bufptr may
+			;be less than buflst if currently
+			;rereading chars).
+bufpc:	-1		;place to goto if rubout found. (backup)
+bufsp:	-1		;stack ptr if rubout found.
+
+;BUFRD reads a  char (input or  from buf).  If  bufptr=buflst
+;then a  char is  inputted,  echoed, and  put into  buf.   If
+;bufptr<buflst then bufptr is moved and the next char is read
+;from buf.  If  a rubout  is inputted, then  BUFRD will  loop
+;inputting chars (handling rubout processing, deleting  chars
+;from buf) until a non-rubout is found. That char is inserted
+;into buf, bufptr is reset to the beginning of buf, and  then
+;the program backs up  by setting PC from  bufpc and SP  from
+;bufsp.  These were set by a previous call to BUFCLR.  Thus a
+;rubout causes the program to back up and reread all previous
+;chars not rubbed out.
+
+; Note: BUFCLR, BUFRD, and BUFRRD are called with JSR PC,.
+
+; Note: BUFCLR should only be called by a top-level routine,
+; not a subroutine.
+
+bufclr:	mov (sp),bufpc		;save where to back up to.
+	mov sp,bufsp		;save stack ptr (will have PC on top).
+	mov #buf,bufptr		;clear out any chars in buf.
+	mov #buf,buflst
+	rts pc
+
+bufpek:	jsr pc,bufrd
+	br bufrrd
+
+; BUFRDU - call bufd and upper case any alphbetic characters
+bufrdu:	jsr pc,bufrd
+	cmp r0,#'a		; upper case alphabetic chars
+	if his,<
+	  cmp r0,#'z
+	  if los,<
+	    sub #40,r0
+	    >
+	  >
+	rts pc
+
+bufrd:	cmp bufptr,buflst	; input or reread?
+	if lo,<
+	  movb @bufptr,r0	; reread char
+	  inc bufptr		; advance to next character
+	  rts pc
+	  >
+1$:	jsr r5,readc		; read next character
+	cmpb r0,#177		; rubout?
+	if eq,<
+  loop <    cmp buflst,#buf	; rubout at beginning of buf?
+	    if los,<
+	      print ^""	; beg of buf, so beep (Nothing to rub out)
+	      br 2$
+	      >
+	    dec buflst		; forget about last character in buffer
+	    movb @buflst,r0	; get character just rubbed out
+	    jsr r5,rubout	; erase it from display
+2$:	    jsr r5,readc	; get next input character
+	    cmp r0,#177		; another rubout?
+	    rptl eq
+	    >
+	  mov r0,reread		; reread character
+	  mov #buf,bufptr	; reset ptr so reread chars
+	  mov bufsp,sp		; now backup stack...
+	  mov bufpc,(sp)	;   ... and PC
+	  rts pc
+	  >
+	cmp r0,#014		; ^L?
+	if eq,<
+	  jsr r5,clrscn		; clear screeen
+	  push r1		; save reg
+	  mov #buf,r1		; ptr to input buffer
+  loop <    cmp r1,buflst	; typed everything in buffer yet?
+	    exitl eq
+	    movb (r1)+,r0	; get next char in input buffer
+	    jsr r5,typec	; type it
+	    rptl
+	    >
+	  pop r1		; restore reg
+	  br 1$			; get next input character
+	  >
+	movb r0,@buflst		; put char into bufffer
+	inc buflst		; move to new char slot
+	br bufrd		; go return char
+
+
+; BUFRRD causes the last character read to be reread.
+bufrrd:	dec bufptr
+	movb @bufptr,r0
+	rts pc
+
+
+; RUBOUT does rubout echoing/erasing for char in R0.
+rubout:	tst ttytyp		; printing terminal?
+	if eq,<
+	  jsr r5,typec		; yes, echo character
+	  rts r5
+	  >
+	cmpb r0,#40		; control char?
+	if lo,<
+	  cmpb r0,#33		; escape is only one char
+	  if ne,<
+	    jsr r5,types	; control char, rub out both ^ and char
+	      bsspbs-.
+	    >
+	  >
+	jsr r5,types		; rub out char
+	bsspbs-.
+	rts r5
+
+bsspbs:	.byte	10,40,10,0	; BS, SP, BS
+	.even
+
+.sbttl	Input-output routines.
+
+; READC gets a character from the terminal.  The char is returned in r0.
+readc:	mov reread,r0		; any character to be reread?
+	bpl 2$			; yes, return right away
+	jsr r5,ireadc		; get a character
+	tst ttytyp		; TTY?
+	if eq,<
+	  cmp r0,#'}		; yes, translate } to escape
+	  if eq,<
+	    mov #33,r0
+	    >	  
+	  >
+  .if eq <sys-mit>*<sys-mit44>
+	cmp ttytyp,#%tnsb	; SB?
+	if eq,<
+	  cmp #33,r0		; SB escape sequence?
+	  bne 1$		; no, no translation
+	  jsr r5,ireadc
+	  cmp r0,#'p		; F1 key: ESC
+	  if eq,<
+	    mov #33,r0
+	    >
+	  cmpb r0,#'q		; F2 key: ^C
+	  if eq,<
+	    mov #3,r0
+	    >
+	  >
+  .endc
+1$:	tst r0			; throw away nulls since proably
+	beq readc		; garbage command anyway
+	cmpb #15,r0 		; don't echo cr, lf, or rubout
+	beq 2$
+	cmpb #12,r0
+	beq 2$
+	cmpb #177,r0
+	beq 2$
+	jsr r5,typec 		; echo character
+	cmpb r0,#4		; ^D
+	beq wipe
+	cmpb r0,#7		; ^G
+	beq quit
+2$:	mov #-1,reread		; clear reread
+	rts r5
+
+wipe:	print ^" XXX? "
+	br qbr
+quit:	print ^"QUIT? "
+qbr:	jmp rcd1
+
+
+; IREADC reads a char from the terminal.
+.if eq  ndz
+ireadc:	tstb @ttycsr
+	bpl ireadc
+	mov @#trs+2,r0		; get character
+	bic #177600,r0		; strip off parity etc.
+	rts r5
+.iff
+ireadc:	mov #dzaddr,r0		; get address of DZ11
+loop <	  tstb (r0)		; wait for a character
+	  rptl pl
+	  >
+	mov 2(r0),r0		; get character
+	bit #3400,r0		; character from line 0?
+	bne ireadc		; no, ignore
+	bic #177600,r0		; strip off parity etc.
+	rts r5
+.endc
+
+.sbttl	Output subroutines
+
+; Clears screen for display, <CRLF> for TTY or Glass TTY
+
+clrscn:	tst ttytyp
+	if le,<
+	  print ^"
+"
+	  >
+	else <
+	  jsr r5,types
+	    .litrl ^".byte 233,'H,233,'J,0"
+	  >
+	rts r5
+
+
+; TYPES takes a relative ptr to an asciz string following the call and
+; types the string.
+types:	push r0,r1		; save regs
+	mov r5,r1		; relative ptr to asciz msg
+	add (r5)+,r1		; make absolute
+loop <	  movb (r1)+,r0		; next character
+	  exitl eq		; null terminates
+	  jsr r5,typec		; type char
+	  rptl
+	  >
+	pop r1,r0		; restore regs
+	rts r5
+
+
+; ITYPES takes a relative ptr to an asciz string following the call and
+; image types the string.
+itypes:	push r0,r1		; save regs
+	mov r5,r1		; relative ptr to string
+	add (r5)+,r1		; make absolute
+loop <	  movb (r1)+,r0		; get character
+	  exitl eq		; null terminates
+	  jsr r5,itypec		; type char
+	  rptl
+	  >
+	pop r1,r0		; restore regs
+	rts r5
+
+
+; Type character contained in r0
+typec:	push r0			; save char
+	cmpb r0,#7		; BELL?
+	beq tyco2
+	cmpb r0,#10		; BS?
+	if eq,<
+	  dec hpos
+	  br tyco2
+	  >
+	cmpb r0,#11		; TAB?
+	if eq,<
+	  mov #40,r0		; type spaces to simulate
+  loop <    jsr r5,itypec
+	    inc hpos
+	    bit #7,hpos		; until reach multiple of 8
+	    rptl ne
+	    >
+	  pop r0		; restore char
+	  rts r5
+	  >
+	cmpb r0,#12		; LF?
+	if eq,<
+	  jsr r5,itypec
+	  tst ttytyp		; printing terminal or glass TTY?
+	  ble tyco3		; yes, just type
+	  sout ^"K"		; erase to end of line
+	  br tyco3		; now type LF
+	  >
+	cmpb r0,#15		; CR?
+	if eq,<
+	  clr hpos
+	  br tyco2
+	  >
+	cmpb r0,#33		; ESC?
+	if eq,<
+	  mov #'$,r0
+	  br tyco1
+	  >
+	cmpb r0,#40
+	if lo,<
+	  mov #'^,r0
+	  jsr r5,itypec
+	  inc hpos
+	  mov (sp),r0
+	  bis #100,r0
+	  >
+tyco1:	inc hpos
+tyco2:	jsr r5,itypec
+tyco3:	pop r0			; restore reg
+	rts r5
+
+
+.if eq  ndz
+itypec:	push r1			; save reg
+loop <	  mov ttycsr,r1
+	  tstb 4(r1)		; wait for ready
+	  rptl pl		; ...
+	  >
+	movb r0,6(r1)		; send character
+	pop r1			; restore reg
+	rts r5
+.iff
+itypec:	push r1			; save reg
+	mov #dzaddr,r1		; get DZ11 address
+loop <	  tst (r1)		; wait for transmitter ready
+	  rptl pl		; ...
+	  >
+	movb r0,6(r1)
+	pop r1			; restore reg
+	rts r5
+.endc
+
+.sbttl	Core/Core-image Routines
+
+getw:	jsr r5,catchn
+	  nxmer1-.
+	mov @2(sp),2(sp)	; get desired word
+	rts r5
+
+getb:	jsr r5,catchn
+	  nxmer1-.
+	movb @2(sp),2(sp)	; get byte
+	clrb 3(sp)
+	rts r5
+
+
+putw:	jsr r5,catchn
+	  nxmer1-.
+	mov 2(sp),@4(sp)	; try deposit
+	pop (sp),(sp)
+	rts r5
+
+putb:	jsr r5,catchn
+	  nxmer1-.
+	movb 2(sp),@4(sp)	; try deposit
+	pop (sp),(sp)		; remove args
+	rts r5
+
+
+nxmer1:	jmp nxmerr
+
+.sbttl	Instruction Symbol Table
+
+; SYMBOL TABLE -- RAD50, THEN VALUE
+; TO CHANGE MASK AND JUMP HAVE 0 HIGH BYTE IN 1ST RAD50 WORD
+; FOLLOWED BY NEW MASK AND JUMP LOC
+; IF FOLLOWED BY ZERO RIGHT BYTE, NEXT SYMBOL IS 2 WORDS LONG
+
+INSTS:	INOP2-ARITH		; ????
+	107777			; Mask
+	ARITH			; Subroutine
+	.RAD50 /MOV/
+	010000
+	.RAD50 /CMP/
+	020000
+	.RAD50 /BIT/
+	030000
+	.RAD50 /BIC/
+	040000
+	.RAD50 /BIS/
+	050000
+
+;ADD&SUB DO NOT HAVE BYTE OPTION SO ARE SEPERATE
+	INOP2-ADDSUB		; ????
+	007777			; Mask
+	ADDSUB			; Subroutine
+	.RAD50 /ADD/
+	060000
+	.RAD50 /SUB/
+	160000
+
+;SINGLE OPERAND INSTRUCTIONS
+	INOP1-SINGOP		; ????
+	100077			; Mask
+	SINGOP			; Subroutine
+	.RAD50 /CLR/
+	005000
+	.RAD50 /COM/
+	005100
+	.RAD50 /INC/
+	005200
+	.RAD50 /DEC/
+	005300
+	.RAD50 /NEG/
+	005400
+	.RAD50 /ADC/
+	005500
+	.RAD50 /SBC/
+	005600
+	.RAD50 /TST/
+	005700
+	.RAD50 /ROR/
+	006000
+	.RAD50 /ROL/
+	006100
+	.RAD50 /ASR/
+	006200
+	.RAD50 /ASL/
+	006300
+
+
+; single operand, non-byte, instructions
+	INOP1-SINGO1		; ????
+	000077			; Mask
+	SINGO1			; Subroutine
+	.RAD50 /JMP/
+	000100
+	0			; signals instruction with >3 chars
+	.RAD50 /SWA/
+	000300
+	.RAD50 /B  /
+
+.if ne  pdp11-10
+.if ne  pdp11-20
+	.RAD50 /SXT/
+	006700
+.if eq  <pdp11-03>*<pdp11-34>
+	0
+	.RAD50 /MTP/
+	106400
+	.RAD50 /S/
+	0
+	.RAD50 /MFP/
+	106700
+	.RAD50 /S/
+.endc	; eq <pdp11-03>*<pdp11-34>
+.if ne  memman
+	0
+	.rad50 /MFP/
+	006500
+	.rad50 /I/
+	0
+	.rad50 /MTP/
+	006600
+	.rad50 /I/
+	0
+	.rad50 /MFP/
+	106500
+	.rad50 /D/
+	0
+	.rad50 /MTP/
+	106600
+	.rad50 /D/
+.endc	; ne memman
+.endc	; ne pdp11-20
+.endc	; ne pdp11-10
+
+
+;CONDITION CODES
+	INCCDD-CNDCOD		; ????
+	000017			; Mask
+	CNDCOD			; Subroutine
+	.RAD50 /SE /
+	000260
+	.RAD50 /CL /
+	000240
+
+;RTS
+	INRTS-.RTS
+	000007
+	.RTS
+	.RAD50 /RTS/
+	000200
+
+;JSR/XOR
+	INJSR-.JSR		; ????
+	000777			; Mask
+	.JSR			; Subroutine
+	.RAD50 /JSR/
+	004000
+.if ne  pdp11-10
+.if ne  pdp11-20
+	.rad50 /XOR/
+	074000
+.endc	; ne pdp11-20
+.endc	; ne pdp11-10
+
+.if ne  eis
+;EIS
+	ineis-.eis		; (typein subroutine)-(typeout subroutine)
+	000777			; mask
+	.eis			; typeout subroutine
+	.rad50 /MUL/
+	070000
+	.rad50 /DIV/
+	071000
+	.rad50 /ASH/
+	072000
+	0
+	.rad50 /ASH/
+	073000
+	.rad50 /C/
+.endc	; ne eis
+
+;CONTROL GROUP
+	INCNTR-.CNTRL
+	0
+	.CNTRL
+	0
+	.RAD50 /HAL/
+	0
+	.RAD50 /T  /
+	0
+	.RAD50 /WAI/
+	1
+	.RAD50 /T  /
+	.RAD50 /RTI/
+	2
+	.RAD50 /BPT/
+	3
+	.RAD50 /IOT/
+	4
+	0
+	.RAD50 /RES/
+	5
+	.RAD50 /ET /
+.if ne  pdp11-10
+.if ne  pdp11-20
+	.RAD50 /RTT/
+	6
+.endc
+.endc
+	.RAD50 /NOP/
+	240
+
+;TRAP AND EMT
+	INCNTR-.TRAP
+	377
+	.TRAP
+	.RAD50 /EMT/
+	104000
+	0
+	.RAD50 /TRA/
+	104400
+	.RAD50 /P  /
+
+;BRANCHES
+	INBRCH-.BRCHS
+	377
+	.BRCHS
+	.RAD50 /BR /
+	000400
+	.RAD50 /BNE/
+	001000
+	.RAD50 /BEQ/
+	001400
+	.RAD50 /BGE/
+	002000
+	.RAD50 /BLT/
+	002400
+	.RAD50 /BGT/
+	003000
+	.RAD50 /BLE/
+	003400
+	.RAD50 /BPL/
+	100000
+	.RAD50 /BMI/
+	100400
+	.RAD50 /BHI/
+	101000
+	0
+	.RAD50 /BLO/
+	101400
+	.RAD50 /S  /
+	.RAD50 /BVC/
+	102000
+	.RAD50 /BVS/
+	102400
+	.RAD50 /BCC/
+	103000
+	0
+	.rad50 /BHI/
+	103000
+	.rad50 /S  /
+	.RAD50 /BCS/
+	103400
+	.rad50 /BLO/
+	103400
+
+; SOB
+	INSOB-.SOB
+	777
+	.SOB
+	.rad50 /SOB/
+inste:	077000
+
+	constants	;Constants area goes here
+			;(Strings and other literals)
+
+.sbttl	Command dispatch tables
+
+comls1:	.byte	033	;  $    alt
+	.byte	':	;  :   colon	starts command name.
+	.byte	'=	;  =   equal
+	.byte	';	;  ;   semicn
+	.byte	'@	;  @   openpc	opens location addressed by PC
+	.byte	'>	;  >   define
+	.byte	'/	;  /   oword
+	.byte	'\	;  \   obyte
+	.byte	'[	;  [   onum
+	.byte	']	;  ]   osym
+	.byte	015	;  CR  cr
+	.byte	012	;  LF  lf
+	.byte	011	; TAB  tab
+	.byte	'^	;  ^   up
+	.byte	'	;  ^N		single step
+	.byte	'_	;  _		type $q in symbolic mode
+	.lif ne  asmdsk+asmRT1+asmsrl
+	.byte	'L	;  $L  load	Load
+	.lif ne  asmdsk+asmdmp
+	.byte	'Y	;  $Y  dump	Dump
+	.byte	'G	;  $G  go	Go
+	.byte	'W	;  $W  wsearc	Word search
+	.byte	'N	;  $N  nsearc	Not Equal word search
+	.byte	'E	;  $E  esearc	Effective addr search
+	.byte	'B	;  $B  setbpt	Breakpoint
+	.byte	'P	;  $P  proced	Proceed
+	.byte	'U	;  $U  delbpt	Remove breakpoint
+	.byte	'K	;  $K  kill	Half kill
+	.byte	'Z	;  $Z  zero	Zero core
+	.byte	'O	;  $O  soct	Set octal output radix
+	.byte	'D	;  $D  sdec	Set decimal output radix
+	.byte	'C	;  $C  cmode	Constant typeout mode
+	.byte	'S	;  $S  smode	Symbol typeout mode
+	.byte	'I	;  $I  imode	Instruction typeout mode
+	.byte	'"	;  $"  amode	Ascii typeout mode
+	.byte	'&	;  $&  rmode	Rad50 typeout mode
+	.byte	'`	;  $`  cmodeb	Constant typeout mode (byte)
+	.byte	''	;  $'  amodeb	Ascii typeout mode (byte)
+	.byte	'A	;  $A  absmd	Absolute typeout mode
+	.byte	'R	;  $R  relmd	Relative typeout mode
+ncom==.-comls1		; no. of commands
+	.byte	0	; place to stick search terminator
+	.even
+
+; Address of command routines
+comls2:	alt	;  $  signals command
+	colon	;  :  followed by command name
+	equal	;  =  prints current value
+	semicn	;  ;  retype $q in last specified mode
+	openpc	;  @  opens location addressed by PC
+	define	;  >  defines sym
+	oword	;  /  open word in current core
+	obyte	;  \  open byte
+	onum	;  [  open as number
+	osym	;  ]  open as symbol
+	cr	;  CR close
+	lf	;  LF close, open next
+	tab	; TAB open location addressed by .
+	up	;  ^  close, open previous
+	sstep	;  ^N single step
+	undscr	;  _  Type $q in symbolic mode
+	.lif ne  asmdsk+asmRT1+asmsrl
+	load	;  L  Load
+	.lif ne  asmdsk+asmdmp
+	dump	;  D  Dump
+	go	;  G  Go
+	wsearc	;  W  Word search
+	nsearc	;  N  Not Equal word search
+	esearc	;  E  Effective addr search
+	setbpt	;  B  Set Breakpoint
+	proced	;  P  Proceed
+	delbpt	;  U  Delete breakpoint
+	kill	;  K  Kill symbol
+	zero	;  Z  Zero core
+	soct	;  O  Set octal typeout radix
+	sdec	;  D  Set decimal typeout radix
+	cmode	;  C  Constant typeout mode
+	smode	;  S  Symbolic typeout mode
+	imode	;  I  Instruction typeout mode
+	amode	;  "  Ascii typeout mode
+	rmode	;  &  Rad50 typeout mode
+	cmodeb	;  `  Constant typeout mode (byte)
+	amodeb	;  '  Ascii typeout mode (byte)
+	absmd	;  A  Absolute typeout mode
+	relmd	;  R  Relative typeout mode
+.iif ne  <.-comls2>/2-ncom, .error Command tables not same length
+	err	;  illegal command
+
+
+;Table of routine-pointers for colon commands:
+;Terminated by -1, an illegal rad50 word.
+COLTAB:
+	.rad50 "help  "		; list : commands
+	  .word colhlp
+	.rad50 "exit  "		; return to DSKLOD
+	  .word exit
+	.rad50 "listb "		; list breakpoints
+	  .word	listb
+	.word -1		; terminator
+
+.sbttl	Data
+
+; mode data
+tabsmd:	.word 0		; temporary absolute/relative typeout mode
+pabsmd:	.word 0		; permanent absolute/relative typeout mode
+semimd:	.word tycons	; semi-colon mode
+twmode:	.word tyinst	; temporary location typeout mode (word)
+pwmode:	.word tyinst	; permanent location typeout mode (word)
+tbmode:	.word tybcon	; temporary location typeout mode (byte)
+pbmode:	.word tybcon	; permanent location typeout mode (byte)
+
+tradix:	.word 8.	; temporary output radix
+pradix:	.word 8.	; permanent output radix
+
+altcnt:	.word 0		;no of alts in command
+
+
+; current location
+clflgs:	.word 0		; current location flags (register flag)
+caddr:	.word 0		; used only by OPEN and CLOSE
+o.bw:	.word 0		; 0 - closed, 1 - byte open, 2 - word open
+oo.bw:	.word 0		; old o.bw for next ^ or LF command
+
+nextad:	.word 0
+
+
+; command argument
+arg:	.word 0
+argflg:	.word 0
+argcnt:	.word 0
+
+
+; current value
+length:	.word 0		; length of current value
+cvalue:	.word 0,0,0	; current value
+cvflgs:	.word 0		; current value flags (register flag)
+
+
+; breakpoint data
+bptset:	.word 0		;-1 if breakpoints set
+bptno:	.word 0		;no. of last breakpoint
+bptadr:	.rept nbpt
+	-1
+	.endr
+bptcnt:	.blkw nbpt
+bptins:	.blkw nbpt
+bpti:	bpt		;breakpoint instruction
+
+
+proflg:	.word 0		; set to single step once, then proceed
+ssflag:	.word 0		; nonzero if single stepping
+count:	.word 0		; single step count
+
+lodoff:	.word 0		; load offset (added to load addresses)
+starta:	.word 0		; program start address
+
+
+; terminal data
+.iif eq  <sys-mit>*<sys-mit44>,	%tntyp===%tnvt
+.iif eq  sys-sao,	%tntyp===%tnvt
+.iif eq	 sys-lll,	%tntyp===%tngl
+.iif ndf  %tntyp,	%tntyp===%tntt
+ttytyp: .word %tntyp
+ttycsr:	.word trs
+hpos:	.word 0			; output column pointer
+reread:	.word -1		; character to be reread
+
+.if eq ndz
+.if ne asmrt1
+havsav:	.word 0			;static flag to indicate if we have saved
+				;the initial console information
+sircsr:	.word 0			;initial receive csr
+sitcsr:	.word 0			;initial transmit csr
+sicvec:	.word 0,0,0,0		;initial interrupt vector for the console
+sclock:	.word 0,0		;save area for the clock interupt
+.endc
+.endc
+
+.if ne asmsrl+asmRT1
+srlcsr:	.word 0
+errcnt:	.word 0		; number of checksum errors per load
+lodasp:	.word 0		; the SP to unwind to when aborting loading
+.endc
+
+smask:	.word -1	; search mask
+	.word 0		; low limit
+	.word symtop	; high limit
+
+
+; symbol table
+stbeg:	.word rugsa-2+6	; ptr to one symbol beyond first register flag word
+stend:	.word symtop	; ptr to symbol slot beyond last in table
+
+; This word defines how far from a symbol a number has to be before it will
+; not use the form: <symbol>+offset for printing.
+mxoff:	.word 200
+
+.sbttl	User-Register Storage
+
+; The order of the following entries is critical
+
+uregs:	0	; user r0
+	0	;      r1
+	0	;      r2
+	0	;      r3
+	0	;      r4
+	0	;      r5
+usp:	0	; user sp
+upc:	0	; user pc
+
+nuregs==<.-uregs>/2
+
+
+; List of locations saved while in RUG.  RUG saves the locations in the
+; program being debugged which it clobbers so that they may be restored
+; when the program is continued.
+savls1:	.word 177776,ups	; This is handled separately
+savls2:	.word 4,sv4
+	.word 6,sv6
+.iif ne  ndz,	.word dzaddr+4,tcr
+	.word 0			; this terminates the list
+
+
+ups:	0	; user ps
+
+
+sv4:	0
+sv6:	0
+svrcsr:	0
+svtcsr:	0
+
+.lif ne  ndz
+tcr:	0	; saved DZ11 transmit control register
+
+	.blkw 60.	; stack area
+stack==.
+
+
+lastlc==.-2	; highest RUG location
+
+.sbttl	Symbol Table
+
+; The following macro produces symbol-table entries.  The symbol table grows
+; downward from BSYMT (below RUG) in groups of 16 symbols (the last, lowest
+; group is padded with null entries).  Every 16-sym group is followed by 2
+; flag words whose bits specify which of the 16  symbols are half-killed
+; (lower word), and which are registers.  The low-order bit in each flag
+; corresponds to the symbol entry with the highest address (for that 16
+; symbol group).  The flags are stored in two temporaries, %.rflg and %.hflg,
+; until the 16 symbol group is done.  They are then put into their core
+; locations.
+
+; The macro S takes four arguments: NAME is the symbol name (it may be any
+; length but is entered in the symbol table as 6 letters), VALUE is the
+; symbol value, FLAG1 and FLAG2 may be "HK" and/or "REG" (or neither) to
+; signify that the symbol is to be half-killed or is a register.  Some
+; examples: "S FOO,1,HK" or "S FOO,1,REG,HK" or "S FOO,1,HK,REG". After all
+; symbols, terminate with the macro ENDS.
+
+; A symbol entry is 3 words: two words of rad50 name (up to
+; 6 letters) followed by a value word.
+
+	%.rflg===0	; temp reg flags word
+	%.hflg===0	; temp half-kill flags word
+	%.sbit===0	; flag bit for current symbol in group
+
+
+.macro	s name,value,flag1,flag2
+
+	.if eq  %.sbit
+	  .=.-4-<16.*6>		; starting a new block, move down
+	  %.sbit===100000
+	  .endc
+
+	%.stmp===.
+	.rad50 /name/
+	%.slng===.length name
+	.iif le  %.slng-3,	.word 0
+	.iif gt  %.slng-6,	.=%.stmp+4
+	.word value
+
+	.irp flag,<flag1,flag2>
+	  .iif idn flag,hk,	%.hflg===%.hflg!%.sbit
+	  .iif idn flag,HK,	%.hflg===%.hflg!%.sbit
+	  .iif idn flag,reg,	%.rflg===%.rflg!%.sbit
+	  .iif idn flag,REG,	%.rflg===%.rflg!%.sbit
+	  .endm
+
+	%.sbit===<%.sbit/2>&077777
+	.if eq	%.sbit
+	  .word	%.hflg,%.rflg
+	  .=.-4-<16.*6>
+	  %.hflg===0
+	  %.rflg===0
+	  .endc
+.endm s
+
+.macro	ends
+	.if ne  %.sbit
+	.rept 16.
+	  .if ne  %.sbit
+	    .word 0,0,0
+	    %.sbit===<%.sbit/2>&077777
+	    %.hflg===%.hflg!%.sbit	; half-kill empty slots
+	    .endc
+	  .endr
+	.word %.hflg,%.rflg
+	.=.-4-<16.*6>
+	.endc
+.endm ends
+
+.=rugsa		; start symbol table just below start of RUG
+	s %0,0,reg
+	s %1,1,reg
+	s %2,2,reg
+	s %3,3,reg
+	s %4,4,reg
+	s %5,5,reg
+	s %6,6,reg
+	s %7,7,reg
+clocat=.+4	;where dot's value is stored
+	s .,0,hk		; current location
+	s .m,smask,hk		; search mask
+	s .ttyty,ttytyp,hk	; tty type code
+.if ne  asmdsk
+.lif eq sysdsk-drk
+	s .rknum,rknum,hk	; disk no. (0 or 20000)
+.lif ne  nrx
+	s .rxnum,rxnum,hk	; disk no. (0 or 20)
+.endc
+	s .stbeg,stbeg,hk	; ptr to top of symbol table
+	s .stend,stend,hk	; ptr to bottom of symbol table
+	s .start,starta,hk	; start address of program
+	s .bptno,bptno,hk	; last breakpoint no.
+	s .mxoff,mxoff,hk	; Maximum offset from a symbol
+.if ne <asmrt1+asmsrl>*asmdmp
+	s .dmplo,dmplow,hk	; low address to dump
+	s .dmphi,dmphi,hk	; high address to dump
+.endc
+	ends
+
+
+symtop==.-2		; top of user symbol table
+
+
+	.if2
+	.print "
+Highest RUG location = "
+	typval \lastlc
+	.print "
+Top of user symbol table = "
+	typval \symtop
+	.print "
+"
+	.endc
+
+.end rug
