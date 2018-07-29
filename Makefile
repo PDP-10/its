@@ -1,4 +1,16 @@
+# Some important environment variables
 EMULATOR ?= simh
+
+# Sometimes you _really_ need to use a different `touch` or `rm`.
+TOUCH ?= touch
+MKDIR ?= mkdir -p
+EXPECT ?= expect
+RM ?= rm
+LN ?= ln
+SED ?= sed
+TEST ?= test
+GIT ?= git
+CAT ?= cat
 
 include conf/network
 
@@ -27,12 +39,12 @@ RAM = bin/ks10/boot/ram.262
 NSALV = bin/ks10/boot/salv.rp06
 DSKDMP = bin/ks10/boot/dskdmp.rp06
 
-KLH10=${PWD}/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
-SIMH=${PWD}/tools/simh/BIN/pdp10
-KA10=${PWD}/tools/sims/BIN/ka10
-ITSTAR=${PWD}/tools/itstar/itstar
-WRITETAPE=${PWD}/tools/tapeutils/tapewrite
-MAGFRM=${PWD}/tools/dasm/magfrm
+KLH10=$(CURDIR)/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
+SIMH=$(CURDIR)/tools/simh/BIN/pdp10
+KA10=$(CURDIR)/tools/sims/BIN/ka10
+ITSTAR=$(CURDIR)/tools/itstar/itstar
+WRITETAPE=$(CURDIR)/tools/tapeutils/tapewrite
+MAGFRM=$(CURDIR)/tools/dasm/magfrm
 
 H3TEXT=$(shell cd build; ls h3text.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
@@ -41,36 +53,36 @@ OUT=out/$(EMULATOR)
 all: $(SMF) $(OUT)/stamp tools/supdup/supdup
 
 out/klh10/stamp out/simh/stamp: $(OUT)/rp0.dsk
-	touch $@
+	$(TOUCH) $@
 
 out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
-	touch $@
+	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
-	PATH=${PWD}/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+	PATH=$(CURDIR)/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
-	expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
 	cd bin/ka10/boot; $(MAGFRM) @.ddt @.salv > ../../../$@
 
 $(OUT)/minsys.tape: $(ITSTAR)
-	mkdir -p $(OUT)
+	$(MKDIR) $(OUT)
 	cd bin/ks10; $(ITSTAR) -cf ../../$@ _ sys
 	cd bin; $(ITSTAR) -rf ../$@ sys
 
 $(OUT)/ka-minsys.tape: $(ITSTAR)
-	mkdir -p $(OUT)
+	$(MKDIR) $(OUT)
 	cd bin/ka10; $(ITSTAR) -cf ../../$@ _ sys
 	cd bin; $(ITSTAR) -rf ../$@ sys
 
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
-	mkdir -p $(OUT)
-	rm -f src/*/*~
-	touch -d 1981-10-06T19:03:37 'bin/emacs/einit.:ej'
-	touch -d 1981-09-19T21:42:56 'bin/emacs/[pure].162'
-	touch -d 1981-03-31T20:41:45 'bin/emacs/[prfy].173'
+	$(MKDIR) $(OUT)
+	$(RM) -f src/*/*~
+	$(TOUCH) -d 1981-10-06T19:03:37 'bin/emacs/einit.:ej'
+	$(TOUCH) -d 1981-09-19T21:42:56 'bin/emacs/[pure].162'
+	$(TOUCH) -d 1981-03-31T20:41:45 'bin/emacs/[prfy].173'
 	cd src; $(ITSTAR) -cf ../$@ $(SRC)
 	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
 	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
@@ -78,83 +90,83 @@ $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	-cd user; $(ITSTAR) -rf ../$@ *
 
 $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
-	mkdir -p $(OUT)
+	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(NSALV)
 
 $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
-	mkdir -p $(OUT)
+	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
 start: build/$(EMULATOR)/start
-	ln -s $< $*
+	$(LN) -s $< $*
 
 build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
-	mkdir -p $(OUT)/system
+	$(MKDIR) $(OUT)/system
 	cp=0; ca=0; \
-	test $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
+	$(TEST) $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
 	x=`echo $(IP) | tr . ,`; \
-	sed -e "s/%IP%/$$x/" \
+	$(SED) -e "s/%IP%/$$x/" \
 	    -e 's/%NETMASK%/$(NETMASK)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > $(OUT)/system/config.203
-	touch $@
+	$(TOUCH) $@
 
 build/simh/stamp: $(SIMH) start
-	mkdir -p $(OUT)/system
+	$(MKDIR) $(OUT)/system
 	cp build/simh/config.* $(OUT)/system
-	touch $@
+	$(TOUCH) $@
 
 build/sims/stamp: $(KA10) start
-	mkdir -p $(OUT)/system
+	$(MKDIR) $(OUT)/system
 	cp build/sims/config.* $(OUT)/system
-	touch $@
+	$(TOUCH) $@
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
-	test $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
-	sed -e 's/%IP%/$(IP)/' \
+	$(TEST) $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
+	$(SED) -e 's/%IP%/$(IP)/' \
 	    -e 's/%GW%/$(GW)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s|%CHAOSA%|$$ca|" < $< > $@
 
 $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
-	mkdir -p $(OUT)/syshst
-	test $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
-	sed -e 's/%IP%/$(IP)/' \
+	$(MKDIR) $(OUT)/syshst
+	$(TEST) $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
+	$(SED) -e 's/%IP%/$(IP)/' \
 	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
 	    -e "s/%CHAOS%/$$c/" < $< > $@
-	cat conf/hosts >> $@
+	$(CAT) conf/hosts >> $@
 
 $(KLH10):
 	cd tools/klh10; \
 	./autogen.sh; \
-	mkdir tmp; \
+	$(MKDIR) tmp; \
 	cd tmp; \
 	export CONFFLAGS_USR=-DKLH10_DEV_DPTM03=0; \
-	../configure --bindir=${PWD}/build/klh10; \
-	make base-ks-its; \
-	make -C bld-ks-its install
+	../configure --bindir=$(CURDIR)/build/klh10; \
+	$(MAKE) base-ks-its; \
+	$(MAKE) -C bld-ks-its install
 
 $(SIMH):
-	cd tools/simh; make pdp10
+	$(MAKE) -C tools/simh pdp10
 
 $(KA10):
-	cd tools/sims; make ka10 TYPE340=y
+	$(MAKE) -C tools/sims ka10 TYPE340=y
 
 $(ITSTAR):
-	cd tools/itstar; make
+	$(MAKE) -C tools/itstar
 
 $(WRITETAPE):
-	cd tools/tapeutils; make
+	$(MAKE) -C tools/tapeutils
 
 $(MAGFRM):
-	cd tools/dasm; make
+	$(MAKE) -C tools/dasm
 
 tools/supdup/supdup:
-	cd tools/supdup; make
+	$(MAKE) -C tools/supdup
 
 $(SMF):
-	git submodule update --init `dirname $@`
+	$(GIT) submodule update --init `dirname $@`
 
 clean:
-	rm -rf out start build/*/stamp
+	$(RM) -rf out start build/*/stamp
