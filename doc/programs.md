@@ -183,6 +183,7 @@
 - QB, the game of Qubic.
 - QUOTE, prints out a random quote.
 - REATTA, reattaches disowned jobs to terminal.
+- RECORD, save TV display contents as text file.
 - REDRCT, redirect IP routing.
 - RIPDEV, replacement for MLDEV for no-longer-existing machines.
 - RMAIL, mail reading client.
