@@ -261,6 +261,7 @@
 - WL, SUDS wirelister.
 - WUMPUS, Hunt the Wumpus game.
 - X, Y, Z, remember DDT command and re-execute it.
+- XD, display XGP scan file on TV display.
 - XGP, PDP-11 controller for the Xerox Graphics Printer.
 - XGPSPL, spooler for the Xerox Graphics Printer.
 - XXFILE, feed scripted input to a STY session.

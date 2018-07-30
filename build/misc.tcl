@@ -1012,6 +1012,10 @@ respond "*" ":midas /t device;jobdev glp_sysen2;xgpdev\r"
 respond "with ^C" "GLP==1\r\003"
 expect ":KILL"
 
+# XD, view XGP files on TV.
+respond "*" ":midas sys3;ts xd_sysen2;xd\r"
+expect ":KILL"
+
 # KL10 front end directory tool
 respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
 expect ":KILL"
