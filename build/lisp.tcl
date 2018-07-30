@@ -884,7 +884,7 @@ respond "_" "\032"
 type ":kill\r"
 
 # ITSter
-respond "*" "complr\r"
+respond "*" "complr\013"
 respond "_" "games;_hibou;itster\r"
 respond "_" "\032"
 type ":kill\r"
