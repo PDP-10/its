@@ -921,6 +921,10 @@ respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
+# View bitmap file on TV.
+respond "*" ":midas sys2; ts tvread_sysen2; tvread\r"
+expect ":KILL"
+
 # Save TV display as text file.
 respond "*" ":midas sys2; ts record_sysen2; record\r"
 expect ":KILL"

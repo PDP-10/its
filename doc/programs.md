@@ -237,6 +237,7 @@
 - TMPKIL, delete old files from .TEMP.
 - TREK, Star Trek game.
 - TV-11, Knight TV PDP-11.
+- TVREAD, read a bitmap file and display on TV.
 - TTLOC, advertises physical location of logged in users.
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
 - TTYSWP, swap TTYs.
