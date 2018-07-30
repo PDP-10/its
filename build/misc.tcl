@@ -921,6 +921,10 @@ respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
+# Save TV display as text file.
+respond "*" ":midas sys2; ts record_sysen2; record\r"
+expect ":KILL"
+
 # Maze War
 respond "*" ":midas /t sysbin;_imsrc; maze\r"
 respond "with ^C" "MOUSE==1\r\003"
