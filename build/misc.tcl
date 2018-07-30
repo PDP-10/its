@@ -443,6 +443,10 @@ respond "\n" "TTY==120\r"
 respond "\n" "DIS==130\r\003"
 expect ":KILL"
 
+# TV-munching square.
+respond "*" ":midas sys2;ts munch_sysen2;munch\r"
+expect ":KILL"
+
 # Hunt the Wumpus
 respond "*" ":midas sys1;ts wumpus_games; wumpus\r"
 expect ":KILL"
