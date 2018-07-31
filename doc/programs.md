@@ -89,6 +89,7 @@
 - GETSYM, copy all symbols from running ITS to a file.
 - GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.
 - GLPDEV/XGPDEV, device for viewing GLPSPL/XGPSPL printer queues.
+- GTLEM, GT40 Lunar Lander.
 - GO, the Go board game.
 - GUESS, a very silly game.
 - GMSGS, copy system messages to mail file.
