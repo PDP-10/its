@@ -1042,6 +1042,10 @@ respond "=YES" "1\r"
 respond "37000" "37000\r"
 expect ":KILL"
 
+# GT40 boot ROM.
+respond "*" ":palx gt40;bootvt\r"
+expect ":KILL"
+
 # KL10 front end debugger.  Put it in the same directory as the
 # "MX" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
