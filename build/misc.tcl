@@ -1046,6 +1046,10 @@ expect ":KILL"
 respond "*" ":palx gt40;bootvt\r"
 expect ":KILL"
 
+# GT40 Lunar Lander.
+respond "*" ":palx gt40;gtlem\r"
+expect ":KILL"
+
 # KL10 front end debugger.  Put it in the same directory as the
 # "MX" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
