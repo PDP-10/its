@@ -89,14 +89,14 @@ proc build_macsyma_portion {} {
     respond_load "(load \"libmax;maxmac\")"
     respond_load "(todo)"
     expect {
-	") \r" {
+	-re {\) *\r} {
 	}
         "NIL" {
 	}
     }
     type "(todoi)"
     expect {
-	") \r" {
+	-re {\) *\r} {
 	}
         "NIL" {
 	}
