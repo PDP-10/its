@@ -39,12 +39,12 @@ RAM = bin/ks10/boot/ram.262
 NSALV = bin/ks10/boot/salv.rp06
 DSKDMP = bin/ks10/boot/dskdmp.rp06
 
-KLH10=$(CURDIR)/tools/klh10/tmp/bld-ks-its/kn10-ks-its 
-SIMH=$(CURDIR)/tools/simh/BIN/pdp10
-KA10=$(CURDIR)/tools/sims/BIN/ka10
-ITSTAR=$(CURDIR)/tools/itstar/itstar
-WRITETAPE=$(CURDIR)/tools/tapeutils/tapewrite
-MAGFRM=$(CURDIR)/tools/dasm/magfrm
+KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
+SIMH=tools/simh/BIN/pdp10
+KA10=tools/sims/BIN/ka10
+ITSTAR=tools/itstar/itstar
+WRITETAPE=tools/tapeutils/tapewrite
+MAGFRM=tools/dasm/magfrm
 
 H3TEXT=$(shell cd build; ls h3text.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
@@ -59,23 +59,23 @@ out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
-	PATH=$(CURDIR)/tools/simh/BIN:$$PATH expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
-	cd bin/ka10/boot; $(MAGFRM) @.ddt @.salv > ../../../$@
+	cd bin/ka10/boot; ../../../$(MAGFRM) @.ddt @.salv > ../../../$@
 
 $(OUT)/minsys.tape: $(ITSTAR)
 	$(MKDIR) $(OUT)
-	cd bin/ks10; $(ITSTAR) -cf ../../$@ _ sys
-	cd bin; $(ITSTAR) -rf ../$@ sys
+	$(ITSTAR) -cf $@ -C bin/ks10 _ sys
+	$(ITSTAR) -rf $@ -C bin sys
 
 $(OUT)/ka-minsys.tape: $(ITSTAR)
 	$(MKDIR) $(OUT)
-	cd bin/ka10; $(ITSTAR) -cf ../../$@ _ sys
-	cd bin; $(ITSTAR) -rf ../$@ sys
+	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
+	$(ITSTAR) -rf $@ -C bin sys
 
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
@@ -83,11 +83,11 @@ $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(TOUCH) -d 1981-10-06T19:03:37 'bin/emacs/einit.:ej'
 	$(TOUCH) -d 1981-09-19T21:42:56 'bin/emacs/[pure].162'
 	$(TOUCH) -d 1981-03-31T20:41:45 'bin/emacs/[prfy].173'
-	cd src; $(ITSTAR) -cf ../$@ $(SRC)
-	cd doc; $(ITSTAR) -rf ../$@ $(DOC)
-	cd bin; $(ITSTAR) -rf ../$@ $(BIN)
-	cd $(OUT); $(ITSTAR) -rf ../../$@ system syshst
-	-cd user; $(ITSTAR) -rf ../$@ *
+	$(ITSTAR) -cf $@ -C src $(SRC)
+	$(ITSTAR) -rf $@ -C doc $(DOC)
+	$(ITSTAR) -rf $@ -C bin $(BIN)
+	$(ITSTAR) -rf $@ -C $(OUT) system syshst
+	-cd user; ../$(ITSTAR) -rf ../$@ *
 
 $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	$(MKDIR) $(OUT)
@@ -143,7 +143,7 @@ $(KLH10):
 	$(MKDIR) tmp; \
 	cd tmp; \
 	export CONFFLAGS_USR=-DKLH10_DEV_DPTM03=0; \
-	../configure --bindir=$(CURDIR)/build/klh10; \
+	../configure --bindir="$(CURDIR)/build/klh10"; \
 	$(MAKE) base-ks-its; \
 	$(MAKE) -C bld-ks-its install
 
