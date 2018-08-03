@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: MISC"
+
 respond "*" ":print teach;..new. (udir)\r"
 type ":vk\r"
 

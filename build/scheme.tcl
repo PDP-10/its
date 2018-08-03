@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: SCHEME"
+
 # Old? Scheme interpreter
 respond "*" "complr\013"
 respond "_" "scheme;_nschsy\r"
