@@ -547,6 +547,8 @@ respond "*" ":link manual;manual demo,demo;manual demo\r"
 respond "*" "macsym\013"
 respond "(C1)" "compile_lisp_file(translate_file(\"sharem\\;packg >\")\[2\]);"
 respond "(C2)" "compile_lisp_file(translate_file(\"tensor\\;ctensr funcs\")\[2\]);"
+respond "Type ALL;" "all;"
+respond "Type ALL;" "all;"
 respond "(C3)" "quit();"
 
 ### build eigen for macsyma

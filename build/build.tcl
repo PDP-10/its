@@ -89,7 +89,10 @@ proc build_macsyma_portion {} {
     respond_load "(load \"libmax;maxmac\")"
     respond_load "(progn (print (todo)) (print (todoi)) \"=Build=\")"
     expect "=Build="
-    respond "\r" "(mapcan #'(lambda (x) (doit x)) (append todo todoi))"
+    respond "\r" "(mapcan "
+    type "#'(lambda (x) (cond ((not (memq x\r"
+    type "'(TRANSS)\r"
+    type ")) (doit x)))) (append todo todoi))"
     set timeout 1000
     expect {
 	";BKPT" {
