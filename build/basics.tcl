@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: BASICS"
+
 expect "\n"; type "\033g"
 pdset
 

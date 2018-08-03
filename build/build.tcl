@@ -1,3 +1,12 @@
+proc log_progress {x} {
+    puts ""
+    puts "$x"
+    puts [exec date]
+    puts ""
+}
+
+log_progress "ENTERING MAIN BUILD SCRIPT"
+
 # If the environment variable BASICS is set to "yes", only build
 # the basics; ITS, tools, infastructure.
 if {![info exists env(BASICS)]} {
@@ -140,3 +149,7 @@ type "quit\r"
 
 shutdown
 quit_emulator
+
+puts ""
+puts "MAIN BUILD SCRIPT DONE"
+puts [exec date]

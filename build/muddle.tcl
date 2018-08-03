@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: MUDDLE"
+
 respond "*" ":cwd mudsys\r"
 respond "*" ":midas /t midasm_midas\r"
 respond "\n" "itssw==1\r"

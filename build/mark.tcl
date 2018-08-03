@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: MARK"
+
 start_salv
 
 mark_packs

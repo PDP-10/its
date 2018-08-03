@@ -1,3 +1,5 @@
+log_progress "ENTERING BUILD SCRIPT: SAIL"
+
 # stktrn
 respond "*" ":cwd sail\r"
 respond "*" ":fail stktrn\r"
