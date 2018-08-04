@@ -1,6 +1,6 @@
 log_progress "ENTERING BUILD SCRIPT: BASICS"
 
-expect "\n"; type "\033g"
+patch_its_and_go
 pdset
 
 respond "*" ":login db\r"
