@@ -37,6 +37,7 @@ proc create_tape {file} {
 
 proc quit_emulator {} {
     respond "sim>" "q\r"
+    expect eof
 }
 
 proc initialize_comsat {} {
