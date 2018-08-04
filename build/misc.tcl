@@ -466,7 +466,7 @@ type "c/\0331'dict\033\r"
 # Run the dictionary loader, skipping its filename setup code.
 type "beg7\033g"
 # Dump out TS JOTTO including the dictionary.
-respond ". words" ":pdump sys1;ts jotto\r"
+respond "words" ":pdump sys1;ts jotto\r"
 respond "*" ":kill\r"
 
 # ngame
