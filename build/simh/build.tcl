@@ -4,6 +4,8 @@ set emulator_escape "\034"
 
 proc start_salv {} {
     uplevel #0 {spawn pdp10 build/simh/init}
+    setup_timeout
+
     respond "sim>" "show ver\r"
     respond "sim>" "b tu1\r"
     expect "MTBOOT"
@@ -23,6 +25,7 @@ proc start_dskdmp {} {
 
 proc start_its {} {
     uplevel #0 {spawn pdp10 build/simh/boot}
+    setup_timeout
 }
 
 proc mount_tape {file} {
