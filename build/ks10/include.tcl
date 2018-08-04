@@ -7,7 +7,7 @@ proc start_dskdmp_its {} {
     respond "DSKDMP" "m\033salv rp06\r"
     expect "\n"; type "d\033its\r"
     expect "\n"; type "its\r"
-    expect "\n"; type "\033g"
+    patch_its_and_go
 }
 
 proc mark_packs {} {
@@ -56,7 +56,7 @@ proc prepare_frontend {} {
 
     start_its
     respond "DSKDMP" "its\r"
-    type "\033g"
+    patch_its_and_go
     pdset
 
     respond "*" ":login db\r"

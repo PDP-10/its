@@ -37,8 +37,19 @@ proc respond { w r } {
     type $r
 }
 
+proc patch_its_and_go {} {
+    expect "\n"
+
+    # Disable SYSJOB output (e.g. "IT IS NOW ...") that appears at random
+    # places during the build process.
+    type "styo+2/popj p,\r"
+    expect "\n"
+
+    type "\033g"
+}
+
 proc pdset {} {
-    expect "SYSTEM JOB USING THIS CONSOLE"
+    expect "IN OPERATION"
     sleep 1
     type "\032"
 
@@ -50,12 +61,10 @@ proc pdset {} {
     type "!."
     expect "DAYLIGHT SAVINGS" {
         type "N"
-	respond "IT IS NOW" "Q"
-    } "IT IS NOW" {
-        type "Q"
-    } "ITS revived" {
-        type "Q"
+        expect "\n"
+    } "\n" {
     }
+    type "Q"
     expect ":KILL"
 }
 

@@ -2,7 +2,7 @@ proc start_dskdmp_its {} {
     start_dskdmp build/sims/boot
 
     respond "DSKDMP" "its\r"
-    expect "\n"; type "\033g"
+    patch_its_and_go
 }
 
 proc mark_packs {} {
