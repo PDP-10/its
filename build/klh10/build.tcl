@@ -7,6 +7,7 @@ set emulator_escape "\034"
 
 proc start_salv {} {
     uplevel #0 {spawn ./kn10-ks-its nsalv.ini}
+    setup_timeout
     expect "EOF"
     respond "KLH10#" "go\r"
 }
@@ -20,12 +21,14 @@ proc start_dskdmp {} {
     #respond "KLH10>" "zero\r"
     quit_emulator
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
+    setup_timeout
     expect "EOF"
     respond "KLH10#" "go\r"
 }
 
 proc start_its {} {
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
+    setup_timeout
     expect "EOF"
     respond "KLH10#" "go\r"
 }
