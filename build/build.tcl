@@ -100,7 +100,7 @@ proc build_macsyma_portion {} {
     expect "=Build="
     respond "\r" "(mapcan "
     type "#'(lambda (x) (cond ((not (memq x\r"
-    type "'(TRANSS)\r"
+    type "'(DUMMY)\r"
     type ")) (doit x)))) (append todo todoi))"
     set timeout 1000
     expect {
