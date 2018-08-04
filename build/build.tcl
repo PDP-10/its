@@ -106,7 +106,11 @@ proc build_macsyma_portion {} {
 }
 
 set timeout 100
-expect_after timeout abort
+proc setup_timeout {} {
+    # Don't do this until after you've called "spawn", otherwise it'll cause a
+    # read from stdin which will return EOF if stdin isn't a tty.
+    expect_after timeout abort
+}
 
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
