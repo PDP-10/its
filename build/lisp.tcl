@@ -557,6 +557,7 @@ respond "(C3)" "quit();"
 respond "*" "macsym\013"
 respond "(C1)" "compile_lisp_file(translate_file(\"share\\;eigen >\")\[2\]);"
 respond "Type ALL;" "all;"
+respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
 
 ### build share;array fasl and ellen; check fasl for macsyma
