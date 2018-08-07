@@ -16,7 +16,8 @@ include conf/network
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
 SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
-      midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak gren	\
+      midas syshst mrc ksc sra
+XSRC = _teco_ emacs emacs1 rms klh eak gren	\
       bawden _mail_ l lisp libdoc comlap lspsrc nilcom rwk chprog rg	\
       inquir acount gz sys decsys ecc alan sail kcc kcc_sy c games archy dcp \
       spcwar rwg libmax rat z emaxim rz maxtul aljabr cffk das ell ellen \
@@ -24,11 +25,13 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       tensor transl wgd zz graphs lmlib pratt quux scheme gsb ejs mudsys \
       draw wl taa tj6 budd sharem ucode rvb kldcp math as imsrc gls demo \
       macsym lmcons dmcg hack hibou agb gt40
-DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
+DOC = info _info_ sysdoc sysnet syshst kshack
+XDOC = _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
       kldcp libdoc lisp _mail_ midas quux scheme manual
-BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
+BIN = sys2
+XBIN = emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
       graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
       _www_
 

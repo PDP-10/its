@@ -42,8 +42,8 @@ proc patch_its_and_go {} {
 
     # Disable SYSJOB output (e.g. "IT IS NOW ...") that appears at random
     # places during the build process.
-    type "styo+2/popj p,\r"
-    expect "\n"
+#    type "styo+2/popj p,\r"
+#    expect "\n"
 
     type "\033g"
 }

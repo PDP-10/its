@@ -18,6 +18,60 @@ type ":vk\r"
 respond "*" ":print device;..new. (udir)\r"
 type ":vk\r"
 
+#---- hack hack ----
+if {1} {
+
+respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
+
+respond "*" ":midas syshst;_syshst;hosts3\r"
+expect ":KILL"
+respond "*" ":link syshst;ts hosts3,syshst;hosts3 bin\r"
+
+respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
+
+respond "*" ":midas syshst;_syshst;h3make\r"
+expect ":KILL"
+respond "*" ":link syshst;ts h3make,syshst;h3make bin\r"
+
+# build binary host table
+respond "*" ":syshst;hosts3 /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
+expect ":KILL"
+
+# basic TCP support
+respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
+expect ":KILL"
+
+# telnet server
+respond "*" ":midas sysbin;telser_sysnet;telser\r"
+expect ":KILL"
+
+# port 23 (telnet) uses TELSER
+respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
+
+# telnet client
+respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
+expect ":KILL"
+
+respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
+respond "*" ":link sys;ts tn,sys;ts telnet\r"
+
+# supdup port (95) uses telser
+respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
+
+# supdup client
+respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
+expect ":KILL"
+
+respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
+
+respond "*" ":link syseng;fsdefs 999999,system;fsdefs >\r"
+
+shutdown
+exit 0
+
+}
+#---hack hack---
+
 source $build/emacs.tcl
 
 # TAGS
