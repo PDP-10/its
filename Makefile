@@ -34,6 +34,8 @@ BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
 
+ITSCONFIG = $(notdir $(wildcard build/$(EMULATOR)/config.*))
+
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
 NSALV = bin/ks10/boot/salv.rp06
@@ -100,7 +102,7 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
 
-build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
+$(OUT)/system/$(ITSCONFIG): build/$(EMULATOR)/$(ITSCONFIG)
 	$(MKDIR) $(OUT)/system
 	cp=0; ca=0; \
 	$(TEST) $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
@@ -108,17 +110,15 @@ build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
 	$(SED) -e "s/%IP%/$$x/" \
 	    -e 's/%NETMASK%/$(NETMASK)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
-	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > $(OUT)/system/config.203
+	    -e "s/%CHAOSA%/$$ca/" < $< > $@
+
+build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini $(OUT)/system/$(ITSCONFIG)
 	$(TOUCH) $@
 
-build/simh/stamp: $(SIMH) start
-	$(MKDIR) $(OUT)/system
-	cp build/simh/config.* $(OUT)/system
+build/simh/stamp: $(SIMH) start $(OUT)/system/$(ITSCONFIG)
 	$(TOUCH) $@
 
-build/sims/stamp: $(KA10) start
-	$(MKDIR) $(OUT)/system
-	cp build/sims/config.* $(OUT)/system
+build/sims/stamp: $(KA10) start $(OUT)/system/$(ITSCONFIG)
 	$(TOUCH) $@
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
