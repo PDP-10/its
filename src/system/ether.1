@@ -32,6 +32,11 @@ $INSRT DEUNA
 
 EBLK
 
+;FIXME This memory stuff would be simpler given a routine
+;that allocated and mapped a page, returning the PDP-10
+;address and the two Unibus addresses. We could then
+;allocate on the fly while setting up the rings.
+
 UNPAGS:	BLOCK %UNNPG		;PDP-10 pages: 0,,addr
 UNPAGU:	BLOCK %UNNPG		;Unibus pages: first-addr,,second-addr
 
@@ -39,8 +44,12 @@ UNTXRP:	BLOCK %UNNTB		;Transmit ring: descriptor addr,,buffer addr
 UNRXRP:	BLOCK %UNNRB		;As above for receive
 ;(setup code assumes those two are contiguous)
 
+UNTXRI:	0			;Transmit ring index (next free slot)
+UNRXRI:	0			;Receive ring index (next used slot)
+
 UNADNI:	CPOPJ			;Call this after a DNI interrupt
 UNARCB:	0			;Have we seen an RCBI interrupt?
+;FIXME A flags word would make more sense (if we ever need a second flag!)
 
 BBLK
 
@@ -71,14 +80,8 @@ UNDPCB:	PUSH P,A
 	JRST UNR3
 
 ;Initialise the DEUNA.
+;
 UNAINI:	MOVEI D,%UNNPG-1
-
-	;FIXME This memory stuff would be simpler given a routine
-	;that allocated and mapped a page, returning the PDP-10
-	;address and the two Unibus addresses. We could then
-	;allocate on the fly while setting up the rings, and 
-	;store the list of descriptor,,data pointers at the start
-	;of the first shared page.
 
 UNAIN1:	PUSHJ P,TCALL		;Allocate a page of unshuffleable low core
 	 JRST IOMQ
@@ -157,7 +160,7 @@ UNAIN2: MOVE TT,C		;Work out index into UNPAGS/UNPAGU
 	 ADDI A,1000
 	HRRM A,UNTXRP(C)	;Data pointer
 	MOVE A,UNTXRP(C)
-	BUG INFO,[ring],OCT,C,[ptr],OCT,A
+	;BUG INFO,[ring],OCT,C,[ptr],OCT,A
 
 	MOVSI A,%UNBSZ		;SLEN (only useful for recv at this point)
 	HRR A,B			;SEGB low bits
@@ -210,7 +213,7 @@ UNAIN2: MOVE TT,C		;Work out index into UNPAGS/UNPAGU
 	MOVEI A,%UNCMD"START
 	PUSHJ P,UNACMD
 
-	BUG INFO,[UNA setup done]
+	BUG INFO,[DEUNA setup done]
 	MOVEI A,CPOPJ		;Reset UNADNI behaviour
 	MOVEM A,UNADNI
 	POPJ P,
@@ -218,6 +221,7 @@ UNAIN2: MOVE TT,C		;Work out index into UNPAGS/UNPAGU
 ;Set up the PCB for a command that uses the UDB.
 ;A=Unibus word 0 (command),,LH of Unibus word 3 (0 for most commands).
 ;Returns: D pointing to UDB.
+;
 UNAPCB: HLRZ B,UNPAGU		;Get Unibus address of UDB
 	ADDI B,%UNUDB
 	MOVE D,UNPAGS		;Point to PCB
@@ -237,12 +241,16 @@ UNAPCB: HLRZ B,UNPAGU		;Get Unibus address of UDB
 ;Send a command (in A). Then set the next instruction in the caller as UNADNI,
 ;and return to the caller's caller -- this means that it'll appear to return
 ;(in interrupt context) when the command is done.
+;
 UNACMD:	POP P,UNADNI		;Back to the caller when DNI is set
 	IORI A,%UN0"INTE	;Keep interrupts on
 	IOWRI A,%UNR0		;Send command
 	POPJ P,			;Return to caller's caller
 
 ;Handle a DEUNA interrupt.
+;
+;FIXME Should this use a low-priority interrupt for the actual copying?
+;(as CHAOS does)
 	EBLK
 UNABRK:	0
 	BBLK
@@ -271,16 +279,29 @@ UNABRK:	0
 
 	JRST DSKEX		;Return from interrupt
 
-;FIXME check in a ring - i.e. continue from the first empty slot found last time
 ;Check the receive ring for new packets, and process them.
-UNARX:	SETZM W			;Buffer index
-UNARX1:	HLRZ J,UNRXRP(W)	;Descriptor
+;Ideally, we want to process packets in the same order that the DEUNA is
+;writing them to the ring -- but just in case we get out of sync, we check the
+;whole ring each time, starting with the first empty slot (UNRXRI) we found
+;last time.
+;
+UNARX:	MOVSI W,<-%UNNRB>	;W = -Number to check,,buffer index
+	HRR W,UNRXRI
+	SETOM UNRXRI		;Haven't found an empty slot yet
+
+UNARX1:	HRRZ A,W		;Wrap index around
+	CAIL A,%UNNRB
+	 HLLZS W
+
+	HLRZ J,UNRXRP(W)	;Descriptor
 	HRRZ R,UNRXRP(W)	;Buffer
 
-	MOVE Q,1(J)		;OWN==0?
-	BUG INFO,[rx packet slot],OCT,W,[desc],OCT,J,[buf],OCT,R,[flags],OCT,Q
+	MOVE Q,1(J)		;Is there a packet in this slot? (OWN=0)
+	BUG INFO,[check rx slot],OCT,W,[desc],OCT,J,[buf],OCT,R,[flags],OCT,Q
 	TLNE Q,%UNTD"OWN
-	 JRST UNARX2		; No
+	 JRST [	SKIPGE UNRXRI	;No. First empty slot we've found?
+		 HRRZM W,UNRXRI	; Yes, start here next time
+		JRST UNARX2]
 
 	MOVE A,0(R)
 	MOVE B,1(R)
@@ -289,18 +310,18 @@ UNARX1:	HLRZ J,UNRXRP(W)	;Descriptor
 
 	;FIXME process
 
-	TLO Q,%UNTD"OWN		;Set OWN to mark as free
+	TLO Q,%UNTD"OWN		;Set OWN=1 to mark as free
 	MOVEM Q,1(J)
 
-	SKIPN UNARCB		;Have we had RCB?
-	 JRST UNARX2		; No
-	SETZM UNARCB
-	MOVEI A,%UN0"INTE+%UNCMD"PDMD
-	IOWRI A,%UNR0		;Issue POLLING DEMAND command
+	SKIPE UNARCB		;Have we had an RCB interrupt?
+	 JRST [	SETZM UNARCB	;Yes. Tell the DEUNA there's a free slot now.
+		MOVEI A,%UN0"INTE+%UNCMD"PDMD
+		IOWRI A,%UNR0
+		JRST UNARX2]
 
-UNARX2:	AOS W			;Next buffer
-	CAIGE W,%UNNRB
-	 JRST UNARX1
+UNARX2:	AOBJN W,UNARX1		;Repeat if we haven't looked at all slots
+	SKIPGE UNRXRI		;Repeat if we haven't found a free slot
+	 JRST UNARX1		; FIXME: Or maybe HRRZM W,UNRXRI ?
 
 	POPJ P,
 
