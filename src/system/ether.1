@@ -15,8 +15,226 @@
 ;;; You should have received a copy of the GNU General Public License
 ;;; along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+;;; Generic Ethernet support
+
+%NE32==37777777777
+%NE16==177777
+%NE8==377
+
+.BEGIN %NEH			;Fields in the Ethernet header
+ LENGTH==<2+6+6+2>
+ WORDS==<LENGTH/4>
+
+ PAD==<.BP <%NE16_20.>,0>
+;FIXME Would all the MAC stuff be easier if this was 3 16-bit fields?
+ DMAC0==<.BP <%NE16_4>,0>
+ DMAC12==<.BP <%NE32_4>,1>
+ SMAC01==<.BP <%NE32_4>,2>
+ SMAC2==<.BP <%NE16_20.>,3>
+ TYPE==<.BP <%NE16_4>,3>	;see %NETYP
+.END %NEH
+
+.BEGIN %NETYP			;Ethernet frame types
+ IP==4000
+ ARP==4006
+.END %NETYP
+
+.BEGIN %NEAH			;Fields in an Ethernet+IPv4 ARP packet
+ LENGTH==<2+2+1+1+2+6+4+6+4>	;should be this long
+ WORDS==<<LENGTH+3>/4>
+
+ HRD==<.BP <%NE16_20.>,0>	;see %NEAHR
+ PRO==<.BP <%NE16_4>,0>		;see %NETYP
+ HLN==<.BP <%NE8_28.>,1>	;must be 6 for Ethernet MAC
+ PLN==<.BP <%NE8_20.>,1>	;must be 4 for IPv4 address
+ OP==<.BP <%NE16_4>,1>		;see %NEAOP
+ SHA01==<.BP <%NE32_4>,2>
+ SHA2==<.BP <%NE16_20.>,3>
+ SPA0==<.BP <%NE16_4>,3>	;SPA split across words
+ SPA1==<.BP <%NE16_20.>,4>
+ THA0==<.BP <%NE16_4>,4>
+ THA12==<.BP <%NE32_4>,5>
+ TPA==<.BP <%NE32_4>,6>
+.END %NEAH
+
+.BEGIN %NEAHR			;ARP hardware type
+ ETHER==1
+.END %NEAHR
+
+.BEGIN %NEAOP			;ARP operation
+ REQ==1
+ REPLY==2
+.END %NEAOP
+
+%NEATS==64.			;Max number of ARP table entries
+.BEGIN %NEAT			;ARP table entry
+ WORDS==3
+
+ HA01==<.BP <%NE32>,0>		;MAC address
+ HA2==<.BP <%NE16>,1>
+ PA==<.BP <%NE32>,2>		;IPv4 address
+.END %NEAT
+
+EBLK
+
+ETHME:	BLOCK %NEAT"WORDS	;Our MAC address, as ARP table entry
+				;(device driver must initialise this)
+
+ETHHBF:	BLOCK %NEH"WORDS	;Ethernet header unpacked
+ETHABF:	BLOCK %NEAH"WORDS	;ARP packet unpacked
+
+ETHAT:	BLOCK <%NEATS*%NEAT"WORDS> ;ARP table
+ETHATS:	0			;Number of entries in ARP table
+
+BBLK
+
+;Process a received packet.
+;R is buffer. Length in bytes is I. May clobber A-I, R.
+;
+ETHRX:	MOVEI TT,ETHHBF		;Unpack Ethernet header into ETHHBF
+	HRL TT,R
+	BLTUB TT,<ETHHBF+%NEH"WORDS-1>
+	SUBI I,%NEH"LENGTH	;I now contains data length
+	ADDI R,%NEH"WORDS	;R points to data
+
+	LDB A,[%NEH"TYPE+ETHHBF]
+	BUG INFO,[etype=],OCT,A
+	CAIN A,%NETYP"IP
+	 JRST ETHRXI
+	CAIN A,%NETYP"ARP
+	 JRST ETHRXA
+	BUG INFO,[Unknown Ethernet type],OCT,A
+	POPJ P,
+
+;Process an ARP packet.
+;
+ETHRXA:	CAIN I,%NEAH"LENGTH	;Check size first
+	 JRST ETHRAS
+
+	MOVEI TT,ETHABF		;Unpack packet into ETHABF
+	HRL TT,R
+	BLTUB TT,<ETHABF+%NEAH"WORDS-1>
+
+	LDB A,[%NEAH"HRD+ETHABF]
+	LDB B,[%NEAH"HLN+ETHABF]
+	HRL B,A
+	CAME B,[%NEAHR"ETHER,,6]
+	 JRST ETHRAH
+
+	LDB A,[%NEAH"PRO+ETHABF]
+	LDB B,[%NEAH"PLN+ETHABF]
+	HRL B,A
+	CAME B,[%NETYP"IP,,4]
+	 JRST ETHRAP
+
+	LDB A,[%NEAH"SPA0+ETHABF] ;Get source IP address
+	LSH A,16.
+	LDB B,[%NEAH"SPA1+ETHABF]
+	IOR A,B
+	BUG INFO,[ARP source addr ],OCT,A
+
+	MOVE E,ETHATS		;Is the IP address in the table already?
+	SOS E
+ETHRX1:	JUMPL E,ETHRX2		;Any more entries to check?
+	LDB B,[%NEAT"PA+ETHAT(E)]
+	BUG INFO,[ARP table entry ],OCT,E,[ of ],OCT,ETHATS,[ is ],OCT,B
+	CAMN A,B		;Match?
+	 JRST ETHRX3		; Yes - update it
+	SOJA E,ETHRX1		;Prev entry
+
+ETHRX2:	MOVE E,ETHATS		;Not found in table - add new entry
+	CAIL E,%NEATS		;Table full?
+	 JRST [	MOVEI E,1	; Yes - flush it and start over
+		MOVEM E,ETHATS	;  FIXME remove a random entry instead
+		SETZM E
+		JRST ETHRX3]
+	AOS ETHATS
+
+ETHRX3: DPB A,[%NEAT"PA+ETHAT(E)]	;Store IP address
+	LDB C,[%NEAH"SHA01+ETHABF]	;Get sender's MAC
+	LDB D,[%NEAH"SHA2+ETHABF]
+	DPB C,[%NEAT"HA01+ETHAT(E)]	;Store MAC
+	DPB D,[%NEAT"HA2+ETHAT(E)]
+	BUG INFO,[Set ARP table entry ],OCT,E,[ to ip ],OCT,A,[ mac ],OCT,C,[ ],OCT,D
+
+	LDB E,[%NEAH"OP+ETHABF]	;Get op
+	BUG INFO,[ARP op ],OCT,E
+	CAIE E,%NEAOP"REQ	;Is this a request?
+	 POPJ P,		;No - nothing more to do
+
+	LDB B,[%NEAH"TPA+ETHABF]	;Get the target PA
+	CAME B,[ETHUS]			;Is it our address?
+	 POPJ P,		;No - nothing more to do
+
+	BUG INFO,[ARP reply]
+	MOVEI E,%NEAOP"REPLY		;Construct reply packet
+	DPB E,[%NEAH"OP+ETHABF]
+	DPB A,[%NEAH"TPA+ETHABF]	;Set sender PA as target PA
+	DPB B,[%NEAH"SPA1+ETHABF]	;Set our PA as source PA
+	LSH B,-16.
+	DPB B,[%NEAH"SPA0+ETHABF]
+	MOVE E,C		;Reshuffle sender's MAC from 01/2 to 0/12 form
+	LSH C,-16.
+	LSH E,16.
+	IOR D,E
+	DPB C,[%NEAH"THA0+ETHABF]	;Set as target HA
+	DPB D,[%NEAH"THA12+ETHABF]
+	DPB C,[%NEH"DMAC0+ETHHBF]	;Set as destination MAC in header
+	DPB D,[%NEH"DMAC12+ETHHBF]
+	LDB C,[%NEAT"HA01+ETHME]	;Get our HA
+	LDB D,[%NEAT"HA2+ETHME]
+	DPB C,[%NEAH"SHA01+ETHABF]	;Set as source HA
+	DPB D,[%NEAH"SHA2+ETHABF]
+
+	MOVEI R,ETHABF			;Send it!
+	MOVEI I,%NEAH"LENGTH
+	JRST ETHTX
+
+ETHRAS:	BUG INFO,[ARP wrong size packet ],OCT,I
+	POPJ P,
+ETHRAH:	BUG INFO,[ARP wrong hardware type ],OCT,B
+	POPJ P,
+ETHRAP:	BUG INFO,[ARP wrong protocol ],OCT,B
+	POPJ P,
+
+;Process an IPv4 packet.
+;
+ETHRXI:
+	BUG INFO,[IP]
+	POPJ P,
+
+;Send an Ethernet packet (if possible).
+;Unpacked header is in ETHHBF. R contains pointer to unpacked data.
+;I contains data length in bytes.
+;
+;FIXME IFN UNAP,...
+ETHTX:	BUG INFO,[ethtx ptr ],OCT,R,[ len ],OCT,I
+	PUSHJ P,UNAFF			;Find a free transmit buffer
+	 POPJ P,			;None left. Give up.
+	BUG INFO,[ethtx buf ],OCT,B,[ desc ],OCT,D,[ len ],OCT,I
+
+	MOVE TT,B			;Convert header
+	HRLI TT,ETHHBF
+	BLTBU TT,<%NEH"WORDS-1>(B)
+
+	ADDI B,%NEH"WORDS		;Convert data
+	MOVE TT,B
+	HRL TT,R
+	MOVE A,I
+	ADDI A,3
+	IDIVI A,4
+	ADD A,B
+	MOVE C,TT
+	BUG INFO,[ethtx bltbu tt ],OCT,C,[ a ],OCT,A
+	BLTBU TT,(A)
+
+	ADDI I,%NEH"LENGTH		;Add length of header
+	BUG INFO,[ethtx end buf ],OCT,B,[ desc ],OCT,D,[ len ],OCT,I
+	JRST UNATX			;Transmit it
+
 ;Check whether the interface is able to send a packet.
 ;Skip-return if it is.
+;
 ETHCTS:
 ;FIXME check if we have an ARP entry, and if not, send a request
 	AOS (P)
@@ -36,6 +254,7 @@ EBLK
 ;that allocated and mapped a page, returning the PDP-10
 ;address and the two Unibus addresses. We could then
 ;allocate on the fly while setting up the rings.
+;FIXME The setup stuff might also be cleaner with byte ptrs as above.
 
 UNPAGS:	BLOCK %UNNPG		;PDP-10 pages: 0,,addr
 UNPAGU:	BLOCK %UNNPG		;Unibus pages: first-addr,,second-addr
@@ -129,15 +348,26 @@ UNAIN1:	PUSHJ P,TCALL		;Allocate a page of unshuffleable low core
 	MOVEI A,%UN0"DNI+%UNCMD"GETPCB	;Ack DNI as it's on after reset
 	PUSHJ P,UNACMD		;We've really returned to the caller here
 
-IFN 1,[
-	;Read, and display, the MAC address
+	;Get the MAC address for ARP to use
 	MOVE A,UNPAGS
 	MOVSI TT,%UNAF"RDDPA
 	MOVEM TT,0(A)
 	MOVEI A,%UNCMD"GETCMD
 	PUSHJ P,UNACMD
 	PUSHJ P,UNDPCB		;Show results
-]
+	MOVEI TT,ETHHBF		;Unpack MAC address into ETHHBF
+	HRL TT,UNPAGS
+	BLTUB TT,ETHHBF+1
+	MOVE TT,[.BP <%NE16_4.>,ETHHBF]
+	LDB A,TT
+	LSH A,16.
+	ILDB B,TT
+	IOR A,B
+	BUG INFO,[my MAC 01 =],OCT,A
+	DPB A,[%NEAT"HA01+ETHME]
+	ILDB A,TT
+	BUG INFO,[my MAC 2 =],OCT,A
+	DPB A,[%NEAT"HA2+ETHME]
 
 	;Set up transmit and receive rings
 	MOVE D,UNPAGS		;Point to TDR (RDR follows)
@@ -151,7 +381,7 @@ UNAIN2: MOVE TT,C		;Work out index into UNPAGS/UNPAGU
 	HLRZ B,UNPAGU(TT)	;Get Unibus addr. Even on the left...
 	TRNE C,1
 	 HRRZ B,UNPAGU(TT)	;... and odd on the right
-	ADDI B,%UNBOF		;Add padding at start
+	ADDI B,%UNBOF		;Add word-aligning padding at start
 
 	;FIXME This bit for now, until I rewrite this whole section..
 	HRLM D,UNTXRP(C)	;Descriptor pointer
@@ -257,7 +487,7 @@ UNABRK:	0
 	JSR UTCSAV
 
 	IORDI H,%UNR0		;Read status
-	BUG INFO,[DEUNA interrupt, PCSR0=],OCT,H,[ UNADNI=],OCT,UNADNI
+	;BUG INFO,[DEUNA interrupt, PCSR0=],OCT,H,[ UNADNI=],OCT,UNADNI
 
 	TRNE H,%UN0"SERI+%UN0"PCEI+%UN0"FATL+%UN0"USCI
 	 BUG HALT,[DEUNA error, PCSR0=],OCT,H	;FIXME do something better!
@@ -287,41 +517,90 @@ UNABRK:	0
 ;
 UNARX:	MOVSI W,<-%UNNRB>	;W = -Number to check,,buffer index
 	HRR W,UNRXRI
-	SETOM UNRXRI		;Haven't found an empty slot yet
+	SETOM UNRXRI		;Haven't found an empty buffer yet
 
 UNARX1:	HRRZ A,W		;Wrap index around
 	CAIL A,%UNNRB
 	 HLLZS W
 
 	HLRZ J,UNRXRP(W)	;Descriptor
-	HRRZ R,UNRXRP(W)	;Buffer
 
-	MOVE Q,1(J)		;Is there a packet in this slot? (OWN=0)
-	BUG INFO,[check rx slot],OCT,W,[desc],OCT,J,[buf],OCT,R,[flags],OCT,Q
+	MOVE Q,1(J)		;Is there a packet in this buffer? (OWN=0)
 	TLNE Q,%UNTD"OWN
-	 JRST [	SKIPGE UNRXRI	;No. First empty slot we've found?
+	 JRST [	SKIPGE UNRXRI	;No. First empty buffer we've found?
 		 HRRZM W,UNRXRI	; Yes, start here next time
 		JRST UNARX2]
 
-	MOVE A,0(R)
-	MOVE B,1(R)
-	MOVE C,2(R)
-	BUG INFO,[got packet],OCT,W,[data],OCT,A,[ ],OCT,B,[ ],OCT,C
+	TLNE Q,%UNTD"STF	;STF+ENF should always be true, but check...
+	 TLNN Q,%UNTD"ENF
+	  JRST UNARSF
 
-	;FIXME process
+	TLNE Q,%UNTD"ERRS+%UNTD"OFLO
+	 JRST UNARER
 
-	TLO Q,%UNTD"OWN		;Set OWN=1 to mark as free
+	HRRZ R,UNRXRP(W)	;Buffer
+	LDB I,[.BP 7777,1(J)]	;Get MLEN
+	PUSHJ P,ETHRX
+
+UNARX3:	TLO Q,%UNTD"OWN		;Set OWN=1 to mark as free
 	MOVEM Q,1(J)
 
 	SKIPE UNARCB		;Have we had an RCB interrupt?
-	 JRST [	SETZM UNARCB	;Yes. Tell the DEUNA there's a free slot now.
+	 JRST [	SETZM UNARCB	;Yes. Tell the DEUNA there's a free buffer now.
 		MOVEI A,%UN0"INTE+%UNCMD"PDMD
 		IOWRI A,%UNR0
 		JRST UNARX2]
 
-UNARX2:	AOBJN W,UNARX1		;Repeat if we haven't looked at all slots
-	SKIPGE UNRXRI		;Repeat if we haven't found a free slot
+UNARX2:	AOBJN W,UNARX1		;Repeat if we haven't looked at all buffers
+	SKIPGE UNRXRI		;Repeat if we haven't found a free buffer
 	 JRST UNARX1		; FIXME: Or maybe HRRZM W,UNRXRI ?
+
+	POPJ P,
+
+;These are only here because you can't use BUG inside []...
+UNARSF:	BUG INFO,[DEUNA split frame ],OCT,Q
+	JRST UNARX3
+UNARER:	BUG INFO,[DEUNA frame with errors ],OCT,Q
+	JRST UNARX3
+
+;Find an empty buffer in the transmit ring.
+;On success, skip return with descriptor in D, buffer in B.
+;On failure (the ring is full), normal return.
+;Clobbers A-TT.
+;
+UNAFF:	MOVSI E,<-%UNNTB>	;E = -Number to check,,buffer index
+	HRR E,UNTXRI
+
+UNAFF1:	HRRZ A,E		;Wrap index around
+	CAIL A,%UNNTB
+	 HLLZS E
+
+	HLRZ D,UNTXRP(E)	;Descriptor
+	MOVE A,1(D)		;Is this buffer free? (OWN=0)
+	BUG INFO,[unaff checking slot ],OCT,E,[ status ],OCT,A
+	TLNE A,%UNTD"OWN
+	 JRST [	AOBJN E,UNAFF1	;Try the next one
+		POPJ P,]	;No buffers free.
+
+	HRRZM E,UNTXRI		;Yes. Start at this buffer + 1 next time.
+	AOS UNTXRI		; (Doesn't matter if it wraps.)
+
+	HRRZ B,UNTXRP(E)	;Buffer
+	BUG INFO,[unaff found free buffer ],OCT,E,[ desc ],OCT,D,[ buff ],OCT,B
+	AOS (P)			;Skip return
+	POPJ P,
+
+;Transmit a packet from a buffer obtained by UNAFF.
+;Descriptor in D, buffer in B, data length in bytes in I.
+;Clobbers A.
+;
+UNATX:	BUG INFO,[unatx desc ],OCT,D,[ buff ],OCT,B,[ length ],OCT,I
+	HRLM I,0(D)			;Set SLEN
+	MOVSI A,%UNTD"OWN+%UNTD"STF+%UNTD"ENF
+	IORM A,1(D)			;Set flags
+
+	MOVEI A,%UN0"INTE+%UNCMD"PDMD	;Tell the DEUNA to check the ring
+	IOWRI A,%UNR0
 
 	POPJ P,
 
