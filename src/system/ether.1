@@ -1,0 +1,313 @@
+;;; ITS Ethernet support			-*-MIDAS-*-
+;;;
+;;; Copyright (C) 2018 Adam Sampson <ats@offog.org>
+;;;
+;;; This program is free software; you can redistribute it and/or modify
+;;; it under the terms of the GNU General Public License as published by
+;;; the Free Software Foundation, either version 2 of the License, or
+;;; (at your option) any later version.
+;;;
+;;; This program is distributed in the hope that it will be useful,
+;;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;;; GNU General Public License for more details.
+;;;
+;;; You should have received a copy of the GNU General Public License
+;;; along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+;Check whether the interface is able to send a packet.
+;Skip-return if it is.
+ETHCTS:
+;FIXME check if we have an ARP entry, and if not, send a request
+	AOS (P)
+	POPJ P,
+
+IFN UNAP,[
+;;; DEUNA/DELNA driver
+
+$INSRT DEUNA
+
+%ETMTU==1492.			;MTU (could be 1500, but be conservative)
+%ETMXL==(1500./4)		;Maximum packet length in 32-bit words
+
+EBLK
+
+UNPAGS:	BLOCK %UNNPG		;PDP-10 pages: 0,,addr
+UNPAGU:	BLOCK %UNNPG		;Unibus pages: first-addr,,second-addr
+
+UNTXRP:	BLOCK %UNNTB		;Transmit ring: descriptor addr,,buffer addr
+UNRXRP:	BLOCK %UNNRB		;As above for receive
+;(setup code assumes those two are contiguous)
+
+UNADNI:	CPOPJ			;Call this after a DNI interrupt
+UNARCB:	0			;Have we seen an RCBI interrupt?
+
+BBLK
+
+;BUG INFO the UNA's registers.
+UNREGS:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	IORDI A,%UNR0
+	IORDI B,%UNR1
+	IORDI C,%UNR2
+	IORDI D,%UNR3
+	BUG INFO,[UNA PCSR0=],OCT,A,[ PCSR1=],OCT,B,[ PCSR2=],OCT,C,[ PCSR3=],OCT,D
+	POP P,D
+UNR3:	POP P,C
+	POP P,B
+	POP P,A
+	POPJ P,
+
+;BUG INFO the PCB.
+UNDPCB:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	MOVE A,UNPAGS
+	MOVE B,0(A)
+	MOVE C,1(A)
+	BUG INFO,[UNA PCB:],OCT,B,[ ],OCT,C
+	JRST UNR3
+
+;Initialise the DEUNA.
+UNAINI:	MOVEI D,%UNNPG-1
+
+	;FIXME This memory stuff would be simpler given a routine
+	;that allocated and mapped a page, returning the PDP-10
+	;address and the two Unibus addresses. We could then
+	;allocate on the fly while setting up the rings, and 
+	;store the list of descriptor,,data pointers at the start
+	;of the first shared page.
+
+UNAIN1:	PUSHJ P,TCALL		;Allocate a page of unshuffleable low core
+	 JRST IOMQ
+	  BUG HALT,[Couldn't allocate page for UNA]
+	MOVEI B,MUETH		;Tag what it's being used for
+	DPB B,[MUR,,MEMBLT(A)]
+
+	LSH A,10.		;Save the pointer
+	MOVEM A,UNPAGS(D)
+
+	MOVE B,A
+	LSH B,-9.		;DEC page number
+	;FIXME Could we use %UQFST? (How do we know nobody else is?)
+	; Could have a word with either 0 or the MU in...
+	IORI B,%UQVAL
+
+	PUSHJ P,UBAASL		;Allocate first UBA paging slot
+	IOWRI B,UBAPAG(A)
+	HRLZ C,A
+	PUSHJ P,UBAASL		;Allocate second slot
+	AOS B
+	IOWRI B,UBAPAG(A)
+	HRR C,A
+	LSH C,11.
+	MOVEM C,UNPAGU(D)
+
+	MOVE A,UNPAGS(D)
+	;BUG INFO,[UNA block ],OCT,D,[ entry ],OCT,B,[ pdp10 ],OCT,A,[ unibus ],OCT,C
+
+	SOJGE D,UNAIN1
+
+	;Initialisation sequence from DELUA user guide, page 3-8 (42).
+	;This needs us to wait for an interrupt in several places, so
+	;UNACMD has magic interrupt-continuation behaviour.
+
+	;Enable interrupts.
+	MOVEI A,%UN0"INTE
+	IOWRI A,%UNR0
+
+	;Set the PCB address.
+	HLRZ A,UNPAGU		;Low bits
+	IOWRI A,%UNR2
+	LSH A,-16.		;High bits
+	IOWRI A,%UNR3
+	MOVEI A,%UN0"DNI+%UNCMD"GETPCB	;Ack DNI as it's on after reset
+	PUSHJ P,UNACMD		;We've really returned to the caller here
+
+IFN 1,[
+	;Read, and display, the MAC address
+	MOVE A,UNPAGS
+	MOVSI TT,%UNAF"RDDPA
+	MOVEM TT,0(A)
+	MOVEI A,%UNCMD"GETCMD
+	PUSHJ P,UNACMD
+	PUSHJ P,UNDPCB		;Show results
+]
+
+	;Set up transmit and receive rings
+	MOVE D,UNPAGS		;Point to TDR (RDR follows)
+	ADDI D,<%UNTDR/4>
+
+	SETZM C			;Buffer index
+
+UNAIN2: MOVE TT,C		;Work out index into UNPAGS/UNPAGU
+	IDIVI TT,2
+	AOS TT
+	HLRZ B,UNPAGU(TT)	;Get Unibus addr. Even on the left...
+	TRNE C,1
+	 HRRZ B,UNPAGU(TT)	;... and odd on the right
+	ADDI B,%UNBOF		;Add padding at start
+
+	;FIXME This bit for now, until I rewrite this whole section..
+	HRLM D,UNTXRP(C)	;Descriptor pointer
+	MOVE A,UNPAGS(TT)
+	TRNE C,1
+	 ADDI A,1000
+	HRRM A,UNTXRP(C)	;Data pointer
+	MOVE A,UNTXRP(C)
+	BUG INFO,[ring],OCT,C,[ptr],OCT,A
+
+	MOVSI A,%UNBSZ		;SLEN (only useful for recv at this point)
+	HRR A,B			;SEGB low bits
+	MOVEM A,0(D)
+	;BUG INFO,[t/rdr ],OCT,C,[ at ],OCT,D,[ 0/1 = ],OCT,A
+
+	LSH B,-16.		;SEGB high bits
+	CAIL C,%UNNTB		;in the receive ring?
+	 IORI B,%UNTD"OWN	; yes - give this buffer to DEUNA
+	HRLZS B			;zero other flags
+	MOVEM B,1(D)
+	;BUG INFO,[t/rdr ],OCT,C,[ at ],OCT,D,[ 2/3 = ],OCT,B
+
+	ADDI D,2		;Next descriptor
+	AOS C			;Next buffer
+	CAIGE C,<%UNNTB+%UNNRB>
+	 JRST UNAIN2
+
+	;Set ring descriptor format
+	MOVSI A,%UNAF"WRDRF	;Set up for UDB-using command
+	PUSHJ P,UNAPCB
+
+	HLRZ B,UNPAGU		;Get Unibus address of TDR
+	ADDI B,%UNTDR
+	HRLZ A,B		;TDRB low bits
+	IORI A,<4_8>		;TELEN
+	LSH B,-16.
+	IOR A,B			;TDRB high bits
+	MOVEM A,0(D)		;Store word 0/1
+	;BUG INFO,[rdf 0/1 =],OCT,A
+
+	MOVSI A,%UNNTB		;TRLEN
+	HLRZ B,UNPAGU		;Get Unibus address of RDR
+	ADDI B,%UNRDR
+	HRR A,B			;RDRB low bits
+	MOVEM A,1(D)		;Store word 2/3
+	;BUG INFO,[rdf 2/3 =],OCT,A
+
+	LSH B,-16.		;RDRB high bits
+	IORI B,<4_8>		;RELEN
+	HRLZS B
+	IORI B,%UNNRB		;RRLEN
+	MOVEM B,2(D)		;Store word 4/5
+	;BUG INFO,[rdf 4/5 =],OCT,B
+
+	MOVEI A,%UNCMD"GETCMD
+	PUSHJ P,UNACMD
+
+	;Start the interface
+	MOVEI A,%UNCMD"START
+	PUSHJ P,UNACMD
+
+	BUG INFO,[UNA setup done]
+	MOVEI A,CPOPJ		;Reset UNADNI behaviour
+	MOVEM A,UNADNI
+	POPJ P,
+
+;Set up the PCB for a command that uses the UDB.
+;A=Unibus word 0 (command),,LH of Unibus word 3 (0 for most commands).
+;Returns: D pointing to UDB.
+UNAPCB: HLRZ B,UNPAGU		;Get Unibus address of UDB
+	ADDI B,%UNUDB
+	MOVE D,UNPAGS		;Point to PCB
+	MOVE C,B		;UDBB low bits
+	HLL C,A			;Command
+	MOVEM C,0(D)		;Store word 0/1
+	HRRZS A			;(command-specific)
+	LSH A,8.
+	LSH B,-16.		;UDBB high bits
+	IOR A,B
+	HRLZS A			;Zero word 3
+	MOVEM A,1(D)		;Store word 2/3
+	MOVE D,UNPAGS		;Point to UDB
+	ADDI D,<%UNUDB/4>
+	POPJ P,
+
+;Send a command (in A). Then set the next instruction in the caller as UNADNI,
+;and return to the caller's caller -- this means that it'll appear to return
+;(in interrupt context) when the command is done.
+UNACMD:	POP P,UNADNI		;Back to the caller when DNI is set
+	IORI A,%UN0"INTE	;Keep interrupts on
+	IOWRI A,%UNR0		;Send command
+	POPJ P,			;Return to caller's caller
+
+;Handle a DEUNA interrupt.
+	EBLK
+UNABRK:	0
+	BBLK
+	JSR UTCSAV
+
+	IORDI H,%UNR0		;Read status
+	BUG INFO,[DEUNA interrupt, PCSR0=],OCT,H,[ UNADNI=],OCT,UNADNI
+
+	TRNE H,%UN0"SERI+%UN0"PCEI+%UN0"FATL+%UN0"USCI
+	 BUG HALT,[DEUNA error, PCSR0=],OCT,H	;FIXME do something better!
+
+	TRNE H,%UN0"RXI
+	 PUSHJ P,UNARX
+
+	;FIXME %UN0"TXI
+
+	TRNE H,%UN0"RCBI
+	 SETOM UNARCB		;Just remember for when a buffer is freed
+
+	MOVE A,H
+	ANDI A,%UN0"ALLINT+%UN0"INTE
+	IOWRI A,%UNR0		;Acknowledge interrupts
+
+	TRNE H,%UN0"DNI		;DNI handler *after* acknowledgement
+	 PUSHJ P,@UNADNI	;(because it will probably issue a new cmd)
+
+	JRST DSKEX		;Return from interrupt
+
+;FIXME check in a ring - i.e. continue from the first empty slot found last time
+;Check the receive ring for new packets, and process them.
+UNARX:	SETZM W			;Buffer index
+UNARX1:	HLRZ J,UNRXRP(W)	;Descriptor
+	HRRZ R,UNRXRP(W)	;Buffer
+
+	MOVE Q,1(J)		;OWN==0?
+	BUG INFO,[rx packet slot],OCT,W,[desc],OCT,J,[buf],OCT,R,[flags],OCT,Q
+	TLNE Q,%UNTD"OWN
+	 JRST UNARX2		; No
+
+	MOVE A,0(R)
+	MOVE B,1(R)
+	MOVE C,2(R)
+	BUG INFO,[got packet],OCT,W,[data],OCT,A,[ ],OCT,B,[ ],OCT,C
+
+	;FIXME process
+
+	TLO Q,%UNTD"OWN		;Set OWN to mark as free
+	MOVEM Q,1(J)
+
+	SKIPN UNARCB		;Have we had RCB?
+	 JRST UNARX2		; No
+	SETZM UNARCB
+	MOVEI A,%UN0"INTE+%UNCMD"PDMD
+	IOWRI A,%UNR0		;Issue POLLING DEMAND command
+
+UNARX2:	AOS W			;Next buffer
+	CAIGE W,%UNNRB
+	 JRST UNARX1
+
+	POPJ P,
+
+;FIXME
+;Stylewise, trying to match IMP...
+;See:
+;receive packet - IMPRM (uses IPGIPT, IPRDGM)
+;send packet - IMPOB0 (uses IPGIOQ)
+
+] ;UNAP
