@@ -521,6 +521,13 @@ respond "*" ":job midas\r"
 #respond "PURIFIED" ":pdump midas; ts 108\r"
 respond "*" ":kill\r"
 
+# midas 135
+respond "*" ":job midas\r"
+respond "*" ":load sysbin; midas 135bin\r"
+respond "\n" "purify\033g"
+respond "PURIFIED" ":pdump midas; ts 135\r"
+respond "*" ":kill\r"
+
 # palx
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
