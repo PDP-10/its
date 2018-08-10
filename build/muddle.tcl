@@ -1,19 +1,19 @@
 log_progress "ENTERING BUILD SCRIPT: MUDDLE"
 
-respond "*" ":cwd mudsys\r"
-respond "*" ":midas /t midasm_midas\r"
+respond "*" ":midas /t sysbin; midas 324bin_midas; midas 324\r"
 respond "\n" "itssw==1\r"
 respond "\n" "ptr==100\r"
 respond "\n" "ldbi=ildb\r"
 respond "\n" "dpbi=idpb\003"
 expect ":KILL"
 
-respond "*" ":job midasm\r"
-respond "*" ":load midasm bin\r"
+respond "*" ":job midas\r"
+respond "*" ":load sysbin; midas 324bin\r"
 respond "*" "purify\033g"
-respond "TS MIDAS" "mudsys;ts midasm\r"
+respond "TS MIDAS" "midas;ts 324\r"
 respond "*" ":kill\r"
 
+respond "*" ":cwd mudsys\r"
 respond "*" ":midas ts stinkm_stink\r"
 expect ":KILL"
 
