@@ -404,6 +404,10 @@ respond "with ^C" "DSPLY==0\r"
 respond "\n" "CHEOPS==0\r\003"
 expect ":KILL"
 
+# MachHack VI with 340 display.
+respond "*" ":midas games;ts c_rg;c\r"
+expect ":KILL"
+
 # CKR
 respond "*" ":midas games;ts ckr_agb;ckr\r"
 expect ":KILL"
