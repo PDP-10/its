@@ -16,6 +16,7 @@
 ;;; along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ;FIXME The big one - interrupts? Compare with CHAOS...
+;FIXME Use the style from TCP - this is a bit of a mix at the moment
 
 ;;; Generic Ethernet support
 
@@ -240,14 +241,103 @@ ETHRX5:	POP P,H
 
 ;Send an IP packet (like IPKSNC for CHAOS).
 ;A contains datagram struct.
+;Clobbers A, B.
 ;
-ETHTXI:	MOVE B,PK.DST(A)
-	BUG INFO,[ethtxi A=],OCT,A,[ dest=],OCT,B
+ETHTXI:
+	PUSH P,C
+	PUSH P,D
+	PUSH P,E
+	PUSH P,I
+	PUSH P,R
+
+	; We'll either send this packet, or send an ARP request.
+	; Either way we'll need our MAC address in the Ethernet header.
+	LDB I,[%NEAT"HA01+ETHME]
+	LDB R,[%NEAT"HA2+ETHME]
+	DPB I,[%NEH"SMAC01+ETHHBF]
+	DPB R,[%NEH"SMAC2+ETHHBF]
+
+	; Search the ARP table for the destination address.
+	MOVE C,PK.DST(A)
+	BUG INFO,[ethtxi A=],OCT,A,[ dest=],OCT,C
+
+;FIXME would this loop (and at ETHRX1) be simpler with AOBJN?
+	MOVE E,ETHATS
+	SOS E
+ETHTX1:	JUMPL E,ETHTX2		;Any more entries to check?
+	LDB B,[%NEAT"PA+ETHAT(E)]
+	CAMN B,C		;Match?
+	 JRST ETHTX3		; Yes
+	SOJA E,ETHTX1
+
+ETHTX2:				;Not found in ARP table
+	; Destination address wasn't in the ARP table.
+	; Send an ARP request instead.
+
+	DPB C,[%NEAH"TPA+ETHABF]
+	MOVEI C,[ETHUS]		;FIXME use ETHME
+	DPB C,[%NEAH"SPA1+ETHABF]
+	LSH C,-16.
+	DPB C,[%NEAH"SPA0+ETHABF]
+
+	MOVEI C,%NETYP"ARP	;Ethernet type = ARP
+	DPB C,[%NEH"TYPE+ETHHBF]
+	SETOM C			;Destination MAC is all 1s
+	DPB C,[%NEH"DMAC0+ETHHBF]
+	DPB C,[%NEH"DMAC12+ETHHBF]
+
+;FIXME Given this is so short, we could keep a separate buffer set up for ARP
+;requests rather than building it each time...
+	DPB C,[%NEAH"THA0+ETHABF]
+	DPB C,[%NEAH"THA12+ETHABF]
+	DPB I,[%NEAH"SHA01+ETHABF]
+	DPB R,[%NEAH"SHA2+ETHABF]
+
+	MOVEI C,%NEAHR"ETHER
+	DPB C,[%NEAH"HRD+ETHABF]
+	MOVEI C,%NETYPE"IP
+	DPB C,[%NEAH"PRO+ETHABF]
+	MOVEI C,6
+	DPB C,[%NEAH"HLN+ETHABF]
+	MOVEI C,4
+	DPB C,[%NEAH"PLN+ETHABF]
+	MOVEI C,%NEAOP"REQ
+	DPB C,[%NEAH"OP+ETHABF]
+
+	MOVEI R,ETHABF		;Data pointer
+	MOVEI I,%NEAH"LENGTH	;Length in bytes
+	JRST ETHTX5		;Send it!
+
+ETHTX3:				;Found MAC in ARP table
+	; Found the destination address in the ARP table. Send it!
+	LDB C,[%NEAT"HA01+ETHAT(E)]
+	LDB D,[%NEAT"HA2+ETHAT(E)]
+	BUG INFO,[found MAC in ARP table ],OCT,C,[ ],OCT,D
+	MOVE E,C
+	LSH C,16.
+	DPB C,[%NEH"DMAC0+ETHHBF]
+	LSH E,-16.
+	IOR D,E
+	DPB D,[%NEH"DMAC12+ETHHBF]
+
+	MOVEI C,%NETYP"IP
+	DPB C,[%NEH"TYPE+ETHHBF]
+
+	MOVE R,PK.BUF(A)	;Data pointer
+	LDB I,[IP$TOL(R)]	;Length in bytes, from the IP header
+ETHTX5:	PUSHJ P,ETHTX		;Send it!
+
+	POP P,R
+	POP P,I
+	POP P,E
+	POP P,D
+	POP P,C
 	POPJ P,
 
 ;Send an Ethernet packet (if possible).
 ;Unpacked header is in ETHHBF. R contains pointer to unpacked data.
 ;I contains data length in bytes.
+;Clobbers A, B, C, TT, I.
 ;
 ;FIXME IFN UNAP,...
 ETHTX:	BUG INFO,[ethtx ptr ],OCT,R,[ len ],OCT,I
@@ -665,11 +755,5 @@ UNATX:	;BUG INFO,[unatx desc ],OCT,D,[ length ],OCT,I
 	IOWRI A,%UNR0
 
 	POPJ P,
-
-;FIXME
-;Stylewise, trying to match IMP...
-;See:
-;receive packet - IMPRM (uses IPGIPT, IPRDGM)
-;send packet - IMPOB0 (uses IPGIOQ)
 
 ] ;UNAP
