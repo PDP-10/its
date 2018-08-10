@@ -162,7 +162,7 @@
 - NUDIR, create user directory.
 - NWATCH, small watch display.
 - OBS, observe system activities.
-- OCM, Richard Greenblatt's Mac Hack VI chess program.
+- OCM/C, Richard Greenblatt's Mac Hack VI chess program.
 - OCTPUS, print character representations.
 - OS, realtime TTY spy.
 - OTHELLO, the original Othello game -- simpler than Go.

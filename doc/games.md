@@ -29,6 +29,11 @@ a five-letter word.  To play this, type `:jotto`.
 This is Richard Greenblatt's chess program.  Type `:games;ocm` to play.
 For instructions, see CHPROG; OCM ORDER.
 
+There is also an older version `:games:c` which can draw the chess
+board on a Type 340 display.  Type
+<code>FANCY<kbd>TAB</kbd>2<kbd>Enter</kbd></code> to get the fanc
+chess board.
+
 ### Maze War
 
 First multi-user first person shooter.  Type `:games;maze` to play.
