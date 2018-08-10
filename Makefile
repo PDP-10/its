@@ -30,7 +30,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       kldcp libdoc lisp _mail_ midas quux scheme manual wp
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
       graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
-      _www_ midas
+      _www_ midas sysbin
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
 
