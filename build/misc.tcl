@@ -1,5 +1,18 @@
 log_progress "ENTERING BUILD SCRIPT: MISC"
 
+respond "*" ":midas /t sysbin; midas 324bin_midas; midas 324\r"
+respond "\n" "itssw==1\r"
+respond "\n" "ptr==100\r"
+respond "\n" "ldbi=ildb\r"
+respond "\n" "dpbi=idpb\003"
+expect ":KILL"
+
+respond "*" ":job midas\r"
+respond "*" ":load sysbin; midas 324bin\r"
+respond "*" "purify\033g"
+respond "TS MIDAS" "midas;ts 324\r"
+respond "*" ":kill\r"
+
 respond "*" ":print teach;..new. (udir)\r"
 type ":vk\r"
 
