@@ -12,6 +12,7 @@
 - ADV350, 350-point Adventure.
 - ADV448, 448-point Adventure.
 - ANIMAL, an animal guessing game.
+- AR, PDP-11 debugger.
 - ARCCPY, copies an old-format archive, converting to new format.
 - ARCDEV, transparent file system access to archive files.
 - ARCSAL, archive salvager.
