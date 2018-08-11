@@ -1136,6 +1136,12 @@ type ":vk\r"
 respond "*" ":palx cons;_lmcons;ccons\r"
 expect ":KILL"
 
+# Logo RUG.  STUFF prefers it to be RUG; AR BIN.
+respond "*" ":palx rug;_ar\r"
+# We'll just do the Logo PDP-11/45.
+respond "COMPUTER=" "1\r"
+expect ":KILL"
+
 # 11BOOT
 respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
 respond "with ^C" "APR==0\r\003"
