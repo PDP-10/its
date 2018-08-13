@@ -527,7 +527,7 @@ respond " " "dsk0:.;@ war\r"
 respond "*" ":kill\r"
 
 # Spacewar, standalone
-respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; newwar\r"
+respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; spcwar\r"
 respond "ITS version" "NO\r"
 respond "interrupt" "NO\r"
 respond "ships" "\r"
@@ -537,7 +537,7 @@ respond "recording" "\r"
 expect ":KILL"
 
 # Spacewar, timesharing
-respond "*" ":midas games;ts spcwar_spcwar; newwar\r"
+respond "*" ":midas games;ts spcwar_spcwar; spcwar\r"
 respond "ITS version" "YES\r"
 respond "ships" "\r"
 respond "designs" "\r"
