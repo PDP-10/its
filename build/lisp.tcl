@@ -717,6 +717,12 @@ respond "_" "games;_hibou;itster\r"
 respond "_" "\032"
 type ":kill\r"
 
+# Knight TV Spacewar
+respond "*" ":lisp gjd; sine lisp\r"
+expect ":KILL"
+respond "*" ":midas games;ts tvwar_spcwar; tvwar\r"
+expect ":KILL"
+
 # Kermit
 respond "*" ":link math;defset fasl,lisp;\r"
 respond "*" ":complr\r"

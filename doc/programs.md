@@ -327,6 +327,7 @@
 - TV-11, Knight TV PDP-11.
 - TVEDIT, paint program.
 - TVREAD, read a bitmap file and display on TV.
+- TVWAR, Knight TV Spacewar.
 - TVWRIT, write TV display contents as bitmap file.
 - TTLOC, advertises physical location of logged in users.
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.

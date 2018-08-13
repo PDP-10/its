@@ -74,6 +74,10 @@ instructions, see CHPROG; CHESS2 ORDER.
 
 Star Trek simulation.  To play this, type `:games;trek`.
 
+### TVWAR
+
+Knight TV adaptation of Spacewar.  To play this, type `:games;tvwar`.
+
 ### Wumpus
 
 Enter a cave and hunt a creature called a wumpus.  To play this, type
