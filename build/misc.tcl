@@ -563,6 +563,8 @@ respond "*" ":job swr\r"
 respond "*" ":load gjd; swr bin\r"
 respond "*" "first\033,last\033\060ygjd; swr ships\r"
 respond "*" ":kill\r"
+respond "*" ":midas games;ts tvwar_spcwar; tvwar\r"
+expect ":KILL"
 
 # MLIFE
 respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
