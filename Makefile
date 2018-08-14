@@ -27,7 +27,7 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
-      kldcp libdoc lisp _mail_ midas quux scheme manual
+      kldcp libdoc lisp _mail_ midas quux scheme manual wp
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
       graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
       _www_
