@@ -625,6 +625,10 @@ respond "*" ":midas sys3;ts yow_maeda; yow\r"
 expect ":KILL"
 respond "*" ":link device;chaos yow, sys3; ts yow\r"
 
+# yow client
+respond "*" ":midas sysnet;ts yow_sysen2; yow\r"
+expect ":KILL"
+
 # @
 respond "*" ":midas sys;ts @_sysen1;@\r"
 expect ":KILL"
