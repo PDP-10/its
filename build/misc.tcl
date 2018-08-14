@@ -620,6 +620,11 @@ respond "*" ":midas sys1;ts bye_sysen1;bye\r"
 expect ":KILL"
 respond "*" ":link device;chaos bye,sys1;ts bye\r"
 
+# yow server
+respond "*" ":midas sys3;ts yow_maeda; yow\r"
+expect ":KILL"
+respond "*" ":link device;chaos yow, sys3; ts yow\r"
+
 # @
 respond "*" ":midas sys;ts @_sysen1;@\r"
 expect ":KILL"

@@ -271,3 +271,4 @@
 - XGPSPL, spooler for the Xerox Graphics Printer.
 - XXFILE, feed scripted input to a STY session.
 - YAHTZE, the game of Yahtzee.
+- YOW, print Zippyisms.
