@@ -459,13 +459,12 @@ expect ":KILL"
 respond "*" ":midas games;ts chess_as;chess\r"
 expect ":KILL"
 
-# Old chess?  Timesharing, no TV, no CHEOPS processor.
+# MacHack VI chess: timesharing, using TV display, no CHEOPS processor.
 respond "*" ":midas /t games;ts ocm_chprog;ocm\r"
-respond "with ^C" "DSPLY==0\r"
-respond "\n" "CHEOPS==0\r\003"
+respond "with ^C" "CHEOPS==0\r\003"
 expect ":KILL"
 
-# MachHack VI with 340 display.
+# MacHack VI: timesharing, using 340 display.
 respond "*" ":midas games;ts c_rg;c\r"
 expect ":KILL"
 
