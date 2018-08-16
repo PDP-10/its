@@ -110,7 +110,9 @@ $(OUT)/system/$(ITSCONFIG): build/$(EMULATOR)/$(ITSCONFIG)
 	cp=0; ca=0; \
 	$(TEST) $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
 	x=`echo $(IP) | tr . ,`; \
+	g=`echo $(GW) | tr . ,`; \
 	$(SED) -e "s/%IP%/$$x/" \
+	    -e "s/%GW%/$$g/" \
 	    -e 's/%NETMASK%/$(NETMASK)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s/%CHAOSA%/$$ca/" < $< > $@
