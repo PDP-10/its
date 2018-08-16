@@ -389,9 +389,8 @@ respond "Command:" "d"
 respond "*" ":pdump games; ts trek\r"
 respond "*" ":kill\r"
 
-# Chess: timesharing, no TV display
-respond "*" ":midas /t games;ts chess2_rg;chess2\r"
-respond "with ^C" "TV==0\r\003"
+# Tech II chess: timesharing, using TV display
+respond "*" ":midas games;ts chess2_rg;chess2\r"
 expect ":KILL"
 
 # Unknown chess
