@@ -145,7 +145,7 @@ proc its_switches {} {
     global mchn
 
     respond "MACHINE NAME =" "$mchn\r"
-    respond "Configuration?" "RP06\r"
+    #respond "Configuration?" "RP06\r"
 }
 
 proc make_ntsddt {} {
@@ -158,7 +158,7 @@ proc make_ntsddt {} {
 
 proc make_salv {} {
     respond "*" ":midas dsk0:.;_kshack;nsalv\r"
-    respond "Which machine?" "KSRP06\r"
+    respond "Which machine?" "LC\r"
     expect ":KILL"
 }
 
