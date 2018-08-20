@@ -41,6 +41,7 @@
 - CHESS2, Alan Baisley's Tech II chess program.
 - CHTN/CFTP, Chaosnet TELNET and FTP support.
 - CKR, Alan Baisley's checkers program.
+- CLOGO, Logo programming language.
 - COMIFY, convert HEX to COM format.
 - COMPLR, Lisp compiler.
 - COMSAT, mail server.

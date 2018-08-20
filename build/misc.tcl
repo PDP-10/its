@@ -1154,6 +1154,14 @@ respond "*" ":palx rug;_ar\r"
 respond "COMPUTER=" "1\r"
 expect ":KILL"
 
+# CLOGO
+respond "*" ":job clogo\r"
+respond "*" ":load hqm; clogo bin\r"
+respond "*" "purify\033g"
+respond "PURIFIED" "\r"
+respond "*" ":pdump sys; ts logo\r"
+respond "*" ":kill\r"
+
 # 11BOOT
 respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
 respond "with ^C" "APR==0\r\003"
