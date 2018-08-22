@@ -916,3 +916,9 @@ respond "*" ":lisp\r"
 respond "Alloc?" "n"
 respond "*" {(load "dcp;supard")}
 respond "system program" "(bootstrap)"
+
+# Forth
+respond "*" ":complr\r"
+respond "_" "kle;forth\r"
+respond "_" "\032"
+type ":kill\r"

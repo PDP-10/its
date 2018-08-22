@@ -83,6 +83,7 @@
 - FIDO, watch for system events and bark.
 - FILE, Chaosnet file server.
 - FIND, search for files.
+- FORTH, Forth written in Maclisp.
 - FRETTY, display list of free TTYs.
 - FTPS, FTP server.
 - FTPU, FTP client.
