@@ -1,0 +1,829 @@
+;;; -*-LISP-*-
+
+(declare (load '|dsk:kle;forth|)
+	 (macros t))
+
+	;;; Build the forth environment
+
+(setq PARAMETER-STACK	nil		;initialize stacks
+      RETURN-STACK	nil
+      LOOP-STACK	nil
+      TEMPORARY-STACK	nil
+      COMPILE-STACK	nil)
+
+(setq INPUT-STREAM      nil)		;clear input-stream
+(setq LINE-DELIMETER    '[])		;denotes end-of line
+(setq BLANK              32)		;ASCII space
+(setq double-quote       34)		;ASCII double-quote
+;-------------------------------------------------------------------------------
+
+	;; >>>>> PHASE I <<<<<
+	;; Build by hand the most integral parts of memory
+	;; So that entries can be made with lisp pseudo functions.
+
+
+(store (memory 0) 'END-OF-DICTIONARY)	;waste the first word, avoid ambiguity
+
+
+			;; Create dictionary entry for inner-interpreter (next)
+
+(store (memory 1) '(NEXT . 0)	)	;enter code definition for inner-interp
+(store (memory 2) 0		)	;indicate no more links (end of world)
+(store (memory 3) 4		)	;point to (lisp) code at location 3
+(store (memory 4) '(NEXT)	)	;lisp routine for inner interpreter
+(setq NEXT-ADDR 3)			;address to hand to "variable" entries
+
+			;; Create dictionary entry for [variable]
+	
+(store (memory 5) '([variable] . 0))	;enter code definition for [variable]
+(store (memory 6) 1		   )	;link to previous entry
+(store (memory 7) 8		   )	;point to code at following location 
+(store (memory 8) '(prog2		;lisp routine for encountering variables
+		    (push parameter-stack
+			  param)
+		    (next)))	
+(setq [variable]-addr 7)		;address to hand to "variable" entries
+
+
+			;; Create dictionary entry for variable "H"
+
+(store (memory  9) '(H . 0)	     )	;name.prec
+(store (memory 10) 5		     )	;link
+(store (memory 11) [variable]-addr)	;code
+(store (memory 12) (random)	     )	;value
+(setq H 12)				;address refered to in lisp code as "H"
+
+			;; Create dictionary entry for variable "context"
+
+(store (memory 13) '(CONTEXT . 0)    )	;name.prec
+(store (memory 14) 9		     )	;link
+(store (memory 15) [variable]-addr)	;code
+(store (memory 16) (random)	     )	;value
+(setq context 16)			;lisp definition
+
+(store (memory H) 17)		;Next available word
+(store (memory context) 13)	;Top definition in the dictionary
+
+;-------------------------------------------------------------------------------
+
+	;; >>>>> PHASE II <<<<<
+	;; using primitive lisp functions, build up the dictionary to
+	;; a stand-alone level
+
+	
+	; INTERPRETER AND DICTIONARY ORIENTED WORDS
+
+		;; "[:]" is the code first executed by executing 
+		;; colon definitions.  It pushes the current value of I onto
+		;; the return-stack before invoking the inner interpreter.
+
+		;; "[/;]" is the code executed by a terminating colon
+		;; definition.  It pops the current value of I from the
+		;; return-stack before invoking the inner interpreter
+
+
+(code) [:]		;0/0
+	(push return-stack I)
+	(setq I param)
+	next (setq [:]-addr *code-addr)
+
+(code) [/;]		;0/0
+	(pop return-stack I)
+	next (setq [/;]-addr *code-addr)
+
+ 
+		;; Having defined [:] and [/;] we can now start using
+		;; colon definitions.
+
+
+			;"[']" is the execution-time routine for numbers.  The
+			;number at I is pushed onto the parameter-stack and I is
+			;incremented so that the number will not be "executed".
+(code) |[']|		;0/1
+	(push parameter-stack
+	      (memory I))
+	(setq I (1+ I))
+	next (setq |[']-addr| *code-addr)
+
+			;"S[']" is the execution-time routine for in-line
+			;strings.  The address I is pushed onto the
+			;parameter-stack and I is incremented sot that the
+			;string (pname of an atom) will not be executed
+(code) |S[']|		;0/1
+	(push parameter-stack I)
+	(setq I (1+ I))
+	next (setq |S[']-addr| *code-addr)
+
+			;[constant] is the run-time routine for placeing the value of
+			;a constant on the parameter-stack when the parameter's name
+			;is referenced.
+(code) [constant]
+	(push parameter-stack (memory param))
+	next (setq |[constant]-addr| *code-addr)
+;-------------------------------------------------------------------------------
+
+	; SOME IMPORTANT VARIABLES
+
+
+(variable) PREC 0	;precedence state.  Initially 0 (interpret all)
+(setq prec (1+ *code-addr))
+;-------------------------------------------------------------------------------
+
+	; STACK MANIPULATION WORDS
+
+			;exchange top and top-1
+(code) SWAP		;2/2
+	(swap parameter-stack)
+	next
+
+(code) 2SWAP		;exchange top-1 and top-2
+	(push parameter-stack
+	      (prog2 nil
+		     (pop parameter-stack)
+		     (swap parameter-stack)))
+	next 
+
+
+	;discard top
+(code) DROP		;1/0
+	(pop parameter-stack)
+	next
+
+
+			;push a copy of top-1
+(code) OVER		;2/3
+	(prog (top top-1)
+	      (pop parameter-stack top)
+	      (pop parameter-stack top-1)
+	      (push parameter-stack top-1)
+	      (push parameter-stack top)
+	      (push parameter-stack top-1))
+	next
+
+			;store top at top-1
+(:) UNDER		;2/1
+	swap drop |;|
+
+
+			;push a copy of the top of the stack
+(code) DUP		;1/2
+	(push parameter-stack (top parameter-stack))
+	next
+
+			;push the pair top-1 and top
+(:) 2DUP		;2/4
+	over over |;|
+
+			;rotate the top 3 stack entries up
+			;top <-- top-2 <-- top-1 <-- top
+(:) +ROT		;3/3
+	swap 2swap |;|
+
+			;rotate the top 3 stack entries down
+			;top --> top-2 --> top-1 --> top
+(:) -ROT		;3/3
+	2swap swap |;|
+
+
+			;exchange top and top-2
+(:) FLIP		;3/3
+	+rot swap |;|
+
+;-------------------------------------------------------------------------------
+
+	; Binary Arithmetic operators
+
+(code) +		;2/1  Add top and top-1
+	(push parameter-stack
+	      (plus (pop parameter-stack)
+		    (pop parameter-stack)))
+	next
+
+(code) -		;2/1  Subtract top from top - 1
+	(let ((x (pop parameter-stack))
+	      (y (pop parameter-stack)))
+	     (push parameter-stack (difference y x )) )
+	next
+
+(code) R-		;2/1  Subtract top-1 from top
+	(let ((x (pop parameter-stack))
+	      (y (pop parameter-stack)))
+	     (push parameter-stack (difference x y )) )
+	next
+
+(code) *		;2/1  Multiply top and top-1
+	(push parameter-stack
+	      (times (pop parameter-stack)
+		     (pop parameter-stack)))
+	next
+
+(code) //		;2/1 Divide top-1 by top
+	(push parameter-stack
+	      (let ((top (pop parameter-stack))
+		    (top-1 (pop parameter-stack )))
+		   (quotient top-1 top)))
+	next
+
+(code) AND		;2/1 And top & top-1
+	(let ((x (not (zerop (pop parameter-stack))))
+	      (y (not (zerop (pop parameter-stack)))))
+	     (push (cond ((and x y) 1)
+			 (t 0))))
+	next
+
+(code) OR		;2/1 OR top & top-1
+	(let ((x (not (zerop (pop parameter-stack))))
+	      (y (not (zerop (pop parameter-stack)))))
+	     (push (cond ((or x y) 1)
+			 (t 0))))
+	next
+
+(code) XOR		;2/1 XOR top and top-1
+	(let ((x (not (zerop (pop parameter-stack))))
+	      (y (not (zerop (pop parameter-stack)))))
+	     (push (cond ((or (and x y )
+			      (and (not x)
+				   (not y) ))
+			  0)
+			  (t 1))))
+	next
+;-------------------------------------------------------------------------------
+
+	; UNARY OPERATORS
+
+(code) MINUS		;1/1 negates top
+	(push parameter-stack
+	      (minus (pop parameter-stack)))
+	next
+
+(code) NOT		;1/1 complement top
+	(push parameter-stack
+	      (cond ((zerop (pop parameter-stack)) 1)
+		    (t 0)))
+	next
+
+(:) 1+			;1/1 increment top
+	1 + |;|
+
+(:) 1-			;1/1 decrement top
+	1 - |;|
+
+
+
+(code) 0=		;1/1 top = zero ?
+	(push parameter-stack
+	      (cond ((zerop (pop parameter-stack)) 1)
+		     (t 0) )) 
+	next
+
+(code) 0<		;1/1 top < zero?
+	(push parameter-stack
+	      (cond ((lessp (pop parameter-stack) 0) 1)
+		    (t 0) )) 
+	next
+
+(code) 0>		;1/1 top > zero?
+	(push parameter-stack
+	      (cond ((greaterp (pop parameter-stack) 0) 1)
+		    (t 0) )) 
+	next
+
+(:) 0<= 0> not |;|
+
+(:) 0>= 0< not |;|
+
+(:) 0<> 0= not |;|
+
+;-------------------------------------------------------------------------------
+
+	; BINARY RELATIONAL OPERATORS
+
+(:) = - 0= |;|
+
+(:) < - 0< |;|
+
+(:) > - 0> |;|
+
+(:) >= - 0>= |;|
+
+(:) <= - 0<= |;|
+
+(:) <> - 0<> |;|
+
+;-------------------------------------------------------------------------------
+
+	; MEMORY ACCESS AND STORAGE WORDS
+
+		;@ is the forth load function. It replaces an address on
+			;the top of the stack with the contents at that address.
+(code) @		;1/1
+	(push parameter-stack	
+	      (memory (pop parameter-stack)))
+	next
+
+			;"!" is the forth store instruction.  It store at the
+			;address on the top of the stack, the value under it on
+			;the stack.
+
+(code) !		;2/0
+	(LET ((adr (pop parameter-stack))
+	      (val (pop parameter-stack)))
+	     (store (memory adr) val))
+	 next
+
+			;@@ does a load-indirect through top of stack
+(:) @@			;1/1
+	@ @ |;|
+
+			;"<-" stores the word on top in the location addressed
+			;by top-1.  I.e. same thing as the "!" instruction, but
+			;takes its arguments in reverse order.
+(:) <-			;2/0
+	swap ! |;|
+
+			;Store the contents of the address found at top-1 into
+			;the address at top.
+(:) @!			;2/0
+	@ ! |;|
+
+			;Add top-1 to contents of location addressed by top.
+(:) +!			;2/0
+	swap over @ + <- |;|
+
+			;Subtract top-1 from contents of location addressed by
+			;top. 
+(:) -!			;2/0
+	swap over @  R-  <-  |;|
+
+			;increment location addressed by top
+(:) 1+!			;1/0
+	dup @ 1+ <- |;|
+
+			;decrement location addressed by top
+(:) 1-!			;1/0
+	dup @ 1- <- |;|
+
+
+;-------------------------------------------------------------------------------
+
+	; DICTIONARY MANIPULATION WORDS
+
+		;push the value of the current end of dictionary pointer 
+(:) H@			;0/1
+	H @ |;|
+
+			;store top of parameter-stack at end of dictionary and
+			;increment H.
+(:) |,|			;1/0
+	H@ ! H 1+! |;|
+
+
+			;"[']," is the execution-time routine that is used to
+			;place an address into the dictionary at H which points
+			;to the routine specified at I.  That is to say that the
+			;contents of the next sequential location addressed by I
+			;is appended to the dictionary.  This is mainly used in
+			;the "immediate"-level compiler directives to append the
+			;address of an associated rutime-routine.
+
+(code) |['],|		;0/0
+	(put (memory I))
+	(setq I (1+ I))
+	next 
+
+ 
+;-------------------------------------------------------------------------------
+
+	; CONDITIONALS AND COMPILER DIRECTIVES
+
+			;RUNTIME ROUTINES 
+			;FOR SINGLE PARAMTER FLOW OF CONTROL
+
+			;[IF] tests the top of the parmeter-stack; if not zero
+			;then I is incremented, otherwise I is set to the
+			;contents of the next sequential word (the word at the
+			;current value of I).
+
+(code) [IF]		;0/0
+	(cond ((zerop (pop parameter-stack))
+	       (setq I (memory I)))
+	      (t (setq I (1+ I))) )
+	next (setq [if]-addr *code-addr)
+
+
+			;[ELSE] sets I to the contents of the next sequential
+			;word.
+(code) [ELSE] 
+	(setq I (memory I))
+	next  (setq [else]-addr *code-addr)
+
+
+			;[(] tests the top of the stack; if negative or zero
+			;then I is set to the contents of the next sequential
+			;word.  Otherwise, the top of the stack is pushed on the
+			;loop-stack and I is incremented.
+
+(code) |[(]|		;1/0
+	(let ((top (pop parameter-stack)))
+	     (cond ((lessp top 1)
+		    (setq I (memory I)) )
+		   (t
+		    (push loop-stack top)
+		    (setq I (1+ I)) )))
+	next (setq |[(]-addr| *code-addr)    
+
+
+			;[)] decrements the word on the top of the loop stack.
+			;If the result is zero, the loop stack is popped and I
+			;is incremented.  Otherwise, I is set ot the contents of
+			;the next sequential word
+
+(code) |[)]|		;0/0
+	(let ((foo (1- (pop loop-stack))))
+	     (cond ((zerop foo)
+		    (setq I (1+ I)))
+		   (t
+		    (push loop-stack foo)
+		    (setq I (memory I)) )))
+	next  (setq |[)]-addr| *code-addr)
+
+;-------------------------------------------------------------------------------
+
+	; CONDITIONALS AND COMPILER DIRECTIVES
+
+			;RUNTIME ROUTINES 
+			;FOR DUAL PARAMTER FLOW OF CONTROL
+
+			;[DO] test the top 2 stack entries for equality.  If
+			;equal, I is set to the contents of the next sequential
+			;word.  If not equal, they are pushed in reverse order
+			;on the loop stack, and I is incremented
+(code) [DO]
+	(let ((low   (pop parameter-stack))
+	      (high (pop parameter-stack)))
+	     (cond ((not (> high low))
+		    (setq I (memory I)))
+		   (t (push loop-stack high)
+		      (push loop-stack low)
+		      (setq I (1+ I)) )))
+	next
+
+			;[LOOP] increments the lower limit (top of loop-stack) 
+			;and then compares it with the upper limit (top-1 of
+			;loop-stack).  If low is >= high, I is incremented and
+			;the limits removed from the loop stack; otherwise I is
+			;set to the contents of the next sequential word.
+(code) [LOOP]		;0/0
+	(let ((low  (1+ (pop loop-stack)))
+	      (high (top loop-stack)))
+	     (cond ((lessp low high)
+		    (push loop-stack low)
+		    (setq I (memory I)))
+		   (t (setq I (1+ I))
+		      (pop loop-stack) )))
+	next
+
+			;[+LOOP] increments the lower limit (top of loop-stack)
+			;by INCR (top of parameter-stack).  If INCR is >= 0 then
+			;termination occurs if low >= high.  If INCR < 0 then
+			;termination occurs if low is less than high.
+(code) [+LOOP]		;1/0
+      (let ((incr (pop parameter-stack))
+	    (low  (pop loop-stack))
+	    (high (top loop-stack)))
+	   (setq low (+ low incr))
+	   (cond ((or (and (not (< incr 0))
+			   (not (< low high)))
+		      (and (< incr 0)
+			   (< low high)) )
+		  (pop loop-stack)
+		  (setq I (1+ I)) )
+		 (t (push loop-stack low)
+		    (setq I (memory I)) )))
+	next
+;-------------------------------------------------------------------------------
+
+	; CONDITIONALS AND COMPILER DIRECTIVES
+
+			;COMPILE-TIME ROUTINES
+
+			;allocate a zero word in the dictionary
+(:) ALLOC 0 |,| |;|	;0/0
+
+
+(:) IF			;0/1*
+	|['],| [if]  h@  alloc  |;| (immediate)
+
+
+(:) THEN		;1/0*
+	h@  <-  |;|  (immediate)
+
+
+(:) ELSE		;1/1*
+	|['],| [else]  h@ 1+ <-  h@   alloc  |;|  (immediate)
+
+
+(:) BEGIN		;0/1*
+	h@ |;| (immediate)
+
+
+(:) END			;1/0*
+	|['],| [if]  |,|  |;| (immediate)
+
+
+(:) |(|			;0/1*
+	|['],| |[(]| h@  alloc  |;|  (immediate)
+
+
+(:) |)|			;1/0*
+	|['],|  |[)]|  dup  h@ <-  |,|  |;|  (immediate)
+
+
+(:) DO			;0/1*
+	|['],| [do]  h@  alloc  |;| (immediate)
+
+
+(:) LOOP		;1/0*
+        |['],| [loop]  dup 1+ |,|  h@ <- |;| (immediate)
+
+
+
+(:) +LOOP |['],| [+loop]  dup  h@ <-  |,|  |;|  (immediate)
+
+;--------------------------------------------------------------------------------
+
+		; INPUT/OUTPUT ROUTINES
+
+(variable) INBLK -1	;current interpreter block # (-1 for tty)
+(setq inblk (1+ *code-addr))
+
+(variable) COL 0	;current output column number
+(setq COL (1+ *code-addr))
+
+(constant) BLANK 32	;ascii space
+
+
+			;make tty the current output device.  Currently does
+			;absoluetly nothing since the tty is the only output
+			;device. 
+(code) TTO		;0/0
+	next
+
+			;make tty the current input device. Currently does a lot
+			;more nothing.
+(code) TTI		;0/0
+	next
+
+			;output a character to the current output device,
+			;increment col.
+(code) TYO		;1/0
+	(princ (ascii (pop parameter-stack)))
+	(store (memory col) (1+ (memory col)))
+	next
+
+
+			;output a space
+(:) SPACE		;0/0
+	blank tyo |;|
+
+
+
+(:) SPACES
+		;1/0 output N spaces
+        |$(| space |$)|  |;|
+
+			;output a <carriage rtn> <linefeed> (newline) and set
+			;col to zero.
+(:) CRLF		;0/0 
+	13 tyo 10 tyo  0 col ! |;|
+
+
+(:) FF			;0/0 form-feed
+	12 tyo  0 col !  |;|
+
+(code) |.|		;pop and print the top of stack
+	(progn (princ (pop parameter-stack))
+	       (princ (ascii blank)))
+	next
+
+			;Tab to column N.  No action taken if COL >= N
+(:) TAB			;1/0
+	col @ - spaces |;|
+
+
+			;Output a character string (an atom's printname) whose
+			;memory address is on the top of the stack.
+(code) TYPE		;1/0
+	(princ (memory (pop parameter-stack)))
+	next
+
+;-------------------------------------------------------------------------------
+
+		; ERROR HANDING ROUTINES
+
+			;QUIT resets all stacks, sets prec to 0, sets inblk to
+			;-1 (tty), and causes and interrupt (thus returning to
+			;GO).  This is a general garbage collection routine
+			;which aborts whatever ation is currently being taken
+			;and returns control to the keyboard.
+
+(code) QUIT		;N/0
+	(setq parameter-stack	nil		;initialize stacks
+	      return-stack	nil
+	      loop-stack	nil
+	      temporary-stack	nil) 
+	(store (memory prec) 0)
+	(store (memory inblk) -1)
+	(error)
+	next
+
+			;ERR sets the output device to the tty, types a CRLF,
+			;types the string (atom's pname) pointed to (addressed
+			;by) the top of the stack, types another CRLF, types the
+			;name of the word LAST interpreted, then aborts via
+			;quit.
+
+(:) ERR			;1/0
+	tto crlf type crlf h@ type quit |;|
+;-------------------------------------------------------------------------------
+
+	; interpreter functions
+
+			;"immediate" increments the precedence of the dictionary 
+			;entry at the location pointed to by context.  this
+			;enables us to have compiler directives that execute
+			;immediately instead of being compiled like other words.
+			;note that "immediate" itself is a compiler directive of
+			;order 2 precedence (refered to as double-immediate).
+
+(code) IMMEDIATE	;0/0
+	(immediate)
+	next (immediate) (immediate)	; the word "immediate"'s precedence
+					; is double-immediate
+
+			;word gets words from the input stream
+(code) WORD		;1/0
+	(word-fn (pop parameter-stack))
+	next						
+
+			;|"| output the address of |S[']|, Get the next string
+			;delimited by |"|, increment H to point to the word
+			;following the string (atom name) .
+(code) |"|		;0/1*
+	(put |S[']-addr|)
+	(word-fn double-quote)
+	(put (memory H)
+	     (1+ (memory H)))
+	next (immediate)
+
+			;find locates dictionary entries
+(code) FIND		;0/(1,2)
+	(find-fn) 
+	next
+
+			;Read in the next word separated by a blank, search for
+			;it in the dictionary with FIND.  If it is not found
+			;execute err with the message "undefined" otherwise
+			;return.  If it is found, then put the address of the
+			;entry's parameter field on the stack.
+(:) |'|			;0/1
+	blank word find not $if |$"| Undefined err
+			    $else 3 +
+			    $then |;|
+
+			;executes or compiles one word whose address is at top
+			;depending upon prec.
+(code) EXECUTE		;1/0
+	(execute)
+	next
+			;number tries to convert to a number the string at the
+			;end of the dictionary.  If the object is not a valid
+			;number then zero is left on the stack.  Otherwise the
+			;number and then a 1 (always non-zero) are pushed.
+(code) NUMBER
+	(let ((num (car (errset (readlist (exploden (locate H)))
+				nil))))
+	     (cond ((numberp num)
+		    (push parameter-stack num)
+		    (push parameter-stack 1))
+		   (t (push parameter-stack 0))))
+	next
+
+			;This routine will never get to a "Next"
+
+;-------------------------------------------------------------------------------
+
+		; WORDS FOR CREATING DICTIONARY ENTRIES
+
+
+
+		;; the following routine is used to create the name, precedence,
+		;; and link into a directory entry.  the internal variable 
+		;; "*code-addr" is set to the address where the code element for
+		;; this entry will go.  this enables lisp to set up values for
+		;; variables and entries that are entered into memory.
+
+(code) ENTRY
+       (word-fn blank)				;find a word
+       (push parameter-stack (memory h))	;save entry location
+       (put (cons (locate h) 0))		;create entry header
+       (put (memory context))			;insert link
+       (setq *code-addr (memory h)) 		;hook for lisp vars
+	next
+
+
+		;; the following routine finishes off a definition by updating
+		;; context to include the entry in the dictonary and thus
+		;; future dictinary searches.
+
+(code) UPDATE
+	(update)
+	 next
+
+		;execute ENTERY, setup [:] as code address and increment the
+		;prec.
+(:) : 
+	entry  |['],| [:]  prec 1+!  |;|
+
+(:) /;			;0/0 
+	|['],|  [/;]  update  prec 1-!  |;| (immediate)
+
+(:) variable
+	entry  update  |['],|  [variable] |,|  |;|
+
+(:) constant
+	entry  update  |['],| [constant]  |,|  |;|
+
+;-------------------------------------------------------------------------------
+
+	; AND AT LAST... THE INTERPRETER!
+
+(:) INTERPRET
+	$begin blank word find
+	$if	execute
+	$else	number $if  prec @  
+				$if |['],|  |[']|  |,| $then
+		       $else |$"| undefined err $then
+	$then 0 $end  |;|
+
+(:) GO
+	tti tto
+	$begin crlf interpret 0 $end |;|
+     (setq go-addr *code-addr)
+
+;-------------------------------------------------------------------------------
+
+		;*  Additional functions
+
+		;pushes onto the parameter-stack the number elements on the
+		;stack already
+
+(code) stack-length
+	(push parameter-stack
+	      (length parameter-stack))
+	next
+
+		;pop and print all parameter-stack entries
+(:) |.S|	;N/0
+	stack-length |$(|  |.|  |$)|   |;|
+
+
+;-------------------------------------------------------------------------------
+
+		;* Mark the state of the world
+
+(setq errstop-flag T)
+(setq halt-flag t)
+(mark)
+
+		;And.. they're off and running!
+(forth)
+
+: /* 0 WORD ; IMMEDIATE   /* the symbol "/*" dentoes comment till end of line.
+
+
+        /*  FUNCTIONS */
+
+
+/* Note that ALL code in this section must be read in via the real interpreter
+/* in it takes advantage of immediate functions!  Since forth distinguishes 
+/* upper and lower case for now all definitions must be in caps.  Also the text
+/* may not have any tabs in it only spaces.
+
+                        
+                        /* 1/1 Absolute value of top */
+
+: ABS   DUP 0< IF MINUS
+               THEN ;
+
+                        /* 1/1 Maximum of top and top-1 */
+: MAX 2DUP > IF DROP
+               ELSE UNDER
+               THEN ;
+
+                        /* 1/1 Minimum of top and top-1 */
+: MIN 2DUP <    IF DROP
+                ELSE UNDER
+                THEN ;
+
+: TESTLOOP  SWAP 0 DO DUP . LOOP DROP ;

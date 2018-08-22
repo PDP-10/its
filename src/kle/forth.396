@@ -1,0 +1,800 @@
+;;; -*-LISP-*-
+
+;;; THIS FILE ORIGINALLY CREATED MARCH 19, 1978 BY 54495.
+
+
+    ;;; EVERYTHING YOU ALWAYS WANTED TO KNOW ABOUT FORTH VARIABLES ;;;
+                     ;;; (BUT WERE AFRAID TO ASK) ;;;
+
+
+;;; "MEMORY" IS A HUMONGOUS ARRAY
+;;; "I" IS CURRENTLY AN INTERNAL VARIALBE POINTING TO THE LOCATION IN MEMORY 
+;;;      WHERE THE NEXT CODE TO BE INTERPRETED IS.
+;;; "PC" IS CURRENTLY AN INTERNAL VARIABLE POINTING TO THE LOACTION IN MEMORY
+;;;      WHERE THE LAST INSTRUCTION (S EXPRESSION) WAS EXECUTED FROM.  THUS THIS
+;;;      VARIABLE ALWAYS WANTS TO BE SET ONE LESS THAN IT IS GOING TO END UP 
+;;;      BEING, when FORCING A BRANCH.
+;;; "PARAM" IS an internal variable denoting THE LOCATION OF THE PARAMETRS FOR 
+;;;	THE CURRENT CALL.
+;;; "H" IS A USER ACCESSABLE VARIABLE THAT ALWAYS POINTS TO THE NEXT AVAILABLE 
+;;;	 word AT THE BEGINNING OF THE DICTIONARY.
+;;; "CONTEXT" IS A USER ACCESSABLE VARIABLE THAT ALWAYS POINTS TO THE TOP ENTRY 
+;;;	IN THE DICTIONARY.  NOTE THAT THIS DIFFERS FROM "H" IN THAT IT POINTS 
+;;;	TO A COMPLETED ENTRY.  "CONTEXT" IS UP DATED AFTER AN ENTRY HAS BEEN 
+;;;	DEFINED SO THAT IF THE SAME WORD WHICH IS BEING DEFINED IS REFERENCED 
+;;;	WITHIN ITS DEFINITION, IT WILL REFERE TO EARLIER ENTRIES IN THE 
+;;;	DICTIONARY.  ONE MAY DEFINE RECURSIVE ROUTINES BY FIDDLIDING WITH  
+;;;	CONTEXT IN MID DEFINITION.
+;;; "*code-addr" is an internal variable that is set to the code element (see 
+;;;	below) of a dictionary entry when defined.  This allows lisp to 
+;;;	optionally set an internal varialbe to that location for internal 
+;;;	operation.  This facility enables lisp to store its variables for the 
+;;;	compiler directly in dictionary entries so that the second version of 
+;;;	this program can be optomized to have most routines written in forth 
+;;;	instead of lisp with a minimal amount of effort.  Note that a virtual 
+;;;	(unimplemented)  "*param-addr" is always equal to (1+ *code-addr).
+;;; "INPUT-STREAM" IS CURRENTLY A SUPER QUICK AND DIRTY PLACE TO FIND INPUT
+;;;	CHARACTERS THE TIMEING AND INTERFACING OF THIS ROUTINE LEAVES MUCH TO
+;;;	BE DESIRED.
+;;; "LINE-DELIMETER" IS SOME SPECIFIED ASCII CHARACTER WHICH IS APPENDED BY
+;;;	"READ-A-LINE" TO THE END OF EACH INPUT LINE READ FROM THE TERMINAL.
+;;;	THIS DELIMETER DEFINES AN UNCONDITIONAL END OF WORD.
+;;; "PREC" IS THE CURRENT PRECEDENCE AS SET BY THE ":", ";" AND "IMMEDIATE"
+;;;	COMMANDS.  PREC IS EITHER 0 (NORMAL STATE ALL COMMANDS ARE EXECUTED); 1
+;;;	(IMMEDIATE--COMMANDS ARE COMPILED EXCEPT FOR COMPILER PSEUDO-OPS SUCH 
+;;;	AS "IF", AND "BEGIN" WHICH ARE EXECUTED IMMEDIATELY WHEN ENCOUNTERED); 
+;;;	OR 2, (DOUBLE IMMEDIATE MODE IN WHICH ONLY A FEW VERY SPECIALIED 
+;;;	COMMANDS --SUCH AS "IMMEDIATE" ARE EXECUTED WHEN A COLON DEFINITION IS 
+;;;	BEING DEFINED).  THE FIRST ELEMENT OF EACH DICTIONARY ENTRY IS A CONS 
+;;;	WHOSE CAR IS THE PRINT NAME FOR THE COMMAND AND WHO'S CDR IS A FIXNUM 
+;;;	BETWEEN AND 0 AND 2 REPRESENTING ITS PRECEDENCE.  IF THE PRECEDENCE AT 
+;;;	ANY TIME, FOR AN INDIVIDUAL COMMAND IS GREATER THAN OR EQUAL TO THE 
+;;;	CURRENT VALUE OF PREC, THEN THAT COMMAND WILL BE EXECUTED; OTHER WISE IT 
+;;;	WILL BE COMPILED.
+
+;-------------------------------------------------------------------------------
+
+                     ;;; DICTIONARY ENTRIES ;;;
+
+
+;;; all definitions for forth commands are placed into the dictionary.
+;;; dictionary entries are linked to each other and appeear as follows:
+;;;	1  (<name> . <Prec>)
+;;;	2  <link> --->
+;;;	3  <code address> --->
+;;;	4  <first parameter>
+;;;	   [<second parameter>]
+;;;	   [<... nth parameter>]
+;;; The first element of the entry is a cons whose car is an atom whose
+;;; printname is the name of the entry and whose cdr is the entry's 
+;;; precedence (see "prec" below).  The second element is a link to the
+;;; previous entry in the dictionary and points the that entry's first
+;;; element.  The third element is a pointer to the address at which
+;;; the assembly (lisp) code for this entry will be found.  For an
+;;; entry created by a ":" definition, this will always point to
+;;; the lisp-code (located located in the parameter elements) of
+;;; the "[:]" command which will invoke the inner-interpreter;
+;;; For an entry created by the "CODE" command this code-address points
+;;; to the first parameter of that same entry at which locate theexecution
+;;; of lisp code will continue until a "(Next)" is encountered at which point
+;;; a return will be executed to the entry's caller.  For ":" definitions
+;;; the parameters are pointers to the CODE ELEMENTS of other entries
+;;; in the dictionary.  When an entry is encountered (executed) the 
+;;; variable "param" is set to  point to the first parameter, before the
+;;; code at the code address is executed--thus enabling an executed "NEXT"
+;;; to push the current pointer to interpreted code ("I") and start 
+;;; interpreting at "param";
+
+
+                               ;;; STACKS ;;;
+
+;;; THIS VERSION OF FORTH (WHICH IS ACTUALLY MORE RELATED TO SWING) UTILIZES 4
+;;;	SEPARATE STACKS.  THEY ARE:
+;;;	1) THE "PARAMETER-STACK" IS THE STACK ON WHICH ALL PARAMETERS ARE
+;;;	   PASSED BACK AND FORTH ON.  THE USER HAS EXPLICIT ACCESS.
+;;;	2) THE "RETURN-STACK" IS USED BY THE INTERPRETER TO MANAGE FLOW OF
+;;;	   CONTROL AMONG NEXTED AND RECURSIVE DEFINITIONS.
+;;;	3) THE "LOOP-STACK" MAINATAINS THE LOOP COUNTS AND LIMITS FOR NESTED
+;;;	   "DO"'S; AND
+;;;	4) THE "TEMPORARY-STACK" IS AN ADDITIONAL STACK PROVIDED SOELY FOR THE 
+;;;	   USER'S CONVENIENCE AND IS NOT USED BY THE SYSTEM AT ALL.  THE STACK
+;;;	   IS ACCESSED BY A SET OF SPECIALIZED USER 
+
+;-------------------------------------------------------------------------------
+
+			; DECIMAL ASCII CHART
+
+
+;                 ____________________________________________________
+;          BINARY|     0000_ 0001_ 0010_ 0011_ 0100_ 0101_ 0110_ 0111_|
+;                |                                                    |
+;          OCTAL |      00_   02_   04_   06_   10_   12_   14_   16_ |
+;                |      01_   03_   05_   07_   11_   13_   15_   17_ |
+;      __________|____________________________________________________|
+;     |BINARY OCT| HEX   0_    1_    2_    3_    4_    5_    6_    7_ |
+;     |__________|     _______________________________________________|
+;     |_0000  _0 | _0 | NUL | DLE | SP  |  0  |  @  |  P  |  `  |  p  |
+;     |          |    |___0_|__16_|__32_|__48_|__64_|__80_|__96_|_112_|
+;     |_0001  _1 | _1 | SOH | DC1 |  !  |  1  |  A  |  Q  |  a  |  q  |
+;     |          |    |___1_|__17_|__33_|__49_|__65_|__81_|__97_|_113_|
+;     |_0010  _2 | _2 | STX | DC2 |  "  |  2  |  B  |  R  |  b  |  r  |
+;     |          |    |___2_|__18_|__34_|__50_|__66_|__82_|__98_|_114_|
+;     |_0011  _3 | _3 | ETX | DC3 |  #  |  3  |  C  |  S  |  c  |  s  |
+;     |          |    |___3_|__19_|__35_|__51_|__67_|__83_|__99_|_115_|
+;     |_0100  _4 | _4 | EOT | DC4 |  $  |  4  |  D  |  T  |  d  |  t  |
+;     |          |    |___4_|__20_|__36_|__52_|__68_|__84_|_100_|_116_|
+;     |_0101  _5 | _5 | ENQ | NAK |  %  |  5  |  E  |  U  |  e  |  u  |
+;     |          |    |___5_|__21_|__37_|__53_|__69_|__85_|_101_|_117_|
+;     |_0110  _6 | _6 | ACK | SYN |  &  |  6  |  F  |  V  |  f  |  v  |
+;     |          |    |___6_|__22_|__38_|__54_|__70_|__86_|_102_|_118_|
+;     |_0111  _7 | _7 | BEL | ETB |  '  |  7  |  G  |  W  |  g  |  w  |
+;     |__________|____|___7_|__23_|__39_|__55_|__71_|__87_|_103_|_119_|
+;     |_1000  _0 | _8 | BS  | CAN |  (  |  8  |  H  |  X  |  h  |  x  |
+;     |          |    |___8_|__24_|__40_|__56_|__71_|__88_|_104_|_120_|
+;     |_1001  _1 | _9 | HT  | EM  |  )  |  9  |  I  |  Y  |  i  |  y  |
+;     |          |    |___9_|__25_|__41_|__57_|__73_|__89_|_105_|_121_|
+;     |_1010  _2 | _A | LF  | SUB |  *  |  :  |  J  |  Z  |  j  |  z  |
+;     |          |    |__10_|__26_|__42_|__58_|__74_|__90_|_106_|_122_|
+;     |_1011  _3 | _B | VT  | ESC |  +  |  ;  |  K  |  [  |  k  |  {  |
+;     |          |    |__11_|__27_|__43_|__59_|__75_|__91_|_107_|_123_|
+;     |_1100  _4 | _C | FF  | FS  |  ,  |  <  |  L  |  \  |  l  |  |  |
+;     |          |    |__12_|__28_|__44_|__60_|__76_|__92_|_108_|_124_|
+;     |_1101  _5 | _D | CR  | GS  |  -  |  =  |  M  |  ]  |  m  |  }  |
+;     |          |    |__13_|__29_|__45_|__61_|__77_|__93_|_109_|_125_|
+;     |_1110  _6 | _E | SO  | RS  |  .  |  >  |  N  |  ^  |  n  |  ~  |
+;     |          |    |__14_|__30_|__45_|__62_|__78_|__94_|_110_|_126_|
+;     |_1111  _7 | _F | SI  | US  |  /  |  ?  |  O  |  _  |  o  | DEL |
+;     |__________|____|__15_|__31_|__47_|__63_|__79_|__95_|_111_|_127_|
+;     
+
+;-------------------------------------------------------------------------------
+
+	;;; Compiler declarations
+(declare (macros t))
+
+(declare
+(special default-readtable		showsize
+	 base				ibase
+	 *nopoint			false
+	 errstop-flag			compile-stack
+	 parameter-stack		return-stack
+	 loop-stack			temporary-stack
+	 input-stream			line-delimeter
+	 blank				double-quote
+	 next-addr			[variable]-addr
+	 pc				h
+	 context			I
+	 param				*code-addr
+	 [/:]-addr			[/;]-addr
+	 |[']-addr|			|s[']-addr|
+	 |[constant]-addr|		prec
+	 [if]-addr			[else]-addr
+	 |[(]-addr|			|[)]-addr|
+	 inblk				col
+	 memory    ))
+
+(declare (array MEMORY t 1500))	;define address space for lisp-machine
+(array MEMORY t 1500)
+
+
+;-------------------------------------------------------------------------------
+
+	;;; STACK (LIST) MANIPULATION MACROS TO MAKE LIFE A LITTLE BIT EASIER
+
+		;; First some macro defining macros!
+		;; Its not clear how much of the backquote macro package is
+		;; actually used here, but not having written it I'm not about
+		;; to start making random deletions.
+
+(array default-readtable readtable)
+(setq default-readtable
+      (get 'default-readtable 'array))
+			;SAVE A COPY OF THE DEFAULT READTABLE!!!!!!
+			;This is necessary to insure that forth can run without
+			;a hundred thousand transformations taking place behind
+			;its back before it ever gets input from the user.
+
+;-------------------------------------------------------------------------------
+
+		;; And now the macros that we really wanted to define!
+
+
+(DEFUN PUSH MACRO (N)					;(PUSH <STACK> OBJECT)
+       `(SETQ ,(CADR N) (CONS ,(CADDR N) ,(CADR N)) ))
+
+
+(DEFUN POP MACRO (N)					;(POP <STACK> {ATOM})
+       `(cond ((null ,(cadr n))
+	       (error '|stack underflow| (quote ,(cadr n))))
+	      (t (PROG2 NIL
+			,(COND ((NULL (CADDR N)) `(CAR ,(CADR N)))
+			       (T `(SETQ ,(CADDR N) (CAR ,(CADR N)))))
+			(SETQ ,(CADR N) (CDR ,(CADR N)))))))
+
+
+(DEFUN TOP MACRO (N)					;(TOP  <STACK>)
+       `(CAR ,(CADR N)))
+
+
+				; SWAP EXCHANGES THE TOP TWO ELEMENTS OF THE
+				; SPECIFIED STACK EFFICIENTLY (NO CONSING).
+
+(DEFUN SWAP MACRO (N)
+       `(COND ((> (LENGTH ,(CADR N)) 1)
+	       (PROG (HOLD)
+		     (SETQ HOLD (CDR ,(CADR N)))
+		     (RPLACD ,(CADR N) (CDDR , (CADR N)))
+		     (SETQ ,(CADR N)
+			    (RPLACD HOLD ,(CADR N)) )))
+	      (T (ERROR '|SWAP: LESS THAN 2 ELEMENTS ON STACK|
+			,(CADR N) )) ))
+
+
+			;The function "dread" cause the lisp reader to read in
+			;and return a single S-expression using the
+			;default-readtable. I.E. one WITHOUT special
+			;macrodefining reader macros in effect.
+(defun dread ()
+       ((lambda (readtable) (read))
+	default-readtable))
+;-------------------------------------------------------------------------------
+
+	;;; create a machine to run forth on...
+
+		;; DEFINE PSEUDO-MACHINE WHOSE NATIVE ASSEMBLY LANGUAGE IS LISP
+		;; GIVE IT A PROGRAM COUNTER AND A PLACE TO START INTERPRETING
+		;; FORTH CODE.
+
+
+(DEFUN LISP-MACHINE (LOC)
+       (PROG (PC)
+	     (SETQ I LOC)		;start interpreting code at "I"
+	     (next)			;set up the world
+	     (setq pc (1+ pc))		;[just once to get started]
+	LOOP (eval (memory PC))         ;and.... they're off and running!
+	     (SETQ PC (1+ PC))
+	     (GO LOOP)  ))
+
+                ;; Define the forth top-level interpreter.    
+
+(defun forth ()
+       (prog ()
+	     (print '|Shift to UPPERCASE!|)
+	     (trans-on)
+	Init (store (memory prec) 0)
+	     (store (memory inblk) -1)
+	     (setq INPUT-STREAM      nil
+		   PARAMETER-STACK	nil		;initialize stacks
+		   RETURN-STACK	nil
+		   LOOP-STACK	nil
+		   TEMPORARY-STACK	nil
+		   COMPILE-STACK	nil)
+
+	     (cond ((null errstop-flag)
+		    (errset (lisp-machine (1+ go-addr)))
+		    (go init))
+		   (t (lisp-machine  (1+ go-addr) ) )) ))
+
+
+;-------------------------------------------------------------------------------
+
+	;;; AND NOW ON TO THE MORE EXCITING FORTH routines
+
+(DEFUN LOCATE MACRO (N)			    ;GET THE CONTENTS POINTED TO BY...
+       `(MEMORY (MEMORY ,(CADR N))))
+
+		;; THE FOLLOWING ROUTINE IS SUPPOSEDLY THE MOST TIME CRITICAL
+		;; IN THIS ENTIRE MESS... BUT THEN THIS IS NOT WHAT YOU WOULD
+		;; CALL A BLINDING FAST IMPLEMENTATION.
+
+		;; "NEXT" is the inner interpreter of Forth.  All "code"
+		;; definitions have the lisp routine (NEXT) as their last
+		;; element and all colon definition's execute "next" after 
+		;; first pushing the current value of I (see [:]).
+
+(DEFUN NEXT ()
+       (SETQ PC (1- (LOCATE I))		   ;INDIRECT THROUGH "CODE" FOR ENTRY
+	     PARAM (1+ (MEMORY I))         ;PARAM = ADDR OF ENTRY'S PARAMETERS
+	     I (1+ I)))                    ;I = NEXT LOCATION TO BE INTERPRETED
+
+(DEFUN PUT MACRO (N)			     ;STORE AT THE HEAD OF DICTIONARY
+       `(PROG2 (STORE (locate H) ,(CADR N))  ;AND INCREMENT H.
+	       (STORE (MEMORY H)
+		      (1+ (MEMORY H))) ))
+
+		;; THE EXECUTE ROUTINE IS PART OF THE MAIN OUTER-INTERPRETER AND
+		;; DECIDES WHETHER INCOMING WORDS SHOULD BE EXECUTED OR COMPILED
+		;; DEPENDING UPON THE CURRENT PRECEDENCE CODE OR STATE AS STORED
+		;; IN "PREC".
+
+
+(DEFUN EXECUTE ()
+       (PROG (FOO)
+	     (COND ((NOT (< (CDR (MEMORY (SETQ FOO
+					       (pop PARAMETER-STACK))))
+			    (memory PREC)))
+		    (setq pc (1- (memory (+ 2 foo)))
+			  param (+ 3 foo) ))		;EXECUTE WORD
+		   (T (PUT (+ 2 FOO))) )))		;COMPILE WORD
+
+				; allocate n elements of storage in the 
+				; dictionary.
+
+(DEFUN ALLOCATE (N)
+       (DO ((I 0 (1+ I)))
+	   ((= I N) NIL)
+	   (PUT (CONS '|ALLOCATE|
+		      (CONS (MEMORY CONTEXT)
+			    (1+ I) ))) ))
+
+
+		;THE FOLLOWING ROUTINE READS A LINE OF INPUT FROM THE TERMINAL
+		;WHEN INVOKED AND APPENDS IT CHARACTER AT A TIME TO THE 
+		;INTERNAL VARIABLE SPECIFIED AS THE FIRST ARGUMENT. 
+
+(DEFUN READ-A-LINE MACRO (N)
+       `(progn (prompt nil)
+	       (SETQ ,(CADR N)
+		      (NCONC ,(CADR N)
+			      (EXPLODEC (READLINE))
+			      (LIST LINE-DELIMETER) ))))
+
+
+
+		;; "WORD-FN" IS USED BY THE FORTH "WORD" COMMAND TO LOCATE WORDS
+		;; ARE SEPERATED BY SOME SPECIFIED  DELIMTER WHICH WORD-FN TAKES 
+		;; AS AN ARGUMENT. NOTE THAT BY DEFINITION IF THE LINE-DELIMETER
+		;; IS ENCOUNTERED THEN THE WORD IS ENDED NO MATTER WHAT 
+		;; SEPARATOR WAS SPECIFIED.  THE WORD IS PLACED AT "H" AT THE 
+		;; BEGINNING OF THE DICTONARY but "H" IS not INCREMENTED.
+
+
+(DEFUN WORD-FN (delim) 
+       (PROG (CHAR)
+	     (setq delim (ascii delim))				;ItoC
+	     (COND ((NULL INPUT-STREAM)				;ASSURE NOT NULL
+		    (READ-A-LINE INPUT-STREAM)))
+	     (DO ()						;STRIP delim'S
+		 ((NOT (OR (EQ delim (SETQ CHAR
+				       (POP INPUT-STREAM) ))
+			   (EQ LINE-DELIMETER CHAR))))
+		 (COND ((EQ CHAR LINE-DELIMETER)
+			(READ-A-LINE INPUT-STREAM))))
+	     (store (locate h)					;store the word
+		    (MAKNAM (DO ((CH CHAR (POP INPUT-STREAM))		
+				 (STR NIL (NCONC STR (LIST CH))))
+				((OR (EQ CH delim)
+				     (EQ CH LINE-DELIMETER))
+				 STR))  ))))
+
+
+		;THE FOLLOWING FUNCTION TRACES DOWN THE LINKS IN A DICTIONARY.
+		;IT EXPECTS the name of a word (an atom) at H which it does
+		;not alter.  If the word is NOT found a 0 is pushed onto the
+		;parameter-stack, if the word IS found the address of the first
+		;element of that entry is pushed onto the parameter-stack twice.
+		;(once for an "IF" to test and again for a routine to access).
+
+(DEFUN FIND-FN ()
+       (PROG (FROB)
+	     (SETQ FROB (locate H))
+	     ((LAMBDA (X) (COND (X (PUSH PARAMETER-STACK X)	;PUSH ADDR AND
+				   (PUSH PARAMETER-STACK X))	;PUSH TRUE
+				((NULL X) (PUSH PARAMETER-STACK FALSE))))
+	      (DO ((A (MEMORY CONTEXT) (MEMORY (1+ A))))
+		  ((= 0 A) NIL)
+		  (COND ((SAMEPNAMEP (CAR (MEMORY A)) FROB)
+			 (RETURN A) )) )) ))
+       
+
+
+		;; the following routine finishes off a definition by updating
+		;; context to include the entry in the dictonary and thus
+		;; future dictinary searches.
+
+(defun update ()				;update context pointer
+       (store (memory context)
+ 	      (pop parameter-stack))
+       (locate context) )			;return for trace in loading 
+						;no other use.
+
+		;print beginning of line prompt
+
+(defun prompt (prt)	
+       (terpri)
+       (cond (prt (princ prt)))
+       (princ '>))
+       
+;-------------------------------------------------------------------------------
+
+                ;;; Routines for forcing dictionary entries
+
+
+		;; The following routine is common to both (code) and (:) and is
+		;; Used to create a dictonary entry with a name that is read in
+		;; from the lisp stream and precedence zero.  The appropriate
+		;; link is made but the context is NOT updated.
+
+
+ (defun lisp-entry ()	
+       (push parameter-stack			;save for context
+	     (memory H) )
+       (put (cons (dread) 0))		;precedence = 0
+       (put (memory context))		;link to previous entry
+       (setq *code-addr			;hook  to access code element
+	     (memory H)))
+
+
+
+		;; The following routine is used to insert code into the 
+		;; dictionary in a brute force manner.  It may be used in lisp 
+		;; files that are read into a lisp environment to create code 
+		;; entries.  The format is:	
+		;;	  (code) <name> <S1> [<S2> ... <Sn>] next 
+		;; where <Sn> denote lisp s-expressions which are to be 
+		;; evaluated when the word <name> is encountered.
+
+(DEFUN CODE ()
+       (LISP-ENTRY)				;CREATE A DICTIONARY ENTRY
+       (PUT (1+ (MEMORY H)))			;CODE POINTS TO NEXT LOC.
+       (DO ((LISP-CODE (dREAD)(dREAD)))
+	   ((EQ LISP-CODE 'NEXT)
+	    (PUT '(NEXT)) )
+	   (PUT LISP-CODE) )
+       (update) )
+
+
+		;The following routine is used to insert colon definitions into
+		;the dictionary in a brute force manner.  It may be used in lisp
+		;files that are read into a lisp envirnment to create colon
+		;definition entries before the ":" word is available in forth
+		;(i.e. in creating entries that will be used to construct the
+		;outer interpreter which is capable of making those entries).
+		;This routine may be used with the folloing format:
+		;	(:) <name> <S1> [<S2> ... <Sn>] |;|
+		;where <Si> denote either the names of words already entered
+		;into the dictionary or numerical constants.  The semicolon
+		;which ends the entry MUST be bracked by vertical bars to
+		;prevent the lisp reader from assuming the rest of the line is a
+		;comment.
+
+
+
+(defun /: ()
+       (lisp-entry)				;create a dictionary entry	
+       (put (1+ [/:]-addr))			;code points to code for next
+       (do ((lisp-code (dread)(dread))
+	    (temp nil temp))
+	   ((eq lisp-code '|;|) nil)
+	   (cond ((symbolp lisp-code)
+		  (store (locate H)		;... so that "find" will see it
+			 lisp-code)
+		  (find-fn)			
+		  (cond ((not (zerop (pop parameter-stack)))
+			 (put (+ 2 (pop parameter-stack))) )
+			((setq temp (get lisp-code 'compile-op))
+			 (eval temp))
+			(t (error '|(:) word not found in dictionary: |
+				  lisp-code)) ))
+		 ((numberp lisp-code)
+		  (put |[']-addr|)
+		  (put lisp-code))
+		 (t (error '|; (:) only atoms allowed| lisp-code)) ))
+       (put [/;]-addr)
+       (update))				;update context
+       
+
+		;And now the corresponding routine for forcing variable entries
+		;into the dictionary:
+		;This routine is not invoked like its forth counterpart since
+		;there is no way go the the initial value off of a stack.  The
+		;syntax is:
+		;	(variable) <name> <initial-value>
+
+
+(defun variable ()
+       (lisp-entry)
+       (put [variable]-addr)
+       (put (dread))
+       (update))
+
+		;And now the corresponding routine for forcing constant entries
+		;into the dictionary:
+		;This routine is not invoked like its forth counterpart since
+		;there is no way go the the initial value off of a stack.  The
+		;syntax is:
+		;	(constant) <name> <initial-value>
+
+(defun constant ()
+       (lisp-entry)
+       (put |[constant]-addr|)
+       (put (dread))
+       (update))
+
+				; Increment the precedence of the dictionary
+				; entry at context.
+
+(defun immediate ()
+       (STORE (LOCATE CONTEXT)
+	      (CONS (CAR (LOCATE CONTEXT))
+		    (1+ (CDR (LOCATE CONTEXT))) )))
+
+;-------------------------------------------------------------------------------
+
+		; IMMEDIATE COMPILER-OPS
+
+			;The following atoms when encountered in a (:)
+			;definition will be acted upon immediately.  The
+			;COMPILE-STACK is made available for boot-stap compile
+			;time use by these routines.
+
+			;For the documentation of what these routines are doing
+			;see the un-dollaratized versions listed as (:)
+			;definitions below.
+
+(setq compile-stack nil)
+
+(putprop '|$(|
+	 '(prog ()
+	       (put |[(]-addr|)
+	       (allocate 1)
+	       (push compile-stack (memory H)))
+	 'compile-op)
+
+(putprop '|$)|
+	 '(prog ()
+		(put |[)]-addr|)
+		(store (memory (1- (top compile-stack)))
+		       (1+ (memory H)))
+		(put (pop compile-stack)))
+	 'compile-op)
+
+(putprop '$if
+	 '(prog ()
+		(put [if]-addr )
+		(push compile-stack
+		      (memory H))
+		(allocate 1))
+	 'compile-op)
+
+
+(putprop '$then
+	 '(store (memory (pop compile-stack))
+		 (memory H))
+	 'compile-op)
+
+
+(putprop '$else
+	 '(prog ()
+		(put [else]-addr)
+		(store (memory (pop compile-stack))
+		       (1+ (memory H)))
+		(push compile-stack
+		      (memory H))
+		(allocate 1))
+	 'compile-op)
+
+(putprop '|$"|
+	 '(prog ()
+		(put |S[']-addr|)
+		(put (read)))
+	 'compile-op)
+
+(putprop '$begin
+	 '(push compile-stack (memory H))
+	 'compile-op)
+
+(putprop '$end
+	 '(prog ()
+		(put [if]-addr)
+		(put (pop compile-stack)))
+	 'compile-op)
+
+;-------------------------------------------------------------------------------
+		
+
+                               ;;; Debugging aids
+
+
+(defun sd macro (n)				;Show top of dictionary
+       `(dp 'memory
+	    ,(cond ((= 1 (length n))
+		    (- (memory h) showsize))
+		   (t (max 0 (- (memory h) (cadr n)))))
+	    (memory h)))
+
+(setq showsize 10)				;show 15 elements by default
+
+(defun pd macro (n)				;Print the dictionary
+       `(dp 'memory
+	    ,(cond ((< (length n) 2) 0)
+		   (t (cadr n)))
+	    ,(cond ((< (length n) 3)
+		    (memory h))
+		   (t (1+ (caddr n))) )))
+
+
+(defun dp (memory m n)					;dictionary print
+       (do ((i m (1+ i))
+	    (st 9 (1+ st))
+	    (type 'code type)
+	    (frob (memory m) (memory (1+ i))))
+	   ((= n i) '|End of List|)
+	   (cond ((and (not (atom frob))
+		       (symbolp (car frob))
+		       (numberp (cdr frob)))
+		  (setq st 1)
+		  (terpri)
+		  (print i)
+		  (princ '|-> |)
+		  (princ frob))
+		 (t (print i)
+		    (princ '| ----> |)
+		    (princ frob)
+		    (cond ((= st 2) (princ '| [link] |))
+			  ((= st 3)
+			   (let ((val (memory (- frob 2))))
+			   (cond ((= frob (+ i 1))
+				  (setq type 'code)
+				  (princ '| [code] |))
+				 ((and (not (atom val))
+				       (eq '[variable] (car val)))
+				  (setq type 'variable)
+				  (princ '| [variable] |))
+				 ((and (not (atom val))
+				       (eq '[constant] (car val)))
+				  (setq type 'constant)
+				  (princ '| [constant] |))
+				 (t
+				  (setq type '/:)
+				  (princ '| [:] |)))))
+			  ((and (eq type '/:)
+				(numberp frob)
+				(> frob 1)
+				(not (atom (memory (- frob 2))))
+				(symbolp (car (memory (- frob 2))))
+				(numberp (cdr (memory (- frob 2)))))
+			   (princ '| ==> |)
+			   (princ (memory (- frob 2))) )
+			  ((or (eq type 'variable)
+			       (eq type 'constant))
+			   (princ '| [value] |) )) ))))
+
+
+		;FIND searches for a dictionary entry and returns its address if
+		;found, else nil.  Note that although it cleans up after itself,
+		;find uses the forth find-fn and thus the dictionary and
+		;parameter stack.
+
+(defun find macro (n)
+       `(prog (rtn)
+	      (store (memory H)
+		     (1+ (memory H)))
+	      (store (locate H)
+		     (quote ,(cadr n)))
+	      (find-fn)
+	      (setq rtn
+		    (cond ((not (zerop (pop parameter-stack)))
+			   (pop parameter-stack))
+			  (t nil)))
+	      (store (memory H)
+		     (- (memory H) 1))
+	      (return rtn)))
+
+
+		;SHOW finds a word in the dictionary and shows its entry
+
+(defun show macro (n)
+       `(let ((loc (find ,(cadr n))))
+	     (cond ((null loc)
+		    (error '|  show: word not found| ,(cadr n)))
+		   (t (dp 'memory loc (+ loc showsize))))))
+
+		;LD lists the entries in the dictionary
+		;memory location at a time (unreadable)
+(defun ld ()
+       (do ((a (memory context) (memory (1+ a)))
+	    (i 1 (1+ i)))	   
+	   ((= 0 a) nil)
+	   (progn (print i)
+		  (princ '| - |)
+		  (princ a)
+		  (princ '| -> |)
+		  (princ (memory a)))))
+
+
+
+
+(defun er ()
+       (errprint nil)		;print the last error message
+       (baktrace)		;print out function stack
+       nil)
+
+(defun make macro (n)
+       `(store (memory ,(cadr n)) ,(caddr n)))
+
+(defun s macro (n)
+       `(memory ,(cadr n)))
+
+(defun s@ macro (n)
+       `(locate ,(cadr n)))
+
+(defun mark ()
+       (setq oldh (s h))
+       (setq oldcontext (s context))
+       (setq oldparameter-stack parameter-stack)
+       (stat) )
+
+(defun remark ()
+       (store (memory h) oldh)
+       (store (memory context) oldcontext)
+       (setq parameter-stack oldparameter-stack)
+       (stat) )
+
+
+(defun stat ()
+       (print 'H-->) (princ (s h))
+       (print '@H->) (princ (s@ h))
+       (print 'CONTEXT-->) (princ (s context))
+       (print '@CONTEXT->) (princ (s@ context))
+       (print 'parameter-stack->) (princ parameter-stack))
+
+(defun write macro (n)		;(write	<file> <s-exp>)
+       `((lambda (outfiles ^r ^w)
+		 ,(caddr n)
+		 (close (car outfiles)))
+	 (list (open ,(cadr n) 'out)) t t))
+
+(defun document macro (n)
+	`(write ,(cadr n)
+		 (progn (stat)
+			(terpri)
+			(pd))))
+
+(defmacro save (file)
+	  `(filewrite ',file
+		      (print `(fillarray 'memory
+					 ',(listarray 'memory)))))
+
+;-------------------------------------------------------------------------------
+
+	;;; RANDOM  DECLARATIONS
+
+(setq base 10.		;And foo said let thy input and output be in decimal.
+      ibase 10.		;And in the beginning, bar saw that it was good.
+      *nopoint t)	;And yea verily thou shalt not print decimal points.
+
+
+(setq FALSE 0)		;TRUE DEFINED NON-ZERO
+
+
+
+		;; Additional support routines
+
+				;Turn translation off i.e. distinguish between
+				;upper and lower case.
+
+(DEFUN TRANS-OFF ()
+       (MAPC '(LAMBDA (X) (SETSYNTAX X NIL X))
+	     (EXPLODEC '|abcdefghijklmnopqrstuvwxyz|)))
+
+
+				;Turn translation on i.e. do not distinguish
+				;between upper and lower case [default] 
+
+(DEFUN TRANS-ON ()
+       (MAPC '(LAMBDA (X Y ) (SETSYNTAX X NIL Y))
+	     (EXPLODEC '|abcdefghijklmnopqrstuvwxyz|)
+	     (EXPLODEC '|ABCDEFGHIJKLMNOPQRSTUVWXYZ|)))
+
+
+
+		;Load the file to bootstrap the forth dictionary.
+
+(let ((fet (status features)))
+     (cond ((member 'mc fet)
+	    (load '|dsk:kle;fordic >|))
+	   ((member 'ai fet)
+	    (load '|ai:kle;fordic >|))))
+	   
+;-------------------------------------------------------------------------------
