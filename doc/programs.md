@@ -234,6 +234,7 @@
 - TELNET, Telnet client.
 - TELSER, Telnet/Supdup server.
 - TEN50, TOPS-10 emulator.
+- TENTH, toy Forth for KS10.
 - THINK, think-a-dot game.
 - TIME, displays date/time/uptime and other info.
 - TIMES, TCP time server.
