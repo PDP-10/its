@@ -1165,6 +1165,10 @@ respond "*" ":kill\r"
 # TENTH, toy Forth for KS10.
 respond "*" ":midas .; @ tenth_aap; tenth\r"
 expect ":KILL"
+respond "*" ":midas /t aap; ts tenth_tenth\r"
+respond "end input with ^C" "TS==1\r"
+respond "\n" "\003"
+expect ":KILL"
 
 # 11BOOT
 respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
