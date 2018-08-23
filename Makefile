@@ -32,6 +32,11 @@ BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys moon \
       graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
       _www_ hqm
 
+# These are not included on the tape.
+DOCIGNORE=-e '\.(jpeg|pdf|info|md)$$' -e '^(dcg|github)$$'
+# These are on the minsys tape.
+BINIGNORE=-e '^(ka10|ks10|sys)$$'
+
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
 
 # These files are used to create bootable tape images.
@@ -51,6 +56,8 @@ SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
 all: $(SMF) $(OUT)/stamp tools/supdup/supdup
+
+check: all check-dirs
 
 out/klh10/stamp out/simh/stamp: $(OUT)/rp0.dsk
 	$(TOUCH) $@
@@ -167,6 +174,19 @@ tools/supdup/supdup:
 
 $(SMF):
 	$(GIT) submodule update --init `dirname $@`
+
+check-dirs: Makefile
+	mkdir -p $(OUT)/check
+	echo $(SRC) | tr ' ' '\n' | sort > $(OUT)/check/src1
+	cd src; ls -1 > ../$(OUT)/check/src2
+	diff -u $(OUT)/check/src1 $(OUT)/check/src2 > $(OUT)/check/src.diff
+	echo $(DOC) | tr ' ' '\n' | sort > $(OUT)/check/doc1
+	cd doc; ls -1d */ | tr -d / | sort | \
+		egrep -v $(DOCIGNORE) > ../$(OUT)/check/doc2
+	diff -u $(OUT)/check/doc1 $(OUT)/check/doc2 > $(OUT)/check/doc.diff
+	echo $(BIN) | tr ' ' '\n' | sort > $(OUT)/check/bin1
+	cd bin; ls -1 | egrep -v $(BINIGNORE) > ../$(OUT)/check/bin2
+	diff -u $(OUT)/check/bin1 $(OUT)/check/bin2 > $(OUT)/check/bin.diff
 
 clean:
 	$(RM) -rf out start build/*/stamp
