@@ -1159,7 +1159,7 @@ respond "*" ":job clogo\r"
 respond "*" ":load hqm; clogo bin\r"
 respond "*" "purify\033g"
 respond "PURIFIED" "\r"
-respond "*" ":pdump sys; ts logo\r"
+respond "*" ":pdump sys; ts clogo\r"
 respond "*" ":kill\r"
 
 # TENTH, toy Forth for KS10.
