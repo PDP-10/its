@@ -92,6 +92,7 @@ There are some short introductions for beginners:
 - [DUMP and itstar](doc/DUMP-itstar.md)
 - [Games](doc/games.md)
 - [Printing](doc/printing.md)
+- [Assembling ITS](doc/NITS.md)
 
 A list of [known ITS machines](doc/machines.md).
 
