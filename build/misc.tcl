@@ -500,6 +500,10 @@ respond "*" ":link sys1;ts %,sys1;ts who%\r"
 respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
 
+# Old PALX
+respond "*" ":midas sys3;ts plx143_rms;palx 143\r"
+expect ":KILL"
+
 # Phil Budne's PALX Game of Life.
 respond "*" ":cwd budd\r"
 respond "*" ":palx live palx\r"
