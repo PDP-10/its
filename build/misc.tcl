@@ -1166,6 +1166,12 @@ respond "PURIFIED" "\r"
 respond "*" ":pdump sys; ts clogo\r"
 respond "*" ":kill\r"
 
+# 11LOGO
+respond "*" ":cwd 11logo\r"
+respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
+respond "ASSSW=" "0\r"
+expect ":KILL"
+
 # TENTH, toy Forth for KS10.
 respond "*" ":midas .; @ tenth_aap; tenth\r"
 expect ":KILL"
