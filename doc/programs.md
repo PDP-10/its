@@ -95,6 +95,7 @@
 - GLPDEV/XGPDEV, device for viewing GLPSPL/XGPSPL printer queues.
 - GTLEM, GT40 Lunar Lander.
 - GO, the Go board game.
+- GOTO, go to specified terminal line.
 - GUESS, a very silly game.
 - GMSGS, copy system messages to mail file.
 - H3MAKE, a job that requests DRAGON to build host table.

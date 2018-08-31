@@ -194,6 +194,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts octpus_gren;octpus\r"
 expect ":KILL"
 
+# GOTO
+respond "*" ":midas sys3;ts goto_kmp; goto\r"
+expect ":KILL"
+
 # binprt
 respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
 expect ":KILL"
