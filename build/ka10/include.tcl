@@ -13,7 +13,7 @@ proc mark_packs {} {
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
     respond "PACK # =" "2\r"
-    respond "PACK ID =" "2\r"
+    respond "PACK ID =" "FIRST\r"
 
     respond "\n" "mark\033g"
     respond "UNIT #" "1"
@@ -22,7 +22,7 @@ proc mark_packs {} {
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
     respond "PACK # =" "3\r"
-    respond "PACK ID =" "3\r"
+    respond "PACK ID =" "SECOND\r"
 
     respond "\n" "mark\033g"
     respond "UNIT #" "2"
@@ -31,7 +31,7 @@ proc mark_packs {} {
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
     respond "PACK # =" "0\r"
-    respond "PACK ID =" "0\r"
+    respond "PACK ID =" "THIRD\r"
 
     respond "DDT" "mark\033g"
     respond "UNIT #" "3"
@@ -40,7 +40,7 @@ proc mark_packs {} {
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
     respond "PACK # =" "1\r"
-    respond "PACK ID =" "1\r"
+    respond "PACK ID =" "FOURTH\r"
 }
 
 proc prepare_frontend {} {
