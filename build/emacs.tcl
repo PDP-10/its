@@ -86,3 +86,18 @@ respond "\n" "\030\003"
 respond "*" ":kill\r"
 
 respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 146\r"
+
+# INFO
+# For some unknown reason, we can't use a printing terminal when
+# generating a new TSINFO.  Temporarily switch to AAA.
+respond "*" ":tctyp aaa\r"
+expect ":KILL"
+respond "*" "info\033\023"
+respond "*" ":emacs\r"
+expect "INFO Dumped"
+expect ":KILL"
+respond "*" ":tctyp la36\r"
+expect ":KILL"
+# The previous file version was 62, dated 1982-01-05.
+respond "*" ":rename emacs; tsinfo >, tsinfo 63\r"
+respond "*" ":link sys2;ts info,emacs;tsinfo >\r"
