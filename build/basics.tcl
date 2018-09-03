@@ -18,6 +18,11 @@ type ":vk\r"
 respond "*" ":print device;..new. (udir)\r"
 type ":vk\r"
 
+# TCTYP
+respond "*" ":midas sysbin;_syseng;tctyp\r"
+expect ":KILL"
+respond "*" ":link sys;ts tctyp,sysbin;tctyp bin\r"
+
 source $build/emacs.tcl
 
 # TAGS
@@ -59,10 +64,6 @@ respond "*" ":midas sysbin;_syseng;@dev\r"
 expect ":KILL"
 respond "*" ":delete sys;atsign device\r"
 respond "*" ":link sys;atsign device,sysbin;@dev bin\r"
-
-respond "*" ":midas sysbin;_syseng;tctyp\r"
-expect ":KILL"
-respond "*" ":link sys;ts tctyp,sysbin;tctyp bin\r"
 
 respond "*" ":midas sysbin;_syseng;crtsty\r"
 expect ":KILL"
