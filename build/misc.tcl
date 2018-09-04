@@ -500,10 +500,6 @@ respond "*" ":midas sys1;ts who%_sysen3;who%\r"
 expect ":KILL"
 respond "*" ":link sys1;ts %,sys1;ts who%\r"
 
-# palx
-respond "*" ":midas sys;ts palx_sysen1;palx\r"
-expect ":KILL"
-
 # Old PALX
 respond "*" ":midas sys3;ts plx143_rms;palx 143\r"
 expect ":KILL"
@@ -1062,10 +1058,6 @@ expect ":KILL"
 respond "*" ":palx sysbin;_sysen2;urug\r"
 respond "=YES" "1\r"
 respond "37000" "37000\r"
-expect ":KILL"
-
-# GT40 boot ROM.
-respond "*" ":palx gt40;_gt40;bootvt\r"
 expect ":KILL"
 
 # GT40 Lunar Lander.
