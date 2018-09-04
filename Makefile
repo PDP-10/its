@@ -51,6 +51,7 @@ KA10=tools/sims/BIN/ka10
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
+GT40=$(OUT)/bootvt.img
 
 H3TEXT=$(shell cd build; ls h3text.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
@@ -60,10 +61,13 @@ all: $(SMF) $(OUT)/stamp tools/supdup/supdup
 
 check: all check-dirs
 
-out/klh10/stamp out/simh/stamp: $(OUT)/rp0.dsk
+out/klh10/stamp: $(OUT)/rp0.dsk
 	$(TOUCH) $@
 
-out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
+out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
+	$(TOUCH) $@
+
+out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40)
 	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
@@ -104,6 +108,18 @@ $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
+
+$(OUT)/tmp/gt40/bootvt.bin: $(OUT)/output.tape
+	rm -rf $(OUT)/tmp
+	mkdir -p $(OUT)/tmp
+	$(ITSTAR) -xf $< -C $(OUT)/tmp
+
+tools/dasm/palx: tools/dasm/palx.c
+	$(MAKE) -C tools/dasm palx
+
+$(OUT)/bootvt.img: $(OUT)/tmp/gt40/bootvt.bin tools/dasm/palx
+	mkdir -p out/gt40
+	tools/dasm/palx -I < $< > $@
 
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*

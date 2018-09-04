@@ -298,3 +298,11 @@ respond "*" ":link sys;ts dec\021 *,must; be here\r"
 
 respond "*" ":midas decsys;_decbot\r"
 expect ":KILL"
+
+# palx
+respond "*" ":midas sys;ts palx_sysen1;palx\r"
+expect ":KILL"
+
+# GT40 boot ROM.
+respond "*" ":palx gt40;_gt40;bootvt\r"
+expect ":KILL"
