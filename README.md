@@ -64,6 +64,10 @@ CONSOLE`.  You are now ready to log in, so type Control-Z.  See
 [doc/DDT.md](doc/DDT.md) for a list of useful commands.  When done,
 shut down orderly by typing `:lock` and then `5down`.
 
+ITS can optionally use some additional peripheral devices.  To attach
+a simulated GT40 graphics terminal, type `./start gt40` when booting
+ITS.
+
 To install your personal user files, add a subdirectory under `user`
 with your files inside.  They will be copied to ITS.  The directory
 name is limited to six characters, and file names must have two
