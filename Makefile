@@ -51,7 +51,7 @@ KA10=tools/sims/BIN/ka10
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
-GT40=$(OUT)/bootvt.img
+GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 
 H3TEXT=$(shell cd build; ls h3text.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
@@ -191,6 +191,9 @@ tools/supdup/supdup:
 
 $(SMF):
 	$(GIT) submodule update --init `dirname $@`
+
+tools/simh/BIN/pdp11:
+	$(MAKE) -C tools/simh pdp11
 
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
