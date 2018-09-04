@@ -1065,11 +1065,11 @@ respond "37000" "37000\r"
 expect ":KILL"
 
 # GT40 boot ROM.
-respond "*" ":palx gt40;bootvt\r"
+respond "*" ":palx gt40;_gt40;bootvt\r"
 expect ":KILL"
 
 # GT40 Lunar Lander.
-respond "*" ":palx gt40;gtlem\r"
+respond "*" ":palx gt40;_gt40;gtlem\r"
 expect ":KILL"
 
 # KL10 front end debugger.  Put it in the same directory as the
