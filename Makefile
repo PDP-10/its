@@ -190,6 +190,7 @@ tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
 
 $(SMF):
+	$(GIT) submodule sync `dirname $@`
 	$(GIT) submodule update --init `dirname $@`
 
 tools/simh/BIN/pdp11:
