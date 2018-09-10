@@ -93,6 +93,7 @@ There are some short introductions for beginners:
 - [Games](doc/games.md)
 - [Printing](doc/printing.md)
 - [Assembling ITS](doc/NITS.md)
+- [Com link mode](doc/comlink.md)
 
 A list of [known ITS machines](doc/machines.md).
 
