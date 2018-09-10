@@ -9,6 +9,9 @@ sleep 1
 type ":rename .;@ its, .;@ oits\r"
 respond "*" ":rename .;@ nits, .;@ its\r"
 
+# Free up some disk space on the pack holding most source code.
+gfr_second
+
 respond "*" ":print sys1;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":print sys2;..new. (udir)\r"
