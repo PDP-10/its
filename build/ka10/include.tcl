@@ -98,8 +98,8 @@ proc dump_nits {} {
 
     # Since we bootstrap with a 2-pack ITS, we need to copy the MFD to
     # the fresh packs.
-    expect "\n"; type "t\033salv\r"
-    expect "\n"; type "ucop\033g"
+    respond "\n" "t\033salv\r"
+    respond "\n" "ucop\033g"
     respond "UNIT #" "0"
     respond "UNIT #" "2"
     respond "OK?" "Y"
@@ -111,9 +111,9 @@ proc dump_nits {} {
 
     # Now dump the new ITS.
     respond "DSKDMP" "t\033its bin\r"
-    expect "\n"; type "\033u"
+    respond "\n" "\033u"
     respond "DSKDMP" "m\033@ salv\r"
-    expect "\n"; type "d\033nits\r"
+    respond "\n" "d\033nits\r"
 }
 
 proc magdmp_switches {} {

@@ -38,14 +38,10 @@ proc respond { w r } {
 }
 
 proc patch_its_and_go {} {
-    expect "\n"
-
     # Disable SYSJOB output (e.g. "IT IS NOW ...") that appears at random
     # places during the build process.
-    type "styo+2/popj p,\r"
-    expect "\n"
-
-    type "\033g"
+    respond "\n" "styo+2/popj p,\r"
+    respond "\n" "\033g"
 }
 
 proc pdset {} {
@@ -71,8 +67,7 @@ proc pdset {} {
 proc shutdown {} {
     global emulator_escape
     respond "*" ":lock\r"
-    expect "_"
-    send "5kill"
+    respond "_" "5kill"
     respond "GO DOWN?\r\n" "y"
     respond "BRIEF MESSAGE" "\003"
     respond "_" "q"
