@@ -174,3 +174,6 @@ proc update_microcode {} {
     respond "!" "quit\r"
     expect ":KILL"
 }
+
+proc gfr_second {} {
+}
