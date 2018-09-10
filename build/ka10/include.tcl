@@ -12,7 +12,6 @@ proc mark_packs {} {
     respond "NO =" "2\r"
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
-    respond "PACK # =" "2\r"
     respond "PACK ID =" "2\r"
 
     respond "\n" "mark\033g"
@@ -21,7 +20,6 @@ proc mark_packs {} {
     respond "NO =" "3\r"
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
-    respond "PACK # =" "3\r"
     respond "PACK ID =" "3\r"
 
     respond "\n" "mark\033g"
@@ -30,7 +28,6 @@ proc mark_packs {} {
     respond "NO =" "0\r"
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
-    respond "PACK # =" "0\r"
     respond "PACK ID =" "0\r"
 
     respond "DDT" "mark\033g"
@@ -39,7 +36,6 @@ proc mark_packs {} {
     respond "NO =" "1\r"
     expect -timeout 300 "VERIFICATION"
     respond "ALLOC =" "3000\r"
-    respond "PACK # =" "1\r"
     respond "PACK ID =" "1\r"
 }
 
