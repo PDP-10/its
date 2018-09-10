@@ -62,4 +62,4 @@ frontend_bootstrap
 shutdown
 start_dskdmp
 dump_nits
-expect "\n"; type "g\033"
+respond "\n" "g\033"

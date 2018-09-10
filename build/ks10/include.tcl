@@ -2,11 +2,11 @@ proc start_dskdmp_its {} {
     start_dskdmp
 
     respond "DSKDMP" "l\033ddt\r"
-    expect "\n"; type "t\033its rp06\r"
-    expect "\n"; type "\033u"
+    respond "\n" "t\033its rp06\r"
+    respond "\n" "\033u"
     respond "DSKDMP" "m\033salv rp06\r"
-    expect "\n"; type "d\033its\r"
-    expect "\n"; type "its\r"
+    respond "\n" "d\033its\r"
+    respond "\n" "its\r"
     patch_its_and_go
 }
 
