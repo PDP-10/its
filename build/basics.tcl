@@ -12,6 +12,9 @@ respond "*" ":rename .;@ nits, .;@ its\r"
 # Free up some disk space on the pack holding most source code.
 gfr_second
 
+# Gague free disk blocks.
+respond "*" ":listf sys\r"
+
 respond "*" ":print sys1;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":print sys2;..new. (udir)\r"
