@@ -28,6 +28,9 @@ expect -timeout 3000 "E-O-T"
 respond "_" "quit\r"
 expect ":KILL"
 
+# Gague free disk blocks.
+respond "*" ":listf sys\r"
+
 respond "*" ":print sysbin;..new. (udir)\r"
 type ":vk\r"
 respond "*" ":midas sysbin;_midas;midas\r"
