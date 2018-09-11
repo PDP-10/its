@@ -5,6 +5,7 @@ EMULATOR ?= simh
 TOUCH ?= touch
 MKDIR ?= mkdir -p
 EXPECT ?= expect
+CP ?= cp
 RM ?= rm
 LN ?= ln
 SED ?= sed
@@ -109,16 +110,18 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
-$(OUT)/tmp/gt40/bootvt.bin: $(OUT)/output.tape
-	rm -rf $(OUT)/tmp
-	mkdir -p $(OUT)/tmp
+$(OUT)/bootvt.bin: $(OUT)/output.tape
+	$(RM) -rf $(OUT)/tmp
+	$(MKDIR) -p $(OUT)/tmp
 	$(ITSTAR) -xf $< -C $(OUT)/tmp
+	$(CP) $(OUT)/tmp/gt40/bootvt.bin $@
+	$(RM) -rf $(OUT)/tmp
 
 tools/dasm/palx: tools/dasm/palx.c
 	$(MAKE) -C tools/dasm palx
 
-$(OUT)/bootvt.img: $(OUT)/tmp/gt40/bootvt.bin tools/dasm/palx
-	mkdir -p out/gt40
+$(OUT)/bootvt.img: $(OUT)/bootvt.bin tools/dasm/palx
+	$(MKDIR) out/gt40
 	tools/dasm/palx -I < $< > $@
 
 start: build/$(EMULATOR)/start
