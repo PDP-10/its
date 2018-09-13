@@ -12,6 +12,7 @@ install_linux() {
     case "$EMULATOR" in
         simh) sudo apt-get install -y simh;;
         sims) sudo apt-get install -y libx11-dev libxt-dev;;
+        klh10) sudo apt-get install -y libusb-1.0-0-dev;;
     esac
 }
 
