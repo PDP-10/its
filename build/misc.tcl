@@ -35,12 +35,7 @@ respond "time-sharing?" "y\r"
 expect ":KILL"
 
 # system gen
-respond "*" ":midas /t dsk0:.;@ sysgen_syseng; system gen\r"
-respond "with ^C" "PI==4\r"
-respond "\n" "TTY==120\r"
-respond "\n" "DC==200\r"
-respond "\n" "UTC==210\r"
-respond "\n" "UTS==214\r\003"
+respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
 expect ":KILL"
 
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
@@ -429,10 +424,7 @@ respond "*" ":midas games;ts ckr_agb;ckr\r"
 expect ":KILL"
 
 # Spacewar, standalone
-respond "*" ":midas /t dsk0:.;@ spcwar_spcwar; newwar\r"
-respond "with ^C" "APR==0\r"
-respond "\n" "PI==4\r"
-respond "\n" "DIS==130\r\003"
+respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; newwar\r"
 respond "ITS version" "NO\r"
 respond "interrupt" "NO\r"
 respond "ships" "\r"
@@ -450,19 +442,10 @@ respond "suns" "\r"
 expect ":KILL"
 
 # MLIFE
-respond "*" ":midas /t games;ts mlife_rwg;mlife\r"
-respond "with ^C" "APR==0\r"
-respond "\n" "PI==4\r"
-respond "\n" "DIS==130\r\003"
+respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
 expect ":KILL"
-respond "*" ":midas /t dsk0:.;@ mlife_rwg;mlife\r"
-respond "with ^C" "TS==0\r"
-respond "\n" "APR==0\r"
-respond "\n" "PI==4\r"
-respond "\n" "PTP==100\r"
-respond "\n" "PTR==104\r"
-respond "\n" "TTY==120\r"
-respond "\n" "DIS==130\r\003"
+respond "*" ":midas;324 /t dsk0:.;@ mlife_rwg;mlife\r"
+respond "with ^C" "TS==0\r\003"
 expect ":KILL"
 
 # TV-munching square.
@@ -658,11 +641,7 @@ respond "*" ":midas sys3;ts create_syseng;create\r"
 expect ":KILL"
 respond "*" ":link sys1;ts plan,sys3;ts create\r"
 
-respond "*" ":midas /t dsk0:.;@ pt_syseng;pt\r"
-respond "with ^C" "pi==4\r"
-respond "\n" "tty==120\r"
-respond "\n" "ptr==104\r"
-respond "\n" "\003"
+respond "*" ":midas;324 dsk0:.;@ pt_syseng;pt\r"
 expect ":KILL"
 
 # PTY
@@ -884,8 +863,7 @@ expect ":KILL"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 
 # KA10 maintenance
-respond "*" ":midas /t sys;ts 10run_sysen2; 10run\r"
-respond "with ^C" "TTY==120\r\003"
+respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
 
 # KL10 microcode assembler
@@ -1190,8 +1168,7 @@ respond "\n" "\003"
 expect ":KILL"
 
 # 11BOOT
-respond "*" ":midas /t sys3;ts 11boot_syseng;11boot\r"
-respond "with ^C" "APR==0\r\003"
+respond "*" ":midas;324 sys3;ts 11boot_syseng;11boot\r"
 expect ":KILL"
 # Note, must be run with symbols loaded.
 # Takes IOELEV BIN and KLRUG BIN from the current directory.
