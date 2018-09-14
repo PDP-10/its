@@ -126,6 +126,7 @@
 - KLDCP, KL10 diagnostics console program.
 - KLFEDR, KL10 frontend directory tool.
 - KLRUG, KL10 frontend debugger.
+- KN10, KS10 frontend software.
 - LAY, SUDS layout program.
 - LD10, Lisp display slave.
 - LIMERI, print limericks.
