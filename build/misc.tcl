@@ -904,6 +904,14 @@ respond "*" ":copy kshack; mcr ram, .; ram ram\r"
 
 update_microcode
 
+# KNS10, KS10 console
+respond "*" ":cwd kshack\r"
+respond "*" ":cross\r"
+respond "*" "FOR21.DAT/PTP,KNS10.PNT/M80/OCT/CRF/EQ:PASS2:SCECOD=CONDEF.M80,HCORE.M80,CMDS.M80,SUBRTN.M80,DR.M80,MSG.M80,STORE.M80\r"
+# kns10,kns10/m80/oct/eq:pass2:scecod=condef,hcore,cmds,subrtn,dr,msg,store
+respond "*" "\003"
+type ":kill\r"
+
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
 expect ":KILL"
