@@ -167,12 +167,13 @@ $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 
 $(KLH10):
 	cd tools/klh10; \
+	$(RM) -rf tmp; \
 	./autogen.sh; \
 	$(MKDIR) tmp; \
 	cd tmp; \
 	export CONFFLAGS_USR=-DKLH10_DEV_DPTM03=0; \
 	../configure --bindir="$(CURDIR)/build/klh10"; \
-	$(MAKE) base-ks-its; \
+	$(MAKE) -C bld-ks-its; \
 	$(MAKE) -C bld-ks-its install
 
 $(SIMH):
