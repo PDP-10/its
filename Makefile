@@ -25,11 +25,12 @@ SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       tensor transl wgd zz graphs lmlib pratt quux scheme gsb ejs mudsys \
       draw wl taa tj6 budd sharem ucode rvb kldcp math as imsrc gls demo \
       macsym lmcons dmcg hack hibou agb gt40 rug maeda ms kle aap common \
-      fonts zork 11logo kmp info
+      fonts zork 11logo kmp info aplogo
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
-      kldcp libdoc lisp _mail_ midas quux scheme manual wp chess ms macdoc
+      kldcp libdoc lisp _mail_ midas quux scheme manual wp chess ms macdoc \
+      aplogo
 BIN = sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys \
       moon graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
       _www_ hqm

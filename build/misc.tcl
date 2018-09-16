@@ -1160,6 +1160,13 @@ respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
 respond "ASSSW=" "0\r"
 expect ":KILL"
 
+# Apple II Logo
+respond "*" ":cwd aplogo\r"
+respond "*" ":cross\r"
+respond "*" "logo,logo=logo\r"
+respond "*" "\003"
+respond "*" ":kill\r"
+
 # TENTH, toy Forth for KS10.
 respond "*" ":midas .; @ tenth_aap; tenth\r"
 expect ":KILL"
