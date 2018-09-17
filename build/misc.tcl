@@ -282,8 +282,9 @@ respond "*" ":midas sys1;ts meter_syseng;meter\r"
 expect ":KILL"
 
 # cross
-respond "*" ":midas sys1;ts cross_syseng;cross\r"
-expect ":KILL"
+# This is not the microcomputer cross assembler.
+#respond "*" ":midas sys1;ts cross_syseng;cross\r"
+#expect ":KILL"
 
 # MACN80
 respond "*" ":midas sys3;ts macn80_gz;macn80\r"
