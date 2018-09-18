@@ -136,6 +136,7 @@
 - LIVE, PALX Game of Life.
 - LOADP, displays system load.
 - LOCK, shut down system.
+- LOGO, BBN Logo.
 - LOOKUP, looks up user info in INQUIR database.
 - LOSS (device).
 - LSPEED, set TTY line parameters.
