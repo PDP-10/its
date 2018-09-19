@@ -129,6 +129,7 @@
 - KN10, KS10 frontend software.
 - LAY, SUDS layout program.
 - LD10, Lisp display slave.
+- LINK-10, DEC linker.
 - LIMERI, print limericks.
 - LIMSER, Chaosnet limerick service.
 - LISP, Lisp interpreter and runtime library (autoloads only).
@@ -141,6 +142,7 @@
 - LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
 - MACN80, Z80 cross assembler.
+- MACRO-10, DEC assembler.
 - MACSYMA, symbolic manipulation system.
 - MAXTUL, tools for managing Macsyma.
 - MAGDMP, standalone program loader/dumper for magtape.
