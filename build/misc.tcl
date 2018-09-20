@@ -527,6 +527,18 @@ respond "Command" "d"
 respond "*" ":pdump sys2; ts macro\r"
 respond "*" ":kill\r"
 
+# CROSS, assembler
+respond "*" ":macro\r"
+respond "*" "cross=cross\r"
+respond "*" "\003"
+respond "*" ":kill\r"
+respond "*" ":dec sys:loader\r"
+respond "*" "cross/go\r"
+respond "*" ":start 45\r"
+respond "Command:" "d"
+respond "*" ":pdump sys1; ts cross\r"
+respond "*" ":kill\r"
+
 # Old PALX
 respond "*" ":midas sys3;ts plx143_rms;palx 143\r"
 expect ":KILL"
