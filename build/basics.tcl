@@ -117,7 +117,7 @@ type ":vk\r"
 respond "*" ":midas sys;ts dskuse_syseng;dskuse\r"
 expect ":KILL"
 
-respond "*" ":midas channa;atsign taraka_syseng; dragon\r"
+respond "*" ":midas channa;atsign taraka_taraka\r"
 expect ":KILL"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
 
@@ -215,8 +215,6 @@ respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
 expect ":KILL"
 
 respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
-
-respond "*" ":link syseng;fsdefs 999999,system;fsdefs >\r"
 
 # these two links are expected by sysnet; ftps > and are present
 # in the PI distribution
