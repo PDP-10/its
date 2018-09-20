@@ -1201,6 +1201,19 @@ respond "*" ":palx rug;_ar\r"
 respond "COMPUTER=" "1\r"
 expect ":KILL"
 
+# BBN Logo
+respond "*" ":cwd bbn\r"
+respond "*" ":macro\r"
+respond "*" "logo=logo\r"
+respond "CORE USED" "\032"
+type ":kill\r"
+respond "*" ":dec sys:loader\r"
+respond "*" "logo/go\r"
+respond "EXIT" ":start 45\r"
+respond "Command:" "d"
+respond "*" ":pdump bbn; ts logo\r"
+respond "*" ":kill\r"
+
 # CLOGO
 respond "*" ":job clogo\r"
 respond "*" ":load hqm; clogo bin\r"
