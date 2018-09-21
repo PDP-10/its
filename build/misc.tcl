@@ -985,6 +985,11 @@ respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
+# Dump TV bitmap as XGP scan file.
+# TVREAD expects the binary in BKPH.
+respond "*" ":midas bkph; ts zap_zap\r"
+expect ":KILL"
+
 # View bitmap file on TV.
 respond "*" ":midas sys2; ts tvread_sysen2; tvread\r"
 expect ":KILL"

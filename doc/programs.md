@@ -282,3 +282,4 @@
 - XXFILE, feed scripted input to a STY session.
 - YAHTZE, the game of Yahtzee.
 - YOW, print Zippyisms.
+- ZAP, dump TV bitmap as an XGP scan file.
