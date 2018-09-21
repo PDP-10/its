@@ -17,12 +17,20 @@ proc restart_nsalv {} {
     start_salv
 }
 
-proc start_dskdmp {} {
+proc start_dskdmp args {
+    global out
+    set tape ""
+    if {[llength $args] == 1} {
+        set tape [lindex $args 0]
+    } {
+        set tape "$out/sources.tape"
+    }
     #respond "KLH10>" "zero\r"
     quit_emulator
     uplevel #0 {spawn ./kn10-ks-its dskdmp.ini}
     setup_timeout
     expect "EOF"
+    respond "KLH10#" "devmo mta0 ../../$tape\r"
     respond "KLH10#" "go\r"
 }
 

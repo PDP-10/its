@@ -16,8 +16,15 @@ proc restart_nsalv {} {
     expect "MTBOOT"
 }
 
-proc start_dskdmp {} {
+proc start_dskdmp args {
     global out
+    set tape ""
+    if {[llength $args] == 1} {
+        set tape [lindex $args 0]
+    } {
+        set tape "$out/sources.tape"
+    }
+    respond "sim>" "at tu0 $tape\r"
     respond "sim>" "at tu2 $out/dskdmp.tape\r"
     respond "sim>" "b tu2\r"
     respond "MTBOOT" "\033g"

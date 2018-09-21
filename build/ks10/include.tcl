@@ -1,5 +1,6 @@
 proc start_dskdmp_its {} {
-    start_dskdmp
+    global out
+    start_dskdmp $out/minsys.tape
 
     respond "DSKDMP" "l\033ddt\r"
     respond "\n" "t\033its rp06\r"
@@ -61,8 +62,9 @@ proc prepare_frontend {} {
 
     respond "*" ":login db\r"
     sleep 1
+    
     type $emulator_escape
-    mount_tape "$out/sources.tape"
+    mount_tape "$out/minsrc.tape"
 }
 
 proc frontend_bootstrap {} {

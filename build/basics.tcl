@@ -8,6 +8,21 @@ sleep 1
 
 type ":rename .;@ its, .;@ oits\r"
 respond "*" ":rename .;@ nits, .;@ its\r"
+sleep 1
+
+respond "*" ":midas sysbin;_syseng;dump\r"
+dump_switches
+expect ":KILL"
+respond "*" ":delete sys;ts dump\r"
+respond "*" ":link sys;ts dump,sysbin;dump bin\r"
+respond "*" ":link sys;ts load,sys;ts dump\r"
+
+type ":dump\r"
+respond "_" "load links crdir sorry\r"
+respond "FILE=" "*;* *\r"
+expect -timeout 3000 "E-O-T"
+respond "_" "quit\r"
+expect ":KILL"
 
 # Free up some disk space on the pack holding most source code.
 gfr_second
@@ -44,13 +59,6 @@ expect ":KILL"
 # magdmp
 respond "*" ":midas sys1;ts magfrm_syseng;magfrm\r"
 expect ":KILL"
-
-respond "*" ":midas sysbin;_syseng;dump\r"
-dump_switches
-expect ":KILL"
-respond "*" ":delete sys;ts dump\r"
-respond "*" ":link sys;ts dump,sysbin;dump bin\r"
-respond "*" ":link sys;ts load,sys;ts dump\r"
 
 respond "*" ":midas sys1;ts stink_sysen2;stink\r"
 expect ":KILL"
