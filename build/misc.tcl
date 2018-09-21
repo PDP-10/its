@@ -1101,6 +1101,10 @@ expect ":KILL"
 respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
 expect ":KILL"
 
+# GTLOAD, load programs into GT40.
+respond "*" ":midas sys1; ts gtload_syseng; gtload\r"
+expect ":KILL"
+
 # URUG, GT40 debugger.
 respond "*" ":palx sysbin;_sysen2;urug\r"
 respond "=YES" "1\r"

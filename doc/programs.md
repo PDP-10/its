@@ -95,6 +95,7 @@
 - GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.
 - GLPDEV/XGPDEV, device for viewing GLPSPL/XGPSPL printer queues.
 - GTLEM, GT40 Lunar Lander.
+- GTLOAD, load programs into GT40.
 - GO, the Go board game.
 - GOTO, go to specified terminal line.
 - GUESS, a very silly game.
