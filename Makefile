@@ -16,8 +16,8 @@ CAT ?= cat
 include conf/network
 
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
-SRC = system syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
-      midas _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak gren	\
+SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
+      _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak gren	\
       bawden _mail_ l lisp libdoc comlap lspsrc nilcom rwk chprog rg	\
       inquir acount gz sys decsys ecc alan sail kcc kcc_sy c games archy dcp \
       spcwar rwg libmax rat z emaxim rz maxtul aljabr cffk das ell ellen \
@@ -34,11 +34,14 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys \
       moon graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
       _www_ hqm
+MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
 # These are not included on the tape.
 DOCIGNORE=-e '\.(jpeg|pdf|info|md)$$' -e '^(dcg|github)$$'
 # These are on the minsys tape.
 BINIGNORE=-e '^(ka10|ks10|sys)$$'
+# These are on the minsrc tape.
+SRCIGNORE=-e '^(system|midas)$$'
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils
 
@@ -56,6 +59,10 @@ MAGFRM=tools/dasm/magfrm
 GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 
 H3TEXT=$(shell cd build; ls h3text.*)
+DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.*)
+SALV=$(shell cd src; ls kshack/nsalv.* syseng/format.* syseng/rfn.*)
+KSFEDR=$(shell cd src; ls kshack/ksfedr.*)
+DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
@@ -72,21 +79,26 @@ out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40)
 	$(TOUCH) $@
 
-$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
+$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
 	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
-$(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
+$(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
 	cd bin/ka10/boot; ../../../$(MAGFRM) @.ddt @.salv > ../../../$@
 
-$(OUT)/minsys.tape: $(ITSTAR)
+$(OUT)/minsrc.tape: $(ITSTAR)
+	$(MKDIR) $(OUT)
+	$(ITSTAR) -cf $@ -C src $(MINSRC)
+	$(ITSTAR) -rf $@ -C $(OUT) system
+
+$(OUT)/minsys.tape: $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ks10 _ sys
 	$(ITSTAR) -rf $@ -C bin sys
 
-$(OUT)/ka-minsys.tape: $(ITSTAR)
+$(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
 	$(ITSTAR) -rf $@ -C bin sys
@@ -100,7 +112,7 @@ $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(ITSTAR) -cf $@ -C src $(SRC)
 	$(ITSTAR) -rf $@ -C doc $(DOC)
 	$(ITSTAR) -rf $@ -C bin $(BIN)
-	$(ITSTAR) -rf $@ -C $(OUT) system syshst
+	$(ITSTAR) -rf $@ -C $(OUT) syshst
 	-cd user; ../$(ITSTAR) -rf ../$@ *
 
 $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
@@ -129,6 +141,15 @@ start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
 
 build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
+	$(TOUCH) $@
+
+build/simh/stamp: $(SIMH) start
+	$(TOUCH) $@
+
+build/sims/stamp: $(KA10) start
+	$(TOUCH) $@
+
+out/klh10/system:
 	$(MKDIR) $(OUT)/system
 	cp=0; ca=0; \
 	$(TEST) $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
@@ -137,17 +158,14 @@ build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
 	    -e 's/%NETMASK%/$(NETMASK)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > $(OUT)/system/config.203
-	$(TOUCH) $@
 
-build/simh/stamp: $(SIMH) start
+out/simh/system:
 	$(MKDIR) $(OUT)/system
 	cp build/simh/config.* $(OUT)/system
-	$(TOUCH) $@
 
-build/sims/stamp: $(KA10) start
+out/sims/system:
 	$(MKDIR) $(OUT)/system
 	cp build/sims/config.* $(OUT)/system
-	$(TOUCH) $@
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
@@ -204,7 +222,7 @@ tools/simh/BIN/pdp11:
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
 	echo $(SRC) | tr ' ' '\n' | sort > $(OUT)/check/src1
-	cd src; ls -1 > ../$(OUT)/check/src2
+	cd src; ls -1 | egrep -v $(SRCIGNORE) > ../$(OUT)/check/src2
 	diff -u $(OUT)/check/src1 $(OUT)/check/src2 > $(OUT)/check/src.diff
 	echo $(DOC) | tr ' ' '\n' | sort > $(OUT)/check/doc1
 	cd doc; ls -1d */ | tr -d / | sort | \
