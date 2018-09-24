@@ -926,16 +926,20 @@ type ":kill\r"
 # Lisp Logo
 respond "*" ":cwd llogo\r"
 respond "*" ":complr\r"
+respond "_" "ioc\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":complr\r"
 respond "_" "\007"
-respond "*" {(load "ioc")}
+respond "*" "(load 'ioc)"
 respond "T" "(maklap)"
 respond "_" "define\r"
 respond "_" "\032"
 type ":kill\r"
 respond "*" ":complr\r"
 respond "_" "\007"
-respond "*" {(load "ioc")}
-respond "T" {(load "define")}
+respond "*" "(load 'ioc)"
+respond "T" "(load 'define)"
 respond "0" "(maklap)"
 respond "_" "error\r"
 respond "_" "parser\r"
