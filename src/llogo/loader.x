@@ -11,6 +11,8 @@
 
 (DECLARE (COUTPUT (READ))) 
 
+(load "ioc")
+
 (DEFUN HOW-BIG NIL 
        (REMPROP 'HOW-BIG 'EXPR)
        ((LAMBDA (FREE) 
@@ -42,7 +44,7 @@
 			    (MAPC 
 			     '(LAMBDA (SOURCE-FILE) 
 				      (APPLY 'UREAD
-					     (CONS SOURCE-FILE '(> AI LLOGO)))
+					     (CONS SOURCE-FILE '(> DSK LLOGO)))
 				      (MAPC 'PRINC
 					    (LIST 'READING
 						  '/ 
@@ -81,9 +83,9 @@ FASLOADING/ 						 FASL-FILE
 							 '/ FASL))
 					     (APPLY 'FASLOAD
 						    (CONS FASL-FILE
-							  '(FASL AI LLOGO))))
+							  '(FASL DSK LLOGO))))
 				    (CDR (GET 'LLOGO 'FILES)))))
-		     (AND DUMP (UWRITE AI LLOGO) (IOC R)
+		     (AND DUMP (UWRITE DSK LLOGO) (IOC R)
 		     (MAPC 'PRINC
 			   (LIST '/
 CREATING/ 			 DUMP
@@ -139,7 +141,7 @@ UUO:/	)	       (PRINC (COND ((NUMBERP PURE) (* PURE 2048.)) (0.)))
 		(TERPRI)
                 (SSTATUS TOPLEVEL '(START-UP))
 		(COND ((AND DUMP (STATUS FEATURE ITS))
-		       (ERRSET (UFILE LLOGO > AI LLOGO) NIL)
+		       (ERRSET (UFILE LLOGO > DSK LLOGO) NIL)
                        (IOG NIL (PRINC 'VERSION/ NUMBER?/ )
                             (PUTPROP 'LLOGO (LIST DUMP (READ)) 'VERSION))
                        (UCLOSE)
