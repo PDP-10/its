@@ -1,0 +1,197 @@
+
+
+(COMMENT NO ALLOCATION) 
+
+(PUTPROP (CAR (STATUS UREAD)) (CADR (STATUS UREAD)) 'VERSION)
+
+;;;LOADER > READS IN THE FN "CREATE".  (CREATE <LLOGO OR NLLOGO>) WILL
+;;;READ IN THE NECESSARY FASL FILES AND DUMP THE JOB OUT AS
+;;;TS NLLOGO OR TS LLOGO, ETC, ON LLOGO;. (CREATE) WILL SIMPLY
+;;;PRODUCE AN INTERPRETIVE VERSION WITHOUT DUMPING.
+
+(DECLARE (COUTPUT (READ))) 
+
+(DEFUN HOW-BIG NIL 
+       (REMPROP 'HOW-BIG 'EXPR)
+       ((LAMBDA (FREE) 
+		((LAMBDA (GC-DAEMON) (GCTWA) (GC))
+		 (FUNCTION (LAMBDA (GC-STATISTICS) (SETQ FREE GC-STATISTICS))))
+		(CONS (PAGEBPORG)
+		      (MAPCAR '(LAMBDA (SPACE) 
+				       (CONS (- (STATUS SPCSIZE SPACE)
+						(CDDR (ASSOC SPACE FREE)))
+					     (ERRSET (STATUS PURSIZE SPACE) NIL)))
+			      (STATUS SPCNAMES))))
+	NIL)) 
+
+(DECLARE (COUTPUT (READ))) 
+
+(DEFUN CREATE NIL 
+       (REMPROP 'CREATE 'FEXPR)
+       (REMPROP 'HOW-BIG 'EXPR)
+       (*RSET T)
+       ((LAMBDA (DUMP) 
+		(AND (STATUS FEATURE ITS)
+		     (COND ((MEMQ 'I (STATUS JCL))
+			    (AND (STATUS FEATURE BIBOP)
+				 (ALLOC '(LIST (25000. 30000. NIL)
+					       SYMBOL
+					       (3000. 5000. NIL)
+					       FIXNUM
+					       (4000. 8000. NIL))))
+			    (MAPC 
+			     '(LAMBDA (SOURCE-FILE) 
+				      (APPLY 'UREAD
+					     (CONS SOURCE-FILE '(> AI LLOGO)))
+				      (MAPC 'PRINC
+					    (LIST 'READING
+						  '/ 
+						  (CAR (STATUS UREAD))
+						  '/ 
+						  (CADR (STATUS UREAD))))
+				      (TERPRI)
+				      (DO ((^Q T) (FORM) (END-OF-FILE (GENSYM)))
+					  ((OR (NULL ^Q)
+					       (EQ END-OF-FILE
+						   (SETQ FORM (READ END-OF-FILE))))
+					   (SETQ ^Q NIL))
+					  (EVAL FORM)))
+			     (GET 'LLOGO 'FILES))
+			    (DEFPROP LLOGO (INTERPRETIVE LOGO) VERSION))
+			   (T (SETQ NOUUO NIL)
+			      (AND (STATUS FEATURE BIBOP)
+				   (SETQ PUTPROP (APPEND '(PARSE UNPARSE)
+							 PUTPROP) 
+					 PURE T 
+					 *PURE T)
+				   ;;THE VALUE OF PURE IS NUMBER OF PAGES FOR UUO
+				   ;;LINKS.  THE VALUE OF PUTPROP IS A LIST OF
+				   ;;INDICATORS PERMITTING PURIFICATION OF THE
+				   ;;CORRESPONDING PROPERTIES.
+				   (ALLOC '(LIST (10000. 20000. NIL)
+						 SYMBOL
+						 (2000. 3000. NIL)
+						 FIXNUM
+						 (3000. 5000. NIL))))
+                              (COND (DUMP (NOUUO NIL) T) ((NOUUO T)))
+			      (MAPC '(LAMBDA (FASL-FILE) 
+					     (MAPC 'PRINC
+						   (LIST '/
+FASLOADING/ 						 FASL-FILE
+							 '/ FASL))
+					     (APPLY 'FASLOAD
+						    (CONS FASL-FILE
+							  '(FASL AI LLOGO))))
+				    (CDR (GET 'LLOGO 'FILES)))))
+		     (AND DUMP (UWRITE AI LLOGO) (IOC R)
+		     (MAPC 'PRINC
+			   (LIST '/
+CREATING/ 			 DUMP
+				 '/ ON/ 
+				 (DATE)
+				 '/ AT/ 
+				 (DAYTIME)
+				 (ASCII 13.)))
+		     (MAPC '(LAMBDA (X) (PRINC X)
+					(TYO 32.)
+					(PRINC (GET X 'VERSION))
+					(TERPRI))
+			   (CONS 'LOADER (REVERSE (GET 'LLOGO 'FILES))))))
+		(COND ((STATUS FEATURE BIBOP)
+                       (SETQ BASE 10.)
+		       (PRINC '/
+GC-STATISTICS/
+)		       (PRINC '/
+BPS:/	)	       (PRINC (- BPORG (CAR INITIAL-SIZE) 
+                                 (COND ((NUMBERP PURE) (* PURE 2048.)) (0.))))
+		       (PRINC '/ WORDS/
+UUO:/	)	       (PRINC (COND ((NUMBERP PURE) (* PURE 2048.)) (0.)))
+		       (PRINC '/ WORDS/
+)		       ((LAMBDA (FREE) 
+				((LAMBDA (GC-DAEMON) (GCTWA) (GC))
+				 '(LAMBDA (GC-STATISTICS) (SETQ FREE GC-STATISTICS)))
+				(MAPC 
+				 '(LAMBDA (SPACE OLD-SIZE) 
+					  (PRINC SPACE)
+					  (PRINC ':/	)
+					  (PRINC (- (- (STATUS SPCSIZE SPACE)
+						       (CDDR (ASSOC SPACE FREE)))
+						    (CAR OLD-SIZE)))
+					  (PRINC '/ IMPURE/ WORDS/ USED/
+)					  (AND (CDR OLD-SIZE)
+					       (PRINC '/	)
+					       (PRINC (- (STATUS PURSIZE SPACE)
+							 (CADR OLD-SIZE)))
+					       (PRINC '/ PURE/ WORDS/ USED/
+)))				 (STATUS SPCNAMES)
+				 (CDR INITIAL-SIZE)))
+			NIL)))
+		;;UNSNAP ALL LINKS. (SSTATUS UUOLINKS)
+		(MAKUNBOUND 'INITIAL-SIZE)
+		(SETQ PURE NIL ^W NIL)
+		(LOGO)
+		(SETQ BASE 10. 
+		      IBASE 10. 
+		      *NOPOINT T 
+		      *PURE NIL 
+		      HOMCHECK NIL 
+		      FASLOAD NIL)
+		(TERPRI)
+                (SSTATUS TOPLEVEL '(START-UP))
+		(COND ((AND DUMP (STATUS FEATURE ITS))
+		       (ERRSET (UFILE LLOGO > AI LLOGO) NIL)
+                       (IOG NIL (PRINC 'VERSION/ NUMBER?/ )
+                            (PUTPROP 'LLOGO (LIST DUMP (READ)) 'VERSION))
+                       (UCLOSE)
+		       (PURIFY 0. 0. 'BPORG)
+		       (SUSPEND (ATOMIZE ':SYMLOD EOL ':PDUMP/ LLOGO/;TS/  DUMP EOL ':KILL/ )))
+		      (DUMP (IOG NIL (PRINC 'VERSION/ NUMBER?/ )
+                                     (PUTPROP 'LLOGO (LIST DUMP (READ)) 'VERSION))
+			    (COND ((STATUS FEATURE DEC10) (SUSPEND))
+                                  ((APPLY 'SAVE (LIST DUMP)))))
+                      ((DEFPROP LLOGO (EXPERIMENTAL LLOGO) VERSION))))
+	(AND (PRINC 'DO/ YOU/ WANT/ TO/ DUMP/ ON/ DSK?/ )
+	     (MEMQ (IOG NIL (READ)) '(Y YES OK SURE T YA OUI))
+	     (PRINC 'NAME/ /[LLOGO/,/ NLLOGO/]?/ )
+	     (IOG NIL (READ))))) 
+
+(DECLARE (COUTPUT (READ)))
+
+(DEFUN START-UP NIL
+       (REMPROP 'START-UP 'EXPR)
+       (LOGO)
+       (AND (STATUS FEATURE ITS) (OR (ZEROP TTY) (CURSORPOS 'C)))
+       ;;CLEAR SCREEN IF AT A DISPLAY TERMINAL.
+       (MAPC '(LAMBDA (X Y) (MAPC 'DPRINC (LIST X '/  Y EOL)))
+		      (LIST 'LISP
+			    (CAR (GET 'LLOGO 'VERSION)))
+		      (LIST (STATUS LISPVERSION)
+			    (CADR (GET 'LLOGO 'VERSION))))
+       (AND (STATUS FEATURE ITS) (ERRSET (ALLOCATOR) NIL))
+       ;; ALLOCATOR LOADS IN AUXILIARY PACKAGES IF THE USER WANTS THEM.
+       (APPLY 'CRUNIT (LIST 'DSK (STATUS UDIR)))
+       (SETQ SAIL (NOT (ZEROP (BOOLE 1. 536870912. (CADDR (STATUS TTY))))))
+       ;;SET FLAG WHETHER TERMINAL IS IN SAIL MODE.
+       ((LAMBDA (^W)
+                (COND ((STATUS FEATURE ITS)
+		       (OR (ERRSET (READFILE LLOGO /(INIT/)) NIL)
+                             (ERRSET (AND (APPLY 'READFILE
+     					       (LIST (STATUS UDIR)
+						     '/.LLOGO/.
+						     '/(INIT/)))
+					(APPLY 'CRUNIT
+					       (LIST 'DSK (STATUS UDIR))))
+				   NIL)))
+		      ((STATUS FEATURE DEC10) (ERRSET (READFILE INIT LGO) NIL))
+		      ((ERRSET (READFILE START_UP LOGO) NIL))))
+         T)
+       (PRINC 'LLOGO/ LISTENING)
+       '?)
+
+
+(DEFPROP LLOGO (DEFINE SETUP READER PARSER UNEDIT PRINT PRIMIT ERROR) FILES) 
+
+(AND (STATUS FEATURE BIBOP) (SETQ INITIAL-SIZE (HOW-BIG))) 
+
+(SSTATUS TOPLEVEL '(CREATE)) 
+
