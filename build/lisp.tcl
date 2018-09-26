@@ -888,6 +888,20 @@ respond "_" "games;_chase\r"
 respond "_" "\032"
 type ":kill\r"
 
+# yahtze
+respond "*" "complr\013"
+respond "_" "sca;macros\r"
+respond "_" "sca;modeb\r"
+respond "_" "\032"
+type ":kill\r"
+
+# note sca;mode > will not compile. Yahtze will load it interpreted
+
+respond "*" "complr\013"
+respond "_" "games;yahtze\r"
+respond "_" "\032"
+type ":kill\r"
+
 # ITSter
 respond "*" "complr\013"
 respond "_" "games;_hibou;itster\r"
