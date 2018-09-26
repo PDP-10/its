@@ -1,0 +1,467 @@
+;-*-lisp-*-
+;***********************************************************************
+;********************* Modes for Extending Maclisp *********************
+;****** (c) copyright 1977 Massachusetts Institute of Technology *******
+;***********************************************************************
+;********************* Do not modify this file !!! *********************
+;***********************************************************************
+
+;***Revise this page.
+
+;One can construct, modify, and extract parts of objects [STRUCT's?] defined
+;using modes.  The particular set of functions which perform these actions are
+;determined by the "type" of the mode.  The currently existing mode types and
+;their corresponding functions are:
+;
+;	(1)  Primitive - This should be called atomic, but that term is used by
+;lisp.  This category includes things like booleans, integers, flonums,
+;character objects, etc.  There are no non-trivial constructors, modifiers, or
+;selectors.
+;	(2)  ***
+
+;Maclisp already knows about some
+;modes:  Booleans (T and NIL), Fixnums, Flonums, Integers (Fixnums and
+;Bignums), Hunks (including Conses), Lists, and Arrays.
+
+;Files should (declare ((lambda (macros) (eval (read))) nil))
+;(load '((sca) mode fasl)) [rather than (macros fasl)] to use the mode
+;package.  Users should also (load '((sca) mfcns fasl)) at run-time.
+
+;This file should be expanded as needed.
+
+;***FIXED-PROP replaces RWK-PROP?
+;***Create an ALIST and a PLIST mode (and a HASHED mode?).
+
+;;; (declare ((lambda (macros) (load '((sca) modeb fasl))) nil)) 
+;;; is usable with QNCOMPLR only
+(include ((sca) modeb >))
+
+(declare (mapex t)
+	 (genprefix scamode)
+	 (macros t))
+
+(declare (@define omacrodef |MACRO|)
+	 (@define defmode |MODE|)
+	 (@define defmconstr |MCONSTR|)
+	 (@define defmmacro |MMACRO|)
+	 (@define mdefun |EXPR|))
+
+(scachar)
+
+(comment subtitle SELECT Macro)
+
+%(defun infix-select ()
+	(do ((l (list (read)) (cons (read) l)))
+	    ((not (= 58. (tyipeek)))		;|:|
+	     (cons 'select (nreverse l)))
+	    (tyi)))
+
+(defun select macro (l)		;Document this macro.
+       (do ((ret (cadr l) `(select1 ,ret ,(car selectors)))
+	    (selectors (cddr l) (cdr selectors)))
+	   ((null selectors) ret)))
+
+(comment subtitle CREATE Mmacro Stuff)
+
+%(defun nmconstr (m bvl name)
+	(putprop name '(lambda (l) `\,(car l)\(create @(cdr l))) 'macro))
+
+(defmmacro create ret nil (l)
+	   (cond ((cddr l) (wna-err l))
+		 (t (cadr l))))
+
+(defun-smac _create (slot . frobs)
+	    `(_ ,slot (create @frobs)))
+
+(alias <-create _create)
+
+(comment subtitle QUOTE Mode)
+
+(defmode quote (x)
+	 nil
+	 (mconstr nmconstr)
+	 (mmacro create ret (lambda (l m) m))
+	 (mmacro ? 0
+	  (lambda (l m) `\boolean\(,(if (symbolp (cadr m)) 'eq 'equal)
+				   ,(caddr l) ,m))))
+
+;(comment subtitle LISP Modes - FIXNUM, SYMBOL)
+
+(defmode fixnum ()
+	 nil
+	 (mmacro m+ ret (lambda (l m) `\,m\(+ @(cdr l))))
+	 (mmacro m- 1 (lambda (l m) `\,m\(- @(cdr l))))
+	 (mmacro m0? 1 (lambda ((nil var) m) `\boolean\(= ,var 0)))
+				;***use ZEROP instead of (= ,var 0)?
+	 (mmacro m* ret (lambda (l m) `\,m\(* @(cdr m))))
+	 (mmacro mdot ret (lambda (l m) `\,m\(* @(cdr m))))
+;*** write m<, m=, m> for bignum & check special case?
+	 (mmacro create ret (lambda (l m) 0)))
+;;;	   (if (cddr l) (caddr l) 0)	;no good
+
+;(defmode fixnum () (ident (nil nil 0))) gives FIXNUM a macro property
+;[mmexpander] which screws (declare (fixnum ...)).
+
+(defmode flonum () nil)
+(defmode atom () nil)
+(defmode file () nil)
+(defmode bignum () nil)
+(defmode array () nil)
+(defmode symbol () nil)		;to make RWK happy
+
+(comment subtitle *STRUCT Mode)
+
+;*STRUCT is the internal mode which cons's, hunk's, struct's, etc. turn into.
+;*STRUCT modes have creation (name) and selection (select) [and assignment (_)]
+;macros.  A *STRUCT mode looks like:
+;(*STRUCT <creation macro> <selection macro> <clause> <clause> ...).
+;A <clause> looks like:  (<token> <mode> [<default>]).
+
+(defmode *struct l
+	 nil
+	 (mmacro create ret
+	  (lambda (l m)
+		  (funcall (cadr m) (clean-list (cdr l) (cdddr m)))))
+	 (mmacro sel 1 *struct-sel)
+	 (mmacro select1 1 *struct-select1))
+
+;L is an even-length list alternating between token names and values, and M
+;is a list of specs, where a spec looks like (<token name> <mode> <default>),
+;except that <mode> and <default> may be missing.  Clean-list returns a list
+;of forms, corresponding to the specs of M, where these forms are either gotten
+;from L, the <default> in the corresponding spec, or the creation macro for the
+;<mode> in the spec:
+%(defun clean-list (l m)
+	(mapcar (fn (l1)
+		    (bind ((x <- (and (car l1)
+				      (getl (cons nil l) (list (car l1))))))
+			  (cond (x `\,(cadr l1)\,(cadr x))
+				((cddr l1) `\,(cadr l1)\,(caddr l1))
+				((cadr l1) `\,(cadr l1)\(create @l))
+				(t (ndf-err (car l1) m)))))
+		m))
+
+%(defun *struct-sel (l m msf)
+	(declare (fixnum n nt))
+	(bind ((out <- nil) (n <- 0) (nt <- (length (cdddr m)))
+	       (selfun <- (caddr m)) (arg <- (cadr l)) (token <- (caddr l)))
+	      (mapc (fn (clause)
+
+       (_ n (1+ n))
+       (cond ((eq token (car clause))
+	      (if out (ams-err token m)
+		  (_ out `\,(cadr clause)\,(funcall selfun n nt arg))))
+	     ((null (car clause))
+	      (bind ((nout <- (mmlm2 (get 'sel 'mmacro)
+				     `(sel ,(funcall selfun n nt arg) ,token)
+				     (al-desugar (cadr clause))
+				     (cons m msf))))
+		    (and nout
+			 (if out (ams-err token m)
+			     (_ out nout)))))))
+
+		    (cdddr m))
+	      out))
+
+%(defun *struct-select1 (l m msf)
+       (declare (fixnum n nt))
+       (or (*struct-sel l m msf)
+	   (bind ((out <- nil) nout (n <- 0) (nt <- (length (cdddr m)))
+		  (selfun <- (caddr m)) (arg <- (cadr l)) (token <- (caddr l)))
+		 (mapc (fn (clause)
+
+   (_ n (1+ n)
+      nout (mmlm2 (get 'select1 'mmacro)
+		  `(select1 ,(funcall selfun n nt arg) ,token)
+		  (al-desugar (cadr clause))
+		  (cons m msf)))
+   (and nout
+	(if out (ams-err token m)
+	    (_ out nout))))
+
+		       (cdddr m))
+		 out)))
+
+(comment subtitle Specific STRUCT Modes)
+
+%(defun scmcmac (m)
+	(mapcar (fn (clause)
+		    (cond ((null clause) nil)
+			  ((atom clause) (list clause nil))
+			  ((eq (car clause) 'quote) (list nil clause clause))
+			  (t clause)))
+		m))
+
+;;;(declare (fixnum n n1 nt)) - not needed since not compiled
+
+(defmode ident l	;a funny struct for when you later plan
+			;to make a real struct out of it (yes,
+			;it is rather obscure)
+	 (eval `(*struct (lambda (l) (car l))
+			 (lambda (n nt arg) arg)
+			 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+(defmode ncons l	;unnecessary - could use hunk
+	 (eval `(*struct (lambda (l) `(ncons @l))
+			 (lambda (n nt arg) `(car ,arg))
+			 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+(defmode cons l		;unnecessary - could use hunk
+	 (eval `(*struct (lambda (l) `(cons @l))
+			 (lambda (n nt arg)
+				 (cond ((= n 1) `(car ,arg))
+				       ((= n 2) `(cdr ,arg))))
+			 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+(defmode hunk l		;note lousy hunk numbering system everywhere
+	 (eval `(*struct (lambda (l) `(hunk @l))
+			 (lambda (n nt arg)
+				 (cond ((= nt 1) `(cxr 1 ,arg))	;ncons case
+				       ((= n nt) `(cxr 0 ,arg))	;cdr case
+				       (t `(cxr ,n ,arg))))
+			 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+(defmode struct-list l
+	 (eval `(*struct (lambda (l) `(list @l))
+			 (lambda (n nt arg)
+				 (repeat n1 (1- n) (_ arg `(cdr ,arg)))
+				 `(car ,arg))
+			 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+(defmode struct-array l		;doesn't know about number or
+	 (eval `(*struct	;un-garbage-collected arrays
+		 (lambda (l)
+		  (bind ((var <- (gensym)) (nt <- (length l)))
+			`(progn (_ ,var (array nil t ,nt))
+				@(do ((l1 l (cdr l1))
+				      (n 1 (1+ n))
+				      (retl))
+				     ((null l1) (nreverse retl))
+				     (lpush `(store
+					      (arraycall t ,var ,(1- n))
+					      ,(car l1))
+					    retl))
+				,var)))
+		 (lambda (n nt arg) `(arraycall t ,arg ,(1- n)))
+		 @(scmcmac l)))
+	 (mconstr nmconstr))
+
+;;;(declare (notype n n1 nt)) - see above
+
+(defmode struct l
+;;;	 (declare (fixnum len)) - not needed since not compiled
+	 (eval
+	  (bind ((len <- (length l)))
+		(cond ((> len 128.) `(struct-array @l))
+		      ((= len 0) ''nil)
+
+		      ((= len 1) `(ncons @l))	;Because the compiler
+		      ((= len 2) `(cons @l))	;is stupid.
+
+		      ((memq len '(3 4 6 7 8 13 14 15 16)) `(hunk @l))
+		      (t `(hunk @l))))))	;Because I'm lazy.
+
+;It's not clear what struct should expand into.  If you're time conscious,
+;use hunks.  The best theoretical answer for large LEN may be arrays, but
+;there are problems with the current compactifying garbage collector.
+;[If you're worried about space, then
+;(memq len '(5 9 10 11 17 18 19)) => use two hunks, and
+;(= len 12) => use three hunks.]
+
+;(comment subtitle TAG, DISJ, UNION, and INTERSECT Modes)
+
+(defmode tag l
+	 (*struct nil
+		  (lambda (n nt arg) (if (= n 1) `(car ,arg) `(cdr ,arg)))
+		  (mtag) . l)
+	 (mconstr nmconstr)
+	 (mmacro create ret
+	  (lambda ((nil tag value) m)
+		  (and (assq tag (cdr m))
+		       `(cons ',tag ,value))))
+	 (mmacro mcase 1	;***won't work for T clauses & should declare
+	  (lambda (l m) `(case (car ,(cadr l)) @(cddr l)))))	;mode of item
+							;in each clause?
+
+(defmode disj l
+	 (*struct nil (lambda (n nt arg) arg) . l)
+	 (mconstr nmconstr)
+	 (mmacro create ret
+	  (lambda (l m)
+		  (and (assq (cadr l) (cdr m))
+		       `\,(cadr (assq (cadr l) (cdr m)))\,(caddr l))))
+	 (mmacro mcase 1
+	  (lambda ((nil item . frobs) m)
+	   (_ item `\,(mode item)\,(macro-expand item))
+	   (bind ((var <- (if (atom (caddr item)) item (gensym))))
+		 (_ frobs
+		    `(cond @(mapcar (fn (clause)
+					`(,(bind ((temp <- (caddr clause)))
+						 (or (null temp)
+						     `(,temp ,var)))
+					  @(cdr (assq (car clause) frobs))))
+				    (cdr m))))
+		 (if (atom (caddr item)) frobs
+		     `(bind ((,var <- ,item)) ,frobs))))))
+
+(defmode union l
+	 (*struct nil (lambda (n nt arg) arg) . l)
+	 (mconstr nmconstr)
+	 (mmacro create ret
+	  (lambda (l m)
+		  (and (assq (cadr l) (cdr m))
+		       (or (caddr l) ''nil)))))
+
+(defmode intersect l	;Same effects as union
+	 (*struct nil (lambda (n nt arg) arg) . l)
+	 (mconstr nmconstr)
+	 (mmacro create ret
+	  (lambda (l m)
+		  (and (assq (cadr l) (cdr m))
+		       (or (caddr l) ''nil)))))
+
+(comment subtitle BOOLEAN Mode)
+
+(defmode boolean ()
+	 (disj (true 't boolean$true?) (false 'nil))
+	 (macrodef true? (x) x))
+
+(comment subtitle HOMOGENEOUS Modes)
+
+;***Unfinished:  One could create more homogeneous modes, and one could add new
+;mmacros to LIST (BACKWARDS, ADD-TO-SET, etc.).
+
+(comment subtitle LIST Mode)
+
+(defmode list (elts-mode)
+	 nil
+
+	 (mmacro empty ret (lambda (l m) ''nil))
+	 (mmacro create ret (lambda (l m) `(list @(cdr l))))
+	 (mmacro ttf -1
+	  (lambda (l m)
+		  (cond ((null (cddr l)) `\,m\,(cadr l))
+			(t `\,m\(cons ,(cadr l) (ttf @(cddr l)))))))
+
+	 (mmacro empty? 1 (lambda (l m) `\boolean\(null ,(cadr l))))
+	 (mmacro size 1 (lambda (l m) `\fixnum\(length ,(cadr l))))
+
+	 (mmacro first 1 (lambda (l m) `\,(cadr m)\(car ,(cadr l))))
+	 (mmacro select1 1	;uses 1-based indexing
+	  (lambda (l m msf)
+		  (cond ((numberp (caddr l))
+			 (bind ((out <- (cadr l)) (n <- (caddr l)))
+			       (repeat i (1- n) (_ out `(cdr ,out)))
+			       `\,(cadr m)\(car ,out)))
+			((eq (caddr l) 'first) `\,(cadr m)\(car ,(cadr l)))
+			((eq (caddr l) 'rest) `\,m\(cdr ,(cadr l)))
+			(t
+			 (mmlm2 (get 'select1 'mmacro)
+				`(select1 \,(cadr m)\(car ,(cadr l))
+					  ,(caddr l))
+				(al-desugar (cadr m))
+				(cons m msf))))))
+	 (mmacro rest 1 (lambda (l m) `\,m\(cdr ,(cadr l))))
+
+			;values returned by _first & _rest are meaningless:
+	 (mmacro _first 1 (lambda (l m) `(rplaca ,(cadr l) ,(caddr l))))
+	 (mmacro _rest 1 (lambda (l m) `(rplacd ,(cadr l) ,(caddr l))))
+			;_first & _rest are unnecessary:  use
+			;(_ (first ...) ...) & (_ (rest ...) ...).
+
+	 (mconstr nmconstr))
+
+(defun push macro (l)		;value returned is meaningless
+       `(_ ,(car (last l)) (ttf @(cdr l))))
+
+(defmmacro pop 1 (list) ((nil arg) m)
+	   `\,(cadr m)\(prog1 (first ,arg) (_ ,arg (rest ,arg))))
+
+(comment subtitle MULT-LIST Mode)
+
+(defmode mult-list l
+	 (eval
+	  `(disj (empty 'nil null)
+		 (non-empty
+		  ,(do ((l (reverse l) (cdr l))
+			(rout `(rest (mult-list @l) nil)
+			      `(nil (cons ,(car l) ,rout))))
+			   ;uses old [?] NIL default-token-select convention
+		       ((null l) (cadr rout))))))
+
+	 (mmacro empty ret (lambda (l m) ''nil))
+	 (mmacro create ret
+	  (lambda (l m)
+	    `\,(simp-mode m)\(create ,(if (cdr l) 'non-empty 'empty)
+				     (create @(cdr l)))))
+		;simply using ,l for the last line will give bugs because of
+		;clobbering
+
+;For LIST-type CREATE and TTF use (create <token> <val> ... REST (create ...)) 
+
+	 (mmacro empty? 1 (lambda (l m) `\boolean\(null ,(cadr l))))
+	 (mmacro size 1
+	  (lambda (l m) `\fixnum\(// (length ,(cadr l)) ,(length (cdr m)))))
+
+;FIRST is meaningless
+
+	 (mmacro select1 1	;uses 1-based indexing
+	  (lambda (l m msf)
+		  (cond ((numberp (caddr l))
+			 (bind ((out <- (cadr l)) (n <- (caddr l)))
+			       (repeat i (1- n) (_ out `(rest ,out)))
+			       `\,m\,out))
+			(t
+			 (mmlm2 (get 'select1 'mmacro)
+				`(select1 \,(simp-mode m)\,(cadr l) ,(caddr l))
+				(simp-mode m)
+				(cons m msf))))))
+	 (mmacro rest 1 (lambda (l m) `\,m\:,(cadr l):rest))
+
+			;value returned by _rest is meaningless:
+	 (mmacro _rest 1 (lambda (l m) `(_ :,(cadr l):rest ,(caddr l))))
+			;_rest is unnecessary:  use (_ (rest ...) ...).
+
+	 (mconstr nmconstr))	;actually unnecessary because of DISJ
+
+(comment subtitle FIXED-PROP Mode)
+
+(defmode fixed-prop (name val-mode . val-default)  ;default is optional
+	 (*struct (lambda (l) `(putprop @l))
+		  (lambda (n nt arg) (case n
+					   (1 arg)
+					   (2 `(get ,arg 'name))
+					   (3 ''name)))
+		  (symbol nil)
+		  (prop-val val-mode . val-default)
+		  (nil 'name))
+	 (mconstr nmconstr))
+
+(comment subtitle Error Messages)
+
+%(defun ndf-err (token mode)
+	(terpri)
+	(princ '|No default given for token |) (princ token)
+	(terpri) (princ '| in structure |) (princ mode)
+	(err))
+
+%(defun csm-err (selector mode)		;unused
+	(terpri)
+	(princ '|Cannot select |) (princ selector)
+	(princ '| from mode |) (princ mode)
+	(err))
+
+%(defun ams-err (selector mode)
+	(terpri)
+	(princ selector) (princ '| is an ambiguous selection from mode |)
+	(terpri) (princ mode)
+	(err))
+
+(scaunchar)
+
+(declare (macros nil))
