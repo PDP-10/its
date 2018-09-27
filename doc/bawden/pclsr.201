@@ -1,0 +1,1337 @@
+.c -*- Text -*-
+.c 
+.c Notes:
+.c - Don't call processes "jobs".
+.c - Don't use "process" except to mean an ITS process.  (Try using "task"
+.c   or "procedure", depending.)
+.c - The Scheduler is always capitalized.
+.c - User mode and Exec mode are always capitalized (why?)
+.c - Run SPELL
+.c - Don't be a we-ist
+.c 
+.c 66 x 88 is the size of our lineprinters these days:
+.pl 66
+.pw 88
+.c .tl 50 is the default:
+.tl 50
+.c .tw 73 is the default:
+.tw 75
+.c .sidm 31 should set the left margin at 4 (31% of 88-75).
+.c This makes the results readable on an 80 column terminal (4+75=79), and
+.c also makes 1 inch margins on LP/LR devices:
+.sidm 31
+.c Use "~" when you want a real space:
+.dummy ~
+.c Start every paragraph with .sp please:
+.crsp
+.crcomp
+.c Ragged right:
+.fill
+.he
+*DRAFT*      Page~
+
+.sp 3
+.ce
+PCLSRing:
+.ce
+Keeping Process State Modular
+.c .ce
+.c in the ITS Operating System
+.sp
+.ce
+Alan Bawden
+
+.sp 5
+.rtw 13
+Abstract:  This paper describes the "PCLSRing" feature of the
+Incompatible Time Sharing (ITS) operating system.  PCLSRing permits a
+process to access the state of another process in a modular fashion.  The
+benefits of PCLSRing are explained, its implementation is described in
+detail, and the results of some simple performance metering are presented.
+.rtw -13
+
+
+.c section
+.sp 3
+.block 5
+1.  Introduction
+
+.sp
+The Incompatible Time Sharing (ITS) operating system was originally written
+for the PDP-6 at the MIT Artificial Intelligence Laboratory during the late
+1960's.  At MIT during the 1970's ITS ran on three KA-10's and one KL-10,
+providing service to researchers in the AI Laboratory and in MIT's
+Laboratory for Computer Science.  Many well-known PDP-10 programs, such as
+the Emacs editor, the MacLisp dialect of Lisp, the Macsyma symbolic algebra
+system, and the Midas assembler, were originally developed under ITS.  More
+than twenty years later ITS still has a small, but devoted, user community.
+It now runs on a handful of KS-10 systems around the world.
+
+.sp
+The designers of ITS were not primarily interested in doing research in
+operating systems.  They held a pragmatic view of ITS as a tool for enabling
+the AI Lab's small user community to get the most out of their PDP-6/10 and
+its peripherals (robot arms, TV cameras, etc.).  This is not to say that
+the designers were ignorant of the state of the art in operating systems,
+but they were unlikely to publish papers about their experiences.  As a
+result, many of their pioneering ideas remain largely unknown outside 
+the ITS user community.
+
+.sp
+Among other features, ITS boasts a convenient symbolic system call
+mechanism that allows calls to be invoked by name and to pass values in
+arbitrary locations, a flexible system for delivering software interrupts
+to processes, device-independent display terminal support, a process
+organization that allows a single command processor to control multiple
+sub-processes, and a powerful mechanism for implementing devices in
+software that enabled ITS to have what was probably the first network file
+system.  Many of these features have since been adopted or rediscovered by
+other operating systems, but one of ITS's major design principles, called
+"PCLSRing", has never found its way into any other operating system.
+
+.c .sp
+.c Before the race of PDP-10's vanish from the face of the earth, taking ITS
+.c and the other PDP-10 operating systems with them, and the last ITS
+.c maintainers are drawn away to other pursuits, ...
+
+.sp
+It is my belief that PCLSRing is an important idea that does not deserve to
+be neglected merely because it has never been adequately explained in
+print.  Therefore, in this paper I have endeavored to explain what PCLSRing
+is, what its benefits are for both the users and the implementors of ITS,
+and how it is implemented.  
+
+.sp
+The reader should not expect to completely understand the description of
+the implementation of PCLSRing on first reading.  Many of the points are
+subtle, and can probably only be fully appreciated by someone who tries to
+implement PCLSRing for himself.  (If any reader makes this attempt, I would
+like to hear from him!)
+
+.c .sp
+.c [ This is really only notes for an introduction. ]
+.c 
+.c .sp
+.c Well, I suppose there should be something here that introduces the ITS
+.c operating system, but I can't for the life of me figure out what it should
+.c say.  The General Idea of this paper is that I'm going to explain one thing
+.c that ITS does, called "PCLSRing", that I think is important for people to
+.c know about.
+.c 
+.c .sp
+.c Should say something to the effect that this paper is a report from the
+.c trenches, rather than an "academic" paper.  (Like, notice that there isn't
+.c a biblography (at the moment).)  We're just trying to document the design
+.c and implementation behind a fairly interesting thing that some hackers once
+.c did with a PDP-10.
+.c 
+.c .sp
+.c Would it be fair to say that PCLSRing is the major influence on the design
+.c of the internals of ITS?  Certainly you can't understand a lot of how ITS
+.c works internally until you understand PCLSRing, and (as this paper
+.c demonstrates) you can't explain PCLSRing without sketching a great deal of
+.c the inner workings of ITS.
+.c 
+.c .sp
+.c Can I claim that no operating system since ITS has supported anything like
+.c PCLSRing?  There might be examples of operating systems that try to make
+.c system calls appear to be atomic, especially some of the modern distributed
+.c systems, but certainly none of the major "traditional" operating systems
+.c like Unix, Tops-20, VMS, etc., can claim to do so.
+
+
+.c section
+.sp 3
+.block 5
+2.  The PCLSRing Modularity Principle
+
+.sp
+Under any timesharing operating system there will be occasions when a
+process must access the state of another process.  A process may need to
+start, stop, debug, load, dump, create, or destroy another process.  There
+is also one occasion when a process must access its own state: an interrupt
+handler needs access to the state of the running process prior to the
+arrival of the interrupt, so that the process may continue after the
+interrupt has been dealt with.
+
+.sp
+"PCLSRing" is a mechanism the ITS operating system uses to enforce a
+kind of modularity when a process must access the state of another
+process.  The modularity principle is very simple: no process ever catches
+another process (including itself) in the act of executing a system call.
+System calls thus behave as if they were directly implemented in hardware.
+A process can no more catch another process in the middle of deleting a
+file than it can catch another process in the middle of a multiply
+instruction.
+
+.sp
+Another way to state the PCLSRing modularity principle is to say that when
+a process looks at the program counter of another process, it must always
+see a User mode PC, never an Exec mode PC.  When one process wants to
+access the state of another process, and the target process happens to be
+executing in Exec mode, then something must be done in order to put the
+target process into User mode.  Either the target process must be backed
+out of the system call, leaving the User mode PC pointing at the call, or
+it must be allowed to finish, leaving the User mode PC pointing just after
+the call.  This act of getting a process into User mode as quickly as
+possible is called "PCLSRing" (pronounced "pee-see-loo-zer-ing") a process.
+We say that one process "PCLSRed" ("pee-see-loo-zerd") another process, or
+we speak of the need to "PCLSR" ("pee-see-loo-zer") a process before giving
+it an interrupt.
+
+.sp
+Just as certain PDP-10 instructions cannot be guaranteed to run to
+completion, either because they might be interrupted or because they run
+the risk of taking a page fault (e.g. BLT), certain ITS system calls cannot
+always run to completion before the executing process must be PCLSRed.  A
+prime example is the SIOT system call, which is used to transfer a string
+of bytes to or from an I/O device.  
+
+.sp
+Suppose a process is using SIOT to send a long string of characters to a
+slow device (such as a terminal) when an interrupt arrives.  It is
+impossible to take back the characters that have already reached the
+device, and there may be an indefinite delay before the rest of the
+characters can be output.  The PCLSRing modularity principle requires that
+the process be maneuvered out of the system call and into User mode as
+quickly as possible, else the interrupt cannot be promptly delivered.  How
+can the state of the process be captured in a User mode PC given that the
+process really is halfway through outputting the string of characters?
+
+.sp
+The solution is to employ the same trick that the PDP-10 hardware uses when
+it is necessary to interrupt an instruction, such as BLT, that has only
+partly performed its task.  The arguments originally passed to the system
+call are updated in place to reflect any work already accomplished, and the
+PC is left pointing at the system call, so that when the system call is
+restarted it will proceed from where it left off.  In the case of the SIOT
+system call, the locations in memory from which the byte count and the byte
+pointer arguments were originally fetched will be overwritten with a new
+count and pointer that address the bytes that remain to be output.
+
+.sp
+All ITS system calls that might be interrupted with their tasks partially
+accomplished are designed to update their arguments in this fashion.  This
+requirement might be expected to introduce some system calls with baroque
+calling conventions, but in fact the vast majority of system calls have no
+need of ever updating any of their arguments, and those few that do are
+generally able to do so in a natural way.  (One rarely used system call
+does require an additional argument that should initially be supplied as
+zero and is used as a "state word" to keep track of the progress of the
+call.  In this obscure case, the documentation explains what the non-zero
+values of this argument mean, although no program is known to make use of
+this information.)
+
+
+.c section
+.sp 3
+.block 5
+3.  The Benefits of PCLSRing
+
+.sp
+The PCLSRing modularity principle is easy to state and easy for the user to
+understand, but it is tricky to implement.  The majority of this paper is
+devoted to explaining the techniques used in the ITS implementation of
+PCLSRing.  Before going into that, however, let us consider why PCLSRing is
+worth all the trouble it entails.  I will present examples of the benefits
+that PCLSRing has for both the users and the implementors of ITS.
+
+.sp
+Users are chiefly conscious of the effects of PCLSRing when they write
+interrupt handlers.  The main program level PC that is passed to an
+interrupt handler is always a User mode PC.  By examining this PC and the
+contents of memory, the interrupt handler can determine precisely what the
+state of the interrupted task was.  If the interrupt handler needs to know,
+for example, whether or not the main program level had successfully deleted
+a file before the user typed an interrupt character, it can simply look to
+see if the PC points before or after the DELETE system call.
+
+.sp
+Any question the interrupt handler may have about the state of the
+computation when the interrupt occurred can be answered in terms of a
+simple machine model in which all system calls behave as if they were
+hardware instructions.  The effects of eccentric interrupt handlers that
+dismiss interrupts by returning to a PC other than the one interrupted
+from, or that alter the main program level accumulators, are
+straightforward to predict.  It is, for example, easy to construct a simple
+interrupt driven scheduler that multiplexes one process into multiple
+tasks.
+
+.c .c TK wanted me to say something like:
+.c .sp
+.c Users also encounter the benefits of PCLSRing when they are debugging their
+.c programs.
+
+.sp
+For the implementors of ITS, PCLSRing is a powerful aid in managing the
+interactions between processes.  This can be illustrated by considering the
+example of the DTTY system call.
+
+.sp
+ITS supports a notion of "ownership" of the user's terminal.  As various
+processes run on the user's behalf (editor, compiler, debugger, etc.), they
+pass ownership of the terminal back and forth.  A critical moment occurs
+when one process uses DTTY to take ownership of the terminal back from a
+process that it had previously given it to.  When the acquiring process
+wrests control of the terminal away from its current owner, how can it know
+it won't catch the owner in the middle of actually using the terminal,
+potentially leaving some per-terminal data structures in an inconsistent
+state?
+
+.sp
+The answer is for the acquiring process to start by PCLSRing the terminal's
+current owner.  This will insure that the current owner is not in the
+middle of any system call.  Therefore all terminal-specific data structures
+will be in a known state, and it will be safe to transfer ownership of the
+terminal.
+
+.sp
+This example shows most clearly why PCLSRing is a tool for promoting
+modularity.  PCLSRing can be used to hide the implementation details of a
+system call that modifies the state of some data structure.  Only
+documented state transitions are ever exposed to other processes.
+
+
+.c section
+.sp 3
+.block 5
+4.  The Basics of ITS
+
+.sp
+In order to understand the techniques used to implement PCLSRing, it is
+necessary to have some understanding of the basic structure of ITS.  This
+section introduces the players.
+
+.c subsection
+.sp 2
+.block 5
+4.1~ Processes and "User" Variables
+
+.sp
+The basic job of any timesharing operating system is to share a single
+processor among set of independent processes.  An ITS process has a name,
+some I/O channels, a program counter, sixteen accumulators, a page table,
+an interrupt system, and assorted other properties.  These properties are
+all held in a collection of per-process variables that ITS keeps in its
+own address space.
+
+.sp
+At any particular moment a process can be running in either User mode or
+Exec mode (as determined by a bit in the left half of the program counter).
+In User mode, each process has its own page table, and can configure its
+User mode address space to suit itself.  In Exec mode, all processes share
+the same page table, and thus all execute in the same Exec mode address
+space.  Hardware interrupt service routines also execute in this single
+Exec mode address space.
+
+.sp
+An important property of the Exec mode address space is that its pages are
+never swapped out to secondary storage.  All system code and data
+structures, including the per-process variables, are stored in Exec address
+space, and are always available without risk of causing a page fault.  This
+convenient property is possible only because the implementors have taken
+great pains to minimize the size of ITS and its data structures.
+
+.sp
+ITS processes are variously called "processes", "jobs", "users", and
+"procedures".  To avoid confusion, this paper consistently uses the word
+"process", with one exception:  the set of per-process variables that ITS
+maintains are referred to as "user variables", rather than the more
+consistent "process variables", because to do otherwise would violate
+tradition.  (Knowing that processes are sometimes called "users" will also
+help the reader understand why there are so many U's in the names of
+various routines and variables!)
+
+.sp
+Typical user variables are the UNAME and JNAME; these contain two SIXBIT
+words that are unique to this process, and together serve as the process's
+name.  Additional user variables will be introduced as they are needed.
+For easy reference, a dictionary of all user variables mentioned anywhere
+in the paper, each with a brief description of its function, is given in an
+appendix.  This appendix also reveals some simplifications made by the main
+text.
+
+.c subsection
+.sp 2
+.block 5
+4.2~ System Calls
+
+.sp
+As in any other PDP-10 operating system, ITS system calls are performed by
+executing instructions that cause a trap to Exec mode.  The Exec mode trap
+handler saves the User mode PC in the SUUOH user variable, saves the
+contents of the User mode accumulators in the UUOACS user variable (an
+array of sixteen words), examines the instruction that caused the trap, and
+dispatches to the appropriate system call.
+
+.sp
+Each system call is responsible for obtaining its own arguments from the
+User mode address space, performing its particular task, and writing any
+return values back into User mode memory.  (Many system calls make use of a
+flexible and convenient facility ITS provides for processing arguments and
+returning values.)
+
+.sp
+All system calls return to a common point in order to return to User mode.
+This common return code checks for a number of possible error conditions
+(such as returning to User mode while still holding a lock or with hardware
+interrupts deferred), performs some general cleanup, restores the
+accumulators from UUOACS, and returns to the User mode PC saved in SUUOH.
+
+.c subsection
+.sp 2
+.block 5
+4.3~ Scheduler
+
+.sp
+The ITS Scheduler runs at the lowest priority of the PDP-10's seven
+hardware interrupt levels.  This interrupt level is commonly called "clock
+level" because a hardware clock interrupt is signaled there periodically.
+(Actually, several minor interrupts are also signaled at clock level, and a
+variety of periodic overhead tasks are performed there as well, but in this
+paper the only clock level activity that will concern us is the Scheduler.)
+
+.sp
+The Scheduler's job is to switch the processor back and forth between those
+processes that are currently runnable.  When a process is not actually
+running on the processor the Scheduler keeps its PC in the UPC user
+variable and keeps its accumulators in the AC0S user variable (an array of
+sixteen words).  
+
+.sp
+When the Scheduler examines a process it may discover that the process is
+either "stopped", "blocked", or "running".  If a process is stopped, then
+some external agent has decided that this process must not run, so the
+Scheduler can do nothing with it.  If a process is blocked, it is waiting
+for something, so the Scheduler must check for the awaited condition to see
+if the process can be unblocked and allowed to run.  If a process is
+running, then it is capable of making immediate progress, so the Scheduler
+can allow it to use the processor.
+
+.sp
+The Scheduler uses the user variables USTP and FLSINS to keep track of the
+runnability of a process.  If a process's USTP is non-zero, then the
+process is stopped.  The left half contains various bits corresponding to
+specific reasons why the process should not run (for example, one bit is
+set when the process receives a fatal interrupt).  The right half contains
+a count of the number of other processes that are currently keeping this
+process stopped.  As each such process finishes, it decrements this variable
+so that the Scheduler will know when everybody is finished and it is safe
+to run the process once again.
+
+.sp
+If the FLSINS user variable is non-zero, then the process is blocked
+waiting for some condition, such as the typing of a character on the user's
+terminal, the passage of a given amount of time, or the arrival of a page
+to satisfy a page fault.  In such a case FLSINS contains an instruction
+that the Scheduler can execute in order to determine if the awaited
+condition has come to pass.  Such an instruction should skip if the process
+is no longer blocked.
+
+.sp
+At any given moment a process can be in one of five possible states:
+
+.in 7
+
+.sp
+.un 5
+(1)~ Stopped.  In this case USTP is non-zero and UPC contains a User mode
+PC.  (FLSINS is zero, which isn't immediately relevant, but does insure
+that the process will run as soon as its USTP is cleared.)
+
+.sp
+.un 5
+(2)~ Blocked in Exec mode.  USTP is zero, FLSINS contains an instruction
+that will skip when the process is no longer blocked, and UPC contains an
+Exec mode PC.
+
+.sp
+.un 5
+(3)~ Blocked in User mode.  USTP is zero, FLSINS contains an instruction
+that will skip when the process is no longer blocked, and UPC contains a
+User mode PC.  The only possible reason for a process to be blocked in User
+mode is that it is waiting for a page to satisfy a page fault; all other
+cases of blocking occur after a process has executed a system call and
+entered Exec mode.
+
+.sp
+.un 5
+(4)~ Running in Exec mode.  USTP is zero, FLSINS is zero, and UPC contains
+an Exec mode PC.
+
+.sp
+.un 5
+(5)~ Running in User mode.  USTP is zero, FLSINS is zero, and UPC contains a
+User mode PC.
+
+.in 0
+
+.sp
+Note that a stopped process must be in User mode.  
+
+.sp
+Once they get a chance to run, processes have ways of influencing the
+behavior of the Scheduler.  For example, a process can temporarily mask
+clock-level interrupts, which insures that it has exclusive use of the
+processor while it performs some critical action that the Scheduler must
+not interrupt.  Processes can also intentionally yield the processor and
+allow the Scheduler to run other processes; a process will do this when it
+first becomes blocked.
+
+.c subsection
+.sp 2
+.block 5
+4.4~ Software Interrupts
+
+.sp
+ITS has a sophisticated software interrupt system that it uses to inform
+processes of a variety of conditions that might require attention.  When a
+hardware device driver or another process wishes to interrupt a given
+process, it merely sets a bit in one of two user variables, PIRQC or
+IFPIR.  It is then up to the Scheduler to actually deliver the interrupt.
+
+.sp
+Whenever the Scheduler is considering running a process it looks at its
+PIRQC and IFPIR variables as well as its USTP and FLSINS.  If it discovers
+that an interrupt is pending, it tries to manipulate the process into its
+interrupt handler.  This is a somewhat tricky procedure, because the
+required manipulations can cause page faults!  Fortunately, only the first
+step of the procedure concerns us in this paper:  the Scheduler first must
+PCLSR the process so that the process's interrupt handler sees a User mode
+PC.
+
+
+.c section
+.sp 3
+.block 5
+5.  The Implementation of PCLSRing
+
+.sp
+Now that we have introduced the players, we can proceed to examine the
+implementation of PCLSRing in detail.  
+
+.sp
+When it becomes necessary to PCLSR some target process, we will find it in
+one of the five possible states described in the introduction to the
+Scheduler above.  Considering each state in turn, what needs to be done in
+order to get the target process into User mode as quickly as possible?
+
+.in 7
+
+.sp
+.un 5
+(1)~ If the process is stopped, it is already in User mode and nothing
+needs to be done.
+
+.sp
+.un 5
+(2)~ If the process is blocked in Exec mode, then we must force it back to
+the start of whatever system call brought it into Exec mode.  First we
+clean up what the process was doing: the LSWPR user variable, described
+below, contains a linked list of cleanup actions that we perform.  Then we
+copy the saved User mode accumulators from UUOACS into AC0S, and we pick up
+the User mode return PC from SUUOH, decrement it so that the process will
+start the system call from the beginning, and put it in UPC.  Finally we
+clear the process's FLSINS.
+
+.sp
+.un 5
+(3)~ If the process is blocked in User mode, it must be waiting for a page
+to satisfy a page fault.  Fortunately, nothing is harmed if the process
+simply forgets this fact, because as soon as it starts running it will
+either immediately take the same fault again or the page will have arrived
+in the interim.  So in this case we simply clear the process's FLSINS.
+
+.sp
+.un 5
+(4)~ If the process is running in Exec mode, we know that it cannot remain
+in this state for long.  If it is not able to quickly finish its task and
+return to User mode, this can only be because it is about to become
+blocked.  Rather than bother it immediately, we set a flag (the SUEXIT user
+variable) that tells the process that it should PCLSR itself either the
+next time it tries to block or when it tries to return to User mode.
+
+.sp
+.un 5
+(5)~ If the process is running in User mode, nothing needs to be done.
+
+.in 0
+
+.sp
+The decision made in case 4 has some important corollaries.  First, it
+means that when a PCLSR is requested, the requester cannot be assured of
+immediate success.  Second, it means that a process can run in Exec mode
+without risk of being PCLSRed, provided it doesn't do anything that might
+cause it to become blocked.  
+
+.sp
+In the sections that follow we explore the consequences of the algorithm
+given above.  The algorithm itself is available as a routine named "PCLSR".
+
+.c subsection
+.sp 2
+.block 5
+5.1~ Rules for System Calls
+
+.sp
+PCLSRing cannot work unless all system calls are written with attention to
+the fact that they might be PCLSRed.  This isn't all that great of a burden
+once the rules of the game are explained.
+
+.sp
+The most obvious rule is that a system call is free to do anything it likes
+if it disables clock level interrupts before it starts, and cleans up after
+itself before reenabling them.  This may seem a rather heavy-handed
+technique, especially given the subtlety of some of the other techniques
+discussed here, but for critical operations no more than a few instructions
+in duration it's hard to imagine anything quicker or more effective.  
+
+.sp
+(The basic PCLSRing routines are themselves built on the ability to
+temporarily turn off clock level interrupts; if ITS were ever converted to
+run with multiple processors, it would be necessary to rework this code.
+PCLSRing would be just as useful on a multiprocessor ITS, but the substrate
+upon which it is built would have to change.)
+
+.sp
+System calls may also rely on the fact that they cannot be PCLSRed unless
+they attempt an operation that might cause them to become blocked.  A
+process can mess around with its own state as much as it likes and no other
+process will be able to see what it is doing, as long as it is careful not
+to block.  If another process wants to examine this one, it must first
+PCLSR it, but as long as this process remains running in Exec mode, the
+PCLSRing algorithm given above guarantees that it will continue to run, and
+the other process will have to wait.
+
+.sp
+This guarantee is only useful if a system call can easily tell when it runs
+the risk of going blocked.  Fortunately there are only two things that a
+process can do to become blocked in Exec mode.  First, it can explicitly
+ask to go blocked, directly supplying the Scheduler with the instruction
+for its FLSINS user variable.  Second, it can take a page fault referencing
+a page in User address space, an action that requires the use of a special
+instruction.  A third possibility, taking a page fault referencing a page
+in Exec address space -- perhaps doing something as innocuous as fetching
+the next instruction -- cannot occur.  This is because, as was pointed out
+above, pages in Exec address space are never swapped out.
+
+.sp
+One additional guarantee is made concerning references to pages in a
+process's own User address space.  System calls can be certain that any
+page successfully referenced will remain swapped in for the duration of the
+execution of the system call.  (More on how this is accomplished later.)  A
+system call can thus be certain that a reference to a given User address
+will not cause the process to block, and therefore risk PCLSRing, if it has
+previously referenced that address.
+
+.sp
+Some system calls take advantage of this guarantee by touching some
+selected User addresses at the beginning of their execution, thus insuring
+that they can modify the contents of those addresses later without fear of
+being PCLSRed at an awkward moment.  For example, the SIOT system call
+starts by touching the locations that contain its byte pointer and byte
+count arguments.  It can then proceed, secure in the knowledge that those
+locations are swapped in (as well as writable!).
+
+.sp
+Most system calls cannot completely avoid the possibility of going blocked.
+Given the PCLSRing algorithm, every point where the execution of a system
+call might block is also a point where that execution might be terminated.
+In order to allow system calls to prepare themselves for this possibility,
+each process's LSWPR user variable contains a list of actions that must be
+performed in order to clean up if it is PCLSRed.  LSWPR is usually
+maintained as a stack, with various system subroutines pushing and popping
+entries as needed.  The most common cleanup handler calls for the release
+of a lock that the process holds, but it is possible for a system call to
+supply an arbitrary routine.  (There are some restrictions on what such a
+routine can do, given the delicacy of the situations in which it will be
+invoked.)
+
+.sp
+System calls also prepare themselves for possible PCLSRing by updating the
+locations in User memory that contained their original arguments to reflect
+whatever work they have accomplished thus far.  This insures that if the
+call is PCLSRed and restarted, it will take up where it left off.  We have
+already seen how users are made aware of this aspect of PCLSRing.
+
+.sp
+The need to update locations in User memory in order to properly prepare
+for possible PCLSRing is the reason why ITS does not swap out User pages
+during the execution of a system call.  If it did, then the very attempt to
+update arguments before possibly blocking might itself cause the process to
+block due to a page fault.  If the process were to be PCLSRed at that
+point, there would be no record of what the system call had already
+accomplished, since the arguments would remain unmodified.
+
+.sp
+PCLSRing has consequences that go beyond simply supplying a few cleanup
+handlers to protect system calls where they might block.  Consider the
+case of a system call that must read some data from the disk.  After it
+makes its request of the disk system, it will want to block waiting for the
+disk interrupt level to complete the transfer.  If the executing process is
+PCLSRed at that point, then when the disk interrupt level finishes, there
+won't be any process waiting for the answer.  
+
+.sp
+The process may come back later looking for the same information, so the
+interrupt level does not want to discard the data that it just read.  On
+the other hand, the process may never come back, so something must make
+certain to eventually reclaim the space occupied by the data.  The
+interface between the system call and interrupt level must be designed with
+these possibilities in mind.  In general, certain operations that in other
+operating systems could be performed directly by system calls must be
+performed by someone else, since any code in a system call beyond a point
+where the call might block may never get executed.
+
+.sp
+One final rule that system calls must observe in order for PCLSRing to
+work:  system calls may not run indefinitely without presenting
+opportunities to be PCLSRed.  For some system calls it is possible to
+supply arguments that require the call to loop.  Those system calls
+periodically check the SUEXIT user variable themselves to see if someone
+has requested a PCLSR, and if so, they submit to the request.
+
+.c subsection
+.sp 2
+.block 5
+5.2~ Delivering Software Interrupts
+
+.sp
+It is the Scheduler's job to deliver software interrupts to a process when
+its PIRQC or IFPIR user variable is non-zero.  The first step of delivering
+such interrupts is to PCLSR the process so that its interrupt handler will
+see a User mode PC.
+
+.sp
+The Scheduler discovers pending software interrupts when it is examining a
+process to determine if it should actually be run.  If a process is not
+stopped (i.e., if its USTP is zero) and if it has pending interrupts, then
+the Scheduler will immediately try to PCLSR the process.
+
+.sp
+If the PCLSR attempt fails, then the process must be running in Exec mode.
+In this case, the Scheduler just treats the process as it would any other
+runnable process.  Since the process's SUEXIT now indicates that the
+process needs to be PCLSRed, the next time the process tries to go blocked,
+or return to User mode, it will PCLSR itself and return to the Scheduler.
+The Scheduler will then be able to deliver the interrupt.
+
+.sp
+If the PCLSR attempt succeeds, then the process has been forced back to
+User mode.  The Scheduler then proceeds to manipulate the process to put it
+into its interrupt handler.  The subsequent steps of this procedure (while
+quite interesting!) are beyond the scope of this paper.
+
+.c subsection
+.sp 2
+.block 5
+5.3~ When One Process Wants to PCLSR Another
+
+.sp
+The most interesting case of PCLSRing occurs when one process wants to
+PCLSR another process, as in the example of the DTTY system call given
+above.  In this case the PCLSRing process will want to PCLSR its target and
+immediately stop it by incrementing the target's USTP.  This common
+operation is done by calling a routine named "RPCLSR", so we often
+speak of one process RPCLSRing ("ar-pee-see-loo-zer-ing") another.
+
+.sp
+The difficulties with RPCLSRing all stem from the possibility that the
+target process might be running in Exec mode, and thus will be unable to be
+PCLSRed immediately.  In this case the perpetrating process will have to go
+blocked (!) waiting for the target to notice the PCLSR attempt.
+
+.sp
+As we are about to discover, this situation is more delicate than blocking
+ordinarily is.  Later, when the target PCLSRs itself, it will need to be
+able to find the perpetrator.  Thus we introduce the RPCL user variable to
+keep track of this situation when it occurs.  When a process fails to
+immediately RPCLSR its target, it will store the address of the target
+process in its own RPCL, and its own address in the target's RPCL.  The
+left half of RPCL is used as a flag to record which process is the target
+and which process the perpetrator.
+
+.sp
+The algorithm for RPCLSRing is as follows:
+
+.sp
+First, try to PCLSR the target process.  If this succeeds, then immediately
+increment the target's USTP and return.  Clock level interrupts are turned
+off during this procedure to prevent the target from getting a chance to
+run after it is PCLSRed, but before it is stopped.
+
+.sp
+If the PCLSR attempt fails, the target's SUEXIT has been set to indicate a
+PCLSR attempt in progress.  The perpetrator should now set up the
+appropriate pointers in both its own and the target's RPCL user variables,
+but two rare cases must be considered first:
+
+.in 7
+
+.sp
+.un 5
+(1)~ The perpetrator might discover that its own RPCL indicates that it
+itself is the target of an RPCLSR by some third process.  In this case the
+perpetrator immediately submits to the third party.  Since the target's
+RPCL is unmodified, but its SUEXIT has been set, it will uselessly PCLSR
+itself at some point in the future and then continue to run.  These useless
+PCLSRs are not a problem because this case rarely happens, and a few extra
+PCLSRs are harmless.
+
+.sp
+.un 5
+(2)~ The perpetrator might discover that the target's RPCL indicates that
+some third process is already trying to RPCLSR the target.  In this case
+the perpetrator simply blocks waiting for the target's RPCL to be cleared,
+and then starts the RPCLSR attempt again from the beginning.  
+
+.sp
+(It is possible that after the Scheduler sees that the target's RPCL is
+clear and unblocks the perpetrator, but before the perpetrator gets a
+chance to run, the target will start up and get back into Exec mode and
+become the target of yet another third-party RPCLSR attempt.  A process
+might therefore starve forever waiting for its chance to RPCLSR someone,
+even though all other processes are making progress.  This is not a problem
+in practice because it is extraordinarily unlikely.  It may be more likely
+to snow in the machine room than it is for a process to starve in this way
+for a noticeable amount of time.)
+
+.in 0
+
+.sp
+If neither of these cases occurs, the perpetrator sets up the two RPCL user
+variables and blocks.  Since the act of going blocked runs the risk of
+being PCLSRed, something must be done to clear out the RPCL pointers if the
+perpetrator is itself PCLSRed while it waits.  This could be done by using
+an appropriate cleanup handler pushed on the perpetrator's LSWPR, but
+instead, the PCLSR routine itself always checks the RPCL of any process it
+is applied to for the possibility that that process is RPCLSRing someone,
+and cleans up appropriately.
+
+.sp
+The final step in RPCLSRing occurs when the target tries to block or to
+return to User mode, and notices that its SUEXIT indicates that it should
+PCLSR itself, and that in addition its RPCL indicates that it is the target
+of an RPCLSR request.  The target must then PCLSR itself, clear the RPCLs of
+both itself and the perpetrator, increment its own USTP in order to stop
+itself, and clear the FLSINS of the perpetrator in order to unblock it.
+(And it must do all this with clock level interrupts turned off, to prevent
+a variety of timing errors.)
+
+.sp
+It is important to unblock the PCLSRing process instantly; otherwise it
+might be PCLSRed and the target's USTP would never get decremented.  This
+risk is eliminated by starting the perpetrator running in Exec mode where
+it can't be PCLSRed until after taking appropriate precautions.  In fact,
+the next thing many RPCLSRing processes do is add a cleanup handler to
+their LSWPR to decrement the target's USTP.  (Of course, if there is no
+danger of going blocked, the perpetrator can simply perform its task and
+decrement the target's USTP when it is done without bothering about cleanup
+handlers at all.)
+
+.c Was going to mention that RPCLSR target gets additional priority in the
+.c Scheduler...
+
+.c Could mention that there is no danger of deadlock, but people should be
+.c able to figure that out for themselves.
+
+.c subsection
+.sp 2
+.block 5
+5.4~ Swapping
+
+.sp
+Recall that ITS guarantees that no User mode pages will be swapped out
+during the execution of a system call.  This cannot be accomplished by
+simply granting blanket immunity to processes in Exec mode, because
+processes spend most of their time blocked in Exec mode (waiting for the
+next character from the terminal or whatever).  It is therefore necessary
+to resort to PCLSRing blocked processes in order to find pages to swap out
+to secondary storage.
+
+.sp
+Unfortunately, simply PCLSRing a process blocked in Exec mode backs it out
+of the system call and starts it running in User mode again, which causes
+it to immediately reexecute the call, and usually to return to the same
+blocked condition as before.  Thus if ITS were to immediately PCLSR a
+process every time it wanted to swap out some of its pages, that would at
+least cause a lot of unnecessary activity, and might even cause the process
+to swap pages back in that were just swapped out.
+
+.sp
+Instead, when ITS wants to swap out a page belonging to a process that
+is blocked in Exec mode, it simply sets a bit (named "%SWPCL") in the
+process's USWST user variable.  %SWPCL is checked by the Scheduler whenever
+it is about to unblock a process, and if it is set, the Scheduler will
+PCLSR the process instead.  The process is allowed to finish waiting for
+whatever it was waiting for, and only then is it PCLSRed.  This is just as
+effective at preventing the process from ever seeing its pages swapped out
+as immediately PCLSRing it would be.
+
+.sp
+(Actually, the swapping code will PCLSR a process immediately if it has any
+entries on its LSWPR.  Presumably the idea is to release any locks that the
+process is holding as soon as possible, so other processes can seize them
+and make progress.  Perhaps because of this, the swapping code tries to
+avoid swapping out pages that belong to processes with LSWPR entries.  The
+author is not prepared to judge these aspects of ITS's page swapping
+algorithm.)
+
+.sp
+Since processes that are running in Exec mode cannot be PCLSRed, and since
+they might depend on keeping any of their pages swapped in, those pages
+must be kept immune from being swapped out.  Fortunately, processes spend
+very little time actually running in Exec mode, so the number of pages
+locked down by this restriction is generally small.
+
+.c subsection
+.sp 2
+.block 5
+5.5~ PCLSR Test Mode
+
+.sp
+To debug ITS system calls, it is convenient to have a way to test
+their behavior when PCLSRed from various points in their execution.  PCLSR
+test mode allows the system call writer to choose a set of such test points
+by inserting calls to an assembler macro, named "PCLT", in the system call.
+Each call to PCLT is positioned immediately before a place where the call
+would block.  Then PCLSR test mode lets the system call writer run the
+system call until it reaches one of the test points.  There are three modes
+that control what happens each time the process being tested reaches one of
+the test points:
+
+.in 7
+
+.sp
+.un 5
+(1)~ In "hold" mode, the process PCLSRs itself and stops.  If the system
+call writer starts the process running again, it will run to the exact same
+test point and then PCLSR and stop again.  Thus the system call writer can
+test the same point over and over again.
+
+.sp
+.un 5
+(2)~ In "advance" mode, each time the system call writer starts the process
+it runs to the same test point as last time, and then sets a flag that
+causes the process to PCLSR and stop at the next test point, where and
+whenever that happens to occur.  Thus the system call writer can test all
+of the test points in succession in a particular path through a system
+call.
+
+.sp
+.un 5
+(3)~ "Advance but don't stop" mode is just like advance mode except that
+the process is not stopped each time it is PCLSRed, it just keeps running
+and thus immediately starts the system call over.  This lets the system
+call writer exercise a system call over and over, presumably waiting for
+some bug to happen.
+
+.in 0
+
+.sp
+The exact way in which PCLSR test mode decides that the call has reached
+"the same test point" is not simply a test of the PC.  This would not work
+very well because a particular test point might be in a subroutine that was
+called from several places.  In fact, PCLSR test mode crawls down the stack
+sniffing around for return addresses, in an attempt to discover the call
+chain that got to the current routine.  These return addresses are then
+hashed together.  It is the resulting hash that is used to compare test
+points.
+
+
+.c section
+.sp 3
+.block 5
+6.  Statistics
+
+.sp
+Many of the design decisions made in the ITS implementation of PCLSRing can
+only be justified by measuring the behavior of a running ITS.  Of primary
+interest are the frequencies at which the various events considered above
+occur.
+
+.c TK says that the original designers operated without benefit of any
+.c metering like this.  How nice that it all worked out for them!
+
+.sp
+The statistics below were collected on AI.AI.MIT.EDU, a KS-10, during
+December 1988 and January 1989.  AI.AI.MIT.EDU supports a moderately small
+user community; typically there are 3 or 4 users logged in, each with 3 or
+4 processes, plus a handful of system demons and network servers, for a
+total of between 15 and 20 processes.  There are rarely more than 40
+processes, and the system never runs up against its configured limit of 62
+processes.
+
+.sp
+How often do the various cases in the PCLSRing algorithm occur?  During a
+10 day period PCLSR was called once every 0.32 seconds.  35.9% of the time
+the target was in User mode already (stopped, blocked, or running).  60.3%
+of the time the target was blocked in Exec mode.  The remaining 3.8% of the
+time the target was running in Exec mode and could not be immediately
+PCLSRed.  This last case therefore happened once every 8.5 seconds.
+
+.sp
+The problem case of PCLSRing, where the target cannot be immediately forced
+into User mode, is observed to be a relatively rare occurrence.  A process
+that calls RPCLSR will only rarely have to block, and will even more rarely
+find a third party already blocked attempting to RPCLSR the same target.
+Also, at any given moment, only a few processes will be holding their pages
+locked in memory because they are running in Exec mode.
+
+.sp
+We might also wonder for what reasons PCLSR is called.  During a 32 hour
+period PCLSR was called once every 0.40 seconds.  The Scheduler called
+PCLSR in order to deliver a software interrupt once every 0.58 seconds,
+accounting for 69.0% of all calls to PCLSR.  A process called RPCLSR once
+every 1.44 seconds, accounting for 27.7% of all calls to PCLSR.  The page
+swapping code caused a process to be PCLSRed once every 11.77 seconds,
+accounting for the remaining 3.4% of all calls to PCLSR.
+
+.sp
+Given that PCLSR fails 3.8% of the time, we can estimate that the Scheduler
+failed to immediately deliver an interrupt (and ran the target process
+instead) once every 15 seconds.  We can also estimate that a process called
+RPCLSR and had to block once every 38 seconds.  Of course these events
+would have happened more frequently on an ITS supporting more processes;
+still, it is nice to have a feel for just how rare these events are.  It is
+also nice that the page swapping code was doing so little PCLSRing.  Of
+course an ITS with less physical memory, or running more memory intensive
+applications, would exhibit a higher percentage of PCLSRs for swapping.
+
+.sp
+Finally, we might wonder just how quickly a process that is PCLSRed while
+running in Exec mode normally reaches User mode.  During a 53 hour period
+PCLSR failed to immediately force a process into User mode 13381 times.  On
+7376 of these occasions the target process was already the subject of a
+PCLSR attempt.  (These occasions mostly represent duplicate attempts by the
+Scheduler to deliver an interrupt to a process that had been continuously
+running in Exec mode since the last time the Scheduler ran.)  Therefore on
+the remaining 6005 occasions the target was not the subject of a prior
+PCLSR attempt.  On these 6005 occasions a timer was started to measure the
+amount of time it took for the process to eventually reach User mode.
+
+.sp
+The resulting distribution of times has some very interesting features.
+The average time taken was 0.116 seconds, which is misleading because a
+minority of cases that took a very long time inflate the average.  Perhaps
+a more reasonable measure is the median:  50% of the time the process
+reached User mode in under 0.015 seconds.  80% of the time the process took
+less than 0.107 seconds (still less than the average).  90% of the time the
+process took less than 0.267 seconds.  The Scheduler allows a process 0.133
+seconds of runtime before the next schedule, so 82% of the time the target of
+a PCLSR attempt reached User mode before the next schedule.
+
+.sp
+The time measured was elapsed time, not per-process run time.  This makes
+little difference to the results because typically the target process was
+the only runnable process in the system, so no delay was introduced while
+some other process ran.  Occasionally, however, there was another runnable
+process, and as a result the distribution shows a small spike just after
+0.133 seconds, caused by PCLSRed processes that had to wait one turn, while
+another process ran, before they got their chance to quickly reach User
+mode.  An even smaller spike appears after 0.266 seconds.
+
+.c .sp
+.c .nofill
+.c Since reload:
+.c   Name     Count   #/sec   sec/#   Description
+.c NAUINT   1484755   1.720   0.581   User int attempt
+.c NPCLSR   2683731   3.110   0.321   PCLSR
+.c NEPCLS   1719604   1.993   0.501   Exec PCLSR
+.c NFPCLS    101041   0.117   8.538   Failed PCLSR
+.c    PCLSRing:  64.07% Exec, 5.87% failed (3.76% of total).
+.c 
+.c Last 117990 seconds:
+.c   Name     Count   #/sec   sec/#   Description
+.c            17920   0.152   6.584   Network PCLSR (6.036%)
+.c NINPCL    186838   1.583   0.631   Interrupt PCLSR (62.931%)
+.c           204758   1.735   0.576   Network + Interrupt PCLSR (68.967%)
+.c NAUINT    178784   1.515   0.659   User int attempt
+.c             8054                   Fatal ints + Failed Interrupt PCLSR
+.c             6982                   Expected Failed Interrupt PCLSR
+.c             1072   0.009 110.065   Estimated Fatal ints
+.c NSWPCL     10025   0.084  11.769   Swapout PCLSR (3.377%)
+.c NRPCLS     82110   0.695   1.436   RPCLSR (27.656%)
+.c NPCLSR    296893   2.516   0.397   PCLSR (100%)
+.c NEPCLS    188768   1.599   0.625   Exec PCLSR
+.c NFPCLS     11095   0.094  10.634   Failed PCLSR
+.c    PCLSRing:  63.58% Exec, 5.87% failed (3.73% of total).
+.c .fill
+
+
+.c .c section
+.c .sp 3
+.c .block 5
+.c 0.  The Future of PCLSRing
+.c 
+.c .sp
+.c Is PCLSRing still a useful concept twenty years later?  It would be easy to
+.c conclude that PCLSRing depends on features that are peculiar to small
+.c assembly-language oriented operating systems.  But the basic PCLSRing
+.c modularity principle, that a process can never catch another process with
+.c its pants down, is general enough to be applied in many different
+.c environments:
+.c 
+.c .sp
+.c In many modern operating systems the interface between the user's code and
+.c the operating system is not reflected in a User/Exec mode distinction
+.c supported directly by the hardware.  When the user requests some service of
+.c the operating system he just calls a procedure, using the same interface he
+.c would use to call a subroutine of his own program or to call a utility
+.c written by a colleague.  The clear boundary drawn between User and Exec
+.c mode on the PDP-10 is absent.  It is unclear which subroutines are properly
+.c thought of as part of the operating system.  Is the window system part of
+.c the operating system, or a utility built on top of the operating system?
+.c How about the storage manager that the window system uses?  
+.c 
+.c .sp
+.c In order to successfully
+.c introduce PCLSRing into such an environment it would be necessary
+.c 
+.c Unfortunately, this discussion rapidly gets out of hand.  I could
+.c write another whole paper just about PCLSRing in a modern operating
+.c system... 
+.c 
+.c Also need to say:
+.c  - How PCLSRing changes if you have better tasking.
+.c  - What to do about paging Exec mode code.
+.c  - The "domain" generalization (mention Multics? Amber??).
+
+
+.c section
+.sp 3
+.block 5
+7.  Conclusion
+
+.sp
+The PCLSRing modularity principle is simple:  a process should never catch
+another process with its pants down.  PCLSRing gives a process a clean way
+to access the state of another process.
+
+.sp
+In this paper I have explained the benefits of this principle for both
+users and system programmers, and I have explained how the ITS operating
+system goes about supporting it.  I described the implementation in some
+detail, and also provided some performance metering, in order to
+demonstrate that the costs of applying the principle are acceptable.
+
+.sp
+I would like to believe that some reader of this paper will be inspired to
+try bringing the benefits of PCLSRing to some younger operating system.
+
+
+.c section
+.sp 3
+.block 5
+8.  Acknowledgments
+
+.sp
+I am grateful to the early ITS developers who originally designed,
+implemented, and debugged the ideas presented here:  Donald Eastlake, Jerry
+Freiberg, Richard Greenblatt, Jack Holloway, Tom Knight, George Mitchel,
+Stewart Nelson, Jeff Rubin, and Frederick Wright.
+
+.sp
+Dave Moon and Tom Knight provided many useful comments on early drafts of
+this paper and helped me debug my understanding of PCLSRing.  Joe Dempster,
+Ian Horswill, Richard Greenblatt, Leigh Klotz, Chris Maeda, Jerry Roylance,
+Mark Shirley, and Guy Steele also provided valuable feedback.  It was Joe
+Dempster who convinced me that something about ITS should be recorded for
+posterity.  Pandora Berman sometimes helped me find the right words.
+Erasmus helped too.
+
+
+.c appendix
+.sp 4
+.block 5
+Appendix:  User Variable Dictionary
+
+.in 8
+
+.sp
+.block 6
+.un 8
+AC0S
+.br
+When a process is not actually running, the Scheduler stores the contents
+of its accumulators in this block of sixteen words.  This might be the User
+mode or the Exec mode accumulators, depending on what the process was doing
+when the Scheduler took the processor away from it.  See also UPC.
+
+.sp
+.block 6
+.un 8
+FLSINS
+.br
+If this variable is non-zero, the process is blocked, and the contents are
+an instruction the Scheduler can execute to determine if the awaited
+condition has come to pass.  The instruction should skip if the process no
+longer needs to wait.  See also USTP.
+
+.sp
+.block 7
+.un 8
+LSWPR
+.br
+This variable addresses a linked list of actions that must be taken in
+order to clean up properly if this process is PCLSRed.  Common cleanup
+actions are releasing locks held by this process and decrementing counters
+incremented by this process.  An important instance of such a cleanup
+action is ensuring that the USTP variable of another process is properly
+decremented.
+
+.sp
+.block 5
+.un 8
+PIRQC
+.un 8
+IFPIR
+.br
+These two variables contain bits that indicate pending software interrupts.
+
+.sp
+.block 7
+.un 8
+RPCL
+.br
+This variable is used to keep track of which processes are trying to RPCLSR
+which other processes.  If process A is trying to RPCLSR process B, then
+process A's RPCL will contain the address of process B in its right half
+and zero in its left half.  Process B's RPCL will contain the address of
+process A in its right half and minus one in its left half.
+
+.sp
+.block 8
+.un 8
+SUEXIT
+.br
+If the process is currently executing a system call in Exec mode, this
+variable contains the instruction that will be used to return to User mode
+-- usually an instruction that restores the PC from this process's SUUOH.
+If there is an attempt in progress to PCLSR this process, this variable
+will instead contain a jump to a special routine.  This variable could
+actually be replaced with a flag that just indicates a pending PCLSR
+attempt.
+
+.sp
+.block 5
+.un 8
+SUUOH
+.br
+If the process is currently executing a system call in Exec mode, this
+variable contains the User mode PC that will be returned to when the call
+completes.  See also UUOACS.
+
+.sp
+.block 5
+.un 8
+UNAME
+.un 8
+JNAME
+.br
+These two variables contain the two SIXBIT names of the process.  These
+variables actually have nothing to do with PCLSRing; they are here to
+serve as examples of "typical" variables.
+
+.sp
+.block 5
+.un 8
+UPC
+.br
+When a process is not actually running, this is where the Scheduler stores
+its PC.  This might be a User mode or an Exec mode PC, depending on what the
+process was doing when the Scheduler took the processor away from it.  See
+also AC0S.
+
+.sp
+.block 6
+.un 8
+USTP
+.br
+If this variable is non-zero, the process is stopped.  The left half
+contains various bits corresponding to specific reasons why the process
+should not run.  The right half contains a count of the number of other
+processes that are keeping this process from running.  See also FLSINS.
+
+.sp
+.block 7
+.un 8
+USWST
+.br
+.c Mention %SWPGW, %SWINT?
+This variable contains various bits controlling page swapping.  Only one of
+these bits, %SWPCL, concerns us in this paper.  %SWPCL is set if any of
+this process's pages were swapped out while it was blocked in Exec mode.
+When the process becomes runnable again, the Scheduler will see this bit
+and PCLSR the process instead of letting it continue in Exec mode.
+
+.sp
+.block 6
+.un 8
+UUOACS
+.br
+While a process is executing a system call in Exec mode, its User mode
+accumulators are stored in this block of sixteen words.  (On a KL or KS the
+User mode accumulators might instead be in a different hardware AC block,
+but we ignore that possibility in this paper.)  See also SUUOH.
+
+.in 0
+
+
+.end
+.page
+.nofill
+Outline:
+
+ Overview of PCLSRing.
+  What is it?
+   Atomic system calls.
+   Arguments updated in place.
+   Like BLT instruction (better!)
+  Why would you want it?
+   Good for users of ITS.
+    Interrupts.
+    Debugging.
+   Good for developers of ITS.
+    Example: .ATTY/.DTTY
+
+ Outline of the structure of ITS.
+  Processes (users? jobs?) and "user" variables.
+  User vs. Exec mode.  (Address spaces)
+  UUOs.
+  Scheduler.
+   States:
+    Stopped (in User mode)
+    Running in User mode
+    Running in Exec mode
+    Blocked in User mode (page wait)
+    Blocked in Exec mode (page wait or other)
+   PUSHJ P,UFLS
+
+ Details of supporting PCLSRing.
+  No, you don't PCLSR a process every time you schedule it!
+  All based on turning off interrupts...
+  All system calls are aware of PCLSRing issues.
+  You might get PCLSRed whenever you block. (And you know when you might
+      block, because Exec mode memory isn't swapped out!)
+  You mustn't loop in Exec mode without offering PCLSR opportunities
+  Must also check when leaving Exec mode.
+  Locks.  (Of course you don't need to add anything to LSWPR if you
+      aren't going to block!)  (TK says that originally you only had
+      the ability to clobber UEXIT.)
+  RPCLSRing.  (Typically followed by PUSHJ P,SOSSET)
+   (Note that RPCLSR itself might block!  What fun!)
+  Delivering an interrupt.
+  PCLSR if swapped out while blocked.  (Or beforehand if has locks.)
+  PCLSR test mode?
+.fill
+
+
+.c Local Modes:
+.c Compiler Filename:TJ6
+.c Paragraph Delimiter:.
+.c Italicize Prefix:
+.c Italicize Suffix:
+.c Comment Start:".c "
+.c Comment Begin:".c "
+.c End:
