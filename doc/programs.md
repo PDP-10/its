@@ -56,6 +56,7 @@
 - CRTSTY, provide display support for additional terminal types.
 - CTIMES, Chaosnet time server.
 - CTIMSR, Chaosnet time server.
+- CTN, networking "supdup" CRTSTY.
 - D, SUDS drawing program
 - DATE, print date and time.
 - DATSRV, server for RFC 867 Daytime protocol.

@@ -82,6 +82,16 @@ respond " BIN" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys3;ts crtsty,sysbin;crtsty bin\r"
 
+# CTN, networking "supdup" CRTSTY
+respond "*" ":midas /t sysbin;ctn bin_syseng; crtsty\r"
+respond "with ^C" "NET==1\r\003"
+expect ":KILL"
+respond "*" ":job ctn\r"
+respond "*" ":load sysbin; ctn bin\r"
+respond "*" "purify\033g"
+respond " BIN" "sys3; ts ctn\r"
+respond "*" ":kill\r"
+
 respond "*" ":midas /t sysbin;_sysen2;peek\r"
 peek_switches
 expect ":KILL"
