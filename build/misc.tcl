@@ -861,6 +861,17 @@ respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
 
+# WHOIML
+respond "*" ":midas sysbin;_sysen1; whoiml\r"
+respond "FILE:" "whoiml\r"
+respond "FILE:" "sys2\r"
+expect ":KILL"
+respond "*" ":job whoiml\r"
+respond "*" ":load sysbin; whoiml bin\r"
+respond "*" "start1\033b\033g"
+expect ">>"
+respond "   " ":kill\r"
+
 # VTTIME
 respond "*" ":midas sys1;ts vttime_rvb;vttime\r"
 expect ":KILL"
