@@ -22,7 +22,7 @@ type ":kill\r"
 respond "*" ":link quux;scheme interp, schint fasl\r"
 respond "*" ":link quux;scheme macros, schmac fasl\r"
 respond "*" ":link quux;scheme uuohan, schuuo fasl\r"
-respond "*" ":lisp scheme (dump)\r"
+respond "*" ":lisp quux;scheme (dump)\r"
 
 # Fails the build, disabled for now.
 if 0 {
