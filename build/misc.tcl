@@ -876,6 +876,10 @@ respond "   " ":kill\r"
 respond "*" ":midas sys1;ts vttime_rvb;vttime\r"
 expect ":KILL"
 
+# APLCLK
+respond "*" ":midas sys3;ts aplclk_music1; vtclk\r"
+expect ":KILL"
+
 # DEVICE; CHAOS TIME
 respond "*" ":midas device;chaos time_syseng;ctimsr\r"
 expect ":KILL"
