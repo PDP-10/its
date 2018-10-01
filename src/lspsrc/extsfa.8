@@ -1,0 +1,138 @@
+;;;   EXTSFA			 	  		  -*-LISP-*-
+;;;   ***************************************************************
+;;;   *** MACLISP ********** EXTEND/SFA Interface *******************
+;;;   ***************************************************************
+;;;   ** (C) COPYRIGHT 1981 MASSACHUSETTS INSTITUTE OF TECHNOLOGY ***
+;;;   ****** THIS IS A READ-ONLY FILE! (ALL WRITES REVERSED) ********
+;;;   ***************************************************************
+
+(herald EXTSFA /8)
+
+(include ((lisp) subload lsp))
+
+(eval-when (eval compile)
+  (subload UMLMAC)
+ )
+
+
+(declare (special MACLISP-PRIMITIVE-CLASS)
+	 (defprop SFA-UNCLAIMED-MESSAGE T SKIP-WARNING))
+
+
+
+;; Call this routine to handle an SFA not understanding the message it was
+;; sent.  It will send back the apropriate message if the message was the
+;; result of a SEND.  It will interface to the CLASS heirarchy to find methods
+;; in superclasses, if SEND-AS is defined.  WHICH-OPERATIONS is hacked to
+;; do the right thing where possible, when (SEND sfa 'WHICH-OPERATIONS) is
+;; done.  And if nothing else works, an error is reported.
+
+(defun SFA-UNCLAIMED-MESSAGE (sfa operation data)
+  (caseq operation
+    (:SEND
+     (desetq (operation . data) data)
+     (cond ((memq operation (sfa-call sfa 'si:which-operations-internal ()))
+	    (sfa-call sfa operation (car data)))
+	   ;; Catch (SEND sfa 'WHICH-OPERATIONS) and extract the info
+	   ((eq operation 'which-operations)
+	    (if (fboundp 'send-as)
+		(append (sfa-call sfa operation ())
+			(delete 'PRINT	;Old meaning is :PRINT-SELF
+				(send-as MACLISP-PRIMITIVE-CLASS sfa
+					 'WHICH-OPERATIONS)))
+		(sfa-call sfa operation () )))
+	   ('T (si:sfa-unclaimed-message-1 sfa operation data))))
+    (SI:WHICH-OPERATIONS-INTERNAL	;Provide a default in case hand-coded
+     (sfa-call sfa 'WHICH-OPERATIONS () ))
+    (T (si:sfa-unclaimed-message-1 sfa operation (ncons data)))))
+
+;; A helper for the above.  Invoke superior if we have the class heirarchy,
+;; else, report an error.
+
+(defun SI:SFA-UNCLAIMED-MESSAGE-1 (sfa operation data)
+  (if (fboundp 'send-as) (lexpr-send-as maclisp-primitive-class
+					sfa operation data)
+      (ferror ':UNCLAIMED-MESSAGE
+	      "The message ~S went unclaimed by ~S.  Args:  ~S"
+	      operation sfa data)))
+
+
+;; Worker for CONS-A-mumble constructors for SFA's.  Lives on the MACRO
+;; property.    Returns the apropriate code.  Gets the name of the SFA from the
+;; PLIST of the macro name, and gets the rest of the info from that symbol.
+
+(defun SI:DEFSFA-CREATOR ((creator . argl))
+  (let* ((name (get creator 'defsfa-name))		;Name of SFA
+	 (argl (cons name argl))			;PLIST so GET will work
+	 (handler (get name 'defsfa-handler))		;Functional handler
+	 (initp (get name 'defsfa-initp))		;Whether to do :INIT
+	 (size (get name 'defsfa-size))			;# of slots to allocate
+	 (sfa-name (or (get argl ':PNAME)		;How to print it
+		       `(GENTEMP ',name))))
+    (remprop argl ':PNAME)		;Hacked here, not in SI:DEFSFA-INITS
+    (if (or initp argl)
+	(let ((temp (si:gen-local-var () "NEW-SFA")))
+	  `(LET ((,temp (SFA-CREATE ',handler ,size ,sfa-name)))
+	     (SFA-CALL ,temp ':INIT (LIST ,@(si:defsfa-inits name (cdr argl))))
+	     ,temp))
+	`(SFA-CREATE ',handler ,size ,sfa-name))))
+
+
+
+;; Take each init spec, and add in the defaults, and return a list of
+;; alternating quoted keywords and forms to EVAL for values.
+
+(defun SI:DEFSFA-INITS (name argl &aux initl
+			     (name-inits (get name 'defsfa-inits)))
+  (do ((ll argl (cddr ll))
+       (res () `(,(cadr ll) ',(car ll) ,. res)))
+      ((null ll) (setq initl res))
+    (if (or (memq (car ll) name-inits) (assq (car ll) name-inits))
+	(setq name-inits (si:defsfa-remassq (car ll) name-inits))))
+  (do ((ll name-inits (cdr ll)))
+      ((null ll) (setq initl (nreverse initl)))
+    (when (pairp (car ll))
+	  (push `',(caar ll) initl)
+	  (push (cadr (car ll)) initl)))
+  initl)
+
+;; Flush all A's and (A ...)'s in '(A ... (A ...) ..)
+;; I.e. remove all defaulted or undefaulted references to the slot A from
+;; the list.
+(defun SI:DEFSFA-REMASSQ (item list)
+  (if list
+      (if (or (eq item (car list))
+	      (and (not (atom (car list)))
+		   (eq item (caar list))))
+	  (si:defsfa-remassq item (cdr list))
+	  (cons (car list)
+		(si:defsfa-remassq item (cdr list))))))
+
+;; Return the code for accessing the slot, given a macro-call.
+;; Lives on the MACRO property of accessors
+(defun SI:DEFSFA-ACCESSOR ((name sfa))
+  `(sfa-get ,sfa ,(get name 'defsfa-idx)))
+
+;; Store the initializations given a list of keywords and values to store
+;; there.  DOES NOT EVAL.
+
+(defun SI:INIT-SFA (sfa name data)
+  (setq data (cons name data))
+  (do ((ll (get name 'defsfa-inits) (cdr ll))
+       (idx 0 (1+ idx))
+       (item))
+      ((null ll) sfa)
+    (if (atom (car ll))
+	(setq item (get data (car ll)))
+	(setq item (get data (caar ll))))
+    (sfa-store sfa idx item)))
+
+
+
+
+(def-or-autoloadable GENTEMP MACAID)
+(def-or-autoloadable SI:GEN-LOCAL-VAR MACAID)
+(def-or-autoloadable SEND-AS EXTEND)
+(def-or-autoloadable LEXPR-SEND EXTEND)
+(def-or-autoloadable LEXPR-SEND-AS EXTEND)
+
