@@ -1,0 +1,835 @@
+;;;  DEFMAC  			-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;  *****************************************************************
+;;;  ***** NIL ******** DEFUN& and DEFMACRO **************************
+;;;  *****************************************************************
+;;;  ** (c) Copyright 1981 Massachusetts Institute of Technology *****
+;;;  *****************************************************************
+
+(herald DEFMACRO /166)
+
+#-NIL (include ((lisp) subload lsp))
+
+#-NIL (eval-when (eval compile)
+	(subload SHARPCONDITIONALS)
+	)
+
+#-NIL 
+(eval-when (eval load compile)
+	   (subload DEFMAX)
+	   (subload MACAID)
+	   (subload CNVD)
+)
+
+#+(or LISPM (and NIL (not MacLISP)))
+  (progn (globalize  "DEFUN&")
+	 (globalize "DEFUN&-CHECK-ARGS")
+	 (globalize "DEFMACRO")
+	 (globalize "DEFMACRO-DISPLACE")
+	 (globalize "LET")
+	 (globalize "LET*")
+	 (globalize "DESETQ"))
+
+
+;; This OWN-SYMBOL declaration is here so that it is easy to change
+;; the number of arguments; also prevents the spurious error messages.
+#+(local MacLISP)
+  (declare 
+    (own-symbol DEFUN& |defmacro-1/|| |&r-l/|| DEFMACRO DEFMACRO-DISPLACE)
+    (defprop  MACRO T 'SKIP-WARNING)
+    (*expr STRINGP))
+
+
+#M (progn 'compile 
+
+(defvar |&r-l/|| 'LISTIFY 
+  "Default meaning for &REST") 
+(defvar |&restv-ify/|| () 
+  "How to make rest vector.")
+(defvar SI:SELF-BIND-CONS () 
+  "Communicates information to function about need to use BOUNDP")
+
+(declare (mapex 'T)
+	 (*expr  SI:SELF-BIND-CONS  |&r-l/|| ))
+)
+
+
+(defvar DEFUN&-CHECK-ARGS () 
+  "Should DEFUN& output code to check number of args?")
+
+(DECLARE (*EXPR DEFUN&-ERROR) 
+	 (SPECIAL DEFUN&-ERROR)
+	 (SPECIAL BAD-VARS BOUND-VARS ALL-LOCALS SUPPLIEDP-VARS 
+		  |&complrp/|| |&specvars/||))
+
+(declare (special DEFMACRO-DISPLACE-CALL 	;User-settable switches.
+		  DEFMACRO-FOR-COMPILING 
+		  MACRO-EXPANSION-USE 
+		  GRIND-MACROEXPANDED ))
+
+(declare (*expr MACROMEMO MACROFETCH |forget-macromemos/|| FLUSH-MACROMEMOS)
+	 (special MACROMEMO MACROEXPANDED 
+		  FLUSH-MACROMEMOS DEFMAX-COUNTER-VARIABLES))
+
+
+
+
+(defun (DEFUNP macro) (X) (DEFUN&-aux/| x 'T)) 
+(defun (DEFUN& macro) (X) (DEFUN&-aux/| x () )) 
+
+
+(DEFUN |def-decl-comment?/|| (BODY FORM)
+    "Process a DEFUN/DEFMACRO body for initial documentation strings 
+     and/or local DECLAREs."
+   (LET (USERCOMMENT? DECLARE?)
+     (OR (PAIRP BODY) (ERROR '|Bad code-body for definition| FORM))
+     (AND (PAIRP (CAR BODY)) 
+	  (EQ (CAAR BODY) 'DECLARE)
+	  (POP BODY DECLARE?))
+     (AND  #+(or LISPM (and NIL (not MACLISP)))
+	  (STRINGP (CAR BODY))
+	   #-(or LISPM (and NIL (not MACLISP)))
+	  (COND ((OR (NULL (CAR BODY)) (PAIRP (CAR BODY)))
+		  () )
+		((SYMBOLP (CAR BODY)) 
+		  (GET (CAR BODY) '+INTERNAL-STRING-MARKER))
+		((AND (GET 'STRINGP 'SUBR) (STRINGP (CAR BODY)))))
+	  (POP BODY USERCOMMENT?))
+     (AND (PAIRP (CAR BODY)) 
+	  (EQ (CAAR BODY) 'DECLARE)
+	  (POP BODY DECLARE?))
+     (VALUES BODY 
+	     (IF DECLARE? (LIST DECLARE?)) 
+	     (IF USERCOMMENT? (LIST USERCOMMENT?)))))
+
+
+(defun |&kwp/|| (varlist more)
+   "Look for a keyword -- the &rest variety are assumed"
+  (do ((l varlist (cdr l))
+       (word))
+      ((null l) () )
+    (setq word (car l))
+    (if (or (memq word '(&REST &RESTL &RESTV))
+	    (memq word more))
+	(return l))))
+
+
+;;;; DEFUN& for non-MacLISP
+
+
+#-MacLISP (progn 'compile 
+
+(DEFUN DEFUN&-aux/| (X DEFUNPP)
+   (PROG (NAME VARLIST BODY DEFUN&-ERROR DECLS KEYWORDP LETLIST 
+	    ALLFLATS INSETQS BOUND-VARS BAD-VARS ALL-LOCALS KEYWORDS 
+	    IVARLIST VARL TMPVAR LAMVAR TEM SUPPLIEDP-VAR USERCOMMENT?)
+	 (DECLARE (SPECIAL ALL-LOCALS BOUND-VARS BAD-VARS))
+	 (SETQ X (CDR X) NAME (CAR X) IVARLIST (SETQ DEFUN&-ERROR (CADR X))
+	       BODY (CDDR X))
+	 (AND (NOT (ATOM NAME)) (SETQ NAME (CAR NAME)))			
+	 (COND ((EQ IVARLIST 'EXPR) 
+		(SETQ IVARLIST (CAR BODY) BODY (CDR BODY)))
+	       ((MEMQ IVARLIST '(MACRO FEXPR)) 
+		(ERROR '|Can't DEFUN& for FEXPR or MACRO| (CONS 'DEFUN X)))
+	       ((AND IVARLIST (OR (ATOM IVARLIST) (CDR (LAST IVARLIST))))
+		(DEFUN&-ERROR)))
+	 (MULTIPLE-VALUE (BODY DECLS USERCOMMENT?) 
+			 (|def-decl-comment?/|| BODY X))
+	 (COND 
+	  ((NOT DEFUNPP)
+	   (DO VARL IVARLIST (CDR VARL) (NULL VARL)
+	      (COND ((ATOM (CAR VARL))
+		     (OR (SYMBOLP (CAR VARL)) (DEFUN&-ERROR))
+		     (COND ((MEMQ (CAR VARL) 
+				  '(&AUX &OPTIONAL &REST &RESTL &RESTV))
+			    (SETQ KEYWORDP (CAR VARL)) 
+			    (AND (COND ((MEMQ KEYWORDP KEYWORDS))
+				       ((EQ KEYWORDP '&OPTIONAL)
+					(PUSH '&OPTIONAL KEYWORDS)
+					(|&kwp/|| KEYWORDS '(&AUX &OPTIONAL)))
+				       ((MEMQ KEYWORDP '(&REST &RESTL &RESTV))
+					(PUSH '&REST KEYWORDS)
+					(|&kwp/|| KEYWORDS () ))
+				       ('T (PUSH '&AUX KEYWORDS) ))
+				 (DEFUN&-ERROR)))
+			   ('T (PUSH (CAR VARL) BAD-VARS)))
+		     (COND ((EQ KEYWORDP '&AUX)
+			    (AND (NOT (EQ (CAR VARL) '&AUX)) 
+				 (PUSH (CAR VARL) LETLIST)))
+			   ('T (PUSH (CAR VARL) VARLIST))))
+		    ((NOT KEYWORDP)
+		      ;case of required argument with destructuring
+		     (SETQ BAD-VARS (FLATTEN-SYMS (CAR VARL) BAD-VARS))
+		     (si:gen-local-var TMPVAR "Reqd-Var")
+		     (PUSH `(,(car varl) ,tmpvar) LETLIST)
+		     (PUSH TMPVAR VARLIST))
+		    ('T (SETQ TMPVAR  
+			      (COND 
+			        ((ATOM (CAAR VARL))
+				 (OR (SYMBOLP (SETQ TMPVAR (CAAR VARL)))
+				     (DEFUN&-ERROR))
+				 (PUSH (SETQ LAMVAR (CAAR VARL)) BAD-VARS)
+				 () ) 
+				('T (SETQ BAD-VARS (FLATTEN-SYMS (CAAR VARL) 
+								 BAD-VARS))
+				    (si:gen-local-var LAMVAR "&var"))))
+			(COND ((AND (CDAR VARL)
+				    (NOT (EQ (CADAR VARL) LAMVAR))
+				    (NOT (|Certify-no-var-dependency/|| (CADAR VARL))))
+			       (SETQ ALLFLATS (FLATTEN-SYMS (CAAR VARL) ALLFLATS))
+			       (SETQ TEM `(DESETQ ,(caar varl) 
+						  ,(or tmpvar (cadar varl))))
+			       (COND ((SETQ SUPPLIEDP-VAR (CADDAR VARL))
+				      (OR (SYMBOLP SUPPLIEDP-VAR) 
+					  (DEFUN&-ERROR)))
+				     ('T (si:gen-local-var SUPPLIEDP-VAR "Supplied-P")))
+			       (PUSH (COND ((EQ KEYWORDP '&OPTIONAL)
+					    `(OR ,suppliedp-var ,tem))
+					   (TEM))
+				     INSETQS)
+			       (OR (EQ KEYWORDP '&AUX)
+				   (PUSH `(,lamvar () ,suppliedp-var) VARLIST)))
+			      ((EQ KEYWORDP '&AUX) (PUSH (CAR VARL) LETLIST))
+			      ('T (AND TMPVAR 
+				       (PUSH `(,(caar varl) ,tmpvar) LETLIST))
+				  (PUSH `(,lamvar  ,. (cdar varl)) VARLIST))))))
+	   (DO ((L BAD-VARS (CDR L)))
+	       ((NULL L))
+	     (AND (CAR L) (MEMQ (CAR L) (CDR L)) (DEFUN&-ERROR)))
+	   (AND (OR LETLIST ALLFLATS INSETQS)
+		(SETQ BODY `((LET (,.(nreverse letlist) ,.allflats)
+				  ,.(nreverse insetqs)
+				  ,. body))))
+	   (push `(COMMENT ARGLIST = ,defun&-error) body)
+	   )
+	  ('T (SETQ BODY (REVERSE BODY))
+	      (SETQ BODY `((PROG () ,.(nreverse (cons `(RETURN ,(car body))
+						      (cdr body))))))))
+	 (SETQ BODY `(,.decls ,.usercomment? ,. body))
+	 (RETURN 
+	   (COND 
+	    (DEFUNPP `(DEFUN ,name ivarlist ,.body))
+	    (`(FSET ',name (FUNCTION (LAMBDA ,(nreverse varlist) ,.body))))))
+	  ))
+
+  )	;end of #-MacLISP
+
+
+;;;; DEFUN& for MacLISP
+
+#M (progn 'compile  
+
+;;; A loop for going down the VARLIST and consing up forms
+;;;   stops when the tail is at MORE
+;;; Requires some variables to be setup - MORE  ARGNO
+;;; Provides some variables for the body - VARL 
+;;; Increments ARGNO
+
+(defun si:MAP-VL macro (x)
+   `(DO ((VARL VARLIST (CDR VARL))
+	 (ANSL))
+	((EQ VARL MORE) ANSL)
+      (SETQ ARGNO (1+ ARGNO)
+	    ANSL  (NCONC ,(cadr x) ANSL))))
+
+
+(DEFUN DEFUN&-aux/| (X DEFUNPP)
+  (LET ((DCA DEFUN&-CHECK-ARGS) (MIN 0)  (MAX 262143.) (ARGNO 0)
+	 NAME-ARG VARLIST BODY DEFUN&-ERROR  SUPPLIEDP-VARS  |&restv-ify/|| 
+	 LEXPRVAR  ALLFLATS  ALLVARS  MORE  LETLIST  DECLS  INSETQS  
+	 USERCOMMENT?  TMP  IVARLIST)
+    (SETQ X (CDR X) NAME-ARG (CAR X) VARLIST (CADR X) BODY (CDDR X))
+    (COND ((EQ VARLIST 'EXPR) (POP BODY VARLIST))
+	  ((MEMQ VARLIST '(MACRO FEXPR)) 
+	   (ERROR "Can't DEFUN& for FEXPR or MACRO"
+		  `(DEFUN& ,name-arg ,varlist ,. body))))
+    (AND (SETQ DEFUN&-ERROR VARLIST) 		;null varlist is ok
+	 (OR (ATOM VARLIST) (CDR (LAST VARLIST)))
+	 (DEFUN&-ERROR))
+    (SETQ IVARLIST VARLIST)
+    (MULTIPLE-VALUE (BODY DECLS USERCOMMENT?)
+		    (|def-decl-comment?/|| BODY X))
+    (COND (DEFUNPP 
+	    (SETQ BODY (REVERSE BODY))
+	    (SETQ BODY `((PROG () ,.(nreverse (cons `(RETURN ,(car body))
+						    (cdr body)))))))
+	  ((let ((|&complrp/|| (status feature COMPLR))
+		 (|&specvars/|| (mapcan #'(lambda (x)				
+					    (and (not (atom x))
+						 (eq (car x) 'SPECIAL)
+						  ;; Forces open-coding of map
+						 (setq tmp (cdr x))
+						 (append tmp () )))
+					(cdar decls))))
+	     (declare (special |&specvars/|| |&complrp/||))
+	     (COND 
+	       ((AND (SETQ MORE (|&kwp/|| VARLIST '(&AUX &OPTIONAL)))
+		     (NOT (EQ (CAR MORE) '&AUX)))
+		 (si:gen-local-var LEXPRVAR "LexprVar")
+		  ;; Initialize letlist for getting the &required vars
+		 (SETQ LETLIST (si:MAP-VL (list `(,(car varl) (ARG ,argno))))
+		       MIN (LENGTH LETLIST)
+		       MAX (IF (|&kwp/|| MORE () ) 	;if any &REST?
+			       ()
+			       (+ MIN (- (LENGTH (CDR MORE))
+					 (LENGTH (MEMQ '&AUX (CDR MORE))))))
+		       VARLIST LEXPRVAR)
+		 (setq 
+		   letlist 
+		    (nreconc 
+		      letlist 
+		       (multiple-value-bind (l inisets)
+					(if (eq (pop more tmp) '&OPTIONAL) 
+					    (|&o-l/|| MORE ARGNO LEXPRVAR)
+					    (|&r-l/|| MORE ARGNO LEXPRVAR TMP))
+			  (if inisets (setq insetqs (nconc inisets insetqs)))
+			  l))))
+	       ('T (cond ((and more (eq (car more) '&AUX))
+			   (setq varlist (but-tail varlist more))
+			   (multiple-value (letlist insetqs) 
+					   (|&a-l/|| (cdr more)))))
+		   (SETQ MAX (SETQ MIN (LENGTH VARLIST)))
+		   (if (DO ((L VARLIST (CDR L)))
+			   ((NULL L)) 
+			 (AND (CAR L) (NOT (SYMBOLP (CAR L))) (RETURN 'T)))
+		       (SETQ VARLIST 
+			     (MAPCAR 
+			       #'(LAMBDA (VAR)
+				   (COND ((OR (NULL VAR) (SYMBOLP VAR))  VAR)
+					 ('T (si:gen-local-var TMP "Reqd-Var")
+					     (PUSH `(,var ,tmp) LETLIST)
+					     TMP)))
+			       VARLIST)))))
+	     (COND (SUPPLIEDP-VARS 
+		     (SETQ ALLFLATS (NCONC (MAPCAR #'CAR SUPPLIEDP-VARS)
+					   ALLFLATS))
+		     (SETQ BODY (NCONC (MAPCAR 
+					#'(LAMBDA (X) 
+					    `(AND (> ,lexprvar ,(1- (cdr x)))
+						  (SETQ ,(caar x) 'T)))
+					SUPPLIEDP-VARS)
+				       BODY)) ))
+	     (SETQ ALLVARS (FLATTEN-SYMS (MAPCAR #'CAR LETLIST)
+					 (IF LEXPRVAR 
+					     ALLFLATS 	 ;VARLIST is atomic?
+					     (FLATTEN-SYMS VARLIST ALLFLATS))))
+	     (DO ((L ALLVARS (CDR L)))
+		 ((NULL L))
+	       (AND (CAR L) (MEMQ (CAR L) (CDR L)) (DEFUN&-ERROR)))
+	     (if letlist 
+		 (let ((BOUND-VARS)
+		       (BAD-VARS ALLVARS)
+		       (ALL-LOCALS (si:all-locals? allvars))
+		       (insetqs-p) )
+		   (declare (special BAD-VARS BOUND-VARS ALL-LOCALS))
+		   (DO ((L LETLIST (CDR L)) (selfp () () ))
+		       ((NULL L))
+		       ;;Analyze variable dependencies in left-to-right 
+		       ;; view of default values for &optionals and &auxs
+		     (COND ((AND (CDAR L)
+				 (IF (ATOM (SETQ TMP (CADAR L)))
+				     (NOT (EQ TMP (CAAR L)))
+				     (NOT (setq selfp (EQ (CAR TMP) 'SI:SELF-BIND))))
+				 (COND (LEXPRVAR)  ;VARLIST is atomic?
+				       ((SYMBOLP TMP)
+					(NOT (MEMQ TMP VARLIST)))
+				       ('T))
+				 (NOT (|Certify-no-var-dependency/|| TMP)))
+			     (SETQ INSETQS-P 'T)
+			     (SETQ ALLFLATS (FLATTEN-SYMS (CAAR L) ALLFLATS))
+			     (PUSH `(DESETQ ,(caar l) ,(cadar l)) INSETQS)
+			     (RPLACA L () ))
+			   (selfp  (rplaca (cdar l) (macroexpand tmp)))))
+		   (AND INSETQS-P (SETQ LETLIST (DELQ () LETLIST)))))
+	     (COND ((OR ALLFLATS LETLIST)
+		    (SETQ BODY `((LET (,.letlist ,.allflats)
+				   ,.(nreverse insetqs)
+				   ,. body)))))
+	     (COND ((AND DCA LEXPRVAR (OR MAX (NOT (= 0 MIN))))
+		     ;;If wrong number of arguments, enter an error handler.
+		     ;;A form may be returned so eval it and return as
+		     ;; value of function.
+		    (LET ((MSG)
+			  (PREDICATE)
+			  (CHECKARGS `(LIST (CONS ',name-arg (LISTIFY ,lexprvar))
+					    ',defun&-error)))
+		      (COND 
+		        ((AND MAX (NOT (= 0 MIN)))
+			  (SETQ MSG `(COND ((> ,lexprvar ,max)
+					    '|Too many arguments supplied |)
+					   ('|Too few arguments supplied |)))
+			  (SETQ PREDICATE
+				(if (= MAX MIN)
+				    `(NOT (= ,lexprvar ,max))
+				    `(OR (< ,lexprvar ,min)
+					 (> ,lexprvar ,max)))))
+			(MAX
+			  (SETQ MSG ''|Too many arguments supplied |)
+			  (SETQ PREDICATE `(> ,lexprvar ,max)))
+			((NOT (= 0 MIN))
+			  (SETQ MSG ''|Too few arguments supplied |)
+			  (SETQ PREDICATE `(< ,lexprvar ,min))))
+		      (SETQ BODY
+			    `((COND (,predicate (EVAL (ERROR ,msg 
+							     ,checkargs 
+							     'WRNG-NO-ARGS)))
+				    ('T ,.body)))))))
+	     (PUSH `(COMMENT ARGLIST = ,defun&-error)  BODY))))
+    (SETQ BODY  `(DEFUN ,name-arg ,varlist
+			,.decls
+			,.usercomment? 
+			,.body))
+      ;;If DEFUN&-CHECK-ARGS is NIL, then let APPLY check the number
+      ;; of args via the ARGS mechanism.
+    (and (cond ((and lexprvar (symbolp name-arg)) 
+		 (setq tmp `((ARGS ',name-arg '(,min . ,(or max 510.)))))
+		 'T)
+	       (|&restv-ify/|| (setq tmp () ) 'T))
+	 (setq body `(PROGN 'COMPILE
+			    ,@|&restv-ify/|| 
+			    ,body 
+			    ,.tmp )))
+    BODY))
+
+
+;;;; Helper Funs for MacLISP DEFUN&
+
+;;; Process a varlist that follows an &OPTIONAL.
+;;; The remainder may have an &REST and/or and &AUX.
+;;; ARGNO is one less than the index number of the argument at 
+;;;	the first of the list
+;;;Returns: 1st value is an item for the LETLIST,
+;;;         2nd value is an allflats list
+;;;         3rd value is an INSETQS list (in case some bindings 'depended')
+
+
+(defun |&o-l/|| (varlist argno lexprvar)
+  (let ((more (|&kwp/|| varlist '(&AUX &OPTIONAL)))
+	suppliedpp  tmp  insetqs)
+    (if (eq (car more) '&OPTIONAL) (DEFUN&-ERROR))
+    (values 
+       (nreconc 
+	  (si:MAP-VL 
+	      (cond 
+	        ((symbolp (car varl))
+		  (list `(,(car varl) 
+			   (AND (> ,lexprvar ,(1- argno)) (ARG ,argno)))))
+		((cond ((prog2 (setq suppliedpp () ) (atom (car varl))))
+		       ((atom (cdar varl)) (cdar varl))
+		       ((atom (setq suppliedpp (cddar varl)))  suppliedpp)
+		       ((or (cdr suppliedpp) 
+			    (null (car suppliedpp))
+			    (not (symbolp (car suppliedpp))))))
+		 (DEFUN&-ERROR))
+		('T (if suppliedpp 
+			(push (cons suppliedpp ARGNO) SUPPLIEDP-VARS))
+		    (multiple-value-bind (l desetqer)
+					 (si:bind-doublet-now? (caar varl) 
+							       (cadar varl)
+							       'T 
+							       lexprvar 
+							       argno)
+			(if desetqer (push desetqer insetqs))
+			l))))
+	  (if more 
+	      (multiple-value-bind (l desetqer)
+			(if (eq (pop more tmp) '&AUX) 
+			    (|&a-l/|| more)
+			    (|&r-l/|| MORE ARGNO LEXPRVAR TMP))
+		 (if desetqer (setq insetqs (nconc desetqer insetqs)))
+		 l)))
+       insetqs)))
+
+
+
+;;;Produce a list of the form (<var-spec> <form-to-eval>) if there is no 
+;;; variable in the <var-spec> which appears in <form-to-eval>.
+;;;Otherwise, have to substitute for <form-to-eval>, and cons up a desetqer
+;;; for the INSETQS list, and return possibly a list of several pairs.
+
+(defun SI:BIND-DOUBLET-NOW? (var-spec val optp lexprvar argno)
+  (let ((retval (if (null optp)
+		    val
+		    `(COND ((> ,lexprvar ,(1- argno)) (ARG ,argno))
+			   ('T ,val))))
+	(SI:SELF-BIND-CONS () )
+	desetqer )
+    (values 
+      (cond ((cond ((atom val) 
+		     (cond ((atom var-spec) 
+			     (cond ((eq val var-spec)
+				     (setq SI:SELF-BIND-CONS '(T))
+				     () )
+				   ('T)))
+			   ((or (not (symbolp val))
+				(not (memq val (flatten-syms var-spec () ))))
+			     ;;Permits things like "&optional (A 3) &aux (B B)"
+			     'T)))
+		   ((not (symbolp (car val))) () )
+		   ((memq (car val) '(QUOTE FUNCTION)))
+		   ((let* ((BOUND-VARS () )
+			   (BAD-VARS (if (atom var-spec)
+					 (list var-spec) 
+					 (flatten-syms var-spec () )))
+			   (ALL-LOCALS (si:all-locals? BAD-VARS)))
+		      (declare (special BAD-VARS ALL-LOCALS BOUND-VARS))
+		      (|Certify-no-var-dependency/|| val))))
+	     `((,var-spec ,retval)))
+	    ('T (setq desetqer `(DESETQ ,var-spec ,retval)) 
+		(if (atom var-spec) 
+		    (si:self-bind-cons var-spec)
+		    (mapcan #'SI:SELF-BIND-CONS (flatten-syms var-spec () )))))
+      desetqer)))
+
+(defun SI:ALL-LOCALS? (varsl)
+  (declare (special |&specvars/|| |&complrp/||))
+  (do ((l varsl (cdr l))
+       (var))
+      ((null l) 'T)
+    (and (symbolp (setq var (car l)))
+	 (or (memq var |&specvars/||)
+	     (if |&complrp/|| 
+		 (specialp var)
+		 (get var 'SPECIAL)))
+	 (return () ))))
+
+;;;###### Someday, we could drop the BOUNDP check in SI:SELF-BIND if the last 
+;;; line just above would split the flattend-syms into two lists -- 
+;;;  1: vars which are needed to evaluate the val
+;;;  2: remainder
+;;;Thus, in "&optional ((a . b) (mumble a))"  would need to bind 'a' to
+;;;  itself, but b could still be bound to ().
+
+
+(defun SI:SELF-BIND-CONS (var) 
+  (list `(,var (SI:SELF-BIND ,var ,.si:self-bind-cons))))
+
+(defun (SI:SELF-BIND macro) (x) 
+  (let (((() var no-boundp-check?) x))
+    (if no-boundp-check? 
+	var 
+	`(AND (BOUNDP ',var) ,var))))
+
+
+;;; Process a varlist that follows an &AUX.
+(defun |&a-l/|| (varlist) 
+  (let (l insetqs desetqer)
+    (if (|&kwp/|| varlist '(&OPTIONAL)) (DEFUN&-ERROR))
+    (if (memq '&AUX varlist)
+	(setq varlist (delq '&AUX (append varlist () ))))
+    (values (mapcan 
+	     #'(lambda (var)
+		 (if (atom var) 
+		     (if (symbolp var)
+			 (list `(,var () ))
+			 (DEFUN&-ERROR))
+		     (multiple-value 
+		       (l desetqer)
+		       (si:bind-doublet-now? (car var) (cadr var) () () () ))
+		     (if desetqer (push desetqer insetqs))
+		     l))
+	     varlist)
+	    insetqs)))
+
+
+;;; Process a varlist that follows a member of the &REST family.
+;;; ARGNO is one less than the index number of argument at the head of the list
+;;; RESTIFY is one of &REST, &RESTV, or &RESTL.  We make the apropriate
+;;; selection of the LISTIFY or |&restv-ify/||.  If it's &REST, the value of
+;;; |&r-l/|| is selected.
+
+(DEFUN |&r-l/|| (VARLIST ARGNO LEXPRVAR RESTIFY)
+  (AND (OR (NOT (SYMBOLP (CAR VARLIST)))
+	   (|&kwp/|| VARLIST '(&OPTIONAL))
+	   (EQ (CAR VARLIST) '&AUX) )
+       (DEFUN&-ERROR))
+  (SETQ RESTIFY
+	(CASEQ RESTIFY 
+	   (&REST  |&r-l/||)
+	   (&RESTL 'LISTIFY)
+	   (&RESTV '|&restv-ify/||)))
+  (IF (EQ RESTIFY '|&restv-ify/||) 	;Signal this case!  May have to 
+      (SETQ |&restv-ify/|| 		; output a putprop for autoloading
+	    '(#%(def-or-autoloadable |&restv-ify/|| VECTOR))))
+  (SETQ ARGNO (IF (= ARGNO 0) 
+		  `(,restify ,lexprvar)	 ;restify may = LISTIFY
+		  `(AND (> ,lexprvar ,argno) 
+			(,restify (- ,argno ,lexprvar)))))
+  (SETQ LEXPRVAR (COND ((NULL (CDR VARLIST)) () ) 
+		       ((EQ (CADR VARLIST) '&AUX) (|&a-l/|| (CDDR VARLIST)))
+		       ((DEFUN&-ERROR))) ) 
+  (IF (CAR VARLIST)
+      (CONS `(,(car varlist) ,argno) LEXPRVAR) 
+      LEXPRVAR))
+
+)	;end of #M 
+
+
+;;;; Helper Functions
+
+
+#Q (defun (PAIRP macro) (x) `(NOT (ATOM ,(cadr x))))
+
+(defun DEFUN&-ERROR ()
+   (error '|Bad variable-list syntax -- DEFUN& | DEFUN&-ERROR))
+
+
+#M (def-or-autoloadable BUT-TAIL MACAID)
+#M (def-or-autoloadable |Certify-no-var-dependency/|| CNVD)
+
+
+;;;; DEFMACRO and MACRO
+
+;;Actual macro functions not defined until after this common subr is defined
+
+(DEFUN |defmacro-1/|| (X DDC)
+   (DECLARE (SPECIAL MACROS))
+   (LET (((NAME-ARG DEF-ARGLIST . BODY) X)
+	 (MIN 0) (MAX  262143.) 
+	  ;; Foo! the following kludgerous crap is here becauses CWH
+	  ;;  is too cowardly to introduce the variable DEFMACRO-FOR-COMPILING
+	  ;;  into the multics lisp compiler;  foo on CWH -- 3/15/81
+	 (DFC (COND ((BOUNDP 'DEFMACRO-FOR-COMPILING)
+		      DEFMACRO-FOR-COMPILING)
+		    ((STATUS FEATURE COMPLR)
+		      MACROS)
+		    ('T)))
+	 (DCA DEFMACRO-CHECK-ARGS)
+	 DECLARE?  USERCOMMENT?  ARGLIST-COMMENT?  
+	 RESTARGP  WHOLEP  DEFAULTOPTSP  
+	 NAME  ARGLIST  MACROARG  OPT-ARGLIST  OPT-INISL  RESTARG  
+	 AUXVARS  AUX-INISL  ALLFLATS  ARGSCHECK  SEQUENCER  TEM  BADP )
+     (MULTIPLE-VALUE (BODY DECLARE? USERCOMMENT?) 
+		     (|def-decl-comment?/|| BODY X))
+     (COND ((SYMBOLP NAME-ARG) (SETQ NAME NAME-ARG))
+	   ('T (SETQ NAME (CAR NAME-ARG))
+	       (OR (SYMBOLP NAME) (SETQ BADP 'T NAME 'FOO))
+	       (AND (SETQ TEM (GETL NAME-ARG '(DEFMACRO-CHECK-ARGS)))
+		    (SETQ DCA (EVAL (CADR TEM))))
+	       (AND (SETQ TEM (GETL NAME-ARG '(DEFMACRO-DISPLACE-CALL)))
+		    (SETQ DDC (EVAL (CADR TEM))))
+	       (SETQ TEM (GETL NAME-ARG '(DEFMACRO-FOR-COMPILING)))
+	       (SETQ NAME-ARG 
+		     #-LISPM 
+		     (COND ((NULL TEM) NAME)
+			   ('T (SETQ DFC (AND (EVAL (CADR TEM)) 'T))
+			       `(,name DEFMACRO-FOR-COMPILING ,dfc )))
+		     #+LISPM 
+		     (PROG2 (EVAL (CADR TEM)) NAME)) ))
+     (si:gen-local-var MACROARG (symbolconc name '/-MACROARG))
+     (SETQ ARGLIST 
+	   (COND  ;Next two clauses permit forms like "(DEFMACRO FOO X ...)" 
+		  ;   and  "(DEFMACRO FOO (<various-args> . X) ...)"
+		 ((ATOM DEF-ARGLIST) `(&REST ,def-arglist))
+		 ((CDR (SETQ TEM (LAST DEF-ARGLIST)))
+		   `(,.(but-tail def-arglist tem) ,(car tem) &REST
+		       ,(cdr tem)))
+		 ('T DEF-ARGLIST)))
+	 ;Process a "&WHOLE" argument, if present
+     (COND ((SETQ TEM (MEMQ '&WHOLE ARGLIST))
+	     (COND ((OR (ATOM (CDR TEM))
+			(MEMQ (CADR TEM) '(&AUX &OPTIONAL &REST &BODY &WHOLE)))
+		     (SETQ BADP 'T))
+		   ('T (SETQ ARGLIST (NCONC (BUT-TAIL ARGLIST TEM) 
+					    (CDDR TEM)))
+		       (AND (NULL ARGLIST) (SETQ DCA () ))
+		       (COND ((NULL (CADR TEM)) () )
+			     ((NOT (SYMBOLP (CADR TEM))) 
+			       (COND ((PAIRP (CADR TEM)) 
+				       (SETQ ALLFLATS (FLATTEN-SYMS (CADR TEM) 
+								    ALLFLATS)
+					     AUX-INISL `((DESETQ ,(cadr tem) 
+								 ,macroarg))))
+				     ('T (SETQ BADP 'T))))
+			     ('T (SETQ MACROARG (CADR TEM))))))
+	     (OR BADP (SETQ WHOLEP 'T))))
+      ;Process "&AUX" arguments, if present
+     (COND ((SETQ TEM (MEMQ '&AUX ARGLIST))
+	     (SETQ ARGLIST (BUT-TAIL ARGLIST TEM)
+		   AUXVARS (CDR TEM))
+	     (IF (MEMQ '&AUX AUXVARS)
+		 (SETQ AUXVARS (DELQ '&AUX (APPEND AUXVARS () ))))
+	     (MAPC #'(LAMBDA (X) 
+		       (SETQ ALLFLATS 
+			     (COND ((ATOM X) 
+				    (IF (MEMQ X '(&OPTIONAL &REST &BODY))
+					(SETQ BADP 'T))
+				    (CONS X ALLFLATS))
+				   ('T (PUSH `(DESETQ ,(car x) ,(cadr x))
+					     AUX-INISL)
+				       (FLATTEN-SYMS (CAR X) ALLFLATS)))))
+		   AUXVARS)
+	     (SETQ AUX-INISL (NREVERSE AUX-INISL))))
+      ;Process any &OPTIONAL and &REST arguments
+     (COND ((SETQ TEM (COND ((MEMQ '&OPTIONAL ARGLIST))
+			    ((SETQ RESTARGP (OR (MEMQ '&REST ARGLIST)
+						(MEMQ '&BODY ARGLIST))))))
+	     (SETQ ARGLIST (BUT-TAIL ARGLIST TEM)
+		   MIN (LENGTH ARGLIST))
+	     (COND (RESTARGP 
+		     (SETQ RESTARG (CADR RESTARGP))
+		     (AND (OR (AND RESTARG (NOT (SYMBOLP RESTARG)))
+			      (CDDR RESTARGP))
+			  (SETQ BADP 'T)))
+		   ('T 			  ;so (EQ (CAR TEM) '&OPTIONAL)
+		      (SETQ OPT-ARGLIST (CDR TEM))
+		      (COND ((MEMQ '&OPTIONAL OPT-ARGLIST) (SETQ BADP 'T))
+			    ((SETQ RESTARGP (OR (MEMQ '&REST OPT-ARGLIST)
+						(MEMQ '&BODY OPT-ARGLIST)))
+			     (SETQ OPT-ARGLIST (BUT-TAIL OPT-ARGLIST 
+							 RESTARGP))
+			     (SETQ RESTARG (CADR RESTARGP))
+			     (AND (OR (AND RESTARG (NOT (SYMBOLP RESTARG)))
+				      (CDDR RESTARGP))
+				  (SETQ BADP 'T)))
+			    ('T (SETQ MAX (+ MIN (LENGTH OPT-ARGLIST)))))
+		      (SETQ OPT-ARGLIST 
+			    (MAPCAR 
+			     #'(LAMBDA (X)
+				 (COND 
+				    ((OR (NULL X) (SYMBOLP X))
+				       (PUSH () OPT-INISL) 
+				       X)
+				     ('T (SETQ DEFAULTOPTSP 'T)
+					 (AND 
+					  (COND ((AND (CDR X) (ATOM (CDR X))))
+						((NULL (CDDR X)) () )
+						((OR (ATOM (CDDR X))
+						     (NOT (SYMBOLP (CADDR X)))))
+						('T  ; Find the "suppliedp" var
+						    (PUSH (CADDR X) ALLFLATS)
+						    (CDDDR X)))
+					      (SETQ BADP 'T))
+					  ;((A . B)  (MUMBLEIFY)) so find A & B
+					 (SETQ ALLFLATS (FLATTEN-SYMS 
+							  (CAR X) 
+							  ALLFLATS))
+					 (PUSH X OPT-INISL)
+					 () )))
+			     OPT-ARGLIST))) )
+	     (SETQ ARGLIST (APPEND ARGLIST OPT-ARGLIST RESTARG)))
+	   ('T (SETQ MIN (SETQ MAX (LENGTH ARGLIST)))))
+     (DO ((L (FLATTEN-SYMS ARGLIST ALLFLATS) (CDR L)))
+	 ((NULL L))
+       (AND (CAR L) (MEMQ (CAR L) (CDR L)) (SETQ BADP 'T)))
+     (IF BADP (ERROR '|Bad arg pattern in use of DEFMACRO| `(DEFMACRO ,x)))
+     (COND ((NOT DCA))
+	   ((AND (= MIN 0) (= MAX 262143.)))
+	   ((= MIN MAX) (SETQ ARGSCHECK `(= (LENGTH ,macroarg) ,(1+ min))))
+	   ('T (AND (NOT (= MIN 0)) 
+		    (SETQ ARGSCHECK `(NOT (< (LENGTH ,macroarg) ,(1+ min)))))
+	       (COND ((= MAX 262143.))
+		     ('T (SETQ TEM `(NOT (> (LENGTH ,macroarg) ,(1+ max))))
+			 (SETQ ARGSCHECK (COND ((NULL ARGSCHECK) TEM)
+					       (`(AND ,argscheck ,tem))))))))
+     (IF ARGSCHECK (SETQ ARGSCHECK `((AND (NOT ,argscheck) 
+					  (ERROR '|Wrong number args for macro| 
+						 ,macroarg)))))
+     (COND 
+       ((NOT (AND OPT-ARGLIST DEFAULTOPTSP)) (SETQ OPT-INISL () ))
+       ('T (SETQ SEQUENCER (si:gen-local-var () "MacArgL") 
+		 OPT-INISL (MAPCAN 
+			     #'(LAMBDA (X)
+				 `((SETQ ,sequencer (CDR ,sequencer))
+				   ,.(and x `((DESETQ 
+					       ,(car x)
+					       (COND (,sequencer 
+						       ,.(if (cddr x) `((SETQ ,(caddr x) 'T)))
+						       (CAR ,sequencer))
+						     (,(cadr x))))))))
+			      ;; OPT-INISL is currently in reverse order.  
+			      ;;  CDR it until something non-null shows up.
+			     (DO ((L OPT-INISL (CDR L))) 
+				 ((OR (NULL L) (NOT (NULL (CAR L)))) 
+				  L))))
+	   (SETQ OPT-INISL (NREVERSE (CDR OPT-INISL)))
+	   (PUSH `(SETQ ,sequencer ,(cond ((= min 0) `(CDR ,macroarg))
+					  (`(NTHCDR (1+ ,min) ,macroarg))))
+		 OPT-INISL) 
+	   (PUSH SEQUENCER ALLFLATS))) 
+     (COND ((AND (ATOM ARGLIST)			;(), or RESTARG
+		 (OR (NULL ARGLIST) (NULL ARGSCHECK))
+		 (NULL ALLFLATS)
+		 (NULL AUX-INISL) 
+		 (NULL OPT-INISL) )
+	     (PUSH (COND ((NULL ARGLIST)
+			  (COND ((OR (NULL DCA) RESTARGP) MACROARG) 
+				(`(AND (CDR ,macroarg) 
+				       (ERROR '|No args allowed for this macro|
+					      ,macroarg)))) )
+			 ('T (AND (NOT (EQ ARGLIST RESTARG)) 
+				  (+INTERNAL-LOSSAGE '&REST 
+						     'DEFMACRO 
+						     (LIST ARGLIST RESTARG)))
+			     (SETQ MACROARG ARGLIST)
+			      ;; A simple case - "(DEFMACRO FOO X (doit X))"
+			     `(SETQ ,macroarg (CDR ,macroarg))))
+		   BODY))
+	   ('T (SETQ ARGLIST-COMMENT? 
+		          `((COMMENT ARGLIST = ,def-arglist))
+		     BODY `(,.argscheck 
+			      (LET ((,arglist (CDR ,macroarg))  ,.allflats)
+				   ,.opt-inisl
+				   ,.aux-inisl 
+				   ,. body)))))
+     (IF DDC (SETQ BODY (COND ((EQ DDC 'DEFMACRO-DISPLACE) 
+			        `((DISPLACE ,macroarg (PROGN ,. body))))
+			      (`((OR (MACROFETCH ,macroarg)
+				     (MACROMEMO ,macroarg 
+						(PROGN ,. body) 
+						',name)))))))
+     (SETQ BODY `(MACRO ,name-arg (,macroarg) 
+			,.declare?
+			,.usercomment? 
+			,.arglist-comment? 
+			,. body))
+     (setq ddc `(FLUSH-MACROMEMOS 
+		  ',name 
+		  ,(cond ((eq ddc MACROEXPANDED) 
+			   'MACROEXPANDED)
+			 ((or (null ddc) (eq ddc 'DEFMACRO-DISPLACE))
+			   () )
+			 ((or (eq ddc 'FLUSH-MACROMEMOS)
+			      (not (memq ddc defmax-counter-variables)))
+			   `'FLUSH-MACROMEMOS)
+			 ( `',ddc))))
+     (if (and ddc (not dfc)) 
+	 (setq ddc `(EVAL-WHEN (EVAL COMPILE) ,ddc)))
+     `(PROGN 'COMPILE ,ddc ,body)))
+
+
+
+(defun (DEFMACRO MACRO) (x)  
+   (|defmacro-1/|| 
+	(cdr x) 
+	(if (boundp 'DEFMACRO-DISPLACE-CALL) DEFMACRO-DISPLACE-CALL)))
+
+(defun (DEFMACRO-DISPLACE MACRO) (x) 
+   (|defmacro-1/|| (CDR X) 'DEFMACRO-DISPLACE))
+
+
+
+;;; Just for starters, consider the case of  ((FIND it) 1), where
+;;; FIND is a macro s.t. (FIND it) ==> FOO,
+
+;;; NIL version of MACRO is in the "NILMAC" file.
+
+
+#M  
+(defun (MACRO MACRO) (x)
+   (declare (special MACROS))
+   (let ((name (cadr x)) 
+	 (bvl-body (cddr x))
+	 (dfc (cond ((boundp 'DEFMACRO-FOR-COMPILING)
+		      DEFMACRO-FOR-COMPILING)
+		    ((status FEATURE COMPLR)
+		      MACROS)
+		    ('T)))
+	 tem)
+      (cond ((not (atom name))
+	     (setq tem (getl name '(DEFMACRO-FOR-COMPILING))
+		   name (car name))
+	     (and tem (setq dfc (eval (cadr tem))))))
+      `(DEFUN ,@(cond (dfc `((,name MACRO)))
+		      ('t  `(,name MACRO))) 
+	      ,. bvl-body)))
+

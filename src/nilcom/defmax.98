@@ -1,0 +1,520 @@
+;;;   DEFMAX   				-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;   ************************************************************************
+;;;   ***** NIL ******* DEFMacro AuXilliary helpers **************************
+;;;   ************************************************************************
+;;;   ** (c) Copyright 1981 Massachusetts Institute of Technology ************
+;;;   ************************************************************************
+
+;;; See second page for documentation
+
+(herald DEFMAX /98)
+
+#-NIL (include ((lisp) subload lsp))
+#-NIL (eval-when (eval compile)
+	(subload SHARPCONDITIONALS)
+	)
+
+#+(or LISPM (and NIL (not MacLISP)))
+  (progn 'compile 
+	 (globalize "DEFMACRO-CHECK-ARGS")
+	 (globalize "DEFMACRO-DISPLACE-CALL")
+	 (globalize "DEFMACRO-FOR-COMPILING")
+	 (globalize "forget-macromemos/|")
+	 (globalize "FLUSH-MACROMEMOS")
+	 (globalize "defvst-construction/|")
+      #Q (globalize "DEFMAX-DISPLACE")
+	 (globalize "GRIND-MACROEXPANDED")
+	 (globalize "MACROEXPANDED-grindmacro/|")
+	 (globalize "GRINDMACRO")
+	 (globalize "MACRO-EXPANSION-USE")
+	 (globalize "MACROEXPAND")
+	 (globalize "MACROEXPAND-1*")
+	 (globalize "MACROEXPAND-1*M")
+	 (globalize "MACROMEMO")
+	 (globalize "MACROFETCH")
+	 (globalize "MACROEXPANDED")
+	 (globalize "MACRO")
+	 (globalize "STATIC-AREAP")
+	 (globalize "STATIC-COPY")
+	 (globalize "WRITEABLEP")
+	 )
+
+
+;;; Three flags controlling the macro-producing macros:
+;;;   DEFMACRO-DISPLACE-CALL if non-null, the resultant macros do a runtime
+;;; 	(default = T)	test of MACRO-EXPANSION-USE for possible displacement
+;;;			and/or "memoizing" in a hasharray.  If equal to the 
+;;; 			variable MACROEXPANDED, then the "cache" for expansions
+;;; 			of this macro need be cleared only when it is redefined
+;;;   DEFMACRO-FOR-COMPILING determines whether the macros produced will be
+;;; 	(default = T)		of the form that gets compiled by COMPLR 
+;;; 				(in either case, COMPLR "remembers" them).
+;;;   DEFMACRO-CHECK-ARGS determines whether there should be code to carry 
+;;;	(default = T)		out number-of-args checking at runtime.
+
+;;;   In the runtime environment, macros produced while 
+;;; DEFMACRO-DISPLACE-CALL is non-null will pay attention to the global 
+;;; variable MACRO-EXPANSION-USE, which if null means merely to run the
+;;; code just produced, but otherwise is a function of two arguments for
+;;; doing some kind of "displaceing".  The user can supply his own function,
+;;; or accept one of the system-supplied ones. (These particular three 
+;;; system functions should not be clobbered by the user since other parts
+;;; of the system depend upon them).  System-supplied "functions":
+;;;     =  ()	 	 - run no function, but merely expand the macro
+;;;			   and return that value.
+;;; 	=  MACROEXPANDED - Displace the original cell with a form like
+;;; 			   (MACROEXPANDED <name> 
+;;; 					  <validation-item>
+;;;					  <original-form> 
+;;; 					  <expansion>)
+;;; 			   Thereafter, the macro named MACROEXPANDED will 
+;;; 			   return the <expansion> until either the value of
+;;; 			   MACRO-EXPANSION-USE changes, or <validation-item>
+;;; 			   changes (such as by redefining some macro).  All
+;;; 			   such expansions can be invalidated by incrementing
+;;; 			   the global (fixnum) variable |forget-macromemos/|| .
+;;;     =  MACROMEMO 	 - Remember the expansions is a hasharray, where the
+;;; 			   global variable MACROMEMO is a dotted pair of the
+;;; 			   number-of-buckets and the array pointer itself.
+;;; 			   All "memorized" expansions can be forgotten merely
+;;; 			   by doing (RPLACD MACROMEMO () ).
+;;; 	=  DISPLACE 	 - Displace the original cell with the expansion of the
+;;; 			   macro-form.  There is no general way to un-do, or 
+;;; 			   "go back" after this kind of displacement.
+;;; Pretty-printing of forms displaced with MACROEXPANDED is controlled by
+;;;  the global variable GRIND-MACROEXPANDED:  if T, then only the
+;;;  expanded form will be printed; if (), then only the original form
+;;;  will be printed.  (Default = () )
+
+
+;;;; Declarations and Initializations
+
+#+(local MacLISP)
+  (declare (own-symbol 
+	        MACROFETCH  MACROMEMO  MACROEXPANDED  |forget-macromemos/|| 
+		MACROEXPAND  MACROEXPAND-1  MACROEXPAND-1*  MACROEXPAND-1*M 
+		+INTERNAL-TRY-AUTOLOADP))
+
+(declare (special DEFMACRO-CHECK-ARGS  		;These are user-settable
+		  DEFMACRO-DISPLACE-CALL 	; switches.
+		  DEFMACRO-FOR-COMPILING 
+		  FIND-MACRO-DEFINITION 
+ 		  MACRO-EXPANSION-USE 
+		  MACROMEMO 
+		  MACROEXPANDED 
+		  GRIND-MACROEXPANDED )
+	 (*expr FIND-MACRO-DEFINITION MACROMEMO MACROFETCH 
+		|forget-macromemos/|| FLUSH-MACROMEMOS)
+	 (special  ;; records total number of macro redefinitions
+		  FLUSH-MACROMEMOS
+		   ;; records total number of defvst redefinitions 
+		  |defvst-construction/|| 
+		   ;; 1+[max of DEFMAXCOUNTER-VARIABLES] when user requests
+		   ;;  a flushing of all memos.
+		  |forgetfulness-max/|| ))
+
+
+#+(and MacLISP PDP10)  
+  (progn 'COMPILE 
+    (or (getl 'DELASSQ '(LSUBR EXPR)) 
+	(defun DELASSQ n
+	   (and (or (< n 2) (> n 3)) 
+		(error 'WRNG-NO-ARGS (cons 'DELASSQ (listify n))))
+	   (let ((x (arg 1))
+		 (ll (arg 2)))
+	     (do ((z (assq x ll) (assq x ll)))
+		 ((null z) ll)
+	       (setq ll (delq z ll))))))
+    (def-or-autoloadable PUREP PUREP)
+    (def-or-autoloadable WRITEABLEP PUREP)
+    )
+
+
+(eval-when (eval load compile)
+    (setq DEFMAX-COUNTER-VARIABLES 
+	  '(|defvst-construction/|| 	;advanced at any redef of a DEFVST
+	    FLUSH-MACROMEMOS 		;advanced at any redef of a macro
+	    ))
+)
+(eval-when (compile)
+	   (eval (cons 'SPECIAL DEFMAX-COUNTER-VARIABLES))
+)
+
+;; Following will set up some relevant variables, unless already
+;;  bound to some non-null value;  certain cases will even override
+;;  a prior setting to null.
+(let (*RSET)
+  (mapc '(lambda (x) 
+	    (cond ((or (not (boundp (car x)))
+		       (null (symeval (car x)))
+		       (caddr x))
+		   (set (car x) (eval (cadr x))))))
+	'((FIND-MACRO-DEFINITION #'FIND-MACRO-DEFINITION)
+	  (MACRO-EXPANSION-USE 'MACROEXPANDED )
+	  (MACROEXPANDED (COPYSYMBOL 'MACROEXPANDED () ))
+	   ;Global counter, incremented when a defmacro'd macro is redefined
+	  (FLUSH-MACROMEMOS 0)
+	   ;Global counter, incremented when a defvst'd structure is redefined
+	  (|defvst-construction/|| 0)
+	   ;; 1+[max of COUNTER-VARIABLES] when flush-all done by user
+	  (|forgetfulness-max/|| 0 )
+	   ;Switch to tell GRINDEF to use the original form
+	  (GRIND-MACROEXPANDED () )
+	  (MACROMEMO (NCONS 103.) T)	 ;; 27th prime!
+	  ))
+)
+
+
+;;;; Temporary macros
+
+(eval-when (compile)
+   (setq DEFMACRO-FOR-COMPILING () 
+	 DEFMACRO-DISPLACE-CALL () 
+	 DEFMACRO-CHECK-ARGS    () ))
+
+;;Well, when can we take this out?  -- JonL, 12/23/80
+#N (progn 'compile
+(defmacro STATIC-AREAP (&rest l) '() )
+(defmacro STATIC-COPY (x) x)
+)
+
+
+#-NIL (progn 'compile
+(defmacro STATIC-AREAP (x)
+      #+PDP10 `(PUREP ,x)
+      #-PDP10 '() )
+(defmacro STATIC-COPY (x) 
+      #+PDP10 `(PURCOPY ,x)
+      #-PDP10 '() )
+(defmacro MAKE-VECTOR (n) `(*ARRAY () T ,n))
+(defmacro VREF (v i) `(ARRAYCALL T ,v ,i))
+(defmacro VSET (v i val) `(STORE (ARRAYCALL T ,v ,i) ,val))
+(defmacro TYPECASEQ (&rest w)
+   `(CASEQ (TYPEP ,(car w)) 
+	   ,.(mapcar '(lambda (x) (cons (subst 'LIST 'PAIR (car x)) (cdr x)))
+		     (cdr w))))
+#Q  		;;Pooor LISPM doesn't have a good DISPLACE 
+(defun DEFMAX-DISPLACE (x y)
+   (check-arg x LISTP "a list")
+   (rplacd x (cond ((atom y)
+		    (rplaca x 'PROGN)
+		    (list y))
+		   ('T (rplaca x (car y)) (cdr y))))
+   x)
+)
+
+#-LISPM 
+(defmacro DEFMAX-DISPLACE (&rest x) `(DISPLACE ,.x))
+
+
+;;; If "MACROMEMO" is the working mode, then (CDR MACROMEMO) is a ptr 
+;;;  to the hasharray (a "vector").  Also, if some entry couldn't be
+;;;  displaced properly for the MACROEXPANDED mode (such as would occur
+;;;  if the expr code were in pure space), then (CDR MACROMEMO) is likewise
+;;   setup.
+;;; Note that we don't really expect to use the "MACROMEMO" mode
+;;;  unless the implementation can support MAKNUM efficiently.
+
+
+(defmacro HASH-GET (key &optional (hash-name 'MACROMEMO)) 
+   `(ASSQ ,key (VREF (CDR ,hash-name) (\ (MAKNUM ,key) (CAR ,hash-name)))))
+
+(defmacro HASH-PUT (x  &optional (hash-name 'MACROMEMO))
+   `(LET* ((ENTRY ,x)
+	   (HASHNO (\ (MAKNUM (CAR ENTRY)) (CAR ,hash-name))))
+	  (DECLARE (FIXNUM HASHNO))
+	  (OR (AND ,hash-name (CDR ,hash-name))
+	       ;; Initialize memo table if necessary
+	      (RPLACD ,hash-name (MAKE-VECTOR (CAR ,hash-name))))
+	  (VSET (CDR ,hash-name)
+		HASHNO 
+		(CONS ENTRY (VREF (CDR ,hash-name) HASHNO)))))
+
+(defmacro STILL-VALID (name invalidator)
+   (or (|no-funp/|| invalidator) 
+       (error '|Uluz, not a symbol - STILL-VALID| invalidator))
+   `(COND ((NULL ,invalidator) 'T) 
+	  ((SI:INVALIDATED ,name ,invalidator) () )
+	  ('T)))
+
+(defmacro symeval-for-counters (x)
+    `(CASEQ ,x ,.(mapcar #'(lambda (x) `(,x ,x)) defmax-counter-variables)))
+	   
+(defmacro max*-counters (&rest w) `(MAX ,@w ,. defmax-counter-variables))
+
+(defsimplemac set-counter-variables (val)
+   `(SETQ ,.(mapcan #'(lambda (x) `(,x ,val)) defmax-counter-variables)))
+
+
+
+;;;; |forget-macromemos/||, FLUSH-MACROMEMOS
+
+
+(defun |forget-macromemos/|| (x) (flush-macromemos x 'FLUSH-MACROMEMOS))
+
+;; The MACROEXPANDED property of a symbol is either a fixnum, for a macro
+;;  which is sensitive only to its own redefinition; or else a list*
+;;  of three things -- a validation-symbol, definition-time-thereof, and 
+;;  number of local cache flushings.
+
+(defun FLUSH-MACROMEMOS (name validation-symbol &aux mxprop fxprop)
+   (cond ((null name) 
+	   (rplacd MACROMEMO () )
+	    ;; Then reset all counters to an incremented value
+	   (setq |forgetfulness-max/|| 
+		 (1+ (max*-counters |forgetfulness-max/||)))
+	   (set-counter-variables |forgetfulness-max/||))
+	 ('T (setq mxprop (get name MACROEXPANDED))
+	     (cond ((or mxprop (fboundp name))
+		     ;; Remove instances of this macro from the MACROMEMO cache
+		    (do ((i (1- (car MACROMEMO)) (1- i)))
+			((< i 0))
+		      (declare (fixnum i))
+		      (vset (cdr MACROMEMO)
+			    i 
+			    (delassq name (vref (cdr MACROMEMO) i))))
+		    (if validation-symbol
+			 ;; Increment the counter of macro re-definitions
+			(setq FLUSH-MACROMEMOS  (1+ FLUSH-MACROMEMOS)))))
+	     (setq fxprop (and mxprop (atom mxprop)))
+	     (cond ((null validation-symbol)
+		      ;; Local flushings, without redefinitions
+		     (cond (fxprop (putprop name (1+ mxprop) MACROEXPANDED))
+			   ('T (if mxprop 
+				     ;; No, no, don't use SETF here!!
+				   (rplacd (cdr mxprop) (1+ (cddr mxprop)))))))
+		   ((putprop name 
+			     (cond 
+			       ((eq validation-symbol MACROEXPANDED)
+				(if (null fxprop) 
+				    FLUSH-MACROMEMOS 
+				    (if (< mxprop |forgetfulness-max/||) 
+					|forgetfulness-max/||
+					 (1+ mxprop))))
+			       ((list* validation-symbol 
+				       (symeval-for-counters validation-symbol)
+				       0)))
+			     MACROEXPANDED)))))
+   name)
+
+
+;;;; SI:INVALIDATED, and MACROFETCH 
+
+(defun SI:INVALIDATED (name invalidator)
+   (cond 
+     ((null invalidator) () ) 
+     ((let ((mxprop (get name MACROEXPANDED))
+	    (simple-invalidator (atom invalidator)))
+	(let ((invalidator-number (if simple-invalidator
+				      invalidator 
+				      (car invalidator)))
+	      (counter (typecaseq mxprop 
+			    (FIXNUM (if simple-invalidator mxprop))
+			    (PAIR   (if (not simple-invalidator) 
+					(symeval-for-counters (car mxprop))))
+			    (T (+internal-lossage () 'SI:INVALIDATED name) 
+			       () ))))
+	  (cond ((or (null counter)
+		     (< invalidator-number counter)
+		     (< invalidator-number |forgetfulness-max/||))
+		  'T)
+		((not simple-invalidator)
+		   ;; check for local flushings of a non-simple expansion
+		  (< (cdr invalidator) (cddr mxprop)))
+		('T () )))))))
+
+
+(defun MACROFETCH (form)
+    ;; Look up form in memo-izing hash table.  If there, entry is like
+    ;;  `(,oldform ,name ,expansion . ,invalidator)
+   (and (cdr MACROMEMO) 
+	(setq form (hash-get form))
+	(let (( (() name expansion . invalidator) form))
+	  (if (still-valid name invalidator)
+	      expansion))))
+
+
+;;;; MACROMEMO and MACROEXPANDED
+
+;; An "invalidator" is either a fixnum, which compares with the fixnum 
+;;  stored as the MACROEXPANDED property of the macro, or a pair of 
+;;  expansion-time-value of a "counter", and a fixnum slot for local flushings.
+
+(defun MACROMEMO (original-cell expansion name)
+    ;; Basic "memoizer".  Makes up a "validation" memo for this expansion
+    ;;  and either enters it into a hash table, or clobbers according to
+    ;;  the MACROEXPANDED style.  May clobber back to original if the
+    ;;  state of the MACRO-EXPANSION-USE switch has changed.
+   (cond ((null MACRO-EXPANSION-USE) () ) 
+	 ((memq MACRO-EXPANSION-USE '(MACROEXPANDED MACROMEMO))
+	   (let* ((mxpp (eq MACRO-EXPANSION-USE 'MACROEXPANDED))
+		  (mxprop (get name MACROEXPANDED))
+		  (invalidator
+		    (cond ((atom mxprop) 
+			   (cond ((< mxprop |forgetfulness-max/||)
+				  (flush-macromemos name MACROEXPANDED)
+				  (setq mxprop (get name MACROEXPANDED))))
+			   (and mxpp mxprop))
+			  ('T (list* (symeval-for-counters (car mxprop))
+				     (cddr mxprop))))))
+	     (cond ((and mxpp
+			  #-(or LISPM MULTICS)
+			 (not (static-areap original-cell)))
+		     ;; Notice copying original cell, in case it is displaced
+		     (defmax-displace 
+			     original-cell 
+			     `(MACROEXPANDED ,name 
+					     ,invalidator 
+					     ,(cons (car original-cell) 
+						    (cdr original-cell)) 
+					     ,expansion)))
+		   ((null expansion) () )
+		   ((hash-put `(,original-cell ,name ,expansion . ,invalidator))))))
+	 ((eq MACRO-EXPANSION-USE 'DISPLACE)
+	    #-(or LISPM MULTICS)
+	   (cond ((not (static-areap original-cell))
+		   (defmax-displace original-cell expansion))
+		 ((writeablep original-cell)
+		   (defmax-displace original-cell (static-copy expansion))))
+	    #+(or LISPM MULTICS)
+	   (defmax-displace original-cell expansion))
+	  ;; Look for user's mispellings, and try to correct them
+	 ((eq MACRO-EXPANSION-USE MACROMEMO) 
+	    ;; What a loser! Next time thru this fun, he'll win!
+	   (setq MACRO-EXPANSION-USE 'MACROMEMO))
+	 ((or (eq MACRO-EXPANSION-USE MACROEXPANDED)
+	      (eq MACRO-EXPANSION-USE 'MACROEXPAND)
+	      (eq MACRO-EXPANSION-USE 'T)
+	      (and #-NIL (boundp '*:TRUTH) 
+		   (eq MACRO-EXPANSION-USE *:TRUTH)))
+	   ;; Ditto.  Remember, these are unique values.
+	  (setq MACRO-EXPANSION-USE 'MACROEXPANDED))
+	 ((typecaseq MACRO-EXPANSION-USE 
+		     (SYMBOL (fboundp MACRO-EXPANSION-USE))
+	        #N   (SUBR *:TRUTH)
+		     (PAIR (eq (car MACRO-EXPANSION-USE) 'LAMBDA)))
+	    ;; Perhaps a user "hook"?
+	   (funcall MACRO-EXPANSION-USE original-cell expansion)))
+   expansion)
+
+
+(defun (MACROEXPANDED macro) (form)
+    ;; (MACROEXPANDED <name> <invalidator> <original-form> <expanded-form>)
+    ;;   <invalidator> is either 
+    ;;    (1) a fixnum, meaning compare it with the version number of this 
+    ;;        particular macro, stored as the MACROEXPANDED property.
+    ;;    (2) a pair of fixnum and symbol -- symbol is name of counter whose
+    ;;        current value is to be compared with the fixnum
+    ;;    (3) null, meaning no need to un-macroize ever
+   (let ((tail (cddr form)))
+     (cond ((and (cond ((eq MACRO-EXPANSION-USE 'MACROEXPANDED))
+		       ((or (eq MACRO-EXPANSION-USE MACROEXPANDED)
+			    (eq MACRO-EXPANSION-USE 'MACROEXPAND))
+			(setq MACRO-EXPANSION-USE 'MACROEXPANDED)))
+		 (still-valid (cadr form) (car tail)))
+	    (caddr tail))
+	   ('T  ;; Revert to original form otherwise, and try expanding again
+	    (defmax-displace form (cadr tail))))))
+
+(DEFPROP MACROEXPANDED |MACROEXPANDED-grindmacro/|| GRINDMACRO)
+
+
+;;;; MACROEXPAND, MACROEXPAND-1*, MACROEXPAND-1*M, etc.
+
+#-LISPM (progn 'compile 
+
+(defun MACROEXPAND (form &aux (ex? 'T))
+   (or (atom form)
+       (do () 
+	   ((or (not ex?) (atom form)) )
+	 (multiple-value (form ex?) (macroexpand-1*m form))))
+   (values form ex?))
+
+;;; MACROEXPAND-1 returns the one-step expansion of a macro.  
+(defun MACROEXPAND-1 (form) 
+   (or (atom form)
+       (multiple-value (form) (macroexpand-1*m form)))
+   form)
+
+) 	;end of #-LISPM
+
+
+;Following global variable is actually set up at beginning of this file
+;(defvar FIND-MACRO-DEFINITION #'FIND-MACRO-DEFINITION
+; "How to find a macro definition.  Funcalled on a symbol,
+;  it should return something to FUNCALL to expand that macro
+;  once, or return () meaning the symbol isn't defined as a macro.")
+
+(defun FIND-MACRO-DEFINITION (frob &aux fval)
+    ;;; Find a macro definition wherever it lives
+  (declare (special macrolist))
+  (cond ((not (symbolp frob)) ())
+	((and (boundp 'MACROLIST) (cdr (assq frob macrolist))))
+	(#M (setq fval (get frob 'MACRO))
+	 #-MacLISP
+	    (and (fboundp frob)
+		 (pairp (setq fval (fsymeval frob)))
+		 (eq (car fval) 'MACRO)
+		 (prog2 (setq fval (cdr fval)) 'T))
+	  fval)
+	((+internal-try-autoloadp frob)
+	  (find-macro-definition frob))))
+
+;; Following is like MACROEXPAND-1, but arg must be non-atomic.  Returns:
+;   (1) one step in the expansion and of 
+;   (2) a flag #T or () depending on whether expansion actually occurred
+(defun MACROEXPAND-1*M (x &aux (fun (car x)) fval (mcx x) ex?)
+   (cond 
+     ((not (atom fun))
+       (cond ((eq (car fun) 'MACRO)
+	      (setq ex? t)
+	      (setq mcx (funcall (cdr fun) x)))
+	     ((not (eq (car fun) 'LAMBDA))
+	      (multiple-value (mcx ex?) (macroexpand-1*m fun))
+	      (setq mcx (if ex?
+			    (cons mcx (cdr x))
+			    x)))))
+     ((setq fval (if (eq FIND-MACRO-DEFINITION #'FIND-MACRO-DEFINITION)
+		     (find-macro-definition fun)
+		     (funcall find-macro-definition fun)))
+      (setq mcx (funcall fval x)
+	    ex? 't)))
+   (values mcx ex?))
+
+
+;Following is like MACROEXPAND-1, but arg is guaranteed non-atomic, and
+;returns () if no expansion happens, or NCONS of the expansion otherwise.
+(defun MACROEXPAND-1* (form &aux ex?) 	
+   (multiple-value (form ex?) (macroexpand-1*m form))
+   (if ex? (list form)))
+
+#Q (defun MACROEXPAND-1* (x) 	
+      ((lambda (ocarx ocdrx val)
+	       (setq val (macroexpand-1 x))
+	       (cond ((atom x) (ferror nil "~SAtomic arg to MACROEXPAND-1*" X))
+		     ((and (eq x val) (eq ocarx (car x)) (eq ocdrx (cdr x)))
+		      () )
+		     ((list val))))
+          (car x) (cdr x) () ))
+
+
+
+;;;; +INTERNAL-TRY-AUTOLOADP
+
+(defun +INTERNAL-TRY-AUTOLOADP (fun &aux (file (get fun 'AUTOLOAD)))
+    ; Try autoloading, if possible.  return non-null iff succeed
+   (cond ((and file (not (fboundp fun)))
+	  (do () 
+	      ((probef file))
+	     (setq file (cerror 'T () ':WRONG-TYPE-ARG 
+				";~1G~S, autoload file for ~2G~S, is missing" 
+				() file fun)))
+	  (funcall autoload (cons fun file))
+	  (cond ((fboundp fun) 'T)
+		((setq fun (cerror 'T () ':UNDEFINED-FUNCTION 
+				   ";~S was not functionally defined by autoloading" 
+				   fun))
+		 (+internal-try-autoloadp fun))))))
+
+
+

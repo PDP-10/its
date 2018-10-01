@@ -1,0 +1,358 @@
+;;;  DEFVSX    				-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;  *************************************************************************
+;;;  ***** NIL ****** NIL/MACLISP/LISPM Structure Definer Aux, Part 1 ********
+;;;  *************************************************************************
+;;;  ******** (c) Copyright 1981 Massachusetts Institute of Technology *******
+;;;  *************************************************************************
+
+;;; Auxillary file for DEFVST -- can stand alone in runtime environment.
+;;; Builds up the STRUCT=INFO descriptor, and has the constructor and 
+;;;   selector helper functions.
+
+;;; In MacLISP, this file is INCLUDE'd in DEFVST for NADEFVST
+
+(herald DEFVSX /106)
+
+#-NIL 
+(eval-when (eval compile)
+  (or (get 'SUBLOAD 'VERSION)
+      (load '((lisp) subload)))
+  (subload SHARPCONDITIONALS)
+)
+
+#+(local MacLISP) 
+(declare (mapc '(lambda (x) (putprop x T 'SKIP-WARNING))
+	       '(SETVST |defvst-selection-1/|| |defvst-xref/||
+		 |defvst-construction-1/|| |defvst-construction/||)))
+
+#+(or LISPM (and NIL (not MacLISP)))
+  (progn (globalize "SETVST")
+	 (globalize "defvst-construction/|")  	;is globalized by DEFMAX too
+	 (globalize "defvst-construction-1/|")
+	 (globalize "defvst-selection-1/|")
+	 (globalize "defvst-xref/|")
+	 )
+
+;; One reason for loading DEFMAX now is to get all its "globalizations"
+#+MacLISP 
+(eval-when (eval load compile) 
+   (subload DEFMAX)
+   (subload DEFVSY)
+)
+
+#+(local MacLISP)
+(eval-when (eval compile)  
+  (subload DEFMAX)
+  (subload DEFVSY)
+  (subload EXTEND)	;also subloads EXTSTR and EXTBAS
+  (subload EXTMAC)
+  (subload EXTHUK)
+    ;; (subload VECTOR)
+  (defmacro VECTOR-LENGTH (v) `(SI:EXTEND-LENGTH ,v))
+  (defmacro VREF (v n) `(SI:XREF ,v ,n))
+  (subload DEFSETF)
+)
+
+
+;;;; Declarations and temporary macros
+
+#+(and MacLISP (not NIL))
+  (progn 'COMPILE 
+	 (defvar SI:STRUCTS-OUTPUT-TO-FASL ()
+	   "Structures which have been output to the FASL file already")
+	 (defvar SI:EXTSTR-AUTOLOAD-OUTPUT-TO-FASL ()
+	   "Says we've already put an autoload for DEFVSY to the FASL file")
+	 )
+
+;; Either EXTEND will have done a DEFCLASS* for STRUCT=INFO-CLASS, or else
+;;  DEFVSY will have set up the skeleton.  Hence  #. can use STRUCT=INFO-CLASS
+
+(eval-when (compile)
+  (special STRUCT-CLASS STRUCT=INFO-CLASS |defvst-construction/|| PRATTSTACK)
+  (setq defmacro-for-compiling () )
+ #+MacLISP 
+  (progn (*expr MACROEXPAND-1*) (*lexpr CERROR SI:DEFVST-BARE-INIT))
+) 
+
+
+;; FOO! to prevent circularities when compiling
+#+(local MacLISP) 
+(eval-when (compile) 
+    (do ((i 0 (1+ i))
+	 (l '(VERS NAME CNSN SIZE INIS CLSS) (cdr l))
+	 (z))
+	((null l))
+      (setq z (symbolconc 'STRUCT=INFO- (car l)))
+      (eval `(DEFMACRO ,z (X) `(SI:XREF ,X ,,i))))
+)
+
+(eval-when (compile)
+	(setq defmacro-for-compiling 'T )
+)
+
+
+;;;; Run-time Support Code
+;;;; SETVST 
+
+(DEFMACRO (SETVST defmacro-displace-call 'T) (ARGL VAL)
+   (PROG (TEM X SNAME)
+      A  (SETQ X ARGL)
+      B	 (AND (OR (ATOM X)				;lose on atom, or
+		  (NULL (SETQ SNAME (CAR X)))		; other bad format
+		  (NOT (SYMBOLP SNAME)))
+	      (GO LUZEZ))
+          ;; SELECTOR prop should be either (NAME i)  or (NAME i &REST)
+	 (AND (SETQ TEM (GET SNAME 'SELECTOR))		;lose if wrong
+	      (OR (COND ((NULL (CDDR TEM)) (CDDR X))	; kind of selector
+			('T (NULL (CDDR X))))
+		  (CDDDR X))
+	      (GO LUZEZ))
+	 (COND 
+	   ((MEMQ (CAR X) '(|defvst-xref/|| SI:XREF *:XREF))
+	     (return #+(and MacLISP (not NIL))
+		      (sublis `((X . ,(cadr x))
+				(I . ,(caddr x))
+				(Z . ,val))
+			      '#%(SI:XSET X I Z))
+		     #-(and MacLISP (not NIL))
+		      `(SI:XSET ,(cadr x) ,(caddr x) ,val)))
+	   ((SETQ TEM (MACROEXPAND-1* X)) 
+	     (SETQ X (CAR TEM)) 
+	     (GO B)))
+      LUZEZ  (SETQ ARGL (CERROR 'T () ':WRONG-TYPE-ARGUMENT 
+				'|~1G~S is not recognizable as a structure component selection -- ~S ~:[~%    Last expansion resulted in ~S ~]|
+				'T ARGL 'SETVST (NOT (EQ ARGL X)) X))
+	     (GO A)))
+
+
+;;;; |defvst-selection-1/||, |defvst-xref/||, |defvst-construction/||
+
+(defprop |defvst-general-selector/|| |defvst-selection-1/|| MACRO)
+
+(defun |defvst-selection-1/|| (x)
+   (or (macrofetch x)
+       (prog (selname struct more? sname index restp sinfo xx)
+	 A   (cond ((eq (car x) '|defvst-general-selector/||)
+		      ;; In this case, the arg list is (name slot-number frob)
+		     (desetq (() sname index struct) x)
+		     (if (or (not (symbolp sname))
+			     (null (setq sinfo (get sname 'STRUCT=INFO)))
+			     (not (fixnump index)))
+			 (+internal-lossage '|defvst-general-selector/||
+					    '|defvst-selection-1/||
+					    (list sname index)))
+		     (setq selname (car (vref (STRUCT=INFO-inis sinfo) 
+					      (1+ index)))))
+		   ('T (desetq (selname struct . more?) x
+			       (sname index . restp) (get selname 'SELECTOR))
+		       (setq sinfo (get sname 'STRUCT=INFO))))
+	     (cond ((or (if more? (or (cdr more?) (not restp)))
+			(if restp (or (not more?) 
+				      (not (eq (car restp) '&REST))))
+			(null sinfo) 	;no struct=info prop?
+			(not (eq (struct-typep sinfo) 'STRUCT=INFO)))
+		    (setq x (cerror 'T () ':WRONG-TYPE-ARGUMENT 
+				    '|~1G~S is not recognizable as a structure component selection -- ~S ~:[~%    Last expansion resulted in ~S ~]|
+				    'T x '|defvst-selection-1/|| () () ))
+		    (go A)))
+	 ;;  (si:check-defvst-version sname)	;Ensure up-to-date STRUCT=INFO
+	     (si:verify-defvst-version sname (STRUCT=INFO-vers sinfo))
+	     (if restp (setq index `(+ ,index ,(car more?))))
+	     (setq xx (if (memq COMPILER-STATE '(() TOPLEVEL))
+			  `(|defvst-xref/|| ,struct ,index ',sname ',selname)
+			  `(SI:XREF ,struct ,index)))
+	     (return (macromemo x xx selname)))
+))
+
+(defmacro |defvst-reference-by-name/|| (name key-index selname object 
+					&whole form)
+  (cond (*RSET 
+	  (check-type name #'SYMBOLP '|defvst-reference-by-name/||)
+	  (check-type key-index #'FIXNUMP '|defvst-reference-by-name/||)
+	  (let ((sinfo (get name 'STRUCT=INFO)))
+	    (if (or (not (eq (struct-typep sinfo) 'STRUCT=INFO))
+		    (< key-index 0)
+		    (not (< key-index (STRUCT=INFO-size sinfo))))
+	       (ferror () "Inconsistent structure expansion request -- ~S" form)))))
+  (if (memq COMPILER-STATE '(() TOPLEVEL))
+      `(|defvst-xref/|| ,object ,key-index ',name ',selname)
+      `(SI:XREF ,object ,key-index)))
+
+
+(defun |defvst-xref/|| (struct index sname selname)
+   (cond ((or (null *RSET) (eq (struct-typep struct) sname))
+	  (si:xref struct index))
+	 ((cerror 'T () ':INCONSISTENT-ARGUMENTS 
+		  "The struct selector ~1G~S is being applied to ~S which isn't a ~S"
+		  (list selname struct) selname struct sname))))
+
+(defsetf |defvst-xref/|| ((() struct index sname selname) val) () 
+   `(SI:XSET ,struct ,index ,val))
+
+
+(defun |defvst-construction-1/|| (x) 
+   (or (macrofetch x)
+       (let (ol cnsn sname sinfo)
+	 (do () 
+	     ((and (setq ol (cdr x) cnsn (car x))
+		   (setq sname (get cnsn 'CONSTRUCTOR))
+		   (setq sinfo (get sname 'STRUCT=INFO))))
+	   (setq x (cerror 'T () ':WRONG-TYPE-ARGUMENT 
+			   "~S is not recognizable as a structure construction -- ~S"
+			   'T x '|defvst-construction-1/||)))
+	 (macromemo 
+	    x 
+	    (|defvst-construction/|| sname ol)
+	    cnsn))))
+
+
+;;;; |defvst-construction/|| 
+
+(defun |defvst-construction/|| (sname argl)
+  (LET ((OVERRIDES ARGL) 
+	(SINFO (GET SNAME 'STRUCT=INFO))
+	(NKEYS 0)
+	(TOTSIZE 0) 
+	RESTRICTIONSP  INIS  ACCESSOR-MAC  INSTANCEIZER  RESTP  
+	BL  OL  NOL  TMP PROGN-LIST)
+    (DECLARE (FIXNUM NKEYS TOTSIZE))
+    (IF (NOT (STRUCT-TYPEP SINFO))
+	(+INTERNAL-LOSSAGE 'STRUCT-TYPEP 
+			   '|defvst-construction/|| 
+			   (CONS SNAME ARGL)))
+;;  (SI:CHECK-DEFVST-VERSION SNAME)	;Ensure up-to-date STRUCT=INFO
+    (si:verify-defvst-version sname (STRUCT=INFO-vers sinfo))
+    (SETQ INIS (STRUCT=INFO-INIS SINFO)
+	  NKEYS (STRUCT=INFO-SIZE SINFO))
+    (SETQ RESTP (VREF INIS 0))
+    (SETQ TOTSIZE NKEYS)
+    (AND OVERRIDES (PUSH () OVERRIDES))
+    (IF RESTP 
+	(SETQ TOTSIZE 
+	      (+ TOTSIZE 
+		 (COND ((AND OVERRIDES (SETQ TMP (GET (CAR RESTP) OVERRIDES)))
+			(COND ((EQ (TYPEP TMP) 'FIXNUM))
+			      ((> TMP -1))
+			      ((+INTERNAL-LOSSAGE '&REST 
+						  '|defvst-construction/||
+						  (CONS SNAME ARGL))))
+			TMP)
+		       ((CADDR RESTP))))))
+    (DO ( (I NKEYS (1- I)) (OVERRIDE? () ()) (KEYNAME) (TYPL) (FORM) )
+	( (< I 1) )
+      (DESETQ (KEYNAME ACCESSOR-MAC FORM . TYPL) (VREF INIS I))
+      (SETQ ACCESSOR-MAC 
+	    (COND (ACCESSOR-MAC 
+		    `(,accessor-mac CURRENT-CONSTRUCTION))
+		  ('T (if typl (+internal-lossage 'SELECTOR 
+						  '|defvst-construction/||
+						  sname))
+		      `(SI:XREF CURRENT-CONSTRUCTION ,(1- i)))))
+      (IF (SETQ TMP (GETL OVERRIDES (LIST KEYNAME)))
+	  (SETQ FORM (CADR TMP) OVERRIDE? 'T))
+      (AND FORM 
+	   (SETQ FORM `(SETVST ,accessor-mac 
+			       ,(cond ((null typl) form)
+				      ('t (setq restrictionsp '(() ))
+					  `(|defvst-typchk/||  
+					    ,form
+					    ',typl 
+					    ',accessor-mac)))))
+	   (IF OVERRIDE? 
+	       (PUSH (CONS KEYNAME FORM) OL)
+	       (PUSH FORM BL))))
+      ;BL is the Basic List of component setups, obtained from the non-null
+      ;  default initializations (initialization to null can be elided)
+      ;OL is the list of overriding initializatons provided by this 
+      ;  particular call to the constructor. 
+      ;There has to be an ordering such that basic one are done first,
+      ;  and then the overrides in the order supplied by the caller. 
+      ;Sort by order seen the the caller.
+    (DO ((L (CDR OVERRIDES) (CDDR L)))
+	((NULL L))
+      (SETQ TMP (CAR L))
+      (DO ()
+	  ((DO ((I (1- (VECTOR-LENGTH INIS)) (1- I)))
+	       ((< I 0))
+	     (DECLARE (FIXNUM I))
+	       ;; (VECTOR-POSASSQ TMP INIS)
+	     (IF (EQ TMP (CAR (VREF INIS I))) (RETURN 'T))))
+	(SETQ TMP (CERROR 'T () ':WRONG-TYPE-ARGUMENT 
+			  "~1G~S Bad key word while cons'ing a ~S structure."
+			  () TMP SNAME)))
+      (IF  (SETQ TMP (ASSQ TMP OL))  (PUSH (CDR TMP) NOL)))
+
+	;; Ensure that the class will be defined.  Remember that things are
+	;; taken from PRATTSTACK in inverse order, so the DEFPROP really does
+	;; happen at the right time.
+   #+MacLISP
+    (cond ((and (status feature COMPLR)
+		  (memq compiler-state '(COMPILE MAKLAP))
+		  (not (memq sname SI:STRUCTS-OUTPUT-TO-FASL)))
+	       ;; Output enough info to initialize everything.
+	      (let* ((sclass (get sname 'CLASS))
+		     (bare-init
+			  `(SI:DEFVST-BARE-INIT
+			       ',sname
+			       ',(or (si:class-var sclass)
+				     (symbolconc sname '|-CLASS|))
+			       ',(STRUCT=INFO-cnsn sinfo)
+			       ,nkeys
+			       ;; Open-coding of TO-LIST to avoid VECTOR file
+			       ',(do ((idx (1- (vector-length inis)) (1- idx))
+				      (z () (cons (vref inis idx) z)))
+				     ((< idx 0) z)
+				   (declare (fixnum idx)))
+			       ,SI:STRUCT=INFO-VERSION
+			       ',(get (si:class-plist (get sname 'CLASS))
+				      ':SOURCE-FILE))))
+		(push bare-init PRATTSTACK)
+		(if (not (eq compiler-state 'COMPILE))
+		    (push bare-init progn-list)))
+	      (cond ((null SI:EXTSTR-AUTOLOAD-OUTPUT-TO-FASL)
+		      (push '#%(subload EXTSTR) PRATTSTACK)
+		      (if (not (eq compiler-state 'COMPILE))
+			  (push '#%(subload EXTSTR) progn-list))))
+	      (setq SI:EXTSTR-AUTOLOAD-OUTPUT-TO-FASL T )
+	        ;; Don't repeat this mickey-mouse!
+	      (push sname SI:STRUCTS-OUTPUT-TO-FASL)))
+
+      (SETQ INSTANCEIZER 
+	       ;; Do things this way to get the COMPILE-time expansion
+	       ;;  of SI:MAKE-EXTEND which should be good at runtime too.
+	  #+(and MacLISP (not NIL)) 
+	  `#%(SI:MAKE-EXTEND ,totsize ,(symbolconc sname '-CLASS))
+	  #-(and MacLISP (not NIL)) 
+	  `(SI:MAKE-EXTEND ,totsize ,(symbolconc sname '-CLASS))
+	  )
+      (IF (AND (NULL BL) (NULL NOL)) 
+	  INSTANCEIZER 
+	  `(PROGN ,@progn-list
+		  (LET ((CURRENT-CONSTRUCTION ,instanceizer))
+		    ,.(nreconc bl (nreconc nol '(CURRENT-CONSTRUCTION))))))))
+
+
+
+;;(defun SI:CHECK-DEFVST-VERSION (sname)
+;;  (let ((sinfo (get sname 'STRUCT=INFO)))
+;;    (cond (sinfo 				    ;If not done yet, it's OK
+;;	    ;; fixups and conversions
+;;	   #M (if (= (STRUCT=INFO-vers sinfo) 1)	;Version 1 and 2 are 
+;;		  (setf (STRUCT=INFO-vers sinfo) 2))	; almost identical
+;;	    ;; Add new fixups and conversions here.
+;;	   (si:verify-defvst-version sname (STRUCT=INFO-vers sinfo))))))
+
+#+MacLISP 
+  (progn 'COMPILE 
+     (if (status feature COMPLR)
+	  ;;Technically, we need to do this.  Also, on COMPLR reinitialization.
+	 (push '(lambda () (setq SI:STRUCTS-OUTPUT-TO-FASL ()
+				 SI:EXTSTR-AUTOLOAD-OUTPUT-TO-FASL () ))
+	       SPLITFILE-HOOK))
+     #-NIL (progn 'compile 
+	     (def-or-autoloadable GENTEMP MACAID)
+	     (def-or-autoloadable SI:XREF EXTBAS)
+	     (def-or-autoloadable SI:XSET EXTBAS))
+     )
+
+

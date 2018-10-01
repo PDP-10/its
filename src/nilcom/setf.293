@@ -1,0 +1,564 @@
+;;;  SETF    				-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;  *************************************************************************
+;;;  ***** NIL ******** SETF, PUSH, and POP Expanders  ***********************
+;;;  *************************************************************************
+;;;  ** (c) Copyright 1981 Massachusetts Institute of Technology *************
+;;;  *************************************************************************
+
+(herald SETF /293)
+
+(eval-when (eval compile)
+  (or (get 'SUBLOAD 'VERSION)
+      (load '((LISP) SUBLOAD)))
+  (subload SHARPCONDITIONALS)
+)
+
+#+(local MacLISP) 
+(eval-when (compile)
+   (mapc '(lambda (x) (putprop x 'T 'SKIP-WARNING))
+	 '(SETF +INTERNAL-SETF-X +INTERNAL-SETF-X-1 SETF-SIMPLEP-SCAN
+	   +INTERNAL-CARCDR-SETF +INTERNAL-PUSH-X +INTERNAL-POP-X
+	   DEFUPDATE PUSH POP))
+)
+
+#+(or NIL LISPM)
+(progn 
+    (globalize "+INTERNAL-SETF-X")
+    (globalize "+INTERNAL-POP-X")
+    (globalize "+INTERNAL-SETF-X-1")
+    (globalize "+INTERNAL-PUSH-X")
+    (globalize "+INTERNAL-CARCDR-SETF")
+    (globalize "SETF-SIMPLEP-SCAN")
+    (globalize "SETF-STRUCT")
+    (globalize "SETF")
+    (globalize "DEFUPDATE")
+    (globalize "STATIC-AREAP")
+    (globalize "WRITEABLEP")
+    )
+
+
+;;; Current contents:
+;;;   Functions:  +INTERNAL-SETF-X,  +INTERNAL-SETF-X-1,  +INTERNAL-CARCDR-SETF
+;;; 	          +INTERNAL-PUSH-X,  +INTERNAL-POP-X, DEFUPDATE
+;;;   and defsetfs for various functions
+
+
+
+#-NIL 
+(eval-when (eval compile)
+    (subload MACAID)
+     ;; Following will also load VECTOR and DEFVST at eval-compile times
+    (subload EXTMAC)
+    (subload EXTEND)
+    (subload DEFSETF)
+    (subload EVONCE)
+)
+
+
+#M (eval-when (eval load compile)
+     (and (status feature COMPLR)
+	  (*lexpr EVAL-ORDERED* SETF-STRUCT))
+     )
+
+
+
+;;Well, when can we take this out?  -- JonL, 12/23/80
+#N (progn 'compile
+(defmacro STATIC-AREAP (&rest l) '() )
+(defmacro STATIC-COPY (x) x)
+)
+
+#-NIL (progn 'compile
+(defmacro STATIC-AREAP (x)
+      #+PDP10 `(PUREP ,x)
+      #-PDP10 '() )
+(defmacro STATIC-COPY (x) 
+      #+PDP10 `(PURCOPY ,x)
+      #-PDP10 '() )
+)
+
+#+(and MacLISP PDP10)  (progn 'compile 
+(def-or-autoloadable PUREP PUREP)
+(def-or-autoloadable WRITEABLEP PUREP)
+(def-or-autoloadable LEXPR-FUNCALL LEXPRF)
+(def-or-autoloadable EVAL-ORDERED* EVONCE)
+(def-or-autoloadable GENTEMP MACAID)
+)
+
+
+
+;;;; Comments
+
+;;   There are problems with doing PUSH and POP regarding multiple evaluations
+;; of the computation yielding the stack.  Simply expanding into SETF
+;; results in unobvious order-of-evaluation and multiple evaluation, and
+;; the wrong return result.
+;;   To deal with this, we interrupt the SETF expansion midway, after all
+;; the pieces have been picked apart.  The setf expanders for the various
+;; functions provide us with a structure containing the computations required,
+;; the value to be stored, and continuation functions to apply to the
+;; computations to get the forms to store and retrieve the value.  This lets
+;; us substitute gensyms for computations that we decide should not be repeated
+;; and lambda-bind the gensyms to the computations.
+
+;; The components of the setf-struct are as follows
+
+;; * SETF-compute			A list (who's length we'll call "n")
+;;					  of forms to be EVAL'ed in the
+;;					  computation prior to storing the
+;;					  value.
+;;   SETF-i-compute			A copy of the initial value of
+;;					  SETF-compute 
+;;   SETF-side-effects			A flag, non-null if SETF-SIMPLEP-SCAN
+;;					  encountered any expressions which may
+;;					  have contained side effects.
+;;					  Initially ().
+;; * SETF-access			A function of n arguments, to be APPLYd
+;;					  to the applied to the computations
+;;					  to give a form to access the
+;;					  specified slot of the structure
+;;					  given the computations with whatever
+;;					  gensym substitutions performed.
+;; * SETF-invert			A function of n+1 arguments, to be
+;;					  applied to SETF-allcomps
+;; * SETF-ret-ok			A flag, non-null implies form returned
+;;					  by SETF-invert will be the value of
+;;					  the SETF-value-expr
+;;   SETF-genvals			A list of values for which gensym
+;;					  been substituted for in SETF-compute.
+;;   SETF-gensyms			A list of gensyms, one-to-one with
+;;					  values in SETF-genvals
+;;   SETF-user-slot			A slot available for communication
+;;					  between SETF-X expanders and their
+;;					  continuations (INVERT and ACCESS)
+
+;; These objects are returned by +INTERNAL-SETF-X-1.  They are updated by
+;; SETF-SIMPLEP-SCAN to build the SETF-genvals and SETF-gensyms slots, from
+;; which a lambda form can be wrapped around the accessing and setting.
+;; The user of the structure is responsible for remembering the value to
+;; be stored, and possibly substituting a gensym for it in the lambda form.
+
+;; The slots marked above with a "*" are supplied by calling the SETF-X
+;; property on the X part of (SETF X Y).  (the case of X being a symbol
+;; is special-cased, and the CAR/CDR cases are handled specially if no
+;; SETF property is found.)
+
+
+;; (SETF-STRUCT access invert ret-ok compute)
+;; creates one of these SETF structures.  The value component is 
+
+;; Note:  The variable EFFS herein is not special.  It is, however, equivalent
+;; in function to the compiler's (NCOMPLR and LCP) variable EFFS.  If non-(),
+;; the form is being expanded "for effect", i.e. the return value is going to b
+;; ignored, so don't bother taking pains to preserve it.  It is supplied as ()
+;; in the interpreter, and currently in the compiler as well.
+
+;; +INTERNAL-PUSH-X and +INTERNAL-POP-X are called by the interpreter and
+;; compiler to expand complex PUSH and POPs.  The first argument is the
+;; CDR of the PUSH or POP form (viewed as a macro, or the entire argument
+;; to the PUSH or POP FSUBR in the interpreter).  The second is the
+;; EFFS argument as above.
+
+;; (DEFMACRO PUSH (&REST PUSH-ARGS) `(+INTERNAL-PUSH-X ,PUSH-ARGS () ))
+;; (DEFMACRO POP (&REST POP-ARGS) `(+INTERNAL-POP-X ,POP-ARGS () ))
+
+
+;;;; +INTERNAL-PUSH-X and  +INTERNAL-POP-X
+
+(defmacro DEFUPDATE (name conser)
+  `(DEFMACRO ,name (&WHOLE FORM)
+     (+INTERNAL-PUSH-X (CDR FORM)
+		       ()  ;Losing compiler doesn't hack EFFS
+		           ;at macro-expansion time.
+		       ',conser)))
+
+;; example: (defupdate PUSH CONS)
+;;          (defupdate accumulate PLUS)
+;; (defmacro increment (x) `(accumulate 1 ,x))
+
+(defun +INTERNAL-PUSH-X ((val stack) effs &optional (push-cons 'CONS)
+				     &aux valval valsym temp incrementation)
+  (let ((expf-stack (setf-simplep-scan (+internal-setf-x-1 stack) () )))
+     (cond ((and (not (|constant-p/|| val))
+		 (not (null (SETF-gensyms expf-stack)))) 
+	    (setq valval (ncons val)
+		  valsym (ncons (si:gen-local-var val)))))
+     (setq incrementation `(,push-cons ,val ,(setf-access-form expf-stack)))
+     (cond ((or effs (SETF-ret-ok expf-stack))
+	       (setq temp (setf-invert-form expf-stack incrementation)))
+	   ('T (si:gen-local-var temp)
+	       (setq temp
+		     `((LAMBDA (,temp)
+			 ,(setf-invert-form expf-stack temp)
+			 ,temp)
+		       ,incrementation))))
+     (cond ((null (SETF-gensyms expf-stack)) temp)
+	   ('T `((LAMBDA (,@valsym ,.(SETF-gensyms expf-stack))
+		   ,temp)
+		 ,.valval ,.(SETF-genvals expf-stack))))))
+
+
+;; POP must be careful of side-effect interactions between first and second arg
+
+(defun +INTERNAL-POP-X (foo effs &optional (pop-car 'CAR) (pop-cdr 'CDR) 
+			         &aux (stack (car foo)) (into (cdr foo)))
+
+  (let ((expf-stack (setf-simplep-scan (+internal-setf-x-1 stack) () ))
+	(expf-into (and (not (null into)) (+internal-setf-x-1 (car into))))
+	stack-access-form  temp  tsym )
+    (if into (setf-simplep-scan expf-into (SETF-side-effects expf-stack) ))
+    (cond ((or (not (null (SETF-gensyms expf-stack)))
+	       (and into (SETF-side-effects expf-into)))
+	    (si:gen-local-var tsym)
+	    (setq temp `((CAR ,tsym)))
+	    (if (and (not effs)			       ;Maybe save ret value
+		     (not (SETF-ret-ok expf-into)))
+		(setq temp `((SETQ ,tsym ,@temp))))
+	    (cond (into
+		    (if (and (SETF-side-effects expf-into)
+			     (not (SETF-side-effects expf-stack)))
+			(setf-simplep-scan expf-stack 'T))
+		    (setq temp 
+			  (ncons (setf-invert-form expf-into (car temp))))))
+	    (if (and (not effs)
+		     (not (SETF-ret-ok expf-into))) 	;Maybe need ret value
+		(setq temp `(,@temp ,tsym)))
+	    `((LAMBDA (,.(SETF-gensyms expf-stack)
+			 ,.(and into (SETF-gensyms expf-into)))
+		((LAMBDA (,tsym)
+		   ,(setf-invert-form expf-stack `(,pop-cdr ,tsym))
+		   ,@temp)
+		 ,(setf-access-form expf-stack)))
+	      ,.(SETF-genvals expf-stack)
+	      ,.(and into (SETF-genvals expf-into))))
+	  ((+internal-dup-p 
+	    (setq stack-access-form (setf-access-form expf-stack)))
+	   (setq temp `(,pop-car ,stack-access-form))
+	   (cond ((not (null into))  ;Better code with SETQ inside PROG2
+		  (setq temp
+			(+internal-setf-x `(,(car into) ,temp) effs))))
+	   `(PROG2 () 
+	      ,temp
+	      ,(setf-invert-form expf-stack `(,pop-cdr ,stack-access-form))))
+	  ('T (si:gen-local-var tsym)
+	      (setq temp `((LAMBDA (,tsym)
+			     ,(setf-invert-form expf-stack `(,pop-cdr ,tsym))
+			     (,pop-car ,tsym))
+			   ,stack-access-form))
+	      (if into 
+		  (+internal-setf-x `(,(car into) ,temp) effs)
+		  temp)))))
+
+
+
+;;;; SETF macro, +INTERNAL-SETF-X, and  SETF-SIMPLEP-SCAN
+
+
+(defmacro SETF (&rest w) (+internal-setf-x w () ))
+
+(defun +INTERNAL-SETF-X (w effs)
+   (do ((l w (cddr l)) 
+	(form) (val) (expf) (val-gensym) (ret-form))
+       ((null l)
+	(cond ((null (cdr ret-form)) (car ret-form))
+	      ('T `(PROGN ,. (nreverse ret-form)))))
+      ;One step in expanding "(SETF ...  form  val ... )"
+     (desetq (form  val) l)
+     (if (null (cdr l))
+	 (setq val (cerror T () ':WRONG-NUMBER-OF-ARGUMENTS
+			   "SETF called with an odd number of arguments.  ~@
+			   Extra reference = ~3G~S.~@
+			   Supply a form to evaluate, store and return."
+			   'SETF (length w) w form)))
+     (setq expf (+INTERNAL-SETF-X-1 form))
+     (cond ((or (and (null (cddr l))		;If at end of SETF
+		     (not effs)			;If values matter at all
+		     (not (SETF-ret-ok expf))   ;If it wrong val at end
+		     (not (+internal-dup-p val)))  ;And we can't duplicate
+		(not (equal (SETF-compute expf)		;If already simplified
+			    (SETF-i-compute expf))))
+	    (if (equal (SETF-compute expf)
+		       (SETF-i-compute expf))
+		(setf-simplep-scan expf () ))
+	    (si:gen-local-var val-gensym)
+	    (push `((lambda (,@(SETF-gensyms expf) ,val-gensym)
+			    ,(setf-invert-form expf val-gensym)
+			    ,val-gensym)
+			  ,@(SETF-genvals expf) ,val)
+		  ret-form))
+	   ('T (setq ret-form (cons (setf-invert-form expf val)
+				    ret-form))
+	       (cond ((and (not effs)
+			   (not (cddr l))
+			   (not (SETF-ret-ok expf)))
+		      (setq ret-form (cons val ret-form))))))))
+
+
+;; Call SETF-SIMPLEP-SCAN on a SETF-STRUCT, and a second arg saying whether
+;; or not side effects have been detected.
+;; NO-OP if SETF-SIMPLEP-SCAN already called on it.
+
+(defun SETF-SIMPLEP-SCAN (expf known-side-effects?)
+  (if (null (SETF-gensyms expf))
+      (do ((rest (SETF-compute expf) (cdr rest))
+	   (clist) (slist) (sitem) 
+	   (original) (expansion))
+	  ((null rest)
+	    (SSETF-genvals expf (nreverse clist))
+	    (SSETF-gensyms expf (nreverse slist)))
+	(setq expansion (macroexpand (setq original (car rest))))
+	 ;; Why isn't the following RPLACA conditionalized by
+	 ;; (cond ((not (static-areap original)))
+	 ;;	  ((writeablep original) 
+	 ;;	     ;; Writeable, but 'static', so someday may be purified.
+	 ;;	    (setq expansion (static-copy expansion))
+	 ;;	    'T))
+        (rplaca rest expansion)
+	(cond ((or (|constant-p/|| expansion)  		;Always safe!
+		   (and (null known-side-effects?) 
+			(+internal-dup-p expansion)))
+	         ;; Nothing to be done in these cases
+	        () )
+	      ((and (null known-side-effects?) (|side-effectsp/|| expansion))
+	         ;;All is in, so reset and carefully do it again!
+	        (SSETF-compute expf (append (SETF-I-compute expf) () ))
+		(SSETF-side-effects expf 'T)
+		(return (setf-simplep-scan expf 'T)))
+	      ('T (si:gen-local-var sitem)
+		  (push expansion clist)
+		  (push sitem slist)
+		  (rplaca rest sitem)))))
+  expf)
+
+
+;;;; +INTERNAL-SETF-X-1  and  +INTERNAL-CARCDR-SETF
+
+
+;; +INTERNAL-SETF-X-1 takes an access expression and returns a SETF-STRUCT
+;; which contains the various info documented at the head of this file.
+
+;; The way the expansion happens is a loop of the following:
+;;  a)  If it's a symbol, special case
+;;  b)  If the CAR is a symbol, and has a SETF-X property, FUNCALL it on the
+;;	access and value expressions (unless that property is 'AUTOLOAD', 
+;; 	meaning that autoloading should be tried if possible, or if it is 
+;; 	'SETF-X' meaning autoloading has been tried and lost).
+;;  c)  If it's a macro, MACROEXPAND-1 it and return
+
+(defun +INTERNAL-SETF-X-1 (expr)
+  (prog (temp oper)
+    A	(cond ((atom expr)
+	       (cond ((symbolp expr)
+		      (return (SETF-STRUCT `(LAMBDA (()) ',expr) 
+					   `(lambda (() y) `(setq ,',expr ,y))
+					   'T 
+					   () )))))
+	      ((not (symbolp (setq oper (car expr)))) () )
+	      ((and (setq temp (get oper 'SETF-X)) 
+		    (not (memq temp '(AUTOLOAD SETF-X))))
+	       (return (funcall temp expr)))
+	      ('T (cond ((and (cond ((null temp)
+				      ;;This excludes carcdrs ??
+				     (not (fboundp oper)))
+				    ((eq temp 'AUTOLOAD))) ;Help for LDB etc
+			      (setq temp (get oper 'AUTOLOAD)))
+			 (funcall autoload `(,oper . ,temp))
+			 (cond ((setq temp (get oper 'SETF-X))
+				(return (funcall temp expr)))
+			       ('T (putprop oper 'SETF-X 'SETF-X))))
+			((setq temp (macroexpand-1* expr)) 
+			  ;allow macro-redefinition, even for carcdr functions
+			 (return (+INTERNAL-SETF-X-1 (car temp))))
+			((setq temp (|carcdrp/|| oper))
+			 (return (+INTERNAL-carcdr-setf temp expr))))))
+    (setq expr (error '|Obscure format - SETF| expr 'WRNG-TYPE-ARG))
+    (go A)
+    ))
+
+
+(defun +INTERNAL-CARCDR-SETF (carcdrspec expr)
+   (let ((rplac (cond ((eq (car carcdrspec) 'A) 'rplaca)
+		      ('T 			  'rplacd)) )
+	 (op (cond ((eq (car carcdrspec) 'A) 'CAR)
+		   ('T 'CDR)))
+	 (carcdr (cadr carcdrspec) )
+	 ((() pair) expr)
+	 (subform) )
+	(setq subform (cond ((or (null carcdr) (eq carcdr 'CR)) pair)
+			    ('T `(,carcdr ,pair))))
+	(SETF-STRUCT `(LAMBDA (() X) `(,',op ,x)) 
+		     `(LAMBDA (() VALUE PAIR) `(,',rplac ,pair ,value))
+		     ()
+		     `(,subform))))
+
+(defun setf-invert-form (expf val)
+   (lexpr-funcall (SETF-invert expf)
+		  expf 
+		  val 
+		  (SETF-compute expf)))
+
+(defun setf-access-form (expf)
+  (lexpr-funcall (SETF-access expf)
+		 expf 
+		 (SETF-compute expf)))
+
+
+; SETF-STRUCT is a slight variant on the constructor  function
+(defun SETF-STRUCT  (access invert ret-ok compute &optional function)
+    (CONS-A-SETF  COMPUTE	compute
+		  I-COMPUTE     (APPEND compute ())
+		  RET-OK	ret-ok 
+		  ACCESS	access 
+		  INVERT	invert
+		  FUNCTION      function))
+
+
+
+;;;; DEFSETFs for various system functions
+
+
+(defsetf CXR ((() index frob) value) ()
+  `(RPLACX ,index ,frob ,value))
+
+(defsetf NTH ((() index frob) value) ()
+  `(RPLACA (NTHCDR ,index ,frob) ,value))
+
+(defsetf NTHCDR ((() index frob) value) ()
+  `(RPLACD (NTHCDR (1- ,index) ,frob) ,value))
+
+
+;; The PROGN stuff isn't optimal, it will generate LAMBDAs unnecessarily.
+;; Hopefully the compiler will eliminate them.
+
+
+
+
+(defprop PROGN T SETF-PROGNP)
+
+(defun (progn SETF-X-ACCESS) (expf &restl steps)
+  (let (( (fun . expf-frobref) (setf-user-slot expf)))
+    (if (and (null steps) (get fun 'SETF-PROGNP))
+	(setf-access-form expf-frobref)
+	`(,fun ,@steps ,(setf-access-form expf-frobref)))))
+
+(defun (progn SETF-X-INVERT) (expf val &restl steps)
+  (let* (( (fun . expf-frobref) (setf-user-slot expf)))
+    (if (and (null steps) (get fun 'SETF-PROGNP))
+	(setf-invert-form expf-frobref val)
+	`(,fun ,@steps ,(setf-invert-form expf-frobref val)))))
+
+(defun (progn SETF-X) 
+	    (expr &aux (fun (car expr)) temp frobref steps expf expf-frobref)
+  (setq temp (reverse (cdr expr))
+	frobref (car temp)
+	steps (nreverse (cdr temp))
+	expf (setf-simplep-scan
+		(setf-struct #,(get 'PROGN 'SETF-X-ACCESS)
+			     #,(get 'PROGN 'SETF-X-INVERT)
+			     () 
+			     steps)
+		() )
+	expf-frobref (setf-simplep-scan (+internal-setf-x-1 frobref) () ))
+    (SSETF-user-slot expf (list* fun expf-frobref))
+    (SSETF-genvals expf (append (SETF-genvals expf)
+				(SETF-genvals expf-frobref)))
+    (SSETF-gensyms expf (append (SETF-gensyms expf)
+				(SETF-gensyms expf-frobref)))
+    (SSETF-ret-ok expf (SETF-ret-ok expf-frobref))
+    expf)
+
+
+
+
+(defun (arraycall SETF-X-ACCESS)  (expf array &restl indices)
+    `(ARRAYCALL ,(SETF-user-slot expf) ,array ,. indices))
+
+(defun (arraycall SETF-X-INVERT) (expf val array &restl indices)
+   (let ((gensyms (mapcar #'(lambda (() ) (si:gen-local-var () "Index"))
+			  indices)))
+	(eval-ordered* `(A ,@gensyms V)
+		       `(,array ,@indices ,val)
+		       ``((store (arraycall ,',(SETF-user-slot expf)
+					    ,A 
+					    ,,@gensyms)
+				 ,V)))))
+
+(defun (arraycall SETF-X) (g)
+  (let* (( (() type . frobs) g)
+	 (struct (setf-struct #,(get 'ARRAYCALL 'SETF-X-ACCESS)
+			      #,(get 'ARRAYCALL 'SETF-X-INVERT)
+			      'T 
+			      frobs)))
+     (SSETF-user-slot struct type)
+     struct))
+
+
+
+(defsetf GET ((() sym tag) value) T 
+   (eval-ordered* '(X A V)
+		  `(,sym ,tag ,value)
+		  '`((PUTPROP ,X ,V ,A))))
+
+(defsetf PLIST  ((() sym) value) T
+   `(SETPLIST ,sym ,value))
+
+(defsetf SYMEVAL ((() sym) value) T
+   `(SET ,sym ,value))
+
+(defsetf ARG ((() argument) value) T
+  `(SETARG ,argument ,value))
+
+(defsetf ARGS ((() argument) value) ()
+   `(ARGS ,argument ,value))
+
+(defsetf SFA-GET ((() sfa loc) value) T
+   `(SFA-STORE ,sfa ,loc ,value))
+
+
+(defsetf FIXNUM-IDENTITY ((() x) value) T 
+  `(FIXNUM-IDENTITY (SETF ,x (FIXNUM-IDENTITY ,value))))
+
+(putprop 'FLONUM-IDENTITY (get 'FIXNUM-IDENTITY 'SETF-X) 'SETF-X)
+
+
+
+(defsetf LDB  ((() byte word) value) () 
+   (si:ldb-dpb-stfx word byte () value '(DPB . T)))
+(defsetf LOAD-BYTE ((() word position size) value) ()
+   (si:ldb-dpb-stfx word position size value '(DEPOSIT-BYTE . () )))
+
+
+(defun SI:LDB-DPB-STFX (word position size value foo)
+   (let ((dpber (car foo))	;like *DPB or DEPOSIT-BYTE or ...
+	 (ppssp (cdr foo))	;non-null iff LDB/DPB rather than LOAD-BYTE/...
+	 (byte position)	;in the LDB case (as opposed to LOAD-BYTE)
+	 (expf (+internal-setf-x-1 word))
+	 side-effects valq valb byteq byteb)
+     (SETF-simplep-scan expf () )
+     (cond ((null ppssp) () )
+	   ((or (SETF-side-effects expf) 
+		(|side-effectsp/|| value)
+		(|side-effectsp/|| byte))
+	    (cond ((|constant-p/|| value))
+		  ('T (si:gen-local-var valq)
+		      (setq valq  (list valq) valb         (list value)
+			    value (car valq)  side-effects 'T)))
+	    (cond ((|constant-p/|| byte))
+		  ('T (si:gen-local-var byteq)
+		      (setq byteq (list byteq)  byteb        (list byte)
+			    byte  (car byteq)   side-effects 'T)))))
+     (let* ((access (setf-access-form expf))
+	    (invert (setf-invert-form 
+		      expf 
+		      (if ppssp 
+			  `(,DPBer ,value ,byte ,access)
+			  `(,DPBer ,access ,position ,size ,value)))))
+	(cond ((or side-effects (not (null (SETF-gensyms expf))))
+	       `((LAMBDA (,.byteq ,@(SETF-gensyms expf) ,.valq)
+			 ,invert)
+		 ,.byteb ,@(SETF-genvals expf) ,.valb))
+	      ('T invert)))))
+
+
+
+

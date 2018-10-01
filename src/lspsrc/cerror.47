@@ -1,0 +1,173 @@
+;;;  CERROR 			-*-Mode:Lisp;Package:SI;Lowercase:T-*-
+;;;  ****************************************************************
+;;;  *** MacLISP ******** CERROR - pseudo version *******************
+;;;  ****************************************************************
+;;;  ** (c) Copyright 1981 Massachusetts Institute of Technology ****
+;;;  ****************************************************************
+
+(herald CERROR /47)
+
+(include ((lisp) subload lsp))
+
+
+(eval-when (eval compile)
+  (subload EXTMAC)
+  (mapc '(lambda (x) (putprop x T 'SKIP-WARNING))
+	'(CERROR FERROR +INTERNAL-LOSSAGE))
+  (setq MACROS () )
+)
+
+
+(eval-when (eval load compile)
+   (cond ((status feature COMPLR)
+	  (*lexpr CERROR FERROR LEXPR-SEND SI:LOST-MESSAGE-HANDLER)))
+)
+
+
+;;;; Kludgy MacLISP setup for ERROR-OUTPUT variable
+(defvar ERROR-OUTPUT 'T)
+
+(defun ERROR-OUTPUT-output MACRO (x) `(SFA-GET ,(cadr x) 0))
+
+(defun si:ERROR-OUTPUT-handler (self op arg)
+  (let ((out (ERROR-OUTPUT-output self)))
+    (caseq op 
+      ((PRINT PRINC) 		(funcall op arg out))
+      (TYO        		(if (> arg 0) (tyo arg out)))
+      ((FRESH-LINE :FRESH-LINE) (si:fresh-linify out))
+      (CURSORPOS  		(si:spread-cursorpos arg out))
+      ((LINEL CHARPOS) 		(lexpr-funcall op out arg))
+      (WHICH-OPERATIONS 	'(PRINT PRINC TYO FRESH-LINE CURSORPOS 
+					LINEL CHARPOS))
+      (T 			(sfa-unclaimed-message self op arg)))))
+
+;; Now that we have a winner, override any previous ERROR-OUTPUT setting
+;;  which is "standard".
+(cond ((and (boundp 'ERROR-OUTPUT)	
+	    (not (eq ERROR-OUTPUT 'T))
+	    (not (eq ERROR-OUTPUT TYO))
+	    (not (eq ERROR-OUTPUT MSGFILES)))
+         ;; Leave this case alone -- it is set to something "local"
+       )
+      ((status nofeature SFA) 		 		;Lossage-mode
+        (setq ERROR-OUTPUT (subst tyo 'T msgfiles)))
+      (T (setq ERROR-OUTPUT (sfa-create 'si:ERROR-OUTPUT-handler 
+					1 
+					'ERROR-OUTPUT))
+	 (sfa-store ERROR-OUTPUT 
+		    0 
+		    (if (boundp 'TERMINAL-IO) terminal-io TYO))))
+
+
+(defun SI:LOST-MESSAGE-HANDLER (object message &rest params &aux newsym)
+  (if (= (getcharn message 1) #/:)
+      (lexpr-send object (implode (cdr (explode message))) params)
+      (if (and (not (= (getcharn message 1) #/:))
+	       (find-method (setq newsym
+				  (implode (list* #/: (explode message))))
+			    (class-of object)))
+	  (lexpr-send object newsym params)
+	  (if (and (si:where-is-method 'PRINT (class-of object))
+		   (si:where-is-method 'FLATSIZE (class-of object)))
+	      (ferror ':UNCLAIMED-MESSAGE
+		      "The message ~S went unclaimed by ~S.~:[~;~2G args: ~S.~]"
+		      message object params)
+	      (ferror 
+	        ':UNCLAIMED-MESSAGE
+		"Message ~S not handled by object at address ~S.~%~@
+		 ~:[(object is not connected to OBJECT-CLASS)~;OBJECT-CLASS is bad!!~].
+		 ~:[~;~3G  Args: ~S.~]~%"
+		message 
+		(maknum object) 
+		(si:has-superior (class-of object) OBJECT-CLASS)
+		params)))))
+
+
+;; Dont use DEFUN& format -- so that no (ARGS 'FERROR ...) will be done.
+(defun FERROR nargs (lexpr-funcall #'CERROR () () (listify nargs)))
+
+
+;;;; Kludgy MacLISP definition of CERROR 
+
+(defvar CERROR-PRINTER 'FORMAT
+	"Function to print an error message for format.  Gets ERROR-OUTPUT
+followed by the format string and additional arguments.  If set to NIL,
+an attempt is made to create an informative string from the format string
+and such, and this is used as the secod argument to ERROR.")
+
+(defun SI:CERROR-ERROR-STRING (string
+			       &aux (super-debug-modep (and *RSET NOUUO)))
+  (maknam
+   (nconc (exploden string)
+	  (list '| |)
+	  (exploden
+	   (or (do ((i 0 (1+ i))
+		    (f (if super-debug-modep () (cons () (baklist)))
+		       (if super-debug-modep (evalframe (cadr f)) (cdr f)))
+		    (fun () (if super-debug-modep (caddr f) f)))
+		   ((cond ((> i 12.) (setq fun '?))
+			  ((and (not (atom fun))
+				(symbolp (setq fun (car fun)))
+				(not (memq fun 
+					   '(CERROR FERROR SI:CHECK-TYPER 
+						    COND SETQ DO PROGN AND OR
+						    SI:CHECK-SUBSEQUENCER))))))
+		    fun))
+	       '?)))))
+
+;; Done use DEFUN& format -- so that no (ARGS 'CERROR ...) will be done.
+(defun CERROR nargs 
+   (let (((proceedable restartable condition string . cruft) (listify nargs)))
+     (if CERROR-PRINTER
+	 (progn (if (symbolp CERROR-PRINTER)
+		    (or (fboundp CERROR-PRINTER)
+			(+internal-try-autoloadp CERROR-PRINTER)))
+		(terpri error-output)
+		(lexpr-funcall CERROR-PRINTER error-output string cruft)))
+     (let* ((blurb (if CERROR-PRINTER '? (si:cerror-error-string string)))
+	    (chnl (cond ((null condition) 'FAIL-ACT)
+			((caseq condition
+				(:WRONG-NUMBER-OF-ARGUMENTS
+				 (setq cruft
+				       `((,(car cruft) ,@(caddr cruft))
+					 ,(and (symbolp (car cruft))
+					       (args (car cruft)))))
+				 'WRNG-NO-ARGS)
+				(:WRONG-TYPE-ARGUMENT
+				 (setq cruft (cadr cruft))
+				 'WRNG-TYPE-ARG)
+				(:UNDEFINED-FUNCTION
+				 (setq cruft (car cruft))
+				 'UNDF-FNCTN)
+				(:UNBOUND-VARIABLE
+				 (setq cruft (car cruft))
+				 'UNBND-VRBL)
+				((:UNCLAIMED-MESSAGE :INCONSISTENT-ARGUMENTS)
+				 (setq cruft `(,condition ,cruft))
+				 'FAIL-ACT)
+				(T () )))))) 
+	   (cond ((null chnl)
+		  (error "-- Unknown or un-proceedable condition" condition))
+		 ((and (not proceedable) (not restartable))
+		  (error blurb cruft))
+		 ('T (setq blurb (error blurb cruft chnl))
+		     (cond (proceedable blurb)
+			   ('T (*throw 'ERROR-RESTART () ))))))))
+
+
+
+
+(defun +INTERNAL-LOSSAGE (id fun datum)
+   (format error-output "~%;System error, or system code incomplete: Id '~A' in function ~S.~:[~;~%;    Losing datum is: ~2G~S~]"
+	   id fun datum)
+   (error (list id fun datum) '+INTERNAL-LOSSAGE 'FAIL-ACT))
+
+
+(mapc #'(lambda (x) (or (getl (car x) '(SUBR AUTOLOAD))
+			(putprop (car x) `((LISP) ,(cadr x) FASL) 'AUTOLOAD)))
+      '((SFA-UNCLAIMED-MESSAGE EXTSFA)
+	(SI:FRESH-LINIFY       QUERIO)
+	(SI:SPREAD-CURSORPOS   QUERIO)
+	(SI:WHERE-IS-METHOD    EXTEND)
+	(SI:HAS-SUPERIOR       EXTEND)))
+
