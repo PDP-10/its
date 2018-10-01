@@ -269,6 +269,10 @@ expect ":KILL"
 respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
 expect ":KILL"
 
+# jedgar
+respond "*" ":midas sys2; ts jedgar_sysen3; jedgar\r"
+expect ":KILL"
+
 # ports
 respond "*" ":midas sys2;ts ports_sysen2;ports\r"
 expect ":KILL"
