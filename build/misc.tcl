@@ -25,7 +25,7 @@ respond "*" ":link teach;ts emacs,emacs;tstch >\r"
 type ":vk\r"
 
 # nsalv, timesharing version
-respond "*" ":midas sys1;_kshack;nsalv\r"
+respond "*" ":midas sys1;ts nsalv_kshack;nsalv\r"
 respond "machine?" "TS\r"
 expect "*"
 
