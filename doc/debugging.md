@@ -15,6 +15,7 @@ Notes where exec DDT differs from timesharing DDT.
 | ◊0G | Set PC to starting address | N/A
 | *n*◊B | Set breakpoint at *n*
 | ◊B | Remove breakpoint at current location | Remove all breakpoints
+| ◊*n*B | Address to breakpoint *n* information | Also removes breapoint *n*
 | .◊B | Set breakpoint at current location
 | . | Current location
 | ◊. | Current value of PC
@@ -29,5 +30,5 @@ Notes where exec DDT differs from timesharing DDT.
 | ' | Print ◊Q as six SIXBIT characters
 | " | Print ◊Q as five ASCII characters
 | # | Print ◊Q as one ASCII character | N/A
-| <kbd>^N</kbd> | Single step | N/A
+| <kbd>^N</kbd> | Single step | KS10 only
 | ◊<kbd>^N</kbd> | Stop at next instruction (skip over calls) | N/A
