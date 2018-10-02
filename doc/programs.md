@@ -264,6 +264,7 @@
 - TTYSWP, swap TTYs.
 - TYPE8, type 8-bit file.
 - UFIND, find users.
+- ULISP, Lisp in Lisp.
 - UNTALK, split-screen comm-link program.
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.

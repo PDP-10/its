@@ -13,9 +13,6 @@ respond "*" "purify\033g"
 respond "TS MIDAS" "midas;ts 324\r"
 respond "*" ":kill\r"
 
-respond "*" ":print teach;..new. (udir)\r"
-type ":vk\r"
-
 respond "*" ":link teach;teach emacs,emacs;teach emacs\r"
 type ":vk\r"
 respond "*" "teach\033\023"
