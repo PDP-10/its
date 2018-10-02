@@ -7,7 +7,7 @@ respond "*" "dumpit\033g"
 sleep 2
 respond "TECPUR" "\r"
 respond "*" ":kill\r"
-respond "*" ":link sys3;ts teco,.teco.;tecpur >\r"
+respond "*" ":link sys;ts teco,.teco.;tecpur >\r"
 
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
 respond "*" ":emacs\r"
