@@ -31,4 +31,4 @@ Notes where exec DDT differs from timesharing DDT.
 | " | Print ◊Q as five ASCII characters
 | # | Print ◊Q as one ASCII character | N/A
 | <kbd>^N</kbd> | Single step | KS10 only
-| ◊<kbd>^N</kbd> | Stop at next instruction (skip over calls) | N/A
+| ◊<kbd>^N</kbd> | Stop at next instruction (skip over calls) | Not on KS10

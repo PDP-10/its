@@ -54,6 +54,7 @@ proc make_ntsddt {} {
     respond "cpusw=" "0\r"
     respond "ndsk=" "0\r"
     respond "dsksw=" "0\r"
+    respond "1PRSW=" "1\r"
     expect ":KILL"
 }
 
