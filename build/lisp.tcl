@@ -938,6 +938,13 @@ respond "_" "\032"
 type ":kill\r"
 respond "*" ":link liblsp;vsaid fasl,lisp;\r"
 
+# cleanup unfasl files in lisp;
+respond "*" ":dired lisp;\r"
+respond "@" "delete * unfasl\r"
+respond "Delete? (Y or N):" "y"
+respond "@" "q\r"
+expect ":KILL"
+
 respond "*" ":midas liblsp;_gsb;ttyvar\r"
 respond "Use what filename instead?" "lisp;\r"
 expect ":KILL"
@@ -980,6 +987,13 @@ respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;utils\r"
 respond "_" "\032"
 type ":kill\r"
+
+# cleanup unfasl files in liblsp;
+respond "*" ":dired liblsp\r"
+respond "@" "delete * unfasl\r"
+respond "Delete? (Y or N):" "y"
+respond "@" "q\r"
+expect ":KILL"
 
 # DEFSET
 respond "*" "complr\013"
