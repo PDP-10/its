@@ -1,0 +1,220 @@
+;; -*-lisp-*-
+(include |ken;declare >|) ;;my macros etc.
+
+(defcomment rdtags) ;;for emacs tags
+
+;;this file reads emacs tags created by :tags and creates a file of
+;;defprop of the function names in the tags file to an autoload-property
+;;those defining functions (such as defun) without an autoload-porperty are ignored
+;;there is only one known very obscure screw, that occurs only if the function
+;;name in the lisp file is immediately followed by a carriage return (before argument-list)
+;;and the function name ends in a number then the function name without the number is defproped
+;;Currently it skips any files in your tags file whose language is not LISP
+
+
+;;TO USE THIS: first define which kinds of defining forms you want autoloaded (and how)
+;;by putting on the defining function a property indicating what property you want for the
+;;symbol being defined to have.
+
+;;FOR EXAMPLE:
+;;(defprop defun autoload autoload-property) this is typical
+;;(defprop define-macro macro-load autoload-property) where you'll make use of macro-load
+
+;;THEN: just call the function "read-eamcs-tags" with the name of your tags file
+;;and the name of the output file you want.  Optionally you can restrict the program to
+;;consider only functions defined in a list of file names you provide
+
+;;FOR EXAMPLE:
+
+;;(read-emacs-tags '|foo;foo tags| '|foo;foo ltags| '(file1 |bar;file1| file2))
+
+;;reading foo's tags and making a file of autoload of foo's file1 and file2 and bar's file1
+;;the file "foo;foo ltags" should look something like
+;;(defprop function1 foo/;file1 autoload)
+;;(defprop macro24 foo/;file1 macro-load)
+;;(defprop function2 bar;file1 autoload)
+;;and so on
+
+;;ADVICE: 
+;;If you are concerned that putting an autoload property on all your functions wastes too
+;;much memory you can do two things:
+;;(a) Make your version of "defun" be a macro that remprop's the symbol's autoload property 
+;;(b) Have two names for defun: one of which will generate autoload properties
+;; and the other you use only for internal functions.
+
+(declare (special output-file input-file))  ;;for debugging
+
+;; define-function is almost the same as "defun" but it remprops its 'autoload property 
+
+(define-function read-emacs-tags (tags-file-name ltags-file-name &optional (only-these-files))
+ ;;if only-these-files is nil read all files otherwise only those in only-these-files are read
+ (let-files ;;closes files nicely and closes for errors
+  ((input-file (open tags-file-name 'in))
+   (output-file (open ltags-file-name 'out)))
+  (let
+   ((only-these-files
+     (and only-these-files
+	  (mapcar
+	   (function (lambda (file-name)
+			     (mergef '((dsk *) * *)
+				     (mergef file-name '((dsk ,(second (crunit))) * >)))))
+	   only-these-files))))
+   (catch 
+    (do ((file-name)
+	 (next-char (tyipeek-eof input-file) (tyipeek-eof input-file)))
+	((= next-char 3)) ;;control-c
+	(cond ((or (and (not (member (setq file-name (read-tags-file-name input-file))
+				     only-these-files))
+			only-these-files)
+		   (not (eq (read-language-name input-file) 'lisp))) ;;only lisp files
+	       (skip-rest-of-file input-file))
+	      (t (read-defun-lines (autoload-name file-name) input-file))))
+    end-of-file))))
+
+(defun autoload-name (file-name)
+       (maknam (append (exploden (second (first file-name))) ;;directory
+		       '(#/;)
+		       (exploden (second file-name)))))
+
+(defun read-tags-file-name (input-file)
+       (mergef '((dsk *) * *)
+	       (readline input-file)))
+
+(defun read-language-name (input-file)
+       (read input-file) ;; the file length or something
+       (tyi input-file) ;;gobble up the ,
+       (read input-file)) ;;the name
+
+(defun read-defun-lines (file-name input-file)
+ (let ((first-letter (tyi -1 input-file))) 
+      (cond ((= first-letter #(getcharn '|(| 1))
+	     (let ((autoload-property (get (read input-file) 'autoload-property)))
+		  (cond ((null autoload-property) (read-to-cr input-file)) ;;skip this one
+			(t (flush-spaces input-file)
+			   (cond ((= (tyipeek -1 input-file) #(getcharn '|(| 1))
+				  ;;as in (defun (foo bar) ...)
+				  (tyi -1 input-file))) ;;gobble it up
+			   (let* ((function-name (read input-file -1))
+				  (next-letter (cond ((and (numberp function-name)
+							   (= function-name -1)) -1)
+						     (t (tyipeek -1 input-file)))))
+				 (cond ((= next-letter -1) ;;eof
+					(throw t end-of-file))
+				       ((or (= next-letter #(getcharn '|(| 1))
+					    (= next-letter #(getcharn '|| 1)))
+					;;if the is no space after function name as when
+					;;a ctrl-m is there which happens
+					;;if defun has carriage after function name
+					(setq function-name (fix-function-name function-name)))
+				       (t (read-to-cr input-file))) ;ignore position number
+				 (print
+				  '(defprop ,function-name ,file-name ,autoload-property)
+				  output-file)))))
+		 (read-defun-lines file-name input-file))
+	    ((= first-letter #(getcharn '|| 1))
+	     (tyi -1 input-file) (tyi -1 input-file)) ;eat up <cr> <lf>
+	    ((= first-letter 10.) ;;<lf>
+	     (read-defun-lines file-name input-file)) ;;try again
+	    ((= first-letter 13) ;;<cr>
+	     (read-defun-lines file-name input-file))
+	    (t (print '(,(ascii first-letter) | first letter is not right|))
+	       (break bad-tags-file? t)))))
+
+;;this removes the right-most numbers from an atom 
+;;since there will be crud there if one had a cr after function name eg 
+;;(defun foo
+;;       (x) ...)
+
+(defun fix-function-name (function-name)
+       (do ((letters (nreverse (exploden function-name)) (rest letters)))
+	   ((null letters) function-name)
+	   (let ((letter (first letters)))
+		(cond ((and (> letter 47) (< letter 58)))
+		      (t (return (implode (nreverse letters))))))))
+
+(defun read-to-cr (input-file)
+       (read-ending-with #(getcharn '/
+ 1) input-file))
+
+(defun skip-rest-of-file (input-file)
+       (throw-away-until #(getcharn '|| 1) input-file)
+       (tyi input-file) (tyi input-file))
+
+(declare (fixnum character))
+
+(defun throw-away-until (stop-character input-file)
+       (do ((character (tyi -1 input-file) (tyi -1 input-file)))
+	   ((= character stop-character)) ;;get rid of the rest
+	   (cond ((= character -1) (throw t end-of-file)))))
+
+(defun read-ending-with (end-character input-file)
+ ;;this returns the list of characters in the reverse order read
+       (do ((character-list nil (cons character character-list))
+            (character 0.))
+           ((= (setq character (tyi -1 input-file)) end-character) 
+            (cons end-character character-list))))
+
+(defun flush-spaces (input-file)
+       (do ((character (tyipeek -1 input-file)
+		       (progn (tyi -1 input-file) (tyipeek -1 input-file))))
+           ((not (= character 32.)))))
+
+(defun tyipeek-eof (input-file)
+       (let ((tyipeek-result (tyipeek -1. input-file)))
+	    (cond ((minusp tyipeek-result) (throw t end-of-file))
+		  (tyipeek-result))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;	Create @ xfile from tags file
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;The function @-emacs-tags creates an @ xfile from a tags file, writing
+;;; it out with second filename "XFILE".  This file can be editted, if
+;;; desired, and then executed by typing ":XFILE fn1 XFILE" to DDT.
+;;;
+(define-function /@-emacs-tags (tags-file-name &optional (xgp? t) (only-these-files))
+ ;;if only-these-files is nil read all files otherwise only those in only-these-files are read
+(let ((/@-xfile-name (mergef '((* *) * xfile) tags-file-name))
+      (/@-lrec-file-name (mergef '((* *) * lrec) tags-file-name))
+      (tags-file-name (mergef '((* *) * tags) tags-file-name)))
+ (let-files ;;closes files nicely and closes for errors
+  ((input-file (open tags-file-name 'in))
+   (output-file (open /@-xfile-name 'out)))
+  (write-/@-leader /@-lrec-file-name output-file)
+  (let
+   ((only-these-files
+     (and only-these-files
+	  (mapcar
+	   (function (lambda (file-name)
+			     (mergef '((dsk *) * *)
+				     (mergef file-name
+					     (list (list 'dsk (cadr (crunit)))
+						   '* '>)))))
+	   only-these-files))))
+   (catch 
+    (do ((file-name) (language-name)
+	 (next-char (tyipeek-eof input-file) (tyipeek-eof input-file)))
+	((= next-char 3)) ;;control-c
+	(setq file-name (read-tags-file-name input-file))
+	(cond
+	 ((or (null only-these-files) (member file-name only-these-files))
+	  (setq language-name (read-language-name input-file))
+	  (cond
+	   ((memq language-name '(lisp macsym midas r))
+	    (write-/@-command file-name language-name output-file xgp?)))))
+	(skip-rest-of-file input-file))
+    end-of-file)))))
+
+(defun write-/@-leader (/@-lrec-file-name output-file)
+       (princ '|:@ | output-file)
+       (princ (namestring /@-lrec-file-name) output-file)
+       (or (probef /@-lrec-file-name) (princ '|//G| output-file)))
+
+(defun write-/@-command (file-name language-name output-file xgp?)
+       (let ((terpri t))
+	    (princ '|/,| output-file)
+	    (princ (namestring file-name) output-file)
+	    (princ '|//L[| output-file)
+	    (princ language-name output-file)
+	    (princ '|]| output-file)
+	    (and xgp? (princ '|//F[20FG]| output-file))))

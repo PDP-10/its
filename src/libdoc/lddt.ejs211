@@ -1,0 +1,607 @@
+;;; -*-LISP-*-
+;			NEWIO LISP DDT
+;
+; This file contains functions to manipulate I.T.S. jobs from LISP using
+; the primitives defined in NEWIO LISP.  A package for interacting with TECO
+; is available as (LIBLSP;LISPT FASL, "LISP INFERIOR TECO")
+
+(COMMENT DECLARATIONS AND SPECIALS)
+
+(DECLARE (SPECIAL NULL *BREAK16-FUNCTION *VALUE *BREAK CURRENT-JOB DDT-READTABLE 
+		  J*STADR J*CRUFT SEND-*VALUE-TO-DDT? JOB-STACK
+		  JOB-INTERRUPT-LIST JOB-RING JOB-INFORM CRLF LISP-CURSORPOS
+		  WAITING-FOR-JOB-INT THE-JOB-INPUT-CHANNEL %OPCMD %OPLSP
+		  TTY-PASSING-MSG TTY-RETURN-LIST DEFAULT-TTY-RETURN-LIST
+		  TTY-RETURN-MSG TTY-RETURN-PROMPT? TTY-RETURN-PROMPTER
+		  RETURN-TO-DDT-LIST DEFAULT-RETURN-TO-DDT-LIST TTY-YANKED-FLAG
+		  JOB-HAD-TTY? TTY-YANKED? TTY-VERBOSE JOB-MSG-FILE TTYRETFUN)
+	 (FIXNUM I N (CALC-EFF-ADR FIXNUM))
+	 (*EXPR P JOB-USET-WRITE JOB-USET-READ EXAMINE-JOB DEPOSIT-JOB
+		 KILL-JOB VALUE-STRING *ATTY *DTTY SELECT-JOB)
+	 (*LEXPR G START :JCL SET-JCL CREATE-JOB print-console-msg))
+
+(eval-when (eval compile)
+      (setq ibase 8)
+      (cond ((not (get '*uset 'macro))
+	     (fasload lusets fasl dsk liblsp)))
+      (cond ((not (status feature lspmac))
+	     (fasload lspmac fasl dsk liblsp)))
+      (defun prinj macro (x) `(princ ,(cadr x) 'job-msg-file))
+      (defun terprj macro (x) '(terpri job-msg-file)))
+
+(if (not (getl 'create-job '(lsubr autoload)))
+    (defprop create-job (humble fasl dsk liblsp) autoload))
+
+(special-init send-*value-to-ddt? t)
+
+; SET UP DEFAULT HANDLERS FOR PARTICULAR INTERRUPTS
+
+(SETQ *VALUE '*VALUE-HANDLER *BREAK '*BREAK-HANDLER ^ZTYPED '^Z-INTERRUPT
+      PIDCL 'DEFERRED-CALL LISP-CURSORPOS NIL WAITING-FOR-JOB-INT NIL
+      NULL (ASCII 0) JOB-STACK NIL
+      J*STADR (GETDDTSYM 'J/.STADR)
+      J*CRUFT (GETDDTSYM 'J/.CRUFT)
+      %OPCMD 1_40
+      %OPLSP 100_18.
+      TTY-PASSING-MSG NIL
+      JOB-HAD-TTY? NIL
+      TTY-YANKED? T
+      TTY-VERBOSE T
+      JOB-MSG-FILE (OPEN '|TTY:| '(OUT TTY ASCII)))
+
+(SPECIAL-INIT *BREAK16-FUNCTION NIL)
+
+(SPECIAL-INIT TTY-RETURN-MSG (COND ((STATUS FEATUR MACSYMA)
+			    '|(Console connected with MACSYMA)|)
+			 (T '|(Console connected with LISP)|)))
+
+(SETQ LNULL '(NIL) JOB-RING NIL ;(RPLACD LNULL LNULL)
+      CRLF '|/
+|)
+
+
+(COMMENT JOB INTERRUPT HANDLER)
+
+; This is the ordinary function for handling job related interrupts.
+; When a job is created, this is specified as the interrupt handler,
+; e.g. (CREATE-JOB JOB-INTERRUPT-HANDLER <JNAME> <UNAME> NIL)
+; The basic dispatch mechanism is that the PIRQC word for the job
+; causing the interrupt is decoded into a list of symbolic interrupt
+; names.  An arbitrator decides which of the interrupts should get
+; handled in which order.  The handling mechanism is by applying
+; the value of the interrupt symbol (if non-nil) to the UUO word.
+; The most useful one's are .VAULE and .BREAK.
+
+(DEFUN JOB-INTERRUPT-HANDLER (JOB)
+       (SETQ JOB-HAD-TTY? (NULL (STATUS TTY))) ; IF LISP DIDN'T, JOB DID
+       (*DTTY)
+       (PUSH-SELECT-JOB JOB)
+       (DO ((UUO (*USET *RSV40))
+	    (INTERRUPT-LIST (ARBITRATE-INTERRUPTS
+			     (PIRQC-DECODE (*USET *RPIRQ) (*USET *RMASK)))
+			    (CDR INTERRUPT-LIST))
+	    (INTBIT) (INTSYM))
+	   ((NULL INTERRUPT-LIST))
+	   (SETQ INTBIT (LSH 1 (CDAR INTERRUPT-LIST))
+		 INTSYM (CAAR INTERRUPT-LIST))
+	   (*USET *SAPIR INTBIT)
+	   (COND ((BOUNDP INTSYM) (FUNCALL (SYMEVAL INTSYM) UUO))
+		 (T (RANDOM-CLASS1-INTERRUPT INTSYM)))
+	      (POP-SELECT-JOB))
+       (IF (AND (STATUS TTY) WAITING-FOR-JOB-INT) ; not very general...
+	   (SETQ WAITING-FOR-JOB-INT NIL))
+       NULL)
+
+; Arbitrator could do something useful someday
+
+(DEFUN ARBITRATE-INTERRUPTS (INT-LIST) INT-LIST)
+
+(COMMENT PIRQC DECODE)
+
+; Interrupt word decoder.  Decodes into a list of symbols whose value
+; is a routine to run.
+
+(DEFUN PIRQC-DECODE (PIRQC MASK)
+  (DECLARE (FIXNUM PIRQC)) 
+  (PROG (L)
+   (RETURN 
+    (COND ((PLUSP PIRQC) ; FIRST WORD INTERRUPTS
+	   (DO ((PIRQC PIRQC (LSH PIRQC -1))
+		(MASK (BOOLE 6 -1 MASK) (LSH MASK -1))
+		(DECOD JOB-INTERRUPT-LIST (CDR DECOD))
+		(I 0 (1+ I)))
+	       ((ZEROP PIRQC) L)
+	       (DECLARE (FIXNUM I))
+	       (COND ((PLUSP (BOOLE 1 1 PIRQC MASK))
+		      (SETQ L (CONS (CONS (CAR DECOD) I) L))))))
+	  (T ;2ND WORD INTS
+	   (DO ((PIRQC PIRQC (LSH PIRQC -1))
+		(I 0 (1+ I)))
+	       ((> I 17))
+	       (IF (PLUSP (BOOLE 1 1 PIRQC))
+		   (SETQ L (CONS
+			    (CONS (IMPLODE
+				   (NCONC (EXPLODEN 'IOCH) (EXPLODEN (1- I))))
+				  I)
+			    L))))
+	   (DO ((PIRQC (BOOLE 1 377777 (LSH PIRQC -18.)) (LSH PIRQC -1))
+		(I 0 (1+ I)))
+	       ((> I 7) L)
+	       (IF (PLUSP (BOOLE 1 1 PIRQC))
+		   (SETQ L (CONS
+			    (CONS (IMPLODE
+				   (NCONC (EXPLODEN 'INF) (NCONS (+ 60 I))))
+				  (+ 18. I))
+			    L)))))))))
+
+
+(COMMENT RANDOM INTERRUPTS (UN-HANDLED))
+
+; If we don't want to bother figuring out what to do, just punt informatively
+
+(DEFUN RANDOM-CLASS1-INTERRUPT (INT)
+       (PRINJ '|INFERIOR CLASS 1 INTERRUPT - |)
+       (PRINJ INT)
+       (TERPRJ)
+       null)
+
+; If ^Z typed ...
+
+(DEFUN ^Z-INTERRUPT (DUMMY) (DECLARE (FIXNUM DUMMY))
+       (SETQ DUMMY DUMMY)
+       (DO NIL ((ZEROP (LISTEN T))) (TYI)))		; GOBBLE TYPE-AHEAD
+
+
+(DEFUN DEFERRED-CALL (DUMMY) (SETQ DUMMY DUMMY))
+
+(DEFUN CALC-EFF-ADR (ADR)
+       (DECLARE (FIXNUM ADR))
+       ((LAMBDA (@ X Y) (DECLARE (FIXNUM @ X Y))
+		(OR (ZEROP X)
+		    (SETQ Y (BOOLE 1 777777
+				   (+ Y (EXAMINE-JOB X)))))
+		(COND ((ZEROP @) Y)
+		      (T (CALC-EFF-ADR (EXAMINE-JOB Y)))))
+	(BOOLE 1 ADR 20_22)
+	(BOOLE 1 17 (LSH ADR -22))
+	(BOOLE 1 777777 ADR))); .VALUE Handler.
+
+(COMMENT *VALUE HANDLER)
+
+(DEFUN *VALUE-HANDLER (UUO)
+       (COND ((ZEROP (BOOLE 1 777777 UUO)) (*VALUE0))
+	     (T (*VALUE-STRING (GET-STRING (BOOLE 1 777777 UUO))))))
+
+; A simple return with no information. (SHOULD TELL WHICH JOB!!)
+
+(DEFUN *VALUE0 NIL (PRINC0 '|.VALUE 0.| job-msg-file) (TERPRI job-msg-file) NULL)
+
+; A return with a request for action in the form of a string. (SHOULD BE IMPROVED)
+
+(DEFUN *VALUE-STRING (VST)
+       (COND ((EQUAL VST '|:PROCED |) (CONTINUE-JOB NIL))
+	     ((EQUAL VST '|:KILL |) (PRINJ '|:KILL |) (KILL-JOB))
+	     ((= 33 (GETCHARN VST 1)) (EVAL (READLIST (CDR (EXPLODEN VST)))))
+	     (SEND-*VALUE-TO-DDT?
+	      (COND ((NOT (EQ T SEND-*VALUE-TO-DDT?))
+		     (PRINJ '|Inferior .VALUE =  "|) (PRINJ VST)
+		     (PRINJ '| "|) (TERPRJ) (PRINJ '|Feed commands to DDT?: |)
+		     (COND ((NOT (MEMQ (let ((READTABLE
+						  (ARRAY NIL READTABLE)))
+						(SETSYNTAX 15 500500 15)
+						(READ))
+				       '(Y YES T)))
+			    (SETQ VST NIL)))))
+	      (COND (VST (setq tty-return-prompt? nil)
+			 (nointerrupt nil)
+			 (let ((tty-return)) (VALRET VST))))
+	      (CONTINUE-JOB JOB-HAD-TTY?))
+	     (T (PRINC0 '|; Inferior .VALUE ignored.|) (TERPRI)
+		(CONTINUE-JOB JOB-HAD-TTY?))))
+
+
+; Get a string from the memory of the current job as an exploded list
+
+(DEFUN GET-STRING (LOC) (MAKNAM (VALUE-STRING LOC))) ; REWRITE USING EXAMINE-JOB
+
+(DEFUN VALUE-STRING (ADR)
+       ((LAMBDA (FILE)
+		(FILEPOS FILE (* ADR 5))
+		(DO ((C (TYI FILE) (TYI FILE))
+		     (L NIL (CONS C L)))
+		    ((ZEROP C) (CLOSE FILE) (NREVERSE L))
+		    (DECLARE (FIXNUM C))))
+	(OPEN CURRENT-JOB '(IN BLOCK ASCII))))
+
+(COMMENT JOB CONTROL FUNCTIONS)
+
+; Deposit JCL in the job.
+(DEFUN PUT-JCL (LOC JCL)
+  (IF (AND JCL (NOT (ATOM JCL))) (SETQ JCL (MAKNAM (MAPCAN 'EXPLODEC JCL))))
+  (IF JCL
+      (DO ((I LOC (1+ I)) (L (PNGET JCL 7) (CDR L)))
+	  ((NULL L) (DEPOSIT-JOB I 0))
+	  (DEPOSIT-JOB I (CAR L)))))
+
+(DEFUN SET-JCL N
+       (IF (NULL CURRENT-JOB) (ERROR '|No job - :JCL |))
+       (*USET *SOPTI (BOOLE 7 %opcmd (*USET *ROPTI)))
+       (PROGB ((JCRUFT (MUNKAM (ARRAYCALL FIXNUM CURRENT-JOB J*CRUFT))))
+	      (COND ((NULL JCRUFT)
+		     (SETQ JCRUFT (LIST NIL))
+		     (STORE (ARRAYCALL FIXNUM CURRENT-JOB J*CRUFT)
+			    (MAKNUM JCRUFT))))
+	      (PUTPROP JCRUFT (LISTIFY N) 'JCL))
+       T)
+
+(DEFUN START-JOB (LOC ATTYP)
+       (DECLARE (FIXNUM LOC))
+       (IF (NULL CURRENT-JOB) (ERROR '|No job - START-JOB|))
+       (IF (NOT (ZEROP LOC)) (STORE (ARRAYCALL FIXNUM CURRENT-JOB J*STADR)
+				    (+ 254_33 (BOOLE 1 777777 LOC))))
+       (SETQ LOC (JOB-START-ADR CURRENT-JOB))
+       (IF (ZEROP LOC) (ERROR '|No start address? |))
+       (*USET *SUPC LOC)
+       (CONTINUE-JOB ATTYP))
+
+(DEFUN JOB-START-ADR (JOB)
+       (IF (NOT (EQ CURRENT-JOB JOB)) (SELECT-JOB JOB))
+       (BOOLE 1 777777 (ARRAYCALL FIXNUM CURRENT-JOB J*STADR)))
+
+(DEFUN SET-JOB-START-ADR (JOB ADDR)
+       (STORE (ARRAYCALL FIXNUM JOB J*STADR) (BOOLE 1 777777 ADDR)))
+
+(DEFUN CONTINUE-JOB (ATTYP)
+       (IF (NULL CURRENT-JOB) (ERROR '|No job - CONTINUE-JOB |))
+       (IF ATTYP
+	   (PROGN (COND (TTY-PASSING-MSG
+			 (print-console-msg TTY-PASSING-MSG)
+			 (CURSORPOS 'E)))
+		  (SETQ LISP-CURSORPOS (CURSORPOS)
+			TTY-PASSING-MSG NIL
+			TTY-YANKED? NIL)))
+       (*USET *SPIRQ 0)
+       (IF (= 0 (BOOLE 1 777777 (*USET *RUPC)))
+	   (*USET *SUPC (JOB-START-ADR CURRENT-JOB)))
+       (nointerrupt 'T)
+       (*USET *SUSTP 0)
+       (SLEEP .001)
+       (cond (attyp (%tbnot-off) (*atty)))
+       (NOINTERRUPT NIL)
+       NULL)
+
+(DEFUN WAIT-FOR-JOB (JOB) ; WAITS UNTIL JOB HAS STOPPED
+       (NOINTERRUPT NIL)
+       (DO ((CURRENT-JOB JOB))
+	   ((NOT (ZEROP (*USET *RUSTP))))
+	   (WAIT-FOR-JOB-INT JOB))
+       (*DTTY) T)
+
+(DEFUN MAKE-JOB (JNAME)
+    (let ((^W T))
+    (CREATE-JOB 'JOB-INTERRUPT-HANDLER 'CHANNEL-INT-HANDLER
+		   JNAME (STATUS UNAME))))
+
+(DEFUN DISOWN-JOB (JOB)
+       (IF (NOT (EQ CURRENT-JOB JOB)) (SELECT-JOB JOB))
+       (IF (AND WAITING-FOR-JOB-INT (EQ JOB WAITING-FOR-JOB-INT))
+	   (SETQ WAITING-FOR-JOB-INT NIL))
+       (*USET *SPIRQ 0)
+       (*USET *SOPTI (BOOLE 2 %OPLSP (*USET *ROPTI)))
+       (PROG2 NIL (NULL (SYSCALL 0 'DISOWN THE-JOB-INPUT-CHANNEL))
+	      (KILL-JOB)))		; flush the job
+
+
+; generally useful DDT commands
+
+(DEFUN :CONTIN NIL (CONTINUE-JOB T) NULL)
+
+(DEFUN P NIL (TERPRI) (:CONTIN))
+
+(DEFUN :START N (START-JOB (COND ((ZEROP N) 0) (T (ARG 1))) T) NULL)
+
+(DEFUN G N (TERPRI) (APPLY '/:START (LISTIFY N)))
+
+(DEFUN :DISOWN NIL (DISOWN-JOB CURRENT-JOB))
+
+(COMMENT
+; DDT LIKE COMMANDS
+
+(ARRAY DDT-READTABLE READTABLE)
+(SETQ DDT-READTABLE (GET 'DDT-READTABLE 'ARRAY))
+(let ((READTABLE DDT-READTABLE))
+	(SETSYNTAX '/ 'MACRO 'DDT-ALTMODE-MACRO)
+	(SETSYNTAX '/: 'MACRO 'DDT-COLON-MACRO)
+	(SETSYNTAX 15 601540 15)
+	(SSTATUS TTYREAD NIL))
+
+
+(DEFUN DDT () (DO ((READTABLE DDT-READTABLE)) (NIL) (PRINT (EVAL (READ)))))
+
+(DEFUN DDT-ALTMODE-MACRO (X) X)	; USE PRE SCAN??
+(DEFUN DDT-COLON-MACRO (X) X)
+
+(DEFUN :JCL N  (APPLY 'SET-JCL (LISTIFY N)))
+
+(DEFUN :PROCEED NIL (CONTINUE-JOB NIL) '*)
+
+(DEFUN ^P NIL (TERPRI) (:PROCEED))
+
+(DEFUN :GZP NIL (START-JOB 0 T) '*)
+
+(DEFUN J N
+       (COND ((= 0 N)
+	      (COND (JOB-RING (SETQ JOB-RING (CDR JOB-RING))
+		     (SELECT-JOB (CAR JOB-RING)) (CAR JOB-RING))))
+	     (T (COND ((MEMQ (ARG 1) JOB-RING)
+		       (DO NIL ((EQ (ARG 1) (CAR JOB-RING)))
+			   (SETQ JOB-RING (CDR JOB-RING)))
+		       (SELECT-JOB (CAR JOB-RING)) (CAR JOB-RING))
+		      (T (SET (ARG 1)
+			      (CADR (CREATE-JOB 'JOB-INTERRUPT-HANDLER
+						'JOB-CHANNEL-HANDLER
+						(ARG 1)
+						(STATUS USERID))))
+			 (SETQ JOB-RING
+			       (CDR (RPLACD JOB-RING
+					    (CONS CURRENT-JOB (CDR JOB-RING))))))))))
+
+(DEFUN J FEXPR (X) (SET (CAR X) (CAR JOB-RING)))
+
+) ; END OF COMMENTED OUT CODE
+
+(DEFUN *BREAK-HANDLER (UUO) 
+       (DECLARE (FIXNUM AC EFF UUO))
+   (PROG (AC EFF)
+	 (SETQ AC (BOOLE 1 17 (LSH UUO -23.)) EFF (BOOLE 1 777777 UUO))
+	 (COND ((= AC 16) (*BREAK16-HANDLER EFF))
+	       ((= AC 12) (*BREAK12-HANDLER EFF))
+	       (T (PRINJ '|ILOPR. |) (PRINJ (BOOLE 1 777777 (*USET *RUPC)))
+		  (PRINJ '|>>.BREAK |) (PRINJ AC) (PRINJ '/,) (PRINJ EFF) (TERPRJ)))))
+
+(DEFUN *BREAK16-HANDLER (EFF)
+       (COND ((PLUSP (BOOLE 1 100000 EFF)) 
+	      (COND (*BREAK16-FUNCTION (APPLY *BREAK16-FUNCTION (LIST EFF)))))
+	     ((PLUSP (BOOLE 1 40000 EFF))
+	      (PRINJ '|:KILL |) (KILL-JOB) CRLF)
+	     ((PLUSP (BOOLE 1 24000 EFF)) (KILL-JOB) CRLF)
+	     (T (PRINJ '|ILOPR. |) (PRINJ (BOOLE 1 777777 (*USET *RUPC)))
+		(PRINJ '|>>.BREAK 16,|) (PRINJ EFF) (TERPRJ) CRLF)))
+
+
+(DEFUN *BREAK12-HANDLER (EFF)
+   (LET ((TTY-RETURN '(LAMBDA (X) NIL)))
+       (NOINTERRUPT NIL)		; let tty-return lose
+       (DO ((CEFF (EXAMINE-JOB EFF)) (TYPE 0)) NIL (DECLARE (FIXNUM CEFF TYPE))
+	   (COND ((= 6 (LSH CEFF -41))
+		  (DO ((I (1+ (BOOLE 6 777777 (LSH CEFF -22))) (1- I))
+		       (LOC (BOOLE 1 777777 CEFF) (1+ LOC)))
+		      ((ZEROP I))
+		      (*BREAK12-HANDLER (EXAMINE-JOB LOC))))
+		 ((MINUSP CEFF)
+		  (SETQ TYPE (LSH (BOOLE 6 -4_41 CEFF) -22) 
+			CEFF (BOOLE 1 777777 CEFF))
+		  (COND ((= TYPE 1)
+			 (STORE (ARRAYCALL FIXNUM CURRENT-JOB J*STADR)
+				(+ 254_33 (BOOLE 1 777777 (EXAMINE-JOB CEFF))))
+			 (CONTINUE-JOB JOB-HAD-TTY?))
+			((= TYPE 3) (CONTINUE-JOB JOB-HAD-TTY?)) ;SYMBOLS
+			((= TYPE 4) (CONTINUE-JOB JOB-HAD-TTY?)) ;SYMBOLS
+			((= TYPE 5)
+			 (PUTPROP (MUNKAM (ARRAYCALL FIXNUM CURRENT-JOB
+						     J*CRUFT))
+				  NIL
+				  'JCL)		; CLEAR JCL
+			 (CONTINUE-JOB JOB-HAD-TTY?))
+			((= TYPE 6) (CONTINUE-JOB JOB-HAD-TTY?)) ; SET DFILE
+			((= TYPE 7) (CONTINUE-JOB JOB-HAD-TTY?)) ; SYMBOL HACKING
+			  (T (PRINJ '|ILOPR. |) (PRINJ (BOOLE 1 777777 (*USET *RUPC)))
+			     (PRINJ '|>>.BREAK 12,|) (PRINJ EFF) (TERPRJ) CRLF)))
+		 (T (SETQ TYPE (LSH CEFF -22) 
+			  CEFF (BOOLE 1 777777 CEFF))
+		    (COND ((= TYPE 1) 
+			   (DEPOSIT-JOB CEFF (ARRAYCALL FIXNUM CURRENT-JOB J*STADR)))
+			  ((= TYPE 2) (CONTINUE-JOB JOB-HAD-TTY?))
+			  ((= TYPE 3)
+			   (DEPOSIT-JOB CEFF 0)
+			   (CONTINUE-JOB JOB-HAD-TTY?)) ; SYMBOLS 
+			  ((= TYPE 4)
+			   (DEPOSIT-JOB CEFF 0)
+			   (CONTINUE-JOB JOB-HAD-TTY?)) ; SYMBOLS
+			  ((= TYPE 5)
+			   (PUT-JCL CEFF 
+				    (GET (MUNKAM (ARRAYCALL FIXNUM CURRENT-JOB
+							    J*CRUFT))
+						 'JCL))
+			   (CONTINUE-JOB JOB-HAD-TTY?))
+			  ((= TYPE 6) (CONTINUE-JOB T))
+			  ((= TYPE 7)
+			   (DEPOSIT-JOB CEFF 0)
+			   (CONTINUE-JOB JOB-HAD-TTY?))
+			  ((= TYPE 10)
+			   (DEPOSIT-JOB (1+ CEFF) (EXAMINE-JOB CEFF))
+			   (DEPOSIT-JOB CEFF 0)
+			   (CONTINUE-JOB JOB-HAD-TTY?))
+			  (T (PRINJ '|ILOPR. |) (PRINJ (BOOLE 1 777777 (*USET *RUPC)))
+			    (PRINJ '|>>.BREAK 12,|) (PRINJ EFF) (TERPRJ) (SLEEP 60)
+			     (CONTINUE-JOB JOB-HAD-TTY?))))))))
+
+(COMMENT TTY Return Functions)
+
+(special-init default-tty-return-list '((default-tty-return ttyretarg)))
+
+(setq tty-return 'tty-return-handler
+      tty-return-list default-tty-return-list
+      tty-yanked-flag T)
+
+(defun tty-return-handler (ttyretarg) (declare (special ttyretarg))
+   (let ((tty-yanked-flag tty-yanked?))
+	    (setq tty-yanked? T)
+	    (mapc 'eval tty-return-list)
+	    (setq tty-return-list default-tty-return-list)))
+
+(defun default-tty-return (x)
+   (cond ((and (or (status feature MACSYMA) (= 0 (listen tyi)))
+	       (null tty-yanked-flag))
+	  (cursorpos 'C job-msg-file)
+	  (funcall (if (status feature MACSYMA) 'print-console-msg 'princt)
+		   (if tty-return-msg tty-return-msg
+		       (if (status feature MACSYMA) '|(MACSYMA)|
+			   '|(LISP)|))
+		   job-msg-file)))
+   (force-output job-msg-file)
+   (if tty-return-prompt? (funcall tty-return-prompter x))
+   (setq tty-return-prompt? t)
+   T)
+
+(defun princt n
+   (progb ((args (listify n)))
+       (apply 'princ args)
+       (apply 'terpri (cdr args))))
+
+(defun clear-tty-return nil
+       (let ((tty-return '(lambda(x) x))) (declare (special tty-return))
+		(nointerrupt nil))
+       (setq tty-return-prompt? T
+	     tty-return-list default-tty-return-list))
+
+(special-init tty-return-prompt? t)
+
+(special-init tty-return-prompter
+	      (cond ((status feature MACSYMA) 'ttyretfun)
+		    (t 'lisp-prompt)))
+
+(defun lisp-prompt (x) (if (eq 'IN x) (progn (princ0 '*) (terpri))))
+
+(special-init default-return-to-ddt-list '((ddt-return)))
+
+(setq return-to-ddt-list default-return-to-ddt-list)
+
+(defun return-to-ddt nil
+       (mapc 'eval return-to-ddt-list)
+       (setq return-to-ddt-list default-return-to-ddt-list))
+
+(defun ddt-return nil
+       (CURSORPOS 'A)
+       (funcall (if (status feature MACSYMA) 'print-console-msg 'PRINCT)
+		(if tty-passing-msg  tty-passing-msg '|(DDT)|))
+       (cursorpos 'E)
+       (setq tty-passing-msg nil tty-yanked? NIL)
+       (ddt-exit))
+
+(defun ^Z-char-interrupt (file ch) (setq ch ch)
+       (if (not (= 0 (listen file))) (tyi file))
+       (return-to-ddt))
+
+(sstatus ttyint 32 '^Z-char-interrupt)
+(sstatus ttyint 25 '^Z-char-interrupt)
+
+(defun print-console-msg nargs
+  (let ((msg (arg 1))
+	(job-msg-file (cond ((< nargs 2) job-msg-file)
+			    (T (arg 2)))))
+    (cond ((and tty-verbose (memq 'CURSORPOS (status filemode job-msg-file))
+		(STATUS FEATURE MACSYMA))
+	   (if (not (= 0 (cdr (cursorpos)))) (terpri job-msg-file))
+	   (CURSORPOS 'L)
+	   (CURSORPOS 'H (1- (// (- (LINEL JOB-MSG-FILE) (flatc msg)) 2)))))
+    (cond (tty-verbose
+	   (princ msg job-msg-file)
+	   (terpri)))
+    T))
+
+(DEFUN PUSH-SELECT-JOB (JOB)
+       (SETQ JOB-STACK (CONS CURRENT-JOB JOB-STACK))
+       (SELECT-JOB JOB))
+
+(DEFUN POP-SELECT-JOB NIL
+       (DO NIL
+	   ((NULL JOB-STACK))
+	   (IF (JOBP (CAR JOB-STACK))	; FILTER DEAD JOBS
+	       (RETURN (SELECT-JOB (CAR JOB-STACK))))
+	   (IF (EQ (CAR JOB-STACK) WAITING-FOR-JOB-INT)
+	       (SETQ WAITING-FOR-JOB-INT NIL))
+	   (SETQ JOB-STACK (CDR JOB-STACK))))
+
+
+; LIST OF PARTICULAR INTERRUPT HANDLERS
+
+(SETQ JOB-INTERRUPT-LIST 
+      '(TYPEIN
+	^ZTYPED
+	BADPI
+	AROV
+	340DPY
+	ILOPR
+	SYSDED 
+	*VALUE
+	IOC
+	ILUAD
+	*BREAK
+	1PROC
+	SLOWCLOCK 
+	MPV
+	MAR
+	LTPEN
+	PDLOV
+	CLI
+	RESTR
+	SYSDBG 
+	ARMTP1
+	ARMTP2
+	ARMTP3
+	SYSUUO
+	PURINS 
+	PURPG
+	ARFOV
+	PARERR
+	PITTY
+	PIATY		; JOB GOT TTY BACK
+	PIDCL		; DELAYED CALL
+	<4/.5>
+	<4/.6>
+	RUNTIM
+	REALTM
+        ))
+
+(Comment Functions to interface with ITS)
+
+(OR (GETDDTSYM T)
+    ((LAMBDA (TTY-RETURN) (VALRET '|/î:SL /î:VP |)) NIL))
+
+(lap	%TBNOT-OFF subr)
+	(movei t tt)
+	(hrli t 2)   	; .RTTY
+	(*suset 0 t)    ; read it
+	(tlz tt 4000)   ; clear %tbout
+        (tlo t  400000) ; make into .STTY
+        (*suset 0 t)    ; set it
+        (movei 1 't)    ; return T
+        (popj p)
+()
+
+;; takes a job object and waits for an interrupt on that job
+(lap wait-for-job-int subr)
+ (args wait-for-job-int (nil . 1))
+	(movem a (special waiting-for-job-int))
+	(movei a (special waiting-for-job-int))
+	(skipe 0 0 a)
+	(*hang 0)
+	(movei A 'T)
+	(popj p)
+()
+
+(lap	jobp subr)			; is it a valid job object (and open)
+(args	jobp (nil . 1))
+	(move t 1 (a))
+	(movei a nil)
+	(tlnn t 'tts/.cl)
+	(movei a 'truth)
+	(popj p)
+()
+
+(lap	ddt-exit subr)
+	(*break 16 300000)		; return with a kerchink
+	(movei A 'truth)
+	(popj p)
+()
