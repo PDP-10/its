@@ -942,6 +942,45 @@ respond "*" ":midas liblsp;_gsb;ttyvar\r"
 respond "Use what filename instead?" "lisp;\r"
 expect ":KILL"
 
+respond "*" ":midas liblsp;_libdoc;aryadr\r"
+expect ":KILL"
+respond "*" ":midas liblsp;_libdoc;bssq\r"
+expect ":KILL"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;lddt\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;ndone\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" ":link graphs;graph3 fasl,liblsp\r"
+respond "*" ":link graphs;plot3 fasl,liblsp\r"
+respond "*" ":link graphs;plot fasl,liblsp\r"
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;plot\r"
+respond "_" "liblsp;_libdoc;plot3\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;prime\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;step\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "liblsp;_libdoc;utils\r"
+respond "_" "\032"
+type ":kill\r"
+
 # DEFSET
 respond "*" "complr\013"
 respond "_" "lisp;_nilcom;defset\r"
