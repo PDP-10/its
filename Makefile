@@ -34,7 +34,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       aplogo _klfe_ pdp11 chsncp cbf rug bawden
 BIN = sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys \
       graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
-      _www_ hqm
+      _www_ hqm gt40
 MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
 # These are not included on the tape.

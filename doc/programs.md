@@ -271,6 +271,7 @@
 - URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
+- VT07, GT40 Datapoint emulator and Lisp display slave.
 - VTTIME, display running time on the terminal.
 - VV/VJ/DETREE, list jobs.
 - XHOST, tool for replacing host nicknames with real hostnames.
