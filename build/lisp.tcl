@@ -118,6 +118,10 @@ respond "_" "lisp;_nilcom;let\r"
 respond "_" "\032"
 type ":kill\r"
 
+respond "*" ":link l;humble fasl,lisp;\r"
+respond "*" ":link l;ledit* fasl,lisp;\r"
+respond "*" ":link l;let fasl,lisp\r"
+
 respond "*" "complr\013"
 respond "_" "lisp;_nilcom;macaid\r"
 respond "_" "\032"
