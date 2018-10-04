@@ -36,6 +36,7 @@ type ":vk\r"
 # TCTYP
 respond "*" ":midas sys1; ts tctyp_syseng;tctyp\r"
 expect ":KILL"
+respond "*" ":link sys1;ts tctype, sys1; ts tctyp\r"
 
 source $build/emacs.tcl
 
