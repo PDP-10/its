@@ -124,7 +124,7 @@ type ":kill\r"
 
 respond "*" ":link l;humble fasl,lisp;\r"
 respond "*" ":link l;ledit* fasl,lisp;\r"
-respond "*" ":link l;let fasl,lisp\r"
+respond "*" ":link l;let fasl,lisp;\r"
 
 respond "*" "complr\013"
 respond "_" "lisp;_nilcom;macaid\r"
@@ -735,7 +735,7 @@ type ":kill\r"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;for\r"
-respond "_" "liblsp;_libdoc;gcdemn\r"
+respond "_" "lisp;_lspsrc;gcdemn\r"
 respond "_" "liblsp;_libdoc;genfns\r"
 respond "_" "liblsp;_libdoc;graphs\r"
 respond "_" "liblsp;_libdoc;graphm\r"
@@ -749,6 +749,9 @@ respond "_" "liblsp;_libdoc;lets\r"
 respond "_" "liblsp;_libdoc;linere\r"
 respond "_" "\032"
 type ":kill\r"
+
+respond "*" ":delete libdoc;gcdemn 999999\r"
+respond "*" ":link libdoc;gcdemn 999999,lspsrc;gcdemn >\r"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;loop\r"
@@ -829,7 +832,7 @@ respond "*" ":delete liblsp;filbit unfasl\r"
 respond "*" ":delete liblsp;fload  unfasl\r"
 respond "*" ":delete liblsp;fontrd unfasl\r"
 respond "*" ":delete liblsp;for    unfasl\r"
-respond "*" ":delete liblsp;gcdemn unfasl\r"
+respond "*" ":delete lisp;gcdemn unfasl\r"
 respond "*" ":delete liblsp;genfns unfasl\r"
 respond "*" ":delete liblsp;gprint unfasl\r"
 respond "*" ":delete liblsp;graph$ unfasl\r"
@@ -1008,6 +1011,32 @@ respond "*" "complr\013"
 respond "_" "lisp;_nilcom;defset\r"
 respond "_" "\032"
 type ":kill\r"
+
+# compile some lisp; libraries
+respond "*" "complr\013"
+respond "_" "lisp;_nilcom;cnvd\r"
+respond "_" "lisp;_lspsrc;exthuk\r"
+respond "_" "lisp;_lspsrc;gfile\r"
+respond "_" "lisp;_lspsrc;gfn\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
+respond "_" "lisp;_lspsrc;querio\r"
+respond "_" "lisp;_lspsrc;vector\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" ":midas lisp;_lspsrc;sendi\r"
+expect ":KILL"
+respond "*" ":midas lisp;_lspsrc;straux\r"
+expect ":KILL"
+
+# lispt source is in libdoc, therefore fasl should be in liblsp
+# version in lisp; should be a link to liblsp;lispf fasl
+respond "*" ":delete lisp;lispt fasl\r"
+respond "*" ":link lisp;lispt fasl,liblsp;\r"
+respond "*" ":link sys2;ts lispt,sys2;ts edit\r"
 
 # Lisp display library
 respond "*" ":midas lisp; slave fasl_l; slave\r"
