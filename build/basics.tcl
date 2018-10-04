@@ -34,9 +34,8 @@ respond "*" ":print device;..new. (udir)\r"
 type ":vk\r"
 
 # TCTYP
-respond "*" ":midas sysbin;_syseng;tctyp\r"
+respond "*" ":midas sys1; ts tctyp_syseng;tctyp\r"
 expect ":KILL"
-respond "*" ":link sys;ts tctyp,sysbin;tctyp bin\r"
 
 source $build/emacs.tcl
 
