@@ -1124,3 +1124,9 @@ respond ":" "t\r"
 respond ":" "t\r"
 respond "\n" ":vk\r"
 respond "*" ":kill\r"
+
+# AS8748
+respond "*" ":complr\r"
+respond "_" "lmio1;as8748\r"
+respond "_" "\032"
+type ":kill\r"
