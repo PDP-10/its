@@ -1131,6 +1131,11 @@ respond "_" "lmio1;as8748\r"
 respond "_" "\032"
 type ":kill\r"
 
+respond "*" ":complr\r"
+respond "_" "moon;8478sa\r"
+respond "_" "\032"
+type ":kill\r"
+
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
 respond "*" "(load '((lmio1) as8748))"
