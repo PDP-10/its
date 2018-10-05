@@ -283,6 +283,8 @@ expect ":KILL"
 # meter
 respond "*" ":midas sys1;ts meter_syseng;meter\r"
 expect ":KILL"
+respond "*" ":link sys1; ts smeter, sys1; ts meter\r"
+respond "*" ":link sys1; ts meterd, sys1; ts meter\r"
 
 # cross
 # This is not the microcomputer cross assembler.
