@@ -63,6 +63,10 @@ respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;loop\r"
+respond "_" "\032"
+type ":kill\r"
+
+respond "*" "complr\013"
 respond "_" "lisp;_lspsrc;umlmac\r"
 respond "_" "lisp;_nilcom;sharpa\r"
 respond "_" "lisp;_nilcom;sharpc\r"
