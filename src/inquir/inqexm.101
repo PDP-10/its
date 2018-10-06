@@ -1,0 +1,1113 @@
+;-*- MODE: MIDAS -*-
+
+TITLE	INQEXM - Examine Inquire Database 
+	;CStacy 6/8/83
+
+;;; This program is used to examine the LSR1 database in various ways.
+;;; For a list of commands, run it and type HELP.
+
+;;;; Things to do:
+;;;; Quoted strings for the syllable reader.
+;;;; Inferiors - WHOIS, LOOKUP, INQUIR.
+;;;; Command to toggle UNAME/Full printouts.
+;;;; INQREP.
+;;;; Fancier search criteria ala KMP's food transfer protocol.
+;;;; Print list of users from a file of UNAMES.
+;;;; HAS-ACCOUNT-P predicate.
+
+;;; Registers.
+
+X=0		;Super temporary register.
+A=1		;General registers.
+B=2
+C=3
+D=4
+E=5
+BP=6		;Byte pointer.
+CHAR=7		;Character.
+COUNT=10	;Accumulator.
+T=12		;Temporary registers.
+TT=13
+OC==14		;Default output channel.
+U1==T		;4 UUO Registers.
+U2==TT
+U3==15
+U4==16
+P=17		;Stack pointer.
+
+;;; I/O Channels
+
+DSKI==1		;Disk Input.
+DSKO==2		;Disk Output.
+TTYO=15		;TTY typeout.
+TTYI=16		;TTY typein.
+
+;;; Date and time routines.
+
+DATIME"$$IN==1	;Conversion from ASCII date-time to standard form.
+DATIME"$$ABS==1	;Conversion from disk format dates to absolute days.
+.INSRT SYSENG;DATIME >
+
+;;; LSR1 database routines.
+
+$$OVLY==0	;Map entire LSR1 file at once.
+$$HSNM==1	;Get HSNAME routines also.
+		;All other routines defaultly selected.
+.INSRT SYSENG;LSRTNS >
+
+;;; Filename parsing routines.
+
+RFN"$$RFN==1
+.INSRT SYSENG;RFN >
+
+
+;;; Macros and output routines.
+
+$$OUT==1
+.INSRT KSC;MACROS >
+.INSRT KSC;OUT >
+
+;;; Get symbol table lookup routines from network package.
+
+$$ARPA==1	;Must specify a network..
+$$SYMLOOK==1
+.INSRT SYSENG;NETWRK >
+
+
+SUBTTL	More Macros
+
+DEFINE DECBP C			   ;Decrement byte pointer.
+	ADD C,[70000,,]		   ;Back up the byte pointer.
+	SKIPGE C		   ;Did we cross a word boundary?
+	  SUB C,[430000,,1]	   ; then fix it.
+TERMIN
+
+
+DEFINE UPPER CHR		   ;uppercase ascii character
+	CAIL CHR,141		   ;lower "a"
+	  CAILE CHR,172		   ;lower "z"
+	    CAIA		   ;if got here, it's not lower a-z, skip
+	    SUBI CHR,40		   ;convert case
+TERMIN
+
+;;; Macro for tokenization calls.
+;;; Fails or puts token in TOKEN
+;;; Note: BPTR not used in this implementation.
+
+DEFINE	GTOKEN BPTR,FAILER,TYPE
+	SKIPN MORJCL
+	 JRST FAILER
+	CALL RD2TKN
+	 JRST FAILER
+IFSE TYPE,REST,	CALL TOKNZR
+IFSE TYPE,ASC,	CALL TOKNIZ
+IFSE TYPE,SIX,	CALL RDSIX
+	JRST FAILER
+TERMIN
+
+
+
+SUBTTL	Error Handler and Returns
+
+POPJ1:	AOS (P)			   ;Skip
+CPOPJ:	RET			   ;Return
+
+SYSLOS::
+AUTPSY:	0			   ;Fatal error JSR here.
+	.LOSE %LSFIL		   ;Print error message.
+				   ;If the luser continues us, log out.
+DEATH:	SKIPE DEBUG		;Jump to your fate!
+	 .VALUE [ASCIZ /:Dying... /]
+	.LOGOUT 1,		;Suicide!
+
+
+;;; Fatal bugs are reported with this:
+
+DEFINE	BUG (LIST)
+	JRST [	MOVEI OC,TTYO
+		OUT!LIST
+		POP P,OC
+		JSR AUTPSY ]
+TERMIN
+
+
+;;; Non fatal errors are reported with these:
+
+DEFINE	ERRRET (LIST)
+	 JRST [ PUSH P,OC
+		MOVEI OC,TTYO
+		OUT!LIST
+		POP P,OC
+		RET ]
+TERMIN
+
+DEFINE	BARF GO,(LIST)
+	JRST [	PUSH P,OC
+		MOVEI OC,TTYO
+		OUT!LIST
+		POP P,OC
+		JRST GO ]
+TERMIN
+
+
+
+
+SUBTTL	Interrupt handler.
+
+TMPLOC 42,{-TSINTL,,TSINT}	   ;New style interrupts.
+INTACS==T_6+5			   ;Temp/OUT registers preserved.
+
+TSINT:	INTACS,,P
+	0 ? 1_TTYI ? 0 ? <1_TTYO>\<1_TTYI> ? CHRINT
+	0 ? 1_TTYO ? 0 ? 0 ? MORINT
+TSINTL==:.-TSINT
+
+;;; Interrupt dismissal
+
+INTRET:	SYSCAL DISMIS,[%CLBIT,,INTACS ? P]
+	 JSR SYSLOS
+
+;;; Console interrupts.
+
+CHRINT:	MOVEI T,TTYI		   ;Interrupt character.
+	.ITYIC T,
+	 JRST INTRET
+	CAIN T,^S
+	  JRST [.RESET TTYO,
+		SYSCAL TTYFLS,[	%CLBIT,,1 ? %CLIMM,,TTYI]
+		 .LOSE %LSSYS
+		JRST FLSIT]
+	 CAIN T,^G
+	  JRST [.RESET TTYO,
+		SYSCAL TTYFLS,[	%CLBIT,,1 ? %CLIMM,,TTYI]
+		 .LOSE %LSSYS
+		OUT(TTYO,("(Quit)"))
+		JRST FLSIT1]
+	JRST INTRET		   ;Ignore other control characters.
+MORINT:	OUT(TTYO,("--More--"))	   ;MORE break.
+	SYSCAL IOT,[%CLBIT,,%TIPEK ? %CLIMM,,TTYI ? %CLOUT,,T]
+	 .LOSE %LSFIL
+	CAIE T,40
+	 CAIN T,177
+	  .IOT TTYI,T
+	CAIE T,40
+	 JRST FLSIT
+	OUT(TTYO,("A"))
+	JRST INTRET
+FLSIT:	OUT(TTYO,("Flushed"))
+				   ;Flushing a command means
+FLSIT1:	MOVEI T,TOPLEV		   ;and returning to toplevel.
+	MOVEM T,-5(P)
+	JRST INTRET
+
+
+
+SUBTTL	Command Tables
+
+DEFINE CMD NAME,ROUTIN,&SHORT,LONG
+TMPLOC HLPTAB+.-CMDTAB,{[ASCIZ LONG],,[ASCIZ SHORT]}
+	ROUTIN,,[ASCIZ \NAME\ ]
+TERMIN
+IF1 HLPTAB==0
+
+;;; Table of top level commands.
+;;; If the short doc starts with an underscore, the command is not listed
+;;; in KHELP.  Long documentation is still avilable though.
+
+CMDTAB:
+	CMD QUIT,DEATH,"Quit this program.",""
+
+	CMD HELP,KHELP,"List the available commands.","HELP [CR]   Lists the commands available.
+HELP <command> [CR]   Explains the command in greater detail."
+
+	CMD ?,KHELP,"_Same as HELP.","To get help, type:   HELP [CR]"
+
+	CMD BADGROUPS,KBADGR,"List users will illegal Group designations.","This command will list the UNAME and GROUP of all people in the database
+whose group letter is not one of the officially approved designators."
+
+	CMD CASE,KCASE,"Examine or toggle case sensitivity in string searches.","By default, substring search commands like COUNT and SEARCH ignore the
+alphabetic case of the search strings.  With the CASE command, you may
+change this setting, and can make case be significant when searching.
+CASE [CR]   Tells you what the current setting is, and offers to change it."
+
+	CMD COUNT,KCOUNT,"Count database entries.","COUNT [CR]   Counts up all the entries in the database.
+COUNT <item-name> <string> [CR]   Does a search and counts up all the 
+matching entries."
+
+	CMD FILE,KFILE,"Sends next command's output to a file.","FILE <filename> [CR]  Changes which file to send the output to."
+
+	CMD GROUP,KGROUP,"Tell what group a person is in.","GROUP <uname>   Looks up the user and prints an English explanation of his group designation."
+
+	CMD GOODGROUP,KGOOGR,"List the approved Group item designation letters.",""
+
+	CMD ITEMS,KITEMS,"List the names of the database items.",""
+
+	CMD NEWUFD,KNUFD,"Create a new User File Directory.","NEWUFD <dir> [CR]   Creates the named file directory."
+
+	CMD SEARCH,KSEARC,"Substring search through items in the database entries.","SEARCH <item-name> <string> [CR]   Searches through the file and prints 
+the UNAMEs of the matching entries. The ITEMS command will tell you
+the names of the database items."
+
+
+CMDTBL==.-CMDTAB
+HLPTBL==CMDTBL
+IF1 EXPUNGE HLPTAB
+HLPTAB:	BLOCK CMDTBL
+
+
+NITMS==0
+DEFINE ITEM NAME,NUM,DESC/
+IFNB [DESC] TMPLOC ITDTAB+.-ITMTAB, [ASCIZ\DESC\]
+	NUM,,[ASCIZ\NAME\]
+NITMS==NITMS+1
+TERMIN
+IF1 ITDTAB==0
+
+;;; Table of Inquire items by [item-number,,name]
+;;; ITDIAB is a table of corrosponding asciz [description] strings.
+
+ITMTAB:	ITEM UNAME,LSRTNS"I$UNAM,User name
+	ITEM AUTH,LSRTNS"I$AUTH,Authorization
+	ITEM NAME,LSRTNS"I$NAME,Name
+	ITEM NICK,LSRTNS"I$NICK,Nick name
+	ITEM GROUP,LSRTNS"I$GRP,Group
+	ITEM RELATION,LSRTNS"I$REL,Relation
+	ITEM MITADR,LSRTNS"I$MITA,MIT address
+	ITEM MITTEL,LSRTNS"I$MITT,MIT phone
+	ITEM HOMADR,LSRTNS"I$HOMA,Home address
+	ITEM HOMTEL,LSRTNS"I$HOMT,Home phone
+	ITEM NETBOX,LSRTNS"I$NETA,Network mailbox
+	ITEM BIRTHDAY,LSRTNS"I$BRTH,Birthday
+	ITEM PROJECT,LSRTNS"I$PROJ,Project
+	ITEM SUPERVISOR,LSRTNS"I$SUPR,Supervisor
+	ITEM REMARKS,LSRTNS"I$REM,Remarks
+	ITEM FILEDIR,LSRTNS"I$DIR,File directory
+	ITEM LOCAL,LSRTNS"I$LOCL,Local items
+	ITEM MACHINES,LSRTNS"I$MACH,Machines known on
+	ITEM ALTER,LSRTNS"I$ALTR,Last Alteration timestamp
+
+ITMTBL==.-ITMTAB
+IF1 EXPUNGE ITDTAB
+ITDTAB:	BLOCK ITMTBL
+
+
+DEFINE	GRPLTR LETTER,&DESC
+	[ASCIZ DESC],,LETTER
+TERMIN
+
+GRPTAB:	GRPLTR "A,"Artificial Intelligence Lab"
+	GRPLTR "C,"Project MAC"
+	GRPLTR "D,"Dynamic Modelling"
+	GRPLTR "E,"EECS"
+	GRPLTR "L,"LOGO Lab"
+	GRPLTR "H,"ACTOR"
+	GRPLTR "K,"Kollaborating Researcher"
+	GRPLTR "M,"Mathlab"
+	GRPLTR "O,"Other (program, etc.)"
+	GRPLTR "N,"Non-Consortium Macsyma"
+	GRPLTR "P,"Knowledge Bases/AutoProg"
+	GRPLTR "S,"MIT student/staff/faculty"
+	GRPLTR "T,"Tourist"
+	GRPLTR "U,"Macsyma Consortium Subscriber"
+	GRPLTR "X,"MIT-XX LCS"
+	GRPLTR "Z,"Clinical Decision Making"
+	GRPLTR "+,"MIT System Maintainer"
+	GRPLTR "$,"Foreign System Maintainer"
+	GRPLTR "@,"Alias entry"
+;	GRPLTR "~,"Dave Plummer"
+;	GRPLTR "*,"RMS"
+;	GRPLTR "`,"Alan Bawden"	
+
+GRPTBL==.-GRPTAB
+
+
+
+SUBTTL	Main Program
+
+GO:	MOVE P,[-PDLLEN,,PDL]	   ;Init the stack.
+	SYSCAL OPEN,[%CLBIT,,<.UAO\%TJDIS> ? %CLIMM,,TTYO ? [SIXBIT /TTY/]]
+	 .LOSE %LSFIL
+	SYSCAL OPEN,[%CLBIT,,.UAI ? %CLIMM,,TTYI  ? [SIXBIT /TTY/]]
+	 .LOSE %LSFIL
+	SYSCAL CNSGET,[%CLIMM,,TTYO ? %CLOUT,,X ? %CLOUT,,TCMXH]
+	 .LOSE %LSFIL
+	SYSCAL TTYSET,[%CLIMM,,TTYI ? [222222,,222222] ? [230222,,220222]]
+	 .LOSE %LSFIL
+	.SUSET [.ROPTION,,A]	   ;Read job option bits.
+	TLO A,%OPINT\%OPOPC	   ;Turn on winning-PC and new interrupts.
+	.SUSET [.SOPTION,,A]	   ;Set option bits.
+	.SUSET [.SMSK2,,[<1_TTYI>\<1_TTYO>]]	   ;Enable TTY interrupts.
+	.SUSET [.RHSNAM,,A]	   ;Read home sname.
+	MOVEM A,SNAME		   ;Use as output file default.
+MAPLSR:	MOVEI A,DSKI		   ;Try to map in Inquire database.
+	MOVE B,[-LSRPGS,,LSRPAG]
+	CALL LSRTNS"LSRMAP
+	 BUG (,("AUnable to map Inquire database."),CRLF)
+	.CLOSE DSKI,
+	MOVEI A,LSRPGS
+	HLRZ B,B
+	HRLI B,-1
+	ADD A,B			   ;Subtract Reserved-Used pages.
+	MOVEM A,TOTAL		   ;Remember total length of file mapped.
+	MOVE A,LSR1+LSRTNS"HDRDTA  ;Get address in file of Data area.
+	ADDI A,LSR1		   ;Compute core address.
+	MOVEM A,DATA		   ;Remember where first entry is.
+	OUT(TTYO,OPEN(UC$IOT))
+	OUT(,CH(TTYO))		   ;Open typeout display as default device.
+	MOVE A,LSR1+LSRTNS"HDRDAT
+	MOVE B,LSR1+LSRTNS"HDRTIM
+	OUT(,CRLF,CRLF,("INQUIR Database Examiner "),6F(VERSHN),("."))
+	OUT(,("AThis LSR1 database created "),6W(A),(" "),6W(B),("."),CRLF)
+
+
+SUBTTL	Top Level Loop
+
+;;; Commands:
+;;;   o  Are passed MORJCL, BP, COUNT, and parse their own args.
+;;;   o  May smash any ACs.
+;;;   o  Come here on ^S or ^G or Moreflush.
+;;;   o  Skip on success. (Command failure does not mean
+;;;      anything special though.)
+;;;   o  Output from commands should go to standard-output.
+;;;      Error messages go to TTYO (one reason for macros).
+
+
+TOPLEV:	MOVE P,[-PDLLEN,,PDL]	   ;Re-initialize the stack pointer.
+	MOVE A,KFILEF
+	JUMPL A,TOPLE1		   ;Normally, dont mess with output.
+	JUMPE A,[ OUT(,CH(TTYO))
+		  OUT(DSKO,CLS)
+		  OUT(,("A"),LBRK,("Output to TTY."),RBRK)
+		  SETOM KFILEF	   ;Set output-status to normal.
+		  JRST TOPLE1 ]
+	SETZM KFILEF		   ;Now doing command to disk output.
+TOPLE1:	CALL CMREAD		   ;Read a command line.
+	 JRST TOPLEV
+	MOVE BP,[440700,,CMDBUF]
+	CALL RD2TKN
+	 NOP
+	MOVE A,BP
+	ILDB CHAR,BP		   ;If the first character is a semicolon
+	CAIN CHAR,73		   ;  Ignore it, it's a comment.
+	 JRST TOPLEV
+	MOVE BP,A
+	CALL TOKNIZ		   ;Gobble an ascii token into TOKEN.
+	 NOP
+TOPLE2:	MOVEI A,TOKEN
+	MOVE E,[-CMDTBL,,CMDTAB]   ;Check normal command table.
+	CALL NETWRK"SYMLOOK
+	 JRST UNKCMD
+	CAMN B,[-1]		   ;Number?
+	 JRST [	MOVEI A,KNUM	   ; Yes - look up that entry number.
+		JRST CMDIS1 ]
+CMDISP:	HLRZ A,(B)		   ;Get address of routine.
+CMDIS1:	CALL (A)		   ;Call the command.
+	 NOP			   ;Failure return not handled specially.
+	JRST TOPLEV		   ;Loop.
+
+UNKCMD:	OUT(TTYO,("AI don't know the word "),C(42),TZ(TOKEN),C(42),("."))
+	JRST TOPLEV
+
+
+;;; FILE command.
+
+KFILE:	CALL RD2TKN		   ;Bp to filename arg in command line.
+	 JRST KFILE1		   ; If no filename, use current default.
+	MOVE D,BP
+	MOVEI B,DEVNAM		   ;Else parse filename into here.
+	CALL RFN"RFN
+KFILE1:	OUT(TTYO,("ASend output to "),6F(DEVNAM),(":"),6F(SNAME),(";"))
+	OUT(TTYO,6F(FN1),(" "),6F(FN2),(" ,OK?"))
+	CALL YORNP
+	 ERRRET (TTYO,("AAborted, use FILE command to change defaults."))
+	SYSCAL OPEN,[%CLBIT,,%TJDIS+.UAO ? %CLIMM,,DSKO
+		DEVNAM ? FN1 ? FN2 ? SNAME]
+	 ERRRET (TTYO,("AUnable to open file."))
+	OUT(DSKO,OPEN(UC$IOT))
+	OUT(,CH(DSKO))		   ;Open disk output as default.
+	MOVEI T,1
+	MOVEM T,KFILEF		   ;Say we just set disk output.
+	OUT(TTYO,("A"),LBRK,("Output to disk."),RBRK)
+	JRST POPJ1
+
+
+
+
+SUBTTL	Loop through database.
+
+;;; This routine maps the function pointed to by FUN over every
+;;; entry in the database. LOOP normally skip-returns, non-skip
+;;; means there was an error.  LOOP smashes random ACs.
+;;; We return the core address of the entry found in LSTADR.
+;;;
+;;; The user's function must not smash any ACs.  
+;;; The core address of the entry is available in A.
+;;; COUNT is maintained. User skip-return means keep going,
+;;; non-skip ends the loop.  There is no call-return convention for
+;;; the user function to indicate success or failure to LOOP's caller.
+;;;
+;;; If we call GOTO instead of LOOP, we stop at the entry
+;;; whose number is in E.
+
+;;;; (What this should do someday is take two functions:
+;;;;  a predicate and an consequence...)
+
+GOTO:	PUSHAE P,[A,B,C,D,E]
+	MOVEI A,POPJ1		   ;Do nothing function.
+	MOVEM A,FUN
+	JRST LOOP1		   ;Now loop until target.
+
+LOOP:	PUSHAE P,[A,B,C,D,E]
+	MOVE E,[-1]		   ;Normally we count up to infinity.
+LOOP1:	MOVE A,DATA
+	SETZ B,			   ;B is the offset to the next one.
+	SETZ COUNT,
+LOOP2:	AOS COUNT		   ;Keep count of entries.
+	MOVE C,(A)		   ;Get entry header.
+	HRRZ D,C		   ;RH has check value.
+	CAIE D,-1		   ;Check for valid header.
+	 JRST [ OUT(,("AEntry number "),D(COUNT),(" at "),O(A),(" has bad header: "),H(C),(" ."),CRLF)
+		JRST LOOP9 ]
+	HLRZ B,C		   ;Get entry length.
+	CAMN COUNT,E		   ;Are we at the target entry?
+	 JRST [	JUMPN B,LOOP8	   ;  Yes. Return address of target
+		SOS COUNT	   ;  Or complain if past eof.  
+		JRST LOOP9 ]
+LOOP3:	JUMPE B,LOOP7		   ;A zero length entry terminates the file.
+	CALL @FUN		   ;Call the user's function.
+	 JRST LOOP8		   ; See if user wants to return now.
+	ADD A,B			   ;Add offset to find next entry.
+	JRST LOOP2		   ;Go fetch another entry.
+
+LOOP7:	SOS COUNT		   ;Here for EOF success.
+LOOP8:	AOS -5(P)		   ;Success exit.
+LOOP9:	MOVEM A,LSTADR		   ;Say where last entry was found.
+	POPAE P,[E,D,C,B,A]
+	RET
+
+
+
+SUBTTL	Simple Commands
+
+;;; KHELP - Give the user some help
+
+KHELP:	GTOKEN BP,KHEL1,ASC	   ;Get subtopic, else list commands.
+	MOVEI A,TOKEN
+	MOVE E,[-CMDTBL,,CMDTAB]
+	CALL NETWRK"SYMLOOK	   ;Look up the field name.
+	 ERRRET (TTYO,CRLF,("I dont know about "),TZ(TOKEN))
+	CAMN B,[-1]		   ;See if he wants to know about KNUM.
+	 JRST [	MOVE A,T	   ; Yes - get database entry number in A.
+		OUT(,CRLF,("Print the UNAME of the LSR1 entry at "),D(A),("."))
+		JRST KHEL9 ]
+	SUBI B,CMDTAB
+	ADDI B,HLPTAB
+	HLRZ BP,(B)		   ;Address of long documentation string.
+	SKIPN (BP)
+	 ERRRET (TTYO,("ANo detailed information for that command."))
+	HRLI BP,440700		   ;Make it into a Bp.
+	OUT(,CRLF,TPZ(BP),CRLF)
+	JRST KHEL9
+KHEL1:	OUT(,CRLF,("Command keywords may be abbreviated, they need only be unique."),CRLF)
+	MOVSI A,-CMDTBL
+KHEL2:	HRR BP,HLPTAB(A)	   ;Examine next short help string.
+	HRLI BP,440700		   ;Make Bp to string. 
+	ILDB CHAR,BP		   ;Check first char.
+	CAIN CHAR,137		   ;If it starts with an underscore
+	 JRST KHEL3		   ;  do not list it.
+	HRLI BP,440700		   ;Else list it (restore Bp to start).
+	HRRZ B,CMDTAB(A)	   ;And next command name.
+	HRLI B,440700
+	OUT(,TPZ(B),TAB,TPZ(BP),CRLF)
+KHEL3:	AOBJN A,KHEL2		   ;List them all.
+	OUT(,("Or type the number (with decimal point) of an entry to find."))
+	OUT(,CRLF,("Type  HELP <command> for info on a particular command."))
+	OUT(,CRLF,("More features are planned.  Mail to CSTACY for bug reports, etc."))
+KHEL9:	OUT(,CRLF,CRLF)
+	JRST POPJ1
+
+
+
+;;; KNUM - Find an entry by number.
+;;; This command is not called directly by the user.
+;;; We expect a database entry number in T.
+
+KNUM:	MOVE E,T
+	SKIPN E
+	 ERRRET (TTYO,("AWe count entries from one, not zero."))
+	CALL GOTO
+	 ERRRET (TTYO,("AThere are only "),D(COUNT),(" entries in the database."))
+	MOVEI A,LSRTNS"I$UNAM
+	MOVE B,LSTADR
+	CALL LSRTNS"LSRITM
+	 BUG (,("AThe entry at "),O(LSTADR),(" lacks a UNAME."))
+	OUT(,("AEntry number "),D(COUNT),(" at "),O(LSTADR),(" belongs to "),TPZ(A),("."))
+	JRST POPJ1
+
+
+
+;;; KCASE - Change case sensitivity settings.
+
+KCASE:	MOVE A,[SIXBIT /OFF/]	;Zero means OFF.
+	SKIPE ALPCAS		;If it is -1
+	 MOVE A,[SIXBIT /ON/]	; say it is on.
+	OUT(TTYO,("ACase sensitivity is currently "),6F(A),("."))
+	OUT(TTYO,CRLF,("Change it?"))
+	MOVE A,ALPCAS
+	CALL YORNP		;Want to change it?
+	 CAIA
+	SETCA A,
+	MOVEM A,ALPCAS
+	JRST POPJ1
+
+
+
+
+SUBTTL	KNUDIR - Make a new UFD
+
+KNUFD:	GTOKEN BP,KNUFDN,SIX
+	OUT(TTYO,("AAre you sure you want to create a "),6F(A),("; directory?"))
+	CALL YORNP
+	 ERRRET (TTYO,("AAborted."))
+	SYSCAL OPEN,[%CLBIT,,.UAI ? %CLIMM,,DSKO
+		[SIXBIT /DSK/]
+		[SIXBIT /..NEW./]
+		[SIXBIT /(UDIR)/]
+		A
+		%CLERR,,B]
+	 JRST [	CAIN B,%ENSFL	   ;FILE NOT FOUND error means success.
+		 JRST KNUFD1
+		OUT(TTYO,("AError: Directory not created."))
+		JRST KNUFD9 ]
+	OUT(TTYO,("ADirectory already exists."))
+	SYSCAL DELEWO,[%CLIMM,DSKO]
+	 NOP
+	JRST KNUFD9
+KNUFD1:	OUT(TTYO,CRLF,6F(A),("; created."))
+	AOS (P)
+KNUFD9:	.CLOSE DSKO,
+	RET
+
+KNUFDN:	 ERRRET (TTYO,("ADirectory name not specified."))
+
+
+
+SUBTTL	KCOUNT - Counts up the entries
+
+;;; This is a command to count up the entries in a database.
+
+KCOUNT:	SKIPN MORJCL
+	 JRST [	MOVEI A,POPJ1	   ;#'(LAMBDA (&REST IGNORE)))
+		JRST KCOUN1 ]
+	GTOKEN BP,KSERMA,ASC	   ;Get Item name.
+	MOVEI A,TOKEN
+	MOVE E,[-ITMTBL,,ITMTAB]
+	CALL NETWRK"SYMLOOK	   ;Look up the field name.
+	 ERRRET (TTYO,("A"),TZ(TOKEN),(" is not a known field."))
+	CAMN B,[-1]		   ;Avoid confusing user with number radix.
+	 ERRRET (TTYO,("AUse item names, not numbers. Try the ITEMS command for help."))
+	HLRZ A,(B)		   ;A gets Inquire search item number.
+	MOVEM A,SEARIN		   ;Save it.
+	GTOKEN BP,KSERMA,REST	   ;Get search string.
+	MOVE T,B		   ;Get pointer into ITMTAB.
+	SUBI T,ITMTAB		   ;Convert to index for ITDTAB.
+	MOVE C,ITDTAB(T)	   ;C gets Bp to item description.
+	OUT(TTYO,("ASearching "),TZ$(C),(" items for "),C(42),TZ(TOKEN),C(42),("."))
+	MOVEI A,KSEFN		   ;Use pickier function.
+KCOUN1:	MOVEM A,FUN
+	SETZM HITCNT		   ;Count the hits.
+	SETZM SEAPRT		   ;But dont print them.
+	CALL LOOP		   ;Go count up the entries.
+	 ERRRET (TTYO,("AThere was a problem - maybe the database is munged?"))
+	SKIPN HITCNT
+	 JRST KCOUN6
+	OUT(TTYO,("A"),D(HITCNT),(" entries found."),CRLF)
+	JRST KCOUN9
+KCOUN6:	MOVE A,LSTADR		   ;Get address of last entry found.
+	SUB A,DATA		   ;Compute number of data words.
+	MOVE B,LSR1+LSRTNS"HDRUNM  ;Compute number of data pages
+	ADDI B,LSR1		   ;(which is number of UNM entries).
+	MOVE B,(B)
+	OUT(TTYO,("ATotal of "),D(COUNT),(" entries in "),D(B),(" data pages "),LPAR,D(A),(" words"),RPAR,("."),CRLF)
+	OUT(TTYO,("LSR1 database consumes "),D(TOTAL),(" disk pages."),CRLF)
+KCOUN9:	JRST POPJ1
+
+
+
+SUBTTL	For searching the database
+
+;;; KITEMS command.
+;;; This lists the names of all the database fields which can
+;;; be used in search commands.
+
+KITEMS:	MOVSI D,-NITMS		   ;Get AOBJN pointer to item names.
+	OUT(TTYO,CRLF,("FieldH"),C(24.),("NumberH"),C(32.),("Description"))
+KITEM1:	HRRZ A,ITMTAB(D)	   ;Get address of item name.
+	HLRZ B,ITMTAB(D)	   ;Get item number.
+	HRRZ C,ITDTAB(D)	   ;Get address of item description.
+	OUT(TTYO,CRLF,TZ$(A),("H"),C(24.),LPAR,D(B),RPAR,("H"),C(32.),TZ$(C))
+	AOBJN D,KITEM1
+	JRST POPJ1
+
+
+;;; SEARCH <item-name>,<string>
+;;; Prints out the unames of all users who are found.
+
+KSEARC:	GTOKEN BP,KSERMA,ASC	   ;Get item name.
+	MOVEI A,TOKEN
+	MOVE E,[-ITMTBL,,ITMTAB]
+	CALL NETWRK"SYMLOOK	   ;Look up the field name.
+	 ERRRET (TTYO,("A"),TZ(TOKEN),(" is not a known field."))
+	CAMN B,[-1]		   ;Avoid confusing user with number radix.
+	 ERRRET (TTYO,("AUse item names, not numbers. Try the ITEMS command for help."))
+KSEAR1:	HLRZ A,(B)		   ;A gets Inquire search item number.
+	MOVEM A,SEARIN		   ;Save it.
+	GTOKEN,KSERMA,REST	   ;Get search string.
+	MOVE T,B		   ;Get pointer into ITMTAB.
+	SUBI T,ITMTAB		   ;Convert to index for ITDTAB.
+	MOVE C,ITDTAB(T)	   ;C gets Bp to item description.
+KSEAR2:	OUT(TTYO,("ASearching "),TZ$(C),(" items for "),C(42),TZ(TOKEN),C(42),("."))
+	MOVEI X,KSEFN
+	MOVEM X,FUN
+	SETZM HITCNT
+	SETOM SEAPRT
+	CALL LOOP		   ;Map KSEFN over the database.
+	 NOP
+	JRST POPJ1
+
+;;; Here for missing args to search command.
+
+KSERMA:	ERRRET (TTYO,("AI don't see what to search for."),CRLF)
+
+;;; Search predicate function, to be called from LOOP context.
+
+KSEFN:	PUSHAE P,[A,B]		   ;Clobber no ACs.
+	MOVE B,-1(P)		   ;Get core address of this entry.
+	MOVE A,SEARIN		   ;Get item number we want.
+	CALL LSRTNS"LSRITM	   ;A gets Bp to the item.
+	 JRST KSEFN9		   ;  (Unless item is null...)
+	MOVE BP,[440700,,TOKEN]	   ;Get Bp to ASCIZ target.
+	MOVE B,A		   ;Get Bp to ASCIZ item.
+	CALL SFND		   ;See if the item contains the string.
+	 JRST KSEFN9
+	AOS HITCNT		   ;Hit! Count hits...
+	SKIPN SEAPRT		   ;Are we printing?
+	 JRST KSEFN9		   ; no.
+	MOVEI A,LSRTNS"I$UNAME	   ;Else Print out the uname.
+	MOVE B,-1(P)		   ;Get core address of this entry.
+	CALL LSRTNS"LSRITM	   ;A get Bp to the UNAME.
+	 JRST KSEFN9
+	OUT(,CRLF,TPZ(A))
+KSEFN9:	POPAE P,[B,A]
+	JRST POPJ1		   ;Never signal failure.
+
+
+
+
+;;; GOODGROUP command - prints the legal Group item letters.
+
+KGOOGR:	MOVSI A,-GRPTBL
+KGOOG1:	OUT(,CRLF)
+	HRLZI BP,440700		   ;Get Bp to description.
+	HLR BP,GRPTAB(A)
+	HRRZ CHAR,GRPTAB(A)	   ;Get ASCII group letter.
+	SYSCAL IOT,[OC ? CHAR]	   ;B(acharbyte) not implemented in OUT.
+	 JSR AUTPSY
+	OUT(,TAB,TPZ(BP))
+	AOBJN A,KGOOG1		   ;Loop for all groups.
+	OUT(,CRLF)
+	JRST POPJ1
+
+;;; GROUP command - tells what kind of user someone is.
+
+KGROUP:	GTOKEN,KGROUN,SIX
+	MOVE B,A		   ;Get sixbit uname.
+	MOVE C,A		   ;Save UNAME.
+	MOVEI A,0		   ;LSR1 is in core.
+	CALL LSRTNS"LSRUNM
+	 ERRRET (TTYO,("AUser not found."))
+	MOVEI A,LSRTNS"I$NAME
+	CALL LSRTNS"LSRITM	   ;Try to get his name.
+	 JRST [	MOVE A,[440700,,[ASCIZ "(Unknown)"]]
+		JRST .+1 ]
+	MOVE D,A		   ;Save Bp to NAME.
+	MOVEI A,LSRTNS"I$GRP
+	CALL LSRTNS"LSRITM	   ;Get Bp to group letter.
+	 JRST [	MOVE A,[440700,,[ASCIZ ""]]
+		JRST .+1 ]
+	ILDB CHAR,A		   ;Get group letter.
+	MOVSI A,-GRPTBL
+KGROU1:	HRRZ B,GRPTAB(A)	   ;Get char from Groups table.
+	CAMN CHAR,B		   ;Is this his group?
+	 JRST [	HRLZI BP,440700	   ; Yes - get Bp to description.
+		HLR BP,GRPTAB(A)
+		JRST KGROU2 ]
+	AOBJN A,KGROU1		   ;No, try again.
+	MOVE BP,[440700,,[ASCIZ "(unrecognized Group)"]]
+KGROU2:	MOVE B,[440700,,TOKEN]	   ;Bp to a string buffer.
+	MOVE A,D		   ;Bp to personal name.
+	CALL LSRTNS"LSRNAM	   ;Permute it down B.
+	 NOP
+	MOVE B,[440700,,TOKEN]	   ;Bp to nice name.
+	OUT(,6F(C),(","),TAB,TPZ(B),(", is listed in the "),TPZ(BP),(" group."))
+	JRST POPJ1
+
+KGROUN:	ERRRET (TTYO,("AYou did not specify a UNAME to look up.")) 
+
+
+;;; BADGROUP command - searches for people with bad Group items.
+;;; Maybe someday make this take optional arg instead of built in list.
+
+KBADGR:	MOVEI A,SIGFN		   ;Illegal Group Function.
+	MOVEM A,FUN
+	CALL LOOP
+	 NOP
+	JRST POPJ1
+
+;;; Illegal Group Item Predicate.  To be called from LOOP context. 
+
+SIGFN:	PUSHAE P,[A,B,C]	   ;Clobber no ACs.
+	MOVE B,-2(P)		   ;Core address of this entry.
+	MOVEI A,LSRTNS"I$GRP	   ;We want the group.
+	CALL LSRTNS"LSRITM	   ;A gets Bp to the GROUP item.
+	 JRST [	MOVE C,A
+		JRST SIGFN7 ]	   ; "No group is a bad group"
+	MOVE C,A
+	ILDB CHAR,A		   ;CHAR gets his group letter.
+	MOVE B,[440700,,OKGRPS]	   ;Bp to the good group letters.
+SIGFN1:	ILDB T,B		   ;Get a good letter.
+	JUMPE T,SIGFN7
+	CAMN CHAR,T		   ;A good group?
+	 JRST SIGFN9		   ; Yes - dont print it.
+	JRST SIGFN1
+SIGFN7:	MOVEI A,LSRTNS"I$UNAME	   ;Else Print out the uname.
+	MOVE B,-2(P)		   ;Get core address of this entry.
+	CALL LSRTNS"LSRITM	   ;A get Bp to the UNAME.
+	 JRST KSEFN9		   ; No UNAME, sigh...
+	OUT(,CRLF,TPZ(A),TAB,TPZ(C))
+SIGFN9:	POPAE P,[C,B,A]
+	JRST POPJ1		   ;Never signal failure.
+
+
+
+
+SUBTTL	Keyboard Input
+
+;;; Read an ASCIZ string from the TTY into the command buffer.
+;;; This can be called anywhere for reading in an asciz string.
+;;; Note that the ^S and ^G interrupt chars flush us to TOPLEV.
+;;; Update count in COUNT and skip-return unless no characters read. 
+;;;
+;;; This stuff probably doesnt work very well on glass TTYs. 
+;;; Too bad.
+
+CMREAD:	OUT(TTYO,("A"),RABR)	   ;Prompt the user.
+	MOVE BP,[440700,,CMDBUF]   ;Bp to command string buffer.
+	SETZ COUNT,
+CMREA1:	.IOT TTYI,CHAR		   ;Get a character.
+	CAIN CHAR,177		   ;RUBOUT rubs out a character.
+	 JRST RUBOUT
+	CAIN CHAR,^H
+	 JRST [	OUT(TTYO,("SALUse the RUBOUT or DELETE key to delete characters.RF"))
+		JRST CMREA1 ]
+	CAIN CHAR,^D		   ;^D rubs out a line.
+	 JRST RUBALL
+	CAIN CHAR,^U		   ;^U rubs out a line.
+	 JRST RUBALL
+	CAIN CHAR,^L		   ;^L clears and redisplays.
+	 JRST REDISP
+	CAIN CHAR,^R		   ;^R redisplays.
+	 JRST REDIS1
+	CAIE CHAR,^C		   ;^C and ^M finish input.
+	 CAIN CHAR,^M
+	 JRST [	MOVEI CHAR,0
+		IDPB CHAR,BP	   ;Tie off ASCIZ string.
+		SKIPE COUNT	   ;If we read something
+		 AOS (P)	   ; Skip
+		RET ]		   ;  Return.
+	CAIGE CHAR,40		   ;No random ctl chars allowed!
+	 JRST [ OUT(TTYO,(""))
+		JRST REDIS1 ]
+	AOS COUNT		   ;Keep count of chars read.
+	CAILE COUNT,CMBUFL*5.	   ;Avoid overflowing the buffer.
+	 JRST [	OUT(TTYO,("ASLine too long!R"))
+		JRST REDISP ]	   ; Chance to rubout some cruft.
+	IDPB CHAR,BP		   ;Stuff it.
+	JRST CMREA1		   ;Get another.
+
+RUBOUT:	SKIPN COUNT		   ;Dont allow rubout of nothing.
+	 JRST [	OUT(TTYO,(""))
+		JRST CMREA1 ]
+	OUT(TTYO,("X"))	   ;Rubout.
+	DECBP BP
+	SOS COUNT		   ;Back up.
+	JRST CMREA1		   ;Get another character.
+
+RUBALL:	OUT(TTYO,("H"),C(8.),("L"))
+	JRST CMREAD		   ;Flush entire line.
+
+REDISP:	OUT(TTYO,("C"))
+REDIS1:	MOVE A,COUNT		   ;Count word
+	HRLZI B,440700		   ;followed by
+	HRRI B,CMDBUF		   ;Byte pointer.
+	OUT(TTYO,("H"),C(8.),("L"),RABR,TS(A))
+	JRST CMREA1
+
+
+
+SUBTTL	Parsing
+
+;;; Routine for RFN. Skip if we should terminate a filename.
+
+RSIXTP:	CAIN A,54		   ;Comma is the only non-control
+	 JRST POPJ1		   ;character which ends filenames.
+	RET
+
+;;; Read an ascii token from BP into the TOKEN buffer.
+;;; Set MORJCL if there are more characters.
+;;; SKip return.
+
+TOKNZR:	SETOM REST		   ;Come here for Rest tokenization. 
+	CAIA
+TOKNIZ:	 SETZM REST		   ;Come here for normal tokenization.
+	PUSHAE P,[B]
+	SETZM MORJCL		   ;Assume only one token.
+	MOVE B,[440700,,TOKEN]	   ;Bp to result
+TOKNI1:	ILDB CHAR,BP		   ;Get char
+	JUMPE CHAR,TOKNI4	   ;A NUL ends JCL.
+	SKIPE REST
+	 JRST TOKNI2
+	CAIE CHAR,40		   ;A SPACE
+	 CAIN CHAR,54		   ; or a COMMA.
+	  JRST TOKNI3		   ;  end a token.
+TOKNI2:	IDPB CHAR,B		   ;Collect token characters.
+	SOJLE COUNT,TOKNI4	   ;Dont go past end of typein!
+	JRST TOKNI1
+TOKNI3:	SETOM MORJCL		   ;Say we did not read NUL.
+TOKNI4: MOVEI CHAR,0
+	IDPB CHAR,B		   ;Tie off asciz string.
+	POPAE P,[B]
+	JRST POPJ1		   ;All done.
+
+
+
+;;; Read to next token.
+;;; This advances BP to read the next non delimiter.
+;;; Skip returns unless no more characters.
+
+RD2TKN:	ILDB CHAR,BP		   ;Get a character.
+	SKIPE CHAR		   ;If end of string
+	CAIN CHAR,^M		   ; or CR
+	 RET			   ;  non-skip.
+	CAIN CHAR,40
+	 JRST RD2TKN
+	CAIN CHAR,","
+	 JRST RD2TKN
+	DECBP BP		   ;Not delimiter - back up.
+	JRST POPJ1		   ;Skip return with BP pointing at it.
+
+
+;;; Read a sixbit word from BP, and return it in A.
+;;; BP is updated.  Skips unless we deposited no characters.
+;;;
+;;; BP should be pointing at first character of a new syllable -
+;;; delimiters will end the input.  There is no check to see if
+;;; the syllable will fit in a sixbit word.   We just fill one word.
+
+RDSIX:	SETZ T,			   ;Count characters in T.
+	SETZ A,			   ;Result goes into A.
+	MOVE TT,[440600,,A]	   ;Bp to the sixbit result.
+RDSI1:	ILDB CHAR,BP		   ;Get a character.
+	JUMPE CHAR,RDSI9
+	CAIN CHAR,40		   ;Space ends word.
+	 JRST RDSI2
+	CAIN CHAR,^M		   ;CR ends word.
+	 JRST RDSI2
+	CAIN CHAR,","		   ;Comma ends word.
+	 JRST RDSI2
+	CAIL CHAR,140		   ;Sixbitify.
+	 SUBI CHAR,40
+	SUBI CHAR,40
+	IDPB CHAR,TT		   ;Deposit into result.
+	AOS T			   ;Keep count.
+	CAIE T,6		   ;If room for more,
+	 JRST RDSI1		   ; gobble again.
+RDSI2:	JUMPE T,CPOPJ
+RDSI9:	JRST POPJ1
+
+
+
+SUBTTL	Utility Routines
+
+;;; Map the LOGOUT TIMES database into core.
+;;; Skip return if successful.
+
+MAPTIM:	SYSCAL OPEN,[%CLBIT,,.BAI ? %CLIMM,,DSKI ? [SIXBIT /DSK/]
+		[SIXBIT /LOGOUT/] ? [SIXBIT/TIMES/] ? [SIXBIT /CHANNA/]]
+	 ERRRET (TTYO,("ACannot open LOGOUT TIMES database."))
+	SYSCAL FILLEN,[%CLIMM,,DSKI ? %CLOUT,,A]
+	 JSR SYSLOS
+	CAIL A,TIMMAX
+	 BUG (,("ANot enough pages reserved for LOGOUT TIMES."))
+	MOVEM A,TIMLEN
+	ADDI A,1777
+	LSH A,-10.
+	MOVNS A
+	HRLZS A
+	HRRI A,TIMPAG
+	SYSCAL CORBLK,[%CLIMM,,%CBRED ? %CLIMM,,%JSELF ? A ? %CLIMM,,DSKI]
+	 JSR SYSLOS
+	.CLOSE DSKI,
+	JRST POPJ1
+
+
+;;; (Y-OR-N-P)  Skips on True.
+
+YORNP:	OUT(TTYO,(" (Y or N) "))
+	.IOT TTYI,CHAR
+	CAIN CHAR,40
+	 JRST YORNY
+	CAIN CHAR,177
+	 JRST YORNN
+	UPPER CHAR
+	CAIN CHAR,131
+	 JRST YORNY
+	CAIN CHAR,116
+	 JRST YORNN
+	OUT(TTYO,("X"))
+	JRST YORNP
+YORNY:	AOS (P)
+YORNN:	RET
+
+
+;;; SFND - String Find
+;;; String Find an ASCIZ string inside another.
+;;; Takes a substring from BP and a string to search from B.
+;;; Skip returns if BP is in B.
+;;; Clobbers no ACs.  (Someday return the index, but not needed yet.)
+
+SFND:	PUSHAE P,[A,B,C,D,E,BP]
+	MOVE E,ALPCAS		   ;Alphabetic case flag.
+SFND1:	ILDB CHAR,BP		   ;Get character to look for.
+	JUMPE CHAR,SFND9	   ;Null string matches nothing.
+	JUMPE E,[UPPER CHAR
+		 JRST .+1]
+SFND2:	ILDB C,B		   ;Get character.
+	JUMPE C,SFND9		   ;Lose if we get to the end of the string.
+	JUMPE E,[UPPER C
+		 JRST .+1]
+	CAME CHAR,C		   ;We are looking for start of BP in B.
+	 JRST SFND2		   ;  Keep looking for a starting point.
+	MOVEM B,D		   ;Remember starting point.
+SFND3:	ILDB CHAR,BP		   ;Get another character pair.
+	JUMPE CHAR,SFND8	   ;If BP runs out before B, we have won.
+	JUMPE E,[UPPER CHAR
+		 JRST .+1]
+	ILDB C,B
+	JUMPE C,SFND9		   ;If B runs out before BP, no match.
+	JUMPE E,[UPPER C
+		 JRST .+1]
+	CAME CHAR,C		   ;If the match is incomplete
+	 JRST [	MOVE B,D	   ; Try to find a new starting point.
+		MOVE BP,(P)	   ; Re-establsh target Bp for another try.
+		JRST SFND1 ]
+	JRST SFND3		   ;See if the entire string matches.
+SFND8:	AOS -6(P)
+SFND9:	POPAE P,[BP,E,D,C,B,A]
+	RET
+
+
+
+
+
+SUBTTL	Storage Definitions.
+
+CONSTANTS
+VARIABLES
+
+PDLLEN==64.		;Stack length.
+PDL:	BLOCK PDLLEN	;The stack.
+
+VERSHN:	.FNAM2		;Program version in sixbit.
+
+JUNK:	0		;Data sink.
+
+DEBUG:	0		;-1 Iff debugging INQEXM.
+
+TCMXH:	0		;Console horizontal size.
+
+CMBUFL==<100./5>
+CMDBUF:	BLOCK CMBUFL+1 ;Command string buffer.
+
+TOKENL==<20./5>
+TOKEN:	BLOCK TOKENL	;Command token.
+
+REST:	0		;Controls type of tokenization.
+			;-1 Iff should ignore delimiters.
+
+MORJCL:	0		;-1 Iff NUL unseen in command tokenization.
+
+FUN:	0		;Pointer to user function.
+
+LSTADR:	0		;Core address of the last found in KCOUNT.
+
+DATA:	0		;Address of first LSR1 data entry.
+
+TOTAL:	0		;Number of LSR1 pages read in.
+
+TIMLEN:	0		;# Words read of LOGOUT TIMES.
+
+;;; Output redirection state - used in main command loop.
+KFILEF:	-1		;1  Iff we just did a FILE command.
+			;-1 Iff normal.
+			;0  Iff should reset after command.
+
+;;; A Filename block.
+
+DEVNAM:	SIXBIT /DSK/	;Start out with reasonable defaults.
+FN1:	SIXBIT /_EXM_/
+FN2:	SIXBIT />/
+SNAME:	0
+
+ALPCAS:	0		;-1 Iff alphabetic case should be
+			;significant in substring search tests.
+
+SEARIN:	0		;Item number for KSEFN substring search.
+
+HITCNT:	0		;Hits in discriminating COUNT.
+
+SEAPRT:	0		;-1 Iff Searches should print out hits.
+
+;;; List of OK Group designation items.
+OKGRPS:	ASCIZ /ACDELHKMONPSTUXZ+$@/
+
+QNUDIR:	0	
+
+PAT:PATCH:: BLOCK 100
+	0
+
+CONSTANTS
+VARIABLES
+
+
+;;; Now come the pages we map in from database.
+
+LASTPG==<.+1777>/2000	;Start mapping databases here.
+
+LSRPAG==LASTPG		;Starting page of Inquire database. 
+LSRPGS==220.		;Number of pages reserved for LSR1.
+LSR1=LSRPAG*2000	;Address of database header.
+
+TIMPAG==LSRPAG+LSRPGS	;Starting page of last-logout database.
+TIMPGS==40.		;Number of pages for LOGOUT TIMES.
+TIMMAX==TIMPGS*2000	;Number of words maximum for LOGOUT TIMES.
+
+
+
+END GO
+
+
+;;; Local Modes:
+;;; Mode:MIDAS
+;;; compile command: :midas 1 M
+;;; End:

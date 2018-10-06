@@ -196,6 +196,13 @@ respond "_" "inquir;inquir\r"
 respond "_" "\032"
 type ":kill\r"
 
+respond "*" ":midas inquir;ts inqexm_inqexm\r"
+expect ":KILL"
+respond "*" ":midas inquir;ts inqrep_inqrep\r"
+expect ":KILL"
+respond "*" ":link inquir;ts inqchk,ts inquir\r"
+respond "*" ":link inquir;ts inqpat,inqupd bin\r"
+
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;dbg ejs2\r"
 respond "_" "liblsp;_libdoc;comrd kmp1\r"
