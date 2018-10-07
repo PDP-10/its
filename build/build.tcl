@@ -13,6 +13,14 @@ if {![info exists env(BASICS)]} {
     set env(BASICS) "no"
 }
 
+# If the MACSYMA environment variable is set, then we'll use
+# it later to decide whether to build Macsyma.  If it is not set,
+# maintain current behavior of building Macsyma.
+
+if {![info exists env(MACSYMA)]} {
+    set env(MACSYMA) "yes"
+}
+
 proc abort {} {
     puts ""
     puts "The last command timed out."
@@ -134,6 +142,9 @@ source $build/basics.tcl
 if {$env(BASICS)!="yes"} {
     source $build/misc.tcl
     source $build/lisp.tcl
+    if {$env(MACSYMA)=="yes"} {
+	source $build/macsyma.tcl
+    }
     source $build/scheme.tcl
     source $build/muddle.tcl
     source $build/sail.tcl
