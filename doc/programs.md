@@ -75,6 +75,7 @@
 - DSKDEV/D, short disk device.
 - DSKUSE, disk usage information.
 - DUMP/LOAD, tape backup and restore.
+- ECHO, Chaosnet echo server.
 - ELIZA, the original psychiatrist game.
 - EMACS, editor.
 - EXECVT, convert 20x EXE (SSAVE) file to ITS BIN (PDUMP) file.
