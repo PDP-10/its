@@ -94,6 +94,7 @@
 - FTPS, FTP server.
 - FTPU, FTP client.
 - GCMAIL, delete old files from .MAIL.
+- GENSYM, generate unique values.
 - GEORGE, Locks DRAGON HOARD to hold PFTHMG at bay.
 - GETSYM, copy all symbols from running ITS to a file.
 - GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.

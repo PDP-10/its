@@ -99,6 +99,10 @@ respond "*" ":midas sysbin;_sysnet;echo\r"
 expect ":KILL"
 respond "*" ":link device; chaos echo, sysbin; echo bin\r"
 
+respond "*" ":midas alan;ts gensym_alan;gensym\r"
+expect ":KILL"
+respond "*" ":link device; chaos gensym, alan; ts gensym\r"
+
 respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
 expect ":KILL"
 
