@@ -107,9 +107,9 @@ $(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
 	$(RM) -f src/*/*~
-	$(TOUCH) -d 1981-10-06T19:03:37 'bin/emacs/einit.:ej'
-	$(TOUCH) -d 1981-09-19T21:42:56 'bin/emacs/[pure].162'
-	$(TOUCH) -d 1981-03-31T20:41:45 'bin/emacs/[prfy].173'
+	$(TOUCH) -t 198110061903.37 'bin/emacs/einit.:ej'
+	$(TOUCH) -t 198109192142.56 'bin/emacs/[pure].162'
+	$(TOUCH) -t 198103312041.45 'bin/emacs/[prfy].173'
 	$(ITSTAR) -cf $@ -C src $(SRC)
 	$(ITSTAR) -rf $@ -C doc $(DOC)
 	$(ITSTAR) -rf $@ -C bin $(BIN)
