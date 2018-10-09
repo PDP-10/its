@@ -760,6 +760,11 @@ respond "*" ":link sys;ts pb,sys;ts probe\r"
 respond "*" ":midas sys1;ts tty_sysen1;tty\r"
 expect ":KILL"
 
+# TTYLINK, just a stub.
+respond "*" ":midas sysbin;ttylin bin_bawden; u\r"
+expect ":KILL"
+respond "*" ":link device; chaos ttylin, sysbin; ttylin bin\r"
+
 # RIPDEV
 respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
 expect ":KILL"

@@ -264,6 +264,7 @@
 - TVWRIT, write TV display contents as bitmap file.
 - TTLOC, advertises physical location of logged in users.
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
+- TTYLIN, Chaosnet TTYLINK server.
 - TTYSWP, swap TTYs.
 - TYPE8, type 8-bit file.
 - UFIND, find users.
