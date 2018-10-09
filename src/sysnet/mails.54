@@ -1,0 +1,584 @@
+;;;-*- Mode:MIDAS -*-
+
+title	MAILS - Chaosnet Mail Server
+
+f=0
+a=1
+b=2
+c=3
+d=4
+e=5
+t=10
+tt=11
+p=17
+
+call==:<pushj p,>
+ret==:<popj p,>
+calret==:jrst
+
+.insrt system;chsdef
+
+$$hst3==1
+$$chaos==1
+$$arpa==1
+$$hstmap==1
+$$ownhst==1
+$$hostnm==1
+.insrt sysnet;netwrk
+
+$$out==1
+$$outf==1
+$$outt==1
+$$outz==1
+$$rfc==1
+.insrt dsk:syseng;datime
+
+nw%chs==7			;standard network number for chaosnet
+
+dskoch==0			;output channel for mail queue file
+errich==1			;input channel for ERR: device
+dski==2				;input channel for HOSTS3
+chaich==10			;chaosnet input channel
+chaoch==11			;chaosnet output channel
+ranch==12			;random channel
+
+
+define	punt &string
+	 jrst [	movei tt,<.length string>
+		move t,[440700,,[ascii string]]
+		calret refuse ]
+termin
+
+
+;;;interrupt handler
+tsint:	loc 42
+	-tsintl,,tsint
+loc tsint
+	p
+	%pirlt ? 0 ? -1 ? -1 ? timer	;handle realtime clock
+	%piioc ? 0 ? -1 ? -1 ? iocerr	;handle ioc errors
+tsintl==.-tsint
+
+;;;internal error handler
+die:	0			;jsr here
+	skipe debug
+	 .value
+passon:	.logout			;natural causes
+	.value
+
+sndpkt:	setz ? 'PKTIOT ? movei chaoch ? setzi chapkt
+rcvpkt:	setz ? 'PKTIOT ? movei chaich ? setzi chapkt
+
+;;;main program
+go:	.close 1,		;this can still be open from loading us
+	move p,[-npdl,,pdl-1]
+	.suset [.roption,,t]
+	tlo t,optint		;new style interrupts
+	.suset [.soption,,t]
+	move tt,[%rlfls\%rlset,,tick]
+	.realt tt,
+	.suset [.smask,,[%pirlt\%piioc]]   ;arm interrupts
+	.call [setz ? 'CHAOSO ? movei chaich ? movei chaoch ? setzi 5]
+	 jsr die
+	move t,[.byte 8 ? %colsn ? 0 ? 0 ? 4]
+	movem t,chapkt
+	move t,[.byte 8 ? "M ? "A ? "I ? "L]
+	movem t,chapkt+%cpkdt
+rfcwat:	.call sndpkt
+	 jsr die
+	movei t,30.*60.
+	skipe debug
+	 hrloi t,177777		;wait forever if debugging
+	.call [setz ? 'NETBLK ? movei chaich ? movei %cslsn ? t ? setzm t]
+	 jsr die
+	caie t,%csrfc		;did we get an rfc for this?
+	 jsr die
+	.call rcvpkt		;yes, read it in
+	 jsr die
+
+okayp:	ldb t,[chapkt+$cpksa]	;get source host address
+	movem t,fgnhst
+	call bloatp		;Don't accept mail if directory is full
+	 punt "Sorry, our mail system is too busy right now"
+	call asshol		;Don't accept mail from nasty hosts
+	 punt "Service has been administratively denied to your host."
+
+	move t,fgnhst
+	move tt,[sixbit /000C00/]  ;convert host number to sixbit
+	dpb t,[220300,,tt]
+	lsh t,-3
+	dpb t,[300300,,tt]
+	lsh t,-3
+	dpb t,[360300,,tt]
+	.suset [.ruind,,t]	;incoroporate user index also
+	dpb t,[000300,,tt]
+	lsh t,-3
+	dpb t,[060300,,tt]
+	move t,tt		;save copy for xuname
+	movei a,100(tt)		;loop only 100 times
+	skipe debug		;If debugging
+	 jrst accept		; just get with it.
+login:	cain tt,(a)
+	 jsr die		;can't log in, must be broken somehow
+	.call [setz
+	       sixbit /LOGIN/
+	       tt ? [sixbit /CHAOS/] ? setz t]
+	 aoja tt,login		;error, perhaps need to try other uname
+	.suset [.sjname,,[sixbit /MAIL/]]
+	.call [setz ? 'DETACH ? movei %jself ? andi 3 ]
+	 jsr die
+
+;;;looks ok to accept the rfc
+accept:	.call [	setz
+		sixbit /OPEN/
+		movsi .uao
+		moves errcod
+		movei dskoch
+		[sixbit /DSK/]
+		[sixbit /_MAILS/]
+		[sixbit /OUTPUT/]
+		setz [sixbit /.MAIL./]]
+	 jrst calerr		;error opening file, return CLS
+	movei a,[asciz /NET-MAIL-FROM-HOST:/]
+	call dsksou
+	ldb a,[chapkt+$cpksa]	;foreign host
+	hrli a,nw%chs_9
+	call dsknou		;output number
+	movei a,[asciz /
+/]
+	call dsksou
+	movei t,%coopn
+	dpb t,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+
+
+;;;read the names of all the recipients
+
+rcplup:	call charch		;get a character
+	 jsr die
+	cain b,215		;end of line
+	 jrst txtmsg		;yes, go get text of message
+	push p,b
+	movei a,[asciz /RCPT:/]
+	call dsksou
+	pop p,b
+namlup:	call dskwch
+	call charch
+	 jsr die
+	caie b,215		;end of one?
+	 jrst namlup		;no, keep reading this name
+rcplp1:	movei a,[asciz /
+/]
+	call dsksou		;end line
+	movei a,[asciz /+Recipient name accepted./]
+	call netsou
+	jrst rcplup		;go get some more
+
+;;; Now make up a "Received from" line and output the msg TEXT.
+
+txtmsg:	move d,[440700,,rcvfbf]	   	;Received from buffer.
+	move a,[440700,,[asciz "TEXT;-1
+Received: from "]]
+	call aszcpy
+	movei a,hstpag			;Map in the HOSTS3 database.
+	movei b,dski
+	call netwrk"hstmap
+	 jfcl
+	hrrz b,fgnhst			;Get user host addr from packet.
+	ior b,[netwrk"nw%chs]		;Host is on Chaosnet.
+	skipe netwrk"hstadr		;If host table is not available
+	movem d,e		   	;Don't smash Bp.
+	call netwrk"hstsrc		; or foreign host name unknown
+	 jrst [	move d,e
+		call octdpb		;  just use octal chaos addr as name.
+		jrst txtms1]
+	hrli a,440700			;Put in host name if known.
+	move d,e
+	call aszcpy
+txtms1:	move a,[440700,,[asciz " by "]]
+	call aszcpy
+	move a,[netwrk"nw%chs]
+	call netwrk"ownhst		;Find our own addr on Chaosnet.
+	 .lose				; (Which we are obviously on). 
+	move b,a
+	skipe netwrk"hstadr		;If not HOSTS3 use number.
+	movem d,e
+	call netwrk"hstsrc
+	 jrst [	move d,e
+		call octdpb
+		jrst txtms2]
+	hrli a,440700			;Put in host name if known.
+	move d,e
+	call aszcpy
+txtms2:	move a,[440700,,[asciz " via Chaosnet; "]]
+	call aszcpy
+	call datime"timget
+	camn a,[-1]
+	 jrst [	move a,[440700,,[asciz "time unknown"]]
+		call aszcpy
+		jrst txtms3 ]
+	call datime"timrfc	   	;7 AUG 1984 08:31:12 EDT
+txtms3:	move a,[440700,,[asciz "
+"]]
+	call aszcpy
+	movei t,0			;Then tie off.
+	idpb t,d
+	movei a,rcvfbf
+	call dsksou			;Write the mess out.
+
+txtlp1:	call charch		;get next character
+	 jrst txtlp2		;eof, finish up
+	cain b,215		;cr?
+	 jrst [	movei b,15
+		call dskwch
+		movei b,12
+		jrst .+1]
+	call dskwch		;output it
+	jrst txtlp1
+
+txtlp2:	call dskwbf		;force out buffered file output
+	.call [	setz
+		sixbit /RENMWO/
+		moves errcod
+		movei dskoch
+		[sixbit /MAIL/]
+		setz [sixbit />/]]
+	 jrst calerr
+	.call [	setz		;Write out directory to disk
+		sixbit /FINISH/
+		moves errcod
+		setzi dskoch ]
+	 jrst calerr
+	.call [	setz
+		sixbit /CLOSE/
+		moves errcod
+		setzi dskoch]
+	 jrst calerr
+	movei a,[asciz /+Mail queued successfully./]
+	call netsou
+	.call [	setz
+		sixbit /FINISH/
+		setzi chaoch]
+	 jrst passon
+	.close chaoch,
+	.close chaich,
+	jrst passon
+
+;;;ioc error comes here
+iocerr:	aosn iocflg		;recursive ioc error?
+	 jsr die		;yes, just die
+	.suset [.rbchn,,t]
+	caie t,dskoch		;only meaningful for dsk output channel
+	 jsr die		;else just go away
+	setom iocflg		;mark to detect recursive ioc errors
+	move a,-2(p)		;previous DF1 word
+	.suset [.sdf1,,a]
+	move a,-1(p)		;previous DF2 word
+	.suset [.sdf2,,a]
+	jrst dskerr	
+
+;;;error opening, or ioc error, return a CLS of the error message
+calerr:	movei tt,3		;get error from .call
+	skipa t,errcod
+dskerr:	 movei tt,2		;enter here with offending channel in t
+snderr:	.call [	setz
+		sixbit /OPEN/
+		movsi .uai
+		movei errich
+		[sixbit /ERR/]
+		movei (tt)
+		setz t]
+	 jsr die
+	move a,[441000,,chapkt+%cpkdt]
+	movei b,0
+snderl:	.iot errich,tt
+	caige tt,40		;stop on first control char
+	 jrst snderc
+	idpb tt,a
+	aoja b,snderl
+
+snderc:	.close errich,
+	dpb b,[chapkt+$cpknb]
+	movei b,%cocls
+	dpb b,[chapkt+$cpkop]
+	.call sndpkt
+	 jsr die
+	jrst passon
+
+;;;output a string to the network, address of asciz string in a, should be short since this
+;;;is slow.  follows string with newline.
+netsou:	hrli a,440700
+netso1:	ildb b,a
+	jumpe b,netso2
+	.iot chaoch,b
+	jrst netso1
+netso2:	.iot chaoch,[215]	;newline
+	.nets chaoch,
+	ret
+
+;;;output a string to the mail file, address of asciz string in a
+dsksou:	hrli a,440700
+dskso1:	ildb b,a
+	jumpe b,cpopj
+	call dskwch
+	jrst dskso1
+
+;;;output a number to the mail file, number in a
+dsknou:	jumpe a,cpopj
+	idivi a,10
+	push p,b
+	call dsknou
+	pop p,b
+	addi b,"0
+	call dskwch
+cpopj:	ret
+
+
+
+
+;;; Deposit number in B as octal down ASCII Bp in D.
+
+octdpb:	move t,b
+	idivi t,8.
+octdp1:	addi tt,"0
+	caile tt,"9
+	 addi tt,<"A-10.-"0>
+	jumpe t,octdp2
+	hrlm tt,(p)
+	idivi t,8.
+	call octdp1
+	hlrz tt,(p)
+octdp2:	idpb tt,d
+	ret
+
+
+;;; Copy ASCIZ string from A down D.
+
+aszcpy:	ildb t,a
+	jumpe t,cpopj
+	idpb t,d
+	jrst aszcpy
+
+
+;;;get a character from the network, skip returns with char in b, single
+;;; return for eof
+charch:	sosge netcnt		;still some characters in the buffer?
+	 jrst charcb		;no, get a new buffer
+	ildb b,netbfp
+cpop1j:	aos (p)
+	ret
+
+charcb:	.call rcvpkt		;refill buffer, actually read another packet
+	 jsr die
+	setom alive		; Remember that we saw signs of life
+	ldb t,[chapkt+$cpkop]
+	cain t,%coeof		;eof?
+	 ret		;yes, single return for that
+	caige t,%codat		;must otherwise be data
+	 jsr die
+	move t,[440800,,chapkt+%cpkdt]
+	movem t,netbfp
+	ldb t,[chapkt+$cpknb]
+	movem t,netcnt
+	jrst charch		;go return first char
+
+;;;output a character to the disk file, character in b
+dskwch:	idpb b,dskbfp
+	sosle dskcnt		;room in output buffer for more?
+	 ret		;yes, return
+dskwbf:	move t,[440700,,dskbuf]	;force out buffered disk output
+	movem t,dskbfp
+	movei tt,dbfsiz
+	subm tt,dskcnt
+	exch tt,dskcnt		;get count of characters to output
+	.call [	setz
+		sixbit /SIOT/
+		moves errcod
+		movei dskoch
+		t ? setz tt]
+	 jrst calerr
+	ret
+
+refuse:	dpb tt,[chapkt+$cpknb]
+	movei tt,%cocls
+	dpb tt,[chapkt+$cpkop]
+	hrli t,440700
+	move a,[440800,,chapkt+%cpkdt]
+refus1:	ildb tt,t
+	idpb tt,a
+	jumpn tt,refus1
+	.call sndpkt
+	 jsr die
+	jsr die
+
+
+;;;Various checks to see if we want the mail or not
+
+; Refuse to accept mail if mailer directory is close to full.
+; This is an attempt to avoid bloating the mailer so the dir fills up and
+; it dies needing human intervention.
+
+.INSRT DSK:SYSENG;FSDEFS >
+.VECTOR UFD(<LUFD==:2000>+1)	; OK, so the server is a page larger now...
+UFDBMX==:<LUFD-UDDESC>*UFDBPW	; Max number of bytes in a directory
+
+IFN UFDBYT-6, .ERR UFDBYT HAS CHANGED!
+UFDBPS:	440600,,UFD+UDDESC
+	360600,,UFD+UDDESC
+	300600,,UFD+UDDESC
+	220600,,UFD+UDDESC
+	140600,,UFD+UDDESC
+	060600,,UFD+UDDESC
+
+BLOATP:	PUSH P,A
+	PUSH P,B
+	PUSH P,C
+	PUSH P,D
+	PUSH P,E
+	.CALL [ SETZ ? SIXBIT /OPEN/ ? [.BII,,RANCH] ? [SIXBIT /DSK/]
+		[SIXBIT /.FILE./] ? [SIXBIT /(DIR)/] ? SETZ [SIXBIT /.MAIL./]]
+	 JRST BLOTP9
+	MOVE A,[-<LUFD+1>,,UFD]
+	.IOT RANCH,A
+	CAME A,[-1,,UFD+LUFD]
+	 JRST BLOTP9
+	.CLOSE RANCH,
+	MOVEI C,UFDBMX		; C: available room in bytes
+	SKIPA A,UFD+UDNAMP	; A: -> current name block
+BLOTP1:	 ADDI A,LUNBLK
+	CAIL A,LUFD
+	 JRST BLOTP7
+	SKIPN UFD+UNFN1(A)
+	 JRST BLOTP1
+	SUBI C,LUNBLK*UFDBPW
+	MOVE B,UFD+UNRNDM(A)
+	LDB D,[UNDSCP B]
+	IDIVI D,UFDBPW
+	ADD D,UFDBPS(E)
+	TLNE B,UNLINK
+	 JRST BLOTP5
+BLOTP3:	ILDB B,D
+	SOJ C,
+	JUMPE B,BLOTP1
+	TRNN B,40
+	 JRST BLOTP3
+REPEAT NXLBYT, ILDB B,D ? SOJ C,
+	JRST BLOTP3
+
+BLOTP5:	ILDB B,D
+	SOJ C,
+	JUMPE B,BLOTP1
+	CAIE B,':
+	 JRST BLOTP5
+	ILDB B,D
+	SOJA C,BLOTP5
+
+BLOTP7:	; Leave dir 25% free.  This is about the right amount of room to
+	; allow LISTS MSGS to get garbage collected even if it gets huge
+	; (like 1700 blocks or more).  Of course this is a function of how
+	; fragmented the disk is -- your results may vary...
+	CAIL C,<UFDBMX*25.>/100.
+BLOTP9:	 AOS -5(P)
+	POP P,E
+	POP P,D
+	POP P,C
+	POP P,B
+	POP P,A
+	POPJ P,
+
+IFN 0,[	; Old version that tries to count MAIL files.
+;Refuse to accept the mail if more than 30 queued mail files.
+;Skip if not bloated
+;This is an attempt to avoid bloating the mailer so the dir fills
+;up and it dies needing human intervention.
+
+bloatp:	.call [	setz ? sixbit/OPEN/ ? [.uai,,ranch] ? [sixbit/DSK/]
+		[sixbit/MAIL/] ? [SIXBIT/>/] ? setz [sixbit/.MAIL./]]
+	 jrst blotp9
+	.call [ setz ? sixbit/RFNAME/ ? movei ranch
+		movem b ? movem b ? setzm b ]
+	 .lose %lssys
+	.close ranch,
+	.call [ setz ? sixbit/OPEN/ ? [.uai,,ranch] ? [sixbit/DSK/]
+		[sixbit/MAIL/] ? [SIXBIT/</] ? setz [sixbit/.MAIL./]]
+	 jrst blotp9
+	.call [ setz ? sixbit/RFNAME/ ? movei ranch
+		movem c ? movem c ? setzm c ]
+	 .lose %lssys
+	.close ranch,
+	;At this point B has the largest version mail request
+	;and C has the smallest.
+	trnn b,77		;Right-justify (can't be zero)
+	 jrst [	lsh b,-6 ? jrst .-1 ]
+	trnn c,77
+	 jrst [ lsh c,-6 ? jrst .-1 ]
+	trnn c,7700		;Make sure 2 digits
+	 tro c,'00
+	addi c,300		;Add 30
+	ldb a,[060600,,c]	;Carry
+	caile a,'9
+	 addi c,<1_12.>-<':_6>
+	;Don't worry about additional carries, close enough for gov't work
+	camg b,c
+blotp9:	 aos (p)
+	ret
+
+] ; IFN 0
+
+;Feature where we refuse to talk to uncooperative hosts.
+;A/ foreign host address
+;Skip if the host is OK.
+
+asshol:	move t,fgnhst		;Get foreign host.
+	jumpe t,cpop1j		;If zero, it's OK.
+	movsi tt,-luzrl		;Get AOBJN ptr to losers.
+assho1:	camn t,luzrs(tt)	;Is the host a loser?
+	 jrst cpopj		; Yes, non-skip return.
+	aobjn tt,assho1		;Else keep checking.
+assho8:	jrst cpop1j		;Skip return if host is cool.
+
+;;;Timer
+
+tick:	3.*60.*60.		; Three minutes with no activity is the limit.
+
+timer:	aosg alive
+	 jrst timerx
+	skipn debug		; Time ran out, unless debugging
+	 jsr die
+timerx:	.call [	setz ? sixbit /DISMIS/ ? setz p ]
+	 .lose %lssys
+
+;;;Storage
+npdl==37
+pdl:	block npdl
+debug:	0			;non-zero => .value on barfage
+
+errcod:	0			;error code
+iocflg:	0			;detect recursive ioc errors
+netcnt:	0			;number of characters in network buffer
+netbfp:	0			;byte pointer to that
+dskcnt:	dbfsiz			;room in disk output buffer
+dskbfp:	440700,,dskbuf		;output byte pointer
+fgnhst:	0			;net addr of user host
+alive:	-1			;set to -1 by signs of life
+
+luzrl==3.
+luzrs:	block luzrl
+
+chapkt:	block %cpmxw		;chaosnet packet goes here
+
+dbfsiz==2000
+dskbuf:	block dbfsiz+4/5
+
+rcvfbf:	block 43 ;about 256 chars
+
+
+constants
+variables
+
+theend:	-1			; Make memory exist (*sigh*)
+
+hstpag==<.+1777>/2000		   ;Start mapping databases here.
+
+end go
