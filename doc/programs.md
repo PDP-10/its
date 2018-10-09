@@ -156,6 +156,7 @@
 - MAGDMP, standalone program loader/dumper for magtape.
 - MAGFRM, create tapes for use with MAGDMP.
 - MAIL, mail sending client.
+- MAILS, Chaosnet mail server.
 - MAILT, allows editing mail (from :MAIL) in EMACS.
 - MAZE, Maze War game.
 - MAZLIB, maze game for EMACS.

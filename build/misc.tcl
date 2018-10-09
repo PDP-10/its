@@ -178,6 +178,11 @@ respond "*" ":link sys;ts m,sys;ts mail\r"
 respond "*" ":link sys2;ts featur,sys;ts qmail\r"
 respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
+# Chaosnet MAILServer
+respond "*" ":midas sysbin;_sysnet;mails\r"
+expect ":KILL"
+respond "*" ":link device; chaos mail, sysbin; mails bin\r"
+
 # TIME
 respond "*" ":midas sys1;ts time_sysen2;time\r"
 expect ":KILL"
