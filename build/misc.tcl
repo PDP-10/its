@@ -773,6 +773,7 @@ respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
 expect ":KILL"
 respond "*" ":link sys2;ts expire, sys2;ts gmsgs\r"
 respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
+respond "*" ":link device;chaos gmsgs,sys2;ts gmsgs\r"
 
 # X, Y, Z
 respond "*" ":midas sys1;ts x_sysen2;x\r"
