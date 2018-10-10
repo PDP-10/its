@@ -16,4 +16,8 @@ install_linux() {
     esac
 }
 
+install_osx() {
+    true
+}
+
 "$1"
