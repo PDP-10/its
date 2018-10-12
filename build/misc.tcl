@@ -850,7 +850,7 @@ respond "*" ":link sys1;ts down, sys1;ts up\r"
 # UPTIME
 respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
 expect ":KILL"
-respond "*" ":link dragon;hourly uptime,sysbin;uptime bin\r"
+respond "*" ":link device;chaos uptime,sysbin;uptime bin\r"
 
 # SHUTDN
 respond "*" ":midas sys3;ts shutdn_bawden;shutdn\r"
