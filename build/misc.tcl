@@ -95,6 +95,9 @@ expect ":KILL"
 respond "*" ":midas sys1;ts dir_bawden;dir^k\r"
 expect ":KILL"
 
+respond "*" ":midas bawden;_uptime\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;_sysnet;echo\r"
 expect ":KILL"
 respond "*" ":link device; chaos echo, sysbin; echo bin\r"
