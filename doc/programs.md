@@ -40,6 +40,7 @@
 - CHADEV, Chaosnet jobdev (binary only).
 - CHARFC/CHARFS, Chaos RFC.
 - CHASE, a 2-player maze game.
+- CHASTA, print Chaos NCP state.
 - CHATST, Chaos test.
 - CHESS, unknown chess program.
 - CHESS2, Alan Baisley's Tech II chess program.
