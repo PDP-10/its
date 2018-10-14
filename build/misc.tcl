@@ -844,6 +844,10 @@ expect ":KILL"
 respond "*" ":midas sys3;ts chasta_chsgtv;chasta\r"
 expect ":KILL"
 
+# CHATAB
+respond "*" ":midas sys3;ts chatab_sysen1;chatab\r"
+expect ":KILL"
+
 # STYLOG
 respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
 expect ":KILL"
