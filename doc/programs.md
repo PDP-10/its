@@ -270,6 +270,7 @@
 - TTY, displays TTYs with UNAME/JNAME/CORE and other info.
 - TTYLIN, Chaosnet TTYLINK server.
 - TTYSWP, swap TTYs.
+- TTYTST, echo characters exactly as typed.
 - TYPE8, type 8-bit file.
 - UFIND, find users.
 - ULISP, Lisp in Lisp.
