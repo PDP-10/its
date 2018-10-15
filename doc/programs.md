@@ -147,6 +147,7 @@
 - LOGO, BBN Logo.
 - LOOKUP, looks up user info in INQUIR database.
 - LOSS (device).
+- LOTCLN - LOGOUT TIMES cleanup program.
 - LSPEED, set TTY line parameters.
 - LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
