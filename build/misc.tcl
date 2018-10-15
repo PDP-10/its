@@ -211,6 +211,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts stty_archy;stty\r"
 expect ":KILL"
 
+# DOWNLD
+respond "*" ":midas sys3;ts downld_sysen1;downld\r"
+expect ":KILL"
+
 # OCTPUS
 respond "*" ":midas sys2;ts octpus_gren;octpus\r"
 expect ":KILL"
