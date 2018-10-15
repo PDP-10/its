@@ -215,6 +215,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts octpus_gren;octpus\r"
 expect ":KILL"
 
+# TTYTST
+respond "*" ":midas sys3;ts ttytst_sysen2;ttytst\r"
+expect ":KILL"
+
 # GOTO
 respond "*" ":midas sys3;ts goto_kmp; goto\r"
 expect ":KILL"
