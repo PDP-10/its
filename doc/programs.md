@@ -113,6 +113,7 @@
 - HOSTS3, the host table compiler.
 - HSNAME, displays user's HSNAME.
 - HSNDEV, HSNAME device.
+- IBMASC, read 8-bit ASCII tape file.
 - IO-11, PDP-11 I/O processor.
 - IDLE, list idle users.
 - IFILE, Chaosnet file service.

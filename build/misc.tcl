@@ -1331,3 +1331,7 @@ expect ":KILL"
 # runtime errors (e.g. not being able to open TTY:).
 respond "*" ":midas sys;ts monit_dmcg;monit\r"
 expect ":KILL"
+
+# IBMASC
+respond "*" ":midas sys3;ts ibmasc_sysen1;ibmasc\r"
+expect ":KILL"
