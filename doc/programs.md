@@ -186,6 +186,7 @@
 - OBS, observe system activities.
 - OCM/C, Richard Greenblatt's Mac Hack VI chess program.
 - OCTPUS, print character representations.
+- OINIT, init program reporting last login, email.
 - OS, realtime TTY spy.
 - OTHELLO, the original Othello game -- simpler than Go.
 - PALX, PDP-11 cross assembler.
