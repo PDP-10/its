@@ -1163,6 +1163,17 @@ respond "DSK: SYS; TS NTJ6" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 
+# OINIT
+respond "*" ":cwd c\r"
+respond "*" ":c;cc sysen2/oinit\r"
+expect ":KILL"
+respond "*" ":stinkr\r"
+respond "=" "x c/clib\r"
+respond "=" "l sysen2/oinit.stk\r"
+respond "=" "o sys3/ts.oinit\r"
+respond "=" "\0"
+expect ":KILL"
+
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
 respond "*" ":midas sys3;ts versa_dcp; versa\r"
