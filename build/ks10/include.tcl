@@ -176,3 +176,7 @@ proc update_microcode {} {
     respond "!" "quit\r"
     expect ":KILL"
 }
+
+proc clib_switches {} {
+    respond "with ^C" "KS10==1\r\003"
+}

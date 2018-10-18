@@ -154,3 +154,7 @@ proc bootable_tapes {} {
 
 proc update_microcode {} {
 }
+
+proc clib_switches {} {
+    respond "with ^C" "\003"
+}
