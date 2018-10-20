@@ -9,7 +9,7 @@
  *
  *	fd = copen (fname, mode, opt)
  *	c = getchar ()
- *	gets (s)
+ *	s = gets (s)
  *	putchar (c)
  *	puts (s)
  *	ch = mopen (f, mode)
@@ -55,6 +55,8 @@
 # rename pc_bad "PC$BAD"
 # rename cl_bad "CL$BAD"
 # rename prsarg "PRSARG"
+# rename pjflag "PJFLAG"
+# rename riflag "RIFLAG"
 # rename fcbtab "FCBTBL"
 # rename tty_input_channel "TYICHN"
 # rename tty_output_channel "TYOCHN"
@@ -310,13 +312,14 @@ getchar () {return (cgetc (cin));}
 
 **********************************************************************/
 
-gets (p)
+char *gets (p)
 	char *p;
 
 	{int c;
 
 	while ((c = cgetc (cin)) != '\n' && c>0) *p++ = c;
 	*p = 0;
+	return (p);
 	}
 
 /**********************************************************************
@@ -570,10 +573,18 @@ channel open (f, mode)		filespec *f; int mode;
 
 **********************************************************************/
 
+int riflag {TRUE};	/* set to false in binary file to suppress action */
+			/* pjflag being false also suppresses it */
+int pjflag {TRUE};	/* set to false in binary to suppress parsing */
+			/* in that case, get 2 args: job name and jcl */
+
 int fxarg (argc, argv)	int argc; char *argv[];
 
 	{char	**p, **q, *s;
 	int	i, append, errappend, f;
+
+	/* suppress action ? */
+	if ((!pjflag) || (!riflag)) return (argc);
 
 	i = argc;	/* number of arguments given */
 	argc = 0;	/* number of arguments returned */
@@ -719,41 +730,53 @@ int prsarg (in, out, argv, job, narg)
 	out = c6tos (job, out);
 	*out++ = 0;
 	argv[1] = out;
-
-	while (c = ildb (&in))
-		{switch (c) {
-	case '\r':	break;
-	case QUOTE:	*out++ = ildb (&in); continue;
-	case ' ':	continue;
-	case '"':	while (c = ildb (&in))
-				{switch (c) {
-			case '\r':	break;
-			case QUOTE:	*out++ = ildb (&in); continue;
-			case '"':	break;
-			default:	*out++ =  c; continue;
+	if (pjflag)
+		{while (c = ildb (&in))
+			{switch (c) {
+		case '\r':	break;
+		case QUOTE:	*out++ = ildb (&in); continue;
+		case ' ':	continue;
+		case '"':	while (c = ildb (&in))
+					{switch (c) {
+				case '\r':	break;
+				case QUOTE:	*out++ = ildb (&in); continue;
+				case '"':	break;
+				default:	*out++ =  c; continue;
+						}
+					break;
 					}
+				*out++ = 0;
+				if (++argc < narg) argv[argc] = out;
+				if (c=='"') continue;
+				break;
+		default:	*out++ = c;
+				while (c = ildb (&in))
+					{switch (c) {
+				case '\r':	break;
+				case ' ':	break;
+				case QUOTE:	*out++ = ildb (&in); continue;
+				default:	*out++ = c; continue;
+						}
+					break;
+					}
+				*out++ = 0;
+				if (++argc < narg) argv[argc] = out;
+				if (c==' ') continue;
 				break;
 				}
-			*out++ = 0;
-			if (++argc < narg) argv[argc] = out;
-			if (c=='"') continue;
-			break;
-	default:	*out++ = c;
-			while (c = ildb (&in))
-				{switch (c) {
-			case '\r':	break;
-			case ' ':	break;
-			case QUOTE:	*out++ = ildb (&in); continue;
-			default:	*out++ = c; continue;
-					}
-				break;
-				}
-			*out++ = 0;
-			if (++argc < narg) argv[argc] = out;
-			if (c==' ') continue;
 			break;
 			}
-		break;
+		}
+	else	{while (c = ildb (&in))
+			{switch (c) {
+		case '\r':	break;
+		case QUOTE:	*out++ = ildb (&in); continue;
+		default:	*out++ = c; continue;
+				}
+			break;
+			}
+		*out++ = 0;
+		++argc;
 		}
 	return (argc>narg ? narg : argc);
 	}
