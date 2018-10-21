@@ -1140,6 +1140,19 @@ expect ":MIDAS"
 expect ":KILL"
 respond "*" ":delete c; \[crel\] 16\r"
 
+# CC
+respond "*" ":cwd c\r"
+respond "*" ":c;cc cc.>\r"
+expect ":KILL"
+respond "*" ":c;cc c5.c\r"
+expect ":KILL"
+respond "*" ":c;cc c93.c\r"
+expect ":KILL"
+respond "*" ":c;cc clib/c10exc.c\r"
+expect ":KILL"
+respond "*" ":stinkr cc\r"
+expect ":KILL"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
