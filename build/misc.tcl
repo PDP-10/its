@@ -1087,6 +1087,16 @@ respond "M IML" "\r"
 respond ":PDUMP" "games; ts maze\r"
 respond "*" ":kill\r"
 
+# The old CLIB has a UFA instruction which doesn't work on a KS10.
+# Patch out the call to FIXIFY.
+respond "*" ":job cc\r"
+respond "*" ":load c; ts cc\r"
+respond "*" "55107/"
+respond "FIXIFY" "jfcl\r"
+respond "UNPURE" ":corblk pure,55107\r"
+respond "*" ":pdump c; ts cc\r"
+respond "*" ":kill\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
