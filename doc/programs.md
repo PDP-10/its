@@ -101,6 +101,7 @@
 - GETSYM, copy all symbols from running ITS to a file.
 - GLP/XGP, queue files to be printed by GLPSPL/XGPSPL.
 - GLPDEV/XGPDEV, device for viewing GLPSPL/XGPSPL printer queues.
+- GT, generate tables for C compiler.
 - GTLEM, GT40 Lunar Lander.
 - GTLOAD, load programs into GT40.
 - GO, the Go board game.
