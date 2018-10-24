@@ -1136,6 +1136,8 @@ respond "*" ":c;cc maklib.c\r"
 respond "*" ":c;cc c10job.c\r"
 respond "*" ":stinkr maklib\r"
 respond "*" ":maklib\r"
+expect ":MIDAS"
+expect ":KILL"
 respond "*" ":delete c; \[crel\] 16\r"
 
 # TJ6
