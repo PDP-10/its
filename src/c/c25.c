@@ -26,7 +26,7 @@ extern int cout;
 
 /*	GLOBAL VARIABLES USED TO RECEIVE INFO FROM GETTOK	*/
 
-int	lextype;	/* indicates which terminal symbol read */
+int	lextag;	/* indicates which terminal symbol read */
 int	lexindex;	/* used as translation element */
 int	lexline;	/* line-number of line which token appears on */
 
@@ -498,7 +498,7 @@ rtoken(p) token *p;
 
 	{
 	gettok();
-	p->type = lextype;
+	p->type = lextag;
 	p->index = lexindex;
 	p->line = lexline;
 	}

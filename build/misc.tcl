@@ -1153,6 +1153,11 @@ expect ":KILL"
 respond "*" ":stinkr cc\r"
 expect ":KILL"
 
+# GT
+respond "*" ":c;cc g0.c g1.c g2.c g3.c g4.c g5.c c25.c\r"
+expect ":KILL"
+respond "*" ":stinkr gt\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
