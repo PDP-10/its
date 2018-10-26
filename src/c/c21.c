@@ -329,4 +329,3 @@ stkunf (line)		{error (6033, line);}
 tkbovf (line)		{error (6008, line);}
 badtwp (line)		{error (6032, line);}
 badtok (line, i)	{error (6000, line, i);}
-

@@ -305,4 +305,3 @@ aentry (idn, stmt)
 
 	{return (stmt);}	/* not implemented */
 
-

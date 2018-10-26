@@ -342,4 +342,3 @@ errx (n)
 char *fn_error;
 int f_error;
 cleanup () {cexit (0);}
-

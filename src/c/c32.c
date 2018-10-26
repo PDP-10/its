@@ -998,4 +998,3 @@ enode *opt (ep)	enode *ep;
 	return (ep);
 yes:	return (intcon (v));
 	}
-

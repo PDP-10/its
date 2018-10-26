@@ -99,4 +99,3 @@ extern type	TUNDEF;
 extern type	TPCHAR;
 extern type	TACHAR;
 extern type	TFINT;
-
