@@ -1142,6 +1142,7 @@ respond "*" ":delete c; \[crel\] 16\r"
 
 # CC
 respond "*" ":cwd c\r"
+respond "*" ":copy ts cc, ts occ\r"
 respond "*" ":cc cc.>\r"
 expect ":KILL"
 respond "*" ":cc c5.c\r"
@@ -1154,7 +1155,7 @@ respond "*" ":stinkr cc\r"
 expect ":KILL"
 
 # GT
-respond "*" ":cc g0.c g1.c g2.c g3.c g4.c g5.c c25.c\r"
+respond "*" ":c;occ g0.c g1.c g2.c g3.c g4.c g5.c c25.c\r"
 expect ":KILL"
 respond "*" ":stinkr gt\r"
 
@@ -1170,7 +1171,7 @@ respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 
 # OINIT
 respond "*" ":cwd c\r"
-respond "*" ":cc sysen2/oinit\r"
+respond "*" ":c;occ sysen2/oinit\r"
 expect ":KILL"
 respond "*" ":stinkr\r"
 respond "=" "x c/clib\r"
