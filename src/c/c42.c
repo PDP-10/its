@@ -17,7 +17,7 @@ char *aname();
 char *apname();
 char *astring();
 char *ffloat();
-char *get_buf();
+char *getbuf();
 char *opname();
 char *sconcat();
 char *asetfno();
@@ -200,7 +200,7 @@ char **y;
 
 	if (x > 0) {
 		a = &cstore[atoi(*y)];
-		b = c = get_buf();
+		b = c = getbuf();
 		if (*a == ' ') {
 			++a;
 			d = 6;
@@ -239,7 +239,7 @@ char *ffloat (a)
 	char *b, *c, *d;
 	char e, f;
 
-	d = get_buf();
+	d = getbuf();
 	f = 0;
 	b = &cstore[a];
 	c = d;
@@ -318,7 +318,7 @@ char *astring (a, b)
 char *apname (a, b)
 {
 	char *buf;
-	buf = get_buf();
+	buf = getbuf();
 	fngnm(fn_output, buf);
 	return buf;
 }
@@ -334,7 +334,7 @@ char *y;
 	char **e;
 	char *f;
 
-	f = get_buf();
+	f = getbuf();
 	e = &y - 1;
 	d = f;
 	
@@ -357,7 +357,7 @@ char *y;
  *
  *
  */
-char *get_buf ()
+char *getbuf ()
 {
 	if (++bufc >= 10) bufc=0;
 	return bufff[bufc];
