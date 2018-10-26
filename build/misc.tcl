@@ -1159,6 +1159,16 @@ respond "*" ":c;occ g0.c g1.c g2.c g3.c g4.c g5.c c25.c\r"
 expect ":KILL"
 respond "*" ":stinkr gt\r"
 
+# Update compiler files with information from machine description.
+respond "*" ":gt pdp10.gt\r"
+respond "*" ":teco\r"
+# Load macro file and store it in q-register x.
+respond "&" "ERinstll teco\033 @Y HXx\033\033"
+# Load output file, and call the macro in x.
+respond "&" "ERpdp10 gtout\033 @Y Mx\033\033"
+respond "&" "\003"
+respond "*" ":kill\r"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
