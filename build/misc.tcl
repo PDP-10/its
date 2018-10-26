@@ -1169,6 +1169,29 @@ respond "&" "ERpdp10 gtout\033 @Y Mx\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
 
+# C compiler, parser.
+respond "*" ":c;occ c1.c c21.c c22.c c23.c c24.c c25.c c26.c\r"
+expect ":KILL"
+respond "*" ":c;occ c91.c c92.c c95.c\r"
+expect ":KILL"
+respond "*" ":stinkr lp\r"
+expect ":KILL"
+respond "*" ":delete c; ts occ\r"
+
+# C compiler, code generator.
+respond "*" ":cc c31.c c32.c c33.c c34.c c35.c\r"
+expect ":KILL"
+respond "*" ":cc c94.c c95.c\r"
+expect ":KILL"
+respond "*" ":stinkr c\r"
+expect ":KILL"
+
+# C compiler, macro expander.
+respond "*" ":cc c41.c c42.c c43.c\r"
+expect ":KILL"
+respond "*" ":stinkr m\r"
+expect ":KILL"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
@@ -1181,7 +1204,7 @@ respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 
 # OINIT
 respond "*" ":cwd c\r"
-respond "*" ":c;occ sysen2/oinit\r"
+respond "*" ":cc sysen2/oinit\r"
 expect ":KILL"
 respond "*" ":stinkr\r"
 respond "=" "x c/clib\r"
