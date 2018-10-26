@@ -533,4 +533,3 @@ rtoken(p) token *p;
 	one may easily substitute other routines for them.
 
 */
-

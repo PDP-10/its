@@ -68,4 +68,3 @@ int xopen (file, mode, opt)
 	return (i);
 	}
 
-

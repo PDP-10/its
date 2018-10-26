@@ -43,4 +43,3 @@ int atoi (s) char s[];
 	return (sign*i);
 	}
 
-

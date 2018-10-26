@@ -460,4 +460,3 @@ cgswitch (np, lp, l1)	int *np, *lp, l1;
 expr (ep, xp) enode *ep;
 
 	{return (ttexpr (opt (ep), xp));}
-
