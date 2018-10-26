@@ -35,7 +35,7 @@
 - BYE, say goodbye to user. Used in LOGOUT scripts.
 - CALPRT, decode a .CALL instruction's CALL block.
 - CARPET, PDP-11 remote debugger.
-- CC, C compiler (binary only).
+- CC, C compiler.
 - CCONS, CONS console.
 - CHADEV, Chaosnet jobdev (binary only).
 - CHARFC/CHARFS, Chaos RFC.
