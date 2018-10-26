@@ -1192,6 +1192,14 @@ expect ":KILL"
 respond "*" ":stinkr m\r"
 expect ":KILL"
 
+# Test C compiler.
+respond "*" ":cc testc.c\r"
+expect ":KILL"
+respond "*" ":stinkr testc\r"
+expect ":KILL"
+respond "*" ":testc\r"
+expect "Done."
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"
