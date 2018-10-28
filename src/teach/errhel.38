@@ -1,0 +1,261 @@
+-*- Mode:LISP; -*-
+
+(herald ERRHEL)
+
+(declare (special *errors-handled*)
+	 (*lexpr bug
+		 output
+		 prop
+		 query
+		 program-record
+		 recorded-output
+		 recorded-sysread)
+	 (*expr set-prop
+		explanation-has-been-seen
+		short-desc-error-handled
+		long-desc-error-handled
+		error-desc-error-handled		
+		name-error-handled))
+
+;;; File hacking if on TOPS-20
+(eval-when (eval compile load)
+  (cond ((status feature TOPS-20)
+	 (putprop 'teach  '(ps kmp/.teach) 'ppn))))
+
+;;; Macros
+(eval-when (eval compile)
+  (load '((teach) macro)))
+
+;;; Base setup
+(eval-when (eval compile load)
+  (setq base 10. ibase 10.))
+
+;;; IOTA snarfing 
+(eval-when (eval compile)
+  (cond ((not (status feature iota))
+	 (load '((liblsp) iota fasl)))))
+
+;; The following is a fairly general set of functions for dealing with a
+;; list of things that we want to be able to use in a menu and to choose 
+;; entries and do something with them.
+;;
+;; 1. (MENU <items> <what-desc> &optional (<menu-name> nil))
+;;      MENU prints out a menu, given a list of items to go in the menu and
+;;      a function to tell how to get the information that is to be printed in
+;;      the menu, and then get a request from user of which item he wants.
+;; 2. (CHOICE <item> <action>)
+;;      CHOICE takes an item and applies an action to it.
+;; 3. (ACTIVE-MENU  <items> <what-desc> <action>
+;;                      &optional (<menu-name> nil))
+;;     ACTIVE-MENU does 1 and 2 for a single item.
+;; 4. (ACTIVE-MENU-LOOP <items> <what-desc> <action>
+;;                      &optional (<menu-name> nil))
+;;      ACTIVE-MENU-LOOP loops about doing 1 and 2 until it get a NIL item.
+;; 5. (DESCRIBE-ERROR &optional name)
+;;      DESCRIBE-ERROR goes into this loop for the errors we know about or
+;;      of gives documentation on a specific one.
+
+;; Print a menu with the ITEMS given using the function WHAT-DESC to
+;; tell you what string to output.
+
+(defun print-menu (items name what-desc)
+  (catch-**more**
+   (if name (output "~2&~A~2&" name))
+   (do ((items items (cdr items))			;give menu at first
+	(count 0 (1+ count)))
+       ((null items))
+     (output "~&[~D] ~A" count (funcall what-desc (car items))))))
+
+
+;; (MENU <items> <what-desc> &optional (<menu-name> nil))
+;; Get an entry from a list of options in a nice way that allows
+;; printing a menu or giving help.
+
+(defun menu (items what-desc &optional (menu-name nil))
+  (program-record "Menu~@[ (~A)~] ..." menu-name)
+  (print-menu items menu-name what-desc)
+  (do ((index)
+       (len (length items)))
+      (nil)
+    (catch-**more**
+     (output "~2&Option (? gives help): ")
+     (setq index (recorded-sysread tyi 'over-rubout))
+     (clear-input tyi)
+     (format t "~&")
+     (cond ((null index) (return nil))
+	   ((eq index 'over-rubout) (comment ignore))
+	   ((eq index '?)
+	    (output "~2&Type an integer (0-~D) to get an entry,~
+		      ~% MENU for the menu,~
+		      ~% ? to see this again~
+		      ~% or NIL to quit."
+		    (1- len)))
+	   ((eq index 'menu)
+	    (print-menu items menu-name what-desc))
+	   ((or (not (numberp index))
+		(not (fixnump index))
+		(minusp index)
+		(not (< index len)))
+	    (output
+	     "Type NIL to exit or an integer (0-~D) to select a menu item."
+	     (1- len)))
+	   (t
+	    (let ((result (nth index items)))
+	      (program-record "Selected ~S = ~S" index result)
+	      (return result)))))))
+
+
+;; Print out a menu and get a request from user.
+;; Take the request and find the entry based on ACTION.
+;; Take the entry found and print it.
+
+(defun choice (item action)
+  (funcall action item))
+
+;; Loop about until you get a NIL item.
+
+(defun active-menu-loop (items what-desc action &optional menu-name)
+  (do ((item (menu items what-desc menu-name)
+	     (menu items what-desc menu-name)))
+      ((null item))
+    (choice item action)))
+
+(defun active-menu (items what-desc action &optional menu-name)
+  (let ((item (menu items what-desc menu-name)))
+    (if item (choice item action))))
+
+;; Function to take either a name of an error and print its documentation
+;; or no argument and loop about getting error documentation.
+
+(defun print-error-desc (item)
+  (let ((desc (error-desc-error-handled item)))
+    (if desc (output desc))))
+
+(defun describe-error ()
+  (active-menu-loop *errors-handled*
+		    #'short-desc-error-handled
+		    #'print-error-desc
+		    "Menu of error descriptions"))
+
+
+;;; Functions for finding out if the user wants to know about a
+;;; certain type of error and to handle telling him or not. This 
+;;; group is invoked when the user actually makes one of the errors.
+
+(defun explain (name &rest data)
+  (let ((message (long-desc-error-handled name)))
+    (cond (message (if (explain? name)
+		       (progn (lexpr-funcall #'output message data)
+			      (explanation-has-been-seen name))))
+	  (t (bug "EXPLAIN got bad arg of ~S" name)))))
+
+(defun explain? (name)
+  (let ((explain? (prop name (prop 'global-explanation 'query))))
+    (cond ((eq explain? 'query)
+	   (query-explain name))
+	  (explain? (clear-input tyi) t)
+	  (t nil))))
+
+(defun query-explain (name)
+  (clear-input tyi)
+  (cond ((query "Would you like help with ~A?"
+		(short-desc-error-handled name))
+	 t)
+	((query "Do you already know about ~A?"
+		(short-desc-error-handled name))
+	 (explanation-has-been-seen name)
+	 (set-prop name nil)
+	 nil)
+	(t nil)))
+
+
+;;;   Code for finding out where the error our poor schnook did was found.
+;;;
+;;; While in the function F, ...
+;;; < was given too few arguments ...
+;;; Do you want help?
+;;; Do you know about?
+;;; [Debug? maybe or maybe just put him there. Make a place for this but
+;;; don't really call it 'cuz he has to be taught about it first.]
+;;; 
+;;; When displaying the function, set PRINLEVEL and PRINLENGTH as in:
+;;; 
+;;;  (LET ((PRINLEVEL 3) (PRINLENGTH 3))
+;;;    (FORMAT T "~&While in the function ~S, ..."))
+;;; 
+;;; -----
+;;; walk back up the stack as follows
+;;; 
+;;; 1. if *RSET is NIL, give up.
+;;; 2. if (EVALFRAME NIL) is NIL, give up. (this should only happen with *RSET 
+;;; 					 nil, but check just in case.)
+;;; 3. iterate doing (EVALFRAME NIL) until you pass your own error handler
+;;; 	function. this will let you run your code interpreted.
+;;;    now iterate past anything which is either something that has an 
+;;; 	ERROR-REPORTER property (abstract this) or for which the following
+;;; 	returns true:
+;;; 	  (AND (SYMBOLP fn) (STATUS SYSTEM fn) (GETL fn '(FSUBR MACRO)))
+;;; 	and past symbol evaluations.
+;;; 
+;;;    probably you should write some predicate INTERESTING-STACK-FRAME? which
+;;;    answers T unless (EVAL ... atom ...) or one of the things which are in 
+;;;    the two categories above.
+;;; 
+;;;    the fn will be the car of the caddr of an EVALFRAME. see doc on
+;;;    evalframe for format detail.
+;;; 
+;;;    (APPLY ... (fn arglist) ...)
+;;;    (EVAL ... (fn arg1 arg2 ...) ...)
+;;; OR (EVAL ... atom ...)
+;;; 
+;;;    if you fall off the end of the EVALFRAME stack, you're at toplevel and
+;;;    should print out "in a toplevel expression" or some such siliness 
+;;;    something that is clearer since thats likely to confuse novices --
+;;;    mostly just avoid saying "while in the function at toplevel")
+
+(defun find-error-context ()
+  (cond ((not *rset) nil)
+	((not (evalframe nil)) nil)
+	(t (let ((fn (do ((stack-frame (evalframe nil)
+				       (evalframe (cadr stack-frame))))
+			 (nil)
+		       (cond ((not stack-frame) (return t))
+			     ((interesting-stack-frame? stack-frame)
+			      (return (car (caddr stack-frame))))))))
+	     (if fn
+		 (let ((prinlevel 3) (prinlength 3))
+		   (cond ((eq fn '*eval)
+			  (recorded-output "~&In a top-level evaluation, "))
+			 (t (recorded-output "~&While in the function ~S, "
+					     fn)))))))))
+
+(defmacro error-reporter (x) `(get ,x 'error-reporter))
+
+(defun interesting-stack-frame? (frame)
+  (let ((block (caddr frame)))
+    (cond ((atom block) nil)
+	  (t (let ((fn (car block)))
+	       (not (or (error-reporter fn)
+			(and (symbolp fn) (status system fn)
+			     (getl fn '(fsubr macro))))))))))
+
+(defun declare-error-reporter (x) (setf (error-reporter x) t))
+
+(declare-error-reporter 'ERROR)
+(declare-error-reporter 'CERROR)
+(declare-error-reporter 'FERROR)
+(declare-error-reporter '+INTERNAL-UDF-BREAK)
+(declare-error-reporter '+INTERNAL-UBV-BREAK)
+(declare-error-reporter '+INTERNAL-WTA-BREAK)
+(declare-error-reporter '+INTERNAL-UGT-BREAK)
+(declare-error-reporter '+INTERNAL-WNA-BREAK)
+(declare-error-reporter '+INTERNAL-FAC-BREAK)
+(declare-error-reporter '+INTERNAL-IOL-BREAK)
+(declare-error-reporter 'find-error-context)
+(declare-error-reporter 'interesting-stack-frame?)
+
+
+;;; Local-Modes:;
+;;; Mode:LISP;
+;;; Lisp CATCH-**MORE** Indent:0;
+;;; End:;
