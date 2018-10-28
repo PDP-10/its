@@ -5,8 +5,8 @@ set emulator_escape "\034"
 proc start_salv {} {
     uplevel #0 {spawn ./tools/sims/BIN/ka10 build/sims/init}
     setup_timeout
-    expect "MAGDMP\r\n"; send "l\033ddt\r"
-    expect "\n"; send "t\033salv\r"
+    respond "MAGDMP\r\n" "l\033ddt\r"
+    respond "\n" "t\033salv\r"
 }
 
 proc start_dskdmp args {
