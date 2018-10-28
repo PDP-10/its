@@ -289,6 +289,7 @@
 - VTTIME, display running time on the terminal.
 - VV/VJ/DETREE, list jobs.
 - XHOST, tool for replacing host nicknames with real hostnames.
+- XLISP, teaches Lisp -- part of TEACH system.
 - WA, a Wumpus advisor game.
 - WEBSER, HTTP server.
 - WHAT, humorous quips to various "what" questions.

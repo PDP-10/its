@@ -1,0 +1,515 @@
+;;; -*- Mode:LISP; -*-
+(herald LESSN)
+
+;;;; Declarations
+(declare (special *default-lesson-filename*
+		  *in-more-break*
+		  *ITS-list-of-list-of-lessons-filenames*
+		  *lessons-known*
+		  *TOPS-20-list-of-lessons-filename*)
+	 (*expr clear-screen
+		lesson-has-been-seen
+		seen-lesson?
+		set-prop
+		user-record)
+	 (*lexpr active-menu
+		 complain
+		 fresh-line
+		 output
+		 program-record
+		 prop
+		 quiet-bug
+		 recorded-output
+		 sysread
+		 query))
+
+;;; File hacking if on TOPS-20
+(eval-when (eval compile load)
+  (cond ((status feature TOPS-20)
+	 (putprop 'teach  '(ps kmp/.teach) 'ppn))))
+
+;;; IOTA snarfing
+(eval-when (eval compile)
+  (cond ((not (status feature iota))
+	 (load '((liblsp) iota fasl)))))
+
+;;; Base setup
+(eval-when (eval compile load)
+  (setq base 10. ibase 10.))
+
+;;; Macro support
+(eval-when (eval compile)
+  (load '((teach) macro)))
+
+;;; Variable declarations
+
+(defvar *disallow-interrupts* nil)
+(defvar *lesson-file* nil)
+(defvar *lesson-name* nil)
+(defvar *lesson-exit-handler* nil "Don't handle lesson exits at toplevel")
+  ; *lesson-information* is a list of the form:
+  ;  (<stream> (eval name position) ...
+  ;            (eval-print name position)
+  ;            (try name position) ... etc ...)
+  ; associated with the current lesson file.
+(defvar *lesson-information* nil)
+
+(define-interrupt-handler abort-lesson-handler
+  (abort-lesson))
+(define-interrupt-handler read-lesson-section-handler
+  (read-lesson-section))
+(define-interrupt-handler read-previous-lesson-section-handler
+  (read-previous-lesson-section))
+(define-interrupt-handler repeat-lesson-section-handler
+  (repeat-lesson-section))
+
+;;; Macro support, etc.
+
+(defmacro catch-lesson-exit (&body body)
+  `(*catch 'lesson-exit-handler
+     (let ((*lesson-exit-handler* t))
+       ,@body)))
+
+(defun exit-lesson () (*throw 'lesson-exit-handler nil))
+
+(defmacro lesson-function (name) `(get ,name 'lesson-function))
+
+(defmacro define-lesson-function (type doc &body body)
+  doc ;ignored 
+  `(defun (,type lesson-function) nil
+     ,@body))
+
+(defun add-lesson-information (type)
+  (let ((name (read-optional-label *lesson-file*))
+	(information-location (filepos *lesson-file*)))
+    (push (list type name information-location)
+	  (cdr *lesson-information*))))
+
+;;; Functions for retrieving the various types of information 
+;;; stored in *lesson-information*.
+
+(defun get-lesson-information (types list)
+  (ass #'(lambda (x y) (memq y x)) types list))
+
+(defun ass (fn obj list)
+  (do ((l list (cdr l)))
+      ((null l) nil)
+    (if (funcall fn obj (caar l))
+	(return (car l)))))
+
+(defun get-optional-label (types list)
+  (cadr (get-lesson-information types list)))
+
+;;; Functions for getting names and positions from a piece of information.
+(defun get-name (obj) (cadr obj))
+(defun get-position (obj) (caddr obj))
+
+(defun read-optional-label (stream)
+  (prog1 (do ((c (tyipeek nil stream) (tyipeek nil stream)))
+	     ((= c #\return) nil)
+	   (if (not (member c '(#\space #\tab)))
+	       (return (read stream)))
+	   (tyi stream))
+	 (do ((c (tyipeek nil stream) (tyipeek nil stream)))
+	     ((= c #\return) (tyi stream))
+	   (tyi stream))))
+
+;;;; Other stuff
+
+(declare (*lexpr *lesson open-lesson))
+
+;;; Find out what lessons we've available for this incarnation
+;;; of XTEACH.
+
+(defun get-list-of-lessons ()
+  (cond ((status feature ITS)
+ 	 (mapallfiles '(lambda (x) (push (caddr x) *lessons-known*))
+		      *ITS-list-of-list-of-lessons-filenames*))
+ 	(t(setq *lessons-known*
+		(cond ((probef *TOPS-20-list-of-lessons-filename*)
+		       (iota ((stream *TOPS-20-list-of-lessons-filename*
+				      '(in ascii dsk)))
+			 (sysread stream)))
+		      (t nil)))))
+  (setq *lessons-known* (sort *lessons-known* 'alphalessp)))
+
+;;; Function for providing a full file name in the place of the single
+;;; word names for lessons.
+
+(defun full-lesson-name (name)
+  (mergef (mergef `(* ,name) *default-lesson-filename*)
+	  defaultf))
+
+;;; Function to find a particular special function request in an open file.
+
+(defun find-special-function-in-file (function file)
+  (cautiously-incrementing-filepos file
+    (do ((c (tyipeek nil file -1)
+	    (tyipeek nil file -1)))
+	((= c -1) nil)
+      (caseq c
+	((#\linefeed) (tyi file))			
+	((#/.) (tyi file)			       
+	       (let ((special (sysread file)))
+		 (if (eq special function)
+		     (let ((special-func (lesson-function special)))
+		       (if special-func
+			   (return (filepos file))
+			 (quiet-bug
+			  "unknown lesson command requested in ~
+			    find-special-function-in-file: ~S~%"
+			  function)
+			 (return nil)))
+		   (readline file))))
+	(t (let ((line (readline file)))
+	     (if (null line) (return nil))))))))
+
+;;; Get the description of each lesson that is to be printed from the
+;;; lesson file. this one time code is run by TEACH-LISP-TOP-LEVEL.
+
+(defun set-up-lesson-descriptions ()
+  (do ((lessons *lessons-known* (cdr lessons)))
+      ((null lessons))
+    (let* ((name (car lessons))
+	   (full-name (full-lesson-name name)))
+      (if (probef full-name)
+	  (iota ((stream full-name '(in ascii dsk)))
+	    (if (find-special-function-in-file 'document stream)
+		(putprop name (readline stream) 'lesson-description)
+	      (putprop name name 'lesson-description)))
+	(putprop name
+"Oops... thought i had a lesson here. 
+Please report this by sending mail to BUG-XTEACH."
+		 'lesson-description)))))
+
+(defun describe-lesson (name)
+  (get name 'lesson-description))
+
+(defun in-lesson? ()
+  (if (not *lesson-file*)
+      (complain "~&You're not in the middle of a lesson.")))
+
+(defmacro lesson (&optional (name nil name?))
+  (cond (name? `(*lesson ',name))
+	(t (*lesson)))) 
+
+(defun *lesson (&optional (name nil name?))
+  (let ((*disallow-interrupts* t))
+    (cond ((and *lesson-file*
+		name?
+		(query "You're already in lesson ~A.~
+		       ~%Shall I start the new one for you anyway?"
+		       *lesson-name*))
+	   (kill-lesson)
+	   (*lesson name))
+	  (*lesson-file*
+	   (cond ((query "Want to go on with lesson ~A now?"
+			 *lesson-name*)
+		  (catch-complaints
+		   (fresh-line 1)
+		   (read-lesson-section)))
+		 ((query "Want a menu of available lessons?")
+		  (catch-complaints
+		   (when-abnormal-exit (open-lesson)
+		     (output
+		      "~&Ok, lesson ~A's still around waiting for you.~%"
+		      *lesson-name*))
+		   (fresh-line 1)
+		   (read-lesson-section)))
+		 (t
+		  (output "~&Ok, lesson ~A's still around waiting for you.~%"
+			  *lesson-name*)))
+	   '*)
+	  (t
+	   (catch-complaints
+	    (cond (name? (open-lesson name))
+		  (t (open-lesson)))
+	    (fresh-line 1)
+	    (read-lesson-section))
+	   '*))))
+
+(defun start-lesson (name)
+  (let ((full-name (full-lesson-name name)))
+    (if (not (probef full-name))
+	(complain "~2&I'm sorry, I can find no lesson by the name ~A."
+		  name))
+    (clear-screen)
+    (if *lesson-file* (kill-lesson)) ;clean up if needed
+    (setq *lesson-file* (open full-name 'in)
+	  *lesson-information* (list *lesson-file*)
+	  *lesson-name* name)
+    (program-record "Starting lesson ~A." name)))
+
+(defun open-lesson (&optional (name *lesson-name* name?))
+  (cond ((not name?)
+	 (let ((wanted-lesson (active-menu *lessons-known*
+					   #'describe-lesson
+					   #'start-lesson
+					   "Menu of available lessons")))
+	   (if (not wanted-lesson) (complain))))
+	((not name)
+	 (complain "~&NIL is not a valid lesson! If you want a menu of ~
+		         lessons, type /"(LESSON)/"~%"))
+	(t
+	 (start-lesson name))))
+
+
+;;; Functions for doing stuff in a lesson file (moving around and reading and
+;;; killing...)
+
+;;; Go back to the previous tag marked in *file-information* if there
+;;; is one; signal error, otherwise.
+;;; Moving backwards entails moving the file position and changing
+;;; the state of file-information* to be as though things after
+;;; the tag had not been read.
+
+
+;;; first hit is the one that caused us to be in a position
+;;;   to be paid attention to.
+;;; second is the lesson we just stopped.
+;;; third is lesson before lesson just done.
+
+(defun trimmed-lesson-information (list)
+  (let ((inf (get-lesson-information '(tag try) list)))
+    (cdr (memq inf list))))
+
+(defun repeat-lesson-section ()
+  ;; trim off the try that got us here
+  ;; and then looke for the next try or tag.
+  (in-lesson?)
+  (let ((list (trimmed-lesson-information (cdr *lesson-information*))))
+    (let ((flag (get-lesson-information '(tag try) list)))
+      (if flag (set-lesson-section-to flag)
+	(complain "You're at the beginning of this sesson")))))
+
+  
+(defun read-previous-lesson-section ()
+  ;; trim off the try that got us here and the lesson we just did.
+  ;; look for a preceding tag or try.
+  (in-lesson?)
+  (let ((list (trimmed-lesson-information
+	       (trimmed-lesson-information
+		(cdr *lesson-information*)))))
+    (let ((flag (get-lesson-information '(tag try) list)))
+      (if flag (set-lesson-section-to flag)
+	(complain "There isn't a section before this one")))))
+
+
+(defun set-lesson-section-to (flag)
+  (filepos *lesson-file* (get-position flag))
+  (setq *lesson-information*
+	(cons (car *lesson-information*)
+	      (memq flag *lesson-information*)))
+  (read-lesson-section))
+
+
+;;; assume cursor is at start of a lesson.
+;;; read lines until reach end of this section, end of file,
+;;; or "try" (it says stop here for user to play)
+;;; for each line, 
+;;;     1. normal line, just echo.
+;;;     2. try line, give over to user.
+;;;     3. eval line, read in lisp exprs and eval them until
+;;;          hit ().
+;;;     4. end-of-file line, close file and return.
+
+(defun want-lesson? ()
+  (recorded-output "~&You're not in a lesson at the moment.~%")
+  (cond ((and *lesson-name*
+	      (query "Restart lesson ~A?" *lesson-name*))
+	 (*lesson *lesson-name*))
+	((query "Start a new lesson?")
+	 (active-menu *lessons-known*
+		      #'(lambda (x) x)
+		      #'*lesson
+		      "Menu of available lessons"))))
+
+(defun kill-lesson ()
+  (cond ((or (filep *lesson-file*)
+	     (sfap *lesson-file*))
+	 (close *lesson-file*)))
+  (program-record "Killing lesson ~A." *lesson-name*)
+  (setq *lesson-file* nil))
+
+(defun abort-lesson ()
+  (in-lesson?)
+  (kill-lesson)
+  (output "~&Lesson ~A aborted.~%" *lesson-name*))
+
+(defun end-of-lesson-file ()
+  (kill-lesson)
+  (if (query "Would you care to have lesson ~A restarted?"
+	     *lesson-name*)
+      (*lesson *lesson-name*)))
+
+(defvar *muzzled* nil "If this is on, the lessons aren't typed out.")
+
+(defun read-lesson-section ()
+  (let ((*muzzled* nil))   ;special -- may be rebound by lesson-function IF
+      (cond ((not *lesson-file*)
+	     (catch-complaints
+	      (catch-**more**
+	       (catch-lesson-exit
+		(want-lesson?)))))
+	    (t (catch-**more**
+		(catch-complaints
+		 (cautiously-incrementing-filepos *lesson-file*
+		   (catch-lesson-exit
+		    (do ((c (tyipeek nil *lesson-file* -1)
+			    (tyipeek nil *lesson-file* -1)))
+			((= c -1) (end-of-lesson-file))
+		      (caseq c
+			((#\linefeed) (tyi *lesson-file*))			
+			((#/.) (tyi *lesson-file*)			       
+			       (let* ((special (sysread *lesson-file*))
+				      (special-func (lesson-function special)))
+				 (if special-func
+				     (funcall special-func)
+				   (quiet-bug
+				    "warpo lesson command encountered: ~S~%"
+				    special)
+				   (readline *lesson-file*))))
+			(t (let ((line (readline *lesson-file*)))
+			     (cond ((null line)
+				    (end-of-lesson-file)
+				    (return nil))
+				   ((not *muzzled*)
+				    (output "~&~A~%" line)))))))))))))))
+
+
+;;; Special functions to be run.
+
+; note -- a .IF will conditionalize only to the next .IF, .END-IF or
+; something that ends a section like a .PAUSE or a .TRY
+
+(define-lesson-function if "conditionalize out a section of text"
+  (setq *muzzled* (not (eval (read *lesson-file*)))))
+
+(define-lesson-function end-if "end an if"
+  (setq *muzzled* nil))
+
+(define-lesson-function eval "invisibly eval a form to the user's environment"
+  (eval (read *lesson-file*)))
+
+;; This reads an entire Lisp form and prints it, including any ;...'s
+(defun read-verbosely (instream)
+  (let ((start-filepos (filepos instream)))
+    (let ((form (read instream)))
+      (readline instream)	;toss rest of line (in case of trailing semi)
+      (let ((end-filepos (filepos instream)))
+	(filepos instream start-filepos)
+	(do ((l (readline instream nil) (readline instream nil)))
+	    ((or (null l) (not (< (filepos instream) end-filepos)))
+	     (if l (output "~&~A~%" l))) ;output the last line
+	  (output "~&~A~%" l))
+	form))))
+
+(define-lesson-function eval-print "same as eval but not invisible"
+  (eval (read-verbosely *lesson-file*)))
+
+(define-lesson-function pp
+  "have a Lisp form pretty printed in the text without having it evaled"
+  (read-verbosely *lesson-file*))
+
+(define-lesson-function try "return from this lesson retaining file info"
+  (add-lesson-information 'try)
+  (recorded-output "~2&You try now. To continue, type ^N.~%")
+  (exit-lesson))
+
+(define-lesson-function pause "return from this lesson without implying try"
+  (add-lesson-information 'pause)
+  (recorded-output "~2&To continue, type ^N.~%")
+  (exit-lesson))
+
+(define-lesson-function tag "tag marks the beginning of a file"
+  (add-lesson-information 'tag)
+  nil)
+
+(define-lesson-function comment "comments to be allowed in the file"
+  (readline *lesson-file*)
+  nil)
+
+(define-lesson-function document "comments to be allowed in the file"
+  (readline *lesson-file*)
+  nil)
+
+(define-lesson-function eof "note lesson is over"
+  (lesson-has-been-seen *lesson-name*))
+
+;;; This lesson is finished. Do you want to go on? (Y or N) Yes.
+;;; The next recommended lesson is ADVANCED. Wanna try that? (Y or N) No.
+;;; Ok, sucker. Type the lesson you want ended by Return: WIZARD
+;;; This function is only to be used as the last thing in a lesson.
+
+(define-lesson-function next "used to point to the next lesson. should
+  only occur as last thing in a lesson, cuz it kills this lesson."
+  (lesson-has-been-seen *lesson-name*)
+  (let ((first-choice (sysread *lesson-file*)))
+    (kill-lesson)
+    (cond ((query "Lesson ~A is finished. Would you care to proceed?"
+		  *lesson-name*)
+	   (get-apropriate-next-lesson first-choice))
+	  (t (if (query "Would you care to retry lesson ~A?"
+			*lesson-name*)
+		 (*lesson *lesson-name*)))))
+  (exit-lesson))
+
+(defun get-apropriate-next-lesson (first-choice)
+  (do ((flag nil t)
+       (lesson-choice first-choice (get-next-next-lesson lesson-choice flag)))
+      ((not lesson-choice)
+       (output "~&I've no~@[~* further~] suggestions for you.~%" flag)
+       (get-a-new-lesson))
+    (if (not (seen-lesson? lesson-choice))
+	(return (if (query "The next recommended lesson is ~A. Do you ~
+			        wish to try that?"
+			   lesson-choice)
+		    (*lesson lesson-choice)
+		  (get-a-new-lesson))))))
+
+(defun get-next-next-lesson (choice flag)
+  (output "~2&The next recommended lesson~@[~* after that~] is ~S, ~
+	   ~%but you've already seen it...~
+	   ~%Hold on while I try to  think of some other suggestion...~2%"
+	  flag
+	  choice)
+  (let ((full-name (full-lesson-name choice)))
+    (if (probef full-name)
+	(iota ((stream full-name '(in ascii dsk)))
+	  (if (find-special-function-in-file 'next stream)
+	      (sysread stream)
+	    nil))
+      nil)))
+    
+(defun get-a-new-lesson ()
+  (output "~2&Here is a list of lessons to choose from:~%")
+  (active-menu *lessons-known*
+	       #'(lambda (x) x)
+	       #'*lesson
+	       "Menu of available lessons"))
+
+(define-lesson-function required
+  "there are lessons that should be run before this one"
+  (let ((requirement (read *lesson-file*)))
+    (if (not (seen-lesson? requirement))
+	(progn
+	 (recorded-output "Before you start lesson ~S you really should know ~
+			    ~%about what is in Lesson ~S."
+			  *lesson-name*
+			  requirement)
+	 (if (query "Should I start it for you?")
+	     (progn
+	      (kill-lesson)
+	      (program-record
+	       "User is gonna be reasonable and do the prereq first")
+	      (*lesson requirement))
+	   (program-record "user is a turkey and is ignoring the prereq.")
+	   (output "~&Ok, but don't say i didn't warn you...~2%"))))))
+	  
+
+;;; Local Modes:;
+;;; Mode:LISP;
+;;; Comment Column:50;
+;;; Lisp WHEN-ABNORMAL-EXIT Indent:1;
+;;; Lisp CAUTIOUSLY-INCREMENTING-FILEPOS Indent:1;
+;;; End:;
