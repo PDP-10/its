@@ -63,7 +63,7 @@ proc pdset {} {
     type [timestamp -seconds $t -format "%y%m%dD"]
     type [timestamp -seconds $t -format "%H%M%ST"]
     type "!."
-    expect "DAYLIGHT SAVINGS" {
+    expect -exact "DAYLIGHT SAVINGS TIME?  " {
         type "N"
         expect "\n"
     } "\n" {
