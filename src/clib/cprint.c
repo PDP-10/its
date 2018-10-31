@@ -42,6 +42,8 @@ deffmt (c, p, n)	int (*p)();
 	else cprint (cerr, "bad character to DEFFMT: %c\n", c);
 	}
 
+fmtf (c, p, n) { deffmt (c, p, n); }
+
 cprint (a1,a2,a3,a4,a5,a6,a7,a8)
 
 	{int *adx, c, width;
