@@ -259,4 +259,3 @@ dofixup (f, val) fixup f;
 		}
 	jwrite (lc, jread (lc) + val);
 	}
-

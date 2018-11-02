@@ -83,4 +83,3 @@ typedef struct _progent progent;
 # define wleft(w) ((w)>>18)
 # define wright(w) ((w)&0777777)
 # define wcons(l,r) (((l)<<18)|((r)&0777777))
-

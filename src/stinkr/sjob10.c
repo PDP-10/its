@@ -113,4 +113,3 @@ soend (count, jch, ofd)
 	{souti (checksum);
 	}
 
-

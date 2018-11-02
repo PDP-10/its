@@ -350,4 +350,3 @@ int sopen (fnbuf, m, o) char fnbuf[], *o;
 		else return (f);
 		}
 	}
-
