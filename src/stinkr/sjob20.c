@@ -164,4 +164,3 @@ rj40 (n) /* right justify a SQUOZE coded symbol (remove trailing blanks) */
 		}
 	return (n);
 	}
-

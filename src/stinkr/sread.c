@@ -528,4 +528,3 @@ defdot ()
 		else symdef (s, loc);
 		}
 	}
-
