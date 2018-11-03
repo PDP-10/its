@@ -168,7 +168,8 @@
 - MCL, subsystem for compiling individual Macsyma files.
 - METER, displays system metering information.
 - MICRO, microcode assembler.
-- MINIC, mini Chaosnet file server.
+- MINI, mini Chaosnet file server (new).
+- MINIC, mini Chaosnet file server (old).
 - MLDEV/MLSLV, allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems dragon.
