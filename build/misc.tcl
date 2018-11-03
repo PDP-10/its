@@ -98,6 +98,11 @@ expect ":KILL"
 respond "*" ":midas bawden;_uptime\r"
 expect ":KILL"
 
+# Mini Chaosnet file server.  Version 24 is MINI.
+respond "*" ":midas sysbin; mini_lmio; minisr 24\r"
+expect ":KILL"
+respond "*" ":link device; chaos mini, sysbin; mini bin\r"
+
 respond "*" ":midas sysbin;_sysnet;echo\r"
 expect ":KILL"
 respond "*" ":link device; chaos echo, sysbin; echo bin\r"
