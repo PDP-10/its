@@ -111,6 +111,10 @@ respond "*" ":midas sysbin; minic bin_syseng; minisr 5\r"
 expect ":KILL"
 respond "*" ":link device; chaos minic, sysbin; minic bin\r"
 
+respond "*" ":midas sysbin;_lmio1; door\r"
+expect ":KILL"
+respond "*" ":link device; chaos door, sysbin; door bin\r"
+
 respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
 expect ":KILL"
 

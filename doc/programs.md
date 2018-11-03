@@ -71,6 +71,7 @@
 - DIRED, directory editor (independent from EMACS DIRED).
 - DMPCPY, crash dump copy dragon.
 - DOCTOR, KMP's psychiatrist game.
+- DOOR, Chaosnet server to open the 9th floor door.
 - DOWNLD, print file in super-image mode to TTY.
 - DP Device, 7-bit conversions?
 - DQ Device, for doing hostname resolutions. Used by COMSAT.
