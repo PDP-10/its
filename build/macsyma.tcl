@@ -298,6 +298,7 @@ respond "(C2)" "compile_lisp_file(translate_file(\"tensor\\;ctensr funcs\")\[2\]
 respond "Type ALL;" "all;"
 respond "Type ALL;" "all;"
 respond "(C3)" "quit();"
+respond "*" ":link share;ctensr fasl,tensor;\r"
 
 ### build eigen for macsyma
 respond "*" "macsym\013"
