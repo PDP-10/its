@@ -81,6 +81,7 @@
 - ECHO, Chaosnet echo server.
 - ELIZA, the original psychiatrist game.
 - EMACS, editor.
+- ESCE, call the elevator.
 - EXECVT, convert 20x EXE (SSAVE) file to ITS BIN (PDUMP) file.
 - EXPN/VRFY, query remote SMTP server.
 - FACTOR, factor integers.

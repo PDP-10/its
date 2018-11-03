@@ -120,6 +120,9 @@ respond "*" ":midas sysbin;_lmio1; door\r"
 expect ":KILL"
 respond "*" ":link device; chaos door, sysbin; door bin\r"
 
+respond "*" ":midas sys3; ts esce_sysen1; esce\r"
+expect ":KILL"
+
 respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
 expect ":KILL"
 
