@@ -126,3 +126,6 @@ respond "*" ":dumpt \033turnip;view\r"
 expect "Dumped to"
 respond "*" ":tctyp la36\r"
 respond "*" ":move turnip; ts view, sys3;\r"
+
+# VDIR
+respond "*" ":link sys3; ts vdir, ts view\r"
