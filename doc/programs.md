@@ -289,6 +289,7 @@
 - URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
+- VDIR, view directory.
 - VIEW, view file.
 - VT07, GT40 Datapoint emulator and Lisp display slave.
 - VTTIME, display running time on the terminal.
