@@ -124,11 +124,12 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
-$(OUT)/bootvt.bin: $(OUT)/output.tape
+$(OUT)/bootvt.bin $(OUT)/aplogo.ptp: $(OUT)/output.tape
 	$(RM) -rf $(OUT)/tmp
 	$(MKDIR) -p $(OUT)/tmp
 	$(ITSTAR) -xf $< -C $(OUT)/tmp
-	$(CP) $(OUT)/tmp/gt40/bootvt.bin $@
+	$(CP) $(OUT)/tmp/gt40/bootvt.bin $(OUT)/bootvt.bin
+	-$(CP) $(OUT)/tmp/aplogo/logo.ptp $(OUT)/aplogo.ptp
 	$(RM) -rf $(OUT)/tmp
 
 tools/dasm/palx: tools/dasm/palx.c

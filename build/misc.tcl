@@ -1449,7 +1449,7 @@ expect ":KILL"
 # Apple II Logo
 respond "*" ":cwd aplogo\r"
 respond "*" ":cross\r"
-respond "*" "logo,logo=logo\r"
+respond "*" "logo/ptp,logo=logo\r"
 respond "*" "\003"
 respond "*" ":kill\r"
 
