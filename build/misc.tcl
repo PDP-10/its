@@ -1261,6 +1261,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts xgpspl_sysen2;xgpspl\r"
 expect ":KILL"
 
+# XGP unspooler
+respond "*" ":midas sysbin;_syseng;scrimp\r"
+expect ":KILL"
+
 # XGP and GLP
 respond "*" ":midas sysbin;xgp bin_sysen2;xqueue\r"
 expect ":KILL"
