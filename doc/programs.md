@@ -228,6 +228,7 @@
 - SCHEME, Scheme interpreter.
 - SCNV, convert plotter files to XGP scan files.
 - SCRAM, encrypt/decrypt file.
+- SCRIMP, XGP unspooler.
 - SCRMBL/UNSCR, scramble/unscramble file.
 - SEND/REPLY, replacements for DDT :SEND.
 - SENDS, Chaosnet SEND server.
