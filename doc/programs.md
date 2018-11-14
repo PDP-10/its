@@ -179,6 +179,7 @@
 - MSEND, send to many users.
 - MSPLIT, split a file into smaller parts.
 - MTBOOT, make bootable tapes.
+- MUDCOM/MUDCHK/MUDFND/MUDLST, compare/check/find/list Muddle files.
 - MUDDLE, MDL interpreter.
 - MUNCH, TV-munching square.
 - NAME, shows logged in users and locations, aka FINGER.

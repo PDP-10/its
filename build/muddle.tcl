@@ -22,3 +22,10 @@ respond "*" ":kill\r"
 
 respond "*" ":link sys3; ts mdl,mudsav; ts mdl56\r"
 respond "*" ":link sys3; ts muddle,mudsav; ts mdl56\r"
+
+respond "*" ":midas sys3; ts mudcom_sysen3; mudcom\r"
+respond "(Y OR N)" "Y\r"
+expect ":KILL"
+respond "*" ":link sys3; ts mudchk, sys3; ts mudcom\r"
+respond "*" ":link sys3; ts mudlst, sys3; ts mudcom\r"
+respond "*" ":link sys3; ts mudfnd, sys3; ts mudcom\r"
