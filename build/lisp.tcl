@@ -508,6 +508,12 @@ respond "_" "liblsp;_pratt;cgrub\r"
 respond "_" "\032"
 type ":kill\r"
 
+# compile cgol
+respond "*" "complr\013"
+respond "_" "lisp;_pratt;cgol\r"
+respond "_" "\032"
+type ":kill\r"
+
 respond "*" "complr\013"
 respond "_" "\007"
 respond "*" "(load '((lisp) cgol fasl))"
