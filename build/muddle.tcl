@@ -29,3 +29,7 @@ expect ":KILL"
 respond "*" ":link sys3; ts mudchk, sys3; ts mudcom\r"
 respond "*" ":link sys3; ts mudlst, sys3; ts mudcom\r"
 respond "*" ":link sys3; ts mudfnd, sys3; ts mudcom\r"
+
+respond "*" ":midas sys3; ts combat_sysen3; combat\r"
+respond "(Y OR N)" "Y\r"
+expect ":KILL"

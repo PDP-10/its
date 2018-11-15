@@ -47,6 +47,7 @@
 - CHTN/CFTP, Chaosnet TELNET and FTP support.
 - CKR, Alan Baisley's checkers program.
 - CLOGO, Logo programming language.
+- COMBAT, submit jobs to the Muddle compiler.
 - COMIFY, convert HEX to COM format.
 - COMPLR, Lisp compiler.
 - COMSAT, mail server.
