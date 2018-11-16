@@ -185,6 +185,7 @@
 - MTBOOT, make bootable tapes.
 - MUDCOM/MUDCHK/MUDFND/MUDLST, compare/check/find/list Muddle files.
 - MUDDLE, MDL interpreter.
+- MUDINQ, Muddle inquirer.
 - MUNCH, TV-munching square.
 - NAME, shows logged in users and locations, aka FINGER.
 - NETIME, network time dragon.
