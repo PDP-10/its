@@ -308,16 +308,26 @@ respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
 
 ### build share;array fasl and ellen; check fasl for macsyma
-
 respond "*" ":maxtul;mcl\r"
 respond "_" "share;_maxsrc;array\r"
 respond "_" "ellen;check\r"
 respond "_" "\032"
 type ":kill\r"
 
+### rebuild float because version built the first time gives
+### arithmetic overflows.  See ticket #1211.
+
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond_load "(load '((libmax) maxmac))"
+respond_load "(maklap)"
+respond "_" "macsym;_rat;float\r"
+respond "_" "\032"
+type ":kill\r"
+
 # this is not technically part of macsyma, but requires a bunch
 # of macsyma macros and libraries in order to compile
-
 respond "*" ":complr\r"
 respond "_" "liblsp;_libdoc;lchstr\r"
 respond "_" "\032"
