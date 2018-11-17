@@ -81,6 +81,7 @@ respond ":EJ" "\033xgenerate\033emacs;vt100\033emacs1;vt100\r"
 respond ":EJ" "\033xgenerate\033emacs;vt52\033emacs1;vt52\r"
 respond ":EJ" "\033xgenerate\033emacs;xlisp\033emacs1;xlisp\r"
 respond ":EJ" "\033xgenerate\033emacs;renum\033emacs1;renum\r"
+respond ":EJ" "\033xgenerate\033emacs;pascal\033emacs1;pascal\r"
 
 respond ":EJ" "\033xrun\033einit\033? Document\r"
 respond "\n" "\030\003"
