@@ -127,6 +127,9 @@
 - INFO, hypertext documentation.
 - INIT, a helper program for LOGIN, LOGOUT, and other script files.
 - INLINE, reads line from TTY and adds to JCL (for DDT init files).
+- INQCHK, checks to see if you have INQUIR entry and runs INQUIR if not.
+- INQEXM, examine inquir database.
+- INQREP, reap inquir database.
 - INQUIR, user account database.
 - INQUPD, processes INQUIR change requests.
 - INSTAL, install executables on other ITS machines.
