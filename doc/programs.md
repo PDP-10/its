@@ -209,6 +209,7 @@
 - PFTHMG, Puff the magic dragon.
 - PHOTO, capture STY session output.
 - PI, print pi.
+- PICK, examine Muddle locks.
 - PLAN, creates a PLAN file in your home directory from console input.
 - PORTS, display free network ports.
 - PR, print out various system documentation.

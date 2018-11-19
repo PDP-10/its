@@ -40,3 +40,6 @@ respond "*" ":link sys3; ts mudfnd, sys3; ts mudcom\r"
 respond "*" ":midas sys3; ts combat_sysen3; combat\r"
 respond "(Y OR N)" "Y\r"
 expect ":KILL"
+
+respond "*" ":midas sys3; ts pick_sysen2; pick\r"
+expect ":KILL"
