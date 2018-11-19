@@ -25,7 +25,7 @@ expect ":KILL"
 respond "*" ":link sys3; ts purge, sys3; ts mudinq\r"
 respond "*" ":link sys3; ts makscr, sys3; ts mudinq\r"
 respond "*" ":link sys3; ts status, sys3; ts mudinq\r"
-respond "*" ":link sys3; ts whom, sys3; ts mudinq\r"
+respond "*" ":link sys3; ts whomud, sys3; ts mudinq\r"
 
 respond "*" ":link sys3; ts mdl,mudsav; ts mdl56\r"
 respond "*" ":link sys3; ts muddle,mudsav; ts mdl56\r"
