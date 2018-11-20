@@ -43,6 +43,9 @@ expect ":KILL"
 respond "*" ":link sys3;ts vj,sys3;ts vv\r"
 respond "*" ":link sys3;ts detree,sys3;ts vv\r"
 
+respond "*" ":midas sys3;ts trees_sysen1; trees\r"
+expect ":KILL"
+
 respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
 expect ":KILL"
 
