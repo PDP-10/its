@@ -279,6 +279,7 @@
 - TIMSRV, RFC 868 network time protocol server.
 - TJ6, typesetting software.
 - TMPKIL, delete old files from .TEMP.
+- TREES, list toplevel jobs.
 - TREK, Star Trek game.
 - TV-11, Knight TV PDP-11.
 - TVREAD, read a bitmap file and display on TV.
