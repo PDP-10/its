@@ -1,0 +1,474 @@
+	.title	CHANNEL (device independent stream I/O) support
+
+;;; ;;; General info:
+;;; ;;; 	Interface and support for stream I/O.
+
+;;; ;;; JOB/CHANNEL/DEVICE interaction:
+;;; ;;;  
+;;; ;;; |---JOB---|		      |--CHAN--|     |--CHAN--|
+;;; ;;; |	  |		   /->|    --------->|	      |
+;;; ;;; |	  |		   |  |        |     |	      |
+;;; ;;; |	  |		   |  |        |     |	      |
+;;; ;;; |	  |		   |  |--------|     |--------|
+;;; ;;; |    --------\		   |
+;;; ;;; |	  |  |		   |
+;;; ;;; |---------|  |  |--CHAN--| |   Channels also point to the
+;;; ;;; 	     >->|    ------/   JOB that owns them and the
+;;; ;;; 	     |  |	 |     DEVICE they represent
+;;; ;;; 	     |  |    ------\
+;;; ;;; |--DEVICE-|  |  |--------| |
+;;; ;;; |	  |  |		   |
+;;; ;;; |     -------/		   |  |--CHAN--|     |--CHAN--|
+;;; ;;; |	  |		   \->|        |  /->|	      |
+;;; ;;; |	  |		      |        |  |  |	      |
+;;; ;;; |	  |		      |    -------/  |	      |
+;;; ;;; |	  |		      |--------|     |--------|
+;;; ;;; |---------|
+
+dsect <			;; a channel link structure
+  $clusr::	.blkw 1		;pointer to the user process
+  $clulk::	.blkw 1		;pointer to next link for user
+  $cldev::	.blkw 1		;pointer to device
+  $cldlk::	.blkw 1		;pointer to next link for device
+  $clmod::	.blkw 1		;mode flags for this channel
+   %clnhg==100000		;don't hang if no chars or no room
+   %clnhh==040000		;no hang happened
+   %clcon==020000		;stream is supposed to be continuous
+   %clmst==010000		;output must happen (part of continuity)
+  >,l$cl		;; length of the structure
+
+dsect <			;; raw device structure
+  $dvchn::	.blkw 1		;pointer to first channel
+  $dvlnk::	.blkw 1		;DEVICE this one is linked to
+  $dvsta::	.blkw 1		;generalized status word of channel
+  $dvlpt::	.blkw 1		;routine to logically  put a character in device
+  $dvlgt::	.blkw 1		;routine to logically  get a character from device
+  $dvlio::	.blkw 1		;other logical IO functions
+  $dvppt::	.blkw 1		;routine to physically put a character in device
+  $dvpwo::	.blkw 1		;routine to wait for room in buffer
+  $dvpgt::	.blkw 1		;routine to physically get a character from device
+  $dvpio::	.blkw 1		;other physical IO functions
+  $dvebr::	.blkw 1		;event bits    receive
+  $dvepr::	.blkw 1		;event pointer receive
+  $dvebx::	.blkw 1		;event bits    xmit
+  $dvepx::	.blkw 1		;event pointer xmit
+  $dvfpt::	.blkw 1		;front pointer (for removal)
+  $dvept::	.blkw 1		;end pointer (for insertion)
+  $dvlim::	.blkw 1		;limit of pointers (end of queue)
+  $dvqsz::	.blkw 1		;size of queue
+  $dvqs2::	.blkw 1		;slightly smaller size of queue (hang limit)
+  $dvhmn::	.blkw 1		;how many datum in queue
+    ;;; change dvxini and dvrini if you change things here
+  >,l$dv		;; length of raw device structure
+
+%break==100001			;magic break character
+
+er%bch==ner%
+ner%==ner%+1
+
+
+;;; character flow:
+;;;                             output       input
+;;;  
+;;;                                USER PROCESS
+;;;                                    |  ^
+;;;                                    v  |
+;;;                              SYSTEM INTERFACE
+;;;                                    |  ^
+;;;                                    v  |
+;;;                   LOGICAL DEVICE (EG TTY, SUPDUP STREAM)
+;;;                                    |  ^
+;;;                                    v  |
+;;;                 HARDWARE DEVICE (EG DL11, CHAOS CONNECTION)
+;;;                                    v  ^
+;;;                     ----------INTERRUPT LEVEL----------
+;;;                                    v  ^
+;;;                               ACTUAL HARDWARE
+
+
+$open:	jcall (r0)
+
+$chngt:			;decode channel in r0, device in r4
+	mov $cldev(r0),r4	;get channel
+	if ne,<
+	    add #2,(sp)		;skip return
+	    return
+	    >
+	mov #er%bch,usrerr(r5)	;return error to user
+	return
+
+;;; .link from,to
+
+$link:	call $chngt		;get from device in r4
+	 return			;error return
+	mov r1,$dvlnk(r4)	;put the to channel in it
+	return
+
+$unlink:
+	call $chngt
+	 return
+	clr $dvlnk(r4)		;not linked to anybody
+	return
+
+$bin:	call $chngt
+	 return
+$bin1:	bic #%clnhh,$clmod(r0)	;no-hang-happened did not yet happen
+	jcall @$dvlgt(r4)
+
+$sin:	call $chngt
+	 return
+	push r1
+	loop <
+	  tst r2
+	  exitl eq
+	  call $bin1
+	  ifpclsr <exitl>
+	  tst usrerr(r5)
+	  exitl ne
+	  bit #%clnhh,$clmod(r0)
+	  exitl ne
+	  movb r1,@(sp)
+	  inc (sp)
+	  dec r2
+	  rptl
+	  >
+	pop r1
+	return
+
+$bout:	call $chngt
+	 return
+	call $.out		;snap links and setup for output
+	 return
+	call $1out
+
+$.oute:	bit #%clcon,$clmod(r0)
+	if ne,<bic #%clmst,$clmod(r0)>
+	return
+
+$1out:	jcall @$dvlpt(r4)	;logically put in the device
+
+$.out:				;snap links and setup for output
+	loop <
+	  tst $dvlnk(r4)
+	  exitl eq
+	  mov $dvlnk(r4),r4	;get the channel
+	  mov $cldev(r4),r4
+	  rptl ne
+	  return
+	  >
+	bit #%clcon,$clmod(r0)	;is the stream continuous?
+	if ne,<bic #%clmst,$clmod(r0)>	;if so, might hang on first char
+	bic #%clnhh,$clmod(r0)	;no hang did not happen
+	add #2,(sp)
+	return
+
+$soutz:	push r1
+	call strlen
+	pop r2
+$sout:	call $chngt
+	 return
+	call $.out		;snap links and setup for output
+	 return
+	push r1
+	loop <
+	  tst r2
+	  exitl eq
+	  movb @(sp),r1		;get character
+	  call $1out		;try to output it
+	  ifpclsr <exitl>
+	  bit #%clnhh,$clmod(r0)	;did no hang happen
+	  exitl ne		;yup, exit
+	  inc (sp)
+	  dec r2
+	  rptl
+	  >
+	pop r1
+	br $.oute
+
+$count:	call $chngt
+	 return
+	mov $dvhmn(r4),r1
+	return
+
+$status:
+	call $chngt
+	 return
+	mov $dvsta(r4),r1
+	clrb $dvsta+1(r4)
+	return
+
+
+$makchn:
+	push r0
+	call makchn
+	pop r0
+	return
+
+;;; make a channel.  (from system level, not user level)
+;;; 	push device
+;;; 	call makchn
+;;; 	pop channel
+
+makchn:	push r0,r4
+	mov 6(sp),r4
+	push #l$cl
+	call fsmall
+	call fsmclr
+	pop r0
+	if eq,<
+	  pop r4,r0
+	  mov #er%mem,usrerr(r5)
+	  sec
+	  return
+	  >
+	mov r0,6(sp)
+	mov r5,$clusr(r0)
+	mov usrchn(r5),$clulk(r0)
+	mov r0,usrchn(r5)
+	mov r4,$cldev(r0)
+	mov $dvchn(r4),$cldlk(r0)
+	mov r0,$dvchn(r4)
+	pop r4,r0
+	clc
+	return
+
+;;; duplicate a specified channel, r0=channel, r1=new mode
+$dup:	call $chngt
+	 return
+	push $cldev(r0)
+	call makchn
+	if cs,<
+	  pop *
+	  return
+	  >
+	pop r0
+	movb r1,$clmod(r0)
+	return
+
+;;; close a specified channel (from the user side)
+$close:	call $chngt
+	  br 10$		;failure
+	call $closd		;close device end
+10$:	call $closu		;close the user side
+	push r0
+	call fsmfre		;free the local storage
+	return
+
+$closu:	push r5			;close user side
+	add #usrchn-$clulk,r5	;pretend this is a channel for the moment
+	loop <
+	  cmp $clulk(r5),r0	;is this the channel
+	  if ne,<
+	    mov $clulk(r5),r5	;move through the link
+	    rptl ne
+	  > >
+	mov $clulk(r0),$clulk(r5)	;unlink it from device list
+	pop r5
+	return
+
+$closd:	push r4			;close the device side
+	add #$dvchn-$cldlk,r4	;pretend this is a channel for the moment
+	loop <
+	  cmp $cldlk(r4),r0	;is this the channel
+	  if ne,<
+	    mov $cldlk(r4),r4
+	    rptl ne
+	  > >
+	mov $cldlk(r0),$cldlk(r4)	;unlink from device list
+	pop r4
+	tst $dvchn(r4)		;any channels left?
+	if eq,<			;nope
+	  push #$close
+	  call $$ioctl		;do any IO control on the device
+	  >
+	return
+
+$clsall:
+	loop <
+	  mov usrchn(r5),r0
+	  if ne,<
+	    push r4,r0
+	    call $close
+	    pop r0,r4
+	    rptl
+	  > >
+	return
+
+$ioctl:	call $chngt
+	  return
+	push r1
+	call $$ioctl		;must be a call for stack management
+	return
+
+$$ioctl:
+	mov $dvlio(r4),r1	;logical IO control alist
+	loop <
+	  tst (r1)
+	  if ne,<
+	    cmp (r1),2(sp)
+	    if eq,<
+	      call @2(r1)
+	      exitl
+	      >
+	    add #4,r1
+	    rptl		;loop on logical IO
+	    >
+$$pioctl: mov $dvpio(r4),r1	;try physical IO
+	  loop <
+	    tst (r1)
+	    exitl eq
+	    cmp (r1),2(sp)
+	    if eq,<
+	      call @2(r1)
+	      exitl
+	      >
+	    add #4,r1
+	    rptl		;loop on physical IO
+	  > >
+	pop (sp)		;flush key
+	return
+
+
+;;; initialize xmit device
+
+;;; 	push size_of_object,size_of_queue
+;;; 	call dv.ini
+;;; 	pop object
+
+dvrini:
+dvxini:				;same routine can be used
+	push r4,r1
+	push 10(sp)
+	add  10(sp),(sp)	;entire object (with queue)
+	call fsmall
+	call fsmclr
+	pop r4			;get it
+	if eq,<
+10$:	  pop r1,r4,(sp)
+	  clr 2(sp)
+	  return
+	  >
+	mov r4,r1		;get device
+	add 10(sp),r1		;point at queue
+	mov r4,10(sp)		;put device in return slot
+	mov r1,$dvfpt(r4)
+	mov r1,$dvept(r4)
+	mov r1,$dvlim(r4)
+	mov 6(sp),r1
+	add r1,$dvlim(r4)
+	mov r1,$dvqsz(r4)
+	sub #20,r1
+	mov r1,$dvqs2(r4)
+	
+	add #$dvlpt,r4
+	mov #genlpt,(r4)+	;generic logical  put
+	mov #genlgt,(r4)+	;generic logical  get
+	clr (r4)+		;logical  other io
+	mov #chnput,(r4)+	;physical put
+	mov #chnwto,(r4)+	;physical wait for buffer room
+	mov #chnget,(r4)+	;physical get
+	mov #chnpio,(r4)+	;physical other io
+
+	clr (r4)+		;event bits    receive
+	mov #junk,(r4)+		;event pointer receive
+	clr (r4)+		;event bits    xmit
+	mov #junk,(r4)+		;event pointer xmit
+
+	pop r1,r4,(sp)
+	return
+
+genlpt:	jcall @$dvppt(r4)
+genlgt:	jcall @$dvpgt(r4)
+
+chnpio:				;channel physical io
+	.word chnevx,chnevx	;set transmit event channel
+	.word chnevr,chnevr	;set receive  event channel
+	.word 0
+
+;;; .regs channel,#chnevx,<bits>,<pointer>
+;;; .ioctl
+chnevx:	mov r2,$dvebx(r4)
+	mov r3,$dvepx(r4)
+	bis r2,(r3)		;turn it on initially
+	return
+
+chnevr:	mov r2,$dvebr(r4)
+	mov r3,$dvepr(r4)
+	bis r2,(r3)		;turn it on initially
+	return
+
+
+chnwto:				;wait for channel output ready
+	bit #%clmst,$clmod(r0)	;must I put
+	if ne,<			;yes I must
+10$:	  clc
+	  return
+	  >
+	loop <
+	  cmp $dvhmn(r4),$dvqs2(r4)	;mother may I?
+	  blo 10$			;yes
+	  bit #%clnhg,$clmod(r0)	;should I hang?
+	  if ne,<			;no
+	    bis #%clnhh,$clmod(r0)	;declare no-hang-happened
+	    sec			;failure to insert
+	    return
+	    >
+	  push r0,r1,r2
+	  .regs #hng.lo,r4,r4
+	  add #$dvhmn,r1
+	  add #$dvqs2,r2
+	  call $hang
+	  pop r2,r1,r0
+	  ifpclsr < sec
+		    return>
+	  rptl			;maybe OK, maybe false wakeup
+	  >
+
+;;; decoded channel in r4, character in r1
+chnput:				;really put it in
+	call chnwto		;wait for output
+	if cc,<
+	  call chnfpt		;really-really do the work
+	  bit #%clcon,$clmod(r0)
+	  if ne,<bis #%clmst,$clmod(r0)>
+	  clc
+	  >
+	return
+
+chnfpt:	movb r1,@$dvept(r4)	;fast put (no channel in r0 necessary)
+	inc $dvept(r4)
+	cmp $dvept(r4),$dvlim(r4)
+	if his,<sub $dvqsz(r4),$dvept(r4)>
+	inc $dvhmn(r4)
+	bis $dvebr(r4),@$dvepr(r4)	;declare something in the device
+	return
+
+chnget:	tst $dvhmn(r4)
+	if le,<			;oops nothing there
+	  bit #%clnhg,$clmod(r0)	;avoid hanging?
+	  if ne,<
+	    bis #%clnhh,$clmod(r0)
+	    return
+	    >
+	  push r0,r2
+	  .regs #hng.gt,r4,#zero
+	  add #$dvhmn,r1
+	  call $hang
+	  pop r2,r0
+	  ifpclsr <return>
+	  >
+chnfgt:	movb @$dvfpt(r4),r1	;fast get (no channel in r0 necessary)
+	inc $dvfpt(r4)
+	cmp $dvfpt(r4),$dvlim(r4)
+	if his,<sub $dvqsz(r4),$dvfpt(r4)>
+	dec $dvhmn(r4)
+	if eq,<bis $dvebx(r4),@$dvepx(r4)>	;allow more transmission
+	return
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

@@ -1,0 +1,478 @@
+;-*-  Mode: MIDAS -*-
+
+.lif  z %defin
+	.title	Ethernet support
+	.sbttl	Ethernet support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defncp eth			;declare ETHERNET NCP support
+defnet eth			;declare Ethernet driver support
+
+  .ntgiv <		;need these fields in a network object
+nt$eth::	.blkw 1		;routine to give an ethernet packet 
+nt.eth::	.blkw 3		;ethernet address of this interface
+  >
+
+.if p1
+	.sbttl	-- Definitions 
+
+  ;;
+;;;;;;	Ethernet protocol type fields
+  ;;
+
+.macro .ethex sym,hex
+sym==0
+	.irpc ch,hex
+%%=='ch
+.iif g %%-'9, %%==%%-'A+10.
+sym==sym+<%%_<<<1-<.irpcnt&1>>+<.irpcnt&2>>*4>>
+	.endm
+.endm
+
+
+.ethex %etchs,0804		;chaosnet protocol
+.ethex  %etip,0800		;DoD Internet
+.ethex %etarp,0806		;Address Resolution protocol
+
+	.sbttl	-- Macros
+
+.endc p1
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  dsect <		;;; Ethernet translation packet
+		.blkb $pktdt
+$etpty::	.blkw 1		;type field
+$etpnb::	.blkw 1		;number of bytes in local address
+$etpop::	.blkw 1		;opcode
+  %etorq==1_8			;  requesting opcode (pdp-10 style word)
+  %etorp==2_8			;  replying opcode   (pdp-10 style word)
+$etpse::	.blkw 3		;sender's ethernet address
+$etpte::	.blkw 3		;target's ethernet address
+$etpsl::			;sender's local address
+  >,l$etrn
+
+ll$etrn==l$etrn+<4*3>		;support up to 3 local address words
+
+.pksiz l$etrn+4,l$etrn+4,ll$etrn
+
+
+;;; call ethrcv(r1:=packet, r2:protocol_type, 
+;;;		r4:I/O page address, r5:hardware object)
+ethrcv:
+		.irp pro,<chs,ip>
+		.if nz ncp'pro
+	cmp r2,#%et'pro
+	if eq,<jcall pro'rcv>
+		.endc
+		.endm
+	cmp r2,#%etarp		;ethernet address resolution protocol
+	if eq,<jcall etrarp>
+
+	netmet ot
+	jcall pktfre
+
+
+  ;;
+;;;;;;	Address resolution, the official one
+  ;;
+
+  dsect <		;;; packet format
+		.blkb $pktdt
+ar$hrd::	.blkw 1		;hardware type 
+ar$pro::	.blkw 1		;protocol type 
+ar$hln::	.blkb 1		;hardware address length
+ar$pln::	.blkb 1		;protocol address length
+ar$op::		.blkw 1		;opcode
+  aro$rq==1_8			;  request
+  aro$rp==2_8			;  reply
+ar$sha::			;sender hardware address
+ar$spa::			;sender protocol address after ar$sha
+ar$tha::			;target hardware address after ar$spa
+ar$tpa::			;target protocol address after ar$tha
+		.blkb 2*<6+6>	;allow six bytes for each address field
+  >,l$arpkt
+
+;;; 	      FORMAT OF AN ADDRESS RESOLUTION TABLE ENTRY
+;;; Similar to the address resolution packet:  16.bit hardware address
+;;; space (Ethernet = 1), 16.bit protocol type field, <n>bytes of
+;;; hardware address, <m>bytes of protocol address.
+
+  dsect <		;;; format of the dispatch table
+$ardht::	.blkw 1		;hardware type
+$ardpt::	.blkw 1		;protocol type
+$ardhl::	.blkw 1		;hardware length
+$ardpl::	.blkw 1		;protocol length
+$ardha::	.blkw 1		;offset in network object of hardware address
+$ardpa::	.blkw 1		;offset in network object of protocol address
+  >,l$ard
+
+l%ar==0
+.macro .ardentry hrd,hrdtyp,hrdlen,pro,protyp,prolen
+  .if df net'hrd
+    .if nz ncp'pro
+	.word hrdtyp_8,protyp
+	.word hrdlen,prolen
+	.word nt.'hrd,nt.'pro
+	%%==4+hrdlen+prolen
+	.iif g %%-l%ar, l%ar==%%
+    .endc
+  .endc
+.endm
+
+ardtbl:	.ardentry eth,1,6,chs,%etchs,2
+	.ardentry eth,1,6,ip,%etip,4
+	.word 0
+
+n%ar==70.			;should really be a site parameter
+.wscalar arvtrn			;number of translations
+.bvector arttrn,<n%ar*l%ar>	;the translation table
+
+
+;;; r3:=arlook(r0=protocol type)=index_into_ardtbl
+
+arlook:
+	push #ardtbl		;get table
+	loop <			;exit when found or end
+	  mov (sp),r3
+	  tst (r3)		;end yet
+	  exitl eq		;yup, get out
+	  cmp (r3)+,#1_8	;ethernet hardware?
+	  if eq,<
+	    cmp (r3)+,r0	;protocol type match?
+	    exitl eq
+	    >
+	  add #l$ard,(sp)
+	  rptl
+	  >
+	pop r3			;get table entry into r3
+	tst (r3)		;set condition flags
+	return
+
+ethtrn::			;this is the entrypoint name most programs
+				;know about
+artrn:				;translate an address
+	call artrns		;handle special cases
+	push r4,r3,r2		;save local address (and usable regs)
+	mov sp,r2		;create pointer to address
+	call arlook		;lookup entry in ardtbl
+	if eq,<
+50$:	  popn #3*2
+	  sec			;failure
+	  return
+	  >
+	call 100$		;try and do translation
+	if cc,<
+	  popn #3*2
+	  clc			;success
+	  return
+	  >
+	call pktngv		;carefully throw away packet
+	mov #l$arpkt,r1		;length of address resolution packet
+	call pktall		;try and get a packet
+	beq 50$			;lossage
+	push r1			;save pointer
+	add #$pktdt,r1		;go up to packet data
+	mov  $ardht(r3),(r1)+	;hardware type
+	mov  $ardpt(r3),(r1)+	;protocol type
+	movb $ardhl(r3),(r1)+	;hardware length
+	movb $ardpl(r3),(r1)+	;protocol length
+	mov #aro$rq,(r1)+	;opcode is request
+	push r5			;need another temp
+	add $ardha(r3),r5	;point at hardware address
+	mov $ardhl(r3),r4	;get number of bytes
+	loop <
+	  movb (r5)+,(r1)+	;copy it in
+	  sorl r4
+	  >
+	mov (sp),r5		;get it back for the protocol address
+	add $ardpa(r3),r5	;point at protocol address
+	mov $ardpl(r3),r4	;get number of bytes
+	loop <
+	  movb (r5)+,(r1)+	;copy it in
+	  sorl r4
+	  >
+	pop r5
+	mov $ardhl(r3),r4	;hardware length for target
+	loop <
+	  clrb (r1)+
+	  sorl r4
+	  >
+	mov $ardpl(r3),r4	;protocol length for target
+	loop <
+	  movb (r2)+,(r1)+
+	  sorl r4
+	  >
+	pop r1			;restore base of packet
+	popn #3*2		;flush old target address
+	mov #-1,$pktul(r1)	;not on a user list
+	mov #l$arpkt-$pktdt,$pktxs(r1)	;set transmit size
+	mov #-1,r2		;broadcast packet
+	mov r2,r3
+	mov r2,r4
+	mov #%etarp,r0		;type is address resolution protocol
+	clc			;success
+	return
+	
+
+100$:				;register usage:
+				; r0: number of entries in trans table
+				; r1: number of bytes to check
+				; r2: pointer to protocol address
+				; r3: pointer into dispatch table
+				; r4: pointer into translation table
+
+	push r0,r1
+	mov #arttrn,r4		;get translation table
+	mov  arvtrn,r0		;number of entries
+	if ne,<
+	  loop <
+	    push r4,r2
+	    add #4,r4		;point to hardware address
+	    add $ardhl(r3),r4	;now point to protocol address
+	    mov $ardpl(r3),r1	;number of bytes to check
+	    loop <
+	      cmpb (r2)+,(r4)+
+	      exitl ne
+	      sorl r1
+	      >
+	    pop r2,r4
+	    tst r1			;success?
+	    if eq,<			;yup
+	      ;;; assume ethernet.  Fixed in NIMITS
+	      add #4,r4		;point to hardware address
+	      mov (r4)+,r2
+	      mov (r4)+,r3
+	      mov (r4),r4
+	      pop r1,r0
+	      clc
+	      return
+	      >
+	    add #l%ar,r4
+	    sorl r0
+	  > >
+	;;; if we get here, we talk the protocol, but translation failed
+	pop r1,r0
+	sec
+	return
+	
+artrns:				;special cases
+		.if nz ncpchs
+	cmp r0,#%etchs		;chaos broadcast
+	if eq,<
+	  tst r2
+	  if eq,<
+	    com r2		;make it -1
+	    mov r2,r3
+	    mov r3,r4
+	    br 100$		;success
+	  > >
+		.endc
+	return
+
+100$:	;;; successful special case
+	pop *			;punt return address
+	clc			;success
+	return
+
+
+;;; Registers:
+;;; 	r1:	packet
+;;; 	r2:	type = TRANSLATION (reusable)
+;;; 	r4:	csr
+;;; 	r5:	network device 
+;;; Register usage:
+;;; 	r0:	number of entries in trans table and other temps
+;;; 	r1:	packet
+;;; 	r2:	other temps
+;;; 	r3:	pointer in dispatch table
+;;; 	r4:	pointer in translation table
+;;; 	r5:	network object
+
+etrarp:	push r0,r3,r4
+	lock 6
+	cmp ar$hrd(r1),#1_8
+	if ne,<
+50$:	  unlock
+	  pop r4,r3,r0
+	  tst r1
+	  if ne,<jcall pktfre>
+	  return
+	  >
+	bitb #1,ar$sha(r1)	;don't allow multicast address
+	  bne 50$
+	mov ar$pro(r1),r0
+	call arlook		;lookup hardware/protocol in dispatch table
+	beq 50$
+	cmpb ar$hln(r1),$ardhl(r3)
+	bne 50$
+	cmpb ar$pln(r1),$ardpl(r3)
+	bne 50$
+	call 140$		;maybe merge, returning table pointer
+				;in r4 and merge flag in r0
+	call 120$		;determine if I am the target protocol address
+	bne 50$			;not for me, go free packet
+	tst r0			;test the merge flag
+	if eq,<			;wasn't merged, must do it now
+	  inc arvtrn
+	  cmp arvtrn,#n%ar	;too many?
+	  if ge,<dec arvtrn
+		 call 80$>	;go flush an entry
+	  call 100$		;go merge it in (r4 points correctly)
+	  >
+	;;; now check the packet opcode
+	cmp ar$op(r1),#aro$rq
+	bne 50$			;not request, so go free packet
+	call 300$		;turn the packet around
+	call 320$		;frob fields and send packet
+	clr r1
+	br 50$
+	
+
+80$:	;;; flush the bottom entry (the oldest).  Makes r4 point to the
+	;;; last available entry.  Smashes r2, which is doesn't need saving.
+	push r3
+	mov #arttrn,r4
+	mov #arttrn+l%ar,r3
+	mov #<<n%ar-1>*l%ar>/2,r2
+	loop <
+	  mov (r3)+,(r4)+
+	  sorl r2
+	  >
+	pop r3
+	return
+
+100$:	;;; merge the packet into the table.  smashes r2 and r4
+	push r1
+	add #$pktdt,r1		;point at packet data
+	mov (r1)+,(r4)+		;set hardware type
+	mov (r1)+,(r4)+		;set protocol type
+	add #<ar$sha-<$pktdt+4>>,r1	;point to hardware address
+	mov $ardhl(r3),r2	;hardware length
+	loop < movb (r1)+,(r4)+
+	       sorl r2 >
+	mov $ardpl(r3),r2	;protocol length
+	loop < movb (r1)+,(r4)+
+	       sorl r2 >
+	pop r1		;restore packet pointer
+	return
+
+120$:	;;; determine if I am the target protocol address.  Smashes r2
+	push r1
+	add #ar$sha,r1		;go up to the sender hardware address
+	add $ardhl(r3),r1	;now pointing to sender protocol address
+	add $ardpl(r3),r1	;now pointing to target hardware address
+	add $ardhl(r3),r1	;now pointing to target protocol address
+	push r5
+	add $ardpa(r3),r5	;point to protocol address in network object
+	mov $ardpl(r3),r2	;get protocol length
+	loop <
+	  cmpb (r1)+,(r5)+	;compare addresses
+	  exitl ne
+	  sorl r2
+	  >
+	pop r5,r1		;get back pointers
+	tst r2
+	return
+
+140$:	;;; maybe merge, returning pointer to next entry in r4 and merge
+	;;; flag in r0
+	push #0			;merge flag
+	push #arttrn		;translation table (hardware address)
+	mov   arvtrn,r0		;length of table
+	if ne,<
+	  loop <
+	    mov (sp),r4
+	    cmp ar$pro(r1),2(r4)	;compare protocol types
+	    if eq,<
+	      push r1
+	      add #4,r4		;point to hardware address
+	      add #ar$sha,r1	;point to hardware address
+	      add $ardhl(r3),r4	;point to protocol address
+	      add $ardhl(r3),r1	;point to protocol address
+	      mov $ardpl(r3),r2	;protocol length
+	      loop <
+	        cmpb (r1)+,(r4)+
+		exitl ne
+		sorl r2
+		>
+	      pop r1		;restore packet pointer
+	      mov (sp),r4	;restore translation table pointer
+	      tst r2		;did it match?
+	      if eq,<		;yup, merge in hardware address
+	        call 100$
+		com 2(sp)	;merge flag := true
+		exitl
+		>
+	      >
+	    add #l%ar,(sp)	;go to next entry
+	    sorl r0
+	  > >
+	pop r4,r0		;get current table pointer and merge flag
+	return
+
+300$:	;;; turn packet around.  Smashes r0, r2 and r4
+	mov #aro$rp,ar$op(r1)	;opcode now reply
+	push r1
+	add #ar$sha,r1		;point to sender hardware address
+	mov r1,r0
+	add $ardhl(r3),r0	;now points to sender protocol address
+	add $ardpl(r3),r0	;now points to target hardware address
+	push r5
+	add $ardha(r3),r5	;point at hardware address
+	mov $ardhl(r3),r2	;get hardware length
+	loop <
+	  movb (r1),(r0)+	;old sender goes to target
+	  movb (r5)+,(r1)+	;own hardware goes to sender
+	  sorl r2
+	  >
+	mov $ardpl(r3),r2	;now swap protocol fields
+	loop <
+	  movb (r0),r5
+	  movb (r1),(r0)+
+	  movb r5,(r1)+
+	  sorl r2
+	  >
+	pop r5,r1		;restore pointers
+	return
+
+320$:	mov #-1,$pktul(r1)	;not on a use list
+	mov #l$arpkt-$pktdt,$pktxs(r1)	;set transmit size
+	mov #%etarp,r0
+	push r1
+	add #ar$sha,r1		;point at sender hardware address
+	add $ardhl(r3),r1	;now   at sender protocol address
+	add $ardpl(r3),r1	;now   at target hardware address
+	mov (r1)+,r2
+	mov (r1)+,r3
+	mov (r1)+,r4
+	pop r1
+	jcall @nt$eth(r5)	;send the packet
+
+ethini:	clr arvtrn		;official
+	return
+
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

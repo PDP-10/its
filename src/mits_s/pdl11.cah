@@ -1,0 +1,484 @@
+
+.lif  z %defin
+	.title	DL11 Packet Support
+	.sbttl	DL11 Packet support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet dup			;declare running with dup-11 hardware
+
+.if p1
+	.sbttl	-- Definitions 
+
+pdlstx==002
+pdletx==003
+pdleot==004
+pdldle==020
+
+;; dl11 definitions
+ ;; offsets to device registers
+  dl.rcs==0			;receiver csr
+  dl.rbf==2			;receiver buffer
+  dl.xcs==4			;transmitter csr
+  dl.xbf==6			;transmitter buffer
+ ;; receiver csr bits
+  dl.ren==bit.00		;reader enable [w]
+  dl.rie==bit.06		;receiver interrupt enable [rw]
+  dl.rdn==bit.07		;receiver done [r]
+  dl.rac==bit.11		;receiver active [r]
+ ;; receiver data buffer [read only]
+  dl.rdt==mask8			;eight bits of data
+  dl.par==bit.12		;parity error
+  dl.frm==bit.13		;framing error
+  dl.ovr==bit.14		;overrun
+  dl.err==bit.15		;error
+ ;; transmitter status register
+  dl.xbk==bit.01		;transmit a BREAK [rw]
+  dl.mnt==bit.03		;maintenance [rw]
+  dl.xie==bit.06		;transmitter interrupt enable [rw]
+  dl.xrd==bit.07		;transmitter ready [r]
+ ;; transmitter data buffer [write only]
+  dl.xdt==mask8			;transmitter data
+
+.endc p1
+
+	.sbttl	-- Macros
+
+ndup11==0
+
+.macro dup11 vec,csr,myaddr,hisaddr
+.iif z ndup11, dupnet==nnet
+  .if p2
+    %%==.
+	.=du$vec+<2*ndup11>
+	  .word vec
+	.=du$csr+<2*ndup11>
+	  .word csr
+		.if nz ncpchs
+	.=du$chs+<2*ndup11>
+	  .word myaddr
+	.=du$hch+<2*ndup11>
+	  .word myaddr
+		.endc
+      .=%%
+   .endc
+ndup11==ndup11+1
+nnet==nnet+1
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+du$vec:	.blkw ndup11
+du$csr:	.blkw ndup11
+		.if nz ncpchs
+du$chs:	.blkw ndup11
+du$hch:	.blkw ndup11
+		.endc
+
+  ;;
+;;;;;;	Interrupt vectors point here
+  ;;
+
+du$brk:
+		.rept ndup11
+		.lif z .rpcnt
+du$rbk::
+	jsr r5,@#durint
+	 .word netobj+<2*dupnet>+<2*.rpcnt>
+		.lif z .rpcnt
+du$xbk::
+	jsr r5,@#dutint
+	 .word netobj+<2*dupnet>+<2*.rpcnt>
+		.endr
+ldu$brk==<.-du$brk>/ndup11
+
+du$vrp::	.rept ndup11
+	.word du$rbk+<ldu$brk*.rpcnt>
+		.endr
+du$vxp::	.rept ndup11
+	.word du$xbk+<ldu$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;	A DUP11 hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a network object with...
+$duhch::	.blkw 1		;remote chaos address
+$durcs==$ntcsr			;DUP receiver control and status pointer
+$durbf::	.blkw 1		;DUP receiver buffer pointer
+$dutcs::	.blkw 1		;DUP transmit control and status pointer
+$dutbf::	.blkw 1		;DUP transmit buffer pointer
+
+$durcon::	.blkw 1		;receiver continuation
+$durpk::	.blkw 1		;current receive packet
+$durbc::	.blkw 1		;byte count while reading
+$durbp::	.blkw 1		;byte pointer while reading
+$durck::	.blkw 1		;read checksum
+
+$duttl::	.blkw 1		;transmit length (in bytes) of all packets
+$dutsi::	.blkw 1		;send inhibit
+$dutcon::	.blkw 1		;xmit continuation
+$dutpk::	.blkw 1		;current xmit packet
+$dutbc::	.blkw 1		;transmit byte count
+$dutbp::	.blkw 1		;transmit byte pointer
+$dutck::	.blkw 1		;write checksum
+  >,l$dup11
+
+durint:	mov @(r5),r5		;get the network object
+	tstb @$durcs(r5)	;receiver done?
+	if mi,<
+	  push r1
+	  mov @$durbf(r5),r1
+	  if mi,<call durerr>	;error
+	  else  <call @$durcon(r5)>	;else call continuation
+	  pop r1
+	  >
+	pop r5
+	rti
+
+durerr:	bit #dl.ovr,r1
+	if ne,<	netmet lo
+		halt
+		br durnew>
+	bit #dl.frm,r1
+	if ne,<	netmet c2
+		br durnew>
+	netmet ot
+	br durnew
+
+durwat:	pop $durcon(r5)		;call here to wait
+	return
+
+.syclk durkal			;at clock level, keep the PDLs alive
+
+durkal:	push #netobj+<2*dupnet>
+	loop <
+	  cmp (sp),#netobj+<2*dupnet>+<2*ndup11>
+	  exitl his
+	  mov @(sp),r5
+	  if ne,<
+	    bic #dl.rie,@$durcs(r5)	;make sure we don't lose any interrupts
+	    bis #dl.rie,@$durcs(r5)	;create a transition and ensure enabled
+	    >
+	  add #2,(sp)
+	  rptl
+	  >
+	pop *
+	return
+
+durini::
+durnew:	push $durpk(r5)
+	if eq,<pop *>
+	else  <
+	  clr $durpk(r5)
+	  call fsmfre
+	  >
+dur1:	call durwat		;wait for next byte
+	cmpb r1,#pdldle		;DLE?
+	bne dur1
+
+	call durwat
+	cmpb r1,#pdlstx
+	bne dur1
+
+	call durwat
+	asl r1
+	mov r1,$durbc(r5)
+	add #$pktdt,r1		;offset by data part of packet
+	call pktall		;get a packet
+	if eq,<
+	  netmet lo
+	  br durnew
+	  >
+	mov r1,$durpk(r5)	;save packet
+	add #$pktdt,r1		;point at data
+	mov r1,$durbp(r5)	;set it as the pointer
+	clr $durck(r5)		;clear checksum
+
+	loop <
+	  call durwat		;wait for characters
+	  cmpb r1,#pdldle
+	  bne 1$
+	  call durwat
+	  cmpb r1,#pdldle
+	  bne 100$
+1$:	  movb r1,@$durbp(r5)
+	  asl $durck(r5)
+	  adc $durck(r5)
+	  add r1,$durck(r5)
+	  inc $durbp(r5)
+	  dec $durbc(r5)
+	  rptl gt
+	  >
+	call durwat		;wait for first crc byte
+	cmpb r1,#pdldle
+	bne 100$		;not yet
+	call durwat
+	cmpb r1,#pdletx
+	bne 100$		;still not yet
+	call durwat
+	cmpb r1,$durck+0(r5)
+	bne 110$		;still not yet
+	call durwat
+	cmpb r1,$durck+1(r5)
+	bne 110$		;still not yet
+
+	mov $durpk(r5),r1
+	clr $durpk(r5)
+	bis #%pkt08,$pktfl(r1)	;declare the packet safe for 08 bit
+	tst $cpksa(r1)		;no address?
+	if eq,<mov $duhch(r5),$cpksa(r1)>	;fill one in
+	call chsrcv
+	br durnew
+
+100$:	netmet ot
+	br durnew
+
+110$:	netmet cr
+	br durnew
+
+
+dutint:	mov @(r5),r5		;get the network object
+	push r1
+	call @$dutcon(r5)
+	pop r1
+	pop r5
+	rti
+
+dutwat:	pop $dutcon(r5)		;call here to wait for next interrupt
+	return
+
+dutini::
+dutnew:	call dutwat
+	tst $dutsi(r5)		;send inhibited?
+	bne 10$			;inhibited, turn off interrupts
+	call ntremq
+	if eq,<	
+10$:		bic #dl.xie,@$dutcs(r5)
+		br dutnew>
+	sub $pktxs(r1),$duttl(r5)	;discount the length
+	mov r1,$dutpk(r5)
+	mov $pktxs(r1),$dutbc(r5)	;remember byte count
+	inc $dutbc(r5)			;round up
+	bic #1,$dutbc(r5)
+	add #$pktdt,r1		;go to the beginning of the xmit packet
+	mov r1,$dutbp(r5)	;and save as byte pointer
+	clr $dutck(r5)		;clear checksum
+
+	movb #pdldle,@$dutbf(r5)
+	call dutwat
+	movb #pdlstx,@$dutbf(r5)
+	call dutwat
+	mov $dutbc(r5),r1
+	asr r1
+	movb r1,@$dutbf(r5)
+	loop <
+	  call dutwat
+	  movb @$dutbp(r5),r1	;get a character
+	  movb r1,@$dutbf(r5)	;send it
+	  cmpb r1,#pdldle	;dle?
+	  if eq,<
+	    call dutwat
+	    mov #pdldle,r1	;also need it for checksum
+	    movb r1,@$dutbf(r5)	;send it
+	    >
+	  bic #mask8,r1		;only 8bits for the checksum
+	  asl $dutck(r5)
+	  adc $dutck(r5)
+	  add r1,$dutck(r5)
+	  inc $dutbp(r5)
+	  dec $dutbc(r5)
+	  rptl gt
+	  >
+
+	call dutwat		;wait for last character to get out
+	mov #pdldle,@$dutbf(r5)	;signal end of message
+	call dutwat		;wait for CRC to get out
+	mov #pdletx,@$dutbf(r5)	;signal end of message
+	call dutwat		;wait for CRC to get out
+	movb $dutck+0(r5),@$dutbf(r5)	;signal end of message
+	call dutwat		;wait for CRC to get out
+	movb $dutck+1(r5),@$dutbf(r5)	;signal end of message
+	call dutwat		;wait for CRC to get out
+	mov #pdldle,@$dutbf(r5)	;signal end of message
+	call dutwat		;wait for CRC to get out
+	mov #pdleot,@$dutbf(r5)	;signal end of message
+
+	mov $dutpk(r5),r1
+	clr $dutpk(r5)
+	call pktngv		;free packet unless on a user list
+	netmet ou		;count packet as out
+	br dutnew		;go look for new packet
+
+dupini:	clr r0
+	loop <
+	  call dupin1
+	  add #2,r0
+	  cmp r0,#ndup11*2
+	  rptl lo
+	  >
+	return
+
+dupin1:	mov du$csr(r0),r4
+	call nxmcat
+	  dupnxm
+	clr dl.rcs(r4)
+	clr dl.xcs(r4)
+	call nxmclr
+
+	mov du$vec(r0),r2
+	mov du$vrp(r0),(r2)+	;set read interrupt routine
+	mov #pr5,(r2)+		;and priority
+	mov du$vxp(r0),(r2)+	;set xmit interrupt routine
+	mov #pr5,(r2)+		;and priority
+
+	mov #l$dup11,r5
+	call ntmake
+	if eq,<bpt>
+	mov r5,netobj+<2*dupnet>(r0)
+	mov r4,$durcs(r5)
+	mov r4,$durbf(r5)
+	add #dl.rbf,$durbf(r5)
+	mov r4,$dutcs(r5)
+	add #dl.xcs,$dutcs(r5)
+	mov r4,$dutbf(r5)
+	add #dl.xbf,$dutbf(r5)
+
+	call durini
+	call dutini
+	
+	mov #dupfls,$ntfls(r5)	;non-standard flush routine
+
+		.if nz ncpchs
+	mov #duchgv,nt$chs(r5)
+	mov du$chs(r0),nt.chs(r5)
+	mov #22.,$ctrcv(r5)	;9600 baud is expensive
+	mov du$hch(r0),$duhch(r5)
+		.endc
+
+	mov #dl.rie+dl.ren,dl.rcs(r4)
+	clr dl.xbf(r4)
+
+	mov r0,r4
+	add #dupnet*2,r4
+	jcall ntmak1
+
+dupnxm:	clr netobj+<2*dupnet>(r0)
+	return
+
+dupfls:				;flush routine for a DUP11
+	loop <
+	  call ntremq
+	  exitl eq
+	  sub $pktxs(r1),$duttl(r5)	;discount the length
+	  call pktngv
+	  rptl
+	  >
+	return
+
+
+.if nz ncpchs
+
+;;; call @nt$chs(r5)[r5:=object, r1:=packet r2:=hardware_destination]
+
+du$mqb:	.word 5000.		;max queued bytes
+
+du$mps:	.word 200.		;mid packet size
+du$lpl:	.word 3			;large packet limit
+du$spl:	.word 8			;small packet limit
+
+duchgv:	call cpks08		;make it safe for 08 bit hardware
+	push r0,r3
+	mov du$spl,r3		;assume small packet limit
+	cmp $pktxs(r1),du$mps	;compare with mid packet size
+	if gt,<mov du$lpl,r3>	;wrong, was large
+
+	inc $dutsi(r5)		;push a send inhibit level while filter
+	mov r5,r2
+	add #$ntxqu,r2
+	loop <
+	  mov (r2),r0
+	  exitl eq
+	  loop <		;exit mechanism
+	    cmp $cpksi(r1),$cpksi(r0)
+	    exitl ne
+	    cmp $cpkdi(r1),$cpkdi(r0)
+	    exitl ne
+	    cmp $cpksa(r1),$cpksa(r0)
+	    exitl ne
+	    cmp $cpkda(r1),$cpkda(r0)
+	    exitl ne
+	    dec r3		;same connection, count down
+	    ble 50$		;too many for this connection, throw packet
+				;away
+	    cmp $cpk(r1),$cpk(r0)	;op and mbz
+	    exitl ne
+	    cmp $cpknb(r1),$cpknb(r0)
+	    exitl ne
+	    cmp $cpkpn(r1),$cpkpn(r0)
+	    exitl ne
+	    cmp $dutsi(r5),#1
+	    if eq,<		;only allowed to splice if first grabber
+	      lock 6		;no more subtle bugs
+	        mov $pktxl(r0),$pktxl(r1)	;link old list through new packet
+		if eq,<		;this was the last on the list
+		  mov r1,$ntxqe(r5)	;update last to point at new packet
+		  add #$pktxl,$ntxqe(r5)	;...locative to xmit link
+		  >
+	        mov r1,(r2)	;splice new packet in list
+		unlock		;finished frobbing pointers
+	      mov r0,r1	;get old packet so it can be freed
+	      >
+50$:	    call pktngv		;give it up
+	    clr r1		;no packet to insert anymore	
+	    br 100$
+	    >
+	  mov r0,r2
+	  add #$pktxl,r2	;create new locative
+	  rptl
+	  >
+100$:	dec $dutsi(r5)		;pop a send inhibit level
+	pop r3,r0
+
+	tst r1
+	if ne,<
+	  cmp $duttl(r5),du$mqb	;max queued bytes
+	  if hi,<call pktngv>	;too much on list already
+	  else <
+	    add $pktxs(r1),$duttl(r5)
+	    call ntputq
+	    >
+	  >
+	bis #dl.xie,@$dutcs(r5)>
+	return
+
+.endc
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

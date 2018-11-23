@@ -1,0 +1,979 @@
+
+.lif  z %defin
+	.title	CAMAC support
+	.sbttl	CAMAC support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+.if p1
+	.sbttl	-- Definitions 
+
+;;; Major prefixes used in this module. Note that in here CAMAC is spelled
+;;; KAMAC and thus prefixes start in general with K. This is done because the
+;;; CHAOS module has several "C" prefixes, and we wish to avoid confusion.
+
+;;; ;;; .KM	random notation macros
+;;; ;;; KAM	random constants (csr, vec, window size, etc.) and routines
+;;; ;;; KAE	error routines
+;;; ;;; KAV	KAmac Variables
+;;; ;;; KAT	KAmac Tables
+;;; ;;; %KS	bits in KAVSTA (software status word)
+;;; ;;; KO$	opcode routines
+;;; ;;; KM$	opcode MAKE internal routines
+;;; ;;; KCH	Kamac CHaos routines
+;;; ;;; %KC	Kamac CSR function codes and bits
+;;; ;;; %KR	KAMAC Service Request codes
+;;; ;;; %KF	KAMAC function codes
+
+;;; --- KAMAC CONSTANTS AND CONTROL SIGNALS ---
+
+%kcien==020000	;interrupt enable bit
+%kcmla==016067	;my listen address, with attn and dcntr
+%kcmta==016127	;my talk address, with attn and dcntr
+%kcrdy==001000	;1 <=> ready for data
+%kcacp==000400	;1 <=> data has been accepted
+%kcdav==002000	;0 <=> data is available
+%kcdir==010000	;direction control. 0=11 sending, 1=11 receiving
+%kcsdr==012000	;sets 11 receiving to one and puts %kcdav passive high
+%kcclr==112000	;clear the GPIB interface
+%kcunl==016077	;asserts attn, direction and unlisten
+%kcutk==016137	;asserts attn, direction and untalk
+%kcspe==016030	;asserts attn, direction and serial poll
+%kcspd==016031	;asserts attn, direction and serial poll disable
+
+%kcsrq==040000	;this bit corresponds to a SRQ
+ %kroff==100	;this prohibits a CRATE SRQ
+ %krlam==101	;LAM, no Q, no X
+ %krq==00102	;this will allow a SRQ for a Q=0 response
+ %krlq==0103	;LAM, no Q
+ %krx==00104	;no X
+ %krlx==0105	;LAM, no X
+ %krxq==0106	;no X, no Q
+ %krlxq==107	;LAM, no X ??
+
+;;;  ---  KAMAC Function codes  ---
+%kfclr==43	;this will EXEC as a CAMAC CLEAR and Z
+%kff26==26.
+%kff25==25.
+%kff24==24.
+%kff16==16.
+%kff10==10.
+%kff9==009.
+%kff8==008.
+%kff2==002.
+
+%kfhs2==151	;high speed return and 2 word
+%kfhs3==152	;high speed return and 3 word
+%kfrt2==141	;2 word return
+%kfrt3==142	;3 word return
+
+	.sbttl	-- Macros
+
+.macro camac vec,csr,chwin
+.if nz nkamac
+ .error Sorry, only allowed one CAMAC interface.
+.iff
+  kamvec==vec
+  kamcsr==csr
+  kamchw==chwin
+  kampri==5
+  kamtry==5			;number of tries for acceptence
+  kam%nc==6			;number of tries before no connection
+.endc
+nkamac==nkamac+1
+.endm
+
+.macro .kmgen wrd1
+	jsr r5,$kmgen
+	 .word wrd1
+.endm
+
+.macro .kmgn2 wrd1,wrd2
+	jsr r5,$kmgn2
+	  .word wrd1,wrd2
+.endm
+
+.macro .kmexe
+	call km$tlk
+.endm
+
+.macro .kmsnd bytes
+ .irp x,<bytes>
+   movb x,r3
+   call kamsnd
+ .endm
+.endm
+
+.macro .kmclr
+ mov #%kcclr,(r4)
+ mov #%kcclr,(r4)
+ mov #%kcsdr,(r4)
+.endm
+
+.endc p1
+
+nkamac==0			;no camac's yet
+chnsrv ^"CAMAC",cxkamac		;define the server
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+.wscalar kavava		;kamac is available flag
+.wscalar kavsta		;camac software status
+ %kscon==100000
+ %ksl23==002000
+ %ksl22==001000
+ %ksl21==000400
+ %ksl18==000200
+ %ksl15==000100
+ %ksl12==000040
+ %ksl9==+000020
+ %ksl5==+000010
+ %ksl1==+000004
+ %kstsq==000002
+ %kstsx==000001
+.wscalar kavpkt		;packet waiting to be transmitted
+.wscalar kaverr		;error message holder
+.wscalar kavsok		;0 <=> not allowed to sleep (sys init or interrupt)
+
+
+
+cxkamac:
+	cx$srv kamopn,40,120_8,<>	;server address, stack size,
+					;priority, no extra code
+kamopn:	call cpkpki		;get the RFC packet
+	bcs 120$		;go away if lost
+	tst kavava		;is it available
+	if eq,<			;nope
+	  mov (pc)+,r2	;in use message
+	    .string ^/Sorry, the CAMAC is already in use/
+	  clr $cpknb(r1)
+	  call cpkaz1
+	  movb #%cocls,$cpkop(r1)	;close packet
+	  call cpkpko		;output it
+120$:	  call ccnfre
+	  .logout
+	  >
+	clr kavava		;no logner available to others
+	mov #kamchw,$cpkpn(r1)	;window size
+	movb #%coopn,$cpkop(r1)	;open packet
+	call cpkpko
+	mov #kamcsr,r4	;status reg in r4
+	loop <
+	  call cpkpki
+	  if cs,< call kamdwn	;shut down the kamac
+		  mov #-1,kavava	;available for the next guy
+		  br 120$>	;free the connection and go away
+	  if eq,<
+	    call cpkwti		;wait for a packet
+	    rptl
+	    >
+	  tstb $cpkop(r1)	;is it a data packet?
+	  if mi,<
+	    push r1
+	    add #$cpkdt,r1	;point to data portion
+	    movb (r1)+,r5	;get operation
+	    bic #mask4,r5	;only four bits of opcode
+	    asl r5		;multiply by two
+	    lock 6
+	    call @katops(r5)	;dispatch by opcode
+	    unlock
+	    pop r1		;restore packet
+	    >
+	  call cpkfre		;free the packet
+	  rptl			;keep going
+	  >
+	
+katops:	.word ko$red,ko$wrt,ko$set,ko$f64
+	.word ko$f56,ko$sta,ko$chk,ko$ini
+	.word ko$r64,ko$r56,ko$mak,ko$nop
+	.word ko$pol,ko$r32,ko$sbt,ko$rbt
+
+
+;;; ----------  easy routines first  ----------
+
+ko$nop:	return			;easy
+
+;;; ----------  csr debugging aids  ----------
+
+ko$red:	push (r4)		;save the value at the csr
+	movb (sp),r2		;get the low byte
+	call kchput		;send it off
+	pop r2			;get the high byte
+	swab r2			;...
+	call kchput		;and send it off too
+	jcall kchfin		;send the packet and return
+
+ko$wrt:	inc r1			;skip padding byte
+	mov (r1),(r4)		;set the csr from the packet
+	return
+
+ko$sbt:	movb (r1),r3		;get <arg>
+	jcall kamsnd		;send it off and return
+
+ko$rbt:	call kamrcv		;receive a byte
+	call kchput		;put it in a packet
+	jcall kchfin		;send it off
+	
+ko$mak:	movb (r1),r5
+	bic #mask2,r5		;2 bits of function code
+	asl r5			;indexable
+	jcall @katmop(r5)
+
+katmop:	km$lsn
+	km$unl
+	km$tlk
+	km$utk
+
+;;;   make the crate a listener  
+km$lsn:	.kmgn2 %kcmla,%kcsdr
+	return
+
+;;;   un-listens the crate  
+km$unl:	.kmgn2 %kcunl,%kcsdr
+	return
+
+;;;   un-talks the crate  
+km$utk:	.kmgen %kcutk
+	return
+
+;;;   makes the crate a talker  
+km$tlk:	.kmgn2 %kcmta,%kcrdy
+	return
+
+
+;;; send and receive routines
+
+;;; sends the low byte in r3
+kamsnd:	bic #mask8,r3		;low byte only
+	bis #%kcdir,r3		;make it a camac command
+	push r5
+	lock 6
+10$:	mov #kamtry,r5
+	loop <
+	  bit #%kcrdy,(r4)		;is it ready?
+	  if eq,< bis #%kcdav,(r4)
+		  sorl r5>
+	  else <
+	    mov r3,(r4)		;do the command
+	    mov #kamtry,r5
+	    loop <
+	      bit #%kcacp,(r4)
+	      if eq,<
+		sorl r5
+		tst kavsok	;can I sleep?
+		beq 100$
+		push r0,r1
+		.regs #10.,#0
+		.sleep		;let other's run
+		pop r1,r0
+		cmpb $ccsta(r0),#%csopn
+		beq 10$		;try again if still open
+	        >>>>
+100$:	bis #%kcdav,(r4)
+	unlock
+	pop r5
+	return
+
+;;; receives byte into r2
+kamrcv:	lock 6
+10$:	mov #kamtry,r3
+	loop <
+	  bit #%kcdav,(r4)	;is data available?
+	  if ne,<		;nope
+	    bit #%kcdav,(r4)	;try again
+	    if ne,<
+	      bic #%kcacp,(r4)
+	      bis #%kcrdy,(r4)
+	      sorl r3
+	      clr r2		;no data
+	      exitl		;get out of the loop
+	    >>
+	  ;;; there is data available
+	  mov (r4),r2		;get it
+	  mov #kamtry,r3
+	  loop <
+	    bic #%kcrdy,(r4)	;disable ready
+	    bis #%kcacp,(r4)	;assert data accepted
+	    bit #%kcdav,(r4)
+	    exitl ne
+	    sorl r3
+	    clr r2
+	    >
+	  >
+	bic #%kcacp,(r4)
+	bis #%kcrdy,(r4)
+	unlock
+	return
+
+;----------------------------------------------------------------
+;THIS ROUTINE SETS OR CLEARS FLAGS LOCATED IN LABSTA
+;A FLAG EXISTS FOR:
+;			EVERY UNIT'S LAM
+;			X
+;			Q
+;			& "GOOD CONNECTION"--SET BY LBTST
+;----------------------------------------------------------------
+
+; SERVICE REQUEST STATUS BYTES:
+
+;BYTE#1 CONTAINS Q AND X
+;BYTE #2 CONTAINS LAM1 AND LAM5
+;BYTE #3 CONTAINS LAM9 AND LAM12
+;BYTE #4 CONTAINS LAM15,LAM18
+;BYTE #5 CONTAINS LAM21,LAM22,LAM23
+
+%klL1==1
+%klL5==20
+%klL9==4
+%klL12==40
+%klL15==4
+%klL18==40
+%klL21==4
+%klL22==10
+%klL23==20
+
+ko$pol:	call km$unl		;unlisten
+	call km$lsn		;and listen
+	.kmsnd #%kroff		;prohibit srq
+
+	bic #-1-%kscon,kavsta	;clear status (except labcon)
+	call km$unl		;unlisten
+	.kmgen %kcspe
+	.kmexe
+
+	call kamrcv
+	bic #mask2,r2
+	bis r2,kavsta
+
+	call kamrcv		;read lam1 to lam6
+	bit #%kll1,r2
+	if ne,<bis #%ksl1,kavsta>
+	bit #%kll5,r2
+	if ne,<bis #%ksl5,kavsta>
+
+	call kamrcv		;read lam7 to lam12
+	bit #%kll9,r2
+	if ne,<bis #%ksl9,kavsta>
+	bit #%kll12,r2
+	if ne,<bis #%ksl12,kavsta>
+
+	call kamrcv		;read lam13 to lam18
+	bit #%kll15,r2
+	if ne,<bis #%ksl15,kavsta>
+	bit #%kll18,r2
+	if ne,<bis #%ksl18,kavsta>
+
+	call kamrcv		;read lam19 to lam23
+	bit #%kll21,r2
+	if ne,<bis #%ksl21,kavsta>
+	bit #%kll22,r2
+	if ne,<bis #%ksl22,kavsta>
+	bit #%kll23,r2
+	if ne,<bis #%ksl23,kavsta>
+	
+	.kmgen %kcspd
+	.kmgen %kcutk
+	return
+
+;----------------------------------------------------------------
+;LAMSET CLEARS THE CAMAC MODULE OF ITS ARGUMENT,
+;	SETS THE LAM,
+;	AND SENDS LABSTA IN RESPONSE.
+;----------------------------------------------------------------
+
+ko$set:	bic #%kcien,(r4)
+	.kmclr
+
+	call kamtst
+	bit #%kscon,kavsta
+	beq kamncn
+	call km$lsn
+	.kmsnd #%krx		;srq for no x
+	call km$unl
+
+	call km$lsn
+	.kmsnd <#%kff9,#0,(r1)>	;send f(9)
+	.kmexe
+	bit #%kcsrq,(r4)
+	bne kamnox
+
+	loop <			;pseudo loop
+	  cmpb (r1),#1.
+	  if eq,< bic #%ksl1,kavsta
+		  exitl>
+	  cmpb (r1),#5.
+	  if eq,< bic #%ksl5,kavsta
+		  exitl>
+	  cmpb (r1),#9.
+	  if eq,< bic #%ksl9,kavsta
+		  exitl>
+	  cmpb (r1),#12.
+	  if eq,< bic #%ksl12,kavsta
+		  exitl>
+	  cmpb (r1),#15.
+	  if eq,< bic #%ksl15,kavsta
+		  exitl>
+	  cmpb (r1),#18.
+	  if eq,< bic #%ksl18,kavsta
+		  exitl>
+	  >
+	call km$lsn
+	.kmsnd <#%kff26>
+	.kmexe
+	bit #%kcsrq,(r4)
+	bne kamnox
+
+	.kmclr
+	bis #%kstsx,kavsta
+	mov kavsta,r2
+	call kchput
+	jcall kchfin
+
+kamncn:	bic #%kstsx,kavsta
+	jcall kaenoc
+
+kamnox:	.kmclr
+	bic #%kstsx,kavsta
+	jcall kaenox
+
+
+;THESE ROUTINES READ THE FRONT PANEL SWITCHES OF THE CRATE MODULES
+
+;----------------------------------------------------------------
+;THIS ROUTINE GETS THE FRONT_PANEL FOR A 2264
+;	(1). NUMBER 0F CHANNELS
+;	(2). PRE-TRIGGER
+;	(3). CLOCK-FRQUENCY
+;	(4). OFFSET FOR 1 TO 4
+;	(5). OFFSET FOR 5 TO 8
+;	(6). LABSTA
+;----------------------------------------------------------------
+
+ko$f64:	bic #%kcien,(r4)
+	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	beq kamncn
+
+	call km$lsn
+	.kmsnd <#%kfrt2>
+	call km$unl
+
+	call km$lsn
+	.kmsnd <#1,#0,(r1)>
+	.kmexe
+	call kamrcv
+	push r2
+	call kamrcv
+	bit #%kstsx,r2
+	if eq,<	pop r2
+		jcall kamnox>
+	mov (sp),r2
+	rolb r2
+	rolb r2
+	rolb r2
+	bic #mask2,r2
+	call kchput
+
+	mov (sp),r2
+	bic #mask3,r2
+	call kchput
+
+	pop r2
+	asr r2
+	asr r2
+	asr r2
+	bic #mask3,r2
+	call kchput
+
+	call km$lsn
+	.kmsnd <#%kfrt3>
+	call km$unl
+
+	call km$lsn
+	.kmsnd <#0>
+	.kmexe
+	call kamrcv
+	push r2
+	call kamrcv
+	push r2
+	call kamrcv
+	bit #%kstsx,r2
+	if eq,<	pop *,*
+		br kamnox>
+	mov 2(sp),r2
+	call kchput
+	pop r2,*
+	call kchput
+
+	.kmclr
+	bis #%kstsx,kavsta
+	mov kavsta,r2
+	call kchput
+	jcall kchfin
+
+
+
+;--------------------------------------------------------
+;THIS ROUTINE GETS THE FRONT-PANEL INFO FOR THE 2256
+;	(1). PRE-TRIGGER
+;	(2). SAMPLING RATE
+;	(3). OFFSET
+;	(4). LABSTA
+;--------------------------------------------------------
+
+ko$f56:	bic #%kcien,(r4)
+	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	if eq,<jcall kamncn>
+
+	call km$lsn
+	.kmsnd <#%kfrt3>
+	call km$unl
+
+	call km$lsn
+	.kmsnd <#1,#0,(r1)>
+	.kmexe
+	call kamrcv
+	push r2
+	call kamrcv
+	push r2
+	call kamrcv
+	bit #%kstsx,r2
+	if eq,< pop *,*
+		jcall kamnox>
+
+	mov 2(sp),r2
+	asr r2
+	asr r2
+	asr r2
+	bic #mask3,r2
+	call kchput
+
+	mov 2(sp),r2
+	bic #mask3,r2
+	call kchput
+
+	pop r2
+	asl r2
+	asl r2
+	rolb (sp)
+	rolb (sp)
+	rolb (sp)
+	bic #mask2,(sp)
+	bis (sp)+,r2
+	call kchput
+
+	bis #%kstsx,kavsta
+	mov kavsta,r2
+	call kchput
+	.kmclr
+	jcall kchfin
+
+
+;----------------------------------------------------------------
+;TEST FOR CONNECTION BY SETTING FINITE LENGTH
+;ON LOOP TIMES WITHIN MLIST
+;	SWITCH SET BY NLBTRY
+;----------------------------------------------------------------
+
+kamtst:
+	bis #%kscon,kavsta
+	jsr r5,10$
+	  .word %kcmla,%kcsdr
+	jsr r5,10$
+	  .word %kcunl,%kcsdr
+	return
+
+10$:	mov #kam%nc,r3
+	mov (r5)+,(r4)		;get address
+	loop <
+	  bit #%kcrdy,(r4)
+	  if eq,<sorl r3>
+	  else <
+	    bic #%kcdav,(r4)
+	    mov #kam%nc,r3
+	    loop <
+	      bit #%kcacp,(r4)
+	      if eq,<sorl r3>
+	      else <
+	        mov (r5)+,(r4)
+		rts r5
+		>>>>
+	bic #%kscon,kavsta
+	tst (r5)+
+	rts r5
+
+
+
+;;; these two routines send the status word
+
+ko$sta:	bit #%kcsrq,(r4)
+	if ne,<call ko$pol>
+	mov kavsta,r2
+	call kchput
+	jcall kchfin
+
+	
+ko$chk:	bit #%kcsrq,(r4)
+	if eq,<
+	  call km$unl
+	  call km$lsn
+	  .kmsnd <#%krlxq>
+	  call km$unl
+	  >
+	call ko$sta
+	call km$lsn
+	.kmsnd <#%kroff>
+	jcall km$unl
+
+
+;;; read 1K bytes from the camac 2256
+
+ko$r56:	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	if eq,<jcall kamncn>
+	call km$lsn
+	.kmsnd <#%krxq>
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff8,#0,(r1)>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<
+	  call ko$pol
+	  bit #%kstsx,kavsta
+	  if eq,<jcall kamnox>
+	  .kmclr
+	  jcall kaenlm		;no LAM error
+	  >
+	call km$lsn
+	.kmsnd #%kroff
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kfhs2>
+	call km$unl
+
+	call km$lsn
+	.kmsnd <#%kff2,#0,(r1)>
+	.kmexe
+	mov #1024.,r5
+	loop <
+	  call kamrcv
+	  call kchput
+	  sorl r5
+	  >
+	.kmclr
+	call km$lsn
+	.kmsnd <#%krx>
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff24,#0>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<jcall kamnox>
+	bis #%kstsx,kavsta
+	call kchfin
+	.kmclr
+	return
+	
+
+ko$r64:	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	if eq,<jcall kamncn>
+	call km$lsn
+	.kmsnd #%krxq
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff8,#0,(r1)>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<
+	  call ko$pol
+	  bit #%kstsx,kavsta
+	  if eq,<jcall kamnox>
+	  .kmclr
+	  jcall kaenlm
+	  >
+	call km$lsn
+	.kmsnd #%krx
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff10,#0,(r1)+>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<jcall kamnox>
+	call km$lsn
+	.kmsnd <#%kff16,(r1)+>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<jcall kamnox>
+	call km$lsn
+	.kmsnd #%kfhs3
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff2,#0>
+	inc r1			;skip padding byte
+	mov (r1),r5		;record-length word
+	bic #mask13,r5
+	if eq,<add #2,r5>
+	.kmexe
+	loop <
+	  call kamrcv
+	  call kchput
+	  sorl r5
+	  >
+	call kchfin
+	bis #%kstsx,kavsta
+	call km$lsn
+	.kmsnd <#%kff24,#0>
+	.kmexe
+	call km$lsn
+	.kmsnd #%kff2
+	.kmexe
+	.kmclr
+	return
+
+
+ko$r32:	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	if eq,<jcall kamncn>
+	call km$lsn
+	.kmsnd #%krx
+	call km$unl
+	call km$lsn
+	.kmsnd <#%kff2,#0,(r1)>
+	.kmexe
+	bit #%kcsrq,(r4)
+	if ne,<jcall kamnox>
+	call km$lsn
+	.kmsnd #%kroff
+	call km$unl
+	mov #32.,r5
+	loop <
+	  call km$lsn
+	  .kmsnd <#%kff2,#0,(r1)>
+	  .kmexe
+	  call kamrcv
+	  call kchput
+	  call kamrcv
+	  bic #mask4,r2
+	  call kchput
+	  sorl r5
+	  >
+	call kchfin
+	call km$lsn
+	.kmsnd <#%kff2,#0,(r1)>
+	.kmexe
+	.kmclr
+	return
+	
+
+$kmgn$:	mov (r5),(r4)		;put arg in CSR
+	mov #kamtry,r3	;times to try
+	loop <
+	  bit #%kcrdy,(r4)	;is it ready yet?
+	  if eq,<
+	    sorl r3
+20$:	    tst kavsok		;can I sleep?
+	    beq 100$		;nope
+	    push r0,r1
+	    .regs #60.,#0	;yup
+	    .sleep
+	    pop r1,r0
+	    cmpb $ccsta(r0),#%csopn
+	    beq $kmgn$		;try it all over again if still open
+	    br 100$
+	    >>
+	bic #%kcdav,(r4)
+	mov #kamtry,r3
+	loop <
+	  bit #%kcacp,(r4)
+	  if eq,<
+	    sorl r3
+	    br 20$		;failure, try again
+	    >>
+100$:	tst (r5)+		;skip arg
+	return
+
+$kmgen:	lock kampri
+	call $kmgn$
+	bis #%kcdav,(r4)
+	unlock
+	rts r5
+
+$kmgn2:	lock kampri
+	call $kmgn$
+	mov (r5)+,(r4)		;set the second arg
+	unlock
+	rts r5
+
+
+kchput:
+	push r1
+	loop <
+	  mov kavpkt,r1
+	  if eq,<
+	    mov #$cpkdt+%cpmxc,r1	;full sized packet
+	    call cpkall
+	    beq 10$		;if no packet
+	    mov r1,kavpkt
+	    mov r1,$cpkan(r1)
+	    add #$cpkdt,$cpkan(r1)	;use ack number as pointer
+	    >
+	  cmp $cpknb(r1),#%cpmxc
+	  if ge,<
+	    call kchfin
+	    rptl ne		;repeat if successful
+10$:	    pop r1		;restore reg
+	    sez			;error return
+	    return
+	    >
+	  >
+	movb r2,@$cpkan(r1)
+	inc $cpkan(r1)
+	inc $cpknb(r1)
+	pop r1
+	clz
+	return
+
+kchfin:
+	call cpkxok
+	if gt,<
+	  push r1
+	  mov kavpkt,r1
+	  call cpkdto		;output a data packet
+	  pop r1
+	  clr kavpkt
+	  clz
+	  return
+	  >
+	sez
+	return
+
+
+    loop <
+kaenoc:	push (pc)+
+	  .string ^/Error: GPIB connection does not respond./
+	exitl
+
+kaenox:	push (pc)+
+	  .string ^/Error: Attempt to execture invalid CAMAC command./
+	exitl
+
+kaenlm:	push (pc)+
+	  .string ^/Error: Unable to read data. No CAMAC lam./
+	exitl
+
+kaesnd:	push (pc)+
+	  .string ^/Error: Unable to send command./
+	exitl
+
+kaercv:	push (pc)+
+	  .string ^/Error: GPIB unable to receive data./
+	exitl
+    >
+kaecls:	pop kaverr		;put error string in variable
+	push r1
+	mov kavpkt,r1
+	if eq,<
+	  mov #$cpkdt+10,r1
+	  call cpkall
+	  >
+	clr kavpkt
+	tst r1
+	if ne,<
+	  mov kaverr,r2
+	  clr $cpknb(r1)
+	  call cpkaz1
+	  movb #%cocls,$cpkop(r1)
+	  call cpkpko
+	  >
+	clr kaverr
+	call ccnrst		;reset chaos connection by hand to make
+				;sure it is dead
+	pop r1
+	return
+
+
+kamint:	push r5,r4,r3,r2,kavsok	;regs and allowed to sleep flag
+	clr kavsok		;not allowed to sleep
+	mov #kamcsr,r4
+	bic #%kcien,(r4)
+	call kamtst
+	bit #%kscon,kavsta
+	if ne,<call ko$pol>
+	pop kavsok,r2,r3,r4,r5
+	rti
+
+kamini:	clr kavsta		;no state yet
+	clr kavsok		;not allowed to sleep
+	call nxmcat
+	  kamnxm
+	mov #kamcsr,r4
+	.kmclr
+	call nxmclr
+	mov #-1,kavava		;it is available
+	mov #kamint,@#kamvec+0
+	mov #kampri*40,@#kamvec+2
+	call kamdwn
+	call ko$ini
+	mov #-1,kavsok		;routines allowed to sleep now
+	return
+
+kamnxm:	clr kavava		;not available
+	return
+
+ko$ini:	.kmclr
+	call kamtst
+	bit #%kscon,kavsta
+	if ne,<
+	  call km$lsn
+	  .kmsnd #%krlxq
+	  call km$unl
+	  bit #%kcsrq,(r4)
+	  if ne,<call ko$pol>
+	  >
+	.kmclr
+	return
+	
+kamdwn:	clr (r4)
+	clr kavsta
+	tst sysup
+	if ne,<			;if system is up, there may be a pending
+	  push r1		;packet 
+	  mov kavpkt,r1
+	  if ne,<call cpkfre>
+	  pop r1
+	  >
+	clr kavpkt
+	return
+
+
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

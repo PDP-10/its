@@ -1,0 +1,575 @@
+
+.lif  z %defin
+	.title  Interlan Ethernet driver
+	.sbttl  Interlan Ethernet driver: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet iln			;declare Interlan packet driver
+
+;;;  For Version 2, put ilanv2==-1 before the DEFDEV in the config file
+.iif ndf ilanv2, ilanv2==0
+
+.pkhrd <	;;; for packet transmit (received packet is copied)
+	..word $ilpdt,0		;interlan xmit packet data
+	..word $ilpda,3		;destination address
+.if nz ilanv2
+	..word $ilpsa,3		;source address for version 2 interfaces
+.endc
+	..word $ilpty,1		;protocol type
+	>
+
+.if p1
+	.sbttl  -- Definitions 
+
+  ;;
+;;;;;; Device registers
+  ;;
+
+il.csr==0			;control and status register
+il.bar==2			;bus address register
+il.bcr==4			;byte count register
+	.if nz qbus
+il.ber==6			;bus extension register
+	.endc
+
+  ;;
+;;;;;;  CSR bits and fields 
+  ;;
+
+il%aeb==140000			;[  W] address extension bits (A17, A16) 
+il%cfc==037400			;[  W] command function code
+il%cdn==000200			;[R/W] command done
+il%cie==000100			;[R/W] command interrupt enable
+il%rdn==000040			;[R/W] receiver done
+il%rie==000020			;[R/W] receiver interrupt enable
+il%csc==000017			;[R  ] comand status code
+
+  ;;
+;;;;;; Command function codes
+  ;;
+
+%ilsil==01_8			;set internal loopback
+%ilsel==02_8			;set external loopback
+%ilclb==03_8			;clear loopback
+%ilspm==04_8			;set   promiscous mode
+%ilcpm==05_8			;clear promiscous mode
+%ilsre==06_8			;set   receive-on error mode
+%ilcre==07_8			;clear receive-on error mode
+%ilofl==10_8			;go OFFline
+%ilonl==11_8			;go ONline
+%ildia==12_8			;run on-board diagnostics
+%ilsis==15_8			;set   insert source address mode
+%ilcis==16_8			;clear insert source address mode
+%ilspd==17_8			;set physical address to default
+
+%ilrrs==30_8			;report and reset statistics
+%ilrdt==31_8			;report collision delay times
+
+%illrb==40_8			;load receive buffer address/byte count queue
+
+%illtd==50_8			;load transmit data
+%illts==51_8			;load transmit data and send
+%illga==52_8			;load group address(es)
+%ildga==53_8			;delete group address(es)
+
+
+%ilfrb==60_8			;flush receive buffer address/byte count queue
+
+%ilrst==77_8			;reset board
+
+  ;;
+;;;;;;  Command status codes
+  ;;
+
+%ilsuc==00			;success
+%ilsur==01			;success with retries
+%ilill==02			;illegal command
+%iliac==03			;innapropriate command
+%ilfai==04			;failure
+%ilbse==05			;buffer size exceeded
+%ilexc==10			;excessive collisions
+%ilcrc==11			;CRC error
+%ilali==12			;alignment error
+%iltcl==13			;transmit carrier lost
+%ilnxm==17			;non-existent unimus memory
+
+.endc p1
+
+
+  ;;
+;;;;;;  receive frame buffer offsets
+  ;;
+
+  dsect <
+ilf$st::	.blkb 1		;frame status byte
+ ilf%lo==004			;at least one packet lost
+ ilf%al==002			;alignment error
+ ilf%cr==001			;CRC error
+ ilf%er==ilf%al+ilf%cr		;receive errors
+ilf$zr::	.blkb 1		;zero byte
+ilf$ln::	.blkw 1		;frame length word
+ilf$da::	.blkw 3		;destination address
+ilf$sa::	.blkw 3		;source address
+ilf$ty::	.blkw 1		;type field
+ilf$dt::
+  >
+
+lilf$==pksiz$-$pktdt+ilf$dt	;max ncp packet, without ncp header, but
+				;with the Interlan frame header
+.iif p2, .iif z <lilf$&7>, lilf$==lilf$+2	;never a multiple of 8
+
+****
+	.sbttl  -- Macros
+
+nilan==0			;no Interlan boards yet
+
+.macro ilan vec,csr,chaddr
+.iif z nilan, ilnnet==nnet	;base net object number of first interlan board
+   .if p2
+      %%==.
+	.=il$vec+<2*nilan>
+	 .word vec
+	.=il$csr+<2*nilan>
+	 .word csr
+		.if nz ncpchs
+	.=il$cha+<2*nilan>
+	 .word chaddr
+		.endc
+      .=%%
+   .endc
+nilan==nilan+1
+nnet==nnet+1
+.endm
+
+
+****
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl  -- Code
+
+.iif z netiln, .error Interlan being included without support in PKTNCP
+
+
+  ;;
+;;;;;;  Tables
+  ;;
+
+il$vec: .blkw nilan		;table of interrupt vector addresses
+il$csr: .blkw nilan		;table of control/status base addresses
+		.if nz ncpchs
+il$cha: .blkw nilan		;table of corresponding chaos addresses
+		.endc
+		.if nz ncpip
+il$ip1: .blkw nilan		;high word of internet address (not used yet)
+il$ip2: .blkw nilan		;low  word of internet address
+		.endc
+
+  ;;
+;;;;;;  Interrupt vector pointers and such
+  ;;
+
+il$brk:
+		.rept nilan
+		.lif z .rpcnt
+il$rbk::
+	jsr r5,@#ilrint
+	 .word netobj+<2*ilnnet>+<2*.rpcnt>
+		.lif z .rpcnt
+il$xbk::
+	jsr r5,@#ilxint
+	 .word netobj+<2*ilnnet>+<2*.rpcnt>
+		.endr
+lil$brk==<.-il$brk>/nilan
+
+il$vrp:		.rept nilan	;vector receive pointers
+	.word il$rbk+<lil$brk*.rpcnt>
+		.endr
+il$vxp::	.rept nilan	;vector xmit pointers
+	.word il$xbk+<lil$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;  An Interlan hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a basic network object
+$ilcsr==$ntcsr			;Interlan CSR is the net CSR
+
+$ilkik::	.blkw 1		;kick flag.  non-zero keeps driver running
+$illok::	.blkw 1		;lock.  -1 is unlocked (INC sets Z)
+$ilsta::	.blkw 1		;interrupt status word
+ ilr%dn==040000			;rcvr done, new packet in
+ ilr%ok==020000			;ok to activate receiver
+ ilc%dn==004000			;command done 
+ ilc%lr==002000			;last command was receive buffer
+ ilc%ok==001000			;ok to issue command
+
+$ilrbf::	.blkw 1		;receive buffer (big buffer)
+$ilxpk::	.blkw 1		;transmit packet
+	>,l$il
+
+
+
+  ;;
+;;;;;;  Interrupt routines
+  ;;
+
+ilrint: mov @(r5),r5
+	bis #ilr%dn,$ilsta(r5)	;rcvr done and ok for new
+	br ilxin2
+
+ilxint: mov @(r5),r5		;get the hardware object
+	movb @$ilcsr(r5),$ilsta+0(r5)	;get the command result
+	bis #ilc%dn,$ilsta(r5)	;command done
+ilxin2:	mov #1,$ilkik(r5)	;keep fairyland stack running
+	inc $illok(r5)
+	if eq,<			;if I got the lock
+	  mtps 4(sp)		;restore previous interrupt priority 
+				;(under R5 and address)
+	  .intstk <		;switch to the interrupt stack
+	    call ilint		;and process
+	  > >	    
+	dec $illok(r5)
+	pop r5
+	rti
+
+;;; pseudo intterupt.  CALL this with device in R5.
+ilpint:	push (sp)		;repush return address so we can...
+	mfps 2(sp)		;slide the PSW under it to make it look
+				;like an interrupt happened
+	push r5			;push r5 like the real intterupt routine does
+	br ilxin2		;and join the rest of the group
+
+
+
+ilint:	push r4,r3,r2,r1,r0	;save entire set (r5 already saved)
+	mov $ntcsr(r5),r4
+	loop <
+	  lock 7		;don't lose a wakeup
+	  tst $ilkik(r5)	;keep running?
+	  if eq,<
+	    pop *		;about to return.  Throw away old priority.
+				;A valid priority will get set by the RTI 
+				;of the person that called us.
+	    pop r0,r1,r2,r3,r4
+	    return
+	    >
+	  unlock
+	  loop <		;things get done in this loop
+	    clr $ilkik(r5)
+
+	    bit #ilr%dn,$ilsta(r5)
+	    if ne,<
+	      call il$rcv
+	      bic #ilr%dn,$ilsta(r5)	;receiver done
+	      bis #ilr%ok,$ilsta(r5)	;ok to receive new packet
+	      rptl
+	      >
+	    bit #ilc%dn,$ilsta(r5)
+	    if ne,<
+	      bit #ilc%lr,$ilsta(r5)
+	      if ne,< bic #ilc%lr,$ilsta(r5) >
+	      else < call il$cdn >
+	      bic #ilc%dn,$ilsta(r5)
+	      bis #ilc%ok,$ilsta(r5)
+	      rptl
+	      >
+	    bit #ilc%ok,$ilsta(r5)
+	    if ne,<
+	      bit #ilr%ok,$ilsta(r5)
+	      if ne,<
+		call il$rnx
+		rptl
+		>
+	      tst $ilxpk(r5)
+	      if eq,<
+		call ntremq
+		if ne,<
+		  call il$out
+		  rptl
+		> >
+	      >
+	    >
+	  rptl			;inner loop finished, do outer loop
+	  >
+
+il$set: push #lilf$		;length of receiver frame
+	call fsmall		;get from free storage
+	pop $ilrbf(r5)		;save it
+	if eq,<bpt>
+	mov $ilrbf(r5),il.bar(r4)
+	mov #66.,il.bcr(r4)	;66. bytes
+	mov #%ilrrs,(r4)	;report and reset statistics
+	loop <
+	  tstb (r4)
+	  rptl pl
+	  >
+	mov $ilrbf(r5),r1
+	mov ilf$da+0(r1),nt.eth+0(r5)
+	mov ilf$da+2(r1),nt.eth+2(r5)
+	mov ilf$da+4(r1),nt.eth+4(r5)
+	mov #ilr%ok+ilc%ok,$ilsta(r5)	;OK to issue receive and OK to issue command
+	mov #-1,$illok(r5)	;initialize the lock to unlocked
+	jcall ilpint		;generate a pseudo interrupt to get receiver going
+	
+
+
+il$rcv:
+      loop <			;easy way to exit
+	mov $ilrbf(r5),r3
+	bit #ilf%er,ilf$st(r3)  ;check frame status for errors
+	exitl ne		;punt if error
+	mov ilf$ln(r3),r2	;get frame length
+	sub #6+6+2+4,r2		;don't count addresses, type and CRC
+	mov r2,r1		;get packet data count
+	add #$pktdt,r1		;entire packet size
+	cmp r1,#pksiz.		;is it big enough for anybody's protocol?
+	if lo,<
+	  netmet ot
+	  exitl
+	  >
+	cmp r1,#pksiz$		;too big??
+	if hi,<
+	  netmet ot
+	  exitl
+	  >
+	call pktall		;get a packet
+	if eq,<
+	  netmet ot		;no packet available
+	  exitl
+	  >
+	push r3,r1		;save base pointers
+	add #ilf$dt,r3		;point at frame data
+	add #$pktdt,r1		;point at packet data
+	inc r2			;for rounding to word count...
+	asr r2			;...byte count to word count
+	loop <
+	  mov (r3)+,(r1)+	;copy packet out of buffer
+	  sorl r2		;loop over packet
+	  >
+	pop r1,r3		;get pointer back
+	bis #%pkt08,$pktfl(r1)  ;declare packet safe for 8 bit
+	br 100$			;exit loop with a packet
+	>
+	clr r1			;no packet
+
+100$:	bitb #ilf%lo,ilf$st(r3)
+	if ne,<netmet lo>
+	bitb #ilf%al,ilf$st(r3)
+	if ne,<netmet bl>
+	bitb #ilf%cr,ilf$st(r3)
+	if ne,<netmet cr>
+
+	tst r1
+	if eq,<			;make partial copy of erring frame
+.bvector ilfsav,<ilf$dt-ilf$da>
+	  push r3
+	  add #ilf$da,r3
+	  mov #ilfsav,r2
+	  mov #<ilf$dt-ilf$da>/2,r1
+	  loop <
+	    mov (r3)+,(r2)+
+	    sorl r1
+	    >
+	  pop r3
+	  return
+	  >
+	mov ilf$ty(r3),r2
+	jcall ethrcv
+
+
+
+il$rnx: bic #ilr%ok+ilc%ok+ilc%dn,$ilsta(r5)	;not OK to issue receive
+				;or command, nor is command done 
+	bis #ilc%lr,$ilsta(r5)	;last command [will have been] receive
+	mov $ilrbf(r5),il.bar(r4)	;set receive buffer address
+	mov #lilf$,il.bcr(r4)	;length of interlan frame
+	mov #%illrb+il%cie+il%rie,(r4) ;load receive buffer/count
+	return
+
+il$cdn: mov $ilxpk(r5),r1	;packet, or random command done?
+	if eq,<bpt>		;random
+	clr $ilxpk(r5)		;no longer one there
+	call pktngv		;free packet unless on user list
+	mov $ilsta(r5),r1
+	bic #mask4,r1
+	if eq,<
+10$:	  netmet ou
+	  return
+	  >
+	cmp r1,#%ilsur
+	if eq,<
+	  netmet ab
+	  br 10$
+	  >
+	cmp r1,#%ilexc
+	if eq,<
+	  netmet ab,#16.
+	  return
+	  >
+	cmp r1,#%ilfai
+	if eq,<
+	  netmet ab,#16.
+	  return
+	  >
+	bpt			;diagnose remotely
+
+il$out:				;start output
+	mov r1,$ilxpk(r5)	;save it to free after DMA
+	push r1			;pointer
+	add #$ilpdt,(sp)
+	pop il.bar(r4)
+	push $pktxs(r1)		;get transmit size
+.if nz ilanv2			;May need to pad packet if using v2 firmware
+	cmp (sp),#60.
+	if lt,<mov #60.,(sp)>
+.endc
+	pop il.bcr(r4)
+	bic #ilc%dn+ilc%ok,$ilsta(r5)	;command not done, nor OK to issue another
+	mov #%illts+il%cie+il%rie,(r4)  ;transmit and arm interrupt
+	return
+
+
+.wscalar $ilnup			;number of alive interlans
+
+ilini:  clr $ilnup		;no interlans up yet
+	clr r0			;index
+	loop <
+	  call ilinit
+	  add #2,r0
+	  cmp r0,#nilan*2
+	 rptl lo
+	 >
+	return
+
+ilinit: mov il$csr(r0),r4
+	call nxmcat
+	 ilnxm
+	loop <  tstb (r4)
+		rptl mi
+		.irp com,<rst,clb,frb,onl,cis,spd>
+	  jsr r2,10$
+	    .word %il'com
+		.endm
+	  exitl
+10$:	  pop *			;don't need r2, and can't have stack changed
+	  mov (r2)+,(r4)
+	  loop <tstb (r4)
+		rptl pl>
+	  jcall (r2)		;REALLY ought to check for errors, dcp...
+				;yeah, I know, Nat...
+	  >
+	inc $ilnup		;count another interlan alive
+	call nxmclr
+
+	mov il$vec(r0),r2	;get interrupt vector
+	mov il$vrp(r0),(r2)+	;set receive interrupt pointer
+	mov #pr5,(r2)+		;and priority
+	mov il$vxp(r0),(r2)+	;set cmd done interrupt pointer
+	mov #pr5,(r2)+		;and priority
+
+
+	mov #l$il,r5
+	call ntmake
+	if eq,<bpt>		;oops
+	mov r5,netobj+<2*ilnnet>(r0)	;save device n network table
+	mov r4,$ntcsr(r5)	;save csr
+
+	call il$set		;setup interrupt handler
+	mov #iletgv,nt$eth(r5)  ;routine to send ethernet packets to interface
+
+		.if nz ncpchs
+	mov #ilchgv,nt$chs(r5)  ;routine to send chaos packets to interface
+	mov il$cha(r0),nt.chs(r5)	;my address on chaos net
+	mov #9.,$ctrcv(r5)	;interlans are pretty cheap for routing
+		.endc
+
+		.if nz ncpip
+	mov #ilipgv,nt$ip(r5)	;routine to send IP packets to interface
+	movb #10.,nt.ip+1(r5)	;"fixed in the rewrite"
+	movb il$cha+1(r0),nt.ip+0(r5)
+	clrb nt.ip+3(r5)
+	movb il$cha+0(r0),nt.ip+2(r5)
+		.endc
+
+	mov r0,r4		;get chaos index into r4
+	add #<ilnnet*2>,r4	;now network index
+	jcall ntmak1		;finish making the object
+
+ilnxm:  clr netobj+<2*ilnnet>(r0)	;no network object
+	return
+
+iletgv: mov r2,$ilpda+0(r1)
+	mov r3,$ilpda+2(r1)
+	mov r4,$ilpda+4(r1)
+.if nz ilanv2			;if new firmware
+	mov nt.eth+0(r5),$ilpsa+0(r1)
+	mov nt.eth+2(r5),$ilpsa+2(r1)
+	mov nt.eth+4(r5),$ilpsa+4(r1)
+.endc
+	mov r0,$ilpty(r1)
+
+.if z 1
+	add #<$pktdt-$ilpdt>,$pktxs(r1) ;include interlan header
+.iff
+	add #<$pktdt-$ilpdt>+1,$pktxs(r1) ;include interlan header
+	bic #1,$pktxs(r1)	;round for symbolics lossage
+.endc
+	call ntputq
+	jcall ilpint		;take pseudo interrupt to get things going
+
+.if nz ncpchs
+
+;;; call @nt$chs(r5),[r5:=object, r1:=packet, r2:=hardware_destination]
+
+ilchgv: call cpks08		;make packet safe for 8 bit hardware
+
+	push r0,r3,r4
+	mov #%etchs,r0		;protocol in r0
+	call ethtrn
+	if cs,<call pktngv>
+	else  <call iletgv>
+	pop r4,r3,r0
+	return
+
+.endc
+
+.if nz ncpip
+
+ilipgv:	call ipks08		;make packet safe for 8bit hardware
+
+	push r0,r4
+	mov #%etip,r0
+	call ethtrn
+	if cs,<call pktngv>
+	else  <call iletgv>
+	pop r4,r0
+	return
+
+.endc
+
+****
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

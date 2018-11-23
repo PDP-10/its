@@ -1,0 +1,739 @@
+
+.lif  z %defin
+	.title	DUP11 support
+	.sbttl	DUP11 support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet dup			;declare running with dup-11 hardware
+
+.pkhrd <	;;; for packet transmit and receive
+	..word $dufth,2		;fast transmit helpers
+	..word $dutst,0		;start of transmit packet
+	  ..word $dulen,1	;packet data length (doesn't count type or crc)
+	..word $durst,0		;start of receive packet
+	  ..word $dupty,1	;protocol type (same as ethernet)
+  >
+
+.if p1
+	.sbttl	-- Definitions 
+
+du.rcs==0		;[R/W] Receiver control and status
+ %durdn==bit.07			;receive done
+ %durie==bit.06			;receive interrupt enable
+ %dudie==bit.05			;dataset intertupt enable
+ %duren==bit.04			;receiver enable
+ %durts==bit.02			;request to send
+ %dudtr==bit.01			;data terminal ready
+du.rbf==2		;[R  ] Receiver data buffer
+ .iif  z qbus, %durde==bit.15	;receive data error
+ .iif  z qbus, %duovr==bit.14	;overrun (lost packet)
+ .iif nz qbus, %duovr==bit.11
+ .iif  z qbus, %ducrc==bit.12	;crc parity error
+ .iif nz qbus, %ducrc==bit.15	;DPV11 sucks hard
+ %durab==bit.10			;receive abort
+ %durem==bit.09			;receive end of message
+ %dursm==bit.08			;receive start of message
+du.pcs==2		;[  W] Parameter control and status
+du.tcs==4		;[R/W] Transmit control and status
+ .iif  z qbus, %dutdl==bit.15	;transmit data late (count as abort)
+ .iif  z qbus, %durst==bit.08	;device reset
+ .iif nz qbus, %durst==bit.00
+ .iif  z qbus, %dutdn==bit.07	;transmit done
+ .iif nz qbus, %dutdn==bit.02
+ %dutie==bit.06			;transmit done interrupt enable
+ %dusnd==bit.04			;send
+du.tbf==6		;[R/W] Transmit data buffer
+ .iif nz qbus, %dutdl==bit.15	;transmit data late (count as abort)
+ %dutab==bit.10			;receive abort
+ %dutem==bit.09			;receive end of message
+ %dutsm==bit.08			;receive start of message
+
+.endc p1
+
+	.sbttl	-- Macros
+
+ndup11==0
+
+.macro dup11 vec,pri,csr,chaddr
+.iif z ndup11, dupnet==nnet
+  .if p2
+    %%==.
+	.=du$vec+<2*ndup11>
+	  .word vec
+	.=du$pri+<2*ndup11>
+	  .word pri
+	.=du$csr+<2*ndup11>
+	  .word csr
+		.if nz ncpchs
+	.=du$chs+<2*ndup11>
+	  .word chaddr
+		.endc
+      .=%%
+   .endc
+ndup11==ndup11+1
+nnet==nnet+1
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+du$vec:	.blkw ndup11
+du$pri: .blkw ndup11
+du$csr:	.blkw ndup11
+		.if nz ncpchs
+du$chs:	.blkw ndup11
+		.endc
+
+  ;;
+;;;;;; Template for transmission code
+  ;;
+
+dupfst::
+
+dutyiv:				;interrupt vector points here for transfers
+	dec (pc)+		;decrement byte count
+dutybc:	 .word 0
+	if ge,<
+	  movb @(pc)+,@(pc)+
+dutybp:    .word -1
+dutybf:    .word -1
+	  inc dutybp		;works because of PC relative
+	  rti
+	  >
+	inc dutybc
+	jsr r5,@(pc)+		;and do the normal continuation
+dutyco:	 .word -1
+
+duryiv:				;interrupt vector points here for transfers
+	dec (pc)+
+durybc:  .word 0
+	if ge,<
+	  push @(pc)+
+durybf:    .word -1
+	  if pl,<
+	    bit #%durem,(sp)
+	    if eq,<
+	      popb @(pc)+
+durybp:	       .word -1
+	      inc durybp
+	      rti
+	    > >
+	  pop (pc)+
+duryrc:	   .word 0		;received character
+	  clr durybc		;don't try to transfer any more
+	  jsr r5,@#durabo
+duryab:
+	  >
+	inc durybc
+	jsr r5,@(pc)+
+duryco:	 .word -1
+
+dupysz==.-dupfst
+
+  ;;
+;;;;;;	A DUP11 hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a network object with...
+$durcs==$ntcsr			;DUP receiver control and status pointer
+$dutcs::	.blkw 1		;DUP transmit control and status pointer
+
+$durpb::	.blkw 1		;the large packet buffer (about 3 fullsized packets)
+$durfp::	.blkw 1		;free packet buffers
+$durcp::	.blkw 1		;current packet buffer in use
+$durup::	.blkw 1		;used packet buffers (to be processed)
+$durue::	.blkw 1		;end pointer to used packet buffers
+$durpc::	.blkw 1		;number of packet buffers on the used list -1.
+				;Also serves as a lock.
+
+$duttl::	.blkw 1		;transmit length (in bytes) of all packets
+$dutsi::	.blkw 1		;send inhibit, -1 = uninhibit, .ge.0 inhibited
+$dutpk::	.blkw 1		;current xmit packet
+
+$dufst::	.blkb dupysz	;fast interrupt code
+
+$duriv==	$dufst+duryiv-dupfst	;interrupt vector points here
+$durbc==	$dufst+durybc-dupfst	;byte count while reading
+$durbp==	$dufst+durybp-dupfst	;byte pointer while reading
+$durbf==	$dufst+durybf-dupfst	;DUP receive buffer pointer
+$durrc==	$dufst+duryrc-dupfst	;received character in case abort while reading
+$durab==	$dufst+duryab-dupfst	;PC pointing after abort
+$durcon==	$dufst+duryco-dupfst	;continuation
+
+$dutiv==	$dufst+dutyiv-dupfst	;interrupt vector points here
+$dutbc==	$dufst+dutybc-dupfst	;byte pointer goes here
+$dutbp==	$dufst+dutybp-dupfst	;byte count goes here
+$dutbf==	$dufst+dutybf-dupfst	;buffer pointer goes here
+$dutcon==	$dufst+dutyco-dupfst	;continuation goes here
+
+  >,l$dup11
+
+
+;;; receive side.  The inner loop, from begining to end, is the following set
+;;; of instructions:
+;;; 				;11/23 timings, MSV11-D memory
+;;; 	jsr r5,@#durint		;4.69		    = 4.69
+;;; 	push @(r5)+		;1.72 + 2.25 + 1.84 = 5.81
+;;; 	bpl ...			;1.72		    = 1.72
+;;; 	jcall @(r5)+		;2.85		    = 2.85
+;;; 	bit #%durem,(sp)	;1.72 + 1.12 + 1.42 = 4.26
+;;; 	beq ...			;1.72		    = 1.72
+;;; 	popb @(r5)		;1.72 + 1.12 + 4.09 = 6.93
+;;; 	inc  (r5)+		;1.72 + 3.49	    = 5.21
+;;; 	dec (r5)+		;1.72 + 3.49	    = 5.21
+;;; 	ble ...			;1.72		    = 1.72
+;;; 	pop r5			;1.72 + 1.12 + 0.00 = 2.84
+;;; 	rti			;5.17		    = 5.17
+;;; 				;		      ----
+;;; 				;		     48.13
+
+;;; new receive side inner loop
+;;; 	dec (pc)+		;1.72 + 3.49	    = 5.21
+;;; 	blt ...not taken...	;1.72		    = 1.72
+;;; 	push @(pc)+		;1.72 + 2.25 + 1.84 = 5.81
+;;; 	bmi ...not taken...	;1.72		    = 1.72
+;;; 	bit #%durem,(sp)	;1.72 + 1.12 + 1.42 = 4.26
+;;; 	bne ...not taken...	;1.72		    = 1.72
+;;; 	popb @(pc)+		;1.72 + 1.12 +?2.25 = 5.09
+;;; 	inc xxx(pc)		;1.72 +?4.00	    = 5.72
+;;; 	rti			;5.17		    = 5.17
+;;; 				;		     -----
+;;; 				;		     36.42
+
+du.gen==100			;gensym counter
+
+.macro durwat noadj,nostk
+  .irp lbl,\du.gen
+	mov #du.'lbl,$durcon(r5)
+	durxit
+du.'lbl==.
+  .endm
+.iif b nostk, durstk
+.iif b noadj, duradj
+du.gen==du.gen+1
+.endm
+
+.macro durstk
+	push @$durbf-<$durcon+2>(r5)
+	.iif  z qbus, bmi durerr
+	.if  nz qbus		;DPV11 sucks hard
+		      bit #%ducrc+%duovr+%durab,(sp)
+		      bne durerr
+	.endc
+.endm
+.macro duradj
+	sub #$durcon+2,r5
+.endm
+.macro durxit
+	pop r5
+	rti
+.endm
+
+
+;;; note: fields are zerod when network objects are made
+durini:	movea #$durup,r5,$durue(r5)
+	mov #-1,$durpc(r5)	;preset packet count/lock
+	push #3
+	loop <
+	  push #<pksiz$-$dupty>+4
+	  call fsmall
+	  if eq,<bpt>
+	  mov $durfp(r5),@(sp)
+	  pop $durfp(r5)
+	  dec (sp)
+	  rptl gt
+	  >
+	pop *
+	return
+
+durabo:				;receiver aborting
+	sub #$durab,r5
+	loop <			;exit mechanism
+	  push $durrc(r5)		;get the received character
+		.if  z qbus
+	  if pl,<	
+	    netmet bl		;no error bits, must be premature end of message
+	    exitl
+	    >
+		.iff		;DPV11 sucks hard
+	  bit #%ducrc+%duovr+%durab,(sp)
+	  if ne,<
+	    netmet bl
+	    exitl
+	    >
+		.endc
+durer2:	  bit #%duovr,(sp)
+	  if ne,<
+	    netmet lo
+	    exitl>
+	  bit #%ducrc,(sp)
+	  if ne,<
+	    netmet cr
+	    exitl>
+	  bit #%durab,(sp)
+	  if ne,<
+	    netmet c2
+	    exitl>
+	  netmet ot
+	  >
+	pop *			;flush the offending data word
+
+durnew:	push $durcp(r5)		;get current packet
+	if eq,<pop *>		;none, oh well
+	else <
+	  mov $durfp(r5),@(sp)	;link current freelist into it
+	  pop $durfp(r5)	;and make it the front of the free list
+	  >
+	durwat noadj,nostk
+	loop <			;wait for start of message
+durbeg==.			;this is the initial starting point
+	  durstk
+	  bit #%dursm,(sp)
+	  exitl ne
+	  pop *
+	  durxit
+	  >
+	duradj
+
+	;;; setup receive buffer now instead of after we receive the
+	;;; second length character.  This is to avoid spending a lot of
+	;;; time between the second length character and the following character.   
+	push r1
+	mov $durfp(r5),r1	;get a free buffer
+	if eq,<			;so much for that idea
+	  pop r1,*
+	  netmet lo
+	  br durnew
+	  ;;; slide this in someplace (here) to avoid branch lossages
+	  durerr::				;can only get here from continuation
+		  duradj
+		  br durer2
+	  >
+	mov (r1),$durfp(r5)	;unlink it
+	mov r1,$durcp(r5)	;declare it the current packet
+	clr (r1)+		;clear link to next
+	movb 2(sp),(r1)+	;save low part of byte count
+	mov r1,$durbp(r5)	;save as buffer pointer
+	pop r1,*
+
+	durwat
+	bit #%durem,(sp)	;premature end?
+	if ne,<	netmet ot
+		pop *
+		br durnew >
+	push r1
+	mov $durbp(r5),r1	;get byte pointer
+	movb 2(sp),(r1)+	;set high portion of length
+	add #<$pktdt-$durst>,-(r1)	;include other fields as well
+	cmp (r1),#<pksiz$-$durst>	;make sure byte count will fit
+	if hi,<
+	  pop r1,*
+100$:	  netmet bl
+	  br durnew
+	  >
+	mov (r1)+,$durbc(r5)	;set byte count for transfer
+	mov r1,$durbp(r5)	;and byte pointer
+	pop r1,*		;r1 and saved char
+
+.if z qbus			;QBUS version doesn't want us to read the CRC!
+	durwat			;wait for data to be transfered
+	bit #%durem,(sp)+	;first CRC byte
+	bne 100$
+	durwat
+	bit #%durem,(sp)+	;second CRC
+	bne 100$		;still not yet
+.endc
+	durwat
+	bit #%durem,(sp)+
+	beq 100$		;should have been now
+	mov #durbeg,$durcon(r5)	;preset the continuation
+	push r1
+	mov $durcp(r5),r1	;get the current packet
+	clr $durcp(r5)		;and don't let anybody else see it
+	mov r1,@$durue(r5)	;set it through the end pointer
+	mov r1,$durue(r5)	;and setup new end pointer
+	inc $durpc(r5)		;up the packet counter
+	if eq,<			;my turn to service it
+	  mtps 6(sp)		;reset hardware priority (under r1, r5
+				;and rti address) 
+	  .intstk <		;while in fairy land
+	    call durprs		;go process the packet(s)
+	    >
+	  >
+	pop r1
+	durxit			;continuation already setup
+
+
+;;; We are now in fairy land.  We are on the interrupt stack with r1 and r5
+;;; available (push anything else we may need).  Interrupts can still happen
+;;; and are actually expected, especially from this or other DUP-11s.  There
+;;; is a linked list of packetd starting at $durup(r5) that need to be
+;;; processed.
+
+durprs:	push r2,r3
+	loop <
+	  mov $durup(r5),r2	;get a packet buffer
+	  if eq,<bpt>		;should never happen.  If it does, the
+				;counter is out of sync.
+	  push r2		;remember it for later
+	  lock 7		;while we unlink it
+	    mov (r2)+,$durup(r5)	;do the unlink
+	    if eq,<
+	      movea #$durup,r5,$durue(r5)
+	      >
+	  unlock
+	  mov (r2)+,r1		;get the byte count (includes type)
+	  mov r1,r3		;save it for the copy as well
+	  add #$durst,r1	;offset by data part of packet
+	  loop <		;exit whenever finished with current buffer
+	    cmp r1,#pksiz.	;check against minimum size
+	    if lt,< netmet bl
+		    exitl >
+	    call pktall		;get a packet
+	    if eq,< netmet lo
+		    exitl >
+	    push r1		;save pointer
+	    add #$dupty,r1	;go up to the start of dup data (includes type)
+	    inc r3		;round up byte count for word count
+	    asr r3		;now word count
+	    loop <
+	      mov (r2)+,(r1)+	;copy the packet
+	      sorl r3		;until finished
+	      >
+	    pop r1
+	    bis #%pkt08,$pktfl(r1)	;declare the packet safe for 08 bit
+	    mov $dupty(r1),r2
+	    call ethrcv
+	    >
+	  pop r2		;get the packet buffer back
+	  lock 7		;while we splice it onto the free list
+	    mov $durfp(r5),(r2)	;link free list into it
+	    mov r2,$durfp(r5)	;and make it the freelist
+	    dec $durpc(r5)
+	    if lt,< pop *	;valid priorty set by the RTI after we return
+		    exitl >
+	  unlock
+	  rptl			;go do the next packet buffer
+	  >
+	pop r3,r2
+	return
+
+
+;;; transmit side.  The inner loop, from begining to end, is the following set
+;;; of instructions:
+;;; 				;11/23 timings, MSV11-D memory
+;;; 	jsr r5,@(pc)+		;4.69		    = 4.69
+;;; 	pushb @0(r5)		;1.72 + x.xx + 1.84 = 7.27 (11/34: 1.96 + 4.18 + 1.13)
+;;; 	inc (r5)+		;1.72 + 3.49	    = 5.21
+;;; 	clrb 1(sp)		;x.xx + x.xx        = 5.31 (11/34: 1.96 + 3.35)
+;;; 	pop @(r5)+		;1.72 + 1.12 + x.xx = 5.71 (11/34: 1.96 + 1.46 + 2.29)
+;;; 	dec (r5)+		;1.72 + 3.49	    = 5.12
+;;; 	ble ...			;1.72		    = 1.72
+;;; 	pop r5			;1.72 + 1.12 + 0.00 = 2.84
+;;; 	rti			;5.17		    = 5.17
+;;; 				;		     -----
+;;; 				;		     43.04 + about 3 more to enter this
+
+;;; new transmit side inner loop, from begining to end, is the following
+;;; instructins.  This does not count the time for the processor to field
+;;; the interrupt.  
+;;; 	dec (pc)+		;1.72 + 3.49        = 5.12
+;;; 	blt ...			;1.72		    = 1.72
+;;; 	movb @(pc)+,@(pc)+	;1.72 +?2.29 +?2.29 = 6.30
+;;; 	inc x(pc)		;1.72 +?4.00	    = 5.72
+;;; 	rti			;5.17               = 5.17
+;;; 				;		     -----
+;;; 				;		     24.03
+
+.macro dutwat noadj
+  .irp lbl,\du.gen
+	mov #du.'lbl,$dutcon(r5)
+	dutxit
+du.'lbl==.
+  .endm
+.iif b noadj, dutadj
+du.gen==du.gen+1
+.endm
+
+.macro dutadj
+	sub #$dutcon+2,r5
+.endm
+.macro dutxit
+	pop r5
+	rti
+.endm
+
+dutnew:	dutwat noadj
+dutbeg==.			;this is the initial starting point
+	dutadj
+	push r1
+	tst $dutsi(r5)		;send inhibited?
+	bpl 10$			;inhibited, turn off interrupts
+	call ntremq
+	if eq,<	
+10$:		bic #%dutie+%dusnd,@$dutcs(r5)
+		pop r1
+		br dutnew>
+	sub $pktxs(r1),$duttl(r5)	;discount the length
+	mov r1,$dutpk(r5)
+dutrtr:	mov #%dutsm,@$dutbf(r5)	;signal start of message
+	add #$dufth,r1
+	mov r1,$dutbp(r5)	;set byte pointer
+	pop r1
+	dutwat
+	push r1
+	mov $dutbp(r5),r1
+	mov (r1)+,@$dutbf(r5)
+	mov (r1)+,$dutbc(r5)	;let interrupt routine take care of the rest
+	inc r1			;already sent first byte
+	mov r1,$dutbp(r5)
+	pop r1
+	dutwat			;execute inner loop and wait for completion
+
+	mov #%dutem,@$dutbf(r5)	;signal end of message
+	dutwat
+	mov #%dutem,@$dutbf(r5)	;and again for the CRC
+	.iif  z qbus, tst @$dutcs(r5)	;check for error
+	.iif nz qbus, tst @$dutbf(r5)
+	if mi,<
+	  netmet ab		;meter it
+	  dutwat		;wait for recovery
+	  push r1		;setup to branch to dutrtr
+	  mov $dutpk(r5),r1	;more setup
+	  br dutrtr		;try again
+	  >
+	push r1
+	mov $dutpk(r5),r1	;get packet again
+	clr $dutpk(r5)
+	call pktngv		;free packet unless on a user list
+	netmet ou		;count packet as out
+	pop r1
+	br dutnew		;go look for new packet
+
+dupini:	clr r0
+	loop <
+	  call dupin1
+	  add #2,r0
+	  cmp r0,#ndup11*2
+	  rptl lo
+	  >
+.wscalar dupflc			;flush count
+	clr dupflc
+	return
+
+dupin1:	mov du$csr(r0),r4
+	call nxmcat
+	  dupnxm
+	mov #%durst,du.tcs(r4)
+	clr du.pcs(r4)
+	call nxmclr
+
+	mov #l$dup11,r5
+	call ntmake
+	if eq,<bpt>
+	mov r5,netobj+<2*dupnet>(r0)
+
+	push r0,r1,r2		;copy transmit interrupt code into object
+	mov #dupfst,r0		;from pointer: interrupt code
+	movea #$dufst,r5,r1	;to pointer: portion of device
+	mov #dupysz/2,r2	;word count
+	loop <
+	  mov (r0)+,(r1)+
+	  sorl r2
+	  >
+	pop r2,r1,r0
+
+	movea #du.rcs,r4,$durcs(r5)	;receive control and status
+	movea #du.rbf,r4,$durbf(r5)	;receive buffer
+	movea #du.tcs,r4,$dutcs(r5)	;transmit control and status
+	movea #du.tbf,r4,$dutbf(r5)	;transmit buffer
+
+	mov du$vec(r0),r2
+
+	movea #$duriv,r5,(r2),+	;setup receive interrupt vector
+	mov du$pri(r0),(r2)+	;and priority
+	movea #$dutiv,r5,(r2),+	;setup transmit interrupt vector
+	mov du$pri(r0),(r2)+	;and priority
+
+	mov #durbeg,$durcon(r5)	;preset receive  continuation
+	mov #dutbeg,$dutcon(r5)	;preset transmit continuation
+
+	call durini		;setup free buffers and lock
+	
+	mov #-1,$dutsi(r5)	;initialize send inhibit.
+	mov #dupfls,$ntfls(r5)	;non-standard flush routine
+
+		.if nz ncpchs
+	mov #duchgv,nt$chs(r5)
+	mov du$chs(r0),nt.chs(r5)
+	mov #44.,$ctrcv(r5)	;9600 baud is expensive
+		.endc
+
+	mov #%durie+%duren+%durts+%dudtr,du.rcs(r4)
+	clr du.tcs(r4)
+	clr du.tbf(r4)
+
+	movea #dupnet*2,r0,r4
+	jcall ntmak1
+
+dupnxm:	clr netobj+<2*dupnet>(r0)
+	return
+
+dupfls:				;flush routine for a DUP11
+
+	lock 7
+.if z qbus
+	  mov $dutcs(r5),r1	;cache transmit control register
+	  push @$dutbf(r5)	;save transmitter buffer value
+	  push (r1)		;save old transmit control reg value
+	  clr (r1)		;set it
+	  tst (r1)		;read it
+	  clr (r1)		;set it again (yes, I'm experimenting)
+	  tst (r1)		;read it again
+	  pop (r1)		;restore
+	  pop @$dutbf(r5)	;restore buffer value
+.iff
+	  mov #%durst,@$dutcs(r5)
+	  clr @$durbf(r5)	;aka pcs
+	  mov #%durie+%duren+%durts+%dudtr,@$durcs(r5)
+	  mov #%dutie+%dusnd,@$dutcs(r5)
+	  mov #%dutsm,@$dutbf(r5)
+.endc
+	  inc dupflc
+	unlock
+	inc $dutsi(r5)
+	if eq,<			;only if I grabbed the chain
+	  loop <			;flush the queue
+	    call ntremq
+	    exitl eq
+	    sub $pktxs(r1),$duttl(r5)	;discount the length
+	    call pktngv
+	    rptl
+	  > >
+	dec $dutsi(r5)
+	return
+
+
+.if nz ncpchs
+
+;;; call @nt$chs(r5)[r5:=object, r1:=packet r2:=hardware_destination]
+
+du$mqb:	.word 5000.		;max queued bytes
+
+du$mps:	.word 200.		;mid packet size
+du$lpl:	.word 3			;large packet limit
+du$spl:	.word 8			;small packet limit
+
+duchgv:	call cpks08		;make it safe for 08 bit hardware
+	mov #%etchs,$dupty(r1)
+
+	mov $pktxs(r1),r2	;don't use r2 here, so it's bashable
+	push r2			;save data length
+	add #$pktdt-$dutst,r2	;adjust to bytes sent over DUP11
+	mov r2,$pktxs(r1)	;number of actual transmitted bytes
+	dec r2
+	mov r2,$dufth+2(r1)	;count after first byte goes out
+	pop r2			;data bytes
+	mov r2,$dulen(r1)	;length in the packet header
+	bic #mask8,r2		;low eight bits is first char to go out
+				;(which turns of start of message)
+	mov r2,$dufth+0(r1)
+
+	push r0,r3
+	mov du$spl,r3		;assume small packet limit
+	cmp $pktxs(r1),du$mps	;compare with mid packet size
+	if gt,<mov du$lpl,r3>	;wrong, was large
+
+	inc $dutsi(r5)		;push a send inhibit level while filter
+	movea #$ntxqu,r5,r2
+	loop <
+	  mov (r2),r0
+	  exitl eq
+	  loop <		;exit mechanism
+	    cmp $dupty(r1),$dupty(r0)
+	    exitl ne
+	    cmp $cpksi(r1),$cpksi(r0)
+	    exitl ne
+	    cmp $cpkdi(r1),$cpkdi(r0)
+	    exitl ne
+	    cmp $cpksa(r1),$cpksa(r0)
+	    exitl ne
+	    cmp $cpkda(r1),$cpkda(r0)
+	    exitl ne
+	    dec r3		;same connection, count down
+	    ble 50$		;too many for this connection, throw packet
+				;away
+	    cmp $cpk(r1),$cpk(r0)	;op and mbz
+	    exitl ne
+	    cmp $cpknb(r1),$cpknb(r0)
+	    exitl ne
+	    cmp $cpkpn(r1),$cpkpn(r0)
+	    exitl ne
+	    tst $dutsi(r5)
+	    if eq,<		;only allowed to splice if first grabber
+	      lock 6		;no more subtle bugs
+	        mov $pktxl(r0),$pktxl(r1)	;link old list through new packet
+		if eq,<		;this was the last on the list
+		  movea #$pktxl,r1,$ntxqe(r5)	;update last to point to xmit link
+		  >
+cmp $pktxl(r1),#-1
+if eq,<bpt>
+	        mov r1,(r2)	;splice new packet in list
+		unlock		;finished frobbing pointers
+	      mov r0,r1	;get old packet so it can be freed
+	      >
+50$:	    call pktngv		;give it up
+	    clr r1		;no packet to insert anymore	
+	    br 100$
+	    >
+	  movea #$pktxl,r0,r2	;reate new locative
+	  rptl
+	  >
+100$:	dec $dutsi(r5)		;pop a send inhibit level
+	pop r3,r0
+
+	tst r1
+	if ne,<
+	  cmp $duttl(r5),du$mqb	;max queued bytes
+	  if hi,<call pktngv>	;too much on list already
+	  else <
+	    add $pktxs(r1),$duttl(r5)
+	    call ntputq
+	    >
+	  >
+	lock 6
+	tst $dutpk(r5)
+	if eq,<	bis #%dutie+%dusnd,@$dutcs(r5)
+		bis #%dutsm,@$dutbf(r5)>
+	unlock
+	return
+
+.endc
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

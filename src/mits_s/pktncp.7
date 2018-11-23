@@ -1,0 +1,493 @@
+;;; ;;; Some rules:
+;;; ;;;     Except for very extreem and well documented cases, r5 contains the
+;;; ;;; 	network object.  The NETMET macro depends on this.  Also, r1
+;;; ;;; 	contains the packet.  It is customary for r4 to contain the CSR of
+;;; ;;; 	the network interface.
+;;; ;;;     When an NCP gives a packet to a device, $PKTXS(R1) MUST contain the
+;;; ;;; 	length of the data field of the packet IN BYTES.  Pakcet drivers
+;;; ;;; 	are allowed to depend on this.
+;;; ;;;     Also, when an NCP gives a packet to a device, R2, R3, R4, R0 (as needed
+;;; ;;; 	in that order) are the immediate destination.  E.g., for CHAOS only
+;;; ;;; 	r2 is needed, but for Internet r2,r3 is needed, and Ethernets need
+;;; ;;; 	r2,r3,and r4.
+
+.lif  z %defin
+	.title	NCP, Packet and Packet Driver support
+	.sbttl	NCP, Packet and Packet Driver support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+nnet==0				;no hardware nets yet
+
+	.sbttl	-- Definitions 
+
+
+****
+	.sbttl	-- Macros
+****
+
+.macro defncp name
+	ncp'name==-1
+.endm
+
+.macro defnet name
+	net'name==-1
+.endm
+
+.macro netmet name,incval
+.if b incval
+	inc $nt%'name(r5)
+	if eq,<inc $nt%'name+2(r5)>
+.iff
+	add incval,$nt%'name(r5)
+	adc $nt%'name+2(r5)
+.endc
+.endm
+
+.if p1
+  pksiz.==077776			;virtual +INF
+  pksiz%==0
+  pksiz$==0
+.endc
+.macro .pksiz minmin,min,max
+  .iif l minmin-pksiz., pksiz.==minmin
+  .iif g min-pksiz%, pksiz%==min
+  .iif g max+20-pksiz$, pksiz$==max+20
+.endm
+
+
+  ;;
+;;;;;;	macros for defining NCP packets
+  ;;
+
+txtint pkncp.
+pkncp$==0			;max of all lengths
+
+.macro .pkncp code
+%%==0
+code
+pkncp%==%%
+.iif g pkncp%-pkncp$, pkncp$==pkncp%
+append pkncp.,<
+	%%==.
+	code
+	>
+.endm
+
+  ;;
+;;;;;;	macros for defining hardware-required packet offsets
+  ;;
+
+txtint pkhrd.
+pkhrd$==0			;max of all lengths
+
+.macro .pkhrd code
+%%==0
+code
+pkhrd%==%%
+.iif g pkhrd%-pkhrd$, pkhrd$==pkhrd%
+.irp pkhrd%,\pkhrd%
+append pkhrd.,<
+	%%==.+pkhrd$-pkhrd%
+	code
+	>
+.endm
+.endm
+
+  ;;
+;;;;;;	macros for defining required slots in network driver objects
+  ;;
+
+txtint ntgiv.
+.macro .ntgiv code
+	append ntgiv.,<code>
+.endm
+
+  ;;
+;;;;;;	Define ..word and ..byte for %DEFIN time
+  ;;
+
+.macro ..word name,nwords
+	%%==%%+<2*nwords>
+.endm
+
+.macro ..byte name,nbytes
+	%%==%%+nbytes
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+.iif ndf ncpchs, ncpchs==0	;CHAOS ncp
+.iif ndf ncpip,  ncpip==0	;Internet ncp
+.iif ndf ncpeth, ncpeth==0	;Ethernet transport NCP
+.iif ndf ncppup, ncppup==0	;PUP support
+
+
+  ;;
+;;;;;;	Define the basic packet structure
+  ;;
+
+.macro ..word name,nwords
+	name==%%
+	%%==%%+<2*nwords>
+.endm
+
+.macro ..byte name,nbytes
+	name==%%
+	%%==%%+nbytes
+.endm
+
+  dsect <
+$pktul::			;user link (this must be first)
+		.blkw 1
+$pktsz::			;size of packet
+		.blkw 1
+$pktfl::			;Flags in general (high byte for user)
+ %pkh08==000001			;ON:= header safe for  8 bit hardware
+ %pkh16==000002			;ON:= header safe for 16 bit hardware
+ %pkd08==000010			;ON:= data   safe for  8 bit hardware
+ %pkd16==000020			;ON:= data   safe for 16 bit hardware
+  %pkt08==%pkh08+%pkd08		;for NCPs that don't distinguish
+  %pkt16==%pkh16+%pkd16		;for NCPs that don't distinguish
+	
+		.blkw 1
+$pktbp::			;(USER I/O) byte pointer
+$pktrs::			;(NCP  I  ) received size
+$pktxs::			;(NCP    O) XMIT size
+		.blkw 1
+$pktbc::			;(USER I/O) byte count
+$pktxl::			;(NCP    O) XMIT link
+		.blkw 1
+$pktxt::			;(NCP    O) XMIT time 
+		.blkw 1
+pkncp.				;other ncp fields
+		.blkb pkncp$
+pkhrd.				;hardware fields
+		.blkb pkhrd$
+$pktdt::			;start of packet data
+  >
+
+.pksiz 077776,$pktdt,$pktdt	;initial packet size knowledge
+
+
+  ;;
+;;;;;;	Define the basic network object
+  ;;
+
+  dsect <		;; a network hardware object
+$ntcsr::	.blkw 1		;base address of this interface
+
+$ntfls::	.blkw 1		;routine to flush transmit queue
+$ntxtm::	.blkw 1		;time last packet pulled from xmit queue
+$ntxqu::	.blkw 1		;transmit queue
+$ntxqe::	.blkw 1		;end of transmit queue
+
+$nt%::				;start of stats (same order as CHAOS STATUS)
+$nt%in::	.blkw 2		;packets in
+$nt%ou::	.blkw 2		;packets out
+$nt%ab::	.blkw 2		;packets aborted
+$nt%lo::	.blkw 2		;packets lost
+$nt%cr::	.blkw 2		;packets with incoming CRC error
+$nt%c2::	.blkw 2		;packets with CRC error after readout
+$nt%bl::	.blkw 2		;packets with bad hardware length
+$nt%ot::	.blkw 2		;packets with some other reason for rejecting
+$nt%%%::			;end of stats
+
+ntgiv.				;routines to give a packet to the interface
+				;for various protocols.  Also the local
+				;address of the interface for those
+				;protocols.
+
+  >,l$nt
+
+
+  ;;
+;;;;;;	Packet allocator/deallocator
+  ;;
+
+.macro pktsiz src,dst
+	mov $pktsz(src),dst
+.endm
+
+npkszs==5			;number of packet sizes
+
+pktfre:	push (sp)		;setup for tail recursion
+	mov r1,2(sp)		;put it under the return address
+	clr r1			;don't let people use it later
+	jcall fsmfre		;go free it to free storage
+
+pktfrl:	push r5
+	mov r1,r5
+	loop <
+	  mov r5,r1
+	  exitl eq
+	  mov (r1),r5
+	  call pktfre
+	  rptl
+	  >
+	pop r5
+	return
+
+pktall:	cmp r1,#pksiz$
+	if hi,<
+	  clr r1
+	  return
+	  >
+	inc r1
+	bic #1,r1		;expected size
+	push r1			;save for read size 
+	loop <			;look for correct freelist size
+		.rept npkszs
+%%==<<<pksiz%*<npkszs-1-.rpcnt>>+<pksiz$*.rpcnt>>/<npkszs-1>+1>&<-2>
+	  cmp r1,#%%
+	  if los,<
+	    mov #%%,r1
+	    exitl
+	    >
+		.endr
+	  >
+	push r1,r1		;size for $PKTSZ and FSMALL
+	call fsmall
+	pop r1			;get packet
+	if ne,<
+	  pop $pktsz(r1)
+	  pop $pktrs(r1)
+	  mov #1,$pktul(r1)	;cause odd address trap on bug
+	  clr $pktfl(r1)	;set
+	  >
+	else  <pop *,*>
+	tst r1
+	return
+
+;;; 	call pktchk(r1:=packet, r2:=size_needed)
+;;; 	  .word max_length
+;;; 	loss_return
+;;; 	old_packet_suffices
+;;; 	new_packet
+
+pktchk:	cmp r2,@(sp)
+	if hi,<			;requested size too big for protocol
+50$:	  add #2,(sp)		;general failure return
+	  sez			;failure
+	  return
+	  >
+	push r5
+	pktsiz r1,r5
+	cmp r2,r5
+	if le,<			;old packet good enough
+	  pop r5
+	  add #4,(sp)
+	  clz
+	  return
+	  >
+	mov r1,r5
+	mov r2,r1
+	call pktall
+	if eq,<
+	  mov r5,r1		;if no packet, get original back
+	  pop r5
+	  br 50$		;go to failure return
+	  >
+	push $pktsz(r1)		;save size (doesn't change)
+	push r1,r5		;save packet pointer (order important)
+	pktsiz r1,r2
+	asr r2
+	loop <			;copy the packet
+	  mov (r5)+,(r1)+
+	  sorl r2
+	  >
+	pop r1			;get old packet back
+	call pktfre		;free it
+	pop r1			;get new packet
+	pop $pktsz(r1)		;restore its size
+	pop r5			;restore reg
+	add #6,(sp)		;new packet return
+	clz			;success
+	return
+	
+
+  ;;
+;;;;;;	Network driver utilities
+  ;;
+
+.wvector netobj,nnet		;table of network objects
+
+;;; NTPUTQ(r1:=packet, r5:=object)
+;;; put a packet on the hardware object xmit queue
+
+nt$ptq::			;always lock priority
+ntputq:	clr $pktxl(r1)
+	lock 7
+tst $pktxl(r1)
+if ne,<bpt>
+	mov r1,@$ntxqe(r5)
+	mov r1,$ntxqe(r5)
+	add #$pktxl,$ntxqe(r5)
+	unlock
+	return
+
+;;; NTREMQ(r5:=object, r1::=packet)
+
+nt$rmq::			;always lock priority
+ntremq:	mov time,$ntxtm(r5)
+	lock 7
+	mov $ntxqu(r5),r1
+	if ne,<
+	  mov time,$pktxt(r1)
+	  mov $pktxl(r1),$ntxqu(r5)
+	  if eq,<
+	    mov r5,$ntxqe(r5)
+	    add #$ntxqu,$ntxqe(r5)
+	    >
+cmp $ntxqu(r5),#-1
+if eq,<bpt>
+cmp $ntxqe(r5),#-1
+if eq,<bpt>
+	  >
+	unlock
+	tst r1
+	return
+
+;;; NTMAKE(r5:=size, r5::=object)
+;;; make a hardware object
+
+ntmake:	push r5
+	call fsmall
+	call fsmclr
+	mov (sp),r5
+	if ne,<
+	  mov #ntflsh,$ntfls(r5)	;default standard flush routine
+	  clr $ntxtm(r5)
+	  mov r5,$ntxqe(r5)
+	  add #$ntxqu,$ntxqe(r5)
+
+		.irp pro,<chs,ip,eth,pup>
+	  	.if nz ncp'pro
+	  mov #pktngv,nt$'pro(r5)	;assume doesn't handle protocol
+	  clr nt.'pro(r5)	;zero first word of address
+		.endc
+		.endm
+
+		.if nz ncpchs	;fixed in the rewrite
+	  mov #11.,$ctrcv(r5)	;assume standard cost value
+		.endc
+	
+	  >
+	pop r5			;get object and test
+	return
+
+;;; finish making an object
+;;; r4:=network interface number, r5:=object
+ntmak1:
+		.if nz ncpchs
+	cmp nt$chs(r5),#pktngv	;does interface talk chaos?
+	if ne,<			;yup
+	  inc chvnup		;up the number of alive chaos interfaces
+	  tst chvmyn		;do we have a primary address yet
+	  if eq,<mov nt.chs(r5),chvmyn>	;do now
+	  push r2
+	  movb nt.chs+1(r5),r2	;get subnet number
+	  bic #mask8,r2		;without possible sign extension
+	  asl r2		;word indexable
+	  mov #chtrou,$ctrap(r5)	;setup routing address pointer...
+	  add r2,$ctrap(r5)	;...
+	  mov r4,$ctrav(r5)	;value is index of interface
+	  inc    $ctrav(r5)	;+1 to make it non-zero
+	  mov #chtcst,$ctrcp(r5)	;setup routing cost pointer...
+	  add r2,$ctrcp(r5)	;...
+	  pop r2
+	  >
+		.endc
+		.if nz ncpip
+	cmp nt$ip(r5),#pktngv
+	if ne,<
+	  inc ipvnup
+	  tst ipvmyn
+	  if eq,<
+	    mov nt.ip+0(r5),ipvmyn+0
+	    mov nt.ip+2(r5),ipvmyn+2
+	    >
+	  >	
+		.endc
+		.if nz ncppup
+	cmp nt$pup(r5),#pktngv
+	if ne,<
+	  inc ppvnup
+	  tst ppvmyn
+	  if eq,<mov nt.pup(r5),ppvmyn>
+	  push r2
+	  movb nt.pup+1(r5),r2	;get subnet number
+	  bic #mask8,r2		;without possible sign extension
+	  asl r2		;word indexable
+	  mov #chtrou,$ctrap(r5)	;setup routing address pointer...
+	  add r2,$ctrap(r5)	;...
+	  mov r4,$ctrav(r5)	;value is index of interface
+	  inc    $ctrav(r5)	;+1 to make it non-zero
+	  mov #chtcst,$ctrcp(r5)	;setup routing cost pointer...
+	  add r2,$ctrcp(r5)	;...
+	  pop r2
+	  >
+		.endc
+	return
+
+pktngv:				;don't give packet to interface
+	tst r1
+	if ne,<			;ethernet translation could cause r1=0
+	  bit #1,$pktul(r1)	;is it on a user list?
+	  if ne,<jcall pktfre>	;nope, so we can free it
+	  mov #-1,$pktxl(r1)	;not on a xmit list
+	  mov time,$pktxt(r1)	;fake transmission time
+	  >
+	return
+
+ntflsh:				;flush packets from driver queue
+	loop <
+	  call ntremq
+	  exitl eq
+	  call pktngv
+	  rptl
+	  >
+	return
+
+
+npini:
+		.if nz ncpchs
+				;i know this breaks modularity...but YOU
+				;find a better way to put it
+	clr chvnup		;no interfaces up yet
+	clr chvmyn		;I don't have a current address yet
+		.endc
+		.if nz ncpip
+	clr ipvnup		;no interfaces up yet
+	clr ipvmyn+0
+	clr ipvmyn+2
+		.endc
+		.if nz ncppup
+	clr ppvnup		;no pup interfaces up yet
+		.endc
+	return
+
+****
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

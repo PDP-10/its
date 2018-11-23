@@ -1,0 +1,552 @@
+
+;;; DMC11 => DMC for 3 characters and DC for two characters (DM is part
+;;; of a DH/DM). 
+
+.lif  z %defin
+	.title	DMC11 support
+	.sbttl	DMC11 support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet DMC			;declare running with dmc-11 hardware
+
+.pkhrd <	;;; for packet transmit and receive
+	..word $dmcst,0		;start of transmit/receive packet
+	  ..word $dmcln,1	;packet data length (doesn't count length or type)
+	  ..word $dmcty,1	;protocol type (same as ethernet)
+  >
+
+.if p1
+	.sbttl	-- Definitions 
+
+dc.inp==0		;[r/w] Input register
+  %dcrdi==bit.07		;Ready In -- DMC is available for input command
+  %dciei==bit.06		;Interrupt enable in -- Tell me when RDI goes on.
+  %dcrqi==bit.05		;Request input -- PDP-11 wants data port
+  %dcinr==bit.02		;IN RCV -- 0 transmit operation, 1 receive operation
+	;; some of these are the same as dc.out
+  %dccba==0			;command: buffer address/character count in
+  %dccci==1			;command: control in
+  %dccbi==3			;command: base input
+dc.mnt==1		;[r/w] Maintenance register
+  %dcrun==bit.07		;run
+  %dcmcl==bit.06		;master clear
+dc.out==2		;[r/w] Output register
+  %dcrdo==bit.07		;ready out -- DMC has output
+  %dcieo==bit.06		;interrupt enable out -- tell me when RDO goes on
+  %dcour==bit.02		;OUT RCV -- 0 transmit buffer, 1 receive buffer
+	;; some of these are the same as in dc.inp
+  %dccba==0			;command: buffer address/character count in
+  %dccco==1			;command: control out
+dc.ba==4		; Buffer address register
+dc.cc==6		; Character count register
+
+.endc pq
+
+	.sbttl	-- Macros
+
+ndmc11==0
+
+.macro dmc11 vec,csr,chaddr
+.iif z ndmc11, dmcnet==nnet
+  .if p2
+    %%==.
+	.=dc$vec+<2*ndmc11>
+	  .word vec
+	.=dc$csr+<2*ndmc11>
+	  .word csr
+		.if nz ncpchs
+	.=dc$chs+<2*ndmc11>
+	  .word chaddr
+		.endc
+      .=%%
+   .endc
+ndmc11==ndmc11+1
+nnet==nnet+1
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+dc$vec:	.blkw ndmc11
+dc$csr:	.blkw ndmc11
+		.if nz ncpchs
+dc$chs:	.blkw ndmc11
+		.endc
+
+dc$brk:
+		.rept ndmc11
+	jsr r5,@#dcint
+	.word netobj+<2*dmcnet>+<2*.rpcnt>
+		.endr
+ldc$brk==<.-dc$brk>/ndmc11
+
+dc$vad:				;addresses at the vectors
+		.rept  ndmc11
+	.word dc$brk+<.rpcnt*ldc$brk>
+		.endr
+
+
+  ;;
+;;;;;;	A DMC11 hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a network object with...
+$dccsr==$ntcsr			;DMC CSR is the net CSR
+
+$dcfls::	.blkw 1		;original network flush routine
+$dclok::	.blkw 1		;lock.  -1 is unlocked (INC sets Z)
+$dcqn::				;queue needed, receive and/or transmit
+$dcqrn::	.blkb 1		;  queue receive needed
+$dcqxn::	.blkb 1		;  queue transmit needed
+$dcrbf::	.blkw 1		;receive buffer
+$dcxpk::	.blkw 1		;current transmit packet
+$dc.ba::	.blkw 1		;buffer address when command wouldn't take immediately
+$dc.cc::	.blkw 1		;character count when command wouldn't
+				;take immediately.  Non-zeroness means valid.
+$dcklu::	.blkw 1		;kludge -- see comment in dcint2
+$dcyuk::	.blkb 256.	;I'll never use these silly base address bytes
+	>,l$dmc11
+
+ldmcf==pksiz$-$dmcst+20		;length of DMC packet.  Can't be put in
+				;the dsect, since that is pass 1 and
+				;pksiz$ is computed on pass2 (+ cruft
+				;for testing the DMC11)
+
+
+dcint:	mov @(r5),r5
+dcint2:	push r4
+	mov $dccsr(r5),r4
+	bicb #%dcieo,dc.out(r4)
+	inc $dclok(r5)
+	if eq,<
+	  mov (r4),$dcklu(r5)	;kludge because we aren't allowed to
+				;clear IEI while waiting for RDI.  The
+				;run byte sets makes this MI, which is
+				;the test to say use it instead of the CSR.
+	  bicb #%dciei,dc.inp(r4)	;NOW turn off the bit
+	  mtps 6(sp)		;restore previous interrupt priority
+				;(under r4, r5 and address)
+	  .intstk <
+	    call dmcint
+	    >
+	  tst $dc.cc(r5)	;command waiting?
+	  if ne,<bisb #%dciei,dc.inp(r4)>	;if so, enable interrupts
+	  bisb #%dcieo,dc.out(r4)	;always enable command output interrupts
+	  >
+	dec $dclok(r5)
+	pop r4
+	pop r5
+	rti
+
+;;; pseudo interrupt.  Call this with device in r5
+dcpint:	push (sp)		;repush return address so we can...
+	mfps 2(sp)		;slide the PSW under it to make it look
+				;like an interrupt happened
+	clrb 2+1(sp)		;but because LSI-11s suck so hard, mfps
+				;only moves low 8 bits.
+	push r5			;push r5 like the real interrupt routine does
+	br dcint2		;and join the rest of the group
+
+dmcint:	push r0,r1
+	loop <
+	  lock 5
+	  movb dc.out(r4),r0
+	  if mi,<
+	    unlock
+	    mov r0,r1
+	    bic #mask2,r1
+	    if eq,<		;Buffer address command
+	      bit #%dcour,r0
+	      if eq,< bicb #%dcrdo,dc.out(r4)
+		      call dmctfn>	;handle transmit finished
+	      else  <call dmcrfn>	;handle receive finished
+	      rptl
+	      >
+	    cmp r1,#%dccco	;control info
+	    if eq,<
+	      call dmccco
+	      rptl
+	      >
+	    bicb #%dcrdo,dc.out(r4)	;whatever it was
+	    rptl
+	    >
+	  mov $dcklu(r5),r0	;see comment in dcint2
+	  if mi,< clr $dcklu(r5)	;reset flag
+		  tstb r0 	;test saved value
+		  bmi 10$>
+	  tstb dc.inp(r4)	;test CSR
+	  if mi,<
+10$:	    unlock
+	    tst $dc.cc(r5)
+	    if ne,<
+	      mov $dc.ba(r5),dc.ba(r4)
+mov time,junk
+mov time,junk
+	      mov $dc.cc(r5),dc.cc(r4)
+mov time,junk
+mov time,junk
+	      clr $dc.cc(r5)
+mov dc.inp(r4),@.dcpt2
+	      bicb #%dcrqi,dc.inp(r4)
+	      >
+	    rptl
+	    >
+	  tst $dcqn(r5)		;need to queue something?
+	  if ne,<
+	    tst $dc.cc(r5)	;allowed to queue?
+	    if eq,<
+	      tstb dc.inp(r4)	;also have to wait for RDI to go off
+	      if pl,<
+		unlock
+		tstb $dcqrn(r5)
+		if ne,< call dmcqrb >	;queue receive buffer
+		tstb $dcqxn(r5)
+		if ne,< call dmcqxp >	;queue transmit packet
+		rptl
+	    > > >
+	  pop *			;interrupt routine will set interrupt
+				;priority back down. 
+	  >
+	pop r1,r0
+	return
+
+
+;;; r0, r1 bashable; r4 CSR, r5 DMC object
+
+dmctfn:	mov $dcxpk(r5),r1
+	if ne,<
+	  clr $dcxpk(r5)
+	  netmet ou			
+	  call pktngv
+	  >
+	jcall dmcqxp		;maybe queue a new packet
+
+
+;;; r0, r1 bashable; r4 CSR, r5 DMC object
+
+dmcrfn:	push r2
+	mov $dcrbf(r5),r0
+	mov $dmcln-$dmcst(r0),r2		;character count
+	loop <			;exit mechanism
+	  tst dc.ba(r4)		;maybe make DMC11 happy?
+	  cmp r2,dc.cc(r4)
+	  if hi,< netmet c2
+		  bicb #%dcrdo,dc.out(r4)
+		  exitl >
+	  bicb #%dcrdo,dc.out(r4)
+	  mov r2,r1
+	  add #$dmcst,r1	;byte count of packet needed
+	  cmp r1,#pksiz.
+	  if lt,< netmet bl
+		  exitl >
+	  call pktall
+	  if eq,< netmet ot
+		  exitl >
+	  push r1		;save pointer
+	  add #$dmcst,r1	;point to beginning of packet
+	  inc r2		;round ...
+	  asr r2		;... to words
+	  loop <
+	    mov (r0)+,(r1)+
+	    sorl r2
+	    >
+	  call dmcqrb
+	  pop r1
+	  bis #%pkt08,$pktfl(r1)	;decalre packet safe for 8bit
+	  mov $dmcty(r1),r2
+	  call ethrcv
+	  br 10$		;don't queue the buffer again
+	  >
+	call dmcqrb
+10$:	pop r2
+	return
+
+
+;;; r0, r1 bashable; r4 CSR, r5 DMC object
+
+dmccco:	mov dc.cc(r4),r0	;get conditions flag
+	bicb #%dcrdo,dc.out(r4)
+	bit #bit.00,r0
+	if ne,< netmet ab >
+	bit #bit.01,r0
+	if ne,< netmet ab >
+	bit #bit.02,r0		;no buffer, actually
+	if ne,< netmet lo >
+	bit #bit.03+bit.07+bit.08,r0
+	if ne,< netmet ab
+		jcall dmcrst >
+	bit #bit.04,r0
+	if ne,< netmet bl
+		jcall dmcrst >
+	bit #bit.09,r0
+	if ne,<bpt>
+	return
+
+
+;;; reset a DMC-11.  Object in r5, CSR in r4
+
+dmcrst:	mov #%dcmcl_8,dc.mnt-1(r4)
+	loop <
+	  tst dc.mnt-1(r4)
+	  rptl pl
+	  >
+	push #%dccbi
+	push r5
+	add #$dcyuk,(sp)
+	push #0
+	call dmccmi
+	;push #%dccci,#0,#bit.08	;maintenance mode
+	push #%dccci,#0,#0	;not maintenance mode
+	call dmccmi
+
+	clr $dc.cc(r5)
+	call dmcqrb		;try to queue a receive buffer
+	jcall dmctfn		;pretend there was a transmit finish
+	
+
+dmcqrb:	tst $dc.cc(r5)		;allowed to issue?
+	if eq,<
+	  tstb dc.inp(r4)	;also have to wait for RDI to go off
+	  if pl,<
+	    clrb $dcqrn(r5)	;queue receive no longer needed
+mov #4,.dccpy
+	    push #%dccba+%dcinr
+	    push $dcrbf(r5),#ldmcf
+	    call dmccmd		;must be a call
+	    return
+	  > >
+	movb #-1,$dcqrn(r5)	;queue receive (still) needed
+	return
+
+dmcqxp:	tst $dc.cc(r5)		;allowed to issue?
+	if eq,<
+	  tstb dc.inp(r4)	;also have to wait for RDI to go off
+	  if pl,<		     
+	    clrb $dcqxn(r5)
+	    tst $dcxpk(r5)
+	    if eq,<		;nope, get fresh one and queue it
+	      push r1
+	      call ntremq
+	      if ne,<
+		mov r1,$dcxpk(r5)
+		push #%dccba
+		add #$dmcst,r1	;point to start
+		push r1		;push buffer address
+		push $dmcln-$dmcst(r1)	;and character count
+		call dmccmd
+		>
+	      pop r1
+	      >
+	    return
+	  > >
+	movb #-1,$dcqxn(r5)	;queue xmit buffer (still needed)
+	return
+
+
+  ;;
+;;;;;;  Command issuance
+  ;;
+
+; Immediate command:  push command,BA,CC ? CALL (must be call)
+dmccmi:	bis #%dcrqi,6(sp)
+	loop <
+	  tstb dc.inp(r4)
+	  rptl mi		;maybe previous command still hung
+	  >
+	movb 6(sp),dc.inp(r4)
+	loop <
+	  tstb dc.inp(r4)
+	  rptl pl
+	  >
+dmccmc:	;; continue
+	mov 4(sp),dc.ba(r4)
+mov time,junk
+mov time,junk
+	mov 2(sp),dc.cc(r4)
+mov time,junk
+mov time,junk
+mov dc.inp(r4),@.dcpt2
+	bicb #%dcrqi,dc.inp(r4)
+	pop (sp),(sp),(sp)
+	return
+
+.dcini:	clr .dccpy
+	mov #.dcdat,.dcptr
+	mov #.dcdat,.dcpt2	
+	return
+
+.wscalar .dccpy
+.wscalar .dcptr
+.wscalar .dcpt2
+.wvector .dcdat,8*8
+.wvector .dccop,8*8
+
+; Command: push command,BA,CC ? CALL.  If it doesn't take immediately,
+; setup so interrupt will do it.
+dmccmd:
+
+push r0
+
+mov .dcptr,r0
+mov time,(r0)+
+mov dc.inp(r4),(r0)+
+mov 8(sp),(r0)+
+mov 6(sp),(r0)+
+mov 4(sp),(r0)+
+mov $dc.cc(r5),(r0)+
+mov r0,.dcpt2
+mov #0,(r0)+
+mov #0,(r0)+
+cmp r0,#.dcdat+<8*8*2>
+if his,<mov #.dcdat,r0>
+mov r0,.dcptr
+
+dec .dccpy
+if eq,<
+  push r1,r2
+  mov #.dccop,r1
+  mov #8*8,r2
+  loop <
+    mov (r0)+,(r1)+
+    cmp r0,#.dcdat+<8*8*2>
+    if his,<mov #.dcdat,r0>
+    sorl r2
+    >
+  pop r2,r1
+  >
+
+pop r0
+
+	bis #%dcrqi,6(sp)
+	movb 6(sp),dc.inp(r4)
+	push r0
+	mov #20,r0
+	loop <
+	  tstb dc.inp(r4)
+	  if mi,<
+mov dc.inp(r4),@.dcpt2
+add #2,.dcpt2
+	    pop r0
+	    br dmccmc		;continue
+	    >
+	  sorl r0
+	  >
+mov dc.inp(r4),@.dcpt2
+add #2,.dcpt2
+	pop r0
+	mov 4(sp),$dc.ba(r5)
+	mov 2(sp),$dc.cc(r5)
+	pop (sp),(sp),(sp)
+	return
+	
+
+
+dmcini:	clr r0
+call .dcini
+	loop <
+	  call dmcin1
+	  add #2,r0
+	  cmp r0,#ndmc11*2
+	  rptl lo
+	  >
+	return
+
+dmcin1:	mov dc$csr(r0),r4
+	call nxmcat
+	  dmcnxm
+	movb #%dcmcl,dc.mnt(r4)
+	call nxmclr
+
+	mov #l$dmc11,r5
+	call ntmake
+	if eq,<bpt>
+	mov r4,$dccsr(r5)
+	mov r5,netobj+<2*dmcnet>
+
+	mov #-1,$dclok(r5)
+	clr $dc.cc(r5)
+
+	push #ldmcf
+	call fsmall
+	pop $dcrbf(r5)
+	if eq,<bpt>
+
+	mov dc$vec(r0),r2	;get interrupt vector
+	mov dc$vad(r0),(r2)+	;set vector address
+	mov #pr5,(r2)+
+	mov dc$vad(r0),(r2)+	;and for interval timer??
+	mov #pr5,(r2)+
+
+	call dmcrst		;reset the interface
+
+	mov $ntfls(r5),$dcfls(r5)	;save standard flush routine
+	mov #dmcfls,$ntfls(r5)	;install non-standard flush routine
+
+		.if nz ncpchs
+	mov #dcchgv,nt$chs(r5)
+	mov dc$chs(r0),nt.chs(r5)
+	mov #20.,$ctrcv(r5)
+		.endc
+
+	mov r0,r4
+	add #dmcnet*2,r4
+	jcall ntmak1
+
+dmcnxm:	clr netobj+<2*dmcnet>(r0)
+	return
+
+;;; this only gets called from main program level, so we don't the DMC
+;;; lock should never be locked. 
+dmcfls:	call @$dcfls(r5)	;call normal flush routine
+	push r4
+	mov $dccsr(r5),r4
+	lock 6
+	  call dmcrst
+	unlock
+	pop r4
+	return
+
+
+
+.if nz ncpchs
+
+;;; call @nt$chs(r5)[r5:=object, r1:=packet, r2:=hardware_destination(if_needed)]
+
+dcchgv:	call cpks08		;make it save for 8bit hardware
+	mov #%etchs,$dmcty(r1)	;Chaos packet type
+	mov $pktxs(r1),$dmcln(r1)	;packet length
+	add #$pktdt-$dmcst+1,$dmcln(r1)	;add in header length and round...
+	bic #1,$dmcln(r1)	;to word boundary (POS)
+	call ntputq		;put it on the queue
+	movb #-1,$dcqxn(r5)	;declare xmit queueing needed
+	jcall dcpint		;take a pseudo interrupt to get things going
+
+.endc ncpchs
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

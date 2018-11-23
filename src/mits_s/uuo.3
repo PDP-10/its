@@ -1,0 +1,186 @@
+	.title	System call support
+	.sbttl	EMT handling (system calls)
+
+;;; ;;; General info:
+;;; ;;; 	Emulator trap setup and dispatch.  Also contains some of the system
+;;; ;;; 	wide traps.
+;;; ;;; Known bugs:
+;;; ;;; 	$CHINT is not defined (should probably be flushed).
+;;; ;;; 	$CNSGE is not defined if there are no terminals.
+
+.macro .args a,b,c,d,e,f
+ .irp arg,<a,b,c,d,e,f>
+  .irp num,\.irpcnt
+   .lif nb arg
+     mov arg,r'num
+  .endm
+ .endm
+.endm
+
+.macro	systrp num,name
+.'name=emt+<<num>&<377>>
+.word $'name
+.endm
+
+emttb1:
+	systrp	-34,makchn	;make a channel from a device at user level
+	systrp	-32,ioctl	;other I/O control
+	systrp	-30,dup		;duplicate an I/O channel
+	systrp	-26,link	;link channels together
+	systrp	-24,unlink	;unlink channel
+	systrp	-22,chint	;set channel interrupt
+	systrp	-20,close	;close a channel
+	systrp	-16,status	;get channel status
+	systrp	-14,count	;get character count
+	systrp	-12,soutz	;asciz string output
+	systrp	-10,sout	;string output
+	systrp	-06,sin		;string input
+	systrp	-04,bout	;byte output
+	systrp	-02,bin		;byte input
+emttbl:	systrp	000,hang	;comparison hang
+	systrp	002,rti		;software interrupt return
+	systrp	004,sleep	;process sleep
+	systrp	006,open	;device open
+	systrp	010,uall	;user allocate
+	systrp	012,udall	;user deallocate
+	systrp	014,logout	;logout user
+	systrp	016,usrgo	;start up a job
+	systrp	020,cnsget	;get tty index
+	systrp	022,ccnmks	;chaos:make-connection
+
+uuoini:	mov #emtbrk,@#030
+	mov #pr7,@#030+2
+	mov #trpbrk,@#034
+	mov #pr7,@#034+2
+	return
+
+emtbrk:	mtps 2(sp)		;reset priority level
+	push r5,r4		;save a couple regs
+	mov usrnow,r5		;get the current user
+	bis #%pclok,ustop(r5)	;job can be pclsr'd
+	clr usrerr(r5)		;no error yet
+	mov 4(sp),r4		;get return address
+	movb -2(r4),r4		;get low byte of emt instruction
+	call @emttbl(r4)	;call the routine
+	bic #%pclok,ustop(r5)	;can no longer pclsr job
+	ifpclsr <
+	  bic #%pclsr,ustop(r5)
+	  pop r4,r5
+	  sub #2,(sp)		;backup over the emt
+	  jcall schslp		;put this process to sleep and wake up
+				;somebody
+	  >
+	bic #psw.c,6(sp)	;no error yet
+	tst usrerr(r5)
+	if ne,<bis #psw.c,6(sp)>
+	pop r4,r5
+	rti
+
+
+
+;;; 	psw at software interrupt time
+;;; 	pc  at software interrupt time
+;;; 	saved r0
+;;; 	psw of .rti
+;;; 	pc  of .rti
+;;; 	r5
+;;; 	r4
+;;; sp/	return address
+
+$rti:	pop *,r4,r5,*,*
+	tst r0
+	if ne,<mov r0,2(sp)>
+	pop r0
+	rti
+
+;;; When the hang function is true (skips) the process is eligible
+$hang:	mov r0,usrhng(r5)
+	mov r1,hngpt1(r5)
+	mov r2,hngpt2(r5)
+	bis #%ishng,ustop(r5)	;declare hanging
+	.deshed
+	bic #%ishng,ustop(5)	;declare not hanging
+	return
+
+
+.macro hng.fn name,instr,test
+hng.'name:
+	instr @hngpt1(r5),@hngpt2(r5)
+	if test,<add #2,(sp)>
+	return
+.endm
+
+hng.fn eq,cmp,eq
+hng.fn ne,cmp,ne
+hng.fn le,cmp,le
+hng.fn lt,cmp,lt
+hng.fn pl,cmp,pl
+hng.fn lo,cmp,lo
+hng.fn gt,cmp,gt
+hng.fn be,bit,eq
+hng.fn bn,bit,ne
+
+hng.or:	tst @hngpt1(r5)
+	if eq,<
+	  tst @hngpt2(r5)
+	  if eq,<return>
+	  >
+	add #2,(sp)
+	return
+
+hng.and:tst @hngpt1(r5)
+	if ne,<
+	  tst @hngpt2(r5)
+	  if ne,<add #2,(sp)>
+	  >
+	return
+
+
+$sleep:	tst r1
+	if eq,<			;if r1=0, then r0 is delta
+	  add time,r0		;compute absolute
+	  com r1		;and make r1<>0
+	  >
+	push r2,r1,r0		;save registers
+	.args #hng.pl,#time,sp
+	call $hang		;hang until when time>r0
+	pop r0,r1,r2		;restore
+	return
+
+
+$uall:	tst usrvrs(r5)		;does the jobs variables already exist?
+	if ne,<
+	  mov usrvrs(r5),r0
+	  return
+	  >
+	loop <
+	  push r0,r0		;on stack: r0 r0
+	  call fsmall
+	  call fsmclr		;zero them
+	  pop r0		;on stack: r0
+	  if ne,<
+	    mov r0,usrvrs(r5)
+	    pop *
+	    return
+	    >
+	  call $fsmhng		;wait for a block to get freed
+	  pop r0		;get back the r0 on the stack
+	  ifpclsr <return>
+	  rptl
+	  >
+
+$udall:	push usrvrs(r5)
+	if eq,<pop *>
+	else <
+	  call fsmfre
+	  clr usrvrs(r5)
+	  >
+	return
+
+
+;;; local modes:
+;;; mode:midas
+;;; auto fill mode:
+;;; fill column:75
+;;; comment column:32
+;;; end:

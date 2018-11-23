@@ -1,0 +1,292 @@
+	.title	USER support
+
+;;; ;;; General info:
+;;; ;;; 	This module defines a PROCESS/USER, and some of the system calls
+;;; ;;; 	needed to deal with them.  Also contains the system job.
+
+dsect <			;a user
+  usrnxt::	.blkw 1		;next luser in doubly linked list
+  usrprv::	.blkw 1		;previous user in double linked list
+  usripc::	.blkw 1		;initial PC (for identification)
+  ustop::	.blkw 1		;running condition flags
+   %pclsr==100000		;user is being PCLSR'ed
+   %pclok==040000		;user can be PCLSR'ed
+   %ishng==020000		;user is hanging
+  usrerr::	.blkw 1		;system call error
+  usrhng::	.blkw 1		;function to call for hang test
+  hngpt1::	.blkw 1		;pointer one for hang test
+  hngpt2::	.blkw 1		;pointer two for hang test
+  usrspt::	.blkw 1		;top of user's stack (to detect over push)
+  usrspb::	.blkw 1		;base of user's stack (for process reset)
+  usrsp::	.blkw 1		;sp when job is not running
+  usrpri::	.blkw 1		;initial priority
+  usrprr::	.blkw 1		;request for run priority
+  usrchn::	.blkw 1		;channel list for user
+  usrtty::	.blkw 1		;tty for this user
+  usrvrs::	.blkw 1		;local storage for the user
+;;; update usrgo if you change things here
+    >,lusr
+
+
+.macro ifpclsr code
+	tst ustop(r5)
+	if mi,<code>
+.endm
+
+lsyssp==100
+
+.wvector ulink,2		;base of doubly linked list
+.bvector sysjob,lusr+lsyssp	;sysjob (always. never from free storage)
+.wscalar usrnow			;current user
+
+usrptr:	.word usrnow		;indirect pointer (sigh)
+
+usrini:	mov #schslp,@#20+0	;set IOT vector to the process sleeper
+	mov #pr6,@#20+2		;at priority 6
+	mov #ulink,ulink+0	;no users yet (not even the sysjob)
+	mov #ulink,ulink+2
+	.regs #sysjpc,#lsyssp,#128.*256.,,#sysjob
+	call usrgo
+	mov #sysjob,usrnow	;sysjob taking over (sort of...)
+	call syjini		;init the system job
+	return
+
+;;; r0/start address
+;;; r1/stack size
+;;; r2/priority
+
+$usrgo:	add #32.+40.,r1		;overhead of .<foo> and .deshed and some interrupts
+	push #lusr
+	add r1,(sp)		;stack goes right after it
+	call fsmall
+	pop r4
+	if eq,<
+	  mov #er%mem,usrerr(r5)
+	  return
+	  >
+usrgo:	push r3
+	mov ulink+0,r3
+	loop <			;sort this in
+	  cmp r3,#ulink
+	  exitl eq
+	  cmp r2,usrpri(r3)
+	  exitl hi
+	  mov (r3),r3
+	  rptl
+	  >
+	mov r3,(r4)		;set next pointer
+	mov usrprv(r3),usrprv(r4)
+	mov r4,usrprv(r3)
+	mov r4,@usrprv(r4)
+	mov r4,r3
+	add #lusr,r3		;top of stack
+	push r4			;save user for return value
+	add #usrprv+2,r4
+	mov r0,(r4)+		;remember the initial PC
+	clr (r4)+		;clear ustop
+	clr (r4)+		;no system errors yet
+	clr (r4)+		;hang function
+	clr (r4)+		;pointer one
+	clr (r4)+		;pointer two
+	mov r3,(r4)		;top of stack
+	mov #52525,@(r4)+	;put alternating bits there for checking
+	add r1,r3		;go to top of stack
+	mov r3,(r4)+		;set base of stack
+	clr -(r3)		;zero the PSW
+	mov r0,-(r3)		;initial PC
+	.rept 6
+	 clr -(r3)		;clear the registers
+	.endr
+	mov r3,(r4)+		;set the SP
+	mov r3,r0		;return the bottom of the stack to the
+				;caller (so he can set registers)
+	mov r2,(r4)+		;set the initial priority
+	mov r2,(r4)+		;and the requesting priority
+	clr (r4)+		;no channels to start with
+	mov #-1,(r4)+		;no tty for this person (yet)
+	clr (r4)+		;no user vars yet
+	pop r1			;r1 is pointer to user
+	pop r3
+	return
+
+$logout:
+	mov #pdl,sp		;reset to system PDL
+	mov #1,$intstk		;switch to interrupt stack
+	lock 6	
+	mov usrnxt(r5),r3
+	mov usrprv(r5),usrprv(r3)
+	mov usrprv(r5),r3
+	mov usrnxt(r5),usrnxt(r3)
+	call $clsall		;close all channels
+	call $udall		;deallocate local storage
+	push r5
+	call fsmfre
+	jcall schnxt		;go schedule the next person
+
+schslp:				;put task to bed
+	push r5,r4,r3,r2,r1,r0	;save regs
+	mov usrnow,r5
+	cmp #52525,@usrspt(r5)	;make sure we didn't over push
+	if ne,<
+	  mov #52525,r0
+	  mov usripc(r5),r1
+	  bpt
+	  >
+	mov sp,usrsp(r5)
+	mov #pdl,sp		;reset pdl
+	mov #1,$intstk		;running in the interrupt stack
+
+schnxt:	spl 0			;scheduler is interruptable
+	tst l2rqst		;device requesting service?
+	if ne,<
+	  clr l2rqst
+	  lock 1		;don't let clock routine do this too
+	  push #l2.nxt
+	  call dolist
+	  unlock
+	  >
+	clr r4
+	mov ulink,r5
+	loop <
+	  cmp r5,#ulink
+	  exitl eq
+	  bit #%pclsr,ustop(r5)
+	  if ne,<
+	    mov r5,r4
+	    exitl		;force PCLSR'ed job to run
+	    >
+	  tst r4
+	  if ne,<
+	    cmp usrprr(r5),usrpri(r4)	;can he compete?
+	    blo 20$
+	    >
+	  bit #%ishng,ustop(r5)
+	  if ne,<
+	    call @usrhng(r5)
+	      br 20$
+	    bic #%ishng,ustop(r5)	;so it won't get caught next time
+	    >
+	  tst r4
+	  if eq,<mov r5,r4>
+	  else <
+	    cmp usrprr(r5),usrprr(r4)
+	    if his,<
+	      inc usrprr(r4)
+	      mov r5,r4
+	      >
+	    >
+20$:	  mov usrnxt(r5),r5
+	  rptl
+	  >
+	tst r4
+	if eq,<
+	  wait			;wait for interrupt
+	  br schnxt
+	  >
+usrkik:	mov usrpri(r4),usrprr(r4)	;reset priority
+	mov r4,usrnow		;kick this user
+	spl 7			;about to go out of interrupt stack
+	mov usrsp(r4),sp
+	clr $intstk
+	pop r0,r1,r2,r3,r4,r5
+	rti
+
+
+
+.wscalar syskik			;sysjob kick word
+.wscalar systm1			;timer one (probably one minute)
+.wscalar systm2			;timer two (probably ten minute)
+
+%%==000001
+.macro sysdo bit,subr
+bit==%%
+	.word subr
+%%==%%_1
+.endm
+
+sysdov:				;sysjob do vector
+	sysdo %sytty,sytty	;some tty has awoken; check them all
+	sysdo %sytm1,sytm1	;system timer one has hit
+	sysdo %sytm2,sytm2	;system timer two has hit
+
+zero:	0			;the standard location that contains zero
+
+syjini:	clr syskik		;clear the system kick word
+	mov #1,systm1		;set timer one to go off soon
+	mov #1,systm2		;set timer two to go off soon
+	return
+
+sysjpc:
+.if nz ntty			;preallocate all command processors
+	mov #ttyrdv,r0
+	mov #ntty,r1
+	loop <
+	  mov (r0)+,r4
+	  if ne,<mov #-1,$ttipt(r4)>	;tell self to create CP
+	  sorl r1
+	  >
+	bis #%sytty,syskik	;kick self
+.endc
+
+	loop <
+	  lock 7		;read word uninterruptable
+	  mov syskik,r0
+	  if eq,<
+	    unlock
+	    .regs #hng.ne,#syskik,#zero
+	    .hang
+	    rptl
+	    >
+	  clr syskik
+	  unlock
+	  mov #sysdov,r1
+	  mov #16,r2
+	  loop <
+	    mov (r1)+,r3
+	    ror r0
+	    if cs,<
+	      push r0,r1,r2
+	      call (r3)
+	      pop r2,r1,r0
+	      >
+	    sorl r2
+	    >
+	  rptl
+	  >
+
+sysclk:	dec systm1
+	if eq,<
+	  bis #%sytm1,syskik
+	  mov #60.*60.,systm1	;one minute
+	  >
+	dec systm2
+	if eq,<
+	  bis #%sytm2,syskik
+	  mov #60.*60.*10.,systm2	;ten minutes
+	  >
+	return
+
+sytm1:	push #s1.nxt		;one minute timer
+	call dolist
+	return
+sytm2:	return
+
+sytty:	
+.if g ntty
+	jcall ttykik
+.iff
+	return
+.endc
+
+s1.nxt==0
+.macro .s1clk name
+	.word s1.nxt,name
+	s1.nxt==.-4
+.endm
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

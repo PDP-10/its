@@ -1,0 +1,298 @@
+
+.lif  z %defin
+	.title	BOOT11 support
+	.sbttl	BOOT11 support: Definitions, Macros and Code
+
+;;; ;;; General info:
+;;; ;;; 	Raw chaos loader/debugger.  Useful for poking an 11 when it croaks
+;;; ;;; 	and you wish to poke at it (better have a debugger).
+;;; ;;; Usage:
+;;; ;;; 	defdev bt,boot11,<
+;;; ;;; 		loader <chaos-csr-address>
+;;; ;;; 		>
+
+
+.if  nz %defin
+
+.macro loader chcsr
+ld.csr==chcsr+0
+ld.myn==chcsr+2
+ld.wbf==chcsr+2
+ld.rbf==chcsr+4
+ld.rbc==chcsr+6
+ld.xmt==chcsr+12
+.endm
+
+%ldrdn==100000
+%lderr==040000
+%ldrst==020000
+%ldtcl==000400
+%ldtdn==000200
+%ldrcl==000010
+
+ld%RFC==1
+ld%ANS==5
+
+
+.endc nz %defin
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+%%==.
+.=bootad
+	br ld
+.=dbugad
+	jmp db
+
+ldtemp==%0			;temp
+ldhstb==%1			;host table
+ldaddr==%2			;load address
+ldcoun==%3			;load count
+ldrpcn==%4			;rep count (timeout)
+ldwbuf==%5			;write buffer
+ldrbuf==%6			;read buffer
+
+ld:	reset
+	mov #10$,sp
+	rti
+
+10$:				;stack points here for priority setting hack
+	20$			;return address
+	340			;priority 7
+
+20$:	mov #%ldrst,@#ld.csr	;reset the board
+	mov #%ldrcl+%ldtcl,@#ld.csr	;clear reciever and Xmitter
+	mov #ld.rbf,ldrbuf
+	mov #ld.wbf,ldwbuf
+	loop <
+	  mov #ldhstt,ldhstb
+	  loop <
+	    clr ldrpcn
+	    loop <
+	      bit #%ldrdn,@#ld.csr
+	      if ne,<
+	        br ldgpkt	;pseudo call
+ldgret:		>
+	      dec ldrpcn
+	      rptl ne
+	      >
+ldsrfc:	    loop <		;no loop, just conceptual
+	      loop <
+		bit #%ldtdn,@#ld.csr	;Xmitter ready?
+		rptl eq		;loop until ready
+		>
+	      bis #%ldtcl,@#ld.csr
+
+	      mov #ld%rfc_8,(ldwbuf)	;opcode RFC
+	      mov #ldslen,(ldwbuf)	;length of contact name
+	      mov (ldhstb)+,(ldwbuf)	;destination host
+	      clr (ldwbuf)	;his index
+	      mov @#ld.myn,(ldwbuf)	;my address
+	      mov #400,(ldwbuf)	;nice vanilla index
+	      clr (ldwbuf)	;packet number
+	      clr (ldwbuf)	;ack number
+
+	      mov #ldcstr,ldtemp	;contact string
+	      loop <
+		mov (ldtemp)+,(ldwbuf)
+		tst (ldtemp)
+		rptl ne
+		>
+	      clr (ldwbuf)	;braodcast to everybody on subnet
+	      tst @#ld.xmt	;send the packet
+	      >			;end ldsrfc
+	    tst (ldhstb)
+	    rptl ne
+	    >
+	  rptl
+	  >
+ldhstt:
+	1440			;mc
+	2026			;ai
+	5542			;ee
+	3120			;vx
+	0
+
+ldcstr:	.ascii /11LOAD/
+  ldslen==.-ldcstr
+	.even
+	.word 0			;force a zero word
+
+ldgpkt:	bit #%lderr,@#ld.csr
+	if ne,<
+10$:	  bis #%ldrcl,@#ld.csr
+	  br ldgret
+	  >
+	mov @#ld.rbc,ldcoun
+	inc ldcoun
+	bit #17,ldcoun
+	bne 10$
+	cmp (ldrbuf),#ld%rfc_8	;check opcode
+	bne 10$
+	mov (ldrbuf),ldcoun	;get the length
+	bic #170000,ldcoun	;without the forwarding count
+	cmp (ldrbuf),@#ld.myn	;for me?
+	bne 10$
+	tst (ldrbuf)		;my index (0)
+
+	loop <			;set up ans packet
+	  bit #%ldtdn,@#ld.csr
+	  rptl eq
+	  >
+	bis #%ldtcl,@#ld.csr
+	mov #ld%ans_8,(ldwbuf)
+	clr (ldwbuf)		;length of data region
+	mov (ldrbuf),(ldwbuf)	;his address
+	mov (ldrbuf),(ldwbuf)	;his index
+	mov @#ld.myn,(ldwbuf)	;my address
+	clr (ldwbuf)		;no connection, so no index
+	clr (ldwbuf)		;packet #
+	clr (ldwbuf)		;and ack #
+				;ANS packet is now ready
+
+	cmp (ldrbuf),(ldrbuf)	;skip packet # and ack #
+	cmp (ldrbuf),#<'L+<'D_8>>	;LD
+	if ne,<
+20$:	  bis #%ldtcl,@#ld.csr
+	  br 10$
+	  >
+	cmp (ldrbuf),#<40+<40_8>>	;space,,space
+	bne 20$
+	mov (ldrbuf),ldaddr		;get deposit address
+	sub #6,ldcoun		;count six bytes read
+	blt 20$			;oops, packet too short
+	if eq,<
+	  bit #1,ldaddr
+	  if ne,<halt>		;if odd just stop (or try to)
+	  jmp (ldaddr)		;if even, go there
+	  >
+	loop <
+	  mov (ldrbuf),ldtemp
+	  movb ldtemp,(ldaddr)+
+	  dec ldcoun
+	  exitl eq
+	  swab ldtemp
+	  movb ldtemp,(ldaddr)+
+	  dec ldcoun
+	  rptl ne
+	  >
+	tst (ldrbuf)		;skip first hardware word
+	mov (ldrbuf),(ldwbuf)	;he who delivereth this packet
+				;shall receiveth mine.
+	tst (ldrbuf)
+	bit #%lderr,@#ld.csr	;bit count after error?
+	bne 20$			;oops, who knows what happened
+	tst @#ld.xmt		;send the ANS poacket on its way
+	clr ldrpcn		;reset repetition count
+	br 10$			;clear receiver and return
+
+
+
+dbcnnm=ldhstb			;reuse a register
+
+db:	mov %0,@#500
+	mov #502,%0
+	mov %1,(%0)+
+	mov %2,(%0)+
+	mov %3,(%0)+
+	mov %4,(%0)+
+	mov %5,(%0)+
+	mov %6,(%0)+
+	mov #4$,sp
+	rti
+
+4$:				;stak points here for priority setting hack
+	6$			;return address
+	340			;priority 7
+
+6$:
+	mov #ld.csr,ldtemp
+	mov #ld.rbf,ldrbuf
+	mov #ld.wbf,ldwbuf
+	mov #%ldrst,(ldtemp)
+	mov #%ldrcl+%ldtcl,(ldtemp)	;clear reciever and Xmitter
+	loop <
+	  bit #%ldrdn,(ldtemp)
+	  rptl eq
+	  bit #%lderr,(ldtemp)
+	  if ne,<
+10$:	    bis #%ldrcl,(ldtemp)
+	    rptl
+	    >
+	  mov @#ld.rbc,ldcoun
+	  inc ldcoun
+	  bit #17,ldcoun
+	  bne 10$
+	  cmp (ldrbuf),#ld%rfc_8	;check opcode
+	  bne 10$
+	  tst (ldrbuf)		;punt the count
+	  cmp (ldrbuf),@#ld.myn
+	  bne 10$
+	  tst (ldrbuf)
+
+	  loop <
+	    bit #%ldtdn,(ldtemp)
+	    rptl eq
+	    >
+	  bis #%ldtcl,(ldtemp)
+	  mov #ld%ans_8,(ldwbuf)
+	  mov #2,(ldwbuf)
+	  mov (ldrbuf),(ldwbuf)
+	  mov (ldrbuf),(ldwbuf)
+	  mov @#ld.myn,(ldwbuf)
+	  clr (ldwbuf)
+	  clr (ldwbuf)
+	  clr (ldwbuf)
+
+
+	  cmp (ldrbuf),(ldrbuf)
+	  mov (ldrbuf),dbcnnm
+	  cmp (ldrbuf),#<40+<40_8>>	;space,,space
+	  if ne,<
+20$:	    bis #%ldtcl,(ldtemp)
+	    br 10$
+	    >
+	  loop <
+	    cmp dbcnnm,#<'e+<'x_8>>
+	    if eq,<
+	      mov @(ldrbuf),(ldwbuf)
+	      exitl
+	      >
+	    cmp dbcnnm,#<'d+<'p_8>>
+	    if eq,<
+	      mov (ldrbuf),@(ldrbuf)
+	      clr (ldwbuf)
+	      exitl
+	      >
+	    cmp dbcnnm,#<'g+<'o_8>>
+	    if eq,<jmp @(ldrbuf)>
+	    br 20$
+	    >
+	  tst (ldrbuf)
+	  mov (ldrbuf),(ldwbuf)
+	  tst (ldrbuf)
+	  bit #%lderr,(ldtemp)
+	  bne 20$
+	  tst @#ld.xmt
+	  br 10$
+	  >
+
+.=%%
+
+btini:	return
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

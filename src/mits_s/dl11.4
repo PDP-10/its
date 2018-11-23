@@ -1,0 +1,302 @@
+
+.lif  z %defin
+	.title	DL11 support
+	.sbttl	DL11 support: Definitions, Macros and Code
+
+;;; ;;; General info:
+;;; ;;; 	DL11 async line driver.  Also works for other single line async
+;;; ;;; 	interfaces that look like a DL11 (DLV11-J, Technical magic DLV11-J,
+;;; ;;; 	etc.  
+;;; ;;; Usage:
+;;; ;;; 	defdev dl,dl11,<
+;;; ;;; 	  ;;;	dl vec,csr   ,typ,baud.,where
+;;; ;;; 		dl 060,177560,v52,9600.,<This is where it is.>
+;;; ;;; 	  >
+;;; ;;; 	where TYP is as defined in the TTY module, and BAUD is with the
+;;; ;;; 	decimal point.
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+.if p1
+	.sbttl	-- Definitions 
+
+
+;; dl11 definitions
+ ;; offsets to device registers
+  dl.rcs==0			;receiver csr
+  dl.rbf==2			;receiver buffer
+  dl.xcs==4			;transmitter csr
+  dl.xbf==6			;transmitter buffer
+ ;; receiver csr bits
+  dl.ren==bit.00		;reader enable [w]
+  dl.rie==bit.06		;receiver interrupt enable [rw]
+  dl.rdn==bit.07		;receiver done [r]
+  dl.rac==bit.11		;receiver active [r]
+ ;; receiver data buffer [read only]
+  dl.rdt==mask8			;eight bits of data
+  dl.par==bit.12		;parity error
+  dl.frm==bit.13		;framing error
+  dl.ovr==bit.14		;overrun
+  dl.err==bit.15		;error
+ ;; transmitter status register
+  dl.xbk==bit.01		;transmit a BREAK [rw]
+  dl.mnt==bit.03		;maintenance [rw]
+  dl.xie==bit.06		;transmitter interrupt enable [rw]
+  dl.xrd==bit.07		;transmitter ready [r]
+ ;; transmitter data buffer [write only]
+  dl.xdt==mask8			;transmitter data
+
+	.sbttl	-- Macros
+
+.macro dl vec,csr,ttytyp,baud,where
+    .if p1
+	 %%==.
+	     .=0
+	     .string <where>
+	 .=%%
+    .iff
+	 %%==.
+	     .=dl$vec+<2*ndl>
+	      .word vec
+	     .=dl$csr+<2*ndl>
+	      .word csr
+	     .=dl$rpt+<2*ndl>
+	      .word dl$brk+dl$rbk+<ndl*ldl$bk>
+	     .=dl$xpt+<2*ndl>
+	      .word dl$brk+dl$xbk+<ndl*ldl$bk>
+	     .=dl$tty+<2*ndl>
+	      .word 2*ntty
+	     .=ttyityp+<2*ntty>
+	      .word t.'ttytyp
+	     .=ttyispd+<2*ntty>
+	      .word baud
+	     .=ttyilo+<2*ntty>
+	      .string <where>
+         .=%%
+    .endc
+    ndl==ndl+1
+    ntty==ntty+1
+.endm
+
+.endc p1
+
+dv%dl==ndv%
+ndv%==ndv%+1
+ndl==0				;no dls to start with
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+dsect <			;;; a DL11 receiver structure
+		.blkb l$tti	;basically an input tty with...
+  $dlrnum::	.blkw 1		;a DL device index
+  >,l$dlr
+
+dsect <			;;; a DL11 transmitter structure
+  		.blkb l$tto	;basically an output tty with...
+  $dlxnum::	.blkw 1		;a DL device index
+  $dlxcsr::	.blkw 1		;cached xmit csr for dlpput
+  $dlbrk::	.blkw 1		;number of characters before turning off
+				;break
+  >,l$dlx
+
+;;; DL11s are PDP11 interfaces to one serial line.  The receiver is supported
+;;; by one source object, and the transmitter by one destination object.
+
+dl$vec:	.blkw ndl		;interrupt vector location
+dl$csr:	.blkw ndl		;csr device register base
+dl$tty:	.blkw ndl		;tty number of this dl
+dl$rpt:	.blkw ndl		;pointer to receiver interrupt routines
+dl$xpt:	.blkw ndl		;pointer to transmitter interrupt routines
+
+.wvector dl$rdv,ndl		;receiver devices
+.wvector dl$xdv,ndl		;transmitter devices
+
+dsect <	
+  dl$rbk::	jsr r0,dlrint	;receiver interrupt
+		.blkw 1		;dl index
+  dl$xbk::	jsr r0,dlxint	;transmitter interrupt
+		.blkw 1		;pointer into transmitter object table
+  >,ldl$bk
+
+dl$brk:
+.rept ndl
+	jsr r0,dlrint
+	.rpcnt*2
+	jsr r0,dlxint
+	.rpcnt*2
+.endr
+
+
+
+.s1clk dlrftm			;DL Receiver %^& Techinical Magic
+
+.wscalar $dlrftm		;counter
+
+dlrftm:	push r0,r1,r2,r3		;gets called once per minute
+	mov #ndl,r0
+	if ne,<			;safety
+	  mov #dl$rdv,r1
+	  mov #dl$csr,r2
+	  loop <
+	    mov (r2)+,r3	;get the CSR
+	    tst (r1)+		;make sure there is an object
+	    if ne,<
+	      bic #dl.rie,dl.rcs(r3)	;clear interrupt enable
+	      bis #dl.rie+dl.ren,dl.rcs(r3)	;turn it back on, and make sure enabled too
+	      >
+	    sorl r0
+	    >
+	  >
+	pop r3,r2,r1,r0
+	return
+
+;;; DL11 receiver interrupt handler.  Interrupt vector points to DLJSR field
+;;; of source object, which contains JSR R0,@#DLRINT.  Thus on entry here R0
+;;; is saved on the stack and initialized to line specific data.  Because the
+;;; JSR is in the object rather than before it, R0 does not contain a pointer
+;;; to the beginning of the object.  This is purely an efficiency hack (see
+;;; code below).
+
+dlrint:	push r1			;save reg
+	mov (r0)+,r0		;get dl index
+	mov dl$csr(r0),r1	;get the csr
+	bit #dl.rdn,dl.rcs(r1)	;check receiver done (safety)
+	if ne,<
+	  push r4
+	  mov dl$rdv(r0),r4	;get the receive device
+	  mov dl.rbf(r1),r1	;get the character
+	  bit #dl.frm,r1
+	  if ne,<		;break character on framing error
+	    movb #%acom,r1	;send COM-B
+	    call @$dvlpt(r4)
+	    movb #'B,r1
+	    >
+	  else  <bic #mask8,r1>
+	  call @$dvlpt(r4)	;logically put the character in the device
+	  pop r4
+	  >
+	pop r1,r0
+	rti
+
+
+
+;;; DL11 transmitter interrupt handler.  Interrupt vector points at object
+;;; representing the specific DL11 starting with JSR R0,@#DLXINT.  Thus on
+;;; entry here R0 is saved on the stack and initialized to a pointer to the
+;;; object itself for the appropriate DL11.  
+
+dlxint:	;; Remove next character from queue in DL11 object and send it.  If
+	;; queue becomes empty, then disable interrupts.  This code can fail
+	;; if interrupted by a queue insertion; thus our source cannot be an
+	;; interrupt routine that runs at higher priority than we do.
+
+	mov (r0)+,r0		;get the index
+	push r1,r4
+	mov dl$csr(r0),r1
+	mov dl$xdv(r0),r4
+	movb @$dvfpt(r4),dl.xbf(r1)	;stuff character in device register
+	push r1
+	call chnfgt		;do a fast get (no channel in r0) from the device
+	pop r1
+	dec $dlbrk(r4)		;decrement break count
+	if eq,<bicb #dl.xbk,dl.xcs(r1)>
+	else <if mi,<clr $dlbrk(r4)>>
+	tst $dvhmn(r4)
+	if eq,<bicb #dl.xie,dl.xcs(r1)>
+	pop r4,r1,r0
+	rti
+
+
+
+dlpwu::
+dlini:	clr $dlrftm		;clear counter
+	clr r0
+	loop <
+	  call dlinit
+	  add #2,r0
+	  cmp r0,#2*ndl
+	  rptl lt
+	  >
+	return
+
+;;; Initialize one DL11 line.  Called with R0 as DL11 index.
+
+dlinit:	push r2
+	mov dl$csr(r0),r2	;get CSR
+	call nxmcat		;install catch for NXM errors
+	  dlnxm
+	clr dl.rcs(r2)		;clear receiver
+	clr dl.xcs(r2)		;clear transmitter
+	call nxmclr		;we have a DL11
+
+	push dl$tty(r0),#l$dlr,#l$dlx	;size of transmit and receive devices
+	call ttygood		;declare tty good and create it
+	if cs,<bpt>
+
+	pop r2			;get transmit device
+	mov r2,dl$xdv(r0)
+	mov dl$csr(r0),$dlxcsr(r2)	;setup fast xmit csr for dlpput
+	add #dl.xcs,$dlxcsr(r2)	;...
+	mov #dlpput,$dvppt(r2)	;reset physical put
+
+	pop dl$rdv(r0)		;get receive device
+	pop *			;flush tty number
+
+	mov dl$vec(r0),r2	;get the vector address
+	mov dl$rpt(r0),(r2)+	;setup receive and xmit interrupt vectors 
+	mov #pr5,(r2)+
+	mov dl$xpt(r0),(r2)+
+	mov #pr5,(r2)+
+
+	mov dl$csr(r0),r2
+	bis #dl.rie+dl.ren,dl.rcs(r2)	; turn on receiver interrupts
+
+	pop r2
+	return
+
+dlnxm:	clr dl$rdv(r0)		;no receiver device
+	clr dl$xdv(r0)		;nor a transmitter device
+
+	push r0
+	mov dl$tty(r0),r0
+	call ttybad		;declare tty bad
+	pop r0
+
+	pop r2
+	return
+
+
+
+dlpput:	lock 6
+	call chnput
+	if cc,<bis #dl.xie,@$dlxcs(r4)>	;enable interrupts
+	unlock
+	return
+
+dlpget:	lock 6
+	call chnget
+	unlock
+	return
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

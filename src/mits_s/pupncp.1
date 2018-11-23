@@ -1,0 +1,410 @@
+
+.lif  z %defin
+	.title	PUP protocol support
+	.sbttl	PUP protocol support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defncp pup
+
+  .ntgiv <		;;need these fields in a network object
+nt$pup::	.blkw 1		;routine to give a pup packet
+nt.pup::	.blkb 1		;pup address of this interface
+		.even
+  >
+
+.if p1
+	.sbttl	-- Definitions 
+
+
+.endc p1
+
+****
+	.sbttl	-- Macros
+****
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	PUP packet definitions
+  ;;
+
+  dsect <
+		.blkb $pktdt	;packet header up to data portion
+$ppk::
+$ppksz::	.blkw 1		;00 size of packet (in bytes)
+$ppkty::	.blkb 1		;02 type (opcode)
+		.blkb 1		;03
+$ppkpn::	.blkw 1		;04 pup id (packet num?) (high)
+		.blkw 1		;06 pup id (packet num?) (high)
+$ppkda::	.blkw 1		;10 destination address
+$ppkdi::	.blkw 1		;12 destination index (high)
+		.blkw 1		;14 destination index (low)
+$ppksa::	.blkw 1		;16 source      address
+$ppksi::	.blkw 1		;20 source      index (high)
+		.blkw 1		;22 source      index (low)
+$ppkdt::		;;24 data starts here
+   >,l$ppk
+
+.pksiz l$ppk,l$ppk,l$ppk
+
+  ;;
+;;;;;;	Packet opcodes
+  ;;
+
+%poech==001			;echo-me
+%poecr==002			;echo reply
+%pogiq==200			;gateway information request
+
+  ;;
+;;;;;;	Connection object
+  ;;
+
+  dsect <
+$pcsta::	.blkb 1		;connection state
+$pcflg::	.blkb 1		;flags
+$pcibf::	.blkw 1		;list of in order received packets
+$pcibe::	.blkw 1		;pointer to end for rapid addition
+$pcnib::	.blkw 1		;number of packets in list
+$pcobf::	.blkw 1		;output packets needing retransmission
+$pcobe::	.blkw 1		;pointer to end for rapid addition
+$pcnos::	.blkw 1		;number of output slots
+$pcsac::	.blkw 2		;the packet number I should ack
+$pcnpn::	.blkw 2		;next packet number to send
+$pcitm::	.blkw 1		;time connection last active
+$pclad::	.blkw 1		;local   address
+$pclid::	.blkw 2		;local   index
+$pcfad::	.blkw 1		;foreign address
+$pcfid::	.blkw 2		;foreign index
+$pcebr::	.blkw 1		;event bits    receive
+$pcepr::	.blkw 1		;event pointer receive
+$pcebx::	.blkw 1		;event bits    xmit
+$pcepx::	.blkw 1		;event pointer xmit
+  >,l$pc
+
+  ;;
+;;;;;;	Variables and tables
+  ;;
+
+.wscalar ppvmyn			;my main PUP address
+.wscalar ppvnup			;number of pup interfaces that are alive
+
+ppcncn==3			;allow three pup connections
+.wscalar ppvuni			;uniquizing key
+.wvector pptcon,ppcncn		;table of connections
+
+.wscalar ppvipq			;network input queue
+.wscalar ppvipe			;pointer to ens for fast insertion
+
+puprcv:	call pupckt		;compute checksum
+	if ne,<
+	  netmet c2
+	  jcall pktfre
+	  >
+	netmet in
+	mov #11.,@$ctrcp(r5)	;and routing cost
+	mov $ctrav(r5),@$ctrap(r5)	;reset routing table entry
+	tst $ppkda(r1)
+	if ne,<
+	  cmp $ppkda(r1),nt.pup(r5)
+	  if ne,<
+	    mov #-1,$pktul(r1)	;not on a user list
+	    jcall puprou	;go route it out to the network
+	    >
+	  >
+	lock 6
+	mov r1,@ppvipe		;put it on the end of the list
+	mov r1,ppvipe		;make it the end
+	unlock
+	return
+
+puprou:	push r5,r2,#0		;hardware object,r2, immediate destination
+	tst $ppkda(r1)		;is it a broadcast?
+	if eq,<movb $ppkda+1(r1),r5>	;use soruce subnet to determine interface
+	else  <
+	  mov $ppkda(r1),(sp)	;assume on same subnet
+	  movb $ppkda+1(r1),r5	;destination subnet
+	  bic #mask8,r5		;sign extension lossage
+	  asl r5
+	  tstb chtrou+1(r5)	;is there a bounding host
+	  if ne,<mov chtrou(r5),(sp)>	;us it as bouncing bridge
+	  movb 1(sp),r5		;get immediate subnet
+	  >
+	pop r2			;get immediate destination
+	bic #mask8,r5		;sign extension lossage
+	cmp r5,#chcmsn
+	if lo,<
+	  asl r5
+	  tstb chtrou+1(r5)	;test high byte (better be zero)
+	  if eq,<			;either hardware or nonexistent
+	    mov chtrou(r5),r5	;get interaface index + 1
+	    if ne,<		;hardware
+	      mov netobj-1(r5),r5	;get the hardware object
+	      call ppkxqu
+	      pop r2,r5		;restore
+	      return
+	  > > >
+	call pktngv		;can't get there from here
+	pop r2,r5
+	return
+	
+ppkxqu:	mov $ppksz(r1),$pktxs(r1)
+	push r1
+	loop <			;various ways to exit
+	  cmp nt$pup(r5),#pktngv	;does it talk pup?
+	  if ne,<
+	    call @nt$pup(r5)
+	    exitl
+	    >
+		.if nz ncpchs
+	  cmp nt$chs(r5),#pktngv	;maybe it talks chaos?
+	  if ne,<		;yup
+	    call pupchs		;convert pup to chaos
+	    if ne,<call cpkrou>	;route it out to the CHAOS
+	    exitl
+	    >
+		.endc
+	  call pktngv		;can't get it there from here
+	  >
+	pop r1
+	return
+
+.if nz ncpchs
+pupchs:	push r2,r1
+	mov $ppksz(r1),r1
+	add #$pktdt,r1
+	call cpkall		;get a chaos packet
+	if eq,<
+	  pop r1,r2
+	  call pktngv		;throw it away (unless on a user list)
+	  clr r1
+	  return
+	  >
+	pop r2			;get PUP packet into r2
+	movb #%counc,$cpkop(r1)	;opcode is UNC
+	mov $ppksz(r2),$cpknb(r1)	;number of bytes
+	mov $ppkda(r2),$cpkda(r1)	;map destination address
+	mov $ppkdi+2(r2),$cpkdi(r1)	;low half of destination index
+	mov $ppksa(r2),$cpksa(r1)	;map source address
+	mov $ppksi+2(r2),$cpksi(r1)	;low half of source index
+	mov #100001,$cpkan(r1)	;indicate PUP packet
+	push r1,r2,r3
+	mov $ppksz(r2),r3
+	inc r3
+	asr r3
+	add #$cpkdt,r1
+	add #$ppkdt,r2
+	loop <
+	  mov (r2)+,(r1)+
+	  sorl r3
+	  >
+	pop r3,r2,r1
+	mov $pktfl(r2),$pktfl(r1)	;copy safety flags
+	push r1
+	mov r2,r1		;get the pup packet
+	call pktngv		;throw it away (if not on user list)
+	pop r1,r2		;get chaos packet, restore r2
+	tst r1			;set condition code
+	return
+.endc nz chsncp
+
+;;; check the checksum
+pupckt:	call pupck1		;compute it
+	cmp @2(sp),#-1		;is it checksummed?
+	if eq,<			;no, so always match
+	  pop *,*
+	  sez			;good match
+	  return
+	  >
+	cmp (sp)+,@(sp)+	;compare the computed with packet's idea
+	return
+
+;;; set the checksum
+pupcks:	call pupck1
+	mov (sp)+,@(sp)+	;set it
+	return
+
+pupck1:	push (sp),(sp),r1,r2,r3
+	add #$ppk,r1		;go to packet data
+	mov (r1),r2		;get size
+	dec r2			;without checksum...
+	asr r2			;...in words
+	clr r3			;build checksum in r3
+	loop <
+	  add (r1)+,r3
+	  adc r3		;one's complement add
+	  if mi,<sec>		;sign bit to the carry
+	  rol r3		;rotate the beast
+	  sorl r2
+	  >
+	inc r3			;grock -0
+	if ne,<dec r3>		;nope, set it back
+	mov r1,12(sp)		;set the pointer to checksum
+	mov r3,10(sp)		;set the checksum
+	pop r3,r2,r1
+	return
+
+  ;;
+;;;;;;	Packet allocation/deallocation
+  ;;
+
+ppkall:	call pktall
+	if eq,<return>
+	bis #%pkt16,$pktfl(r1)	;declare safe for 16.bit
+	clr $ppkty(r1)		;clear the type field
+	clr $ppksz(r1)		;nothing in packet yet
+	clz			;success -- not zero
+	return
+
+ppkfre==pktfre
+ppkfrl==pktfrl
+
+
+  ;;
+;;;;;;	connection routines
+  ;;
+
+ppcall:	push r5,r4		;save regs
+	clr r0
+	mov #pptcon,r5
+	mov #ppcncn,r4
+	loop <
+	  tst (r5)+
+	  if ne,<
+	    sorl r4
+	    exitl
+	    >
+	   ;we have found a free slot to put a connection
+	  push #l$pc		;size of a connection structure
+	  call fsmall		;get it
+	  call fsmclr		;clear it out
+	  pop r0
+	  exitl eq		;oops, no memory now
+	  mov r0,-(r5)		;place it in the connection table slot
+	  call ppcrst		;reset it completely
+	  mov r5,r4		;compute index...
+	  sub #pptcon,r4	;...now a word index...
+	  asr r4		;...now an index
+	  movb r4,$pclid(r0)	;set the index as low part
+	  incb ppvuni		;up the uniquizer
+	  if eq,<incb ppvuni>	;NEVER allow it to be zero
+	  movb ppvuni,$pclid+1(r0)	;set it
+	  mov ppvmyn,$pclad(r0)	;set local address
+	  >
+	pop r4,r5
+	tst r0
+	return
+
+ppcrst:	push r5,r1
+	clrb $pcsta(r0)		;initial state is inactive
+	clr $pcfid(r0)
+	mov $pcibf(r0),r1	;get ready to free the input list
+	if ne,<
+	  clr $pcibf(r0)
+	  call pktfrl
+	  >
+	mov r0,$pcibe(r0)	;reset insertion pointer...
+	add #$pcibf,$pcibe(r0)	;...done
+	mov #-1,$pcnib(r0)	;no input packets
+	mov #junk,$pcepr(r0)	;event pointer recieve at junk
+	mov #junk,$pcepx(r0)	;event pointer xmit    at junk
+	
+  loop <			;fall through, but don't double push regs
+	exitl
+ppcrs2:				;reset most of the connection
+	push r5,r1
+  >
+	mov time,$ccitm(r0)	;declare connection active as of now
+	tst $pcnib(r0)
+	if eq,<mov #-1,$pcnib(r0)>	;if no packets, pretend -1
+	mov $pcobf(r0),r5	;get the list of packets to xmit
+	loop <
+	  mov r5,r1		;get the top of the list
+	  exitl eq
+	  mov (r1),r5		;cdr down
+	  mov #+1,$pktul(r1)	;not in need of retransmit
+	  cmp $pktxl(r1),#-1	;test the transmit link
+	  if eq,<call pktfre>	;and free it
+	  rptl		;keep going down the list
+	  >
+	clr $pcobf(r0)
+	mov #-1,$pcnos(r0)	;no output slots (non-zero so people wake up)
+	bis $pcebx(r0),@$pcepx(r0)	;wake up both event channels
+	bis $pcebr(r0),@$pcepr(r0)	;...they will be awake when they look
+	mov r0,$pcobe(r0)	;setup insertion pointer...
+	add #$pcobf,$pcobe(r0)	;...done
+	pop r1,r5
+	return
+
+ppcfre:	call ppcrst		;reset the connection to free packets
+	push r0
+	movb $pclid(r0),r0	;get low bytes of index
+	asl r0
+	cmp pptcon(r0),(sp)	;am I the one in the table?
+	if eq,<clr pptcon(r0)>	;if so, I go away
+	else  <bpt>		;if not, somebody out of phase (bad)
+	call fsmfre		;wave...bye...bye
+	clr r0			;no more connection
+	return
+
+
+ppkxok:	tst $pcnos(r0)
+	return
+
+ppkpko:	tstb $pcsta(r0)		;connection active yet?
+	if eq,<			;nope
+	  inc $pcsta(r0)	;declare it active
+	  clr $pcnpn+0(r0)
+	  clr $pcnpn+2(r0)
+	  clr $pcsac+0(r0)
+	  clr $pcsac+2(r0)
+	  mov #1,$pcnos(r0)
+	  mov time,$pcitm(r0)
+	  >
+	mov $pcnpn+0(r0),$ppkpn+2(r1)
+	mov $pcnpn+2(r0),$ppkpn+0(r1)
+	inc $pcnpn(r0)
+	if eq,<inc $pcnpn+2(r0)>
+	mov $pcfad(r0),$ppkda(r1)
+	mov $pcfid+0(r0),$ppkdi+2(r1)
+	mov $pcfid+2(r0),$ppkdi+0(r1)
+	mov $pclad(r0),$ppksa(r1)
+	mov $pclid+0(r0),$ppksi+2(r1)
+	mov $pclid+2(r0),$ppksi+0(r1)
+	clr (r1)		;clear user list
+	mov r1,@$pcobe(r0)
+	mov r1,$pcobe(r0)
+	jcall puprou
+
+pupini:	clr ppvipq
+	mov #ppvipq,ppvipe
+	tst ppvnup		;any pup interfaces up?
+	if ne,<
+	  .regs #ppkrcv,#40,#200_8
+	  .usrgo
+	  if cs,<bpt>		;oops
+	  >
+	return
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:
