@@ -1,0 +1,529 @@
+
+.lif  z %defin
+	.title	PERTEK support
+	.sbttl	PERTEK support: Definitions, Macros and Code
+
+;;; ;;; General info:
+;;; ;;; 	A little code to play with the 512.*512. Pertek (sp?) graphics
+;;; ;;; 	board. 
+;;; ;;; Usage:
+;;; ;;; 	defdev pt,pertek,<
+;;; ;;; 	  ;;;	pt csr   ,raster_line
+;;; ;;; 		pt 174140,174000
+;;; ;;; 	  >
+;;; ;;; 	
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+.if p1
+	.sbttl	-- Definitions 
+
+pt.csr==0
+  pt.blk==100000		;screen blanking
+  pt.msk==077700		;mask for scan line address
+  pt.ash==6			;ash amount for scan line address
+  pt.ena==000040		;enable
+  pt.vro==000020		;enables video ram
+  pt.cro==000010		;enable character ram instead of video
+  pt.mld==000004		;memory load: duplicate top scan line throughout
+  pt.rev==000002		;reverse video
+  pt.map==000001		;enable direct address, disable one raster map
+pt.adr==4			;internal register pointer
+pt.dat==6			;internal value in that register
+
+%ptwid==512.			;width in pixels
+%pthig==512.			;height in pixels
+%ptcwi==8.			;character width
+%ptchi==12.			;character height
+%ptwic==%ptwid/%ptcwi		;width in characters
+%pthic==<%pthig-2>/%ptchi	;height in characters
+
+****
+	.sbttl	-- Macros
+
+.macro pt csr,linadr
+	.if p2
+	    %%==.
+		.=pt$csr+<2*npt>
+		 .word csr
+		.=pt$adr+<2*npt>
+		 .word linadr
+	    .=%%
+	.endc
+npt==npt+1
+.endm
+
+****
+
+.endc p1
+
+npt==0				;no perteks to start with
+chnsrv ^"PERTEK",cxpertek	;define the CHAOS server
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+pt$mag:				;initial stuffing of the pertek board
+	.byte 78.-1
+	.byte 64.
+	.byte 64.+3
+	.byte 16.*3+5
+	.byte 33.-1
+	.byte 7
+	.byte 32.
+	.byte 32.
+	.byte 83.
+	.byte 16.-2
+	.byte 40
+	.byte 16.-2
+	.byte 0,0,0,0
+pt$mae::			;end of magic
+
+pt$csr:	.blkw npt		;constant CSRs
+pt$adr:	.blkw npt		;constant line addresses
+.wvector pt$xdv,npt		;table of xmit devices
+
+dsect <			;;; a PERTEK structure
+		.blkb l$dv	;a raw device
+  $ptava::	.blkw 1		;device available flag
+  $ptcsr::	.blkw 1		;the CSR for this device
+  $ptadr::	.blkw 1		;IO page scan line start address
+  $ptchx::	.blkw 1		;current x-pos
+  $ptchy::	.blkw 1		;current y-pos
+  >,l$pt
+
+
+
+ptini:	clr r0
+	loop <
+	  call ptinit
+	  add #2,r0
+	  cmp r0,#2*npt
+	  rptl lt
+	  >
+	return
+
+;;; Initialize one PERTEK board.  Called with T0 as the PERTEK index.
+
+ptinit:	push r2
+	mov pt$csr(r0),r2	;get CSR
+	call nxmcat
+	  ptnxm
+	mov #pt.ena+pt.vro,pt.csr(r2)	;enable + video ram on
+	clr @pt$adr(r0)		;try clearing first word of video ram
+	call nxmclr		;looks like it is there
+
+	push r1,r0
+	.regs #ptdrvr,#40,#40_8	;start address, stack size, priority
+	.usrgo			;fire up a process to drive it
+	if cs,<bpt>
+	mov (sp),(r0)+		;put index of device in r0 of process
+	pop r0,r1
+
+	push #l$pt,#200		;size of xmit object, size of queue
+	call dvxini		;init a transmit device
+	pop r2			;get xmit device
+	if eq,<bpt>
+
+	mov r2,pt$xdv(r0)	;store it in the table of devices
+	mov #-1,$ptava(r2)	;declare it available
+	mov pt$csr(r0),$ptcsr(r2)
+	mov pt$adr(r0),$ptadr(r2)
+	mov #ptpio,$dvpio(r2)	;set physical IO control word
+
+	pop r2			;restore reg
+	return
+	
+ptnxm:	clr pt$xdv(r0)
+	pop r2
+	return
+
+ptpio:				;physical IO control
+	.word $close,ptcls
+	.word 0
+
+ptcls:	mov #-1,$ptava(r4)	;declare it available again
+	return
+
+
+;;; The process that drives a PERTEK board
+
+ptdrvr:	mov pt$xdv(r0),r4	;get the device
+	if eq,<.logout>
+	mov $ptcsr(r4),r5	;maybe cache csr in r5
+	clr r0			;starting at internal register zero
+	mov #pt$mag,r1		;point at the magic init table
+	loop <
+	  movb (r1)+,r2
+	  bic #mask8,r2		;just in case
+	  mov r0,pt.adr(r5)	;get ready to write the register
+	  mov r2,pt.dat(r5)	;and set it
+	  inc r0		;go on to next register
+	  cmp r1,#pt$mae	;reached the end yet
+	  rptl lo		;repeat as necessary
+	  >
+	call pt$clr		;clear the screen
+	loop <
+	  call ptgetc		;get a character
+	  tstb r1
+	  if pl,<call ptchar>	;draw a character
+	  else  <call pt%td>	;interpret the %td code
+	  rptl
+	  >
+
+pt%td:	bic #mask7,r1
+	asl r1
+	cmp r1,#lpt$%td		;range check
+	if ge,<return>
+	jcall @pt$%td(r1)	;call the routine
+
+;;; draw a character on the screen
+
+;;; defines FNTTBL: as index-by-11. (one less than char height for
+;;; interline spaceing) raster defs
+
+bitbak==-1			;turn the bits backwards
+.insrt chsgtv;cptfnt nnbits
+
+ptfidx:	.rept 128.
+	.word fnttbl+<.rpcnt*<%ptchi-1>>
+	.endr
+
+ptchar:	bic #mask7,r1		;make sure range is ok
+	asl r1			;word index
+	mov ptfidx(r1),r1	;get pointer to raster defs
+	mov $ptadr(r4),r3	;get the address in the IO page of raster
+	add $ptchx(r4),r3	;now it points to the correct character
+	push (r5)		;save old CSR value
+	mov #%ptchi-1,r0	;number of bytes per raster definition
+	loop <			;for each byte in the raster definition
+	  add #1_pt.ash,(r5)
+	  bisb (r1)+,(r3)
+	  sorl r0
+	  >
+	pop (r5)
+	jcall pt$fs		;do a forward space
+
+ptgetc:	loop <
+	  tst $dvhmn(r4)	;is there any data?
+	  if eq,<
+	    push r0,r2
+	    .regs #hng.ne,#zero,r4
+	    add #$dvhmn,r2	;point at the word
+	    .hang
+	    pop r2,r0
+	    rptl
+	  > >
+	jcall chnfgt		;do a fast get (no r0 channel)
+
+
+
+pt$%td:				;%TD code dispatch table for the PERTEK
+		.irp com,<mov,mv0,eof,eol,dlf,mtf,mtn,crl>
+	.word pt$'com
+		.endm
+		.irp com,<nop,bs,lf,rcr,ors,qot,fs,mv0>
+	.word pt$'com
+		.endm
+		.irp com,<clr,bel,ini,ilp,dlp,icp,dcp,bow>
+	.word pt$'com
+		.endm
+		.irp com,<rst,grf,rsu,rsd,ach,asp,alv,asv>
+	.word pt$'com
+		.endm
+lpt$%td==.-pt$%td
+
+pt$mov:	call ptgetc
+	call ptgetc
+pt$mv1::
+pt$mv0:	call ptgetc		;get the y
+	mov r1,$ptchy(r4)
+	call ptgetc		;get the x
+	mov r1,$ptchx(r4)
+pt$pos:	mov $ptchy(r4),r1	;reget the y
+	cmp r1,#%pthic		;range check
+	if ge,<
+	  clr r1
+	  clr $ptchy(r4)	;wrap
+	  >
+	bic #pt.msk,(r5)	;clear the field in the CSR
+	asl r1
+	bis ptrtbl(r1),(r5)
+pt$po1:	cmp $ptchx(r4),#%ptwic
+	if ge,<mov #%ptwic-1,$ptchx(r4)>	
+	return
+
+ptrtbl:	.rept %pthic+2
+	.word <<.rpcnt*%ptchi>_pt.ash>&pt.msk
+	.endr
+
+pt$eof:	call pt$eol
+	push (r5)
+	add #%ptchi_pt.ash,(r5)
+	call pt$eo1
+	pop (r5)
+	return
+
+pt$eo1:	mov (r5),r0		;get the current csr
+	bic #<-1-pt.msk>,r0	;only line address bits
+	ash #-pt.ash,r0		;right justified
+	mov #%pthig,r1		;total height
+	sub r0,r1		;r1 = number of scan lines to clear
+	mov $ptadr(r4),r2
+	loop <
+	  mov r2,r3
+	      .rept <%ptwid/16.>
+	  clr (r3)+
+	      .endr
+	  dec r1
+	  exitl eq
+	  add #1_pt.ash,(r5)
+	  rptl
+	  >
+	.deshed
+	return
+
+pt$eol:	mov $ptadr(r4),r3
+	mov r3,r1
+	add #%ptwid/8.,r1
+	add $ptchx(r4),r3
+	mov #%ptchi,r2		;rep count
+	loop <
+	  mov r3,r0
+	  loop <
+	    clrb (r0)+
+	    cmp r0,r1
+	    rptl lo
+	    >
+	  add #1_pt.ash,(r5)
+	  sorl r2
+	  >
+	sub #%ptchi_pt.ash,(r5)
+	return
+
+pt$dlf:	mov $ptadr(r4),r3
+	add $ptchx(r4),r3
+	mov #%ptchi,r2
+	loop <
+	  clrb (r3)
+	  add #1_pt.ash,(r5)
+	  sorl r2
+	  >
+	sub #%ptchi_pt.ash,(r5)
+	return
+
+pt$mtf::
+pt$mtn::
+pt$nop:
+	return
+
+pt$crl:	inc $ptchy(r4)
+	clr $ptchx(r4)
+	call pt$pos
+	jcall pt$eol
+
+pt$bs:	dec $ptchx(r4)
+	if mi,<clr $ptchx(r4)>
+	return
+
+pt$lf:	inc $ptchy(r4)
+	jcall pt$pos
+
+pt$rcr:	clr $ptchx(r4)
+	return
+
+pt$ors==pt$nop
+
+pt$qot:	call ptgetc
+	bic #mask7,r1
+	jcall ptchar		;draw the character
+
+pt$fs:	inc $ptchx(r4)
+	jcall pt$po1		;position 1 (only checks the x)
+
+pt$clr:	clr $ptchy(r4)
+	clr $ptchx(r4)
+	call pt$pos
+	jcall pt$eof
+
+pt$bel:	tst fixbel
+	return
+
+pt$ini==pt$nop
+
+pt$ilp:
+pt$dlp:	call ptgetc
+	return
+
+pt$.cp:				;insert/delete char setup routine
+	call ptgetc
+	pop r3			;get return address in r3
+	tstb r1
+	if le,<return>		;return (do nothing)
+	mov #%ptwic,r2
+	sub $ptchx(r4),r2	;max number of characters possible to delete
+	sub r1,r2		;number of chars to move
+	if le,<jcall pt$eol>	;optimize into clear-to-end-of-line
+	push r1,r2,$ptadr(r4)	;number to clear after delete, number to
+				;move, pointer to beginning of scan line
+	jcall (r3)		;"continue/return"
+
+pt$icp:	call pt$.cp		;call setup routine
+	add #%ptwic,(sp)	;pointer to end of line
+	push (sp)		;and again
+	sub r1,(sp)		;now pointer to last character still alive
+
+	mov #%ptchi,r3
+	loop <
+	  .regs 4(sp),2(sp),(sp)
+	  loop <
+	    movb -(r2),-(r1)
+	    sorl r0
+	    >
+	  .regs 6(sp)
+	  loop <
+	    clrb -(r1)
+	    sorl r0
+	    >
+	  add #1_pt.ash,(r5)
+	  sorl r3
+	  >
+	sub #%ptchi_pt.ash,(r5)
+	popn #4*2
+	return
+
+pt$dcp:	call pt$.cp		;call setup routine
+	add $ptchx(r4),(sp)	;pointer to current position of line
+	push (sp)		;and again
+	add r1,(sp)		;now pointer to last character still alive
+
+	mov #%ptchi,r3
+	loop <
+	  .regs 4(sp),2(sp),(sp)
+	  loop <
+	    movb (r2)+,(r1)+
+	    sorl r0
+	    >
+	  .regs 6(sp)
+	  loop <
+	    clrb (r1)+
+	    sorl r0
+	    >
+	  add #1_pt.ash,(r5)
+	  sorl r3
+	  >
+	sub #%ptchi_pt.ash,(r5)
+	popn #4*2
+	return
+
+pt$bow==pt$nop
+pt$rst==pt$nop
+
+pt$rsu:
+pt$rsd:	call ptgetc
+	call ptgetc
+	return
+
+pt$grf:
+pt$asp::
+pt$alv::
+pt$asv::
+	loop <
+	  call ptgetc
+	  tstb r1
+	  rptl pl
+	  >
+	jcall pt%td
+
+pt$ach==pt$nop
+
+
+cxpertek:			;chaos server for a PERTEK
+	cx$srv ptopn,40,100_8,<>	;start address, stack size, pri, code
+
+ptopn:	call cpkpki		;get the RFC
+	if cs,<
+110$:	  call ccnfre
+	  .logout
+	  >
+	mov #npt,r5		;number of PERTEKs configured
+	mov #pt$xdv,r4		;pointer to devices
+	loop <
+	  mov (r4),r2		;get a device
+	  if ne,<
+	    tst $ptava(r2)	;is it available
+	    exitl ne		;yup
+	    >
+	  sorl r5		;try the next
+	  mov (pc)+,r2
+	    .string <All PERTEKs at this site are in use.>
+120$:	  clr $cpknb(r1)
+	  call cpkaz1
+	  movb #%cocls,$cpkop(r1)	;make it a close packet
+	  call cpkpko		;output it
+	  br 110$
+	  >
+	clr $ptava(r2)		;no longer available
+	mov #4,$cpkpn(r1)	;window size 
+	movb #%coopn,$cpkop(r1)	;make it an open packet
+	call cpkpko		;output the OPEN
+	push r0
+	.regs r2
+	.makchn			;make a channel out of the device
+	if cs,<
+	  pop r0
+	  mov (r4),r2
+	  mov #-1,$ptava(r2)	;make it available for next time
+	  mov (pc)+,r2
+	    .string <BARF: Memory bloat.  Can't open PERTEK>
+	  br 120$
+	  >
+	mov r0,r5		;put channel in r5 for now
+	pop r0			;get back the connection
+	loop <
+	  call cpkpki
+	  if cs,<
+	    push r0
+	    mov r5,r0
+	    .close
+	    pop r0
+	    br 110$
+	    >
+	  if eq,<
+	    call cpkwti		;wait for an input packet
+	    rptl
+	    >
+	  tstb $cpkop(r1)	;is it data
+	  if mi,<		;yes
+	    push r0,r1
+	    mov r5,r0		;get channel in r0
+	    mov $pktbc(r1),r2	;number of bytes to read in r2
+	    mov $pktbp(r1),r1	;and pointer in r1
+	    .sout
+	    pop r1,r0
+	    >
+	  call cpkfre		;free the packet
+	  rptl
+	  >
+****
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

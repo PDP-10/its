@@ -1,0 +1,323 @@
+
+.lif  z %defin
+	.title	DR11 (chaos) support
+	.sbttl	DR11 (chaos) support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet dr11			;declare DR-11 packet driver present
+
+.if p1
+	.sbttl	-- Definitions 
+
+dr.csr==0		;control and status register
+ %dravl==001			;data available toggle for xmit
+ %drtak==002			;data taken toggle for receive
+ %drtie==040			;transmitter interrupt enable
+ %drrie==100			;receiver interrupt enable
+dr.tbf==2		;transmitter buffer
+dr.rbf==4		;receiver buffer
+
+****
+
+.endc p1
+	.sbttl	-- Macros
+
+
+ndr11==0
+
+.macro dr11 vec,csr,chaddr
+.iif z ndr11, dr1net==nnet
+   .if p2
+      %%==.
+	.=dr$vec+<2*ndr11>
+	  .word vec
+	.=dr$csr+<2*ndr11>
+	  .word csr
+		.if nz ncpchs
+	.=dr$chs+<2*ndr11>
+	  .word chaddr
+		.endc
+      .=%%
+   .endc
+ndr11==ndr11+1
+nnet==nnet+1
+.endm
+
+.macro drgetw dst
+	mov @$drrbf(r5),dst
+	bic #%drtak,@$drcsr(r5)
+	bis #%drtak,@$drcsr(r5)
+.endm
+
+.macro drputw src
+	mov src,@$drxbf(r5)
+	bic #%dravl,@$drcsr(r5)
+	bis #%dravl,@$drcsr(r5)
+.endm
+
+****
+
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+.iif z netdr1, .error DR11 being included without support in PKTNCP
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+dr$vec:	.blkw ndr11
+dr$csr:	.blkw ndr11
+		.if nz ncpchs
+dr$chs:	.blkw ndr11
+		.endc
+
+  ;;
+;;;;;;	Interrupt vectors point here
+  ;;
+
+dr$brk:
+		.rept ndr11
+		.lif z .rpcnt
+dr$rbk::
+	jsr r5,@#drrint
+	 .word netobj+<2*dr1net>+<2*.rpcnt>
+		.lif z .rpcnt
+dr$xbk::
+	jsr r5,@#drxint
+	 .word netobj+<2*dr1net>+<2*.rpcnt>
+		.endr
+ldr$brk==<.-dr$brk>
+
+dr$vrp::	.rept ndr11
+	.word dr$rbk+<ldr$brk*.rpcnt>
+		.endr
+dr$vxp::	.rept ndr11
+	.word dr$xbk+<ldr$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;	A DR11 hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt
+$drcsr==$ntcsr			;DR csr is the net CSR
+$drrbf::	.blkw 1		;DR rcvr buffer
+$drxbf::	.blkw 1		;DR xmit buffer
+
+$drrcon::	.blkw 1		;rcvr continuation
+$drrpk::	.blkw 1		;current rcvr packet
+$drrwc::	.blkw 1		;word count while reading
+$drrpt::	.blkw 1		;next deposit location in packet
+
+$drxcon::	.blkw 1		;xmit continuation
+$drxpk::	.blkw 1		;current xmit packet
+$drxwc::	.blkw 1		;word count while sending
+$drxpt::	.blkw 1		;next examine location in packet
+  >,l$dr11
+
+
+drrint:	mov @(r5),r5		;get the network object
+	call @$drrcon(r5)	;do the continuation
+	pop r5			;restore reg
+	rti
+
+drrwat:	pop $drrcon(r5)		;come here to wait for rcvr interrupt
+	return
+
+drrini::
+drrnew:	call drrwat		;wait for next word
+	push r1
+	drgetw r1		;get word (word count) into r1
+	mov r1,$drrwc(r5)	;save it as word count
+	if le,<
+10$:	  pop r1
+	  br drrnew		;go back for a new packet
+	  >
+	asl r1
+	bmi 10$
+	add #$pktdt,r1		;add in the overhead
+	call pktall		;get a packet
+	if eq,<
+	  pop r1
+	  br drrfls
+	  >
+	mov r1,$drrpk(r5)	;save packet
+	add #$pktdt,r1		;point to packet data
+	mov r1,$drrpt(r5)	;save as pointer
+	pop r1
+	loop <			;read packet out of interface
+	  call drrwat		;wait for next word
+	  drgetw @$drrpt(r5)	;deposit word
+	  add  #2,$drrpt(r5)	;advance pointer
+	  dec $drrwc(r5)	;decrement word coun
+	  rptl gt		;keep going if more
+	  >
+	push r1
+	mov $drrpk(r5),r1
+	bis #%pkt16,$pktfl(r1)	;declare the packet safe for 16 bit
+	loop <
+		.if nz ncpchs
+	  call chsrcv		;go receive the packet
+	  exitl
+		.endc
+	  call pktngv		;don't give packet to anybody
+	  >
+	pop r1
+	br drrnew
+
+;;; this could be made much smarter about ill-formed packets
+drrfls:				;flush a packet for some reason
+	cmp $drrwc(r5),#<pksiz./2>
+	blo drrnew		;look at every word if less
+	cmp $drrwc(r5),#<pksiz$/2>
+	bhi drrnew		;look at every word if too big
+	loop <			;snarf down the packet
+	  call drrwat		;wait for a word
+	  drgetw junk		;throw the word away
+	  dec $drrwc(r5)	;decrement word count
+	  rptl gt
+	  >
+	br drrnew		;go back for a new packet
+		
+
+
+drxint:	mov @(r5),r5		;get the network object
+	call @$drxcon(r5)	;do the continuation
+	pop r5
+	rti
+
+drxwat:	pop $drxcon(r5)		;call here to wait
+	return
+
+drxini:	mov #pksiz$/2,$drxwc(r5)
+	loop <
+	  call drxwat
+	  drputw #0
+	  dec $drxwc(r5)
+	  rptl gt
+	  >	  
+drxnew:	call drxwat
+	push r1
+	call ntremq
+	if eq,<			;no packet
+	  pop r1
+	  bic #%drtie,@$drcsr(r5)	;turn off interrupts
+	  br drxnew		;and try later
+	  >
+	push $pktxs(r1)		;xmit byte count (already even)
+	asr (sp)		;now word count
+	drputw (sp)		;send it through the DR
+	pop $drxwc(r5)		;and save it as the word count
+	mov r1,$drxpk(r5)	;save packet
+	add #$pktdt,r1		;point to packet data
+	mov r1,$drxpt(r5)	;save as pointer
+	pop r1			;restore r1
+	loop <
+	  call drxwat		;wait for xmit slot
+	  drputw @$drxpt(r5)	;send a word
+	  add  #2,$drxpt(r5)	;advance pointer
+	  dec $drxwc(r5)	;decrement the word count
+	  rptl gt		;loop until finished
+	  >
+	netmet ou
+	push r1			;working packet reg
+	mov $drxpk(r5),r1
+	call pktngv		;free packet if not on user list
+	pop r1
+	br drxnew		;go back to xmit a new packet
+
+
+drini:	clr r0
+	loop <
+	  call drinit
+	  add #2,r0
+	  cmp r0,#<ndr11*2>
+	  rptl lo
+	  >
+	return
+
+drinit:				;actually init one device
+	mov dr$csr(r0),r4
+	call nxmcat
+	  drnxm
+	clr (r4)		;check for existence of interface
+	call nxmclr
+
+	mov dr$vec(r0),r2	;get interrupt vector
+	mov dr$vrp(r0),(r2)+	;set read interrupt routine
+	mov #pr5,(r2)+		;and priority
+	mov dr$vxp(r0),(r2)+	;set xmit interrupt routine
+	mov #pr5,(r2)+		;and priority
+
+	mov #l$dr11,r5
+	call ntmake		;make a network object
+	if eq,<bpt>		;oops
+	mov r5,netobj+<2*dr1net>(r0)	;save device in network table
+	mov r4,$drcsr(r5)
+	mov r4,$drrbf(r5)
+	add #dr.rbf,$drrbf(r5)
+	mov r4,$drxbf(r5)
+	add #dr.tbf,$drxbf(r5)
+
+	call drrini		;init rcvr interrupt routine
+	call drxini		;init xmit interrupt routine
+
+		.if nz ncpchs
+	mov #drchgv,nt$chs(r5)	;routine to give a chaos packet 
+	mov dr$chs(r0),nt.chs(r5)	;my address
+	mov #15.,$ctrcv(r5)	;interrupt per byte (doesn't really matter,
+				;since this is probably the only route to
+				;the other end.)
+		.endc
+
+		.if nz ncpip
+		.endc
+
+	mov #%drrie+%drtak,(r4)	;initialize interface
+
+	mov r0,r4		;get dr index into r4
+	add #<dr1net*2>,r4	;now network index
+	jcall ntmak1		;finish making the object
+
+drnxm:	clr netobj+<2*dr1net>(r0)
+	return
+
+.if nz ncpchs
+
+;;; call @nt$chs(r5)[r5:=object, r1:=packet r2:=hardware_destination]
+
+drchgv:	call cpks16		;make it safe for 16 bit hardware
+	inc $pktxs(r1)		;round to word count
+	bic #1,$pktxs(r1)	;word count
+	lock 6
+	call nt$ptq		;put packet on device queue
+	bis #%drtie,@$drcsr(r5)	;
+	unlock
+	return
+
+.endc
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

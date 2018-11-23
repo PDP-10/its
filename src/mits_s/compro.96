@@ -1,0 +1,1212 @@
+	.title	Command Processor
+	.sbttl	Command Processor
+
+;;; ;;; General info:
+;;; ;;; 	One of cruftiest command processors I have ever seen,
+;;; ;;; 	but then again, I was never very good at user
+;;; ;;; 	interfaces.  This should be completly reimplemented.
+
+  dsect <		;;; command processor variables
+$cpevn::	.blkw 1		;event word
+ %cptyi==100000
+ %cptyo==040000
+ %cphsi==020000
+ %cphso==010000
+ %cpmsg==004000			;needed for shout command
+$cpevs::	.blkw 1		;saved event word
+$cpcon::	.blkw 1		;continuation for terminal input
+$cptyi::	.blkw 1		;terminal input  channel
+$cptyo::	.blkw 1		;terminal output channel
+$cphsi::	.blkw 1		;host input  channel
+$cphso::	.blkw 1		;host output channel
+$cphoc::	.blkw 1		;host output continuation
+$cphic::	.blkw 1		;host input  continuation
+$cptnm::	.blkw 1		;telnet modes
+ %tniac==377
+ %tnsb==372			;subnegotiation begin
+ %tnse==360			;subnegotiation end
+ %tnwil==251.
+ %tnwnt==252.
+ %tndo==253.
+ %tndnt==254.
+ %tnip==244.
+ %tntbn==0			;Transmit binary
+ %tneco==1			;ECHO
+ %tnsga==3			;suppress go ahead
+ %tntmk==6			;timing mark
+ %tnloc==23.			;terminal location negotiation
+ .tntbn==00.			;LSH amount for transmit binary
+ .tneco==04.			;LSH amount for echo
+ .tnsga==08.			;LSH amount for Suppress Go Ahead
+ .tnfwa==01			;what the foreign host wants to do
+ .tnfdo==02			;what the foreign host is doing
+ .tnlwa==04			;what local wants to do
+ .tnldo==10			;what local is doing
+$cptnc::	.blkw 1		;telnet from connection continuation
+$cphsm::	.blkw 1		;mode of the host input channel
+l$cpbf==40			;size of temp buffers
+$cphsb::	.blkb l$cpbf	;host input buffer
+$cphsp::	.blkw 1		;pointer into buffer
+$cphsc::	.blkw 1		;count of characters in the host input buffer
+$cpoct::	.blkw 1		;octal number accumulated
+$cpdec::	.blkw 1		;decimal number accumulated
+$cpnum::	.blkw 1		;0 <==> no number
+  >,l$cp
+
+
+	$insrt	hosts
+
+cp$cp:	.regs #l$cp
+	.uall
+	if cs,<.logout>
+	mov r0,r5		;keep it in r5
+	push #-1		;my tty
+	.regs #opntty,sp
+	.open
+	if cs,<.logout>
+	pop *
+	movb #md%sup,$clmod(r1)	;set supdup mode on output
+	bis  #%clnhg,$clmod(r0)	;no hang on tty input
+	mov r0,$cptyi(r5)	;tyi
+	mov r1,$cptyo(r5)	;tyo
+	mov #$cphsb,$cphsp(r5)	;offset to host input buffer
+	add r5,$cphsp(r5)	;now really point to it
+	.regs $cptyi(r5),#chnevr,#%cptyi,r5
+	add #$cpevn,r3
+	.ioctl
+	.regs $cptyo(r5),#chnevx,#%cptyo
+	.ioctl			;r3 still set to $cpevn(r5)
+	call cpistr		;send initial string
+	.regs $cptyo(r5),(pc)+
+	  .litrl <.asciz <%tdclr>/   MINITS Reloaded or Restarted/<%tdcrl>>
+	.soutz
+	call cp$cl2		;close the host (or at least fake it)
+	call cp$pro		;prompt
+	loop <
+.if df shoutp
+	  bit  #%cpmsg, $cpevn(r5)	; Message waiting?
+	  if ne,<
+	     call cp$msg
+		>
+.endc
+	  lock 7
+	  mov $cpevn(r5),$cpevs(r5)	;save event flag
+	  if eq,<
+	    unlock
+	    .regs #hng.ne,#zero,r5
+	    add #$cpevn,r2
+	    .hang
+	    rptl
+	    >
+	  clr $cpevn(r5)
+	  unlock
+	  loop <
+	    .regs $cptyi(r5)
+	    .bin
+	    bit #%clnhh,$clmod(r0)	;no hang happen?
+	    if eq,<
+	      call @$cpcon(r5)
+	      rptl
+	    > >
+	  call cp$htb		;do host to buffer
+	  call cp$btt		;do buffer to tty
+	  rptl
+	  >
+
+cp$btt:	mov $cphsc(r5),r2	;get count
+	if ne,<
+	  .regs $cptyo(r5),$cphsp(r5)	;tty output and pointer
+	  push $clmod(r0)	;save modes
+	  movb $cphsm(r5),$clmod(r0)	;mode for the host
+	  bis #%clnhg,$clmod(r0)	;don't hang
+	  call @$cphic(r5)	;call the host input continuation
+	  if cs,<bpt>
+	  pop $clmod(r0)	;restore modes
+	  mov r2,$cphsc(r5)	;set number of characters still in buffer
+	  if ne,<
+	    mov $cphsp(r5),r3
+	    loop <		;move the characters down
+	      movb (r1)+,(r3)+
+	      sorl r2
+	      >
+	    >
+	  >
+	return
+
+cp$htb:	mov $cphsi(r5),r0	;get host input channel
+	if ne,<
+	  .regs ,$cphsp(r5),#l$cpbf,$cphsc(r5)
+	  add r3,r1		;point to end of buffer
+	  mov r2,$cphsc(r5)	;expect a full buffer
+	  sub r3,r2		;number of characters to try and read
+	  bis #%clnhg,$clmod(r0)	;don't hang on input
+	  .sin
+	  if cs,<
+	    cmp r2,$cphsc(r5)	;any data?
+	    if eq,<
+	      clr $cphsc(r5)	;no
+	      call cp$clh	;close the host
+	      jcall cp$pro
+	      >
+	    >
+	  sub r2,$cphsc(r5)	;didn't read some
+	  >
+	return
+
+cp$clh:	push #0
+	mov $cphso(r5),r0
+	if ne,<
+	  clr $cphso(r5)
+	  .close
+	  inc (sp)
+	  >
+	mov $cphsi(r5),r0
+	if ne,<
+	  clr $cphsi(r5)
+	  .close
+	  inc (sp)
+	  >
+	.regs $cptyo(r5)
+	tst (sp)+
+	if ne,<mov #100$,r1>	;close it
+	else  <mov #110$,r1>	;already closed
+	.soutz
+cp$cl2=.
+	mov #cp$cm1,$cpcon(r5)	;continuation routine for terminal input
+	mov #cp$bel,$cphoc(r5)	;host output does nothing
+	return
+
+100$:	.asciz <%tdcrl>/[Host connection closed.]/<%tdcrl>
+110$:	.asciz <%tdcrl>/[Connection already closed.]/<%tdcrl>
+	.even
+
+cp$bel:	.regs $cptyo(r5),#%tdbel ;ring the bell
+	.bout
+	return
+
+cp$eco:	push r0,r1
+	.regs $cptyo(r5),6(sp)
+	cmpb r1,#40
+	if lt,<
+.if ge system-12			;EECS hacks
+.if le system-14
+;
+;   Hack to avoid lossage caused by MINITS interacting 
+;   with certain terminals (such as DEC VT52, Zenith Z19)
+;   which insist on sending ^S when their input buffer
+;   is full.  Otherwise, MINITS echoes ~30 characters for
+;   every ^S received, resulting in an argument over who
+;   has the last word.
+	  cmpb r1,#23		;^S
+	  if eq,<jcall cp$sil>	;don't echo anything, just return
+;   also shrug off ^Q, to avoid continuous flaming loop
+	  cmpb r1,#21		;^Q
+	  if eq,<jcall cp$sil>	;don't echo anything, just return
+.endc
+.endc
+	  movb #'^,r1
+	  .bout
+	  movb 6(sp),r1
+	  add #'@,r1
+	  >
+	.bout
+cp$sil:	pop r1,r0               ;clean up stack and return
+	return
+
+cp$wti:				;wait for character input
+	pop $cpcon(r5)
+	return
+cp$lfn:				;logically finished with command
+	call cp$wti		;wait for input and fall through
+cp$tyi:	mov r1,r2
+	bic #mask7,r2
+	cmp r2,#%acom	
+	if eq,<jcall cp$com>
+	jcall @$cphoc(r5)	;output the character to the host
+
+cp$hic:	.sout
+	return
+
+cp$hso:				;standard routine to output to a host
+	mov $cphso(r5),r0
+	if ne,<
+	  .bout
+	  if cs,<
+	    call cp$clh		;close the host channels
+	    .regs $cptyo(r5),(pc)+
+	      .litrl <.asciz <%tdcrl><%tdcrl>/Host connection gone./<%tdcrl><%tdcrl>>
+	    .soutz
+	    call cp$pro
+	  > >
+	return
+
+cp$com:	call cp$wti
+	call cp$lfn
+	bic #mask7,r1		;completely 7-ascii now
+	push r1
+	call upcase
+	pop r2
+	cmpb r2,#%acom
+	if eq,<jcall @$cphoc(r5)>	;output to host
+	cmpb r2,#14
+	if eq,<jcall cp$ff>
+.if df shoutp
+	cmpb r2,#22		;^R
+	if eq,<jcall maint>
+.endc
+.if df wereok
+	cmpb r2,#26		;^V
+	if eq,<jcall where>
+.endc
+	cmpb r2,#'?
+	if eq,<
+	  .regs $cptyo(r5),#help2
+	  .soutz
+	  return
+	  >
+	cmpb r2,#21		;^Q is "quote"
+	if eq,<
+	  mov #34,r1		;send an unquoted ^\
+	  jcall cp$hso>
+	cmpb r2,#'B
+	if eq,<jcall sndbrk>
+	cmpb r2,#'H
+	if eq,<jcall sndhlp>
+	cmpb r2,#'L		;[Gumby]
+	if eq,<
+	  mov #300,r1		;send command flag
+          call cp$hso
+	  mov #301,r1		;send logout command
+          call cp$hso
+	  ;; if other end ignores this (e.g. twenex), then don't lose
+	  return
+	  >
+	cmpb r2,#'K
+	if eq,<
+	  call cp$clh
+	  jcall cp$pro
+	  >
+	call cp$bel			;bad command
+	return
+
+cp$pro:	push r0,r1
+	.regs $cptyo(r5),#prmpt1
+	.soutz
+	pop r1,r0
+	clr $cpnum(r5)		;no number yet
+	clr $cpoct(r5)
+	clr $cpdec(r5)
+	return
+
+prmpt1: .ascii <%tdcrl>
+	%host%
+	.ascii / MINITS - Type ? for help. >/
+	.byte 0
+	.even
+
+cp$cm1:	bic #mask7,r1		;completely 7-ascii now
+	push r1
+	call upcase
+	call cp$eco
+	pop r2
+	cmpb r2,#14		;^L
+	if eq,<
+	  call cp$ff
+	  jcall cp$pro
+	  >
+.if df shoutp
+	cmpb r2,#22		;^R
+	if eq,<jcall maint>
+.endc
+	cmpb r2,#24		;^T
+	if eq,<
+	  call cpttyp
+	  jcall cp$pro
+	  >
+.if df wereok
+	cmpb r2,#26		;^V
+	if eq,<jcall where>
+.endc
+	cmpb r2,#32		;^Z
+	if eq,<jcall hakcon>
+.if ge system-12			;EECS hacks
+.if le system-14
+	cmpb r2,#34		;^\
+	if eq,<return>		;don't feep
+	cmpb r2,#23		;^S
+	if eq,<return>		;don't feep
+	cmpb r2,#21		;^Q
+	if eq,<return>		;don't feep
+.endc
+.endc
+	cmpb r2,#'S
+	if eq,<jcall hakcon>
+	cmpb r2,#'?
+	if eq,<
+	  call cpistr
+	  .regs $cptyo(r5),#help1
+	  .soutz
+	  jcall cp$pro
+	  >
+.if nz natk
+	cmpb r2,#'D
+	if eq,<jcall atkcon>
+.endc
+	cmpb r2,#'F
+	if eq,<jcall rfinger>
+.if ge system-60
+.if le system-74
+.if ne system-71
+	cmpb r2,#'G
+	if eq,<jcall gtkcon>
+.endc
+.endc
+.endc
+	cmpb r2,#'T
+	if eq,<jcall telnet>
+	cmpb r2,#'U
+	if eq,<jcall ttylnk>
+	cmpb r2,#'W		;[pao]
+	if eq,<jcall weather>	;[pao]
+.if df mveok
+	cmpb r2,#'M		;[pao]
+	if eq,<jcall movies>	;[pao]
+.endc
+.if df nwsflg
+	cmpb r2,#'N		;[gumby]
+	if eq,<jcall news>	;[gumby]
+.endc
+.if df lispm
+	cmpb r2,#6		;^F lists lispms
+	if eq,<jcall lmfree>	;[gumby]
+.endc
+	cmpb r2,#'0
+	if ge,<
+	  cmpb r2,#'9
+	  if le,<jcall 100$>
+	  >
+	call cp$bel		;bad command - ring the bell
+	jcall cp$pro		;prompt
+
+
+
+100$:				;collect a number
+	mov #-1,$cpnum(r5)
+	sub #'0,r2
+	mov $cpdec(r5),r3
+	mul #10.,r3
+	add r2,r3
+	mov r3,$cpdec(r5)
+	asl $cpoct(r5)
+	asl $cpoct(r5)
+	asl $cpoct(r5)
+	add r2,$cpoct(r5)
+	call cp$wti		;wait for input
+	jcall cp$cm1		;keep collecting
+
+cp$ff:	.regs $cptyo(r5),#%tdclr	;clear the screen
+	.bout
+	return
+
+sndbrk:	mov #%txtop+'B,r1
+	jcall @$cphoc(r5)	;output to the host
+
+sndhlp:	mov #%txtop+'H,r1
+	jcall @$cphoc(r5)
+
+cpistr:	.cnsget			;get terminal charactistics
+	if cs,<halt>
+	mov r0,r1		;into r1
+	.regs $cptyo(r5),ttyist(r1)	;get tty and initial string
+	.soutz			;send the initial string
+	return
+
+help1:
+.ascii <%tdclr>
+.ascii /This PDP-11 is /
+%host%				;ascii format (not asciz)
+.byte <%tdcrl>
+.ascii /To connect to a machine, type <number><protocol>/<%tdcrl>
+.ascii /where <number> is an octal chaosnet host number, or one of:/<%tdcrl>
+	comdoc
+.ascii /and <protocol> is one of:/<%tdcrl>
+; (rearranged to save screen space, hope nobody minds) [alw]
+.ascii /    S - SUPDUP        T - TELNET     F - Finger/<%tdcrl>
+.ascii /    U - TTYLINK (perhaps Unix only)  W - Weather information/<%tdcrl>
+.if df mveok
+.ascii /    M - Movie information/<%tdcrl>	;[pao]
+.endc
+.if df nwsflg
+.ascii /    N - News headlines/<%tdcrl>		;[gumby]
+.endc
+.if df lispm
+.ascii /   ^F - Finger lispms.  Arg means find free machines./<%tdcrl>
+.endc
+.if nz natk
+.ascii / <n>D  DIRECT to:/<%tdcrl>
+atkhlp
+.endc
+.if ge system-60
+.if le system-74
+.if ne system-71
+.byte  <%tdcrl>
+.ascii /<number> G chooses from/<%tdcrl>
+.ascii /   0 Prime       1 Scicards/<%tdcrl>
+.endc
+.endc
+.endc
+help2:
+; extra crlf removed, c-\ ? help explained [alw]
+.ascii /Commands when connected (c-\ ? gets this help):/<%tdcrl>
+.ascii /   c-\ K closes the current connection/<%tdcrl>
+.ascii /   c-\ c-\ sends a c-\/<%tdcrl>
+.ascii /   c-\ B sends a break/<%tdcrl>
+.ascii /   c-\ L sends the SUPDUP Logout command/<%tdcrl>
+.ascii /   c-\ H sends the SUPDUP Help character/<%tdcrl>
+.ascii /   c-\ c-L clears the screen (use just c-L when not connected)/<%tdcrl>
+	.byte 0
+	.even
+
+cpttyp:	.cnsget
+	mov $cpdec(r5),r1
+
+.if nz 0			; This is stupid -- Gumby and KLTOZ
+.if nz system-35		; don't restrict the choices if 7B.
+	loop <			;hack to avoid complete lossage
+	  cmp r1,#1		;vt52 allowed
+	  exitl eq
+	  cmp r1,#6		;and AAA allowed
+	  exitl eq
+	  return
+	  >
+.endc
+.endc
+	cmp r1,#<20$-10$>/2
+	if lt,<
+	  asl r1
+	  push r0,10$(r1)
+	  call tctyp
+	  >
+	return
+;; This table is so stupid -- why doesn't the loser just type the TCTYP code??
+;	        0     1     2     3     4     5     6     7	8     9
+10$:	.word t.prt,t.v52,t.t61,t.h19,t.v00,t.v32,t.aaa,t.c08,t.hds,t.baa
+20$:
+
+
+conokp:	tst $cphso(r5)
+	if eq,<
+	  tst $cphsi(r5)
+	  if eq,<
+	    .regs $cptyo(r5),(pc)+
+	      .litrl < .asciz <%tdclr>/ Trying.../ >
+	    .soutz
+	    call cp$lfn
+	    return
+	    >
+	  >
+	pop *			;flush return address
+	.regs $cptyo(r5),(pc)+
+	  .litrl <
+	    .byte  %TDCRL
+	    .ascii /[Please close previous host connection first (with c-\ K).]/
+	    .byte  %TDCRL,0
+	    .even
+	    >
+	.soutz
+	return
+
+;;; SUPDUP initial block
+
+  dsect <
+		.blkb 6		;-n,,0
+		.blkb 6		;tctyp
+$spopt::	.blkb 6		;ttyopt
+  %spcbs==5
+  %tpcbs==40			;fifth byte, bit 40
+$spmxv::	.blkb 6		;vertical
+$spmxh::	.blkb 6		;horizontal
+$sprol::	.blkb 6		;ttyrol
+$spsmt::	.blkb 6		;smarts
+$spisp::	.blkb 6		;ispeed
+$sposp::	.blkb 6		;ospeed
+  >,l$spdp
+
+hakcon:	call conokp
+	mov $cpdec(r5),r0
+	asl r0
+	cmp r0,#l$hstlst
+	if lo,<mov hstlst(r0),r0>
+	else  <mov $cpoct(r5),r0>
+	push #1,(pc)+
+	  .string <SUPDUP>
+	push r0
+	.regs #opncha,sp
+	.open
+	if cs,<
+	  pop *,*,*
+	  return
+	  >
+	pop *,*,*
+	movb #md%sup,$clmod(r0)	;supdup in from the network
+	movb #md%raw,$clmod(r1)	;raw out to the network
+	mov #md%sup,$cphsm(r5)	;save remember host mode
+	mov r0,$cphsi(r5)	;save input channel
+	mov r1,$cphso(r5)	;save output channel
+	mov #suptyo,$cphoc(r5)	;host output continuation is supdup tyo
+	mov #cp$hic,$cphic(r5)	;standard host input continuation
+	.regs ,#chnevr,#%cphsi,r5	;r0 still has channel
+	add #$cpevn,r3		;point to even word
+	.ioctl			;set event receive bits
+	if cs,<bpt>
+	push #l$spdp
+	call fsmall
+	call fsmclr
+	pop r4
+	if eq,<halt>
+	.cnsget
+	if cs,<halt>
+	mov r0,r1
+	.regs $cptyo(r5),ttyist(r1)
+	.soutz			;send the initial string
+
+	.cnsget
+	mov #77+<77_8>,(r4)
+	mov #<100-<l$spdp/6-1>>,2(r4)	;-n,,0
+	movb #7,6+5(r4)		;tctyp = 7 (software)
+
+	mov ttyop1(r0),$spopt+0(r4)
+	mov ttyop2(r0),$spopt+2(r4)
+	mov ttyop3(r0),$spopt+4(r4)
+	bisb #%tpcbs,$spopt+%spcbs(r4)	;turn on C-\ hacking
+
+	mov ttysm1(r0),$spsmt+0(r4)
+	mov ttysm2(r0),$spsmt+2(r4)
+	mov ttysm3(r0),$spsmt+4(r4)
+
+	movb ttymxv(r0),r1
+	mov #$spmxv,r2
+	call 10$
+	
+	movb ttymxh(r0),r1
+	dec r1			;SUPDUP is really one less!!
+	mov #$spmxh,r2
+	call 10$
+	
+	movb ttyrol(r0),$sprol+5(r4)
+
+	mov ttyspd(r0),r1
+	mov #$spisp,r2
+	call 10$
+	mov $spisp+2(r4),$sposp+2(r4)
+	mov $spisp+4(r4),$sposp+4(r4)
+
+	mov r0,r3		;save tty in r3
+	mov $cphso(r5),r0
+	mov r4,r1
+	mov #l$spdp,r2
+	.sout
+	if cs,<halt>
+
+	push r4
+	call fsmfre
+
+	mov #300,r1
+	.bout
+	mov #302,r1
+	.bout
+	mov ttyloc(r3),r1
+	.soutz
+	clr r1
+	.bout
+
+	return
+
+10$:	push r4
+	add r2,r4
+	cmp r1,#-1
+	if eq,<movb #20,(r4)>
+	else <
+	  add #6,r4
+	  loop <
+	    mov r1,r2
+	    bic #mask6,r2
+	    movb r2,-(r4)
+	    ash #-6,r1
+	    bic #mask10,r1	;only low 10 bits are valid now
+	    tst r1
+	    rptl ne
+	  > >
+	pop r4
+	return
+
+tcon:	.string <PRIME>
+	.word 22401
+	.string <SCICARDS>
+	.word 22401
+l$tcon==.-tcon
+
+gtkcon:	call conokp
+	mov $cpdec(r5),r0
+	asl r0
+	asl r0
+	cmp r0,#l$tcon
+	if his,<
+	  .regs $cptyo(r5),(pc)+
+	    .litrl <.asciz <%tdcrl>/[Numeric argument does not specify a known path.]/<%tdcrl>>
+	  .soutz
+	  return
+	  >
+	push #2,tcon(r0),tcon+2(r0)
+	br ttyln2
+
+
+.if nz natk
+atkcon:
+	call conokp
+	mov $cpdec(r5),r1
+	cmp r1,#natk
+	if lt,<
+	  asl r1
+	  add #atktab,r1
+	  clr r0
+	  loop <
+	    cmp r0,#ntty*2
+	    exitl ge
+	    cmp ttyity(r0),r1
+	    if eq,<
+	      mov ttyrdv(r0),r2
+	      tst $ttipt(r2)
+	      if eq,<
+		push r0
+		.regs #opntty,sp
+		.open
+		if cs,<bpt>
+		pop *
+		jcall ttyln3
+	        >
+	      >
+	    add #2,r0
+	    rptl
+	    >
+	  >
+	call cp$cl2
+	.regs $cptyo(r5),(pc)+
+	  .litrl <.asciz <%tdcrl>/[No free lines.]/<%tdcrl>>
+	jcall cp$pro
+
+atktab:	atktyp
+.endc
+
+
+ttylnk:
+	call conokp
+	mov $cpdec(r5),r0
+	asl r0
+	cmp r0,#l$hstlst
+	if lo,<mov hstlst(r0),r0>
+	else  <mov $cpoct(r5),r0>
+	push #1,(pc)+
+	  .string <TTYLINK>
+	push r0
+ttyln2:	.regs #opncha,sp
+	.open
+	if cs,<
+	  pop *,*,*
+	  call cp$cl2
+	  jcall cp$pro
+	  >
+	pop *,*,*
+ttyln3:	movb #md%asc,$clmod(r0)	;ascii input from the network
+	movb #md%asc,$clmod(r1)	;ascii out to the network
+	mov  #md%asc,$cphsm(r5)	;remember host mode
+	mov  r0,$cphsi(r5)	;save input  channel
+	mov  r1,$cphso(r5)	;save output channel
+	mov  #ttltyo,$cphoc(r5)	;host output continuation to save meta bit
+	mov  #cp$hic,$cphic(r5)	;standard host input continuation
+	.regs ,#chnevr,#%cphsi,r5	;r0 still has channel
+	add #$cpevn,r3		;point to even word
+	.ioctl			;set event receive bits
+
+	return
+
+ttltyo:	cmp r1,#%txtop+'B	;break?
+	if eq,<
+	  .regs $cphso(r5),#ttybrk
+	  .ioctl
+	  return
+	  >
+	bit #%txctl,r1
+	if ne,<bic #mask5-%txmta,r1>
+	bit #%txmta,r1
+	if ne,<bis #200,r1>
+	bic #mask8,r1
+	jcall cp$hso		;send the character
+
+.if df shoutp			;assemble shout command
+
+maint:	cmp	$cpdec(r5), #84		; Moby shout command
+	if	ne,<return>
+	movb #15, r1
+	.regs $cptyo(r5), r1
+	.bout
+	movb #12, r1
+	.regs $cptyo(r5), r1
+	.bout
+	.regs	$cptyo(r5), (pc)+
+	.litrl <
+		.ascii /Enter message (terminate with C-\):/
+		.byte 0
+		>
+	.soutz
+	clr r4
+
+	loop <
+		call cp$wti
+		bic #mask7, r1
+		cmpb r1, #%acom
+		if eq,<exitl>
+		.regs $cptyo(r5)
+		.bout
+		movb r1, messag(r4)
+		inc r4
+		rptl
+	    >
+
+	inc r4
+	mov #%tdcrl, messag(r4)
+	incb r4
+	mov #%tdcrl, messag(r4)
+	inc r4
+	mov #0, messag(r4)
+
+	mov	#ulink, r1
+	loop	<
+		  cmp (r1), #ulink
+		  exitl eq
+	   	  mov (r1), r1
+		  mov usrvrs(r1), r2
+		  tst r2
+		  rptl eq
+		  cmp usripc(r1), #cp$cp
+		  rptl ne
+		  bis #4000, $cpevn(r2)
+		  rptl
+
+		>
+
+
+	call cp$cl2
+	call cp$pro		;prompt
+
+	return
+cp$msg:	.regs $cptyo(r5), #msgs
+	      .soutz
+	return
+
+msgs:	       .byte %tdcrl, %tdcrl, 7, 7, 7, 7
+messag:		.blkb 132
+
+.endc				;end shout command
+
+.if df wereok
+
+where:	movb #15, r1
+	.regs $cptyo(r5), r1
+	.bout
+	movb #12, r1
+	.regs $cptyo(r5), r1
+	.bout
+	mov	#ulink,r1
+	loop	<
+		  
+		  cmp (r1), #ulink
+		  exitl eq
+ 		  mov (r1), r1
+		  mov usrvrs(r1), r2
+		  tst r2
+		  rptl eq
+		  cmp usripc(r1), #cp$cp
+ 		  rptl ne
+		  tst $cphso(r2)
+		  if eq,<
+		    tst $cphsi(r2)
+		    if eq,<rptl>>
+	mov usrtty(r1), r4
+	push r1,r2
+	.regs $cptyo(r5), ttyilo(r4)
+	.soutz
+	movb #15, r1
+	.regs $cptyo(r5), r1
+	.bout
+	movb #12, r1
+	.regs $cptyo(r5), r1
+	.bout
+        pop r2,r1
+	rptl
+	>
+	return
+
+.endc
+
+;;;[pao]
+weather:
+	call conokp
+	mov #013045,r0		;mit-hermes
+	push #1,(pc)+
+	  .string <WTHRSTAT>	;The right way to get weather -cjl
+	br rfing0
+
+.if df mveok
+movies:
+	call conokp
+	mov #05542,r0		; mit-ee
+	push #1,(pc)+
+	  .string <LSC>
+	br rfing0
+.endc
+;;;[pao]
+
+;;; [gumby] get news headlines from MC
+.if df nwsflg
+news:
+	call conokp
+	mov #03131,r0		; MC gets them from DB
+	push #1,(pc)+
+	  .string <NEWS>
+	br rfing0
+.endc
+
+.if df lispm			;[gumby] ^F means finger lispms; arg means free
+lmfree:
+	call conokp
+	mov $cpnum(r5),r0
+	cmpb r0,#0		;SKIPE @$CPNUM(R5) is so much easier!
+	beq lmfre0
+	push #1,(pc)+
+	  .string <NAME .FREE>
+	br lmfre1
+lmfre0:	push #1,(pc)+
+	  .string <NAME>
+lmfre1:	mov #013065,r0
+	br rfing0
+.endc
+
+rfinger:
+	call conokp
+	mov $cpdec(r5),r0
+	asl r0
+	cmp r0,#l$hstlst
+	if lo,<mov hstlst(r0),r0>
+	else  <mov $cpoct(r5),r0>
+	push #1,(pc)+
+	  .string <NAME>
+rfing0:	push r0
+	.regs #opncha,sp
+	.open
+	if cs,<
+	  pop *,*,*
+	  call cp$cl2
+	  jcall cp$pro
+	  >
+	pop *,*,*
+	movb #md%lsp,$clmod(r0)
+	mov r0,$cphsi(r5)
+	mov r1,r0		;xmit channel in r0
+	.close			;and close, it, not allowed to xmit to it
+	mov #md%lsp,$cphsm(r5)	;mode is LISP for this host
+	mov #cp$hic,$cphic(r5)	;standard host input continuation
+	.regs $cphsi(r5),#chnevr,#%cphsi,r5	;channel, command, bits, pointer
+	add #$cpevn,r3		;point to event word
+	.ioctl			;set event receive bits
+	.regs $cptyo(r5),#%tdcrl
+	.bout
+
+	return
+	
+%cbs==<'\>-<'@>
+suptyo:	bit #mask7,r1		;is it 7-bit already
+	if eq,<			;yup
+	  cmp r1,#%cbs		;is it C-\
+	  if eq,<call cp$hso>	;output it to quote itself
+	  jcall cp$hso		;output the 7-bit character
+	  >
+	push r1
+	mov #%cbs,r1
+	call cp$hso
+	mov (sp),r1
+	asl r1
+	swab r1
+	bic #mask5,r1
+	bis #100,r1
+	call cp$hso
+	pop r1
+	bic #mask7,r1
+	jcall cp$hso
+
+telnet:	call conokp
+	mov $cpdec(r5),r0
+	asl r0
+	cmp r0,#l$hstlst
+	if lo,<mov hstlst(r0),r0>
+	else  <mov $cpoct(r5),r0>
+	push #1,(pc)+
+	  .string <TELNET>
+	push r0
+	.regs #opncha,sp
+	.open
+	if cs,<
+	  pop *,*,*
+	  call cp$cl2
+	  jcall cp$pro
+	  >
+	pop *,*,*
+	movb #md%asc,$clmod(r0)	;ascii input from the network
+	movb #md%asc,$clmod(r1)	;ascii out to the network
+	mov  #md%asc,$cphsm(r5)	;remember host mode
+	mov  r0,$cphsi(r5)	;save input  channel
+	mov  r1,$cphso(r5)	;save output channel
+	mov  #teltyo,$cphoc(r5)	;host ouput continuation is telnet tyo
+	mov  #telhsi,$cphic(r5)	;host input continuation
+	.regs ,#chnevr,#%cphsi,r5	;r0 still has channel
+	add #$cpevn,r3		;point to even word
+	.ioctl			;set event receive bits
+	if cs,<bpt>
+	.regs $cphso(r5),(pc)+
+	  .litrl <
+		.byte %tniac,%tndo,%tnsga	;request it suppress go ahead
+		.byte %tniac,%tndo,%tneco	;request remote echo
+		.byte %tniac,%tnwil,%tnloc	;will do terminal location
+		.even
+		>
+	.regs ,,#3+3+3
+	.sout
+	mov #<.tnfwa_.tneco>+<.tnfwa_.tnsga>,$cptnm(r5)
+	return
+
+teltyo:	cmp r1,#%txtop+'B
+	if eq,<			;also do IAC DMK when we do INS hacking
+	  .irp char,<%tniac,%tnip>
+	    movb #char,r1
+	    call cp$hso
+	  .endm
+	  return
+	  >
+	bit #%txctl,r1
+	if ne,<bic #mask5-%txmta,r1>
+	bit #%txmta,r1
+	if ne,<bis #200,r1>
+	bic #mask8,r1
+	tstb r1
+	if pl,<
+	  bit #<.tnfdo_.tneco>,$cptnm(r5)
+	  if eq,<
+	    .regs $cptyo(r5)
+	    push $clmod(r0)
+	    mov $cphsm(r5),$clmod(r0)
+	    .bout
+	    pop $clmod(r0)
+	  > >
+	cmpb r1,#%tniac
+	if eq,<call cp$hso>	;if IAC, quote it
+	call cp$hso		;output the character
+	cmpb r1,#15		;is it a RETURN?
+	if eq,<			;yup, maybe send LINEFEED
+	  bit #<.tnldo_.tntbn>,$cptnm(r5)	;should I transmit binary?
+	  if eq,<		;no, so should send LINEFEED
+	    movb #12,r1		;now do a LINEFEED
+	    br teltyo		;and do it
+	  > >
+	return
+
+telhsi:				;r0 is terminal output
+				;r1 is pointer
+				;r2 is count
+	push r3
+	loop <
+	  tst r2
+	  exitl eq		;finished if no more characters
+	  tst $cptnc(r5)	;is there a telnet continuation?
+	  if eq,<		;if not, scan for an IAC
+	    mov r2,r3
+	    clr r2
+	    push r1
+	    loop <
+	      cmpb (r1)+,#%tniac
+	      exitl eq
+	      inc r2
+	      sorl r3
+	      >
+	    pop r1		;get pointer back
+	    .sout		;output some characters
+	    tst r2
+	    if ne,<
+	      add r3,r2
+	      exitl
+	      >
+	    mov r3,r2
+	    exitl eq
+	    mov #teliac,$cptnc(r5)	;set the telnet continuation
+	    >
+	  push r1
+	  loop <
+	    tst $cptnc(r5)
+	    exitl eq
+	    movb @(sp),r1
+	    inc (sp)
+	    call @$cptnc(r5)
+	    sorl r2
+	    >
+	  pop r1
+	  rptl
+	  >
+	pop r3
+	return
+
+
+telwti:	pop $cptnc(r5)		;save contination
+	return
+tellfn:	clr $cptnc(r5)		;logically finished, no continuation
+	return
+
+teliac:	cmpb r1,#%tniac
+	if ne,<bpt>		;oops
+	call telwti		;wait for a character
+	.irp what,<wil,wnt,do,dnt>
+	cmpb r1,#%tn'what
+	if eq,<jcall tel'what>
+	.endm
+	cmpb r1,#%tniac
+	if eq,<.bout>		;send character if iac
+	jcall tellfn		;not recognized
+
+telwil:	call telwti
+	loop <
+	  cmpb r1,#%tneco
+	  if eq,<
+	    bit #.tnfwa_.tneco,$cptnm(r5)	;negotiation in progress?
+	    if eq,<call telsdo>	;send a do
+	    bis #<.tnfwa+.tnfdo>_.tneco,$cptnm(r5)	;remember modes
+	    exitl
+	    >
+	  cmpb r1,#%tnsga
+	  exitl eq		;fine with me
+	  cmpb r1,#%tntbn
+	  if eq,<
+	    call telsdo		;send a do
+	    bis #<.tnfwa+.tnfdo>_.tntbn,$cptnm(r5)
+	    exitl
+	    >
+
+	  call telsdnt		;whatever it is, don't do it
+	  >
+	jcall tellfn		;logically finished
+
+telwnt:	call telwti
+	loop <
+	  cmpb r1,#%tneco
+	  if eq,<
+	    bit #.tnfwa_.tneco,$cptnm(r5)
+	    if ne,<call telsdnt>	;send back a don't
+	    bic #<.tnfwa+.tnfdo>_.tneco,$cptnm(r5)
+	    exitl
+	    >
+	  cmpb r1,#%tntbn
+	  if eq,<
+	    call telsdnt	;send back a don't
+	    bic #<.tnfwa+.tnfdo>_.tntbn,$cptnm(r5)
+	    exitl
+	    >
+	  >
+	jcall tellfn
+
+teldo:	call telwti
+	loop <
+	  cmpb r1,#%tnsga
+	  if eq,<
+	    bis #.tnldo_.tnsga,$cptnm(r5)
+	    exitl
+	    >
+	  cmpb r1,#%tntbn
+	  if eq,<
+	    call telswil
+	    bis #<.tnlwa+.tnldo>_.tntbn,$cptnm(r5)
+	    exitl
+	    >
+	  cmpb r1,#%tntmk
+	  if eq,<
+	    call telswil
+	    exitl
+	    >
+	  cmpb r1,#%tnloc	;terminal location
+	  if eq,<
+	    call tnsloc		;send the location
+	    exitl
+	    >
+
+	  call telswnt		;whatever it is, I won't do it
+	  >
+	jcall tellfn
+
+teldnt:	call telwti
+	loop <
+	  cmpb r1,#%tntbn
+	  if eq,<
+	    call telswnt
+	    bic #<.tnlwa+.tnldo>_.tntbn,$cptnm(r5)
+	    exitl
+	    >
+	  >
+	jcall tellfn
+
+  loop <
+telsdo:	push #%tndo
+	exitl
+telsdnt:
+	push #%tndnt
+	exitl
+telswil:
+	push #%tnwil
+	exitl
+telswnt:
+	push #%tnwnt
+  >
+	push r0,r1
+	movb #%tniac,r1
+	call cp$hso
+	mov 4(sp),r1
+	call cp$hso
+	pop r1
+	call cp$hso
+	pop r0,*
+	return
+
+tnsloc:				;send terminal location
+	push r0,r1,r2
+	mov $cphso(r5),r0
+	if ne,<
+	  mov #10$,r1
+	  mov #3,r2
+	  .sout
+	  push r0
+	  .cnsget
+	  mov ttyloc(r0),r1
+	  pop r0
+	  .soutz
+	  mov #20$,r1
+	  mov #2,r2
+	  .sout
+	  >
+	pop r2,r1,r0
+	return
+
+10$:	.byte %tniac,%tnsb,%tnloc
+20$:	.byte %tniac,%tnse
+	.even
+
+;;; local modes:
+;;; mode:midas
+;;; auto fill mode:
+;;; fill column:75
+;;; comment column:32
+;;; end:

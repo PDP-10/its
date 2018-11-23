@@ -176,6 +176,7 @@
 - METER, displays system metering information.
 - MICRO, microcode assembler.
 - MINI, mini Chaosnet file server (new).
+- MINITS, mini-ITS network utility.
 - MINIC, mini Chaosnet file server (old).
 - MLDEV/MLSLV, allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.

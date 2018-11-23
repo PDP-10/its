@@ -1,0 +1,470 @@
+.lif  z %defin
+	.title	LGP support
+	.sbttl	LGP support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+.if p1
+	.sbttl	-- Definitions 
+
+;;; DR11 interface
+lg.csr==0		;control and status register
+ %lgcs0==001			;CSR 0 user defined bit
+ %lgcs1==002			;CSR 1 user defined bit
+ %lgbie==040			;b interrupt enable
+ %lgaie==100			;a interrupt enable (xmit)
+ %lgrqa==200			;REQUEST A (transmit)
+ %lgrqb==100000			;REQUEST B
+lg.tbf==2		;transmitter buffer
+lg.rbf==4		;receiver buffer
+
+.endc p1
+
+chnsrv <LGP>,cxlgp	    ;define the LGP server
+
+	.sbttl	-- Macros
+
+nlgp==0
+.macro lgp vec,csr,maxpnd
+  .if p2
+    %%==.
+	.=lg$vec+<2*nlgp>
+	  .word vec
+	.=lg$csr+<2*nlgp>
+	  .word csr
+	.=lg$mxp+<2*nlgp>
+	  .word maxpnd
+    .=%%
+  .endc
+nlgp==nlgp+1
+.endm
+
+.macro lggetw dst
+	mov @$lgrbf(r5),dst
+.endm
+
+.macro lgputw src
+	mov src,@$lgxbf(r5)
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+lg$vec:	.blkw nlgp
+lg$csr:	.blkw nlgp
+lg$mxp:	.blkw nlgp
+
+  ;;
+;;;;;;	Interrupt vectors point here
+  ;;
+
+lg$brk:
+		.rept nlgp
+		.lif z .rpcnt
+lg$abk::
+	jsr r5,@#lgaint
+	  .word lgpdvs+<2*.rpcnt>
+		.lif z .rpcnt
+lg$bbk::
+	jsr r5,@#lgbint
+	  .word lgpdvs+<2*.rpcnt>
+		.endr
+llg$brk==<.-lg$brk>
+
+lg$vap::	.rept nlgp
+	.word lg$abk+<llg$brk*.rpcnt>
+		.endr
+lg$vbp::	.rept nlgp
+	.word lg$bbk+<llg$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;	An LGP hardware object
+  ;;
+
+  dsect <
+$lgcsr::	.blkw 1	    ;CSR for the DR11
+$lgxbf::	.blkw 1	    ;xmit buffer register
+$lgrbf::	.blkw 1	    ;recv buffer register
+$lgsrq::	.blkw 1	    ;server queue
+$lgqrm::	.blkw 1		;number of slots left on queue
+$lgxpq::	.blkw 1	    ;pending LGP output buffers
+$lgxpe::	.blkw 1	    ;end of list for fast addition
+$lgnos::	.blkw 1	    ;number of output slots on the xmit queue
+$lgsrc::	.blkw 1	    ;source connection
+$lgsrp::	.blkw 1	    ;current source packet
+$lgbld::	.blkw 1	    ;output buffer being built
+  ;; be sure to change lgpini/100$ if you change this
+  >,l$lgp
+
+  dsect <		;; queue entry
+$lgqlk::	.blkw 1		;link to next queue entry
+$lgqcn::	.blkw 1		;connection with this queue
+  >,l$lgq
+
+  ;;
+;;;;;;	An LGP buffer structure
+  ;;
+
+l$lgbd==100			;length of buffer data (in bytes)
+  dsect <
+$lgblk::	.blkw 1		;link to next (or zero for end)
+$lgbpt::	.blkw 1		;pointer to next word/byte
+$lgbct::	.blkw 1		;count (byte in, word out)
+$lgbdt::	.blkb l$lgbd	;buffer data
+  >,l$lgbf
+
+  ;;
+;;;;;;  Interrupt routines
+  ;;
+
+lgbint:	pop r5
+	rti			;?? why is it interrupting??
+
+lgaint:	mov @(r5),r5		;get the hardware object
+	push r1
+	mov $lgxpq(r5),r1	;get current output buffer
+	if ne,<
+	  loop <
+	    bit #%lgrqa,@$lgcsr(r5)
+	    exitl eq
+	    lgputw @$lgbpt(r1)	;put a word in the interface
+	    add #2,$lgbpt(r1)	;advance pointer
+	    dec $lgbct(r1)	;one less word
+	    rptl gt
+	    inc $lgnos(r5)	;one more output slot
+	    mov #1,lgpkik	;kick the daemon
+	    push r1		;for FSMFRE
+	    mov (r1),r1		;get next packet
+	    call fsmfre		;free the old one
+	    tst r1		;is there another packet
+	    rptl ne
+	    >
+	  >
+	mov r1,$lgxpq(r5)
+	if eq,<
+	  bic #%lgaie,@$lgcsr(r5)	;turn off interrupts
+	  mov r5,$lgxpe(r5)	;set up insertion...
+	  add #$lgxpq,$lgxpe(r5)	;...pointer
+	  >
+	pop r1,r5
+	rti
+
+  ;;
+;;;;;;  The daemon
+  ;;
+
+.wscalar lgpkik			;kick here when something to do
+.wvector lgpdvs,nlgp		;a table of devices
+
+lgpdmn:	loop <
+	  tst lgpkik
+	  if eq,<
+	    .regs #hng.ne,#lgpkik,#zero
+	    .hang
+	    rptl
+	    >
+	  clr lgpkik
+	  push #lgpdvs
+	  loop <
+	    mov @(sp),r5	;get the hardware object
+	    if ne,<loop <
+	      call lgpgcn	;get a connection
+	      if ne,<
+	        tst $lgnos(r5)	;room for an output buffer?
+		if gt,<
+		  call lgpgpk	;get a packet
+		  if ne,<
+		    call lgpgbf	;get a buffer (hangs until there is one)
+		    call lgpcpy	;copy packet to buffer
+		    rptl		;go do more (if possible)
+		    >
+		> >
+	      >>
+900$:	    add #2,(sp)
+	    cmp (sp),#lgpdvs+<2*nlgp>
+	    rptl lo
+	    >
+	  pop *
+	  rptl
+	  >
+
+lgpgcn:	mov $lgsrc(r5),r0   ;get current source connection
+	if eq,<
+	  mov r5,r2
+	  add #$lgsrq,r2	;locative to queue head
+	  loop <
+	    mov (r2),r1		;get a queue entry
+	    exitl eq
+	    mov $lgqcn(r1),r0
+	    tst $ccibf(r0)
+	    if eq,<
+	      clr r0		;connection not yet good
+	      mov r1,r2
+	      rptl
+	      >
+	    mov (r1),(r2)	;unlink it
+	    push r1
+	    call fsmfre	    ;free the queue entry
+	    inc $lgqrm(r5)
+	    mov #5,$cclwn(r0)	    ;up the window size
+	  > >
+	mov r0,$lgsrc(r5)	;save connection and test existence
+	return
+
+lgpgpk:	mov $lgsrp(r5),r1   ;get current source packet
+	if eq,<		    ;none there, try the connection
+	  loop <	    ;exit mechanism
+	    call cpkpki	    ;get a packet
+	    if cc,<
+	      exitl eq
+	      tstb $cpkop(r1)	    ;data opcode?
+	      exitl mi	    ;yup, it's a good packet
+	      call cpkfre ;free the packet
+	      rptl	    ;and try to get another
+	      >
+	    clr $lgsrc(r5)  ;clear the source connection
+	    call ccnfre	    ;get rid of this connection
+	    mov #1,lgpkik   ;kick the daemon to try again
+	    call lgpfin	    ;finish the current output buffer
+	    >
+	  >
+	mov r1,$lgsrp(r5)	;save packet and test existence
+	return
+
+lgpgbf:	loop <
+	  mov $lgbld(r5),r2 ;get current build buffer
+	  exitl ne
+	  push #l$lgbf
+	  call fsmall	    ;get a buffer
+	  pop r2
+	  if eq,<
+	    call fsmhng
+	    rptl
+	    >
+	  mov r2,$lgbpt(r2) ;setup byte...
+	  add #$lgbdt,$lgbpt(r2)    ;...pointer
+	  mov #l$lgbd,$lgbct(r2)    ;bytes remaining in this buffer
+	  >
+	mov r2,$lgbld(r5)	;save buffer and test existence
+	return
+
+;;; r1 has packet, r2 has buffer, r5 has lgp object
+lgpcpy:	mov $pktbc(r1),r3   ;get packet byte count
+	cmp $lgbct(r2),r3
+	if lt,<mov $lgbct(r2),r3>
+	;; r3 now has byte count
+	tst r3
+	if ne,<
+	  sub r3,$pktbc(r1)
+	  sub r3,$lgbct(r2)
+	  mov $pktbp(r1),r0   ;get byte pointer
+	  mov $lgbpt(r2),r4
+	  loop <
+	    movb (r0)+,(r4)+
+	    sorl r3
+	    >
+	  mov r0,$pktbp(r1)   ;reset pointers
+	  mov r4,$lgbpt(r2)
+	  >
+	tst $pktbc(r1)	    ;anything left in packet?
+	if eq,<		    ;nope, so get rid of packet
+	  clr $lgsrp(r5)    ;no more source packet
+	  call cpkfre	    ;free it
+	  >
+	tst $lgbct(r2)	    ;any more room in buffer?
+	if eq,<		    ;nope, queue it
+	  clr $lgbld(r5)    ;no more buffer being built
+	  mov #l$lgbd/2,$lgbct(r2)  ;set the "byte" count
+	  call lgpqbf	    ;queue the buffer
+	  >
+	return
+
+lgpfin:	mov $lgbld(r5),r2   ;get current buffer being built
+	if ne,<
+	  clr $lgbld(r5)    ;so it won't appear next time
+	  bit #1,$lgbct(r2) ;odd byte count
+	  if ne,<	    ;yup, cause padding
+	    clrb @$lgbpt(r2);make pad byte a zero
+	    dec $lgbct(r2)  ;count the byte (don't need to advance pointer)
+	    >
+	  mov #l$lgbd,r3    ;get max byte count
+	  sub $lgbct(r2),r3 ;get new byte count
+	  if eq,<	    ;nothing really there
+	    push r2
+	    call fsmfre	    ;free it
+	    >
+	  else <
+	    asr r3	    ;byte count to word count
+	    mov r3,$lgbct(r2)	    ;set the "byte" count
+	    call lgpqbf	    ;queue the buffer
+	    >
+	  >
+	return
+
+lgpqbf:	mov $lgbct(r2),r3	;get word count for swapping
+	if eq,<
+	  push r2
+	  call fsmfre
+	  return
+	  >
+	mov r2,r0
+	add #$lgbdt,r0
+	mov r0,$lgbpt(r2)
+	loop <
+	  swab (r0)+
+	  sorl r3
+	  >
+	dec $lgnos(r5)		;one less output slot
+	clr (r2)	    ;clear the link
+	lock 6
+	  mov r2,@$lgxpe(r5);add it to the end of the queue
+	  mov r2,$lgxpe(r5) ;and make it the end
+	  bis #%lgaie,@$lgcsr(r5)   ;enable interrupts
+	unlock
+	return
+
+
+
+cxlgp:
+lgpchaos:
+	push r5		    ;scan for an available lgp
+	mov #lgpdvs,r0
+	loop <
+	  mov (r0)+,r5
+	  if ne,<
+	    dec $lgqrm(r5)
+	    exitl ge
+	    inc $lgqrm(r5)
+	    >
+	  cmp r0,#lgpdvs+<2*nlgp>
+	  rptl lo
+	  mov (pc)+,r0
+	    .string <No available LGP>
+	  pop r5
+	  movb #%cocls,$cpkop(r1)   ;refuse the conneciton
+	  jcall cprbad	    ;actually refuse it now
+	  >
+
+	call ccnall	    ;get a connection
+	if eq,<
+10$:	  inc $lgqrm(r5)
+	  pop r5
+	  jcall cpkfre	    ;free the packet, but don't refuse
+	  >
+
+	push r2,#l$lgq
+	call fsmall
+	pop r2		    ;get a queue entry
+	if eq,<
+	  pop r2	    ;restore r2
+	  call ccnfre	    ;free the connection
+	  br 10$	    ;and go free the packet
+	  >
+	mov #%csrfc,$ccsta(r0)	;connection is rfc received
+	mov $cpksa(r1),$ccfad(r0)	;set foriegn address
+	mov $cpksi(r1),$ccfid(r0)	;and foriegn index
+	mov $cpkda(r1),$cclad(r0)	;set local address correctly
+	mov time,$ccitm(r0)	;time of transaction
+	push $cpkpn(r1)		;get packet number
+	mov (sp),$ccsac(r0)	;set should ack number
+	mov (sp),$cchac(r0)	;and have acked number
+	pop $ccrcp(r0)		;receipt number
+	mov #1,$ccebr(r0)	;set event bits    receive
+	mov #lgpkik,$ccepr(r0)  ;set event pointer receive
+	
+	mov r0,$lgqcn(r2)   ;save the connection in the queue entry
+	clr $lgqlk(r2)	    ;make sure the link is zero
+	add #$lgsrq,r5		;point at list
+	loop <
+	  tst (r5)
+	  exitl eq
+	  mov (r5),r5
+	  rptl
+	  >
+	mov r2,(r5)		;link it on the end
+	pop r2,r5	    ;don't need the regs any more
+	mov #1,$cpkpn(r1)   ;window size of 1
+	movb #%coopn,$cpkop(r1)	    ;open the connection
+	mov #1,lgpkik	    ;kick the daemon
+	jcall cpkpko	    ;send the packet through
+
+
+lgpini:	clr r0
+	loop <
+	  call 100$
+	  add #2,r0
+	  cmp r0,#nlgp*2
+	  rptl lo
+	  >
+	.regs #lgpdmn,#60,#140_8	;start up the daemon
+	.usrgo
+	if eq,<bpt>		;oops
+	return
+
+100$:	mov lg$csr(r0),r4
+	call nxmcat	    ;in case it doesn't exist
+	  lgpnxm
+	clr (r4)	    ;check for existence of interface
+	call nxmclr	    ;looks like it's there
+
+	mov lg$vec(r0),r2   ;get interrupt vector
+	mov lg$vap(r0),(r2)+	;set read interrupt routine
+	mov #pr5,(r2)+		;and priority
+	mov lg$vbp(r0),(r2)+	;set xmit interrupt routine
+	mov #pr5,(r2)+		;and priority
+
+	push #l$lgp
+	call fsmall
+	pop r5		    ;get the object
+	if eq,<bpt>	    ;out of memory at startup...bad
+	mov r5,lgpdvs(r0)
+
+	mov r4,(r5)+		;($lgcsr) save CSR
+	add #lg.tbf-lg.csr,r4	;convert to xmit register
+	mov r4,(r5)+		;($lgxbf) save xmit register
+	add #lg.rbf-lg.tbf,r4	;convert to recv register
+	mov r4,(r5)+		;($lgrbf) save recv register
+	mov r5,r4		;save pointer to server queue
+	clr (r5)+		;($lgsrq) clear server queue
+	mov lg$mxp(r0),(r5)+		;($lgqrm) remaining slots on queue
+	mov r5,r4		;save pointer to xmit buffer queue
+	clr (r5)+		;($lgxpq) clear xmit queue
+	mov r4,(r5)+		;($lgxqe) setup end pointer to xmit queue
+	mov #5,(r5)+		;($lgnos) number of output slots
+	clr (r5)+		;($lgsrc) no source connection
+	clr (r5)+		;($lgsrp) no source packet
+	clr (r5)+		;($lgbld) no buffer being built
+
+	return
+
+lgpnxm:	clr lgpdvs(r0)	    ;declare no object
+	return
+
+****
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

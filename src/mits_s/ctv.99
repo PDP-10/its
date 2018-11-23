@@ -1,0 +1,870 @@
+.lif  z %defin
+	.title	CTV support
+	.sbttl	CTV support: Definitions, Macros and Code
+
+;;; ;;; General info:
+;;; ;;; 	Some code for testing Chuck Linton's new version of the TV system
+;;; ;;; Usage:
+;;; ;;; 	defdev ctv,ctv,<
+;;; ;;; 	  ;;;	ctv csr
+;;; ;;; 		ctv 177740
+;;; ;;; 	  >
+;;; ;;; 	
+
+;;; ;;; Note well: this code is optimized to draw characters.  All other code must
+;;; ;;; keep pointers consistent.  CT.PT1 must always point at the current
+;;; ;;; character, CT.INC must always be 96.  R5 must always point to ct.pt1 and R3
+;;; ;;; must always point to ct.dt1.
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+.if p1
+	.sbttl	-- Definitions 
+
+; debug hacks
+
+ct.csr==00			;plane number selected
+ct.bow==02			;black on white register
+ct.inc==04			;increment register
+ct.pt0==10			;pointer 0 (increment on data read)
+ct.dt0==12			;data at (pointer 0)
+ct.pt1==14			;pointer 1 (increment on data write)
+ct.dt1==16			;data at (pointer 1)
+
+%ctwip==768.			;width  in pixels
+%cthip==582.			;height in pixels
+%ctchw==8.			;character width  (in pixels)
+%ctchi==12.			;character height (in pixels)
+%ctwic==%ctwip/%ctchw		;width  in characters
+%cthic==%cthip/%ctchi		;height in characters
+
+.endc p1
+
+	.sbttl	-- Macros
+
+nctv==0
+.macro ctv csr
+	.if p2
+	    %%==.
+		.=ct$csr+<2*nctv>
+		 .word csr
+	    .=%%
+	.endc
+nctv==nctv+1
+.endm
+
+chnsrv ^"CTV",cxctv		;define the CHAOS server
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+ct$csr:	.blkw nctv		;constant CSRs
+.wvector ct$xdv,nctv		;table of xmit devices
+
+dsect <			;;; a CTV structure
+		.blkb l$dv	;a raw device
+  $ctava::	.blkw 1		;device available flag
+  $ctcsr::	.blkw 1		;the CSR for this device
+  $ctptr::	.blkw 1		;current pointer
+  $ctpt0::	.blkw 1		;pointer to beginning of this line
+  $ctchx::	.blkw 1		;current x-pos
+  $ctchy::	.blkw 1		;current y-pos
+  $ctgrx::	.blkw 1		;current graphic x
+  $ctgry::	.blkw 1		;current graphic y
+  $ctgpt::	.blkw 1		;current graphic pointer
+  $ctgbt::	.blkw 1		;current graphic bit
+  $ctgsp::	.blkw 1		;stack pointer for throwing from supdup graphics
+  >,l$ct
+
+
+
+ctvini:	clr r0
+	loop <
+	  call ctinit
+	  add #2,r0
+	  cmp r0,#2*nctv
+	  rptl lt
+	  >
+	return
+
+;;; Initialize one CTV board.  Called with R0 as the CTV index.
+
+ctinit:	push r2
+	mov ct$csr(r0),r2	;get CSR
+	call nxmcat
+	  ctnxm
+	mov #1,ct.csr(r2)
+	mov #-1,ct.bow(r2)
+	mov #%ctwic,ct.inc(r2)
+	clr ct.pt0(r2)
+	clr ct.pt1(r2)
+	call nxmclr		;looks like it is there
+
+	push r1,r0		;push order important
+	.regs #ctdrvr,#40,#40_8	;start address, stack size, priority
+	.usrgo			;fire up a process to drive it
+	if cs,<bpt>
+	mov (sp),(r0)+		;put index of device in r0 of process
+	pop r0,r1
+
+	push #l$ct,#200		;size of xmit object, size of queue
+	call dvxini		;init a transmit device
+	pop r2			;get xmit device
+	if eq,<bpt>
+
+	mov r2,ct$xdv(r0)	;store it in the table of devices
+	mov #-1,$ctava(r2)	;declare it available
+	mov ct$csr(r0),$ctcsr(r2)
+
+	pop r2			;restore reg
+	return
+	
+ctnxm:	clr ct$xdv(r0)
+	pop r2
+	return
+
+ctpio:				;physical IO control
+	.word $close,ctcls
+	.word 0
+
+ctcls:	mov #-1,$ctava(r4)	;declare it available again
+	return
+
+
+;;; The process that drives a CTV board
+
+ctdrvr:	mov ct$xdv(r0),r4	;get the device
+	if eq,<.logout>
+	mov $ctcsr(r4),r5	;get the CSR
+	mov #%ctwic,ct.inc(r5)	;set the increment
+	mov r5,r3
+	add #ct.dt1-ct.csr,r3
+	add #ct.pt1-ct.csr,r5
+	call ct$clr		;clear the screen
+	  .irp var,<grx,gry,gpt,gbt>	;init graphics
+	clr $ct'var(r4)
+	  .endm
+	loop <
+	  call ctgetc		;get a character
+	  cmpb r1,#12
+	  if eq,<call ct$crl
+	  	 rptl>
+	  tstb r1
+	  if pl,<call ctchar>	;draw a character
+	  else  <call ct%td>	;interpret the %td code
+	  rptl
+	  >
+
+ct%td:	bic #mask7,r1
+	asl r1
+	cmp r1,#lct$%td		;range check
+	if ge,<return>
+	jcall @ct$%td(r1)	;call the routine
+
+;;; draw a character on the screen
+
+;;; defines FNTTBL: as index-by-11. (one less than char height for
+;;; interline spaceing) raster defs
+
+$insrt cptfnt,nnbits
+
+ctfidx:	.rept 128.
+	.word fnttbl+<.rpcnt*<%ctchi-1>>
+	.endr
+
+;;; vc.pt1 and vc.inc must be set up. r1 must be 7 bits
+ctchar:
+
+	cmp r1,#40
+	if lt,<jcall ct%td>
+
+	asl r1			;word index
+	mov ctfidx(r1),r0	;get pointer to raster defs
+	mov r3,r2
+	bit #1,$ctchx(r4)
+	if eq,<inc r2>
+	.rept %ctchi-1
+	  bisb (r0)+,(r2)
+	.endr
+ct$fs:	cmp $ctchx(r4),#%ctwic-1
+	if lt,<
+	  inc $ctchx(r4)
+	  inc $ctptr(r4)
+	  >
+	mov $ctptr(r4),(r5)
+	return
+	
+ctgetc:	loop <
+	  tst $dvhmn(r4)	;is there any data?
+	  if le,<
+	    push r0,r2
+	    .regs #hng.gt,r4,#zero
+	    add #$dvhmn,r1	;point at the word
+	    .hang
+	    pop r2,r0
+	    rptl
+	  > >
+	jcall chnfgt		;do a fast get (no r0 channel)
+
+
+
+ct$%td:				;%TD code dispatch table for the PERTEK
+		.irp com,<mov,mv0,eof,eol,dlf,mtf,mtn,crl>
+	.word ct$'com
+		.endm
+		.irp com,<nop,bs,lf,rcr,ors,qot,fs,mv0>
+	.word ct$'com
+		.endm
+		.irp com,<clr,bel,ini,ilp,dlp,icp,dcp,bow>
+	.word ct$'com
+		.endm
+		.irp com,<rst,grf,rsu,rsd,ach,asp,alv,asv>
+	.word ct$'com
+		.endm
+lct$%td==.-ct$%td
+
+ct$mov:	call ctgetc
+	call ctgetc
+ct$mv1::
+ct$mv0:	call ctgetc		;get the y
+	mov r1,$ctchy(r4)
+	call ctgetc		;get the x
+	mov r1,$ctchx(r4)
+ct$pos:	mov $ctchy(r4),r1	;reget the y
+	cmp r1,#%cthic		;range check
+	if his,<
+	  clr r1
+	  clr $ctchy(r4)	;wrap
+	  >
+	mov $ctchx(r4),r0
+	cmp r0,#%ctwic
+	if ge,<
+	  mov #%ctwic-1,r0
+	  mov r0,$ctchx(r4)
+	  >
+	asl r1
+	mov ctrtbl(r1),r1
+	mov r1,$ctpt0(r4)
+	add r0,r1
+	mov r1,$ctptr(r4)
+	mov r1,(r5)
+	return
+
+ctrtbl:	.rept %cthic+2
+	  .word .rpcnt*%ctchi*%ctwic
+	.endr
+
+ct$eof:	call ct$eol
+	mov $ctchy(r4),r0	;get current line
+	inc r0			;go down one
+	asl r0			;word index
+	mov ctrtbl(r0),(r5)	;set begin clear pointer
+	mov #2,ct.inc-ct.pt1(r5)	;increment pointer by 2 as we go
+	mov #%cthip,r1		;total number of scan lines
+	sub ctctbl(r0),r1	;number of scan lines to clear
+	loop <
+	  	.rept %ctwic/2
+	  clr (r3)
+	  	.endr
+	  sorl r1
+	  >
+	mov $ctptr(r4),(r5)
+	mov #%ctwic,ct.inc-ct.pt1(r5)
+	.deshed
+	return
+
+ct$eol:	bit #1,$ctchx(r4)
+	if ne,<
+		.rept %ctchi
+	  clrb (r3)
+	  	.endr
+	  sub #<%ctchi*%ctwic>-1,(r5)
+	  >
+	mov $ctpt0(r4),r2
+	add #%ctwic,r2		;limit
+	loop <
+		.rept %ctchi
+	  clr (r3)
+		.endr
+	  sub #<%ctchi*%ctwic>-2,(r5)
+	  cmp (r5),r2
+	  rptl lo
+	  >
+	mov $ctptr(r4),(r5)
+	return
+
+ct$dlf:	push r3
+	bit #1,$ctchx(r1)
+	if eq,<inc r3>
+		.rept %ctchi
+	clrb (r3)
+		.endr
+	pop r3
+	mov $ctptr(r4),(r5)
+	return
+
+ct$mtf::
+ct$mtn::
+ct$nop:
+	return
+
+ct$crl:	inc $ctchy(r4)
+	clr $ctchx(r4)
+	call ct$pos
+	jcall ct$eol
+
+ct$bs:	dec $ctchx(r4)
+	if mi,<clr $ctchx(r4)>
+	else <dec (r5)>
+	return
+
+ct$lf:	inc $ctchy(r4)
+	jcall ct$pos
+
+ct$rcr:	clr $ctchx(r4)
+	mov $ctpt0(r4),(r5)
+	mov (r5),$ctptr(r4)
+	return
+
+ct$ors==ct$nop
+
+ct$qot:	call ctgetc
+	bic #mask7,r1
+	jcall ctchar		;draw the character
+
+ct$clr:	clr $ctchy(r4)
+	clr $ctchx(r4)
+	call ct$pos
+	jcall ct$eof
+
+ct$bel:	tst fixbel
+	return
+
+ct$ini==ct$nop
+
+.wscalar ct%mcp			;mode
+
+    loop <
+ct$icp:	clr ct%mcp		;indicate insert
+	exitl
+ct$dcp:	mov #-1,ct%mcp		;indicate delete
+    >
+	call ctgetc
+	tstb r1			;r1 has move count
+	if le,<return>
+	mov #%ctwic,r0
+	sub $ctchx(r4),r0	;r0 has region width
+	if le,<return>
+	cmp r0,r1
+	if le,<mov r0,r1>
+	sub r1,r0		;r0 has move count
+	push r3
+.bvector ct%%cp,%ctwic
+	tst ct%mcp
+	if eq,<			;insert
+	  mov #ct%%cp+%ctwic,r3	;r3 if  TO  pointer
+	  mov r3,r2
+	  sub r1,r2		;r2 is FROM pointer
+	  >
+	else <			;delete
+	  mov #ct%%cp,r3	;r3 is  TO  pointer
+	  add $ctchx(r4),r3
+	  mov r3,r2
+	  add r1,r2		;r2 is FROM pointer
+	  >
+.wscalar ct%cpf			;FROM pointer
+.wscalar ct%cpt			; TO  pointer
+	mov r2,ct%cpf
+	mov r3,ct%cpt
+	mov #2,ct.inc-ct.pt1(r5)	;auto inc by 2
+	mov $ctpt0(r4),(r5)	;setup write pointer
+	mov (r5),ct.pt0-ct.pt1(r5)	;and read pointer
+				;;note: autoincrement takes care of getting
+				;;to next line
+	add #ct.dt1-ct.pt1,r5	;setup r5 as (write) data register
+	push #%ctchi		;number of lines to do
+	loop <
+	  add #ct.dt0-ct.dt1,r5	;convert r5 to (read)  data register
+	  mov #ct%%cp,r2
+	  mov #%ctwic/2,r3
+	  loop <		;yank old scan line
+	    mov (r5),(r2)
+	    swab (r2)+
+	    sorl r3
+	    >
+	  mov ct%cpf,r2		;get from pointer
+	  mov ct%cpt,r3		;get to pointer
+	  push r1,r0
+	  tst ct%mcp		;insert or delete?
+	  if eq,<		;insert
+	    loop <		;move part of it
+	      movb -(r2),-(r3)
+	      sorl r0
+	      >
+	    loop <		;and clear the rest
+	      clrb -(r3)
+	      sorl r1
+	      >
+	    >
+	  else <
+	    loop <		;move part of it
+	      movb (r2)+,(r3)+
+	      sorl r0
+	      >
+	    loop <		;and clear the rest
+	      clrb (r3)+
+	      sorl r1
+	      >
+	    >
+	  pop r0,r1
+	  add #ct.dt1-ct.dt0,r5	;back to (write) data register
+	  mov #ct%%cp,r2
+	  mov #%ctwic/2,r3
+	  loop <		;put scan line back
+	    swab (r2)
+	    mov (r2)+,(r5)
+	    sorl r3
+	    >
+	  dec (sp)
+	  rptl ne
+	  >
+	pop *			;get rid of counter
+	add #ct.pt1-ct.dt1,r5	;r5 now points to pointer B
+	mov $ctptr(r4),(r5)
+	mov #%ctwic,ct.inc-ct.pt1(r5)
+	pop r3
+	return
+
+ct$bow==ct$nop
+ct$rst==ct$nop
+
+    loop <
+ct$ilp:	push #0
+	exitl
+ct$dlp:	push #-1
+    >
+	mov #%cthic,r0
+	br ct$rs.
+
+    loop <
+ct$rsu:	push #-1
+	exitl
+ct$rsd:	push #0
+    >
+	call ctgetc
+	mov r1,r0
+ct$rs.:	call ctgetc
+	tstb r0			;r0 is region size, r1 is scroll size
+	if le,<return>		;no region
+	tstb r1
+	if le,<return>		;no scrolling
+	mov #%cthic,r2
+	sub $ctchy(r4),r2	;maximum region size
+	if le,<return>		;somebody screwed up
+	cmp r2,r0
+	if lt,<mov r2,r0>
+	cmp r0,r1
+	if lt,<mov r0,r1>
+.wscalar ct%rsm			;move count
+.wscalar ct%rsc			;clear count
+	asl r0			;region size
+	asl r1			;scroll size
+	mov r0,r2
+	sub r1,r2		;r2 has move size
+	mov ctctbl(r2),ct%rsm
+	mov ctctbl(r1),ct%rsc
+	mov $ctpt0(r4),(r5)	
+	tst (sp)+
+	if eq,<			;scroll down
+	  mov #-2,ct.inc-ct.pt1(r5)
+	  add ctrtbl(r0),(r5)
+	  sub #2,(r5)
+	  mov (r5),ct.pt0-ct.pt1(r5)
+	  sub ctrtbl(r1),ct.pt0-ct.pt1(r5)
+	  >
+	else <			;scroll up
+	  mov #2,ct.inc-ct.pt1(r5)
+	  mov (r5),ct.pt0-ct.pt1(r5)
+	  add ctrtbl(r1),ct.pt0-ct.pt1(r5)
+	  >
+	add #ct.dt0-ct.pt1,r5
+	mov ct%rsm,r0
+	if ne,<
+	  loop <
+	   	.rept %ctwic/2
+	    mov (r5),(r3)
+		.endr
+	    sorl r0
+	  > >
+	mov ct%rsc,r0
+	loop <
+	   	.rept %ctwic/2
+	  clr (r3)
+		 .endr
+	  sorl r0
+	  >
+	add #ct.pt1-ct.dt0,r5
+	mov $ctptr(r4),(r5)
+	mov #%ctwic,ct.inc-ct.pt1(r5)
+	.deshed
+	return
+
+ctctbl:	.rept %cthic+2
+	.word .rpcnt*%ctchi
+	.endr
+
+ct$grf:	mov sp,$ctgsp(r4)	;save as graphic stack pointer
+	loop <
+	  call ctggtc
+	  tstb r1
+	  if eq,<return>	;kludge
+	  mov r1,r0
+	  bic #mask4,r0		;really only use 4 bits
+	  asl r0
+	  bit #100,r1		;draw/erase or misc?
+	  if eq,<call @ct$%gm(r0)>	;call misc routine
+	  else  <call @ct$%gd(r0)>	;call draw/erase routine
+	  rptl
+	  >
+
+ct$%gm:		.irp subr,<nop,mv.,.or,set,ms.,nop,inv,bnk>
+	.word ctm'subr
+		.endm
+		.irp subr,<clr,psh,phy,hrd,gin,lmt,nop,nop>
+	.word ctm'subr
+		.endm
+
+ct$%gd:		.irp subr,<nop,lin,pnt,rec,chr,scn,run,nop>
+	.word ctd'subr
+		.endm
+		.rept 8
+	.word ctdnop
+		.endr
+
+ctmnop:
+ctm.or:
+ctmset:
+ctmms.:
+ctminv:
+ctmbnk:
+ctmpsh:
+ctmphy:
+ctmhrd:
+ctmgin:
+ctmlmt:
+ctdnop:
+ctdrec:
+ctdchr:
+ctdscn:
+ctdrun:
+	return
+
+ctggtc:	call ctgetc
+	tstb r1
+	if pl,<return>
+	mov $ctgsp(r4),sp	;*throw
+	jcall ct%td		;reinterpret as %TD
+
+ctgrel:	call ctggtc
+	bit #100,r1
+	if ne,<bis #-100,r1>
+	return
+
+ctgabs:	call ctggtc
+	push r1
+	call ctggtc
+	swab r1
+	asr r1
+	bis (sp)+,r1
+	bit #020000,r1
+	if ne,<bis #-020000,r1>
+	return
+
+ctgcor:	bit #20,r1		;absolute or relative
+	if eq,<			;relative
+	  call ctgrel
+	  mov r1,r0
+	  add $ctgrx(r4),r0
+	  call ctgrel
+	  neg r1
+	  add $ctgry(r4),r1
+	  >
+	else <			;abs
+	  call ctgabs
+	  mov r1,r0
+	  add #%ctwip/2,r0	;convert to CTV coordinates
+	  call ctgabs
+	  neg r1		;turn y upside down because (0,0) is upper left
+	  add #<%cthip-1>/2,r1
+	  >
+	tst r0
+	if lt,<clr r0>
+	else <
+	  cmp r0,#%ctwip-1
+	  if gt,<mov #%ctwip-1,r0>
+	  >
+	tst r1
+	if lt,<clr r1>
+	else <
+	  cmp r1,#%cthip-1
+	  if gt,<mov #%cthip-1,r1>
+	  >
+	return
+
+ctmmv.:	call ctgcor		;get a coordinate
+ctmmov:	mov r0,$ctgrx(r4)
+	mov r1,$ctgry(r4)
+.if nz haseis
+	mul #%ctwic,r1		;point to beginning of scan line
+.iff
+	mov r1,r2		;depends on %ctwic=96.
+	asl r2
+	add r2,r1
+	asl r1
+	asl r1
+	asl r1
+	asl r1
+	asl r1
+.endc	
+	mov r0,r2		;must divide x into word/bit portions
+	bic #mask4,r2		;one of 16 bits
+	asl r2			;word index
+	mov ctbtbl(r2),$ctgbt(r4)	;save the current bit
+	asr r0
+	asr r0
+	asr r0			;convert to byte offset within line
+	add r0,r1		;now points to CTV word
+	mov r1,$ctgpt(r4)	;save pointer
+	return
+
+ctbtbl:	.rept 16.
+	.word 1_<15.-.rpcnt>
+	.endr
+
+ctmclr==ct$clr
+
+ctdlin:	call ctgcor		;get a coordinate
+	jcall ct$vec		;draw the vector
+
+ctdpnt:	call ctmmv.
+	mov $ctgpt(r4),(r5)
+	bis $ctgbt(r4),(r3)
+	mov $ctptr(r4),(r5)
+	return
+
+
+ct$asp::
+ct$alv::
+ct$asv::
+	loop <
+	  call ctgetc
+	  tstb r1
+	  rptl pl
+	  >
+	jcall ct%td
+
+ct$ach==ct$nop
+
+
+;;; (r0,r1) [clipped] is where we are trying to get to
+
+ct$vec:	sub $ctgrx(r4),r0	;r0 now delta-x
+	sub $ctgry(r4),r1	;r1 now delta-y
+	add r0,$ctgrx(r4)	;graphics x now updated
+	add r1,$ctgry(r4)	;graphics y now updated
+
+.wscalar ct%grx			;how to update pointer for x
+.wscalar ct%gry			;how to update pointer for y
+	tst r1			;test delta-y
+	if ge,<mov #%ctwic,ct%gry>	;going down
+	else <			;going up
+	  mov #-%ctwic,ct%gry
+	  neg r1		;delta-y now has abs value
+	  >
+	tst r0			;test delta-x
+	if le,<
+	  mov #-2,ct%grx	;going to the left
+	  mov $ctgpt(r4),(r5)	;set pointer to graphic position
+	  mov $ctgbt(r4),r2	;get the bit within the word
+	  neg r0
+	  >	  
+	else <			;going to the right
+	  mov #2,ct%grx
+	  neg ct%gry		;flip the entire line
+	  ;;; sigh, have to recompute point and bit
+	  push r1
+	  mov $ctgry(r4),r1
+.if nz haseis
+	  mul #%ctwic,r1
+.iff
+	  mov r1,r2		;depends on %ctwic=96.
+	  asl r2
+	  add r2,r1
+	  ash #5,r1
+.endc	
+	  mov r1,(r5)
+	  mov $ctgrx(r4),r1
+	  mov r1,r2
+	  bic #mask4,r2
+	  asl r2
+	  mov ctbtbl(r2),r2
+	  mov r2,$ctgbt(r4)	
+	  ash #-3,r1
+	  add r1,(r5)
+	  pop r1
+	  mov (r5),$ctgpt(r4)
+	  >
+
+	push r4			;save r4, it will be the counter
+
+	cmp r0,r1		;which is bigger?  delta-x or delta-y
+	if gt,<			;delta-x is, we go to right or left
+	  push r0		;save it as magic incrementer, r1 is decrementer
+	  clr ct.inc-ct.pt1(r5)	;increment by zero
+	  mov r0,r4
+	  asr r4		;magic threshold
+	  loop <
+	    bis r2,(r3)		;set the bit
+	    dec r0
+	    exitl lt
+	    asl r2
+	    if eq,<		;1/16 of time
+	      inc r2
+	      add #-2,(r5)
+	      >
+	    sub r1,r4
+	    rptl ge
+	    add (sp),r4		;up to <100-epsilon>% of time
+	    add ct%gry,(r5)
+	    rptl
+	    >
+	  pop *
+	  >
+	else <			;delta-y is bigger, going up/down
+	  push r1		;save it as magic incrementer, r0 is decrementer
+	  mov ct%gry,ct.inc-ct.pt1(r5)	;increment up or down
+	  mov r1,r4
+	  asr r4		;magic threshold
+	  loop <
+	    bis r2,(r3)		;set the bit
+	    dec r1
+	    exitl lt
+	    sub r0,r4		;magic decrement
+	    rptl ge
+	    add (sp),r4		;magic increment
+	    asl r2
+	    rptl ne
+	    inc r2
+	    add #-2,(r5)
+	    rptl
+	    >
+	  sub ct%gry,(r5)	;fix overshoot
+	  pop *
+	  >
+	pop r4			;get r4 back
+	tst ct%grx		;which direction were we going?
+	if le,<			;to the left, must set graphics vars
+	  mov r2,$ctgbt(r4)	;save bit
+	  mov (r5),$ctgpt(r4)	;save graphic pointer
+	  >
+
+	mov $ctptr(r4),(r5)	;reset character pointer
+	mov #%ctwic,ct.inc-ct.pt1(r5)	;reset increment
+	return
+
+cxctv:			;chaos server for a PERTEK
+	cx$srv ctopn,40,100_8,<>	;start address, stack size, pri, code
+
+ctopn:	call cpkpki		;get the RFC
+	if cs,<
+110$:	  call ccnfre
+	  .logout
+	  >
+	mov #nctv,r5		;number of PERTEKs configured
+	mov #ct$xdv,r4		;pointer to devices
+	loop <
+	  mov (r4)+,r2		;get a device
+	  exitl ne
+	  if ne,<
+	    tst $ctava(r2)	;is it available
+	    exitl ne		;yup
+	    >
+	  sorl r5		;try the next
+	  mov (pc)+,r2
+	    .string <All CTVs at this site are in use.>
+120$:	  clr $cpknb(r1)
+	  call cpkaz1
+	  movb #%cocls,$cpkop(r1)	;make it a close packet
+	  call cpkpko		;output it
+	  br 110$
+	  >
+	clr $ctava(r2)		;no longer available
+	mov #4,$cpkpn(r1)	;window size 
+	movb #%coopn,$cpkop(r1)	;make it an open packet
+	call cpkpko		;output the OPEN
+	push r0
+	.regs r2
+	.makchn			;make a channel out of the device
+	if cs,<
+	  pop r0
+	  mov -(r4),r2
+	  mov #-1,$ctava(r2)	;make it available for next time
+	  mov (pc)+,r2
+	    .string <BARF: Memory bloat.  Can't open CTV>
+	  br 120$
+	  >
+	mov r0,r5		;put channel in r5 for now
+	pop r0			;get back the connection
+	loop <
+	  call cpkpki
+	  if cs,<
+	    push r0
+	    mov r5,r0
+	    .close
+	    pop r0
+	    br 110$
+	    >
+	  if eq,<
+	    call cpkwti		;wait for an input packet
+	    rptl
+	    >
+	  tstb $cpkop(r1)	;is it data
+	  if mi,<		;yes
+	    push r0,r1
+	    mov r5,r0		;get channel in r0
+	    mov $pktbc(r1),r2	;number of bytes to read in r2
+	    if ne,<
+	      mov $pktbp(r1),r1	;and pointer in r1
+	      .sout
+	      >
+	    pop r1,r0
+	    >
+	  call cpkfre		;free the packet
+	  rptl
+	  >
+
+****
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+;;; flush this once no longer testing
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

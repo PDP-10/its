@@ -1,0 +1,816 @@
+;;; WARNING: this uses DEC 6 character names for bit values and offsets.  The
+;;; alternative is to colapse them into 4 characters and invent some 2
+;;; character prefixes that stand for DTE offset or bitvalue.  This is hard, so
+;;; I gave in and used the DEC names as found in Chapter 8 of the front end
+;;; communications manual for 20X.
+
+;;; Here is how a DTE works, as far as I can tell.  Each processor has an area
+;;; which only it is theoretically allowed to write in.  This area is refered
+;;; to as the OWNER'S area.  This area is composed of an section which is for
+;;; the owner's use only.  This contains the keepalive count, among other
+;;; things.  Next comes various sections in which the OWNER writes to SEND
+;;; INFORMATION TO other processors.  These other processors must know to look
+;;; at it.  When an 11 does an DTE EXAMINE operation, it is relative to his
+;;; header word in the entire communications region.  So to examine the header
+;;; word, location 0 is examined.  When an 11 does a DTE DEPOSIT operation, it
+;;; is relative to the base of the area that it OWNs, NOT the base of the
+;;; communications region.
+
+;;; Well folks, that is correct.  The code now works following the above
+;;; guidlines.  I wish it were documented in some DEC manual...
+
+.lif  z %defin
+	.title	DTE support
+	.sbttl	DTE support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet dte			;declare DTE packet pusher
+
+.pkhrd <
+	..word $dtpdt,0		;start of DTE packet data
+	..word $dtpbc,1		;DTE packet byte count
+	..word $dtpty,0		;type field
+	  ..byte $dtpst,1	;  sub type
+	  ..byte $dtpmt,1	;  major type
+	    dttchs==0		;    CHAOS
+	    dttip==2		;    IP
+	>
+
+.if p1
+	.sbttl	-- Definitions 
+
+  ;;
+;;;;;;	DTE Communications region
+  ;;
+
+pident==00	;processor identification word
+ cmlnk==01	;rel offset (from base of com region) to next com area
+ cmkac==05	;owning processors keep alive count
+cmpiwd==07	;CONI  PI,  instruction
+cmpgwd==10	;CONI  PAG, instruction 
+cmpdwd==11	;DATAI PAG, instruction
+cmaprw==12	;CONI  APR, instruction
+cmdapr==13	;DATAI APR, instruction
+
+ topid==00	;TO processor ID
+ cmppt==01	;pointer to area in com reg owned by TO processor
+comsts==02	;STATUS word
+   dt.vld==1			;valied examine/deposit
+   dt.ini==2			;trying to reinit the protocol
+ cmqct==03	;number of bytes supplied by the TRANSMITTING processor
+   dt.16w==2			;16 bit, word transfer
+ cmrlf==04	;TO processors reload word ??
+ cmkak==05	;TO processors keep alive count
+
+  ;;
+;;;;;;	DTE registers as seen from the PDP-11
+  ;;
+
+  dsect <
+dlycnt::	.blkw 1		;Delay count
+  dt.dly==037777		;1*500 nanoseconds delay
+  .iif df net3cm, dt.dly==037776	;for dual ported memory
+
+dexwd3::	.blkw 1		;deposit/examine data word 3 (low)
+dexwd2::	.blkw 1		;deposit/examine data word 2 (mid)
+dexwd1::	.blkw 1		;deposit/examine data word 1 (high)
+
+tenad1::	.blkw 1		;address in PDP-10 (high and flags)
+   dt.dep==010000		;set if operation is a DEPOSIT
+tenad2::	.blkw 1		;address in PDP-10 (low)
+
+to10bc::	.blkw 1		;byte count going to 10
+to11bc::	.blkw 1		;byte count going to 11
+to10ad::	.blkw 1		;pdp-11 address of next word to 10
+to11ad::	.blkw 1		;pdp-11 address of next word to 11
+
+to10dt::	.blkw 1		;data of last word from 11 to 10
+to11dt::	.blkw 1		;data of last word from 10 to 11
+
+diag1::		.blkw 1
+diag2::		.blkw 1
+status::	.blkw 1		;STATUS.  Where the interesting bits live
+diag3::		.blkw 1
+  >
+
+  ;;
+;;;;;;	STATUS bit definitions
+  ;;
+
+;;; on reading
+
+to10dn==bit.15			;to-10 normal termination
+to10er==bit.13			;to-10 error  termination
+to11db==bit.11			;KL requested PDP-11 interrupt
+ mpe11==bit.09			;pdp-11 memory parity during to-10
+to10db==bit.08			;pdp-11 requested KL interrupt
+to11dn==bit.07			;to-11 transfer done
+bparer==bit.04			;EBUS parity error during to-11
+dexdon==bit.02			;deposit/examine done
+to11er==bit.01			;to-11 error termination
+intson==bit.00			;interrupts are on
+
+;;; the magic bits to test for when scanning at interrupt level
+%dttst==to10er+to10dn+to11er+to11dn+to11db
+
+;;; on writing
+
+don10s==bit.15			;set   to-10 done
+don10c==bit.14			;clear to-10 done
+err10s==bit.13			;set   to-10 error
+err10c==bit.12			;clear to-10 error
+int11s==bit.11			;set   11 doorbell
+int11c==bit.10			;clear 11 doorbell
+perclr==bit.09			;clear 11 parity error (MPE11)
+int10s==bit.08			;set   10 doorbell
+don11s==bit.07			;set   11 done
+don11c==bit.06			;clear 11 done
+intron==bit.05			;turn  on interrupts
+ebuspc==bit.04			;clear ebus parity error
+introf==bit.03			;turn  off interrupts
+ebusps==bit.02			;set   ebus parity error
+err11s==bit.01			;set   11 error
+err11c==bit.00			;clear 11 error
+
+;;; the magic reset bits (on startup)
+dt.rst==don10c+err10c+perclr+don11c+ebuspc+introf+err11c
+
+.endc p1
+
+****
+	.sbttl	-- Macros
+****
+
+ndte==0
+
+.macro dte vec,csr,chaddr
+.iif z ndte, dtenet==nnet
+   .if p2
+      %%==.
+	.=dt$vec+<2*ndte>
+	  .word vec
+	.=dt$csr+<2*ndte>
+	  .word csr
+		.if nz ncpchs
+	.=dt$chs+<2*ndte>
+	  .word chaddr
+		.endc
+      .=%%
+   .endc
+ndte==ndte+1
+nnet==nnet+1
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+.iif ndf dtephx, dtephx==0	;assume not a phoenix DTE
+.iif ndf dtecpr, dtecpr==0	;assume CPR did not get his hand on the 20
+.iif nz dtecpr, .iif ndf dtewho, .error DTEWHO=={11, 20} not defined
+.iif ndf dtefcl, dtefcl==-1	;DTE flow control protocol by default
+.iif z dtefcl, .print "
+ WARNING: No DTE FLOW control, must have new Twenex CHAOS
+"
+
+  ;;
+;;;;;;	Tables
+  ;;
+
+dt$vec:	.blkw ndte
+dt$csr:	.blkw ndte
+		.if nz ncpchs
+dt$chs:	.blkw ndte
+		.endc
+
+  ;;
+;;;;;;	Interrupt vectors point here
+  ;;
+
+dt$brk:
+		.rept ndte
+	jsr r5,@#dtint
+	 .word netobj+<2*dtenet>+<2*.rpcnt>
+		.endr
+ldt$brk==<.-dt$brk>
+
+dt$vad::	.rept ndte
+	.word dt$brk+<ldt$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;	A DTE hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a basic networ object
+$dtcsr==$ntcsr
+$dtrbf::	.blkw 1		;DTE rcvr buffer
+$dtxbf::	.blkw 1		;DTE xmit buffer
+
+$dtcon::	.blkw 1		;daemon process continuation
+
+$dtmth::	.blkw 1		;me to him offset (for deposit)
+$dthtm::	.blkw 1		;him to me offset (for examine)
+
+	.lif nz ncpchs
+$dtack::	.blkw 1		;ack count for 20
+	.lif nz ncpchs
+$dtlct::	.blkw 1		;last chaos packet time
+$dtkpa::	.blkw 3		;keep alive count (mine)
+
+$dtste::	.blkw 3		;11's status (sent    to 10)
+$dtstt::	.blkw 3		;10's status (grabbed by 11)
+  $dttec==4			;to eleven count (packets mod 256.)
+  $dtttc==5			;to ten	   count (packets mod 256.)
+
+  >,l$dte
+
+
+
+dtint:	mov @(r5),r5		;get object
+	push r4,r1		;save some regs
+	mov $dtcsr(r5),r4	;get the CSR
+
+	loop <
+	  bit #%dttst,status(r4)	;anything to do?
+	  exitl eq
+
+	  bit #to10er,status(r4)
+	  if ne,<call dt$kik>	;fix this later
+	  bit #to10dn,status(r4)
+	  if ne,<call dtettd>	;to ten done
+	  bit #to11er,status(r4)
+	  if ne,<call dt$kik>	;fix this later
+	  bit #to11dn,status(r4)
+	  if ne,<call dteted>	;to eleven done
+	  bit #to11db,status(r4)
+	  if ne,<call dtedng>	;doorbell rang
+
+	  rptl
+	  >
+
+	pop r1,r4,r5		;restore regs
+	rti
+
+;;; wait for deposit/examine to complete (C bit set on fail)
+.wscalar dtvwto			;wait timeout
+dt$wed:	mov #3000,dtvwto	;timeout
+	loop <
+	  bit #dexdon,status(r4)
+	  exitl ne
+	  dec dtvwto
+	  rptl ne
+	  sec			;failure
+	  >
+	return
+
+dt$sst:	push $dtmth(r5)		;from ME to HIM
+	add #comsts,(sp)	;to his STATUS word
+	mov $dtste+0(r5),dexwd1(r4)
+	mov $dtste+2(r5),dexwd2(r4)
+	mov $dtste+4(r5),dexwd3(r4)
+	mov      #dt.dep,tenad1(r4)
+	pop	         tenad2(r4)
+	jcall dt$wed
+
+dt$gst:	push $dthtm(r5)		;from HIM to ME
+	add #comsts,(sp)	;from his STATUS word
+	clr	         tenad1(r4)	;read his status
+	pop	         tenad2(r4)
+	call dt$wed
+	if cc,<
+	  mov dexwd1(r4),$dtstt+0(r5)
+	  mov dexwd2(r4),$dtstt+2(r5)
+	  mov dexwd3(r4),$dtstt+4(r5)
+	  bit #dt.vld,$dtstt+0(r5)
+	  if ne,<clc>		;success
+	  else  <sec>		;failure
+	  >
+	return
+
+  ;;
+;;;;;;	TO-10 transfer done
+  ;;
+
+dtettd:	mov #don10c,status(r4)	;clear done flag
+	mov $dtxbf(r5),r1
+	if ne,<
+	  clr $dtxbf(r5)	;no longer any packet there
+	  bit #1,r1		;might be a flow control packet
+	  if eq,<		;nope, real packet
+	    call pktngv		;free packet if not on user list
+	    netmet ou		;count it as out
+	  >
+	  >
+dteout:				;start DTE output (TO-10 transfer)
+	tst $dtxbf(r5)		;something already in queue?
+	if ne,<return>		;yup, so not allowed to start a transfer
+
+.if nz ncpchs
+  .if nz dtefcl			;Want flow control?
+	tst $dtack(r5)		;if we should ACK a packet
+	if ne,<
+	  dec $dtack(r5)
+	  mov DTVcap,r1		;DTe(variable) Chaos Ack Packet
+	  bis #1,$dtxbf(r5)	;pseudo packet
+	  br 10$
+	  >
+  .endc
+.endc
+
+	call nt$rmq
+	if eq,<return>
+	bit #dt.ini,$dtste+0(r5)
+	if ne,< call pktngv
+		br dteout
+		>
+
+	mov r1,$dtxbf(r5)	;save it
+10$:	incb $dtste+$dtttc(r5)	;one more in TO TEN queue
+
+	push r1			;setup packet address for KL
+	add #$dtpdt,(sp)	;point at dte packet data
+	pop to10ad(r4)		;store address to read from
+
+	push $dtmth(r5)		;send from ME to HIM
+	add  #cmqct,(sp)	;in the QSIZE count variable
+	mov    #dt.16w,dexwd1(r4)	;word mode transfer
+	mov $pktxs(r1),dexwd2(r4)	;store PSIZE byte count
+	mov $pktxs(r1),dexwd3(r4)	;store CSIZE byte count
+	mov    #dt.dep,tenad1(r4)	;deposit operation
+	pop	       tenad2(r4)	;in QSIZE register
+	call dt$wed		;wait for completion
+
+	clr diag3(r4)		;ensure transfers will be word mode
+	call dt$sst
+	mov #int10s,status(r4)	;ding the 10
+
+	return
+
+
+  ;;
+;;;;;;	TO-11 transfer done
+  ;;
+
+dteted:
+.if nz ncpchs
+  .if nz dtefcl			;Want flow control?
+	inc $dtack(r5)		;assume it was chaos data
+	push #dteout		;tail recurse to start DTE output
+  .endc
+.endc
+	mov #don11c,status(r4)	;clear done flag
+	bic #1,$dtste+2(r5)	;no longer in reception mode
+	mov $dtrbf(r5),r1	;get the packet
+	if eq,<return>		;huh?, no packet? Oh, well...
+	clr $dtrbf(r5)
+
+	bis #%pkt16,$pktfl(r1)	;declare packet safe for 16 bit
+
+		.if nz ncpchs
+	cmpb $dtpmt(r1),#dttchs
+	if eq,<
+	  tstb $dtpst(r1)	;subtype chaos packet?
+	  if eq,<
+	    mov time,$dtlct(r5)	;set last chaos packet time
+	    jcall chsrcv	;go receive chaos packet
+	    >
+	  cmpb $dtpst(r1),#1	;request for status?
+	  if eq,<jcall dtchss>	;go send DTE CHAOS STATUS
+	  >
+		.endc
+
+		.if nz ncpip
+	cmpb $dtpmt(r1),#dttip
+	if eq,<jcall iprcv>
+		.endc
+
+	netmet ot
+	jcall pktfre
+
+
+  ;;
+;;;;;;	Ding dong, door bell rang
+  ;;
+
+dtedng:	call dt$gst		;get his status
+	if cs,<jcall dt$kik>
+	mov #int11c,status(r4)	;clear my doorbell
+
+	bic #mask4,$dtstt+0(r5)	;only 4 bits there
+	cmp #dt.vld,$dtstt+0(r5)	;valid examine?
+	if ne,<jcall dt$kik>
+
+	cmpb $dtste+$dttec(r5),$dtstt+$dttec(r5)	;compare to-11 counts
+	if eq,<			;if same, send him status
+	  call dt$sst
+	  mov #int10s,status(r4)	;ding him
+	  return
+	  >
+
+	incb $dtste+$dttec(r5)	;assume he is sending one
+	cmpb $dtste+$dttec(r5),$dtstt+$dttec(r5)	;should be same now
+	if ne,<jcall dt$kik>	;out of phase, go request re-initialization
+
+	bis #1,$dtste+2(r5)	;in packet reception mode
+	push $dthtm(r5)		;get from HIM to ME
+	add #cmqct,(sp)		;the QSIZE word
+	clr	tenad1(r4)
+	pop	tenad2(r4)
+	  call dt$wed
+	  if cs,<jcall dt$kik>
+
+	mov dexwd3(r4),r1	;get queue size
+	cmp dexwd2(r4),r1	;all in one piece?
+	if ne,<jcall dt$kik>
+	push r1
+	add #$dtpdt,r1		;this data starts at DTE packet data
+	call pktall
+	if eq,<			;no packet
+	  netmet ot
+	  mov #junk,r1		;send things to JUNK
+	  mov #2,(sp)		;only transfer 2 bytes
+	  >
+	else <			;there is a packet
+	  mov r1,$dtrbf(r5)
+	  add #$dtpdt,r1	;pointer to beginning of packet
+	  >
+	asr (sp)
+	neg (sp)
+	bic #mask12,(sp)
+	bis #bit.15,(sp)
+	mov r1,to11ad(r4)
+	pop    to11bc(r4)
+	jcall dt$sst		;go send status for some reason
+
+
+dt$kik:	mov #dt.rst,status(r4)	;reset all interrupt bits
+	mov #dt.vld+dt.ini,$dtste+0(r5)	;valid examine, protocol init request 
+	clr 	 	   $dtste+2(r5)	;clear to-R rcv
+	clr		   $dtste+4(r5)	;clear packet counts
+	call dt$sst		;try to send status
+	jcall dt$ini		;setup for daemon init
+
+  ;;
+;;;;;;	The DTE daemon.  Makes sure KLs are up and initializes protocols
+  ;;
+
+dt$dmn:	loop <
+	  push #netobj+<2*dtenet>
+	  loop <
+	    mov @(sp),r5
+	    if ne,<
+	      mov $dtcsr(r5),r4	;get the CSR
+	      call @$dtcon(r5)	;call the process continuation
+	      >
+	    add #2,(sp)
+	    cmp (sp),#netobj+<2*dtenet>+<2*ndte>
+	    rptl lo
+	    >
+	  pop *
+	  .regs #60.,#0		;wait a second
+	  .sleep
+	  rptl			;and do it all again
+	  >
+
+dt$dmw:	pop $dtcon(r5)		;next daemon tick goes to continuation
+	return
+
+dt$dmc:	mov #intron,status(r4)	;turn on interrupts for normal operation
+	call dt$dmw		;wait for next daemon tick
+	inc $dtkpa+4(r5)
+	if eq,<inc $dtkpa+2(r5)>	;good for 136 years
+
+	lock 6
+	mov $dtkpa+0(r5),dexwd1(r4)
+	mov $dtkpa+2(r5),dexwd2(r4)
+	mov $dtkpa+4(r5),dexwd3(r4)
+	mov      #dt.dep,tenad1(r4)
+	mov	  #cmkac,tenad2(r4)	;deposit my keepalive
+	call dt$wed
+	if cs,<call dt$kik>
+	else <
+		.if nz ncpchs
+	  push $dtlct(r5)	;get last chaos packet time
+	  add #60.*60.,(sp)	;5 minutes after
+	  cmp time,(sp)+	;time passed yet?
+	  if pl,<		;yup, kick the 20
+	    mov time,$dtlct(r5)	;consider a chaos packet in as of now
+	    mov #$pktdt+6,r1	;6 bytes of packet data for info to 20
+	    call pktall		;get a packet
+	    if ne,<call dtchss>	;send him my status
+	    >
+		.endc
+	  >
+	unlock
+
+	return
+
+
+  ;;
+;;;;;;	really init.  Find my communications region, etc
+  ;;
+
+;;; These are only used to init.  Interrupts do not look at these.  A
+;;; process looks at them, but the process does not get interrupted by
+;;; another process.
+.wscalar dtvpnm
+
+dt$ini:	mov #dt.vld+dt.ini,$dtste+0(r5)	;valid examine, protocol init request 
+	clr 	 	   $dtste+2(r5)	;clear to-R rcv
+	clr		   $dtste+4(r5)	;clear packet counts
+	call dt$dmw
+	mov #dt.rst,status(r4)
+	mov #dt.dly,dlycnt(r4)
+
+.if nz dtephx			;if a phoenix DTE
+	mov #int10s+int11c,status(r4)
+	mov #20,r0		;outer loop counter
+	clr r1			;inner loop counter
+	loop <
+	  bit #to11db,status(r4)
+	  exitl ne
+	  sorl r1
+	  sorl r0
+	  br dt$ini
+	  >
+	mov #int11c,status(r4)
+	loop <
+	  bit #to11db,status(r4)
+	  exitl ne
+	  sorl r1
+	  br dt$ini
+	  >
+.endc dtephx
+
+	clr tenad1(r4)
+	clr tenad2(r4)		;examine location zero
+	  call dt$wed
+	  bcs dt$ini
+
+	movb dexwd2+1(r4),r1	;get processor number
+	bic #mask5,r1		;only five bits
+	mov r1,dtvpnm		;save as processor number
+	inc r1			;point to base of comm region
+	mov r1,r3		;save offset to base of comm area
+	add dexwd3(r4),r1	;get to my area (add offset)
+
+	clr    tenad1(r4)
+	mov r1,tenad2(r4)	;read PIDENT word
+	  call dt$wed
+	  bcs dt$ini
+	cmp dexwd3(r4),dtvpnm	;make sure it is mine
+	.if z dtecpr		;**++ Try NZ at FLAIR someday ++**
+	bne dt$ini		;avoid if at flair
+	.endc
+	mov r1,r2		;save it as my comm area (for examine)
+	loop <
+	  mov dexwd2(r4),r0	;get size of section
+	  bic #mask3,r0		;only 3 bits in size
+	  ash #3,r0		;*8 words
+	  add r0,r1		;point at TOPID word
+	  clr    tenad1(r4)
+	  mov r1,tenad2(r4)	;read TOPID word
+	    call dt$wed
+	    bcs dt$ini
+	  cmp dexwd3(r4),#0	;looking for KL (which is processor 0)
+	  rptl ne
+	  exitl
+	  >
+				;r1 now points to base of to-KL section
+	mov r1,$dtmth(r5)	;absolute location of ME to HIM region
+	sub r2,$dtmth(r5)	;now relative to base of my area (for DEP)
+
+	;;; find HIM to ME section in his comm area
+.if nz dtecpr			;++++ try this at MIT someday ++++
+	mov dexwd1(r4),r2
+	bic #mask2,r2
+	ash #3,r2
+.endc
+	inc r1			;pointer to KL's area
+	clr    tenad1(r4)
+	mov r1,tenad2(r4)
+	  call dt$wed
+	  bcs dt$ini
+	mov dexwd3(r4),r1	;get address to his PIDENT
+	add r3,r1		;add offset to base of COMM REGION
+	clr    tenad1(r4)
+	mov r1,tenad2(r4)	;read it
+	  call dt$wed
+	  bcs dt$ini
+.if nz dtecpr			;++++ try this at MIT someday ++++
+	add r2,r1		;point to hopeful start of me
+.endc	
+	cmp dexwd3(r4),#0	;make sure he is a KL
+	bne dt$ini
+	loop <
+	  mov dexwd2(r4),r0	;get size of section
+	  bic #mask3,r0		;only 3 bits in size
+	  ash #3,r0		;*8 words
+	  add r0,r1		;point at TOPID word
+	  clr    tenad1(r4)
+	  mov r1,tenad2(r4)	;read TOPID word
+	    call dt$wed
+	    if cs,<jcall dt$ini>	;bcs won't reach for flair
+	  cmp dexwd3(r4),dtvpnm	;looking for me
+	  rptl ne
+	  >
+	mov r1,$dthtm(r5)	;r1 now points to HIM to ME area
+
+	call dt$gst
+	loop <
+	  call dt$sst		;send my status
+	  mov #int10s+int11c,status(r4)	;ding him, un-ding me
+.iif nz dtephx, clr r0		;loop counter for phoenix DTE
+	  loop <
+	    bit #to11db,status(r4)
+	    exitl ne
+.if z dtephx			;if not a phoenix
+	    call dt$dmw
+	    rptl
+.iff				;if a phoenix
+	    sorl r0		;loop counter
+	    jcall dt$ini
+.endc dtephx
+	    >
+	  bit #dt.ini,$dtstt+0(r5)	;was he also initing?
+	  exitl ne
+	  call dt$gst		;get his status again
+	  bit #dt.ini,$dtstt+0(r5)	;is he initing now?
+	  rptl eq		;wait until he is
+	  >
+	bic #dt.ini,$dtste+0(r5)	;I am no longer initing
+	call dt$sst		;send him my status
+	mov #int10s+int11c,status(r4)	;ding him one final time
+.iif nz ncpchs, mov time,$dtlct(r5)	;fake a chaos packet in now
+	jcall dt$dmc		;continue at the daemon clock
+
+
+  ;;
+;;;;;;	DTE initialization
+  ;;
+
+.wscalar dtvnup			;number of DTE's that are up
+
+dteini:	clr dtvnup		;none up yet
+	clr r0
+	loop <
+	  call 100$
+	  add #2,r0
+	  cmp r0,#ndte*2
+	  rptl lo
+	  >
+	tst dtvnup
+	if ne,<
+	  .regs #dt$dmn,#40,#040_8
+	  .usrgo		;start the daemon
+	  if cs,<bpt>		;oops
+	  .iif nz ncpchs, call dtchma	;make the damn DTE ack packet
+	  >
+	return
+
+100$:				;actually init one DTE
+	mov dt$csr(r0),r4
+	call nxmcat
+	  dtenxm
+	mov #dt.rst,status(r4)
+	mov #dt.dly,dlycnt(r4)
+	inc dtvnup		;another DTE is alive
+	call nxmclr		;look OK to me
+
+	mov dt$vec(r0),r2	;get interrupt vector
+	mov dt$vad(r0),(r2)+	;set vector address
+	mov #pr6,(r2)+		;and priority 6
+
+	mov #l$dte,r5
+	call ntmake		;make the network object
+	if eq,<bpt>		;oops
+	mov r5,netobj+<2*dtenet>(r0)	;save device in network table
+	mov r4,$ntcsr(r5)	;save CSR address
+
+		.if nz ncpchs
+	mov     #dtchgv,nt$chs(r5)	;routine to send chaos packets to interface
+	mov  dt$chs(r0),nt.chs(r5)	;my pseudo address on DTE
+	mov        #10.,$ctrcv(r5)	;DTE has a cost of 10.
+		.endc
+
+		.if nz ncpip
+	mov #dtipgv,nt$ip(r5)	;routine to send IP packet to interface
+	movb      #ipnlcs,nt.ip+1(r5)
+	movb dt$chs+1(r0),nt.ip+0(r5)
+	clrb              nt.ip+3(r5)
+	movb dt$chs+0(r0),nt.ip+2(r5)
+		.endc
+
+	call dt$ini		;start initialization
+
+	mov r0,r4		;get DTE index into r4
+	add #<dtenet*2>,r4	;now network index
+	jcall ntmak1		;finish making the object
+
+dtenxm:	clr netobj+<2*dtenet>(r0)	;no network object
+	return
+
+;;; ;;; jsr r0,dt..gv
+;;; ;;;   .word protocol
+
+dt..gv:	mov (r0)+,$dtpty(r1)	;set the type field
+	pop r0			;restore reg
+	add #<$pktdt-$dtpdt>+1,$pktxs(r1)	;include DTE hearder words
+	bic #1,$pktxs(r1)	;and round up to a word boundary
+	mov $pktxs(r1),$dtpbc(r1)
+	asr	       $dtpbc(r1)	;make it word count
+
+	call ntputq
+	push r4
+	mov $dtcsr(r5),r4
+	lock 6
+	call dteout
+	unlock
+	pop r4
+	return
+
+
+.if nz ncpchs
+
+.wscalar dtvcap			;magic DTE CHAOS ack packet
+
+dtchma:				;make the ack packet
+	mov #$pktdt,r1		;no data, just existence
+	call pktall
+	if eq,<bpt>		;oops
+	mov r1,dtvcap
+	mov #<$pktdt-$dtpdt>,$pktxs(r1)	;just the header words
+	mov #<$pktdt-$dtpdt>/2,$dtpbc(r1)	;the byte(word) count
+	mov #3,$dtpst(r1)	;set the type to ACK
+	return
+
+;;; call @nt$chs(r5)[r5:=object, r1:=packet, r2:=hardware_destination(if_needed)]
+
+dtchgv:	call cpks16		;make packet safe for 16.bit hardware
+	jsr r0,dt..gv
+	  .word dttchs_8
+
+;;; Request from 20 for status (only address important)
+dtchss:	movb #dttchs,$dtpmt(r1)	;major type is chaos
+	movb #2,$dtpst(r1)	;turn it into a HERE IS STATUS
+.if z dtecpr			;CPR didn't frob with 20
+	movb nt.chs+1(r5),$pktdt+3(r1)	;set 20's subnet address
+	movb     chvmyn+0,$pktdt+2(r1)	;set host with subnet address
+	mov #<$pktdt+4-$dtpdt>,$pktxs(r1)	;just the header words
+	mov #<$pktdt+4-$dtpdt>/2,$dtpbc(r1)	;the byte(word) count
+.iff				;CPR did frob with 20
+	mov     #4,$pktdt+0(r1)
+	clr        $pktdt+2(r1)	;value at the CSR (never gets looked at)
+  .if z dtewho-11
+	mov chvmyn,$pktdt+4(r1)	;my address
+  .iff
+	movb nt.chs+1(r5),$pktdt+5(r1)	;set 20's subnet address
+	movb     chvmyn+0,$pktdt+4(r1)	;set host with subnet address
+  .endc	
+	mov #10000,$pktdt+6(r1)	;I don't run out of buffers
+	mov #<$pktdt+8-$dtpdt>,$pktxs(r1)	;just the header words
+	mov #<$pktdt+8-$dtpdt>/2,$dtpbc(r1)	;the byte(word) count
+.endc
+	call nt$ptq		;link it on the queue
+	jcall dteout		;and start output
+
+.endc ;if nz ncpchs
+
+.if nz ncpip
+
+;;; call @nt$ip(r5),[r5:=object, r1:=packet, r2,r3:=immediate_detination]
+
+dtipgv:
+ipstat +,15.
+.ipcpy 5
+	call ipks16		;make packet (data too) safe for 8.bit
+.ipcpy 6
+ipstat -,15.
+	jsr r0,dt..gv
+	  .word dttip_8
+
+.endc nz ncpip
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

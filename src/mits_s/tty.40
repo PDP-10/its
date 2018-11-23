@@ -1,0 +1,1004 @@
+	.title	TTY support
+	.sbttl	TTY support
+
+;;; ;;; General info:
+;;; ;;; 	Terminal support.  Pretty crufty, and should be (partially)
+;;; ;;; 	reimplemented. 
+;;; ;;; Known bugs/misfeatures:
+;;; ;;; 	Some terminals don't have full SUPDUP support.
+;;; ;;; 	There is no padding, so you better not need it.
+
+%acom==34			;control-backslash  (C-\)
+%txctl==0200			;control bit in ITP
+%txmta==0400			;meta	 bit in ITP
+%txtop==4000			;top	 bit in ITP
+
+dsect <			;;; an input tty structure
+		.blkb l$dv	;it is a device with...
+  $ttinum::	.blkw 1		;a tty number
+  $ttimod::	.blkw 1		;a mode (what kind of characters go here)
+  $ttipt::	.blkw 1		;<>0 if characters should go in queue
+  $ttisys==$ttipt		;byte<>0 if sysjob should spawn process
+  >,l$tti
+
+dsect <			;;; an output tty structure
+		.blkb l$dv	;it is a device with...
+  $ttonum::	.blkw 1		;a tty number
+  $ttomod::	.blkw 1		;a mode (kind of characters that go here)
+  $ttspc::	.blkw 1		;a supdup continuation
+  $ttspt::	.blkw 1		;a supdup table (%td code dispatch)
+  $ttsd1::	.blkb 1		;supdup temp data 1
+  $ttsd2::	.blkb 1		;supdup temp data 2
+  $ttsd3::	.blkb 1		;supdup temp data 3
+  $ttsd4::	.blkb 1		;supdup temp data 4
+  >,l$tto
+
+ttyilo:	.blkw ntty		;initial location of this tty
+ttyisp:	.blkw ntty		;initial speed
+ttyity:	.blkw ntty		;initial tty type
+
+.wvector ttyrdv,ntty		;receive devices
+.wvector ttyxdv,ntty		;xmit devices
+
+.wvector ttyloc,ntty		;location of this tty
+.wvector ttytyp,ntty		;type of this tty
+.wvector ttymxv,ntty		;max vertical
+	 ttymxh==ttymxv+1	;max horizontal
+.wvector ttyrol,ntty		;roll (glitch)
+.wvector ttyop1,ntty		;first  12 ttyopt bits
+.wvector ttyop2,ntty		;second 12
+  tofci%==ttyop2+0
+  %tofci==10
+.wvector ttyop3,ntty		;third	12
+  tpmta%==ttyop3+0
+  %tpmta==4
+.wvector ttysm1,ntty		;first  12 ttysmt bits
+.wvector ttysm2,ntty		;second 12
+.wvector ttysm3,ntty		;third  12
+.wvector ttyist,ntty		;initial string
+.wvector ttyspd,ntty		;output/input speed 
+.wvector ttyown,ntty		;owner of this tty
+
+
+
+;;; push ttynum,receive_device_size,xmit_device_size
+;;; returns ttynum,receive_device,xmit_device
+ttygood:
+	push r0,r1
+	loop <			;dummy for fast exiting
+	  mov 12(sp),r0		;get tty number
+
+	  push 10(sp)		;size of receive object, size of queue
+	  tst @ttyity(r0)	;terminal?
+	  if eq,<push #200>	;no, big buffer
+	  else  <push #40>	;yes, small buffer
+	  call dvrini		;init a receive device
+	  pop r1		;get it into r1
+	  exitl eq
+	  mov r1,ttyrdv(r0)	;remember the device
+	  mov r1,10(sp)		;put it back on stack
+	  mov r0,$ttinum(r1)	;save tty number object
+	  mov #ttylgt,$dvlgt(r1)	;logical get routine
+	  mov #ttrlpt,$dvlpt(r1)	;to wake up a process if necessary
+	  mov #ttilio,$dvlio(r1)	;logical input io vector
+	
+	  push 6(sp),#100	;size of transmit object, size of queue
+	  call dvxini		;init a transmit device
+	  pop r1		;get it into r1
+	  exitl eq
+	  mov r1,ttyxdv(r0)	;remember the deice
+	  mov r1,6(sp)		;put it back on stack
+	  mov r0,$ttonum(r1)	;save tty number in object
+	  mov #ttylpt,$dvlpt(r1)	;logical put routine
+	  mov #ttolio,$dvlio(r1)	;tty output logical io vector
+
+	  push r0,ttyity(r0)
+	  call tctyp
+	  mov ttyisp(r0),ttyspd(r0)	;set initial tty speed
+	  mov ttyilo(r0),ttyloc(r0)	;and initial tty loc
+
+	  pop r1,r0
+	  clc			;success
+	  return
+	  >
+	pop r1,r0
+	sec			;failure
+	return
+
+ttybad:	clr ttyrdv(r0)		;no receive device
+	clr ttyxdv(r0)		;nor xmit device
+	return
+
+
+ttybrk:	return			;send a break
+
+ttolio:				;tty output logical io
+	.word $close,ttocls	;close routine
+	.word 0
+
+ttilio:				;tty input logical io
+	.word $close,tticls	;close routine
+	.word 0
+
+ttocls:	push r0
+	mov $ttonum(r4),r0
+	mov ttyisp(r0),ttyspd(r0)
+	push r0,ttyity(r0)
+	call tctyp
+	pop r0
+	push #$close
+	call $$pioctl
+	return
+
+tticls:	push r0
+	clr $ttipt(r4)
+	mov $ttinum(r4),r0
+	cmp ttyilo(r0),ttyloc(r0)
+	if ne,<
+	  push ttyloc(r0)
+	  call fsmfre
+	  >
+	mov ttyilo(r0),ttyloc(r0)
+	pop r0
+	push #$close
+	call $$pioctl
+	return
+	
+
+;;; push tty_num,tctyp
+;;; call tctyp
+
+tctyp:	push r0,r1
+	mov 10(sp),r0		;get ttynum
+	mov 06(sp),r1		;and tctyp
+	mov r1,ttytyp(r0)	;set it
+	tst (r1)		;raw type?
+	if eq,<mov #t.raw,r1>
+	.irp var,<ttymxv,ttyrol,ttyop1,ttyop2,ttyop3,ttysm1,ttysm2,ttysm3,ttyist>
+	mov (r1)+,var(r0)
+	.endm
+	mov ttyxdv(r0),r0
+	mov (r1)+,$ttomod(r0)
+	mov (r1)+,$ttspt(r0)	;set the supdup table
+	pop r1,r0,(sp),(sp)
+	return
+
+
+
+ttrlpt==chnfpt			;tty receive logical put
+
+ttykik:	clr r5			;tty index
+	loop <
+	  mov ttyrdv(r5),r4
+	  if ne,<
+	    tstb $ttisys(r4)
+	    if ne,<call 10$>
+	    >
+	  add #2,r5
+	  cmp r5,#2*ntty
+	  rptl lt
+	  >
+	return
+
+10$:	clr $ttisys(r4)
+	tst @ttytyp(r5)			;is this a real type?
+	if eq,<return>			;no, skip it
+	loop <
+	  .regs #cp$cp,#64.,#160
+	  .usrgo
+	  if cs,<
+	    .regs #60.,#0
+	    .sleep
+	    rptl
+	  > >
+	mov r5,usrtty(r1)
+	mov r1,ttyown(r5)
+	return
+
+
+$cnsget:			;get terminal index
+	mov usrtty(r5),r0
+	return
+
+;;; open a terminal
+
+;;; 	push #tty_number*2
+;;; 	.regs #opntty,sp
+;;; 	.open
+
+opntty:	mov (r1)+,r0
+	if lt,<mov usrtty(r5),r0>
+opntt2:	push ttyrdv(r0)
+	if eq,<br 10$>
+	call makchn		;make the channel
+	if cs,<
+10$:	  pop *
+	  mov #-1,usrerr(r5)	;nobody looks at the value anyway
+	  return
+	  >
+	push ttyxdv(r0)
+	call makchn
+	if cs,<
+	  pop *,r0
+	  call $close
+	  mov #-1,usrerr(r5)	;nobody looks at the value anyway
+	  return
+	  >
+	mov ttyrdv(r0),r0	;one last time
+	mov #mask8,$ttipt(r0)	;declare receiver active (without spawn)
+	.regs (sp),#$open	;do physical control
+	.ioctl
+	pop r1,r0		;xdev into r1, rdev into r0
+	return
+
+
+;;; character set mappings for terminal output:
+;;; 	from\to	RAW	ASCII	SUPDUP	LISPM
+;;; 	RAW	<none>	<none>	<none>	<none>	
+;;; 	ASCII	<none>	<none>	<none>1	<none>1
+;;; 	SUPDUP	<none>	*yes*	<none>	<none>2
+;;; 	LISPM	<none>	*yes*	*yes*	<none>
+;;; Notes:
+;;; (1) ASCII output going to a SUPDUP connection or LISPM does not get
+;;; 	translated because the SUPDUP terminal or LISPM is presumably
+;;; 	emulating some ASCII terminal
+;;; (2) the LISPM character set is a printing character set (with a couple
+;;; 	whitespace characters).  It does not have cursor movements (etc),
+;;; 	so a translation from SUPDUP to LISPM is impossible.  (Also, I
+;;; 	don't expect to see a SUPDUP output stream going to a LISPM
+;;; 	stream). 
+
+.irp mode,<raw,asc,sup,lsp>
+	md%'mode==.irpcnt*2
+.endm
+
+ttylpt:	call @$dvpwo(r4)	;wait for physical output ready
+	if cc,<			;I may now output
+	  push $clmod(r0),(sp)
+	  bis #%clmst,$clmod(r0)	;this sub-stream must happen
+	  bic #mask8,(sp)
+	  add #10$,(sp)
+	  mov @(sp),(sp)	;get address on stack
+	  call @(sp)+		;call the routine
+	  bic #-1-<%clnhh>,$clmod(r0)	;only interesting bit to remember
+	  bis (sp)+,$clmod(r0)	;and set the rest from the old mode
+	  >
+	return
+
+10$:	.word tcvraw,tcvasc,tcvsup,tcvlsp
+
+    loop <
+tcvsup:	cmpb $ttomod(r4),#md%asc
+	exitl ne
+	tst $ttspc(r4)
+	if ne,<jcall @$ttspc(r4)>
+	tstb r1
+	exitl pl
+	cmpb r1,#maxsdc
+	exitl his
+	movb r1,$ttsd1(r4)	;save for retransmission -- CPH
+	bic #mask7,r1
+	asl r1
+	add $ttspt(r4),r1
+	jcall @(r1)
+
+tcvlsp:	cmpb r1,#215
+	exitl ne
+	cmpb $ttomod(r4),#md%raw
+	exitl eq
+	cmpb $ttomod(r4),#md%lsp
+	exitl eq
+	movb #%tdcrl,r1
+	br tcvsup	
+    >
+tcvraw::
+tcvasc:	jcall @$dvppt(r4)
+
+
+ttylgt:	call @$dvpgt(r4)	;fix this later
+	push r2
+	mov $ttinum(r4),r2
+	bitb #%tofci,tofci%(r2)
+	if eq,<
+	  bitb #%tpmta,tpmta%(r2)
+	  if eq,< bic #mask7,r1>
+	  else  <
+	    bic #mask8,r1
+	    tstb r1
+	    if mi,< add #%txmta-200,r1 >
+	    >
+	  >
+	pop r2
+	return
+
+;;; define the SUPDUP character set
+
+.macro dfspdp name,value	;define a supdup character
+name==value
+.endm
+
+dfspdp %tdmov,200		;<old y><old x><new y><new x>
+dfspdp %tdmv1,201		;<new y><new x>
+dfspdp %tdeof,202		;clear to end of file (screen)
+dfspdp %tdeol,203		;clear to end of line
+dfspdp %tddlf,204		;delete character under cursor
+dfspdp %tdmtf,205		;motor off
+dfspdp %tdmtn,206		;motor on
+dfspdp %tdcrl,207		;CRLF and clear EOL
+dfspdp %tdnop,210		;nothing
+dfspdp %tdbs,211		;backspace
+dfspdp %tdlf,212		;line feed
+dfspdp %tdrcr,213		;cariage return
+dfspdp %tdors,214		;output reset
+dfspdp %tdqot,215		;quote next character literally
+dfspdp %tdfs,216		;non-destructive forward space
+dfspdp %tdmv0,217		;<new y><new x>
+dfspdp %tdclr,220		;clear screen
+dfspdp %tdbel,221		;beep the bell
+dfspdp %tdini,222		;initialize
+dfspdp %tdilp,223		;insert line positions
+dfspdp %tddlp,224		;delete line positions
+dfspdp %tdicp,225		;insert character positions
+dfspdp %tddcp,226		;delete character positions
+dfspdp %tdbow,227		;go into black on white (inverse video writing)
+dfspdp %tdrst,230		;reset options (%tdbow, graphics)
+dfspdp %tdgrf,231		;enter SUPDUP graphics mode
+dfspdp %tdrsu,232		;region scroll up
+dfspdp %tdrsd,233		;region scroll down
+dfspdp %tdach,234		;ards enter character mode
+dfspdp %tdasp,235		;ards enter set-point mode
+dfspdp %tdalv,236		;ards enter long-vector mode
+dfspdp %tdasv,237		;ards enter short-vector mode
+dfspdp maxsdc,240		;max supdup character
+
+
+;;; see TCTYP routine for order of these things
+
+.macro dfttyp ttytyp,mode,ttymxv,ttymxh,ttyrol,ttyopt,ttysmt
+t.'ttytyp:
+	.byte	ttymxv,ttymxh
+	.byte	ttyrol,0
+	.byte	ttyopt
+	.byte	ttysmt
+	.word	is$'ttytyp	;initial string
+	.word	md%'mode
+	.word	td'ttytyp
+td'ttytyp:
+		.irp nam,<mov,mv0,eof,eol,dlf,mtf,mtn,crl>
+	.word ttytyp''nam
+		.endm
+		.irp nam,<nop,bs,lf,rcr,ors,qot,fs,mv0>
+	.word ttytyp''nam
+		.endm
+		.irp nam,<clr,bel,ini,ilp,dlp,icp,dcp,bow>
+	.word ttytyp''nam
+		.endm
+		.irp nam,<rst,grf,rsu,rsd,ach,asp,alv,asv>
+	.word ttytyp''nam
+		.endm
+.endm
+
+;;; ttyopt bits
+;;; 	04	can selectively erase
+;;; 	01	can backspace directly
+;;; 	--
+;;; 	40	handles sail characters
+;;; 	20	used to initialize %TSSAI for new jobs
+;;; 	10	can overprint correctly
+;;; 	04	can move cursor upward
+;;;	02	system should provide **MORE** processing
+;;; 	--
+;;; 	20	has lower case keyboard
+;;; 	10	has full input keyboard
+;;; 	02	can insert/delete lines
+;;; 	01	can insert/delete characters
+;;; 	--
+;;; 	00	nothing interesting
+;;; 	--
+;;; 	04	has meta key
+;;; 	--
+;;; 	00	nothing interesting
+;;; 	--
+
+;;;    typ,mod,maxv,maxh,r,      ttyopt       ,    ttysmt
+dfttyp raw,raw,-001,-001,1,<00,00,10,00,00,00>,<00,00,00,00,00,00>
+dfttyp prt,asc,-001,080.,1,<01,12,20,00,00,00>,<00,00,00,00,00,00>
+dfttyp v52,asc,024.,080.,1,<05,06,20,00,00,00>,<00,00,00,00,00,00>
+dfttyp t61,asc,024.,080.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp h19,asc,024.,080.,1,<05,06,22,00,00,00>,<00,00,00,00,00,00>
+dfttyp btg,asc,063.,084.,1,<05,06,22,00,00,00>,<00,00,00,00,00,00>
+dfttyp v00,asc,024.,080.,1,<05,06,20,00,00,00>,<00,00,00,00,00,00>
+dfttyp v32,asc,024.,080.,1,<05,06,23,00,00,00>,<00,00,00,00,00,00>
+dfttyp aaa,asc,048.,080.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp oaa,asc,048.,080.,1,<05,06,23,00,00,00>,<00,00,00,00,00,00>
+dfttyp c08,asc,024.,080.,1,<05,06,20,00,00,00>,<00,00,00,00,00,00>
+dfttyp hds,asc,024.,080.,1,<05,06,20,00,04,00>,<00,00,00,00,00,00>
+dfttyp baa,asc,060.,080.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp chp,asc,024.,080.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp b52,asc,047.,127.,1,<05,06,20,00,04,00>,<00,00,00,00,00,00>
+dfttyp gaa,asc,047.,127.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp haa,asc,094.,127.,1,<05,06,23,00,04,00>,<00,00,00,00,00,00>
+dfttyp h52,asc,094.,127.,1,<05,06,20,00,04,00>,<00,00,00,00,00,00>
+dfttyp hpf,asc,024.,080.,1,<05,06,22,00,00,00>,<00,00,00,00,00,00>
+dfttyp hps,asc,024.,080.,1,<05,06,20,00,00,00>,<00,00,00,00,00,00>
+dfttyp bob,asc,047.,127.,1,<05,06,20,00,00,00>,<00,00,00,00,00,00>
+
+is$raw:: is$prt:: is$v52:: is$t61:: is$h19:: is$v32:: is$btg::
+is$b52:: is$h52:: is$haa:: is$gaa::
+	.byte 0
+
+is$v00:	.ascii /</		;ANSI mode
+	.ascii /[r/		;reset scroll region
+	.byte 0
+
+is$oaa: .ascii /[48;;;48p/	;memory size=48, display 48 lines
+	.ascii /[>33l/		;reset wrap forward
+	.ascii /[>37l/		;reset auto xon/xoff
+	.ascii /[>39l/		;reset slow scroll mode
+	.byte 0
+
+is$aaa::			;like old aaa but different screen size
+	.ascii /[60;;;48p/	;memory size=60, display 48 lines
+	.ascii /[>52h/		;set meta-key mode
+	.ascii /[>33l/		;reset wrap forward
+	.ascii /[>37l/		;reset auto xon/xoff
+	.ascii /[>39l/		;reset slow scroll mode
+	.byte 0
+
+is$baa::			;like aaa but different screen size
+	.ascii /[60;;;60p/	;memory size=60, display 60 lines
+	.ascii /[>52h/		;set meta-key mode
+	.ascii /[>33l/		;reset wrap forward
+	.ascii /[>37l/		;reset auto xon/xoff
+	.ascii /[>39l/		;reset slow scroll mode
+	.byte 0
+
+is$chp::			;like aaa but different screen size
+	.ascii /[24;;;24p/	;memory size=24, display 24 lines
+	.ascii /[>52h/		;set meta-key mode
+	.ascii /[>33l/		;reset wrap forward
+	.ascii /[>37l/		;reset auto xon/xoff
+	.ascii /[>39l/		;reset slow scroll mode
+	.byte 0
+
+is$hds::			; just like a Concept 108
+is$c08::
+	.ascii /v/		;define window
+	.byte 0+40,0+40		;home is 0,0
+	.byte 24.+40,80.+40	;24 lines, 80. columns
+	.byte 0
+
+is$hps::
+is$hpf::
+is$bob::
+	.ascii /3/		;clear tabs
+	.ascii /&a0y8C1/	;Set tabs. Column 8,
+	.ascii /&a0y16C1/	;16,
+	.ascii /&a0y24C1/	;24,
+	.ascii /&a0y32C1/	;32,
+	.ascii /&a0y40C1/	;40,
+	.ascii /&a0y48C1/	;48,
+	.ascii /&a0y56C1/	;56,
+	.ascii /&a0y64C1/	;64,
+	.ascii /&a0y72C1/	;72
+	.ascii /HJ/		; clear screen
+	.ascii /&s1C/		;disable wraparound at EOL
+	.byte 0
+
+	.even
+
+;;; mov	mv0 eof eol dlf mtf mtn crl
+;;; nop bs  lf	rcr ors qot fs	mv0
+;;; clr bel ini ilp dlp icp dcp bow
+;;; rst grf rsu rsd ach asp alv asv
+
+
+
+ttylnx:				;wait for next logical tty character
+	pop $ttspc(r4)		;save as continutation address
+	return
+
+ttyig2:	call ttylnx		;ignore two characters
+ttyig1:	call ttylnx		;ignore one character
+ttylfn:	clr $ttspc(r4)		;logically finished
+	return
+
+ttywtd:				;wait for a %TD code
+	loop <
+	  call ttylnx
+	  tstb r1
+	  rptl pl
+	  >
+	call ttylfn		;logically finished with previous sequence
+	jcall ttylpt		;logically put it back in the tty
+
+.macro ttyudf from,to
+		.irp code,<mov,mv0,eof,eol,dlf,mtf,mtn,crl>
+	.iif ndf from''code, from''code==to''code
+		.endm
+		.irp code,<nop,bs,lf,rcr,ors,qot,fs,mv0>
+	.iif ndf from''code, from''code==to''code
+		.endm
+		.irp code,<clr,bel,ini,ilp,dlp,icp,dcp,bow>
+	.iif ndf from''code, from''code==to''code
+		.endm
+		.irp code,<rst,grf,rsu,rsd,ach,asp,alv,asv>
+	.iif ndf from''code, from''code==to''code
+		.endm
+.endm
+
+
+;;; printing terminal support
+
+;;; these don't do anyting on printing terminals
+.irp code,<eof,eol,mtf,mtn,nop,ors,ini,bow,rst>
+	prt'code==ttylfn
+.endm
+
+prtmov:	call ttylnx
+	call ttylnx
+prtmv1::
+prtmv0:	call ttylnx
+	call ttylnx
+	jcall ttylfn
+
+    loop <
+prtdlf:	call prtfs
+prtbs:	movb #10,r1
+	exitl
+
+prtcrl:	call prtrcr
+prtlf:	movb #12,r1
+	exitl
+	
+prtrcr:	movb #15,r1
+	exitl
+
+prtqot:	call ttylnx
+	exitl
+
+prtfs:	movb #40,r1
+	exitl
+
+prtbel:	movb #7,r1
+	exitl
+    >
+	call @$dvppt(r4)
+	jcall ttylfn
+
+
+prtclr:	push #4
+	loop <
+	  call prtcrl
+	  dec (sp)
+	  rptl gt
+	  >
+	pop *
+	return
+
+prtilp==ttyig1			;ignore 1 character
+prtdlp==ttyig1
+prticp==ttyig1
+prtdcp==ttyig1
+
+prtrsu==ttyig2			;ignore 2 characters
+prtrsd==ttyig2
+
+prtgrf==ttywtd			;wait for the %td code to exit
+prtach==ttylfn			;ARDS character == resume normal mode
+prtasp==ttywtd			;ARDS set-point (wait for %TD code)
+prtalv==ttywtd			;ARDS long-vec  (wait for %TD code)
+prtasv==ttywtd			;ARDS short-vec (wait for %TD code)
+
+ttyudf raw,prt
+
+;;; vt52 support
+
+v52mov:	call ttylnx		;get next logical tty character
+	call ttylnx		;and another (toss both away)
+v52mv1::
+v52mv0:	call ttylnx
+	add #40,r1
+	movb r1,$ttsd1(r4)
+10$:	call ttylnx
+	add #40,r1
+	movb r1,$ttsd2(r4)
+	movb #33,r1
+	call @$dvppt(r4)
+	movb #'Y,r1
+	call @$dvppt(r4)
+	movb $ttsd1(r4),r1
+	call @$dvppt(r4)
+	movb $ttsd2(r4),r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+v52eof:	movb #33,r1
+	call @$dvppt(r4)
+	movb #'J,r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+v52crl:	call prtcrl		;do a printing CRLF, then...
+v52eol:	movb #33,r1
+	call @$dvppt(r4)
+	movb #'K,r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+v52fs:	movb #33,r1
+	call @$dvppt(r4)
+	movb #'C,r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+v52clr:	movb #33,r1
+	call @$dvppt(r4)
+	if cs,<jcall ttylfn>	;oops, come back here later
+	movb #'H,r1
+	call @$dvppt(r4)
+	jcall v52eof
+
+ttyudf v52,prt			;define undefined codes as printing terminals
+ttyudf b52,v52			;just a big VT52
+ttyudf h52,v52			;just a huge VT52
+
+
+;;; teleray 1061 support
+
+
+t61ilp:	
+t61dlp:
+t61icp:
+t61dcp:	bpt
+
+ttyudf t61,v52			;define the rest as if it is a VT52
+
+;;; heath 19 terminal support
+
+
+    loop <
+h19ilp:	call ttylnx
+	pushb r1,#'L
+	exitl
+h19dlp:	call ttylnx
+	pushb r1,#'M
+	exitl
+h19dcp:	call ttylnx
+	pushb r1,#'N
+    >
+	loop <
+	  movb #33,r1
+	  call @$dvppt(r4)
+	  movb (sp),r1
+	  call @$dvppt(r4)
+	  decb 2(sp)
+	  exitl le
+	  rptl
+	  >
+	popb *,*
+	jcall ttylfn
+
+h19icp:	bpt
+
+    loop <
+h19clr:	pushb #'E
+	exitl
+h19bow:	pushb #'b
+	exitl
+h19rst:	pushb #'q
+    >
+	movb #33,r1
+	call @$dvppt(r4)
+	popb r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+ttyudf h19,v52			;define the rest as if it were a VT52
+
+
+;;; VT100 support
+
+    loop <
+v00mov:	call ttylnx
+	call ttylnx
+v00mv1::
+v00mv0:	call ttylnx
+	inc r1			;ansi sequences are one based
+	movb r1,$ttsd1(r4)
+	call ttylnx
+	inc r1
+	movb r1,$ttsd2(r4)
+	mov (pc)+,r1
+	  .litrl <.byte -1,-2,-3,'H>
+	exitl
+v00eof:	mov (pc)+,r1
+	  .litrl <.byte -3,'J>
+	exitl
+v00crl:	call prtcrl
+	clr r1			;NUL for padding
+	call @$dvppt(r4)
+	incb $ttsd1(r4)
+v00eol:	mov (pc)+,r1
+	  .litrl <.byte -3,'K>
+	exitl
+v00fs:	mov (pc)+,r1	;actually home cursor
+	  .litrl <.byte -3,'C>
+	exitl
+v00clr:	call 10$		;home cursor
+	br v00eof		;then clear EOF
+10$:	mov (pc)+,r1
+	  .litrl <.byte -3,'H>
+	movb #1,$ttsd1(r4)
+	exitl
+    >
+	call ttyans
+	jcall ttylfn
+
+;;;This stuff doesn't work for a lot of reasons.
+;;;
+.if z 1
+	loop <
+v00ilp:	  call ttylnx
+	  push r1
+	  mov (pc)+,r1
+	    .litrl <.byte -1,30,-3,'r>
+	  call ttyans
+	  mov (pc)+,r1
+	    .litrl <.byte -1,1,-3,'H>
+	  call ttyans
+	  loop <
+	    movb #33,r1	  	  
+	    call @$dvppt(r4)
+	    movb #'M,r1
+	    call @$dvppt(r4)
+	    dec (sp)
+	    rptl ne
+	    >
+	  exitl
+
+v00dlp:	  call ttylnx
+	  push r1
+	  mov (pc)+,r1
+	    .litrl <.byte -1,30,-3,'r>
+	  call ttyans
+	  mov (pc)+,r1
+	    .litrl <.byte 30,1,-3,'H>
+	  call ttyans
+	  loop <
+	    movb #33,r1	  	  
+	    call @$dvppt(r4)
+	    movb #'D,r1
+	    call @$dvppt(r4)
+	    dec (sp)
+	    rptl ne
+	    >
+	  >
+	pop *
+	mov (pc)+,r1
+	  .litrl <.byte 1,30,-3,'r>
+	call ttyans
+	mov (pc)+,r1
+	  .litrl <.byte -1,1,-3,'H>
+	call ttyans
+	jcall ttylfn
+.endc
+
+ttyans:				;do an ansi sequence
+	push r2
+	mov r1,r2
+	movb #33,r1
+	call @$dvppt(r4)
+	movb #'[,r1		;]
+	call @$dvppt(r4)
+	cmpb (r2),#-3
+	if ne,<
+	  loop <
+	    loop <
+	      cmpb (r2),#-1
+	      if eq,<
+	        movb $ttsd1(r4),r1
+	        exitl
+	        >
+	      cmpb (r2),#-2
+	      if eq,<
+	        movb $ttsd2(r4),r1
+	        exitl
+	        >
+	      movb (r2),r1
+	      >
+	    call ttydou
+	    tstb (r2)+
+	    cmpb (r2),#-3
+	    exitl eq
+	    movb #';,r1
+	    call @$dvppt(r4)
+	    rptl
+	    >
+	  >
+	movb (r2)+,r1
+	movb (r2)+,r1
+	call @$dvppt(r4)
+	pop r2
+	return
+	
+;output value in r1 as ascii digits
+ttydou:	push r2,r3		;can't use r0, because that is the channel.
+				;therefore, have to use r2,r3 for the division.
+	mov r1,r3
+	bic #mask8,r3
+	push #0
+	loop <
+	  clr r2
+	  div #10.,r2
+	  add #'0,r3
+	  push r3
+	  mov r2,r3
+	  rptl ne
+	  >
+	loop <
+	  pop r1
+	  exitl eq
+	  call @$dvppt(r4)
+	  rptl
+	  >
+	pop r3,r2
+	return
+
+ttyudf v00,prt			;other things are as per printing terminal
+
+
+;;; VT132 support
+
+    loop <
+v32icp:	call ttylnx
+	movb r1,$ttsd1(r4)
+	mov (pc)+,r1
+	   .litrl <.byte -1,-3,'@>
+	exitl
+v32dcp:	call ttylnx
+	movb r1,$ttsd1(r4)
+	mov (pc)+,r1
+	  .litrl <.byte -1,-3,'P>
+	exitl
+v32ilp:	call ttylnx
+	movb r1,$ttsd1(r4)
+	mov (pc)+,r1
+	  .litrl <.byte -1,-3,'L>
+	exitl
+v32dlp:	call ttylnx
+	movb r1,$ttsd1(r4)
+	mov (pc)+,r1
+	  .litrl <.byte -1,-3,'M>
+    >
+	call ttyans
+	jcall ttylfn
+
+ttyudf v32,v00			;the rest looks like a vt100
+
+
+;;; AAA terminal support
+
+ttyudf aaa,v32			;the rest looks like a vt132
+
+ttyudf oaa,aaa			;old ann arbors look like the new for
+				;output 
+
+ttyudf baa,aaa			;Exactly like an aaa (except for screen size)
+				; 05/06/85 - JINX@OZ
+
+ttyudf gaa,aaa			;ditto:  CPH
+ttyudf haa,aaa			;ditto: JINX 8/21/85
+ttyudf chp,aaa			;ditto:  CPH 11/16/85
+
+;;;	BitBucket Support	07/22/83	- Ron Schnell
+
+ttyudf btg, v32			; Looks like vt132
+
+
+;;; Concept 108 support
+
+c08mov:	call ttylnx		;get next logical tty character
+	call ttylnx		;and another (toss both away)
+c08mv1::
+c08mv0:	call ttylnx
+	add #40,r1
+	movb r1,$ttsd1(r4)
+10$:	call ttylnx
+	add #40,r1
+	movb r1,$ttsd2(r4)
+	movb #33,r1
+	call @$dvppt(r4)
+	movb #'a,r1
+	call @$dvppt(r4)
+	movb $ttsd1(r4),r1
+	call @$dvppt(r4)
+	movb $ttsd2(r4),r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+  loop <
+c08eof:	pushb #'E-'@
+	exitl
+c08crl:	call prtcrl		;do a printing crlf, then...
+c08eol:	pushb #'U-'@
+	exitl
+c08fs:	pushb #'=
+	exitl
+c08clr:	push #c08eof		;do eof after a home
+	pushb #'?
+	exitl
+  >
+	movb #33,r1
+	call @$dvppt(r4)
+	popb r1
+	call @$dvppt(r4)
+	jcall ttylfn
+
+ttyudf c08,prt			;the rest looks like a printing terminal
+
+;;;   HDS Support
+
+ttyudf hds,c08			; Looks like a Concept 108
+
+;;;HP2647/8 support - 9/20/83 RCA
+
+hpsmov:	call ttylnx		;get next logical tty character
+	call ttylnx		;and another (toss both away)
+hpsmv1::
+hpsmv0:	call ttylnx		;; get row number
+	movb r1,$ttsd1(r4)	;;  and save it
+	call ttylnx		;; get column number
+	movb r1,$ttsd2(r4)	;;  and save it
+
+	movb #33,r1		;; send prefix sequence (^[&a)
+	call @$dvppt(r4)
+	movb #'&,r1
+	call @$dvppt(r4)
+	movb #'a,r1
+	call @$dvppt(r4)
+
+	movb $ttsd2(r4),r1	;; recall column #
+	call ttydou		;; print number in ASCII decimal
+	movb #'c,r1		;; send "c"
+	call @$dvppt(r4)
+
+	movb $ttsd1(r4),r1	;; recall row number
+	call ttydou		;; print number in ASCII decimal
+	movb #'Y,r1		;; send "Y" to end sequence
+	call @$dvppt(r4)
+	jcall ttylfn
+
+ttyudf 	hps,v52			;define undefined codes as vt52 style
+ttyudf  bob,hps			; bob(cat) is an alias for hps - JINX 3/20/86
+
+;; fast HP terminals - no padding needed
+
+hpfilp==h19ilp			; reuse h19 ins/del line code
+hpfdlp==h19dlp
+
+    loop <
+hpfbow:	pushb #'J
+	exitl
+
+hpfrst: pushb #'@
+    >
+	movb #33,r1		;; send display enhancement prefix ("^[&d")
+	call @$dvppt(r4)
+	movb #'&,r1
+	call @$dvppt(r4)
+	movb #'d,r1
+	call @$dvppt(r4)
+	popb r1			; recall enhancement code
+	call @$dvppt(r4)
+	jcall ttylfn
+
+ttyudf	hpf,hps			; get undefined thingees from slow version
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:
+

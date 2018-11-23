@@ -1,0 +1,308 @@
+
+.lif  z %defin
+	.title	3Mbit Experimental Ethernet Driver
+	.sbttl	3Mbit Experimental Ethernet Driver
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+defnet een
+
+.pkhrd <		;;needed packet fields for hardware
+	..word $eeptc,1		;number of times to transmit
+	..word $eepdc,1		;delay count for ethernet sending
+
+	..word $eep,0		;beginning of transmit/receive packet
+	..byte $eepsa,1		;source address
+	..byte $eepda,1		;destination address
+	..word $eepty,1		;type field
+	  .eepup==1000		;  pup type
+	>
+.if p1
+	.sbttl	-- Definitions 
+
+ee%pri==5			;bus grant 5
+
+  ;;
+;;;;;;	I/O page offsets
+  ;;
+
+  dsect <
+
+ee.owc::	.blkw 1		;output word count
+ee.oad::	.blkw 1		;output address
+ee.ocs::	.blkw 1		;output command
+  %eeodo==101			;start output, enable interrupt
+ee.osd::	.blkw 1		;output start delay
+
+ee.iwc::	.blkw 1		;input word count
+ee.iad::	.blkw 1		;input address
+ee.ics::	.blkw 1		;input command
+  %eeido==101			;start, enable interrupt
+  >
+
+.endc p1
+
+l$eep==pksiz$-$eep		;max packet size to queue
+
+****
+	.sbttl	-- Macros
+
+neen==0				;no 3Mbit interfaces yet
+
+.macro EEN vec,csr,pupadr
+.iif z neen, eennet==nnet	;base net object of EEN network objects
+  .if p2
+      %%==.
+	.=ee$vec+<2*neen>
+	  .word vec
+	.=ee$csr+<2*neen>
+	  .word csr
+	.=ee$adr+<2*neen>
+	  .word pupadr
+      .=%%
+  .endc
+neen=neen+1
+nnet==nnet+1
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+
+  ;;
+;;;;;;	Tables and pointers
+  ;;
+
+ee$vec:	.blkw neen		;table of interrupt vectors
+ee$csr:	.blkw neen		;table of control/status base addresses
+ee$adr:	.blkw neen		;table of addresses of interface on cable
+
+ee$brk:
+		.rept neen
+		.lif z .rpcnt
+ee$rbk::
+	jsr r5,@#eerint
+	 .word netobj+<2*eennet>+<2*.rpcnt>
+		.lif z .rpcnt
+ee$xbk::
+	jsr r5,@#eexint
+	 .word netobj+<2*eennet>+<2*.rpcnt>
+		.endr
+lee$brk==<.-ee$brk>/neen
+
+ee$vrp:		.rept neen	;vector receive pointers
+	.word ee$rbk+<lee$brk*.rpcnt>
+		.endr
+ee$vxp::	.rept neen	;vector xmit pointers
+	.word ee$xbk+<lee$brk*.rpcnt>
+		.endr
+
+  ;;
+;;;;;;	A 3Mbit Ethernet hardware object
+  ;;
+
+  dsect <
+		.blkb l$nt	;a basic network object
+$eecsr==$ntcsr
+$eerbf::	.blkw 1		;pointer to receive buffer
+$eexpk::	.blkw 1		;current transmit packet
+	>,l$ee
+
+
+  ;;
+;;;;;;	Interrupt routines
+  ;;
+
+eerint:	mov @(r5),r5		;get hardware object
+	push r4,r2,r1
+	mov $eecsr(r5),r4	;get csr
+	push ee.ics(r4)		;stow away the csr
+	clr ee.ics(r4)		;clear it
+	loop <			;various ways to exit
+	  tst (sp)+
+	  if mi,<		;error of some form
+	    netmet cr		;call a CRC error
+	    exitl
+	    >
+	  mov #l$eep/2,r1	;get word count
+	  sub ee.iwc(r4),r1	;without residue
+	  mov r1,r2		;save word count
+	  asl r1		;convert to byte count
+	  add #l$eep,r1		;count the NCP header
+	  cmp r1,#pksiz.
+	  if his,<
+	    cmp r1,#pksiz$
+	    if lo,<
+	      call pktall
+	      if ne,<
+	        push r1,r3
+		mov $eerbf(r5),r3	;get receive buffer
+		add #$eep,r1	;point to 3Mbit packet
+		loop <
+		  mov (r3)+,(r1)+	;copy out the packet
+		  sorl r2
+		  >
+	        pop r3,r1
+		mov #%pkt16,$pktfl(r1)	;safe for 16.bit hardware
+		call eerque	;requeue the input buffer
+		loop <
+			.irp pro,<pup>
+			.if nz ncp'pro
+		  cmp $eepty(r1),#.ee'pro
+		  if eq,<call pro'rcv
+		         exitl>
+			 .endc
+			 .endm
+		  netmet ot
+		  call pktfre
+		  >
+		br 100$		;already queued a new packet
+	  > > > >
+	netmet ot
+	call eerque		;queue the buffer again
+100$:	pop r1,r2,r4,r5
+	rti
+
+eerque:	mov #-<l$eep/2>,ee.iwc(r4)	;set word count
+	mov $eerbf(r5),ee.iad(r4)	;set read address
+	mov #%eeido,ee.ics(r4)	;do it
+	return
+
+eexint:	mov @(r5),r5		;get the hardware object
+	push r4,r1
+	mov $eecsr(r5),r4
+	mov $eexpk(r5),r1	;get packet
+	if eq,<bpt>		;interrupts should have a reason
+	clr $eexpk(r5)		;no longer there
+	loop <			;may exit in various ways
+	  push ee.ocs(r4)	;get output command reg
+	  clr  ee.ocs(r4)	;clear it
+	  tst (sp)+
+	  if mi,<		;error
+	    netmet ab		;count an abort
+	    dec $eeptc(r1)	;decrement transmit counter
+	    if gt,<		;still more to go
+	      mov #25.,$eepdc(r1)	;set delay count to 1 MS
+	      call eexqu1		;requeue the packet
+	      exitl
+	      >
+	    >
+	  call pktngv		;discard packet (if not on user list)
+	  >
+	call eexout		;try to start more transmission
+	pop r1,r4,r5
+	rti			;return
+
+eexque:	clr $eepdc(r1)		;no delay
+	mov #3,$eeptc(r1)	;allow 3 transmissions before giving up
+eexqu1:	mov r1,$eexpk(r5)	;save packet pointer
+	push $pktxs(r1)
+	add #5,(sp)		;count EE header and round for words...
+	asr (sp)		;...now word count
+	neg (sp)		;hardware want neg count
+	pop ee.owc(r4)		;set output word count
+	push r1
+	add #$eep,(sp)		;go to beginning of transmit portion of packet
+	pop ee.oad(r4)		;set output address
+	mov $eepdc(r1),ee.osd(r4)	;set output start delay
+	mov #%eeodo,ee.ocs(r4)	;start output, enable interrupt
+	return
+
+eexout:	;; r1 bashable, r5 object.  don't depend on r4
+	tst $eexpk(r5)		;a packet already in transit??
+	if eq,<			;nope
+	  call ntremq		;get a packet from the object
+	  if ne,<
+	    push r4
+	    mov $eecsr(r5),r4
+	    lock ee%pri
+	    call eexque		;queue the packet
+	    unlock
+	    pop r4
+	  > >
+	return
+
+
+eenini:	clr r0
+	loop <
+	  call eenin1
+	  add #2,r0
+	  cmp r0,#neen*2
+	  rptl lo
+	  >
+	return
+
+eenin1:
+	mov ee$csr(r0),r4	;get the csr
+	call nxmcat
+	  eennxm
+	clr ee.ics(r4)
+	clr ee.ocs(r4)
+	call nxmclr
+
+	mov ee$vec(r0),r2	;get interrupt vector
+	mov ee$vrp(r0),(r2)+	;set receive interrupt vector...
+	mov #ee%pri,(r2)+	;...and priority
+	mov ee$vxp(r0),(r2)+	;set the transmit interrupt vector...
+	mov #ee%pri,(r2)+	;...and priority
+	mov ee$vxp(r0),(r2)+	;set the abort interrupt vector (to xmit)...
+	mov #ee%pri,(r2)+	;...and priority
+
+	mov #l$ee,r5		;length of a network object
+	call ntmake		;make the object
+	if eq,<bpt>		;out of memory at init time...barf
+	mov r5,netobj+<2*eennet>(r0)	;save device in network table
+	mov r4,$ntcsr(r5)	;save csr in object
+
+	push #l$eep/2		;size of receive buffer
+	call fsmall		;get it from free storage
+	pop $eerbf(r5)		;save it
+	if eq,<bpt>		;out of mem at init time
+	call eerque		;queue it for input
+
+		.if nz ncppup
+	mov #eeppgv,nt$pup(r5)	;routine to send pup packets to this interface
+	mov ee$adr(r0),nt.pup(r5)	;my address on network
+		.endc
+
+	mov r0,r4		;get pup device index into r4
+	add #<eennet*2>,r4	;now network index
+	jcall ntmak1		;finish making the object
+
+eennxm:	clr netobj+<2*eennet>(r0)	;no network object
+	return
+
+.if nz ncppup
+
+;;; call @nt$pup(r5),[r5:=object, r1:=pakcet, r2:=hardware_destination]
+
+eeppgv:	mov #.eepup,$eepty(r1)	;set the type to PUP
+	movb r2,$eepda(r1)
+	movb nt.pup(r5),$eepsa(r1)
+	call ntputq		;put it on the queue
+	jcall eexout
+
+.endc
+
+****
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

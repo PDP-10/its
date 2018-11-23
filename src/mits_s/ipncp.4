@@ -1,0 +1,363 @@
+;;; ;;; ipcpy:	0	iprcv  (entry)
+;;; ;;; 	1	iprcv  (before routing)
+;;; ;;; 	2 	ipklcs
+;;; ;;; 	3	ipkchs
+;;; ;;; 	4	ipkrou (before handing to device
+;;; ;;; 	5	dtipgv (before safing)
+;;; ;;; 	6	dtipgv (after safing)
+;;; ;;;		7	lnipgv (after safing)
+
+
+.macro .ipcpy n
+	jsr r0,ipcpy
+	 .word ipreg+<n*$ipkop>
+.endm
+
+.macro ipstat flag,n
+.iif idn flag,+, bis #1_n,@#470
+.iif idn flag,-, bic #1_n,@#470
+.endm
+
+.lif  z %defin
+	.title	Internet NCP (MIT routing) support
+	.sbttl	Internet NCP (MIT routing) support: Definitions, Macros and Code
+
+.iif  z %defin, .nlist		;don't list definitions and macros if not
+				;defining them
+
+.if  nz %defin			;only define symbols when we are supposed to
+
+  ;;
+;;;;;;	Major prefixes used in this module
+  ;;
+
+;;; ;;; ipc	Internet Protocol Constants
+;;; ;;; ipv	Internet Protocol Varaibles
+;;; ;;; $ipk	Packet offsets
+;;; ;;; %ipk	Masks ans such for packet offsets
+;;; ;;; ipk	Internet Packet routines
+
+  ;;
+;;;;;;	Send information to PKTNCP module
+  ;;
+
+defncp ip			;we have some form of Internet NCP
+
+  .ntgiv <		;need these fields in a network object
+nt$ip::		.blkw 1		;routine to give an internet packet
+nt.ip::		.blkw 2		;internet address of interface (high word
+				;first, first byte high PDP-10 style)
+  >
+
+	.sbttl	-- Definitions 
+
+ipnCHS==007.			;MIT CHAOS Network
+ipnLCS==018.			;MIT LCS Network
+
+	.sbttl	-- Macros
+
+.macro ipddef b0,b1,b2,b3
+  ipdobj==netobj+<<nnet-1>*2>
+  ipdad0==<b0_8>+b1
+  ipdad2==<b2_8>+b3
+.endm
+
+.endc %defin
+
+.iif  z %defin, .list		;start listing again
+
+.iif nz %defin, .nlist		;don't list code if only doing definitions
+
+.if   z %defin			;only do code if not defining symbols
+
+	.sbttl	-- Code
+  ;;
+;;;;;;	Internet packet definitions
+  ;;
+
+  dsect <		;these offsets are for 16 bit data (PDP-10 style bytes)
+		.blkb $pktdt	;packet header up to data portion
+$ipk::
+$ipkts::	.blkb 1		;type of service
+$ipkhl::			;header length
+  %ipkhl==mask4			;  Use BIC with this mask to get it
+$ipkve::			;Internet version number
+  %ipkve==-1-<17_4>		;  Use BIC with this mask to get it
+  ipcpv4==4_4			;  version 4 (the only one we accept)
+		.blkb 1
+$ipktl::	.blkw 1		;total length
+$ipkid::	.blkw 1		;identification
+$ipkfo::	.blkw 1		;fragment offset 
+  %ipkfo==mask13		;  BIC mask
+$ipkfl==$ipkfo+1		;flags
+  %ipkfl==-1-<7_13.>		;  BIC mask
+$ipkpt::	.blkb 1		;protocol
+  ipcggp==3			;  Gateway-to-Gateway protocol
+    ipggec==10			;    GGP Echo Packet
+    ipgger==0			;    GGP Echo reply
+$ipktt::	.blkb 1		;Time to Live
+$ipkcs::	.blkw 1		;header checksum
+$ipksa::	.blkw 2		;source address
+$ipkda::	.blkw 2		;destination address
+$ipkop::			;options
+$ipkdt::			;data portion (if no options)
+	>,l$ipk
+
+.pksiz $ipkdt,$ipkdt,<$pktdt+576.>	;minimum for protocol,
+				;minimum desired,
+				;max we deal with
+
+  ;;
+;;;;;;	Variables and tables
+  ;;
+
+.wscalar ipvnup			;number of interfaces that are up
+.wvector ipvmyn,2		;my main internet address
+
+.wvector iptrou,ipcmsn		;internet routing table
+
+
+.bvector ipreg,8*$ipkop
+.if p2
+.irp num,\ipreg
+	.print "ipreg = num"
+.endm
+.irp num,\$ipkop
+	.print "$ipkop = num"
+.endm
+.endc
+
+ipcpy:	push r1,r2
+	mov (r0)+,r2
+	.rept <$ipkop/2>
+	mov (r1)+,(r2)+
+	.endr
+	pop r2,r1
+	rts r0
+
+
+  ;;
+;;;;;;	Internet packet reception from hardware
+  ;;
+
+;;; r1/packet, r4/csr (probably), r5/hardware object
+
+iprcv:
+.ipcpy 0
+ipstat +,0
+	loop <			;easy way to setup exit handler
+ipstat +,1
+	  call ipkh16		;make header safe for 16.bit (words)
+ipstat -,1
+
+	  pushb $ipkve(r1)	;get version...
+	  bic  #%ipkve,(sp)	;...and only version
+	  cmpb (sp)+,#ipcpv4	;is it protocol version 4?
+	  exitl ne		;nope, discard packet
+
+	  push $ipktl(r1)	;total length
+	  add #$pktdt,(sp)	;with MINITS header
+	  cmp (sp)+,$pktrs(r1)	;compare with requested size
+	  exitl hi		;internet header says packet is bigger that
+				;the interface says it is
+	  netmet in		;count another packet in
+
+	  decb $ipktt(r1)	;decrement time to live
+	  exitl eq		;turn off its life support system
+	  add #1_8,$ipkcs(r1)	;adjust checksum
+	  adc      $ipkcs(r1)	;one's complement
+
+	  cmp   $ipkda+0(r1),nt.ip+0(r5)	;is it for me?
+	  if eq,<		;maybe
+	    cmp $ipkda+2(r1),nt.ip+2(r5)	;check other half
+	    if eq,<		;it's for me
+	      cmpb $ipkpt(r1),#ipcggp	;GGP ping?
+	      exitl ne		;nope, throw it away
+	      call ipks16	;make sure entire packet is 16.bit
+	      cmpb $ipkdt+1(r1),#ipggec	;is it echo?
+	      exitl ne
+	      movb #ipgger,$ipkdt+1(r1)	;make it a reply
+	      push $ipkda+0(r1),$ipksa+0(r1)
+	      pop  $ipkda+0(r1),$ipksa+0(r1)	;exchange first word
+	      push $ipkda+2(r1),$ipksa+2(r1)
+	      pop  $ipkda+2(r1),$ipksa+2(r1)	;exchange second word
+	      ;; send by falling through
+	      >	
+	    >
+	  mov #-1,$pktul(r1)	;not on a user list
+.ipcpy 1
+ipstat +,2
+call ipkrou
+ipstat -,2
+ipstat -,0
+return
+	  jcall ipkrou		;route it out to the network
+	  >
+	;; packet lost for some reason
+	netmet ot
+ipstat -,0
+	jcall pktfre		;go free the packet
+
+    loop <
+ipkh08:	jsr r0,ipksaf		;make header safe for 8 bit
+	  .word %pkh08,%pkh16
+	exitl
+ipkh16:	jsr r0,ipksaf		;make header safe for 16 bit
+	  .word %pkh16,%pkh08
+    >
+	mov #<$ipkop-$pktdt>/2,r0
+	jsr r0,(r2)
+	  .word $pktdt
+    loop <
+ipks08:	call ipkh08		;first make header safe for 8bit
+	jsr r0,ipksaf		;now make data safe
+	  .word %pkd08,%pkd16
+	mov $ipktl(r1),r0
+	swab r0
+	exitl
+ipks16:	call ipkh16		;first make header safe for 16bit
+	jsr r0,ipksaf		;now make data safe
+	  .word %pkd16,%pkd08
+	mov $ipktl(r1),r0
+    >
+	asr r0			;convert bytes to words
+	sub #<$ipkop-$pktdt>/2,r0	;don't count internet header
+	jsr r0,(r2)
+	  .word $ipkop
+
+ipksaf:
+ipstat +,8
+	bit (r0),$pktfl(r1)	;is it already safe?
+	if ne,<			;yup
+	  pop r0
+ipstat -,8
+	  return
+	  >
+	bis (r0)+,$pktfl(r1)	;it will be when I'm through with it
+	bic (r0)+,$pktfl(r1)	;and the other can't be safe
+	jsr r2,(r0)		;go pick up length (returned on stack)
+	mov (r0)+,r2		;get offset in packet to swappable area
+	pop r0			;get length of swappable area
+	if gt,<
+	  add r1,r2		;add packet base
+	  loop <
+	    swab (r2)+
+	    sorl r0
+	    >
+	  >
+	pop r2,r0
+ipstat -,8
+	return
+
+
+  ;;
+;;;;;;	Route an Internet packet (using the MIT scheme)
+  ;;
+
+;;; The r2,r3 it sends to the driver are in in Internet style bytes, NOT PDP-11
+;;; style bytes.  Ie. the first byte is the HIGH byte of r2.
+
+ipkrou:	call ipkh16		;make sure header is in 16.bit format
+	mov $ipktl(r1),$pktxs(r1)	;total length is xmit size
+ipstat +,3
+	push r2,r3,r5		;addr high, addr low, device
+	clr r5
+	loop <			;exit when we have a route (or 0 in r5)
+		.irp net,<lcs,chs>	;for each net we know about
+	  cmpb $ipkda+1(r1),#ipn'net
+	  if eq,<
+	    call ipk'net
+	    exitl
+	    >
+		.endm
+	  mov  ipdobj,r5	;get default object to route to
+	  mov #ipdad0,r2	;get default...
+	  mov #ipdad2,r3	;...address to send to
+	  >
+.ipcpy 4
+	tst r5			;is there an interface to give it to?
+	if eq,<call pktngv>	;no, throw packet away (unless on user list)
+	else  <call @nt$ip(r5)>	;yes, give it
+	pop r5,r3,r2
+ipstat -,3
+	return
+
+ipklcs:	push $ipkda+2(r1),$ipkda+0(r1)
+ipstat +,4
+.ipcpy 2
+	loop <
+	  movb (sp),r3		;get subnet
+	  bic #mask8,r3		;losing sign extension
+	  cmp r3,#ipcmsn	;subnet within range?
+	  exitl his		;too big
+	  asl r3		;word index
+	  tstb iptrou+1(r3)	;bouncing gateway?
+	  if ne,<		;yup
+	    movb iptrou+1(r3),(sp)
+	    movb iptrou+0(r3),2(sp)
+	    >
+	  movb (sp),r3		;get subnet back
+	  bic #mask8,r3		;sign extension lossage
+	  cmp r3,#ipcmsn
+	  if lo,<
+	    asl r3
+	    tstb iptrou+1(r3)	;test high byte (better be zero)
+	    if eq,<
+	      mov iptrou(r3),r5
+	      if ne,<
+		mov netobj-1(r5),r5	;get the hardware object
+	    > > >
+	  >
+	pop r2,r3		;get immediate host
+ipstat -,4
+	return
+
+ipkchs:
+.ipcpy 3
+	return			;no routing for CHAOS (throw it away for now)
+
+ipini:	mov #iptrou,r5
+clr @#470
+mov #ipreg,r0
+mov #8*$ipkop/2,r1
+loop <
+  clr (r0)+
+  sorl r1
+  >
+	mov #ipcmsn,r3
+	loop <
+	  clr (r5)+
+	  sorl r3
+	  >
+		.irp sbn,<1,2,6,10,12>
+	mov #<10_8>+5,iptrou+<sbn*2>
+		.endm
+	mov #netobj,r5
+	mov #1,r4		;2*idx+1
+	loop <
+	  mov (r5)+,r3
+	  if ne,<
+	    cmp nt$ip(r3),#pktngv	;does it talk internet?
+	    if ne,<
+	      movb nt.ip+0(r3),r3
+	      bic #mask8,r3
+	      asl r3
+	      mov r4,iptrou(r3)
+	    > >
+	  add #2,r4
+	  cmp r4,#nnet*2
+	  rptl lo
+	  >
+	return
+
+.endc %defin
+
+.iif nz %defin, .list		;start listing as usual
+
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:

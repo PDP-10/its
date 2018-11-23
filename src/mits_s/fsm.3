@@ -1,0 +1,318 @@
+
+	.title	Free Storage Manager
+	.sbttl	Free Storage Manager
+
+;;; This is a generalized free storage manager. 
+
+;;; Style: Arguments are passed on the stack and values are returned on the
+;;; stack. This is to save trouble in the calling program trying to make sure
+;;; that it has put all the registers where these routines want them (which
+;;; is probably not where the calling routine wants them), and similarly for
+;;; values. Thus, the stack.
+
+;;; Overview of routines:
+;;; 	FSM...	Free Storage Manager
+;;; 	   INI	;init the FSM. Args are address limits
+;;; 	   ALL	;allocate a chunk of memory
+;;; 	   CLR	;clear (zero) a chunk of memory
+;;; 	   FRE	;free a chunk of memory
+;;;	   HNG	;hang until a memory free
+
+;;; Theory and method of management (taken from CHSNCP;FSM on 5/30/81)
+
+; Storage manager: allocates and frees contiguous blocks of memory within
+; within a special area.  The free-storage list is a doubly-linked list of
+; free blocks, pictured below.  When allocated, each block still contains
+; some overhead giving the size of the block, who allocated it, and a bit to
+; show that it is in use.  These help compaction, garbage collection of
+; storage, and run-time checking that each process frees all storage that it
+; allocated before killing itself.  Allocation is by "first-fit"; 
+; deallocation will compact adjacent free blocks.
+
+; Note that the free area is surrounded by -1 words, which represent
+; boundary conditions of "allocated" so that compaction will not try
+; to compact beyond the free area.
+
+; FREE BLOCKS:
+
+;	|---|--------------------|
+;	| 0 |  N (size in words) |
+;	|---|--------------------|
+;	|      forward link      |
+;	|------------------------|
+;	|     backward  link     |
+;	|------------------------|
+;	|			 |
+;	|       (N-4 words)      |
+;	|			 |
+;	|---|--------------------|
+;	| 0 |        N		 |
+;	|---|--------------------|
+
+
+; ALLOCATED BLOCKS:
+
+;	|---|--------------------|
+;	| 1 |  N (size in words) |
+;	|---|--------------------|
+;	|			 |
+;	|   N-3 allocated words  |
+;	|			 |
+;	|------------------------|
+;	|	Process ID	 |
+;	|---|--------------------|
+;	| 1 |  N (size in words) |
+;	|---|--------------------|
+
+; The following defines the fsm offsets in a dummy section:
+dsect <
+	  .word 0		; Freebit is bit-15, rest is size.
+ fsmfpt:: .word 0		; Forward pointer.
+ fsmbpt:: .word 0		; Backward pointer.
+	>,lfsmptr
+; Reference section 2.5 in Knuth.
+
+	.sbttl	Variables and initialization
+
+;;; Variables used by the FSM
+
+.wscalar fsmlow			;low  address of free storage
+.wscalar fsmhig			;high address of free storage
+.wscalar fsmalc			;how many times things have been allocated
+.wscalar fsmfrc			;how many times things have been freed
+				;(people hang on this)
+.bvector fsmava,lfsmptr		;the list of free blocks (AVAIlable blocks)
+
+  er%mem==ner%
+  ner%==ner%+1
+
+;;; Initialization of the Free Storage Manager
+
+;;; 	ARGS:				VALS:
+;;; 	bottom of area			(none)
+;;; 	top of area + 2
+;;; sp:	return address
+
+fsmini:	clr fsmfrc		;zero the number-of-times-freed count
+	push r5,r4,r3		;save the regs we need
+	mov 10(sp),r5		;top of area
+	mov 12(sp),r4		;bottom of area
+	mov #-1,(r4)+		;mark the bottom
+	mov #-1,-(r5)		;and the top
+	mov r4,fsmlow		;low  address of free storage
+	mov r5,fsmhig		;high address of free storage
+	mov r5,r3		;top (new)
+	sub r4,r3		;number of bytes in the area
+	clc			;clear carry so we can do an unsigned
+	ror r3			;divide by 2 to get words
+	mov r3,(r4)		;size at the bottom
+	mov r3,-2(r5)		;and  at the top
+	mov #fsmava,r3		;we will be using this a bit
+	mov r3,fsmfpt(r4)	;set the forward  pointer to AVAIL
+	mov r3,fsmbpt(r4)	;set the backward pointer to AVAIL
+	clr (r3)		;clear the size (just in case)
+	mov r4,fsmfpt(r3)	;set the list's forward  pointer
+	mov r4,fsmbpt(r3)	;and the list's backward pointer
+	pop r3,r4,r5,(sp),(sp)	;pop regs and flush args
+	return
+
+	.sbttl	Allocation and deallocation
+
+;;; Allocate a chunk of memory. Stack arg is size (in bytes) of chuck
+;;; desired. Stack value is pointer to usable memory (or zero if none).
+;;; Allocation is done from the top of free blocks
+
+fsmall:	push r5,r4
+	mov 6(sp),r5		;get byte size requested
+	inc r5			;plus one for rouding
+	clc			;for unsigned division by two
+	ror r5			;size in words
+	add #3,r5		;need 3 more for overhead
+	mov #fsmava,r4		;get handle on the list
+	lock 6			;lock out interrupts
+	loop <
+	  mov fsmfpt(r4),r4	;go down the list to the next item
+	  cmp r4,#fsmava	;did we reach the end?
+	  if ne,<
+	    cmp r5,(r4)		;check the size
+	    rptl gt
+	    >
+	  else <clr r4>		;didn't find anything
+	  >
+	tst r4			;do we have anything?
+	if eq,<
+	  unlock
+	  pop r4,r5
+	  clr 2(sp)		;no return value
+	  return
+	  >
+	add #4+4,r5		;find out if we can divide the block or
+				;should use it all
+	cmp r5,(r4)		;check for size+overhead
+	if le,<			;divide current block
+	  sub #4+4,r5		;get back original size
+	  push r3,r2,r1		;save some more people
+		;r5=# desired words	r4=pointer to base of free
+		;r3=pointer to end	r2=pointer to beg of allocated
+		;r1=# free words
+	  mov (r4),r1		;get number of words
+	  mov r4,r3		;go to the beginning
+	  add r1,r3		;halfway to end
+	  add r1,r3		;to the end
+	  mov r3,r2		;go to end
+	  sub r5,r2		;halfway to base of allocated
+	  sub r5,r2		;to base of allocated
+	  sub r5,r1		;number of words in remaining free portion
+	  mov r1,(r4)		;set at the beginning
+	  mov r1,-2(r2)		;and at the end
+	  bis #100000,r5	;set the "allocated" bit
+	  mov r5,-(r3)		;set it at the end
+mov @usrptr,-(r3)
+;	  clr -(r3)		;don't implement process ID's yet
+	  mov r5,(r2)		;and put it in the base of the allocated
+	  mov r2,r4		;put block in r4
+	  pop r1,r2,r3
+	  >
+	else <			;we use the entire block, unlink, etc.
+	  mov (r4),r5		;get the number of words
+	  asl r5		;convert to bytes
+	  add r4,r5		;and go forward to the end
+	  bis #100000,(r4)	;"allocate" the beginning
+	  bis #100000,-(r5)	;"allocate" the end
+mov @usrptr,-(r5)
+;	  clr -(r5)		;process id not implemented
+	  mov fsmfpt(r4),r5	;go through forward pointer
+	  mov fsmbpt(r4),fsmbpt(r5)	;unlink the forward half
+	  mov fsmbpt(r4),r5	;go through backward pointer
+	  mov fsmfpt(r4),fsmfpt(r5)	;unlink the backward half
+	  >
+	add #2,r4		;go to the beginning of usable (user)
+				;memory
+	unlock
+	mov r4,6(sp)
+	pop r4,r5
+	inc fsmalc		;count it
+	return
+
+;;; Clear the piece of memory on the stack, returning same
+
+fsmclr:	tst 2(sp)		;is there any?
+	if eq,<return>		;that was easy
+	push r5,r4		;save regs
+	mov 6(sp),r5		;get pointer to beyond
+	mov -2(r5),r4		;get number of words
+
+bit #100000,r4			;debugging aid
+if eq,<bpt>
+
+	bic #100000,r4		;without the allocate bit
+	sub #3,r4		;skip overhead
+	if gt,<			;if there is still something there
+	  loop <
+	    clr (r5)+
+	    sorl r4		;and loop over the words
+	    >
+	  >
+
+bit #100000,2(r5)		;debugging aid
+if eq,<bpt>
+
+	pop r4,r5		;restore
+	return			;and give the user back his memory
+
+
+;;; Free a piece of memory on the stack. No values
+;;; Algorithm C (Liberation with boundary tags)
+
+fsmfre:	tst 2(sp)		;is there anything?
+	if eq,<
+	  pop (sp)		;flush arg
+	  return		;and finish
+	  >
+	inc fsmfrc		;count another block freed
+	push r5,r4,r3,r2	;save regs
+	mov 12(sp),r5		;get pointer to base+2
+
+	lock 6			;don't get confused
+	sub #2,r5		;P0 -- base of current block
+
+cmp r5,fsmlow			;debugging aids
+if lo,<bpt>
+cmp r5,fsmhig
+if hi,<bpt>
+bit #100000,(r5)
+if eq,<bpt>			;somebody isn't obeying discipline
+
+	bic #100000,(r5)	;clear the "allocated" bit
+	mov -2(r5),r4		;get the number of words of block below
+	  ;C1 -- check lower bound
+	if pl,<			;it is free, combine them
+	    ;C2 -- delete lower area
+	  mov r5,r3
+	  sub r4,r3
+	  sub r4,r3		;P:=P0 - size(P0-1)
+	  mov fsmfpt(r3),r2	;P1:=link(P)
+	  mov fsmbpt(r3),r4	;P2:=link(P+1)
+	  mov r4,fsmbpt(r2)	;link(P1+1):=P2
+	  mov r2,fsmfpt(r4)	;link(P2):=P1
+	  add (r5),(r3)		;size(P):=size(P)+size(P0)
+	  mov r3,r5		;P0:=P
+	  >
+	  ;C3 -- check upper bound
+	mov (r5),r4		;get size(P0)
+	mov r5,r3
+	add r4,r3
+	add r4,r3		;P:=P0+size(P0)
+	tst (r3)		;check for allocation
+	if pl,<
+	    ;C4 -- Delete upper area
+	  mov fsmfpt(r3),r2	;P1:=link(P)
+	  mov fsmbpt(r3),r4	;P2:=link(P+1)
+	  mov r4,fsmbpt(r2)	;link(P1+1):=P2
+	  mov r2,fsmfpt(r4)	;link(P2):=P1
+	  mov (r3),r4		;get size(P)
+	  add r4,(r5)		;size(P0):=size(P0)+size(P)
+	  add r4,r3
+	  add r4,r3		;P:=P+size(P)
+	  >
+	  ;C5 -- Add to AVAIL
+	mov (r5),-2(r3)		;size(P-1):=size(P0) (fixes tags also)
+	cmp (r5),#200.		;200 word decision boundary
+	if lo,<			;if less, put it on the beginning
+	  mov fsmava+fsmfpt,r4	;get old first block = link(AVAIL)
+	  mov r4,fsmfpt(r5)	;link(P0)=link(AVAIL)
+	  mov #fsmava,fsmbpt(r5)	;link(P0+1)=loc(AVAIL)
+	  mov r5,fsmbpt(r4)	;link(link(AVAIL)+1):=P0
+	  mov r5,fsmava+fsmfpt	;link(AVAIL):=P0
+	  >
+	else <			;if more, put it on the end
+	  mov fsmava+fsmbpt,r4	;get old last block
+	  mov r4,fsmbpt(r5)	;link(P0+1)=link(AVAIL)
+	  mov #fsmava,fsmfpt(r5)	;link(P0)=loc(AVAIL)
+	  mov r5,fsmfpt(r4)
+	  mov r5,fsmava+fsmbpt
+	  >
+
+	unlock
+	pop r2,r3,r4,r5,(sp)
+	return
+
+fsmhng:	push r0,r1,r2,fsmfrc
+	.regs #hng.ne,#fsmfrc,sp
+	.hang
+	pop *,r2,r1,r0
+	return
+
+$fsmhng:			;internal hang
+	push r0,r1,r2,fsmfrc
+	.regs #hng.ne,#fsmfrc,sp
+	call $hang
+	pop *,r2,r1,r0
+	return
+
+;; local modes:
+;; mode:midas
+;; auto fill mode:
+;; fill column:75
+;; comment column:32
+;; end:
