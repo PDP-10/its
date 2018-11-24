@@ -1410,6 +1410,12 @@ expect ":KILL"
 # Maybe roll back to IOELEV 431, or fix it in new version 433.  Maybe
 # link with 11DDT 16K.
 
+# MINITS
+respond "*" ":cwd mits.s\r"
+respond "*" ":palx test_config\r"
+respond ":::" "777\r"
+expect ":KILL"
+
 # TV-11.  STUFF prefers it to be in the "." directory.
 respond "*" ":palx dsk0:.;_system;tv\r"
 expect ":KILL"
