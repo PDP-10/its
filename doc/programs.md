@@ -159,6 +159,7 @@
 - LOSS (device).
 - LOTCLN - LOGOUT TIMES cleanup program.
 - LSPEED, set TTY line parameters.
+- LSRDMP, dump the user database.
 - LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
 - MACN80, Z80 cross assembler.

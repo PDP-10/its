@@ -244,6 +244,9 @@ respond "*" ":link sys1;ts lookup,inquir;ts lookup\r"
 respond "*" ":midas sys3;ts lsrprt_sysen1; lsrprt\r"
 expect ":KILL"
 
+respond "*" ":midas sys3;ts lsrdmp_bawden; lsrdmp\r"
+expect ":KILL"
+
 respond "*" ":print cstacy;..new. (udir)\r"
 type ":vk\r"
 
