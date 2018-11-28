@@ -106,7 +106,7 @@ respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
 expect ":KILL"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
-respond "*" ":midas device;oarcdv bin_syseng;arcdev 66\r"
+respond "*" ":midas device;oarcdv bin_sysen2; dmarcd\r"
 expect ":KILL"
 
 # JOBDEV D (DSKDEV)
