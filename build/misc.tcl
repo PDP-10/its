@@ -1196,7 +1196,7 @@ respond "*" ":midas bkph; ts lines_lines\r"
 expect ":KILL"
 
 # View bitmap file on TV.
-respond "*" ":midas sys2; ts tvread_sysen2; tvread\r"
+respond "*" ":midas sys2; ts tvread_vis; tvread\r"
 expect ":KILL"
 
 # Save TV display as bitmap file.
