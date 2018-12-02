@@ -47,6 +47,7 @@
 - CHESS2, Alan Baisley's Tech II chess program.
 - CHTN/CFTP, Chaosnet TELNET and FTP support.
 - CKR, Alan Baisley's checkers program.
+- CLOCK, analogue, small, or digital clock.
 - CLOGO, Logo programming language.
 - COMBAT, submit jobs to the Muddle compiler.
 - COMIFY, convert HEX to COM format.
