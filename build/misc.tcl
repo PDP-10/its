@@ -1111,6 +1111,22 @@ respond "M IML" "\r"
 respond ":PDUMP" "games; ts maze\r"
 respond "*" ":kill\r"
 
+# KLH's Knight TV clock.
+respond "*" ":midas klh; ts tinyw_klh; clock\r"
+respond "=" "1\r"
+respond "=" "1\r"
+expect ":KILL"
+respond "*" ":midas klh; ts bigw_klh; clock\r"
+respond "=" "1\r"
+respond "=" "0\r"
+respond "=" "0\r"
+expect ":KILL"
+respond "*" ":midas klh; ts digiw_klh; clock\r"
+respond "=" "1\r"
+respond "=" "0\r"
+respond "=" "1\r"
+expect ":KILL"
+
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
 respond "*" ":job cc\r"
