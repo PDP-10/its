@@ -672,6 +672,10 @@ expect ":KILL"
 respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
 respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
 
+# gunner
+respond "*" ":midas device; jobdev shoe_rwk; gunner\r"
+expect ":KILL"
+
 # pr
 respond "*" ":midas sys1;ts pr_sysen1;pr\r"
 expect ":KILL"

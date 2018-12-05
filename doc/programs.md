@@ -112,6 +112,7 @@
 - GO, the Go board game.
 - GOTO, go to specified terminal line.
 - GUESS, a very silly game.
+- GUNNER, gun down jobs.
 - GMSGS, copy system messages to mail file.
 - H3MAKE, a job that requests DRAGON to build host table.
 - HEXIFY, convert COM file into Intel HEX format.
