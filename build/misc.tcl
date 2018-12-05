@@ -940,6 +940,10 @@ respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
 
+# LINE
+respond "*" ":midas sys2;ts line_rab;line\r"
+expect ":KILL"
+
 # WHOIML
 respond "*" ":midas sysbin;_sysen1; whoiml\r"
 respond "FILE:" "whoiml\r"
