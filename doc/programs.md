@@ -148,6 +148,7 @@
 - KN10, KS10 frontend software.
 - LAY, SUDS layout program.
 - LD10, Lisp display slave.
+- LINE, display wholine.
 - LINK-10, DEC linker.
 - LIMERI, print limericks.
 - LIMSER, Chaosnet limerick service.
