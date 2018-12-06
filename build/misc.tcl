@@ -497,6 +497,11 @@ respond "*" ":midas;324 /t dsk0:.;@ mlife_rwg;mlife\r"
 respond "with ^C" "TS==0\r\003"
 expect ":KILL"
 
+# 340D
+respond "*" ":midas stan.k;mod11 bin_340d\r"
+expect ":KILL"
+respond "*" ":link sys1;ts 340d, stan.k; mod11 bin\r"
+
 # TV-munching square.
 respond "*" ":midas sys2;ts munch_sysen2;munch\r"
 expect ":KILL"
