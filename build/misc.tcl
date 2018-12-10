@@ -1533,3 +1533,7 @@ expect ":KILL"
 # IBMASC
 respond "*" ":midas sys3;ts ibmasc_sysen1;ibmasc\r"
 expect ":KILL"
+
+# NEWDEC
+respond "*" ":midas sys3;ts newdec_sysen1;newdec\r"
+expect ":KILL"
