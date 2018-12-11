@@ -258,7 +258,7 @@ expect ":KILL"
 # bday
 respond "*" ":midas sysbin;_sysen1;bday\r"
 expect ":KILL"
-respond "*" ":link dragon;bday daily,sysbin;bday bin\r"
+respond "*" ":link dragon;daily bday,sysbin;bday bin\r"
 
 # sender
 respond "*" ":midas sysbin;sender_sysen1;sender\r"
