@@ -144,6 +144,9 @@ respond "*" ":link channa;ts netime,channa;rakash netime\r"
 
 respond "*" ":link dragon;hourly modems,channa;ts modems\r"
 
+respond "*" ":midas channa;rakash papsav_sysen3;papsav\r"
+expect ":KILL"
+
 # sources dump tape now creates dragon directory and populates
 # with an initial dragon; dragon hoard file, which is required
 # by PFT
