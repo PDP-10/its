@@ -209,6 +209,7 @@
 - OTHELLO, the original Othello game -- simpler than Go.
 - PALX, PDP-11 cross assembler.
 - PANDA, user account management program.
+- PAPSAV, daemon to record system events in file system.
 - PC, SUDS printed circuit board program.
 - PDSET, set time and date.
 - PEEK, system monitoring.
