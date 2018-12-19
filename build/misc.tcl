@@ -490,6 +490,10 @@ respond "designs" "\r"
 respond "suns" "\r"
 expect ":KILL"
 
+# Dazzle Dart, video game for the Logo group PDP-11/45
+respond "*" ":palx bs;_dazzle\r"
+expect ":KILL"
+
 # MLIFE
 respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
 expect ":KILL"
