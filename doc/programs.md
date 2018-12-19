@@ -67,6 +67,7 @@
 - D, SUDS drawing program
 - DATE, print date and time.
 - DATSRV, server for RFC 867 Daytime protocol.
+- Dazzle Dart, video game.
 - DCROCK, digital watch.
 - DDTDOC, interactive DDT documentation.
 - DECUUO, TOPS-10 and WAITS emulator.
