@@ -197,6 +197,7 @@
 - MUNCH, TV-munching square.
 - NAME, shows logged in users and locations, aka FINGER.
 - NETIME, network time dragon.
+- NETRFC, serve ARPANET connections.
 - NEWDEC, DECtape converter.
 - NICNAM/NICWHO, look up someone in the Arpanet directory.
 - NIMLIN, a game of unknown features.

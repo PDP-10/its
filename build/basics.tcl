@@ -189,6 +189,10 @@ respond "*" ":midas sysbin;_syseng;@chaos\r"
 expect ":KILL"
 respond "*" ":link sys;atsign chaos,sysbin;@chaos bin\r"
 
+# ARPANET support
+respond "*" ":midas sys;atsign netrfc_sysen2; netrfc\r"
+expect ":KILL"
+
 # CHA: and CHAOS: device
 respond "*" ":midas device;jobdev cha_dcp;chadev\r"
 expect ":KILL"
