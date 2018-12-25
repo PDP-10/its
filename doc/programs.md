@@ -138,6 +138,7 @@
 - INQUIR, user account database.
 - INQUPD, processes INQUIR change requests.
 - INSTAL, install executables on other ITS machines.
+- IPLJOB, plot display lists.
 - ITSDEV, ITS device server.
 - ITSTER, Donald Fisk's block-stacking puzzle game.
 - JEDGAR, counter spying tool.

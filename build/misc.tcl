@@ -825,6 +825,10 @@ respond "*" ":midas sysbin;ttylin bin_bawden; u\r"
 expect ":KILL"
 respond "*" ":link device; chaos ttylin, sysbin; ttylin bin\r"
 
+# IPLJOB
+respond "*" ":midas sys;atsign ipl_sysen2; ipljob\r"
+expect ":KILL"
+
 # RIPDEV
 respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
 expect ":KILL"
