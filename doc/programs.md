@@ -275,6 +275,7 @@
 - RABBIT, Scheme compiler.
 - TAGS, generate tags table for sources.
 - TALK/WHO/WHOJ/WHOM/USERS, list users.
+- TBMOFF, turn TAC or TIP binary mode off.
 - TCTYP, set terminal type and options.
 - TEACHE, Emacs tutorial.
 - TECO, editor.

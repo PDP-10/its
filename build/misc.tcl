@@ -1545,3 +1545,7 @@ expect ":KILL"
 # NEWDEC
 respond "*" ":midas sys3;ts newdec_sysen1;newdec\r"
 expect ":KILL"
+
+# TBMOFF
+respond "*" ":midas sys; ts tbmoff_cstacy; tbmoff\r"
+expect ":KILL"
