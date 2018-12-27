@@ -202,6 +202,7 @@
 - NICNAM/NICWHO, look up someone in the Arpanet directory.
 - NIMLIN, a game of unknown features.
 - NODIPS, SUDS wirelister (without DIP definitions).
+- NTSDDT, non timesharing DDT with 340 support.
 - NUDIR, create user directory.
 - NWATCH, small watch display.
 - OBS, observe system activities.
