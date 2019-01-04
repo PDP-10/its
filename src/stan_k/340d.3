@@ -9,7 +9,6 @@ title 340d - Datapoint emulator for 340 display.
 ;Possible improvements:
 ; - Super image mode for TTY input.
 ; - Double buffering.
-; - Display missing characters using incremental mode.
 ; - Handle STY input from interrupt.
 ; - Have separate display lists per line, and only update one line at a time.
 ; - Run on PDP-6.
@@ -17,6 +16,8 @@ title 340d - Datapoint emulator for 340 display.
 ;These numbers come from TCTYP.
 width=117
 height=50
+
+ifndef new,new=0	;Use new ASCII characters instead of old.
 
 a=1
 b=2
@@ -34,8 +35,13 @@ ttyi==3
 dstop==003000
 point==020000
 chara==060000
+incre==140000
 vecto==100000
 verti==200000
+
+;Characters per line, as stored in memory.
+lshift==7
+lchars==<1_lshift>
 
 loc 42
 	tsint
@@ -123,7 +129,7 @@ styin:	.iot styi,a
 
 ;Output character in A to STY.  Interpret Datapoint codes.
 styout:	move b,y
-	lsh b,7
+	lsh b,lshift
 	add b,x				;B gets character offset in screen.
 	xct tab(a)
 	skipge x			;Ensure cursor position inside bounds.
@@ -153,16 +159,11 @@ prscr:	pushj p,prlin			;Render one line.
 	idpb b,c
 	movei b,33
 	idpb b,c
-	addi a,200			;Go to next line.
-	caie a,screen+200*height	;Unless done.
+	addi a,lchars			;Go to next line.
+	caie a,screen+lchars*height	;Unless done.
 	 jrst prscr
 
-	movei b,37			;Escape from character mode.
-	idpb b,c
-	tlnn c,200000			;Convert from 6-bit byte pointer to 18-bit.
-	 jrst [hrli c,002200 ? jrst .+2]
-	  hrli c,222200
-
+	pushj p,eschr			;Escape from character mode.
 	pushj p,cursor			;Draw cursor.
 
 	movei b,dstop			;End with a 340 stop instruction.
@@ -173,7 +174,7 @@ prscr:	pushj p,prlin			;Render one line.
 prlin:	move b,a
 	move d,a
 	subi d,screen
-	lsh d,-7
+	lsh d,-lshift
 	movn d,length(d)		;Get negative of line length.
 	cain d,0
 	 popj p,			;Empty line.
@@ -182,7 +183,7 @@ prlin0:	move d,(b)
 	xct shift(d)			;Insert shift character if necessary.
 	move d,char(d)			;Convert ASCII to 340 character code.
 	idpb d,c
-	aobjn b,prlin0
+prlin1:	aobjn b,prlin0
 	popj p,
 
 ;Insert character in A in screen memory.
@@ -208,9 +209,104 @@ shout:	skipe mode
 	idpb e,c
 	popj p,
 
+;Escape from character mode.
+eschr:	movei d,37                      ;Escape character.
+	idpb d,c
+	tlnn c,200000			;Convert from 6-bit byte pointer to 18-bit.
+	 jrst [hrli c,002200 ? jrst .+2]
+	  hrli c,222200
+	popj p,
+
+;Go from character mode to incremental.
+goinc:	pushj p,eschr
+	movei d,incre+17+<5_4>          ;Go to incremental mode.
+	idpb d,c
+	popj p,
+
+;Codes for incremental mode.
+inten==200000
+escap==400000
+up==2
+dn==3
+rt==10
+lt==14
+
+;Draw atsign character.
+atsign:	pushj p,goinc			;Go to incremental mode.
+	movei d,inten+<up_12.>+<up_8.>+<up_4>+up
+	idpb d,c
+	movei d,inten+<up_12.>+<<up+rt>_8.>+<rt_4>+rt
+	idpb d,c
+	movei d,inten+<<rt+dn>_12.>+<dn_8.>+<dn_4>+dn
+	idpb d,c
+	movei d,inten+<lt_12.>+<<lt+up>_8.>+<<rt+up>_4>
+	idpb d,c
+	movei d,<<lt+dn>_12.>+<<lt+dn>_8.>+<dn_4>+dn
+	idpb d,c
+	movei d,inten+<0_12.>+<rt_8.>+<rt_4>+rt
+	idpb d,c
+	movei d,escap+<rt_12.>+<rt_8.>+<rt_4>
+	idpb d,c
+next:	movei d,chara+17+<5_4>		;Go to character mode.
+	idpb d,c
+	tlnn c,770000			;Convert from 18-bit byte pointer to 6-bit.
+	 tlca c,002400
+	  hrli c,220600
+	jrst prlin1
+
+;Draw caret.
+caret:
+ifn new,[
+	pushj p,goinc
+	movei d,<up_12.>+<up_8.>+<up_4>
+	idpb d,c
+	movei d,inten+<up_12.>+<<up+rt>_8.>+<<up+rt>_4>+<dn+rt>
+	idpb d,c
+	movei d,inten+<<dn+rt>_12.>
+	idpb d,c
+	movei d,escap+<<dn+rt>_12.>+<<dn+rt>_8.>+<<dn+rt>_4>+dn
+	idpb d,c
+	jrst next
+]
+.else [
+	movei d,40
+	idpb d,c
+	pushj p,shout
+	movei d,67
+	idpb d,c
+	jrst prlin1
+]
+
+;Draw underscore.
+under:
+ifn new,[
+	pushj p,goinc
+	movei d,inten+<0_12.>+<rt_8.>+<rt_4>+rt
+	idpb d,c
+	movei d,inten+<rt_12.>
+	idpb d,c
+	movei d,escap+<rt_12.>+<rt_8.>+<rt_4>
+	idpb d,c
+	jrst next
+]
+.else [
+	pushj p,shout
+	movei d,60
+	idpb d,c
+	jrst prlin1
+]
+
+;Draw grave accent.
+grave:	movei d,40
+	idpb d,c
+	pushj p,shout
+	movei d,66
+	idpb d,c
+	jrst prlin1
+
 ;Scroll entire screen.
-scroll:	move a,[screen+200,,screen]	;Copy screen contents one line up.
-	blt a,screen+200*height-200-1
+scroll:	move a,[screen+lchars,,screen]	;Copy screen contents one line up.
+	blt a,screen+lchars*height-lchars-1
 	move a,[length+1,,length]	;Copy line lengths one line up.
 	blt a,length+height-2
 	setzm length+height-1		;Clear last line.
@@ -293,22 +389,36 @@ char:	repeat 40,0		;Control characters
 	repeat 40,.rpcnt+40	;Space to ?
 	00			;@
 	repeat 32,.rpcnt+1	;A to Z
-	repeat 6,00		;[ to `
+	53			;[
+	52			;\
+	54			;]
+	67			;^
+	60			;_
+	66			;`
 	repeat 32,.rpcnt+1	;a to z
-	repeat 5,00		;{ to Rubout
+	55			;{
+	62			;|
+	56			;}
+	43			;~
+	00			;Rubout
 ifn .-char-200,.err The char table is wrong.
 
 ;Table for shifting character set.
-shift:	repeat 65.,jfcl
+shift:	repeat 32.,jfcl
+	repeat 32.,pushj p,shin
+	jrst atsign
 	repeat 26.,pushj p,shin
-	repeat 6,jfcl
-	repeat 26.,pushj p,shout
-	repeat 5,jfcl
+	repeat 3,pushj p,shout
+	jrst caret
+	jrst under
+	jrst grave
+	repeat 30.,pushj p,shout
+	jfcl
 ifn .-shift-200,.error The shift table is wrong.
 
 tty:	0
 mode:	0			;0 means upper case, -1 means lower case.
-screen:	block 200*height	;Characters on screen.
+screen:	block lchars*height	;Characters on screen.
 length:	block height		;Number of characters on each line.
 
 .vector pdl(pdllen==100)
