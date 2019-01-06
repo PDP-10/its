@@ -309,6 +309,7 @@
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.
 - UPTIME, record ITS uptimes.
+- UPTINI, program to create new UPTIME DATA.
 - URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
