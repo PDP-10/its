@@ -1561,3 +1561,7 @@ expect ":KILL"
 # TBMOFF
 respond "*" ":midas sys; ts tbmoff_cstacy; tbmoff\r"
 expect ":KILL"
+
+# UPTINI
+respond "*" ":midas ejs;ts uptini_uptini\r"
+expect ":KILL"
