@@ -49,7 +49,9 @@ SWTLST:	0		;This is the locked switch list, used to undo AOS's if we are killed.
 
 LOC	77
 SIXBIT /ARCDEV/
-RDEVN:	BLOCK 3	;Real filenames of file open in creator's channel on the archive device.
+RDEVN:	0	;Real filenames of file open in creator's channel on the
+RFN1:	0	;archive device.  However, RDEVN is set up so that if the
+RFN2:	0	;archive is referred through a link, this still works.
 RDIRN:	0
 ACCP:	0	;Access pointer in open file, as byte # of next byte to transfer.
 DIRECTN:0	;-1 if direction is Output.
@@ -64,7 +66,10 @@ FILBSZ:	0	;Byte size file was written in.
 ;;; From 77 to here is looked at by PEEK.
 
 AFDEV:	0	;Real Device (the machine name) and FN2 of the archive file.
-AFFN2:	0	;(the real FN1 and SNAME are in RDEVN and RDIRN).
+AFFN1:	0	;The real FN1 is here, so RFNAME on ARC will give original
+		;name instead of this one, for the device name
+AFFN2:	0	;
+AFDIR:	0	;(just a copy of RDIRN)
 FILADR:	0	;Address in core of start of file's data area (actually, start of header).
 		;Zero only if no file is open.
 DIRFLG:	0	;-1 => reading the directory rather than a file.
@@ -113,6 +118,8 @@ GO:	MOVE P,[-LPDLL-1,,PDL-1]
 	ANDI A,-1	;NOW .VALUE IF OPCODE IS .IOT - SHOULDN'T HAPPEN, 
 	CAIN A,1	;BUT DID DUE TO A BUG.
 	 .VALUE
+	MOVE A,JBCDEV	;USE ORIGINAL FN1 AS DEVICE NAME FOR RFNAME, ETC.
+	MOVEM A,RDEVN
 	SYSCAL OPEN,[	;OPEN THE ARCHIVE DEVICE FILE WE ARE SUPPOSED TO USE.
 		[.BII,,CHDSK]
 		['DSK,,]
@@ -126,8 +133,10 @@ GO:	MOVE P,[-LPDLL-1,,PDL-1]
 	CAME B,[SIXBIT/ARC1!!/]	;If the file isn't recognizable as a current-format archive,
 	 JRST OLDARC		;maybe it's an old-format one.  Load the old handler.
 	SYSCAL RFNAME,[%CLIMM,,CHDSK
-		%CLOUT,,AFDEV ? %CLOUT,,RDEVN ? %CLOUT,,AFFN2 ? %CLOUT,,RDIRN]
+		%CLOUT,,AFDEV ? %CLOUT,,AFFN1 ? %CLOUT,,AFFN2 ? %CLOUT,,AFDIR]
 	 .LOSE %LSFIL
+	MOVE A,AFDIR		;CAN USE REAL SNAME SAFELY
+	MOVEM A,RDIRN
 	SYSCAL RFDATE,[%CLIMM,,CHDSK ? %CLOUT,,ARCCDT]
 	 .LOSE %LSFIL		;Read the arc dev's creation date before we lock it.
 	SKIPGE ARCCDT		;If file has none, use current date.
@@ -148,6 +157,7 @@ GO:	MOVE P,[-LPDLL-1,,PDL-1]
 	MOVEM A,ARCADR+UDDMPB
 	SETOM ARCCDT
 	SETOM ARCDMP
+	PUSHJ P,ARCCLN		;Clean up traces of usage going on when system crashed.
 	PUSHJ P,ARCDEL		;Delete any files marked "delete when closed" and not open.
 	.SUSET [.SMSK2,,[1_CHBOJ]]
 	JRST GOINIT		;Dispatch to JOPEN or JFDEL with dir still locked.
@@ -155,10 +165,6 @@ GO:	MOVE P,[-LPDLL-1,,PDL-1]
 WRGDIR:	SKIPA A,[%ENSIO]
 NSDEV:	MOVSI A,%ENSDV
 	JRST NOGO2
-
-PKNMTD:	MOVSI A,%ENAPK		;If Pack Not Mounted, say so, and die.
-	JRST NOGO2
-
 
 FILXST:	MOVSI A,%EEXFL		;File already exists error.
 	JRST NOGO2
@@ -216,8 +222,6 @@ OFFSET 0
 ARCINI:	CAIN B,%ENAFL		;If we couldn't open the file because it was locked,
 	 JRST [	PAUSE		;wait and try again.
 		JRST ARCIN1]
-	CAIN B,%ENAPK		;if pack not mounted,
-	 JRST PKNMTD		;say so and die.
 	HRRZ A,JBCOP
 	CAIE A,%JOOPN		;Create only if opening a file
 	 JRST NSDEV
@@ -292,13 +296,13 @@ ARCSAL:	PUSHJ P,DIRWST
 	JUMPN C,CPOPJ		;Do nothing if files are open,
 	CAIGE B,2000		;of if there isn't much garbage to clean up.
 	 POPJ P,
-	SYSCAL OPEN,[[.BIO,,CHSALV] ? ['DSK,,] ? ['_ARCSA] ? ['OUTPUT] ? RDIRN]
+	SYSCAL OPEN,[[.BIO,,CHSALV] ? ['DSK,,] ? ['_ARCSA] ? ['OUTPUT] ? AFDIR]
 	 POPJ P,
 	MOVE A,[-2000,,ARCADR]
 	.IOT CHSALV,A		;Write out the old directory,
 	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000
 			%CLIMM,,CHSALV ? %CLIMM,,0]	;then map that page in so we can update it.
-	 JSR CBKLOS
+	 .LOSE %LSSYS
 ;Now write out the data areas of all files, one by one,
 ;and make the copy's directory point at them.
 	MOVE Q,UDNAMP+ARCADR
@@ -471,23 +475,8 @@ PCLSRD:	0		;-1 => OUR LAST JOBRET FAILED, SO EXPECT A RESTARTED SYSTEM CALL.
 
 ;Get a page of core at address DIRCPY
 GETPAG:	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000 ? %CLIMM,,%JSNEW]
-	 JSR CBKLOS
+	 .LOSE %LSSYS
 	POPJ P,
-
-;JSR CBKLOS after a CORBLK which can possibly get NO CORE AVAILABLE.
-;If that happens, we sleep and retry.  Otherwise, we LOSE.
-CBKLOS:	0
-	SOS CBKLOS
-	SOS CBKLOS		;Get address of the CORBLK which failed.
-	PUSH P,A
-	.STATUS 0,A
-	LDB A,[220600,,A]
-	CAIE A,%ENACR		;If not NO CORE AVAILABLE, pretend we did a .LOSE.
-	 JRST [ POP P,A
-		SYSCAL LOSE,[ %CLIMM,,%LSSYS ? CBKLOS]]
-	MOVEI A,300.		;If NO CORE AVAILABLE, wait 10 seconds and return
-	.SLEEP A,		;to the failing CORBLK to retry it.
-	JRST @CBKLOS
 
 ;Release the page.
 RELPAG:	SYSCAL CORBLK,[%CLIMM,,0 ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000]
@@ -502,7 +491,7 @@ RELPAG:	SYSCAL CORBLK,[%CLIMM,,0 ? %CLIMM,,%JSELF ? %CLIMM,,DIRCPY/2000]
 ;that you won't reference anything outside the directory.
 ;Anything which might look at the header for a file other than the one which is open
 ;might look at a file which was created since your last MAPARC.
-LOCK:	SYSCAL OPEN,[[100000+.BIO,,CHDSK] ? AFDEV ? RDEVN ? AFFN2 ? RDIRN
+LOCK:	SYSCAL OPEN,[[100000+.BIO,,CHDSK] ? AFDEV ? AFFN1 ? AFFN2 ? AFDIR
 			%CLERR,,TT]
 	 JRST LOCKWT
 	SKIPGE Q,ARCCDT
@@ -551,7 +540,7 @@ MAPARC:	PUSH P,A
 	HRRI A,ARCADR/2000
 	SETZ B,
 	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? A ? %CLIMM,,CHDSK ? B ? %CLERR,,ERCD]
-	 JSR CBKLOS
+	 .LOSE %LSSYS
 	POP P,C
 	JRST POPBAJ
 
@@ -612,8 +601,8 @@ JOPEN:	LDB W,[410100,,JBCOP]	;0 => INPUT  1 => OUTPUT
 	MOVE C,OPMODE	; GET OPEN MODE
 	 TRNE C,777771	; OPEN FOR WRITING?
 	  JRST WRGDIR		; WRONG DIRECTION - LOSE
-	MOVEM A,RDEVN+1
-	MOVEM B,RDEVN+2
+	MOVEM A,RFN1
+	MOVEM B,RFN2
 	.CALL JBST		;Report file being operated on as .FILE. (DIR)
 	 JFCL
 	PUSHJ P,DIRGE1		;Get a copy of the directory.
@@ -712,9 +701,9 @@ CRITTB:	CRIT1A,,CRIT1B
 CRITLN==.-CRITTB
 
 FILOP3:	MOVE A,UNFN1(Q)	; STORE REAL INFO ABOUT THE FILE
-	MOVEM A,RDEVN+1
+	MOVEM A,RFN1
 	MOVE A,UNFN2(Q)
-	MOVEM A,RDEVN+2
+	MOVEM A,RFN2
 	.CALL JBST		; GIVE REAL NAMES TO SYS
 	 JFCL
 	MOVE A,BYTSIZ		; Create B.P. to ILDB the first byte of the file.
@@ -1209,11 +1198,11 @@ DIRASC:	MOVE D,[440700,,NEWDAT]
 	SETZM FILBLN		;initialize vars used for creating the directory string.
 	MOVE B,AFDEV
 	PUSHJ P,DIRSI4		;Output machine name and disk dir which archive resides on.
-	MOVE B,RDIRN
+	MOVE B,AFDIR
 	PUSHJ P,DIRSIX
 	MOVEI A,40
 	PUSHJ P,DIRCHR
-	MOVE B,RDEVN
+	MOVE B,AFFN1
 	PUSHJ P,DIRSIX		;Output archive device name, and archive file's FN2.
 	MOVEI A,40
 	PUSHJ P,DIRCHR
@@ -1534,7 +1523,6 @@ JFORCE:	SKIPN DIRECTN		;If we are writing a file, stick it into the directory.
 	MOVE D,UDDATP+ARCADR	;Start writing where allocation is being done.
 	MOVE A,D
 	PUSHJ P,JFRCIOT		;Simulate .IOT, using BLT on existing pages.
-	 JRST UNLOCK
 ;A has new value for file's UNRNDM rh.
 JFRCX:	MOVE J,NEWLEN		;D has updated access pointer.
 	ADD J,BYTSWD
@@ -1543,13 +1531,12 @@ JFRCX:	MOVE J,NEWLEN		;D has updated access pointer.
 	MOVE C,J
 	ADD C,D
 	CAIL C,ARCMAX		;Return non-skip if we will exceed maximum archive device size.
-	 JRST UNLOCK
+	 POPJ P,
 	PUSH P,J
 	MOVN C,J
 	HRLZS C			;Write out the data we are extending the file with.
 	HRRI C,NEWDAT
 	PUSHJ P,JFRCIOT
-	 .VALUE
 	MOVEM D,UDDATP+ARCADR	;Advance the data area free pointer over what we just gobbled.
 	JUMPG TT,JFOR2		;If we .IOT'ed to make new pages,
 	SYSCAL FINISH,[%CLIMM,,CHDSK]
@@ -1601,14 +1588,9 @@ JFOR3:	MOVE A,CRDATE		;Update the file's dates stored in the directory,
 ;must also be BLT'ed into that page.
 ;When we return, TT is negative if any new pages were created.
 ;Clobbers E.  Updates D by the number of words transferred.
-;Skips unless the archive became full.
 JFRCIOT:
 	PUSH P,B
 	PUSH P,C
-	HLRZS C
-	SUBM D,C
-	CAIL C,ARCMAX
-	 JRST POPDBJ
 	.ACCESS CHDSK,D
 	.IOT CHDSK,C		;First, IOT the whole thing so file length is set right.
 	POP P,C
@@ -1631,8 +1613,7 @@ JFRCI2:	HRLZ B,C
 	ADDI B,ARCADR		;Transfer them with BLT.
 	ADD D,E
 	BLT B,ARCADR-1(D)
-JFRCI1:	AOS -2(P)
-POPDBJ:	POP P,D
+JFRCI1:	POP P,D
 POPBJ:	POP P,B
 	POPJ P,
 
@@ -1791,8 +1772,8 @@ JRNM1:	PUSHJ P,ARCWRT
 	MOVE B,JBCWD6
 	PUSHJ P,QFNG		;process a > or < appearing in the new filenames.
 	 JFCL
-	MOVEM A,RDEVN+1
-	MOVEM B,RDEVN+2		;Report changed names to RFNAME system call.
+	MOVEM A,RFN1
+	MOVEM B,RFN2		;Report changed names to RFNAME system call.
 	.CALL JBST
 	 .LOSE %LSFIL
 	PUSHJ P,DINSR2		;Make a new one at the appropriate place, with the new names.
@@ -1882,7 +1863,7 @@ TSMPV:	PUSH P,A
 TSMPV1:	.SUSET [.RMPVA,,A]
 	LSH A,-10.
 	SYSCAL CORBLK,[%CLIMM,,%CBNDW ? %CLIMM,,%JSELF ? A ? %CLIMM,,%JSNEW]
-	 JSR CBKLOS
+	 .LOSE %LSSYS
 	POP P,A
 	POPJ P,
 
@@ -1908,8 +1889,8 @@ JBST:	SETZ
 	MOVEI CHBOJ
 	MOVEI 43	;SNDSK
 	RDEVN
-	RDEVN+1
-	RDEVN+2
+	RFN1
+	RFN2
 	SETZ RDIRN
 
 JBRT1:	SETZ			;JOBRET call block to report success.
