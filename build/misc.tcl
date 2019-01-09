@@ -554,6 +554,13 @@ respond "*" ":link sys1;ts 340d, stan.k; mod11 bin\r"
 respond "*" ":midas sys2;ts munch_sysen2;munch\r"
 expect ":KILL"
 
+# Munching squares for 340 display.
+respond "*" ":midas lars; ts munch_munch\r"
+expect ":KILL"
+respond "*" ":midas /t dsk0: .; @ munch_lars; munch\r"
+respond "with ^C" ".iotlsr==jfcl\r\003"
+expect ":KILL"
+
 # PI
 respond "*" ":midas sys3;ts pi_rwg; ran\r"
 expect ":KILL"

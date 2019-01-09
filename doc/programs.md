@@ -212,6 +212,7 @@
 - MUDDLE, MDL interpreter.
 - MUDINQ, Muddle inquirer.
 - MUNCH, TV-munching square.
+- MUNCH, munching squares for Type 340 display.
 - NAME, shows logged in users and locations, aka FINGER.
 - NAMDRG, free TV display.
 - NETIME, network time dragon.
