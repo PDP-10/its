@@ -261,10 +261,10 @@ respond "*" ":link syseng;ttytyp 999999,system;ttytyp >\r"
 respond "*" ":copy inquir;lsr1 empty,inquir;lsr1 >\r"
 
 # pword/panda
-respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
+respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
 respond "Is this to be a PANDA?" "yes\r"
 expect ":KILL"
-respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
+respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
 respond "Is this to be a PANDA?" "no\r"
 expect ":KILL"
 respond "*" ":midas sysbin;pwinit bin_sysen1;pwinit\r"
