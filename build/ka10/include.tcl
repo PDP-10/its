@@ -59,7 +59,7 @@ proc make_ntsddt {} {
 }
 
 proc make_salv {} {
-    respond "*" ":midas dsk0:.;@ salv_system;salv\r"
+    respond "*" ":midas dsk0:.;_system;salv\r"
     respond "time-sharing?" "n\r"
     respond "machine?" "KA\r"
     expect ":KILL"
@@ -97,9 +97,14 @@ proc dump_nits {} {
 
     respond "DSKDMP" "l\033ddt\r"
 
+    # Dump an executable @ SALV.
+    respond "\n" "t\033salv bin\r"
+    respond "\n" "\033u"
+    respond "DSKDMP" "d\033salv\r"
+
     # Since we bootstrap with a 2-pack ITS, we need to copy the MFD to
     # the fresh packs.
-    respond "\n" "t\033salv\r"
+    respond "\n" "salv\r"
     respond "\n" "ucop\033g"
     respond "UNIT #" "0"
     respond "UNIT #" "2"
@@ -113,7 +118,7 @@ proc dump_nits {} {
     # Now dump the new ITS.
     respond "DSKDMP" "t\033its bin\r"
     respond "\n" "\033u"
-    respond "DSKDMP" "m\033@ salv\r"
+    respond "DSKDMP" "m\033salv bin\r"
     respond "\n" "d\033nits\r"
 }
 
