@@ -5,7 +5,9 @@ VERSION==.FNAM2
 
 TITLE	INQUIRE UPDATE DEAMON
 	;CStacy, 4/1/83
-
+	;EJS, 2019-01-16 added support for creating initial LSR1 EMPTY
+	; file
+	
 COMMENT |
 			INQUPD documentation.
 
@@ -71,6 +73,14 @@ INQPAT mode is useful for hand-patching the database.  In this
 mode, we simply lock and load LSR1, and allow the user to call
 routines (such as LOOKUP, DELETE, and DONE) from DDT.
 
+LSRINI mode allows this program to be run without JCL to create the file
+.TEMP.; LSR1 EMPTY. This is an empty LSR1 database that can be used with
+a new ITS system. This file can be copied to INQUIR;LSR1 1 and the system
+rebooted.
+
+The resulting LSR1 database has no entries in it.  It can be updated
+through the use of INQUIR and the subsequent handling by the INQUPD
+daemon.
 |
 
 
@@ -110,10 +120,10 @@ DSKO=16		;Disk output channel.
 
 %COPY==1	;We are a COPY program.
 %RETRY==2	;We are retrying a failed operation.
-%PATCH==3	;We are manually patching the database.
-%MPVOK==4	;MPVs should create core.
-%MUNG==10	;In-core database has been modified. 
-
+%PATCH==4	;We are manually patching the database.
+%MPVOK==10	;MPVs should create core.
+%MUNG==20	;In-core database has been modified. 
+%LSRINI==40	;Initialize a new LSR1 EMPTY database
 
 ;;; Basic Macros
 .INSRT KSC;MACROS >
@@ -196,12 +206,22 @@ LSR1:	SIXBIT /DSK/
 	SIXBIT /1/
 	SIXBIT /INQUIR/
 
+LSREM1: SIXBIT /DSK/
+	SIXBIT /LSR1/
+	SIXBIT /EMPTY/
+	SIXBIT /.TEMP./
+
 ;;; The provisionally installed LSR1 database.
 
 LSR2:	SIXBIT /DSK/
 	SIXBIT /NLSR1/
 	SIXBIT /1/
 	SIXBIT /INQUIR/
+
+LSREM2: SIXBIT /DSK/
+	SIXBIT /NLSR1/
+	SIXBIT /EMPTY/
+	SIXBIT /.TEMP./
 
 ;;; Old and Ancient versions of the database.
 
@@ -340,20 +360,26 @@ GO:	MOVE P,[-PDLLEN,,PDL]	   ;Init the  stack.
 	 TLO F,%COPY		   ; remember that.
 	CAMN A,[SIXBIT /INQPAT/]   ;If we are in PATch mode.
 	 TLO F,%PATCH		   ; remember that.
+	CAMN A,[SIXBIT /LSRINI/]   ;If we are creating LSR1 EMPTY
+	 TLO F,%LSRINI 		   ; remember that.
 	.SUSET [.ROPTIO,,A]	   ;Find our job options.
-	TLNN F,%PATCH		   ;If are are patching the database
-	 TLNE F,%COPY
+	TLNE F,%PATCH+%COPY+%LSRINI  ;If are are patching the database, copying, or initing
 	 JRST [	TLNN A,%OPDDT	   ; Make sure a human is around.
 		 ERROR "Must run with human supervision."
 		JRST .+1]
 	TLO A,%OPOPC
 	.SUSET [.SOPTIO,,A]	   ;Set winning interrupt-PC option.
 	.SUSET [.SMASK,, [%PIPDL+%PIIOC+%PIMPV]]   ;Arm interrupts.
+
+	TLNE F,%LSRINI	 	   ; don't need to lock if we're initing
+	 JRST SKIPLK
 	CALL LOCK		   ;Try to lock the LSR1 database.
 	 JRST DONE		   ; If already locked, commit suicide.
+SKIPLK:
 	CALL MAPIN		   ;Map all database entries into core.
 	 ERROR "Unable to map LSR1 database."
 	SETZM COUNT		   ;Count of entries is zero based.
+
 	TLNE F,%PATCH
 	 ERROR "LSR1 loaded and locked. You may call LOOKUP, DELETE, and DONE."
 	TLNE F,%COPY		   ;If copying the database
@@ -416,7 +442,11 @@ DONE0: MOVE A,LENGTH		   ;get length of DATA area
        MOVEI B,-1		   ;end-of-data area sentinel
        MOVEM B,DATA-1(A)       	   ;store end-of-data sentinel
 
-DONE:	TLNN F,%MUNG		   ;If no modification
+DONE:
+	TLNE F,%LSRINI	 	   ; always want to write
+	 JRST DOCHK		     
+	
+	TLNN F,%MUNG		   ;If no modification
 	 JRST DONE3		   ;  don't write out out anything.
 	TLNE F,%COPY		   ;If COPYing
 	 JRST [ MOVE A,WHERE	   ; cons up "final" entry.
@@ -424,6 +454,7 @@ DONE:	TLNN F,%MUNG		   ;If no modification
 		SUBI A,DATA
 		MOVEM A,LENGTH
 		JRST .+1 ]
+DOCHK:
 	CALL CHECK
 	 ERROR "Data bashed."	   ;Make sure LSR1 looks Ok.
 	CALL MAKTAB		   ;Create LSR1 tables.
@@ -435,6 +466,10 @@ DONE2:	CALL WRITE		   ;Write out the new database files.
 	 ERROR "Error writing database."
 	CALL INSTAL		   ;Install it.
 	 NOP
+
+	TLNE F,%LSRINI		   ; don't signal COMSAT if we're initing
+	 JRST DONE3
+	 
 	MOVEI A,SATFL		   ;Tell COMSAT there is a new LSR1 file.
 	SYSCAL OPEN,[%CLBIT,,.BIO ? %CLIMM,,DSKO ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
 	 NOP
@@ -445,7 +480,11 @@ DONE3:	TLNE F,%COPY		   ;Unless we are an INQCPY
 DONE4:	SYSCAL DELETE,[0(A) ? 1(A) ? 2(A) ? 3(A)]
 	 CAIA
 	  JRST DONE4
-DONE5:	.CLOSE LOCKC,		   ;Relinquish lock on database.
+DONE5:	
+	TLNE F,%LSRINI		   ; unless we're initting
+	 JRST DIE
+
+        .CLOSE LOCKC,		   ;  Relinquish lock on database.
 	SKIPE DEBUG		   ;If being debugged
 	 .VALUE [ASCIZ /:Done./] ;  pause.
 	SYSCAL STDMST,[ [SIXBIT /INQUPD/] ? [-1] ? 0]
@@ -504,6 +543,10 @@ MAPIN:	PUSHAE P,[A,B,BP]
 	.CORE DATA/2000		   ;Flush core where LSR1 entries mapped.
 	 JSR AUTPSY
 	SETZM LENGTH
+
+	TLNE F,%LSRINI
+	  JRST DOINI
+	  
 	MOVEI A,LSR1		   ;Open the database file.
 	SYSCAL OPEN,[%CLBIT,,.UII ? %CLIMM,,DSKI
 		    0(A) ? 1(A) ? 2(A) ? 3(A)]
@@ -518,6 +561,13 @@ MAPIN:	PUSHAE P,[A,B,BP]
 	SYSCAL FILLEN,[%CLIMM,,DSKI ? %CLOUT,,A]
 	 JSR AUTPSY
 	SUB A,B			   ;We dont want Areas before DATA.
+	JRST MAPCOM		   ; join common code
+
+DOINI:
+	movei a,1		   ; empty database has data area of length 1
+	movei b,2000		   ; offset of data area within file
+	
+MAPCOM:
 	LSH B,-10.		   ;Get # of 1st page to map.
 	MOVEM A,LENGTH		   ;Remember the DATA length.
 	ADDI A,1777		   ;Round up a page.
@@ -525,15 +575,36 @@ MAPIN:	PUSHAE P,[A,B,BP]
 	MOVNS A			   ;Make into AOBJN pointer.
 	HRLZS A
 	HRRI A,DATA/2000	   ;A gets AOBJN to pages to map file into.
+
+	TLNE F,%LSRINI
+	 JRST INICOR
+	 
 	SYSCAL CORBLK,[	%CLIMM,,%CBNDW+%CBCPY ? %CLIMM,,%JSELF ? A
 			%CLIMM,,DSKI
 			B]	   ;Try to map in the DATA Area pages.
+	JRST CORERR		   ; error retry
+	JRST INICOM		   ; join common code
+
+INICOR:
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDR+%CBNDW
+			%CLIMM,,%JSELF
+			A	   ;Create one new page in our space.
+			%CLIMM,,%JSNEW]
+
+CORERR:
 	 JRST [ TLNE F,%RETRY	   ;  If failed twice
 		 JRST CPOPJ	   ;   give up.
 		TLO F,%RETRY	   ;  Else say we are trying again.
 		SLEEP 60.	   ;  Wait a minute.
 		JRST MAPIN ]	   ;  And try again.
+INICOM:
 	TLZ F,%RETRY		   ;Success.
+
+	TLNE F,%LSRINI
+	 JRST [	movei a,-1	   ; mark data as being empty
+	 	movem a,data
+		jrst .+2 ]	   ; yes, skip the .close
+
 	.CLOSE DSKI,		   ;Close up.
 GETHSN:	MOVEI A,HSNFIL		   ;Now to read the HSNAME table.
 	SYSCAL OPEN,[%CLBIT,,.UII ? %CLIMM,,DSKI ? 0(A) ? 1(A) ? 2(A) ? 3(A)]
@@ -1205,6 +1276,8 @@ LSRIDX:	MOVEI I,DATA		;-> ENTRY
 	MOVEM A,LASUNM
 	MOVEI A,LNMSTR
 	MOVEM A,LNMPTR
+	setzm nlnms		; in case we don't find any at all, make sure we allocate this
+				;  page, so that we can read this value later on
 LSRID0:	HLRZ A,(I)		;SEE IF EOF
 	JUMPE A,LSRID3		;YUP.
 	MOVEI R,-DATA(I)	;SAVE RELATIVE ADDRESS
@@ -1408,7 +1481,12 @@ STRCM3:	POPAE P,[E,D]
 SUBTTL	Write out updated database
 
 WRITE:	PUSHAE P,[A,B,BP]
-	MOVEI A,LSR2
+
+	MOVEI A,LSR2		; normal filename for non-LSRINI
+
+	TLNE F,%LSRINI
+	  MOVEI A,LSREM2	; special filename if LSRINI
+
 	SYSCAL OPEN,[%CLBIT,,.UIO\40 ? %CLIMM,,DSKO
 		     0(A) ? 1(A) ? 2(A) ? 3(A)]
 	 JSR AUTPSY
@@ -1468,9 +1546,13 @@ WRITE9:	AOS -3(P)		   ;Success return.
 
 SUBTTL	Install Database	
 
-;;; Files are renamed:  NEW -> LIVE -> OLD -> OOLD -> Deleted
+;;; Files are renamed:  NEW -> LIVE -> OLD -> OOLD -> Deleted (in the case of non-LSRINI operation)
+;;; Files are renamed:  LSR2 -> LSR1 (for LSRINI operation)
 
 INSTAL:	PUSHAE P,[A,B]
+
+	TLNE F,%LSRINI
+	  JRST INSINI
 
 	MOVEI A,OOLD
 	SYSCAL DELETE,[ 0(A) ? 1(A) ? 2(A) ? 3(A)]
@@ -1488,13 +1570,19 @@ INSTAL:	PUSHAE P,[A,B]
 
 	MOVEI A,LSR2
 	MOVEI B,LSR1
+	JRST INSCOM
+
+INSINI:
+	MOVEI A,LSREM2
+	MOVEI B,LSREM1
+	JRST INSCOM
+
+INSCOM:	
 	SYSCAL RENAME,[ 0(A) ? 1(A) ? 2(A) ? 3(A) ? 1(B) ? 2(B) ]
 	 NOP
 
 	POPAE P,[B,A]
 	JRST POPJ1
-
-
 
 SUBTTL	Warn Luser of truncated entry
 
@@ -1628,7 +1716,7 @@ PDL:	BLOCK PDLLEN	;The stack.
 
 DANGER:	-1		;-1 if Copy-munging.
 
-DEBUG:	-1		;-1 if debugging.
+DEBUG:	0		;-1 if debugging.
 
 JUNK:	0		;Random sink.
 
@@ -1821,7 +1909,3 @@ MPVOKE:			;Ending of legal MPV area.
 ;;; End: :::
 
 END GO
-
-
-
-

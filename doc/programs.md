@@ -136,7 +136,10 @@
 - INQEXM, examine inquir database.
 - INQREP, reap inquir database.
 - INQUIR, user account database.
+- INQCPY, copies an inquir datqbase.
+- INQPAT, allows  patching INQUIR database.
 - INQUPD, processes INQUIR change requests.
+- LSRINI, creates an empty INQUIR database.
 - INSTAL, install executables on other ITS machines.
 - IPLJOB, plot display lists.
 - ITSDEV, ITS device server.
