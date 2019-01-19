@@ -202,7 +202,6 @@ expect ":KILL"
 respond "*" ":midas inquir;ts inqrep_inqrep\r"
 expect ":KILL"
 respond "*" ":link inquir;ts inqchk,ts inquir\r"
-respond "*" ":link inquir;ts inqpat,inqupd bin\r"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;dbg ejs2\r"
@@ -219,6 +218,9 @@ expect ":KILL"
 
 respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
 expect ":KILL"
+respond "*" ":link inquir;ts inqcpy,inqupd bin\r"
+respond "*" ":link inquir;ts inqpat,inqupd bin\r"
+respond "*" ":link inquir;ts lsrini,inqupd bin\r"
 
 # od
 respond "*" "complr\013"
