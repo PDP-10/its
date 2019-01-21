@@ -178,9 +178,13 @@ respond "*" ":midas syshst;_syshst;h3make\r"
 expect ":KILL"
 respond "*" ":link syshst;ts h3make,syshst;h3make bin\r"
 
-# build binary host table
-respond "*" ":syshst;hosts3 /insert syshst; h3text > /outfil sysbin; hosts3 bin\r"
-expect ":KILL"
+# Run H3MAKE to make the SYSBIN; HOSTS3 > database.  H3MAKE looks for
+# an older version, so there is an empty placeholder to make this
+# work.  H3MAKE runs in the background and leaves either SYSHST; H3TYO
+# or H3ERR with the output from the HOSTS3 program.  The placeholder
+# file is removed later.
+respond "*" ":syshst;h3make\r"
+expect {$$^K}
 
 # basic TCP support
 respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
@@ -282,6 +286,9 @@ respond "*" ":pdump sysbin;panda bin\r"
 respond "*" ":kill\r"
 respond "*" ":link sys;atsign pword,sysbin;pword bin\r"
 respond "*" ":link sys;ts panda,sysbin;panda bin\r"
+
+# Remove placeholder SYSBIN; HOSTS3 database.
+respond "*" ":delete sysbin; hosts3 <\r"
 
 respond "*" ":copy sysbin;name bin,sys;ts name\r"
 respond "*" "name\033j"
