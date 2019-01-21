@@ -216,6 +216,7 @@
 - OINIT, init program reporting last login, email.
 - OS, realtime TTY spy.
 - OTHELLO, the original Othello game -- simpler than Go.
+- OTJ6, an old version of TJ6.
 - PALX, PDP-11 cross assembler.
 - PANDA, user account management program.
 - PAPSAV, daemon to record system events in file system.
