@@ -1281,6 +1281,10 @@ respond "DSK: SYS; TS NTJ6" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 
+# Old TJ6.
+respond "*" ":midas sys2; ts otj6_tj6; otj6\r"
+expect ":KILL"
+
 # OINIT
 respond "*" ":cwd c\r"
 respond "*" ":cc sysen2/oinit\r"
