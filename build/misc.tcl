@@ -1127,6 +1127,10 @@ expect ":KILL"
 # SST
 respond "*" ":midas imlac;_sst21\r"
 expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; sst21 iml_imlac; sst21 bin\r"
+respond "@" "\032"
+type ":kill\r"
 
 # Maze War
 respond "*" ":midas /t sysbin;_imsrc; maze\r"
