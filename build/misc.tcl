@@ -1092,6 +1092,10 @@ respond "*" ":midas sys1; ts imload_syseng; imload\r"
 expect ":KILL"
 respond "*" ":link sys1; ts imtran, sys1; ts imload\r"
 
+# UNTRAN
+respond "*" ":midas imlac; ts untran_untran\r"
+expect ":KILL"
+
 # IMPRNT
 respond "*" ":midas sys1; ts imprnt_syseng; imprnt\r"
 expect ":KILL"

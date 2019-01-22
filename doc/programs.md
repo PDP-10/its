@@ -312,6 +312,7 @@
 - UFIND, find users.
 - ULISP, Lisp in Lisp.
 - UNTALK, split-screen comm-link program.
+- UNTRAN, untranslate an Imlac program.
 - UP/DOWN, check if host is online.
 - UPTIME, Chaosnet uptime server.
 - UPTIME, record ITS uptimes.
