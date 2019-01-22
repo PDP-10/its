@@ -1174,6 +1174,14 @@ respond "@" "imlac; swar iml_imlac; swar bin\r"
 respond "@" "\032"
 type ":kill\r"
 
+# PONG
+respond "*" ":midas imlac;_imsrc; pong\r"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; pong iml_imlac; pong bin\r"
+respond "@" "\032"
+type ":kill\r"
+
 # KLH's Knight TV clock.
 respond "*" ":midas klh; ts tinyw_klh; clock\r"
 respond "=" "1\r"
