@@ -282,6 +282,7 @@
 - STYLOG, convert PTY output file into ASCII file.
 - SUPARD, draw ARDS graphics to SUPDUP.
 - SUPDUP, Supdup client.
+- SWAR, Imlac Spacewar.
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.
 - SYSMSG, displays system messages.

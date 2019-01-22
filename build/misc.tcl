@@ -1165,6 +1165,15 @@ respond "M IML" "\r"
 respond ":PDUMP" "games; ts maze\r"
 respond "*" ":kill\r"
 
+# SWAR
+respond "*" ":midas imlac;_imsrc; swar\r"
+respond "INFINITE FUEL AND BULLETS VERSION?" "N\r"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; swar iml_imlac; swar bin\r"
+respond "@" "\032"
+type ":kill\r"
+
 # KLH's Knight TV clock.
 respond "*" ":midas klh; ts tinyw_klh; clock\r"
 respond "=" "1\r"
