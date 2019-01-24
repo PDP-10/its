@@ -1390,9 +1390,8 @@ expect ":KILL"
 respond "*" ":palx gt40;_gt40;gtlem\r"
 expect ":KILL"
 
-# KL10 front end debugger.  Put it in the same directory as the
-# "MX" IOELEV.
-respond "*" ":palx sysbin;_syseng; klrug\r"
+# KL10 front end debugger.  11STINK expects it to be in the . directory.
+respond "*" ":palx .;_syseng; klrug\r"
 expect ":KILL"
 
 # PDP-11 debugger.
@@ -1417,7 +1416,7 @@ respond "DEBSW=" "0\r"
 expect ":KILL"
 
 # KL10 diagnostics console program.
-respond "*" ":palx kldcp; kldcp\r"
+respond "*" ":palx kldcp;_kldcp\r"
 expect ":KILL"
 
 # KL10 NTSDDT.
