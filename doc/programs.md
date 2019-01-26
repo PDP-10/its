@@ -43,6 +43,7 @@
 - CHASE, a 2-player maze game.
 - CHASTA, print Chaos NCP state.
 - CHATAB, print information on Chaosnet hosts.
+- CHATER, show com links.
 - CHATST, Chaos test.
 - CHESS, unknown chess program.
 - CHESS2, Alan Baisley's Tech II chess program.
