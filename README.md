@@ -98,6 +98,7 @@ There are some short introductions for beginners:
 - [Printing](doc/printing.md)
 - [Assembling ITS](doc/NITS.md)
 - [Com link mode](doc/comlink.md)
+- [Logo](doc/logo.md)
 
 A list of [known ITS machines](doc/machines.md).
 
