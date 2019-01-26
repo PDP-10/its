@@ -1569,3 +1569,7 @@ expect ":KILL"
 # UPTINI
 respond "*" ":midas ejs;ts uptini_uptini\r"
 expect ":KILL"
+
+# CHATER
+respond "*" ":midas sys1;ts chater_gren;coms\r"
+expect ":KILL"
