@@ -1481,6 +1481,14 @@ type ":vk\r"
 respond "*" ":palx cons;_lmcons;ccons\r"
 expect ":KILL"
 
+# ITS universal file.
+respond "*" ":cwd decsys\r"
+respond "*" ":macro\r"
+respond "*" "sits.unv=sits.mac\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+
 # Logo RUG.  STUFF prefers it to be RUG; AR BIN.
 respond "*" ":palx rug;_ar\r"
 # We'll just do the Logo PDP-11/45.
