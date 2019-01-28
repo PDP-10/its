@@ -1240,6 +1240,14 @@ respond "&" "ERpdp10 gtout\033 @Y Mx\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
 
+# Run Yacc to generate parser.
+respond "*" ":c;yacc c/c.grammr\r"
+expect ":KILL"
+respond "*" ":teco\r"
+respond "&" "ERyinstl teco\033 @Y HXx Mx\033\033"
+respond "&" "\003"
+respond "*" ":kill\r"
+
 # C compiler, parser.
 respond "*" ":c;occ c1.c c21.c c22.c c23.c c24.c c25.c c26.c\r"
 expect ":KILL"
