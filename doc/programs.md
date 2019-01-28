@@ -341,6 +341,7 @@
 - XGP, PDP-11 controller for the Xerox Graphics Printer.
 - XGPSPL, spooler for the Xerox Graphics Printer.
 - XXFILE, feed scripted input to a STY session.
+- YACC, parser generator.
 - YAHTZE, the game of Yahtzee.
 - YOW, print Zippyisms.
 - ZAP, dump TV bitmap as an XGP scan file.
