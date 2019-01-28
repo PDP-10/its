@@ -1497,6 +1497,21 @@ expect "CORE USED"
 respond "*" "\003"
 respond "*" ":kill\r"
 
+# Datacomputer file transfer.
+respond "*" ":cwd mrc\r"
+respond "*" ":macro\r"
+respond "*" "dftp=dftp\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+respond "*" ":dec sys:link\r"
+respond "*" "dftp/go\r"
+expect "EXIT"
+respond "*" ":start 45\r"
+respond "Command" "d"
+respond "*" ":pdump sys1; ts dftp\r"
+respond "*" ":kill\r"
+
 # Logo RUG.  STUFF prefers it to be RUG; AR BIN.
 respond "*" ":palx rug;_ar\r"
 # We'll just do the Logo PDP-11/45.
