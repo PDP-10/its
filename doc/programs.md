@@ -27,6 +27,7 @@
 - ATSIGN DEVICE, load device drivers.
 - ATSIGN TARAKA, starts dragons.
 - ATSIGN TCP, TCP support.
+- BABEL, Chaosnet server.
 - BALANC/MOVDIR, balances directories.
 - BDAY, happy birthday demon.
 - BINPRT, display information about a binary executable file.
