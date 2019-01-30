@@ -735,6 +735,12 @@ respond "Alloc?" "n"
 respond "*" {(load "dcp;supard")}
 respond "system program" "(bootstrap)"
 
+# ARDS to SVG converter
+respond "*" ":complr\r"
+respond "_" "victor; ards\r"
+respond "_" "\032"
+type ":kill\r"
+
 # Forth
 respond "*" ":complr\r"
 respond "_" "kle;forth\r"

@@ -20,6 +20,7 @@
 - ARCCPY, copies an old-format archive, converting to new format.
 - ARCDEV, transparent file system access to archive files.
 - ARCSAL, archive salvager.
+- ARDS, ARDS to SVG converter.
 - ARGUS, alerts you when specified users login or logout.
 - ARPA, gateway from Chaosnet to Arpanet and Internet.
 - AS8748, 8748 assembler.

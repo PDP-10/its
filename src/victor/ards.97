@@ -1,0 +1,306 @@
+;;; -*-LISP-*-
+;;; See .INFO.;ARDS INFO.
+;;;
+;;; TODO:
+;;; - Doesn't handle text correctly:
+;;;   should handle CR, LF, BS separately,
+;;;   and use white-space: pre or similar
+
+(eval-when (eval load compile)
+  (if (not (get 'lispm-compatibility 'version))
+      (load '((liblsp) lispm)))
+  )
+(eval-when (load)
+  (setq gc-overflow '(lambda (x) t)))
+
+(declare (*lexpr decode-ards-stream ards-to-svg svg-from-ards))
+
+;; Common Lisp compat
+(defun read-byte (s &optional eof)
+  (tyi s eof))
+(defun code-char (x) x)
+(defun file-position (s) (filepos s))
+(defmacro when (p &body b) `(cond (,p ,@b)))
+(defun consp (x) (and x (listp x)))
+(defun first (x) (car x))
+(defun second (x) (cadr x))
+
+(defun decode-ards-file (fn)
+  (with-open-file (s fn 'image)
+    (decode-ards-stream s)))
+
+(defun ards-to-svg-dir (dir &optional force)
+  (let ((dirlist (directory (list `((,dir) * pic))))
+	bad good)
+    (dolist (d dirlist)
+      (when (and (not (get d 'link))
+		 (or force (not (probef (list (caar d) (cadr (car d)) 'svg)))))
+	(let ((f (car d)))
+	  (print f)
+	  (if (null (errset (ards-to-svg-file f (list (car f) (cadr f) 'svg))))
+	      (push f bad)
+	      (push f good))
+	  (gc))))
+    (list bad good)))
+
+(defun ards-to-svg-file (ifn ofn)
+  (with-open-file (s ifn 'image)
+    (let ((ards (decode-ards-stream s)))
+      (with-open-file (o ofn 'out)
+	(ards-to-svg ards o s)))))
+
+(defun low-order (x)
+  (+ (ash (logand (abs x) #o37) 1)
+     (if (< x 0) #o101 #o100)))
+(defun high-order (x)
+  (+ (logand (ash (abs x) -5) #o37) #o100))
+
+(defun decode-low-high (low high)
+  (* (if (oddp low) -1 1)
+     (+ (logand (ash (- low (if (oddp low) #o101 #o100)) -1) #o37)
+	(ash (logand (- high #o100) #o37) 5))))
+
+(defun decode-long-vector-args (x1 x2 y1 y2)
+  (when (not (and (>= x1 #o100) (>= x2 #o100) (>= y1 #o100) (>= y2 #o100)))
+    (error "Bad long-vector arg chars" (list x1 x2 y1 y2)))
+  `(relative
+    :invisible ,(not (= 0 (logand x2 #o40)))
+    :dotted ,(not (= 0 (logand y2 #o40)))
+    :coord
+    (,(decode-low-high x1 x2) ,(decode-low-high y1 y2))))
+
+(defun decode-long-vector-stream-args (s)
+  (let ((x1 (logand #o177 (read-byte s)))
+	(x2 (logand #o177 (read-byte s)))
+	(y1 (logand #o177 (read-byte s)))
+	(y2 (logand #o177 (read-byte s))))
+    (decode-long-vector-args x1 x2 y1 y2)))
+
+(defun decode-short-vector-args (x1 y1)
+  (when (not (and (>= x1 #o100) (>= y1 #o100)))
+    (error "Bad short-vector arg chars" (list x1 y1)))
+  `(relative :coord
+	     (,(decode-low-high x1 0) ,(decode-low-high y1 0))))
+
+(defun decode-short-vector-stream-args (s)
+  (decode-short-vector-args (logand #o177 (read-byte s)) (logand #o177 (read-byte s))))
+
+(defun decode-setpoint-args (x1 x2 y1 y2)
+  (when (not (and (>= x1 #o100) (>= x2 #o100) (>= y1 #o100) (>= y2 #o100)))
+    (error "Bad setpoint arg chars" (list x1 x2 y1 y2)))
+  `(setpoint-absolute
+    :coord
+    (,(decode-low-high x1 x2) ,(decode-low-high y1 y2))))
+
+(defun decode-setpoint-stream-args (s)
+  (let ((x1 (logand #o177 (read-byte s)))
+	(x2 (logand #o177 (read-byte s)))
+	(y1 (logand #o177 (read-byte s)))
+	(y2 (logand #o177 (read-byte s))))
+    (decode-setpoint-args x1 x2 y1 y2)))
+
+(defun decode-ards-stream (str &optional (mode 'long-vector))
+  (do* ((ich (read-byte str -1) (read-byte str -1))
+	(ch (and (not (= ich -1)) (logand #o177 ich))
+	    (and (not (= ich -1)) (logand #o177 ich)))
+	(v nil))
+       ((null ch) (nreverse v))
+    (when ch
+;;      (format t "~&; **** pos ~d. control ~o (~d.) ~c~%" (file-position str)
+;;	      ch ch (code-char ch))
+      (caseq ch
+	(#o34						;leave graphics mode
+	 (setq mode nil))
+	(#o35						;Set point, absolute coordinates
+	 (push (decode-setpoint-stream-args str) v)
+	 (setq mode 'setpoint))
+	(#o36						;Long-vector, relative coordinates
+	 (push (decode-long-vector-stream-args str) v)
+	 (setq mode 'long-vector))
+	(#o37						;short-vector
+	 (push (decode-short-vector-stream-args str) v)
+	 (setq mode 'short-vector))
+	(t
+	 (if (or (null mode) (< ch #o100))
+	     (progn
+	      ;; Spec says
+	      ;;   * Character mode is entered by receipt of any ASCII "control"
+	      ;;   character,   and the control function (eg CR, FF) is also executed.
+	      ;; but it seems (e.g. VIC PIC) we need to switch for non-coordinate ascii too?
+	      (setq mode nil)
+	      (if (not (= ch 3))
+		  (push ch v)))
+	     (progn
+	      (untyi ch str)
+	      (caseq mode
+		(long-vector
+		 (push (decode-long-vector-stream-args str) v))
+		(short-vector
+		 (push (decode-short-vector-stream-args str) v))
+		(setpoint
+		 (push (decode-setpoint-stream-args str) v))))))))))
+
+(defvar *svg-header* "<?xml version=/"1.0/" encoding=/"US-ASCII/"?> <!-- -*-XML-*- -->/
+<!DOCTYPE svg PUBLIC /"-////W3C////DTD SVG 1.1////EN/"/
+  /"http:////www.w3.org//Graphics//SVG//1.1//DTD//svg11.dtd/">")
+
+;;; Y axis negated ONLY IN OUTPUT
+
+(defun ards-to-svg (ards &optional (of t) origfn)
+  (let* ((minmaxxy (ards-coordinates ards))
+	 (fudge 10.)					;margin
+	 (height (- (second (cdr minmaxxy)) (second (car minmaxxy))))	;Y delta
+	 (width (- (first (cdr minmaxxy)) (first (car minmaxxy)))))	;X delta
+;    (format t "~&; Height ~d. Width ~d.  min(X Y) = ~d,  max(X Y) = ~d~%"
+;	    height width (car minmaxxy) (cdr minmaxxy))
+    (princ *svg-header* of)
+    (format of "~%<svg xmlns=/"http:////www.w3.org//2000//svg/" viewBox=/"~d ~d ~d ~d/">"
+	    ;; minY is -maxY since we're negating Y
+	    (- (first (car minmaxxy)) fudge) (- (+ (second (cdr minmaxxy)) fudge))
+	    (+ (* 2 fudge) width) (+ (* 2 fudge) height))
+    (when origfn
+      (format of "~% <!-- SVG created from ARDS file ~a -->" (namestring origfn)))
+    ;; Mirror and adjust
+    ;; transform=/"matrix(1 0 0 -1 0 ~d) translate(~d,~d)/"
+    (format of "~% <g fill=/"none/" stroke=/"black/">"
+	    ;;height
+	    (- (- (car (car minmaxxy)) fudge)) (- (+ fudge (cadr (car minmaxxy)))))
+    (svg-from-ards of ards)
+    (format of "~% <//g>~%<//svg>~%")))
+
+(defun ards-coordinates (iards)
+  (do* ((ards iards (cdr ards))
+	(ard (car ards) (car ards))
+	(cur-x 0) (cur-y 0)
+	(minxy (list 2048. 2048.)
+	       (if (get ard ':invisible) minxy
+		   (list (min cur-x (first minxy))
+			 (min cur-y (second minxy)))))
+	(maxxy (list -2048. -2048.)
+	       (if (get ard ':invisible) maxxy
+		   (list (max cur-x (first maxxy))
+			 (max cur-y (second maxxy))))))
+       ((or (null ards) (null ard))
+	(cons minxy maxxy)
+	;;(cons (list (first minxy) (- (second minxy)))
+	;;      (list (first maxxy) (- (second maxxy))))
+	)
+    (if (consp ard)
+	(caseq (car ard)
+	  (setpoint-absolute
+	   (setq cur-x (first (get ard ':coord))
+		 cur-y (second (get ard ':coord))))
+	  (relative
+	   (setq cur-x (+ cur-x (first (get ard ':coord)))
+		 cur-y (+ cur-y (second (get ard ':coord))))))
+	(do* ((rest (cdr ards) (cdr rest))
+	      (nxt (car rest) (car rest))
+	      (nlines 0))
+	     ((or (null rest)
+		  (consp nxt))
+	      (setq ards (cons nil (cons nxt rest)))	;Undo cdr
+;	      (format t "~&; Found ~d. lines of text, delta Y is ~d.~%" nlines
+;		      (* nlines 14.))
+	      (setq cur-y (- cur-y (* nlines 14.))))	;Count lines
+	  (when (= nxt #^j)
+	    (setq nlines (1+ nlines))))
+	)))
+
+(defun svg-from-ards (of iards &optional (cur-x 0) (cur-y 0))
+  (do* ((ards iards (cdr ards))
+	(ard (car ards) (car ards)))
+       ((or (null ards)
+	    (null ard)))
+    (if (consp ard)
+	(caseq (car ard)
+	  (setpoint-absolute
+	   ;; Update current cordinates
+	   (setq cur-x (first (get ard ':coord))
+		 cur-y (second (get ard ':coord))))
+	  (relative
+	   (let* ((plist ard)
+		  (inv (get plist ':invisible))
+		  (dot (get plist ':dotted))
+		  (coord (get plist ':coord)))
+	     (if (not inv)
+		 (do* ((rest (cdr ards) (cdr rest))
+		       (nxt (car rest) (car rest))
+		       (ninv (get nxt ':invisible) (get nxt ':invisible))
+		       (ndot (get nxt ':dotted) (get nxt ':dotted))
+		       (npos (get nxt ':coord) (get nxt ':coord))
+		       (inipos (list cur-x cur-y))	;initial position
+		       (fpos (list (setq cur-x (+ cur-x (first coord)))
+				   (setq cur-y (+ cur-y (second coord)))))
+		       (pts nil))
+		      ;; collect points while relative and same properties
+		      ((or (null rest)
+			   (not (and (eq (car nxt) 'relative)
+				     (eq inv ninv)
+				     (eq dot ndot))))
+		       ;; undo next cdr
+		       (setq ards (cons nil rest))
+		       (if pts
+			   ;; Collected points: make a polyline
+			   (format of "~%  <polyline~:[~; stroke=/"red/"~]~:[~; stroke-dasharray=/"2,2/"~] points=/"~:{~d,~d~:^ ~}/" //>"
+				   inv
+				   dot
+				   (mapcar #'(lambda (p)
+					       (list (first p) (- (second p))))
+					   (cons inipos
+						 (cons fpos
+						       (nreverse pts)))))
+			   ;; No following points, just make a simple line
+			   (format of "~%  <line~:[~; stroke=/"red/"~]~:[~; stroke-dasharray=/"2,2/"~] x1=/"~d/" y1=/"~d/" x2=/"~d/" y2=/"~d/" //>"
+				   inv
+				   dot
+				   (first inipos) (- (second inipos))
+				   (first fpos) (- (second fpos)))))
+		   ;; Collecting a point on a polyline
+		   ;; Update current coordinates
+		   (setq cur-x (+ cur-x (first npos))
+			 cur-y (+ cur-y (second npos)))
+		   (push (list cur-x cur-y) pts))
+		 ;; invisible move
+		 (setq cur-x (+ cur-x (first coord))
+		       cur-y (+ cur-y (second coord)))))))
+	;; non-graphics: text
+	(do* ((rest (cdr ards) (cdr rest))
+	      (nxt (car rest) (car rest))
+	      (txt (caseq ard
+		     (#/< '(#/; #/t #/l #/&))
+		     (#/> '(#/; #/t #/g #/&))
+		     (#/& '(#/; #/p #/m #/a #/&))
+		     (t
+		      ;; Skip non-printables?  (SAIL chars?)
+		      (when (>= ard #/ )
+			(list ard))))))
+	     ((or (null rest)
+		  (consp nxt))
+	      (setq ards (cons nil (cons nxt rest)))	;Undo cdr
+	      (format t "~&; TEXT: /"~a/"~%"
+		      (maknam (reverse txt)))
+	      (when txt
+		(format of "~%  <text x=/"~d/" y=/"~d/" font-family=/"monospace/" font-size=/"12/">~a<//text>"
+			cur-x (- (- cur-y 12.))
+			(maknam (nreverse txt)))))
+	  (caseq nxt
+	    (#^j
+	      (format t "~&; TEXT: /"~a/"~%"
+		      (maknam (reverse txt)))
+	      (when txt
+		(format of "~%  <text x=/"~d/" y=/"~d/" font-family=/"monospace/" font-size=/"12/">~a<//text>"
+			cur-x (- (- cur-y 12.))
+			(maknam (nreverse txt))))
+	     ;; Maybe??
+	     (setq cur-y (- cur-y 14.)			;#### note Y grows upward
+		   txt nil))
+	    (#^h
+	     ;; Guessing.
+	     (setq cur-x (- cur-x 10.)))
+	    (#/< (setq txt (append '(#/; #/t #/l #/&) txt)))
+	    (#/> (setq txt (append '(#/; #/t #/g #/&) txt)))
+	    (#/& (setq txt (append '(#/; #/p #/m #/a #/&) txt)))
+	    (t (when (>= ard #/ )
+		 (push nxt txt))))
+	;;(princ ard of)
+	))))
