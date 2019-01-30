@@ -993,6 +993,11 @@ respond "*" ":midas sysbin;_sysnet;sends\r"
 expect ":KILL"
 #respond "*" ":link device;chaos send,sysbin;senver bin\r"
 
+# Chaosnet BABEL service.
+respond "*" ":midas sysbin; babel_dcp2; babel\r"
+expect ":KILL"
+respond "*" ":link device;chaos babel,sysbin; babel bin\r"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"
