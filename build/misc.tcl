@@ -628,7 +628,6 @@ respond "*" ":midas sys3;ts lotcln_sysen1; lotcln\r"
 expect ":KILL"
 
 # itsdev
-respond "*" ":link syseng;chsdef 999999,system;chsdef >\r"
 respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
 expect ":KILL"
 respond "*" ":link device; tcp syn723, device; chaos itsdev\r"
