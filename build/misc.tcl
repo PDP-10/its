@@ -105,6 +105,15 @@ expect ":KILL"
 respond "*" ":midas bawden;_uptime\r"
 expect ":KILL"
 
+# Chaosnet EVACUATE service.
+respond "*" ":midas sysbin; evacua_bawden; evacua\r"
+expect ":KILL"
+respond "*" ":job evacua\r"
+respond "*" ":load sysbin; evacua bin\r"
+respond "*" "purify\033g"
+respond "CHAOS EVACUA" "\r"
+respond "*" ":kill\r"
+
 # Mini Chaosnet file server.  Version 24 is MINI.
 respond "*" ":midas sysbin; mini_lmio; minisr 24\r"
 expect ":KILL"
