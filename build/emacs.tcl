@@ -87,7 +87,7 @@ respond ":EJ" "\033xrun\033einit\033? Document\r"
 respond "\n" "\030\003"
 respond "*" ":kill\r"
 
-respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 146\r"
+respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 147\r"
 
 # INFO
 # For some unknown reason, we can't use a printing terminal when
