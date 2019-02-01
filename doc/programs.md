@@ -191,6 +191,7 @@
 - METER, displays system metering information.
 - MICRO, microcode assembler.
 - MINI, mini Chaosnet file server (new).
+- MINI36, mini Chaosnet file server (36-bit).
 - MINITS, mini-ITS network utility.
 - MINIC, mini Chaosnet file server (old).
 - MLDEV/MLSLV, allows access to remote systems as devices (e.g. DB:).

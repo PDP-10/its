@@ -119,6 +119,11 @@ respond "*" ":midas sysbin; mini_lmio; minisr 24\r"
 expect ":KILL"
 respond "*" ":link device; chaos mini, sysbin; mini bin\r"
 
+# Mini Chaosnet file server.  This is the 36-bit version.
+respond "*" ":midas kshack;_mini36\r"
+expect ":KILL"
+respond "*" ":link device; chaos mini36, kshack; mini36 bin\r"
+
 respond "*" ":midas sysbin;_sysnet;echo\r"
 expect ":KILL"
 respond "*" ":link device; chaos echo, sysbin; echo bin\r"
