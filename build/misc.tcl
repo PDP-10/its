@@ -1011,6 +1011,11 @@ respond "*" ":midas sysbin; babel_dcp2; babel\r"
 expect ":KILL"
 respond "*" ":link device;chaos babel,sysbin; babel bin\r"
 
+# Chaosnet HOSTAB service.
+respond "*" ":midas sysbin;_eak; chahtb\r"
+expect ":KILL"
+respond "*" ":link device; chaos hostab, sysbin; chahtb bin\r"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"

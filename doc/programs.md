@@ -41,6 +41,7 @@
 - CC, C compiler.
 - CCONS, CONS console.
 - CHADEV, Chaosnet jobdev (binary only).
+- CHAHTB, Chaosnet HOSTAB server.
 - CHARFC/CHARFS, Chaos RFC.
 - CHASE, a 2-player maze game.
 - CHASTA, print Chaos NCP state.
