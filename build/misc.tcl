@@ -1579,14 +1579,6 @@ respond "Command:" "d"
 respond "*" ":pdump bbn; ts logo\r"
 respond "*" ":kill\r"
 
-# CLOGO
-respond "*" ":job clogo\r"
-respond "*" ":load hqm; clogo bin\r"
-respond "*" "purify\033g"
-respond "PURIFIED" "\r"
-respond "*" ":pdump sys; ts clogo\r"
-respond "*" ":kill\r"
-
 # 11LOGO
 respond "*" ":cwd 11logo\r"
 respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
