@@ -1579,6 +1579,17 @@ respond "Command:" "d"
 respond "*" ":pdump bbn; ts logo\r"
 respond "*" ":kill\r"
 
+# CLOGO
+respond "*" ":midas sys; ts clogo_rjl; logo\r"
+respond "STANDARD=" "0\r"
+respond "TBOX=" "0\r"
+respond "TURTLE=" "1\r"
+respond "PHYSICS=" "0\r"
+respond "LFLAG=" "0\r"
+respond "OLDMUSIC=" "0\r"
+respond "DFLAG=" "1\r"
+expect ":KILL"
+
 # 11LOGO
 respond "*" ":cwd 11logo\r"
 respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
