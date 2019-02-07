@@ -166,6 +166,7 @@
 - LIMERI, print limericks.
 - LIMSER, Chaosnet limerick service.
 - LISP, Lisp interpreter and runtime library (autoloads only).
+- LISP11, PDP-11 Lisp.
 - LIVE, PALX Game of Life.
 - LLOGO, Logo implemented in Maclisp.
 - LOADP, displays system load.

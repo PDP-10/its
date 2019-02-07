@@ -1560,6 +1560,11 @@ respond "Command" "d"
 respond "*" ":pdump sys1; ts dftp\r"
 respond "*" ":kill\r"
 
+# PDP-11 Lisp.
+respond "*" ":palx rms;_lisp11\r"
+respond "System (RANDOM, SIMULATOR, LOGO, MATH, or STANFORD)?" "SIMULATOR\r"
+expect ":KILL"
+
 # Logo RUG.  STUFF prefers it to be RUG; AR BIN.
 respond "*" ":palx rug;_ar\r"
 # We'll just do the Logo PDP-11/45.
