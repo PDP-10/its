@@ -151,6 +151,7 @@
 - IDLE, list idle users.
 - IEC, Inter-Entity Communication.
 - IFILE, Chaosnet file service.
+- IMEDIT, Imlac text editor.
 - IMGOUT, outputs JCL in Image mode.
 - IMLOAD/IMTRAN, load or translate an Imlac program.
 - IMPRNT, image mode printer.
