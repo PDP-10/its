@@ -64,6 +64,15 @@ respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
 expect ":KILL"
 
+# macdmp, PDP-10 hardware read in, with 340 support.
+respond "*" ":midas;77\r"
+respond "MIDAS.77" ".;MACDMP RIM10_SYSENG; MACDMP MOBY1\r"
+expect ":KILL"
+# macdmp, PDP-6 read in hack.
+respond "*" ":midas;77\r"
+respond "MIDAS.77" ".;MACDMP RIM2_SYSENG; MACDMP 6U32\r"
+expect ":KILL"
+
 # system gen
 respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
 expect ":KILL"
