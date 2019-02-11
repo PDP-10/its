@@ -199,6 +199,7 @@
 - LSRPRT, print information about user groups.
 - LUSER, request help from registered list of logged-in users.
 - MBXLOC, lock a mailbox.
+- MACDMP, standalone program loader/dumper for DECtape.
 - MACN80, Z80 cross assembler.
 - MACRO-10, DEC assembler.
 - MACSYMA, symbolic manipulation system.
