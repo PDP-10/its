@@ -1418,6 +1418,7 @@ expect ":KILL"
 # PDP-11 linker.
 respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
 expect ":KILL"
+respond "*" ":link .; ts boot11, sys1; ts 11stnk\r"
 
 # CARPET, remote PDP-11 debugger through Rubin 10-11 interface.
 respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
