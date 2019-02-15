@@ -29,6 +29,8 @@
 - ATSIGN TARAKA, starts dragons.
 - ATSIGN TCP, TCP support.
 - BABEL, Chaosnet server.
+- BABYL, mail reading/sending program for EMACS.
+- BABYLM, mail sending program for EMACS.
 - BALANC/MOVDIR, balances directories.
 - BDAY, happy birthday demon.
 - BINPRT, display information about a binary executable file.
