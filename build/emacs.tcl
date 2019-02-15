@@ -10,6 +10,7 @@ respond "*" ":kill\r"
 respond "*" ":link sys;ts teco,.teco.;tecpur >\r"
 
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
+respond "*" ":link sys2;ts ne,emacs;ts >\r"
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
 expect -timeout 1000 -exact { -> DSK: EMACS; [PURE]}
@@ -38,6 +39,7 @@ respond "\n" "\033xgenerate\033emacs;ivory\033emacs1;ivory\r"
 respond ":EJ" "\033xgenerate\033emacs;pl1\033emacs1;pl1\r"
 respond ":EJ" "\033xgenerate\033emacs;wordab\033emacs1;wordab\r"
 respond ":EJ" "\033xgenerate\033emacs;tmacs\033emacs1;tmacs\033tmucs\r"
+respond ":EJ" "\033xgenerate\033emacs;babyl\033emacs1;babyl\033babylm\r"
 respond ":EJ" "\030\003"
 respond "*" ":kill\r"
 
@@ -88,6 +90,10 @@ respond "\n" "\030\003"
 respond "*" ":kill\r"
 
 respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 147\r"
+
+# make TS BABYL
+respond "*" ":midas sys3;ts babyl_kmp;babyl\r"
+expect ":KILL"
 
 # INFO
 # For some unknown reason, we can't use a printing terminal when
