@@ -519,6 +519,10 @@ respond "*" ":midas;324 /t dsk0:.;@ mlife_rwg;mlife\r"
 respond "with ^C" "TS==0\r\003"
 expect ":KILL"
 
+# MLIFE
+respond "*" ":midas;324 dsk0:.;@ pornis_rwg; pornis\r"
+expect ":KILL"
+
 # 340D
 respond "*" ":midas stan.k;mod11 bin_340d\r"
 expect ":KILL"
