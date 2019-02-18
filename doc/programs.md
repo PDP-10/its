@@ -308,6 +308,7 @@
 - TIMES, TCP time server.
 - TIMOON, displays the time and phase of the moon.
 - TIMSRV, RFC 868 network time protocol server.
+- TITLER, display text on color scope.
 - TJ6, typesetting software.
 - TMPKIL, delete old files from .TEMP.
 - TREES, list toplevel jobs.

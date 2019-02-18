@@ -512,6 +512,10 @@ expect ":KILL"
 respond "*" ":palx bs;_dazzle\r"
 expect ":KILL"
 
+# TITLER
+respond "*" ":midas dsk0:.;@ titler_mb; titler\r"
+expect ":KILL"
+
 # MLIFE
 respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
 expect ":KILL"
