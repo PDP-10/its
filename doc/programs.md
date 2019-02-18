@@ -240,6 +240,7 @@
 - PICK, examine Muddle locks.
 - PLAN, creates a PLAN file in your home directory from console input.
 - PONG, Imlac game.
+- PORNIS, display Steiner chains on 340 display.
 - PORTS, display free network ports.
 - PR, print out various system documentation.
 - PRINT, print long-named files.
