@@ -185,6 +185,7 @@
 - MACN80, Z80 cross assembler.
 - MACRO-10, DEC assembler.
 - MACSYMA, symbolic manipulation system.
+- MACTAP, library for MACDMP tapes.
 - MAXTUL, tools for managing Macsyma.
 - MAGDMP, standalone program loader/dumper for magtape.
 - MAGFRM, create tapes for use with MAGDMP.
