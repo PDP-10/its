@@ -13,6 +13,10 @@ respond "*" "purify\033g"
 respond "TS MIDAS" "midas;ts 324\r"
 respond "*" ":kill\r"
 
+# MACTAP
+respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
+expect ":KILL"
+
 # TECO6
 respond "*" ":midas sysbin;teco 335bin_.teco.; teco 335\r"
 expect ":KILL"
