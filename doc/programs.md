@@ -111,6 +111,7 @@
 - FRETTY, display list of free TTYs.
 - FTPS, FTP server.
 - FTPU, FTP client.
+- GAS, particle simulation.
 - GCMAIL, delete old files from .MAIL.
 - GENSYM, generate unique values.
 - GEORGE, Locks DRAGON HOARD to hold PFTHMG at bay.
