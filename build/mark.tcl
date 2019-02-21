@@ -29,8 +29,7 @@ expect ":KILL"
 # Gague free disk blocks.
 respond "*" ":listf sys\r"
 
-respond "*" ":print sysbin;..new. (udir)\r"
-type ":vk\r"
+mkdir "sysbin"
 respond "*" ":midas sysbin;_midas;midas\r"
 expect ":KILL"
 respond "*" ":job midas\r"

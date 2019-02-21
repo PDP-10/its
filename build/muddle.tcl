@@ -7,8 +7,7 @@ expect ":KILL"
 respond "*" ":xfile assem xfile\r"
 expect -timeout 300 "Assembly done!"
 
-respond "*" ":print mudsav; ..new. (udir)\r"
-type ":vk\r"
+mkdir "mudsav"
 
 respond "*" ":stinkm\r"
 respond "STINK." "MMUD56 STINK\033@\033\033"
