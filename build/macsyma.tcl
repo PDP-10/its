@@ -56,8 +56,7 @@ respond "*" ":midas rwk;lfsdef fasl_rwk;lfsdef\r"
 expect ":KILL"
 respond "*" ":midas rat;ratlap fasl_rat;ratlap\r"
 expect ":KILL"
-respond "*" ":print maxdmp;..new. (udir)\r"
-type ":vk\r"
+mkdir "maxdmp"
 respond "*" ":link maxdmp;ratlap fasl,rat;ratlap fasl\r"
 respond "*" ":link libmax;lusets fasl,liblsp;\r"
 
@@ -91,10 +90,8 @@ type ":kill\r"
 
 # build MAXTUL FASL files
 
-respond "*" ":print maxerr;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print maxer1;..new. (udir)\r"
-type ":vk\r"
+mkdir "maxerr"
+mkdir "maxer1"
 
 respond "*" "complr\013"
 respond "_" "maxtul;strmrg\r"
@@ -132,8 +129,7 @@ type ":kill\r"
 
 # build macsyma
 
-respond "*" ":print macsym;..new. (udir)\r"
-type ":vk\r"
+mkdir "macsym"
 
 respond "*" ":link macsym;mdefun fasl,libmax;\r"
 
@@ -229,10 +225,8 @@ respond "_" "mrg;macros\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":print maxout;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print share2;..new. (udir)\r"
-type ":vk\r"
+mkdir "maxout"
+mkdir "share2"
 
 # Here we actually perform the compilation of Macsyma sources
 # For some unknown reason, compilation fails in the same place

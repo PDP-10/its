@@ -24,16 +24,11 @@ expect -timeout 3000 "E-O-T"
 respond "_" "quit\r"
 expect ":KILL"
 
-respond "*" ":print sys1;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print sys2;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print sys3;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print device;..new. (udir)\r"
-type ":vk\r"
-respond "*" ":print cstacy;..new. (udir)\r"
-type ":vk\r"
+mkdir "sys1"
+mkdir "sys2"
+mkdir "sys3"
+mkdir "device"
+mkdir "cstacy"
 
 # TCTYP
 respond "*" ":midas sys1; ts tctyp_syseng;tctyp\r"
@@ -149,12 +144,6 @@ respond "*" ":link dragon;hourly modems,channa;ts modems\r"
 respond "*" ":midas channa;rakash papsav_sysen3;papsav\r"
 expect ":KILL"
 
-# sources dump tape now creates dragon directory and populates
-# with an initial dragon; dragon hoard file, which is required
-# by PFT
-#
-# respond "*" ":print dragon;..new. (udir)\r"
-#
 respond "*" ":midas dragon;rakash pfthmg_syseng; pft\r"
 respond "mcp=" "0\r"
 expect ":KILL"

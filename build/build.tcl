@@ -133,6 +133,12 @@ proc setup_timeout {} {
     expect_after timeout abort
 }
 
+proc mkdir {name} {
+    respond "*" ":print $name;..new. (udir)\r"
+    expect "FILE NOT FOUND"
+    type ":vk\r"
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 

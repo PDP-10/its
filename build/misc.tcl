@@ -1541,8 +1541,7 @@ respond "*" ":palx sysbin;vxgp bin_sysen2;xgp\r"
 expect ":KILL"
 
 # CCONS.  STUFF prefers it to be in the CONS directory.
-respond "*" ":print cons;..new. (udir)\r"
-type ":vk\r"
+mkdir "cons"
 respond "*" ":palx cons;_lmcons;ccons\r"
 expect ":KILL"
 
