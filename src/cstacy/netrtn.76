@@ -1,0 +1,409 @@
+;;; -*- Mode: MIDAS -*-
+
+TITLE	NETRTN - Maclisp/NETWRK package.
+	;CStacy, December 1983
+
+; Summary:
+;
+; (MAP-HOSTS3)  ==> T if mapped in the database.
+; (STDHST host) ==> standardized host-number.
+; (GET-NET-FROM-ADDRESS host) ==> network-number.
+; (OWN-HOST network-numer) ==> host.
+; (HOST-EQUAL host1 host2) ==> T iff they refer to same host.
+; (LOOKUP-HOST host-name) ==> host-number.
+; (HOST-SIXBIT-NAME host) ==> sixbit host name.
+; (HOST-INFO host) ==> (host-name . SITES-pointer)
+; (TAC? host) ==> T iff this is an Internet TIP or TAC.
+;   NW%ARP ==> ARPAnet  network-number.
+;   NW%LCS ==> LCSnet   network-number.
+;   NW%CHS ==> CHAOSnet network-number.
+
+
+.FASL
+IF1,.INSRT SYS:.FASL DEFS
+
+;;; Accumulator definitions
+;;; NETWRK assumes A thru E, consecutive T and TT, and pdl pointer P.
+
+NETWRK"A=A
+NETWRK"B=B
+NETWRK"C=D
+NETWRK"D=R
+NETWRK"E=F 
+NETWRK"T=T
+NETWRK"TT=TT
+NETWRK"P==FXP
+
+;;; NETWRK routines
+
+NETWRK"$$LOOK==1	;Include only lookup routines.
+NETWRK"$$ARPA==1
+NETWRK"$$CHAOS==1
+NETWRK"$$HST3==1	;Use the HOSTS3 database.
+NETWRK"$$ALLNET==1	;Look up Internet/Unternet.
+NETWRK"$$HSTMAP==1	;Host mapping routines.
+NETWRK"$$SYMLOOK==1	;Host name lookup.
+NETWRK"$$HOSTNM==1	;Host name lookup.
+NETWRK"$$HSTSIX==1	;Sixbit-name host lookup.
+NETWRK"$$OWNHST==1	;Own host number routine.
+NETWRK"$$HSTCMP==1	;Host number comparisons.
+NETWRK"$$CVH==1		;Host number conversions.
+.INSRT SYSENG;NETWRK
+
+;;;; Macros.
+
+;;; Nice names for some instructions.
+
+NOP=:<JFCL>
+CALRET==:JRST
+
+;;; System calling.
+
+DEFINE SYSCAL NAME,ARGS
+	.CALL [SETZ ? SIXBIT /NAME/ ? ARGS ((SETZ))]
+TERMIN
+
+;;; (NOT NIL)
+
+DEFINE TRUTH
+.ATOM T!TERMIN
+
+;;; SETQing a symbol to a number at FASLOAD time.
+
+DEFINE QTES NAME,VAL
+.SXEVA (SETQ NAME #VAL )
+TERMIN
+
+;;; GCOFF and GCON can surround code during which garbage collection
+;;; and interrupts should not happen.
+;;; This is necessary since we let LSRTNS randomly hack the argument ACs.
+
+DEFINE GCOFF
+	PUSH FXP,INHIBIT
+	SETOM INHIBIT
+	PUSH FXP,NOQUIT
+	HLLOS NOQUIT
+TERMIN
+
+DEFINE GCON
+	POP FXP,NOQUIT
+	PUSHJ P,INTREL	;Pop FXP and check for deferred interrupts.
+TERMIN
+
+;;; Bash ACs to be NIL, which is a reasonable pointer for an argument AC.
+;;; MacLisp does "caller-saves" protocol, so we just need to make sure
+;;; there is not garbage left in these when we turn back on interrupts
+;;; and garbage collection.
+
+DEFINE NULLIFY LIST
+IRP AC,,[LIST]
+	MOVE AC,NIL
+TERMIN
+TERMIN
+
+;;; Popular returns:
+
+;;; ONRET - Zap reasonable things into argument ACs, turn on interrupts
+;;; and garbage collection, and return the value in A.
+;;; (But for NCALLable functions, you must return value in TT instead.)
+
+ONRET:	NULLIFY [B,C,AR1,AR2A]
+	GCON
+	POPJ P,
+
+
+;;; Check for HOSTS3 having been mapped in.
+;;; Do this before hacking GC or trashing anything.
+
+DEFINE	HST3CK
+	SKIPN HST3P
+	 LERR [SIXBIT "Host table has not been mapped in!"]
+TERMIN
+
+
+
+;;; BP2LST - Given a Bp in D, return in A a list of characters.
+
+BP2LST:	PUSH FXP,B
+	PUSH FXP,D
+	MOVEI B,NIL		   ;()
+BP2LS1:	ILDB TT,D		   ;Get a character.
+	JUMPE TT,BP2LS9		   ;Zero terminated strings.
+	JSP T,FXCONS		   ;Turn into fixnum.
+	CALL 2,.FUNCTION CONS	   ;CONS onto our list.
+	MOVE B,A		   ;Recover list pointer.
+	JRST BP2LS1		   ;Gobbble entire string.
+BP2LS9:	MOVE A,B		   ;Recover list pointer.
+	CALL 1,.FUNCTION NREVERSE  ;Reverse it to normal order.
+	POP FXP,D
+	POP FXP,B
+	POPJ FXP,
+
+
+
+;;;; (HSTMAP)
+;;;
+;;; Maps in the HOSTS3 database and returns the file object opened.
+;;; Returns NIL if there was an error.
+;;;
+;;; Note: since there is no way to return storage to Maclisp,
+;;;       we do not provide a "HSTUNM" function.
+
+HST3P:	0
+
+.ENTRY MAP-HOSTS3 SUBR 1+0	   ;No argument.
+	GCOFF
+	MOVEI A,.ATOM SYSBIN/;HOSTS3/ >
+	MOVEI B,.SX (IN)
+	CALL 2,.FUNCTION OPEN	   ;Ask for file object.
+	PUSH FXP,A		   ;Stack the file object.
+	MOVEI TT,F.CHAN		   ;Get channel number from the file array.
+	MOVE B,@TTSAR(A)
+	SYSCAL OPEN,[ NETWRK"B ? %CLBIT,,.BII
+			[SIXBIT /DSK/]
+			[SIXBIT /HOSTS3/]
+			[SIXBIT />/]
+			[SIXBIT /SYSBIN/]]
+	 JRST HSTMA8		   ; Fail
+	SYSCAL FILLEN,[B ? %CLOUT,,TT] ;Get length in bytes.
+	 JRST HSTMA8		   ; Fail
+	JUMPLE TT,HSTMA8	   ;Make sure length not zero.
+	MOVEI TT,1777(TT)	   ;Round up length to next page.
+	LSH TT,-10.		   ;And convert to number of pages.
+	PUSH FXP,TT
+	PUSHJ P,GETCOR		   ;Ask for that much core.
+	JUMPE TT,HSTMA8		   ; If not available, fail.
+	MOVEM TT,NETWRK"HSTADR	   ;Remember addr where mapping.
+	IDIVI TT,2000		   ;Convert addr to page number.
+	HRRZ A,TT		   ;Page number RH of AOBJN ptr.
+	POP FXP,TT		   ;Get number pages desired.
+	MOVNS TT		   ;Negative number of pages in LH.
+	HRL A,TT
+	MOVEM A,NETWRK"HSTABN	   ;Save AOBJN for unmapping (not really).
+	SYSCAL CORBLK,[ 1000,,%CBNDR	   ;Read-only
+			1000,,%JSELF	   ;into self
+			A	   ;at core pages provided.
+			B]	   ;from file open on channel.
+	 JRST HSTMA8		   ;  Fail.
+	SYSCAL CLOSE,[ B ]	   ;All mapped in: close HOSTS3. 
+	 JRST HSTMA8
+	MOVE T,NETWRK"HSTADR	   ;Address where HOSTS3 should start.
+	MOVE T,NETWRK"HSTSID(T)	   ;Examine check word.
+	MOVEI FREEAC,TRUTH	   ;If we win, we return T.
+	CAME T,[SIXBIT /HOSTS3/]   ;Finally, is this really HOSTS3?
+HSTMA8:	 MOVEI FREEAC,NIL	   ;  No, we lose: we return NIL.
+	POP FXP,A		   ;Recover file object.
+	CALL 1,.FUNCTION CLOSE	   ;Close it.
+	SETOM HST3P		   ;Remember we mapped it in OK.
+	MOVE A,FREEAC
+	JRST ONRET		   ;Return T or NIL.
+
+
+
+;;;; (OWN-HOST network-numer)
+;;; 
+;;; Given a network number (fixnum), returns our own host address there.
+
+.ENTRY OWN-HOST SUBR 1+1
+	HST3CK
+	JSP T,FXNV1		   ;TT gets network fixnum.
+	GCOFF
+	MOVE NETWRK"A,TT
+	PUSHJ FXP,NETWRK"OWNHST	   ;Look up our host address.
+	 JRST [	MOVEI NETWRK"A,NIL	   ;  Not on this net => NIL.
+		JRST ONRET ]
+	MOVE TT,NETWRK"A	   ;Get the HOSTS3 address.
+	JSP T,FXCONS		   ;Make into fixnum.
+	JRST ONRET
+
+
+;;; (STDHST host)
+;;; Return the host number in standard format.
+
+.ENTRY STDHST SUBR 1+1
+	JSP T,FXNV1		   ;TT gets host fixnum.
+	GCOFF
+	MOVE NETWRK"A,TT
+	PUSHJ FXP,NETWRK"STDHST	   ;Hack the host number.
+	MOVE TT,NETWRK"A	   ;Here it is in standard format
+	JSP T,FXCONS		   ;Make it into a fixnum.
+	JRST ONRET		   ;Return it.
+
+
+;;; (GET-NET-FROM-ADDRESS host-address)
+;;;
+;;; Given a host address (fixnum), return its network number (fixnum).
+
+.ENTRY	GET-NET-FROM-ADDRESS SUBR 1+1
+	JSP T,FXNV1		   ;TT gets host fixnum.
+	GCOFF
+	NETWRK"GETNET TT,TT	   ;Get network number of our arg.
+	JSP T,FXCONS		   ;CONS fixnum.
+	MOVE A,TT		   ;That's the return value.
+	JRST ONRET
+
+
+;;; Some popular HOSTS3 Network Numbers.
+
+QTES NW%ARP,\NETWRK"NW%ARP
+QTES NW%LCS,\NETWRK"NW%LCS
+QTES NW%CHS,\NETWRK"NW%CHS
+
+;.ENTRY NW%ARP SUBR 1+0
+;	MOVE TT,[NETWRK"NW%ARP]	   ;ARPAnet IP net number.
+;	JRST FIX1		   ;CONS fixnum from A and return.
+
+
+
+;;;; (HOST-EQUAL host1 host2)
+;;;
+;;; Returns T if the host numbers refer to the same host.
+;;; To compare host-numbers on different networks, HOSTS3 must be mapped.
+
+.ENTRY HOST-EQUAL SUBR 2+1
+	HST3CK
+	JSP T,FXNV1		   ;Host1 into TT.
+	JSP T,FXNV2		   ;Host2 into D.
+	GCOFF
+	MOVE NETWRK"A,TT
+	MOVE NETWRK"B,D
+	PUSHJ FXP,NETWRK"HSTCMP
+	 JRST [ MOVEI A,NIL
+		JRST ONRET ]
+	  MOVEI A,TRUTH
+	JRST ONRET
+
+
+
+;;;; HOSTS3 SITE table lookup.
+
+;;; (HOST-INFO host-address)
+;;; 
+;;; Given a host (fixnum), returns a pair whose CAR is the host
+;;; name (fake-string) and whose CADR is a (fixnum) pointer into
+;;; the HOSTS3 SITE table.
+;;; Returns NIL if the host is not found.
+
+.ENTRY	HOST-INFO SUBR 1+1
+	HST3CK
+	JSP T,FXNV1		   ;TT gets host fixnum.
+	GCOFF
+	MOVE NETWRK"B,TT
+	PUSHJ FXP,NETWRK"HSTSRC	   ;Look up host.
+	 JRST [	MOVEI A,NIL	   ;  Not found => NIL.
+		JRST ONRET ]
+	HRRZ D,NETWRK"A		   ;D gets address of official host name.
+	HRLI D,440700		   ;Make Bp to it.
+	PUSHJ FXP,BP2LST	   ;Get list of fixnums into A.
+	CALL 1,.FUNCTION IMPLODE   ;Make into a symbol.
+	PUSH P,A		   ;Stash pointer to it.
+;	MOVEI B,TRUTH		   ;Say that it is a fake string.
+;	MOVEI C,.ATOM +INTERNAL-STRING-MARKER
+;	CALL 3,.FUNCTION PUTPROP
+	MOVE TT,NETWRK"D	   ;Get SITE table pointer.
+	JSP T,FXCONS
+	MOVEI B,NIL		   ;Start with ().
+	CALL 2,.FUNCTION CONS	   ;CONS on HOSTS3 pointer.
+	MOVE B,A		   ;Recover list pointer.
+	POP P,A			   ;A gets host name string.
+	CALL 2,.FUNCTION CONS	   ;CONS it on.
+	JRST ONRET		   ;Return pair.
+
+
+;;; (TAC? host-address)
+;;;
+;;; Given a host (fixnum), returns T of the host claims to be an
+;;; Internet TAC or TIP.  Otherwise, returns NIL.
+
+.ENTRY	TAC? SUBR 1+1
+	HST3CK
+	JSP T,FXNV1		   ;TT gets host fixnum.
+	GCOFF
+	MOVE NETWRK"B,TT
+	PUSHJ FXP,NETWRK"HSTSRC	   ;Look up host.
+	 JRST TACP1		   ; Not found, return NIL.
+	MOVEI B,TRUTH		   ;Assume host is a TAC.
+	TLNN NETWRK"A,400000	   ;Is it really?
+TACP1:	 MOVEI B,NIL		   ; Nope.
+	MOVE A,B
+	JRST ONRET
+
+
+;;; (HOST-SIXBIT-NAME host-address)
+;;;
+;;; Given a host (fixnum), return its (sixbit quantity) host name,
+;;; or NIL if the host is not found.
+;;;
+;;; You need something like KMP's SIXBIT package (with SIXBIT->SYMBOL) to
+;;; make much use of the return value.
+
+.ENTRY	HOST-SIXBIT-NAME SUBR 1+1
+	HST3CK
+	JSP T,FXNV1		   ;TT gets host fixnum.
+	GCOFF
+	MOVE NETWRK"A,TT
+	PUSHJ FXP,NETWRK"HSTSIX	   ;Look up host.
+	 JRST [	MOVEI A,NIL	   ;  Not found => NIL.
+		JRST ONRET ]
+	MOVE TT,NETWRK"A	   ;Sixbit value.
+	JSP T,FXCONS		   ;CONS fixnum.
+	JRST ONRET
+
+
+;;; Other things from the SITE table we might want to fool around with
+;;; include: the host ADDRESS table entries, the operating system and
+;;; machine types, and whether the host is a server; from the NAMES table
+;;; we might want to manually frob around with other names.  We might also
+;;; want to examine the NETNAMES table and provide functions to map those
+;;; names to addresses and back.
+;;;
+;;; Hey, maybe if I figured out how to do Structs from inside MIDAS or something,
+;;; we could have SI:PARSE-HOST, which accept either host names or addresses
+;;; (maybe even site table entries?) and return all the various junk.
+;;;
+;;; Someday when I figure out the functionality and representation for these 
+;;; features, I will implement them.  That probably won't happen until I have 
+;;; a real need to use them.  If you are using this package and need to do 
+;;; these things, send me mail and I'll put it in.  -- CSTACY, 31 December 1983
+
+
+;;;; Host name lookup.
+
+;;; (HOST-LOOKUP host-name)
+;;;
+;;; Given a host name (symbol), return its (fixnum) host address,
+;;; or NIL if unknown host.
+
+HSLUQQ:	BLOCK 20.		   ;Cruft.
+
+.ENTRY	HOST-LOOKUP SUBR 1+1
+	HST3CK
+	GCOFF
+	PUSH P,A		   ;Stash arg.
+	MOVEI TT,7.		   ;We want packed-ASCII fixnums.
+	JSP T,FXCONS		   ;(Must use Lisp fixnums.) 
+	MOVE B,A
+	POP P,A			   ;Recover arg.
+	CALL 2,.FUNCTION PNGET	   ;Get the pname-list of our argument.
+	MOVE F,[440700,,HSLUQQ]	   ;Bp to ASCIZ string we'll accumulate.
+	MOVE A,(A)		   ;A gets first CONS of pname-list.
+HSLU20:	 HLRZ B,A		   ;Take CAR of list.
+	MOVE C,B		   ;Make Bp to chars.
+	HRLI C,440700
+	MOVE FREEAC,[-5,,0]	   ;AOBJN to them.
+HSLU30:	ILDB R,C		   ;Get a character.
+	IDPB R,F		   ;Store it.
+	AOBJN FREEAC,HSLU30	   ;Get all five chars.
+	SKIPE A,(A)		   ;Get next CONS from CDR of A.
+	 JRST HSLU20		   ;Process this one.
+	MOVEI NETWRK"A,HSLUQQ	   ;ASCIZ host name.
+	PUSHJ FXP,NETWRK"HSTLOOK   ;Look up the host.
+	 JRST [	MOVEI A,NIL	   ;  Not found => NIL.
+		JRST ONRET ]
+	MOVE TT,NETWRK"A	   ;TT gets the host's Inter/Unternet address.
+	JSP T,FXCONS		   ;CONS fixnum.
+	JRST ONRET
+
+.SXEVAL (SSTATUS FEATURE NETWRK) 
+FASEND
+

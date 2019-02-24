@@ -183,6 +183,8 @@ type ":kill\r"
 # inquir
 respond "*" ":midas inquir;_lsrrtn\r"
 expect ":KILL"
+respond "*" ":midas inquir;_cstacy;netrtn\r"
+expect ":KILL"
 
 respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
 respond "*" ":link lisp;debug fasl,liblsp;debug fasl\r"
