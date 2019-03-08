@@ -512,6 +512,10 @@ expect ":KILL"
 respond "*" ":palx bs;_dazzle\r"
 expect ":KILL"
 
+# TOSBLK, convert from PALX binary to SBLK.
+respond "*" ":midas pdp11;ts tosblk_tosblk\r"
+expect ":KILL"
+
 # TITLER
 respond "*" ":midas dsk0:.;@ titler_mb; titler\r"
 expect ":KILL"

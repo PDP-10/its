@@ -315,6 +315,7 @@
 - TMPKIL, delete old files from .TEMP.
 - TREES, list toplevel jobs.
 - TREK, Star Trek game.
+- TOSBLK, convert PALX binaries to SBLK.
 - TV-11, Knight TV PDP-11.
 - TVEDIT, paint program.
 - TVREAD, read a bitmap file and display on TV.
