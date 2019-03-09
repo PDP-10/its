@@ -63,7 +63,10 @@ and MIDAS and enhanced with turtle graphics and other capabilities at MIT.
 We have a pretty stable CLOGO version 49 binary as well as well-commented source code
 for the version.
 
-Uninished documentation for the CLOGO may be reached at:
+to run, type:
+`:clogo`
+
+Unfinished documentation for the CLOGO may be reached at:
 https://github.com/PDP-10/its/blob/alexey/CLOGO/doc/_info_/clogo.manual
 
 ### MIT LISP LOGO
@@ -149,7 +152,7 @@ Solomon on language specification.
 But please note, that the 11LOGO version 1007 currently available on ITS is very early
 MIT 11LOGO one. It is in essence just logo language evaluator with limited turtle display
 340 grapics capabilities only. A brief description of the built-in procedures (primitives)
-in 11LOGO version that we have is available at `its/doc/_info_/11logo.order document`.
+in 11LOGO version that we have is available at `its/doc/_info_/11logo.order` document.
 
 ### MIT PLOGO
 
