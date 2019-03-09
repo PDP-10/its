@@ -13,6 +13,16 @@ respond "*" "purify\033g"
 respond "TS MIDAS" "midas;ts 324\r"
 respond "*" ":kill\r"
 
+# TECO6
+respond "*" ":midas sysbin;teco 335bin_.teco.; teco 335\r"
+expect ":KILL"
+respond "*" ":job teco\r"
+respond "*" ":load sysbin; teco 335bin\r"
+respond "*" "purify\033g"
+respond "PURIFIED" "\r"
+respond "*" ":pdump .teco.; ts 335\r"
+respond "*" ":kill\r"
+
 respond "*" ":link teach;teach emacs,emacs;teach emacs\r"
 type ":vk\r"
 respond "*" "teach\033\023"
