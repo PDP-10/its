@@ -1353,6 +1353,11 @@ expect ":KILL"
 respond "*" ":testc\r"
 expect "Done."
 
+# C library for drawing on a TV display.
+respond "*" ":cwd clib\r"
+respond "*" ":cc tv.>\r"
+expect ":KILL"
+
 # TJ6
 respond "*" ":midas sysbin;_tj6;tj6\r"
 expect ":KILL"

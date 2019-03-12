@@ -1,0 +1,436 @@
+/*
+	TV Package for doing graphics on Knight TV's
+
+	tvopen()       	Map PDP-10 memory onto PDP-11 memory.
+			A pointer to the beginning of the TV array is
+		      	returned, but this pointer may be ignored by
+		       	the caller, since the package uses its own copy
+		       	of the TV array pointer.  A return code of 0
+		       	indicates failure.
+
+	tvclose()	Undo the mapping and release the memory used
+		      	by the TV array.  No value is returned and no
+			action is taken if the TV is not open.
+
+	tvmode(mode)	Change the mode by which updates to the TV 
+			buffer are affected.  Useful modes are defined
+			as macro variables below.  The previous mode is
+			returned.
+
+	tvclear()	Clear the screen.  The cursor is moved to the
+			lower left corner of the screen.  The request is
+			ignored if the TV is not open and no value is
+			returned.
+
+	tvbase()	Return the value of the TV pointer.  The TV pointer
+			is always 0 if the TV memory is not mapped into
+			the program address space.
+
+	tvsetup()	Open TV, clear the screen, and set the TV mode
+			to inclusive-OR mode.  A pointer to the TV buffer
+			is returned or 0 if the TV could not be opened.
+
+	tvwrite(line, word, data)
+			Write the 32 rightmost bits of the supplied data
+			to the indicated line and word of the TV buffer.
+			If necessary, the TV is opened and the mode is
+			changed to SET mode.  The routine checks for out
+			of bounds line and word arguments.  Returns 1,
+			unless the write could not be performed.
+
+	point(x, y)	Draw dot at the raster point (x, y).  Returns
+			0 if the point was not on the screen or the TV
+			could not be opened, otherwise returns 1.
+
+	testp(x, y)	Returns 1, if the indicated point is set,
+			0, if the indicated point is clear, and
+			-1, if the indicated point is off the screen or
+			if the TV could not be opened.
+
+	line(x0, 01, y1, y1)
+			Draw a line from (x0, y0) to (x1, y1).  Returns
+			0 is either point is off the screen or if the TV
+			mapping could not be established, otherwise
+			returns 1.
+
+	connect(x, y)	Draws a line from the last point drawn to the
+			indicated point.  Returns 1, if the new point lies
+			on the screen and the line could be drawn, 0 otherwise.
+
+	move(x, y)	Move to (x, y) without drawing anything.  It
+			does not open the TV if it is closed.  Move
+			returns 0 if the point is off of the screen, and
+			returns 1 otherwise. 
+
+	circle(x, y, r)	Draw a circle of radius r, centered at (x, y).
+			Returns 1, if the circle is inside the screen and
+			was successfully drawn, otherwise returns 0.
+
+Note that in all cases, the specified operation will not be performed if
+it would result in movement off of the screen.  All of the drawing
+functions test to see if the TV has been opened and if it has not been
+opened, open it by calling tvsetup().  So if the user starts drawing on
+the TV display, then the TV will be opened, the screen will be cleared,
+and the TV display will be in inclusive-OR mode so that overlapping
+lines will not erase one another.  The routine testp is the only
+plotting function that does not return 0 if the point is off of the
+screen or the TV could not be opened.  The routine tvwrite uses a
+default mode of SET, since that is advantageous for dumping images on
+the screen.
+
+For information on the algorithms used in this graphics package,
+consult
+
+  	B. K. P. Horn, "Circle Generators for Display Devices",
+	Computer Graphics and Image Processing 5, 280-288 (1976).
+
+*/
+
+
+	/*Useful TV modes. */
+#define TVAND  013		    /* AND mode */
+#define TVXOR  006		    /* Exclusive OR mode */
+#define TVIOR  016		    /* Inclusive OR mode */
+#define TVEQV  011		    /* Equivalence mode */
+#define TVSET  017		    /* Set bits regardless of previous value */
+#define TVANDC 002		    /* AND the complement of the new value
+					with the old value */
+#define TVSETZ 003		    /* Set the TV word to zero */
+#define TVCOMP 005		    /* Complement the TV word */
+#define TVSAME 012		    /* Do nothing */
+#define TVSETO 014		    /* Set the TV word to all one's */
+
+#define NP	9		    /* Number of pages in PDP-11 address space */
+#define RW	0600000		    /* Read/write access to mapped pages */
+
+#define MAXLINE	453		    /* Number of the highest usable raster line */
+#define MAXBIT	575		    /* Number of highest raster bit */
+#define MAXWORD  17		    /* Number of the highest 36 bit word
+				       in a TV line  */
+
+
+	/* Macro for consing up an AOBJN pointer for use in the CORBLK call */
+#define AOBJNPTR(cnt,addr)  (-(cnt)<<18 | ((addr) & 0777777))
+
+	/* Macro to test for point inside raster */
+#define ONSCREEN(x, y) (x >= 0 && x <= MAXBIT && y >= 0 && y <= MAXLINE)
+
+#macro PUTDOT(tvline, bit)	    /* Macro for setting a bit in the TV raster */
+	((*tv)[tvline][(bit)/32] = 1 << (35 - ((bit) % 32)))
+#end
+
+#macro TESTDOT(tvline, bit)	    /* Macro for testing a bit in the TV raster */
+	((*tv)[tvline][(bit)/32] & ~(1 << (35 - ((bit) % 32))))
+#end
+
+	/* Macro for outputting a 32 bit word */
+#macro PUTWORD(tvline, word, mask, offset)
+	((*tv)[tvline][word] = mask << (4 + offset))
+#end
+
+#macro SWAP(x, y)		    /* Swap two variables */
+	{int temporary;
+		temporary = x;
+		x = y;
+		y = temporary; }
+#end
+
+
+extern int cerr;		    /* All error messages to standard error output */
+
+
+typedef int TVBUFFER[455][18];	    /* Structure of TV buffer memory */
+
+static TVBUFFER *tv  0;	    /* Pointer to beginning of TV buffer */
+
+
+tvopen() {
+	int tvpage, rc;
+
+	if(tv != 0) return(tv);
+
+    	if((tvpage = pg_get(NP)) <= 0) {
+		cprint(cerr, "TVOPEN: Cannot get enough pages\n");
+	       	return(0);
+    	};
+
+    	if((rc = corblk(RW,-1,AOBJNPTR(NP,tvpage),-2,0)) < 0) {
+	   	cprint(cerr, "TVOPEN: Corblk failure code %o\n", -rc);
+	   	return(0);
+    	};
+	return(tv = tvpage << 10);
+}
+
+tvclose() {
+    	int temp;
+
+    	if(tv) {
+	  	pg_ret((temp = tv) >> 10, NP);
+	  	tv = 0;
+    	};
+}
+
+tvmode(mode)
+	int mode; {
+
+	int newmode;
+	static int oldmode TVSET;
+
+	if(tv == 0) return(oldmode);
+
+	(*tv)[455][2] = (mode << 28) | (newmode = (*tv)[455][2] & (07777777 << 4));
+	mode = oldmode;
+	oldmode = (newmode >> 28) & 0377;
+	return(mode);	
+}
+
+#define TVBUFFERSIZE (453 * 18)	    /* Number of writeable words in the TV buffer */
+
+tvclear() {
+	int oldmode, *ptr, word;
+
+	if(tv == 0) return;
+
+	oldmode = tvmode(TVSET);
+	for(ptr = tv, word = 0; word < TVBUFFERSIZE; word++)
+		*(ptr++) = 0;
+	spctty('Z');		    /* Move to lower left corner */
+	tvmode(oldmode);	    /* Restore old TV mode */
+}
+
+tvbase() { return(tv); }
+
+tvsetup() {
+
+	if(tv == 0)
+		if(tvopen() == 0) return(0);
+
+	tvclear();
+	tvmode(TVIOR);
+	return(tv);
+}
+
+tvwrite(line, word, bits)
+	int line, word, bits; {
+
+	if(tv == 0)
+		if(tvopen() == 0) return(0);
+
+	if(line < 0 || line > MAXLINE || word < 0 || word > MAXWORD)
+		return(0);
+
+	PUTWORD(line, word, bits, 0);
+}
+
+
+static int oldx, oldy;		    /* Endpoints of last line drawn */
+
+point(x, y)
+	int x, y; {
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(0);
+
+	if(ONSCREEN(x, y)) {
+		PUTDOT(MAXLINE - y, x);
+		return(1);
+	}
+	else return(0);
+
+}
+
+testp(x, y)
+	int x,y; {
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(-1);
+
+	if(ONSCREEN(x, y)) return(TESTDOT(MAXLINE - y, x));
+	else return(-1);
+
+}
+
+static int swapxy, negatex, negatey;	    /* Flags for line and circle drawing */
+static int xcenter, ycenter;
+
+line(x0, y0, x1, y1)
+	int x0, y0, x1, y1; {
+
+	int a, b, s, x, y;
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(0);
+
+	if(!(ONSCREEN(x0, y0) && ONSCREEN(x1, y1))) return(0);
+
+	oldx = x1;		    /* Save endpoints for use by connect */
+	oldy = y1;
+
+	negatex = negatey = swapxy = 0;
+
+	a = x1 - x0;		    /* Compute slope parameters */
+	b = y1 - y0;
+
+	if(a == 0) {vertline(x0,y0,y1); return(1);} /* Look for easy cases */
+	if(b == 0) {hortline(x0,y0,x1); return(1);}
+
+	if(a < 0) {a = -a; negatex = 1;}    /* Reduce problem to first quadrant */
+	if(b < 0) {b = -b; negatey = 1;}
+	if(a < b) {SWAP(a,b); swapxy = 1;}  /* Reduce problem to first octant */
+
+	xcenter = x0;
+	ycenter = y0;
+	for(x = y = 0, s = -a/2; x <= a; x++) {
+		plotdot(x,y);
+		if((s =+ b) > 0) {s =- a; y++;}
+	}
+	return(1);
+}
+
+static int mask[] {		    /* Table of masks */
+	01, 03, 07, 017, 037, 077, 0177, 0377, 0777,
+	01777, 03777, 07777, 017777, 037777, 077777,
+	0177777, 0377777, 0777777, 01777777, 03777777, 07777777,
+	017777777, 037777777, 077777777,
+	0177777777, 0377777777, 0777777777,
+	01777777777, 03777777777, 07777777777,
+	017777777777, 037777777777 };
+
+hortline(x, y, x2)		    /* Draw horizontal line from x to x2 */
+	int x, x2, y; {
+
+	int first, last, tvline;
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(0);
+
+	if(x > x2) SWAP(x, x2);
+
+	tvline = MAXLINE - y;	    /* Compute line number */
+	first = x/32;		    /* Compute range of words affected */
+	last = x2/32;
+
+	if(first == last) {
+		PUTWORD(tvline, first, mask[x2 - x], 31 - (x2 % 32));
+	}
+	else {
+		PUTWORD(tvline, first, mask[31 - (x % 32)], 0);
+		PUTWORD(tvline, last, mask[x2 % 32], 31 - (x2 % 32));
+		for(first++; first < last; first++)
+			PUTWORD(tvline, first, mask[31], 0);
+	};
+	return(1);
+}
+
+vertline(x, y, y2)		    /* Draw vertical line from y to y2 */
+	int x, y, y2; {
+
+	int bitmask, word;
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(0);
+
+	if(y > y2) SWAP(y, y2);
+
+	bitmask = 1 << (35 - (x % 32));
+	word = x/32;
+
+	for(; y <= y2; y++)
+		(*tv)[MAXLINE - y][word] = bitmask;
+
+	return(1);
+}
+
+connect(x, y)
+	int x, y; {
+
+	return(line(oldx, oldy, x, y));
+
+}
+
+move(x, y)
+	int x, y; {
+
+	if(!ONSCREEN(x, y)) return(0);
+
+	oldx = x;
+	oldy = y;
+
+	return(1);
+
+}
+
+circle(x, y, r)
+	int x, y, r; {
+
+	if(tv == 0)
+		if(tvsetup() == 0) return(0);
+
+	if(x + r > MAXBIT || x - r < 0 || y + r > MAXLINE || y - r < 0)
+		return(0);
+
+	xcenter = x;
+	ycenter = y;
+
+	for(negatex = 0; negatex < 2; negatex++)
+		for(negatey = 0; negatey < 2; negatey++)
+			for(swapxy = 0; swapxy < 2; swapxy++)
+				sector(r);
+
+	return(1);
+}
+
+sector(r)			    /* Draw one octant of circle */
+	int r; {
+
+	int x, y, s;
+
+	x = r;
+	y = 0;
+	s = -r;
+
+	while(y <= x) {
+		plotdot(x, y);
+		s =+ 2 * (y++) + 1;
+		if(s > 0) s =- 2 * (x--);
+	};
+}
+
+plotdot(x, y)
+	int x, y; {
+
+	if(swapxy) SWAP(x, y);
+	if(negatex) x = -x;
+	if(negatey) y = -y;
+
+	PUTDOT(MAXLINE - ycenter - y, xcenter + x);
+
+}
+
+
+#ifdef DEBUG
+
+main() {			    /* For testing the graphics routines */
+
+	int x0, y0, offset, radius;
+
+	x0 = y0 = 250;
+
+	tvopen();
+	tvclear();
+	tvmode(TVIOR);
+
+	for(radius = 200; radius > 20; radius =- 50)
+		circle(x0, y0, radius);
+
+	for(offset = -200; offset < 200; offset =+ 20) {
+		if(line(x0 - offset, y0 + 200, x0 + offset, y0 - 200) == 0)
+			cprint("First line write failed, offset %d\n", offset);
+		if(line(x0 - 200, y0 - offset, x0 + 200, y0 + offset) == 0)
+			cprint("Second line write failed, offset %d\n", offset);
+	};
+
+	valret("");		    /* Avoid :KILL */
+}
+
+#endif
