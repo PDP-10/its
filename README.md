@@ -99,6 +99,7 @@ There are some short introductions for beginners:
 - [Assembling ITS](doc/NITS.md)
 - [Com link mode](doc/comlink.md)
 - [Logo](doc/logo.md)
+- [PDP-6](doc/pdp6.md)
 
 A list of [known ITS machines](doc/machines.md).
 
