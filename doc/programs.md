@@ -82,6 +82,7 @@
 - DIRCPY, copy directory.
 - DIRDEV, list directories, sorted or subsetted.
 - DIRED, directory editor (independent from EMACS DIRED).
+- DMP, old tape backup and restore.
 - DMPCPY, crash dump copy dragon.
 - DOCTOR, KMP's psychiatrist game.
 - DOOR, Chaosnet server to open the 9th floor door.
