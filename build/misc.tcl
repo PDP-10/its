@@ -1153,6 +1153,10 @@ respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 respond "*" ":midas bkph; ts zap_zap\r"
 expect ":KILL"
 
+# LINES
+respond "*" ":midas bkph; ts lines_lines\r"
+expect ":KILL"
+
 # View bitmap file on TV.
 respond "*" ":midas sys2; ts tvread_sysen2; tvread\r"
 expect ":KILL"
