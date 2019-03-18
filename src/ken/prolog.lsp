@@ -81,6 +81,12 @@
                  (rename-variables (rest term)
                                    list-of-level)))))
 
+(defun resolve (x e)       
+    (cond ((atom x) x)
+          ((variable-p x) (resolve (value x e) e))
+          (t (cons (resolve (car x) e)
+                   (resolve (cdr x) e))))))
+
 (defun print-bindings (environment-left environment)
   (cond ((rest environment-left)
          (cond ((zerop
@@ -88,8 +94,8 @@
                 (print
                  (second (first (first environment-left))))
                 (princ " = ")
-                (prin1 (value (first (first environment-left))
-                              environment))))
+                (prin1 (resolve (first (first environment-left))
+                                environment))))
          (print-bindings (rest environment-left) environment))))
 
 ;; a sample database:
