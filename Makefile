@@ -217,7 +217,7 @@ $(MAGFRM):
 	$(MAKE) -C tools/dasm
 
 $(TV11):
-	$(MAKE) -C tools/tv11
+	$(MAKE) -C tools/tv11 CFLAGS=-O3
 	$(MAKE) -C tools/tv11/tvcon
 
 $(PDP6):
