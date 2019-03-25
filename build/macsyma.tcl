@@ -276,7 +276,7 @@ respond_load "(load \"libmax;define\")"
 respond_load "(load \"libmax;maxmac\")"
 respond_load "(load \"libmax;displm\")"
 respond_load "(load \"aljabr;loader\")"
-respond "T" "(loader 1000)"
+respond "T" "(loader 1001)"
 respond "(C1)" "quit();"
 
 respond "*" ":copy aljabr;user profil,macsym;\r"
