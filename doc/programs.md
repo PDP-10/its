@@ -136,6 +136,7 @@
 - IBMASC, read 8-bit ASCII tape file.
 - IO-11, PDP-11 I/O processor.
 - IDLE, list idle users.
+- IEC, Inter-Entity Communication.
 - IFILE, Chaosnet file service.
 - IMLOAD/IMTRAN, load or translate an Imlac program.
 - IMPRNT, image mode printer.

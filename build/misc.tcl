@@ -84,6 +84,11 @@ type ":vk\r"
 respond "*" ":link sys2;ts u,sys2;ts users\r"
 type ":vk\r"
 
+#Inter-Entity Communication
+respond "*" ":midas sysbin;_sysen2; iec\r"
+expect ":KILL"
+respond "*" ":link sys; atsign iec, sysbin; iec bin\r"
+
 respond "*" ":midas sys2;ts untalk_gren;untalk\r"
 expect ":KILL"
 
