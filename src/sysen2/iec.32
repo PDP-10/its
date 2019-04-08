@@ -1,0 +1,1874 @@
+;-*-Midas-*-
+TITLE IEC SERVER (RSSER)
+	;Writ by KLH @ MIT-AI.
+	;Considerably hairier than necessary, but it was fun.
+
+.MLLIT==1
+
+P=17
+F=0	;flags
+A=1	;these 4 ac's saved & restored for each process.
+B=2
+C=3
+D=4
+S1=5	;3 acc's used only by main process
+S2=6
+S3=7
+NCH=10	;network channel acc. (contains channel #)
+
+I=11	;interrupt acc.
+II=12	;2nd int. acc.
+ICH=13	;3rd int. acc (to hold channel #)
+
+IN=14	;these two hold input and output channel #'s for
+OUT=15	;process specified by 'u'
+U=16	;holds index to process being run
+
+	; I-O channel assignments
+NTIC==0		;Network input from user  DON'T CHANGE!
+NTOC==1		;Network output to user    "       "
+; 2-15 dynamically allocated.
+TDC==16		;channel for getting TTY^F
+DBCH==17	;debugging output channel
+
+
+	;RH flags
+
+%ICPFF==1	;on during icp phase
+%CRLST==4	;on if last chr cr
+%CRLF==10	;on if crlf found
+%ERSTR==20	;on to include string with neg. acks
+%PTCL==40	; 0 Genrl ptcl, 1 Tenex ptcl.
+%CCOLL==100	; 0 in between commands, 1 while collecting/executing command.
+%LINKI==200	; in LINKI mode when set.
+%NBLKM==400	; temp during NCOPN to indicate block/unit mode.
+
+	;misc
+SKTNUM==10	;# of sockets available (ITS per/job limitation)
+
+SUBTTL Macro definitions
+;"nethang" - macro interface to use 'netblk' call.
+;execution time arg is a channel # in an acc.
+;function is to hang as long as the channel is in specified
+;'hang state', until either the state changes or the timeout
+;expires.
+;  skips if state changes to a specified desirable state.
+;  fails (does not skip) if timed out or new state not specified
+;	as desirable state
+;always replaces channel # (in acc) with current state.
+
+;movei ac,<channel connection open on>
+;nethang <timeout>,<acc w/ch #>,<hang state>,<winning states>
+;  failure return (timed out or wrong state)
+; win return   (state is now a winning one)
+;note that '.' refers to loc. of original jrst!
+
+DEFINE NETHANG TIMOUT,AC,HANGST,NEWSTL
+	JRST [	EXCH AC,[TIMOUT]
+		MOVEM AC,TMSTOR'
+		EXCH AC,[TIMOUT]
+		.CALL [SETZ
+			SIXBIT /NETBLK/
+			AC
+			[HANGST]
+			TMSTOR'
+			2000,,AC
+			402000,,TIMLFT']
+		JRST .+1
+		SKIPG TIMLFT
+		JRST .+1
+		IRP CODE,,[NEWSTL]
+		CAIN AC,CODE
+		JRST .+2
+		TERMIN
+		JRST .+1]
+TERMIN
+
+;"netstate" - macro takes channel from 'addr', returns
+;  status in acc. specified (uses 'rchblk')
+;	"inetst" is equivalent but uses 'irchblk' to avoid
+;	clobbering 'rchblk' during interrupt.
+
+DEFINE NETSTATE	AC,ADDR
+	HRLZ AC,ADDR
+	HRRI AC,RCHBLK
+	.RCHST AC,
+	HRRZ AC,RCHBLK+4
+TERMIN
+DEFINE INETSTATE AC,ADDR
+	HRLZ AC,ADDR
+	HRRI AC,IRCHBLK
+	.RCHST AC,
+	HRRZ AC,IRCHBLK+4
+TERMIN
+
+
+PJRST==JRST
+DEFINE POPAE AC,LIST
+IRP N,,[LIST]
+POP AC,N
+TERMIN
+TERMIN
+DEFINE PUSHAE AC,LIST
+IRP N,,[LIST]
+PUSH AC,N
+TERMIN
+TERMIN
+
+DEFINE NEGACK NUM,ERRMSG
+JRST [	HRREI A,-NUM
+	TRNN F,%PTCL
+	 MOVEI A,[ASCIZ /NUM!ERRMSG/]
+	JRST NEGAC0]
+TERMIN
+
+DEFINE ASCNT STRING
+.LENGTH STRING,,[ASCIZ STRING]
+TERMIN
+DEFINE DBJOT STRING
+SKIPE DEBUG
+ OUTC DBCH,[ASCNT [STRING]]
+TERMIN
+
+SUBTTL Setup and initialization (ICP)
+LOC 41
+	PUSHJ P,UUOH
+	-LINTBLK,,INTBLK	;new mode ints.
+
+LOC 100
+
+PATCH:	BLOCK 30
+PDL:	BLOCK 150	;big for ints
+
+CRLF:	ASCIZ /
+/
+POPJ1:	AOS (P)
+APOPJ:	POPJ P,
+
+ICPOPN:	40065,,'NET	;32 bit listen
+ICPSKT:	 245.		;IEC socket for ICP  (365 octal)
+
+DEBUG:	0		; -1 when debugging
+DBOPN:	.OPEN DBCH,[.UAO,,'DSK
+		SIXBIT /.IEC/
+		SIXBIT />/]
+	 JSR LOGOUT
+	DBJOT [STARTED
+]
+	POPJ P,
+
+$ACFLD==270400
+
+UUOH:	PUSH P,A
+	LDB A,[331100,,40]
+	CAILE A,UUOMAX
+ILUUO:	 JSR LOGOUT
+	PUSH P,D
+	LDB D,[$ACFLD,,40]
+	JRST @UUOTAB(A)
+
+UUOTAB:	ILUUO
+	U7C
+	U7Z
+	U7I
+	UN8
+OUTC=1_27.
+OUTZ=2_27.
+OUTI=3_27.
+OUTN8=4_27.
+OUTN10=5_27.
+UUOMAX==5
+
+U7I:	MOVE A,40
+	XCT IOTTB(D)
+	JRST UUORET
+
+U7C:	PUSH P,B
+	PUSH P,C
+	MOVE B,@40
+	HLRZ C,B
+	HRLI B,440700
+	JRST U7C4
+U7C2:	ILDB A,B
+	XCT IOTTB(D)
+U7C4:	SOJGE C,U7C2
+U7C9:	POPAE P,[C,B]
+UUORET:	POPAE P,[D,A]
+	POPJ P,
+
+U7Z:	PUSHAE P,[B]
+	MOVE B,40
+	HRLI B,440700
+	CAIA
+U7Z2:	 XCT IOTTB(D)
+	ILDB A,B
+	JUMPN A,U7Z2
+	POP P,B
+	JRST UUORET
+
+UN10:	SKIPA A,[10.]
+UN8:	 MOVEI A,8.
+	PUSHJ P,UNUM
+	JRST UUORET
+
+UNUM:	MOVEM A,URADIX'
+	MOVE A,@40
+	JUMPGE A,UNUM2
+	PUSH P,A
+	MOVEI A,"-
+	XCT IOTTB(D)
+	POP P,A
+	MOVMS A
+UNUM2:	PUSH P,B
+	IDIV A,URADIX
+	JUMPE A,UNUM4
+	PUSHJ P,UNUM2
+UNUM4:	MOVEI A,"0(B)
+	XCT IOTTB(D)
+	POP P,B
+	POPJ P,
+
+LOGOUT:	0
+	SKIPN DEBUG
+	 .LOGOUT
+	.VALUE
+
+	; Start of program
+GO:	MOVEI P,PDL			;init pdl pointer
+	.SUSET [.SOPTION,,[4000,,0]]	;enable new int. mode
+	SKIPE DEBUG
+	 PUSHJ P,DBOPN		;if debugging, open debug script channel.
+
+	TRZ F,%PTCL		;initially in GENRL ptcl.
+	TRO F,%ICPFF		;indicate icp phase
+
+	;set timer to log out if icp not finished within 60 sec.
+	MOVE A,[600000,,[60.*60.]]	;flush old ticks, start
+	.REALT A,			;new rate, 60 sec frame(ints).
+	 JFCL
+	.SUSET [.SMASK,,[200000,,400]]	;enable ioc and realt
+	.SUSET [.SPICLR,,[-1]]		;enable ints
+
+	;start icp
+	.OPEN NTOC,ICPOPN		;open 32-bit listen on IEC socket.
+	 JSR LOGOUT
+
+	MOVEI A,NTOC
+	NETHANG 30.*30.,A,1,2	;hang until rfc received
+	 JSR LOGOUT
+	.NETAC NTOC,		;accept it
+	 JSR LOGOUT
+	MOVEI A,NTOC
+	NETHANG 900.,A,2,5	;wait until open
+	 JSR LOGOUT
+
+;initial socket open, now connect (input ch) to frnsoc+3,
+;send resultant (gensoc'd) local input socket # over initial
+;connection, then reconnect output from locsoc+1 to frnsoc+2.
+
+	MOVE A,[NTOC,,RCHBLK]
+	.RCHST A,		;get info about connection
+	MOVE A,RCHBLK+2		;get foreign socket we latched ourselves onto
+	LDB B,[001100,,RCHBLK+3] ;and foreign host #.
+	ADDI A,2		;get frn skt for connecting our output to
+	MOVEM A,FSOCTB+NTOC	;and store for later ref
+	MOVEM B,HOSTTB+NTOC	;also store host #
+	ADDI A,1
+	MOVEM A,FSOCTB+NTIC	;and # for connecting input to
+	MOVEM B,HOSTTB+NTIC
+	MOVEI A,8.
+	MOVEM A,CONNTB+NTOC	;also indicate that both conns will be 8-bit.
+	MOVEM A,CONNTB+NTIC
+
+	MOVEI NCH,NTIC		;open NTIC channel
+	MOVEI A,50		;set up mode bits.(gensoc, 8-bit uai)
+	PUSHJ P,NETOPN		;connect to frnsoc+3
+	 JSR LOGOUT
+
+	MOVE A,[NTIC,,RCHBLK]
+	.RCHST A,
+	MOVE A,RCHBLK+1		;get generated local socket
+	MOVEM A,LSOCTB+NTIC	;store
+	.IOT NTOC,A		;send to user
+	.NETS NTOC,		;at once
+	MOVE B,[-SKTNUM+1,,1]	;set up aobjn to rest of lsoctb
+	ADDI A,1		;loop from here--fill out lsoc table
+	MOVEM A,LSOCTB(B)
+	AOBJN B,.-2
+
+	.CLOSE NTOC,		;now break and re-connect output
+	MOVEI NCH,NTOC
+	PUSHJ P,NCOPNU		;connect to frnsoc+2 from locsoc+1
+	 JSR LOGOUT
+
+;wait for fully open connections
+	MOVEI A,NTIC
+	NETHANG 900.,A,4,[5,10,11]	;wait for input conn.
+	 JSR LOGOUT
+	MOVEI A,NTOC
+	NETHANG 900.,A,4,5	;wait for output conn.
+	 JSR LOGOUT
+
+;icp done! turn off icp flag, set up main prog.
+	TRZ F,%ICPFF
+	MOVEI A,1
+	HRLM A,CONNTB+NTIC		;indicate channels open
+	HRLM A,CONNTB+NTOC
+	TRZ F,%CCOLL			;indicate not collecting command.
+	MOVE A,[1,,PARSER]
+	MOVE B,[2,,NTIC]
+	MOVE C,[1,,NTOC]
+	PUSHJ P,PCRETE			;set up main 'user' process
+	SETOM U				;set user index to null job
+	.SUSET [.SIMASK,,[10000]]	;add slow clock to int. enable wd.
+	JRST NULJOB			;now go run null job and wait for something.
+
+SUBTTL Main user process loop - command interpreter
+;this section is returned to from interrupt handler when a
+;command string has been collected.
+
+PARSER:	DBJOT [ Parser:]
+	TRNN F,%CCOLL		;were we collecting command?
+	 JRST [	MOVE B,BUFFS	;no, but now we are! set up pointer to beg. of buff
+		TRO F,%CCOLL	;and with ptr safely set up, now set flag.
+		JRST .+1]
+PAR1:	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI
+		SKIPN DEBUG
+		 JRST PARSE2
+		SETZ B,
+		OUTI DBCH,""
+		OUTZ DBCH,A
+		OUTI DBCH,""
+		JRST PARSE2]
+PAR2:	PUSHJ P,NCHRI		;check for input available, and block if none.
+	CAIN A,^J
+	 JRST [	TRNE %CRLST	;CR came just before this LF?
+		 JRST PAR3	;yes, found CRLF, go parse command!
+		JRST .+1]	;no?!?
+	TRZ %CRLST
+	CAIN A,^M
+	 TRO %CRLST		;CR, set flag so LF jumps out.
+	IDPB A,B		;deposit
+	JRST PAR2		;get another char
+
+PAR3:	TRZ %CRLST
+	SETZ A,			;cr-lf found.
+	DPB A,B			;asciz
+	MOVE D,BUFFS		;reset ptr
+	SKIPE DEBUG
+	 JRST [	OUTI DBCH,""
+		OUTZ DBCH,(D)
+		OUTI DBCH,""
+		JRST .+1]
+	;now get command into A as 5-char ASCII.
+	MOVE A,D
+	PUSHJ P,UPPRZ		;make string uppercase.
+	SETZ A,			;clear collection reg.
+	MOVEI B,5		;get 5 chars
+	MOVE S1,[440700,,A]	;ptr to acc
+PARSE1:	ILDB C,D		;get char
+	CAIE C,40		;blank?
+	 CAIN C,0		;or end?
+	  JRST PARSE2		;stop loop if so
+	IDPB C,S1		;dep in acc
+	SOJG B,PARSE1		;do all 5 chars if no break reached
+	ILDB C,D		;if count out, see if next char a break
+	JUMPE C,PARSE2		;null, ok
+	CAIE C,40		;also ok if space
+	 NEGACK 110,[Command too long.]
+
+;commmand in a.  look for it in table
+PARSE2:	MOVEM A,USRCMD			;save.
+	MOVSI B,-NCOMS			;aobjn ptr
+	CAMN A,COMTAB(B)
+	 JRST PARSE3			;if legal, jump to parse arguments
+	AOBJN B,.-2
+	NEGACK 100,[Command unknown.]	;eh, Bruddah?
+
+NMAXARG==3	;max. no. of args used by any command
+ARGPTS:	BLOCK NMAXARG
+USRCMD:	0
+	0	; Fence for OUTZ.
+
+;here to parse the arguments, and put pointers to those
+;found into a table ('argpts')
+
+PARSE3:	MOVE S3,COMVEC(B)	;put vector wd. in S3
+	TRNE F,%PTCL		;if using TENEX ptcl,
+	 HRRZ S3,S3		;clear LH (i.e. don't look for args)
+	CAIN S3,
+	 NEGACK 120,[I'm too dumb] ;no routine implemented.
+
+	HLLZ S2,S3		;get # of args in s2
+	JUMPE S2,(S3)		;just execute if no args needed
+	MOVN S2,S2		;set up aobjn ptr
+				;zero all slots of table
+REPEAT NMAXARG,	SETZM ARGPTS+.RPCNT
+	JUMPE C,(S3)		;execute if last char read was e-o-c
+
+;now for all args necessary, (1) find start (2) asciz it
+PARSE4:	MOVE B,D		;save last value of ptr
+	ILDB C,D		;get next char
+	JUMPE C,(S3)		;exec if done
+	CAIN C,40		;space?
+	 JRST PARSE4		;keep looking for start of arg
+	MOVEM B,ARGPTS(S2)	;found start! save ptr to it
+
+PARSE5:	ILDB C,D		;look for end
+	JUMPE C,(S3)		;eoc already ascized
+	CAIE C,40		;end of arg?
+	 JRST PARSE5		;no, loop
+	SETZ C,			;yes, get null char
+	DPB C,D			;replace space with null
+	AOBJN S2,PARSE4		;repeat for all necessary args
+	JRST (S3)		;finally go!
+
+	;NEGACK JRSTs here to send out negative acknowledgements
+
+NEGAC0:	SKIPE DEBUG
+	 OUTI DBCH,"-
+	TRNE F,%PTCL		;if using TENEX ptcl,
+	 JRST [	.IOT NTOC,A	;output error wd in A.
+		SKIPN DEBUG
+		 JRST ACKEN2
+		MOVNS A
+		OUTN10 DBCH,A
+		JRST ACKEN2]
+	.IOT NTOC,["-]		;negative ack
+	HRLI A,440700		;set up ptr
+REPEAT 3,[
+	ILDB B,A
+	.IOT NTOC,B
+	SKIPE DEBUG
+	 OUTI DBCH,(B)
+]
+	TRNN %ERSTR		;output error message too?
+	 JRST ACKEND		;nope
+	.IOT NTOC,[40]		;yep. space out
+	PUSHJ P,NOUT		;output rest of string
+	JRST ACKEND		;finish off ack.
+
+	;come here for return with positive ack.
+POSACK:	SKIPE DEBUG
+	 OUTI DBCH,"+
+	TRNE F,%PTCL
+	 JRST [	.IOT NTOC,[-1]	;-1 is TPTCL positive ack.
+		JRST ACKEN2]
+	.IOT NTOC,["+]
+ACKEND:	.IOT NTOC,[^M]
+	.IOT NTOC,[^J]
+	.IOT NTOC,["@]
+ACKEN2:	SKIPE DEBUG
+	 OUTZ DBCH,CRLF
+	.NETS NTOC,
+	TRZ F,%CCOLL		;end of command collect!
+	JRST PARSER		;go check for more input.
+
+
+NWRDI:
+NCHRI:	.STATUS NTIC,A
+	LDB A,[140600,,A]
+	CAIE A,11
+	 CAIN A,10
+	  JRST NCHRI5
+	CAIE A,5
+	 JSR LOGOUT
+	DBJOT [_]
+	MOVEI A,NCHRI5		;place to come when unblocked.
+	MOVEM A,PRSTTB(U)
+	JRST PRBLCK
+NCHRI5:	.IOT NTIC,A
+	DBJOT [.]
+	POPJ P,
+
+COMTAB:	ASCII //	;null command (give pos. ack)
+	ASCII /SSINF/	;get system status
+	ASCII /USINF/	;get user status
+	ASCII /AUXS/	;allocate auxiliary connection
+	ASCII /CONN/	;open auxiliary connection
+	ASCII /CLSE/	;break auxiliary connection
+	ASCII /LINK/	;link to user with aux. conns.
+	ASCII /LINKI/	;link to user with command conns.
+	ASCII /BREAK/	;break link
+	ASCII /QUIT/	;terminate interaction (die)
+	ASCII /PTCL/	;switch protocol mode
+	ASCII /ERSTR/	;turn error msgs on or off
+	ASCII /NOOP/	;no-op with reply
+	ASCII /ECHO/	;echo back
+NCOMS=.-COMTAB
+
+COMVEC:	NILCOM
+	SSINF		;<# args>,,addr of routine
+	1,,USINF	;0 means not implemented
+	3,,AUXS
+	3,,CONN
+	2,,CLOSE
+	3,,LINK
+	1,,LINKI
+	BREAK
+	QUIT
+	1,,PTCL
+	ERSTR
+	NOOP
+	0		;ECHO not implemented
+
+NILCOM:	JRST POSACK
+
+;complement state of whether or not to include error msgs
+ERSTR:	DBJOT [ERSTR:]
+	TRC %ERSTR	;complement bit
+	JRST POSACK
+
+	;obvious
+NOOP:	DBJOT [NOOP:]
+	TRNE F,%PTCL
+	 JRST POSACK
+	MOVE A,[440700,,[ASCIZ /+NOOP/]]
+	PUSHJ P,NOUT
+	JRST POSACK
+
+	;also obvious
+QUIT:	DBJOT [QUIT:]
+	JSR LOGOUT
+
+SUBTTL SSINF command - System Status
+SSINF:	DBJOT [SSINF:]
+	TRNE F,%PTCL
+	 JRST SSINF3
+	.IOT NTOC,["+]
+	SETZ D,
+	PUSHJ P,TTYFLN
+	 JRST POSACK
+	JRST SSINF2
+SSINF1:	PUSHJ P,TTYFLN
+	 JRST POSACK
+SSINF2:	PUSHJ P,NOUT
+	JRST SSINF1
+
+SSINF3:	.IOT NTOC,[-1]
+	SETZ D,
+	PUSHJ P,TTYFLN
+	 JRST POSACK
+	PUSHJ P,TTYFLN
+	 JRST POSACK
+SSINF5:	PUSHJ P,TTYFLN
+	 JRST POSACK
+	PUSHJ P,TYMNCH
+	 JRST SSINF5
+	HRLZ A,USRIDX
+	HRR A,TTYNUM
+	.IOT NTOC,A
+	SETZB A,B
+	MOVE D,[440700,,A]
+	ILDB C,PJNAME
+	IDPB C,D
+	JUMPN C,.-2
+	.IOT NTOC,A
+	TRNE A,376
+	 .IOT NTOC,B
+
+	SETZB A,B
+	MOVE D,[440700,,A]
+	ILDB C,PUNAME
+	IDPB C,D
+	JUMPN C,.-2
+	.IOT NTOC,A
+	TRNE A,376
+	 .IOT NTOC,B
+	JRST SSINF5
+
+SUBTTL USINF Command - User Status
+USINF:	DBJOT [USINF:]
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,TSTRG	;get asciz string
+		MOVE D,[440700,,INBUF]
+		JRST USINF0]
+	SKIPN D,ARGPTS		;get 1st arg ptr in d
+	 NEGACK 110,[Who?]
+USINF0:	MOVEM D,USRSTR'		;save bp
+
+	SETZ D,			;now get tty^f. d=0 means .open it
+	PUSHJ P,TTYFLN		;flush first line
+	 JRST USINF2
+	PUSHJ P,TTYFLN		;and second
+	 JRST USINF2
+USINF1:	PUSHJ P,TTYFLN		;start looking on 3rd
+	 JRST USINF2
+	MOVE D,A		;ptr to line
+	ILDB A,D		;get chr
+	CAIN A,"F		;last line?
+	 JRST USINF2		;not on-line...check for a dsk dir.
+	MOVE A,TTYPT
+	PUSHJ P,TYMNCH		;munch up line
+	 JRST USINF1		;nope, get another
+	MOVE A,PUNAME
+	MOVE B,USRSTR
+	PUSHJ P,STRGE		;see if strings equal
+	 JRST USINF1		;bah
+
+	;user found on-line!
+	TRNE F,%PTCL
+	 JRST [	.IOT NTOC,[-1]
+		HRLZ A,USRIDX
+		HRR A,TTYNUM
+		.IOT NTOC,A
+		MOVE A,PJNAME
+		PUSHJ P,CVTSIX
+		.IOT NTOC,A
+		JRST POSACK]
+	.IOT NTOC,["+]		;found him!
+	.IOT NTOC,[^M]
+	.IOT NTOC,[^J]
+	MOVE D,TTYPT		;reset ptr
+	SKIPGE A,TTYNUM
+	 JRST [	MOVE A,[440700,,[ASCIZ /DET/]]
+		JRST USINF4]
+	.IOT NTOC,["T]
+	PUSHJ P,CVTOCT
+USINF4:	PUSHJ P,NOUT
+	.IOT NTOC,[40]
+	MOVE A,PUNAME
+	PUSHJ P,NOUT
+	.IOT NTOC,[40]
+	MOVE A,PJNAME
+	PUSHJ P,NOUT
+	.IOT NTOC,[^M]		; This CRLF is mainly so ITS TALK/WHO wins.
+	.IOT NTOC,[^J]
+	JRST POSACK		;all done
+
+	;user not online-- see if "real" user.
+USINF2:	MOVE A,USRSTR
+	PUSHJ P,CVTSIX		;convert name to 6bit in A
+	
+	.CALL [SETZ ? SIXBIT /OPEN/ ? [16] ? [SIXBIT /DSK/]
+		[SIXBIT /.FILE./]
+		[SIXBIT /(DIR)/]
+		SETZ A]		;get sname in A
+	 NEGACK 310,[No such user.]
+	MOVE A,[440700,,[ASCIZ/+
+Not logged in./]]
+	PUSHJ P,NOUT
+	JRST POSACK		;he exists!
+
+SUBTTL   Data rtns for SSINF and USINF
+TTYEOF:	0		;-1 when hit EOF on tty^F
+TTYFLN:	JUMPN D,TTYFL1		;zero d is flag to .open chan
+	.OPEN TDC,[SIXBIT /   TTY.FILE.(DIR)/]
+	 NEGACK 700,[Can't get information.]
+	SETZM TTYEOF
+TTYFL1:	SKIPE TTYEOF
+	 POPJ P,		;nothing left
+	MOVE D,TTYPT		;setup ptr
+TTYFL2:	.IOT TDC,A		;get chr
+	CAIE A,^C
+	 CAIN A,^L		;EOF?
+	  JRST [SETOM TTYEOF
+		.CLOSE TDC,
+		CAMN D,TTYPT
+		 POPJ P,	;non-skip return if nothing read
+		JRST TTYFL3]
+	IDPB A,D		;store
+	CAIE A,^J		;end of line?
+	 JRST TTYFL2		;not yet
+TTYFL3:	SETZ A,
+	IDPB A,D	;ASCIZ it
+	MOVE A,TTYPT	;return ptr to string.
+	AOS (P)
+	POPJ P,
+
+TTYPT:	440700,,TTYBUF
+TTYBUF:	BLOCK 20.
+
+TTYNUM:	0
+USRIDX:	0
+PUNAME:	0
+PJNAME:	0
+
+	;hairy kludge to chomp a TTY^F line into numerical data.
+	;BP to ASCIZ in A.  TTY # in TTYNUM(-1 if det), user index in
+	;USRIDX, bp to ASCIZ jname in PJNAME, bp to asciz uname in PUNAME.
+TYMNCH:	PUSHAE P,[A,B,C,D]
+	ILDB B,A	;1st char
+	CAIN B,"D	;detached?
+	 JRST [	SETOM TTYNUM
+		IBP A	;flush following 2 digits.
+		IBP A
+		JRST TYMN3]
+	CAIE B,"T
+	 JRST TYMN90	;unparseable.
+	ILDB B,A
+	MOVEI C,-"0(B)
+	LSH C,3
+	ILDB B,A
+	ADDI C,-"0(B)
+	MOVEM C,TTYNUM
+
+TYMN3:	IBP A		;past space
+	MOVEM A,PUNAME
+	ILDB B,A
+	CAIE B,40
+	 JRST .-2
+	SETZ B,
+	DPB B,A		;asciz it.
+
+	MOVE C,A
+	ILDB B,A
+	CAIN B,40
+	 JRST .-3
+	MOVEM C,PJNAME
+	ILDB B,A
+	CAIE B,40
+	 JRST .-2
+	SETZ B,
+	DPB B,A
+
+	IBP A
+	CAIA
+	 MOVE D,C
+	MOVE C,A
+	ILDB B,A
+	CAIE B,^M
+	 JRST .-4
+	SETZ C,
+	LDB B,D
+	CAIE B,40	;can be space.
+	 MOVEI C,-"0(B)
+	LSH C,3
+	ILDB B,D
+	ADDI C,-"0(B)
+	MOVEM C,USRIDX
+	AOS -4(P)
+TYMN90:	POPAE P,[D,C,B,A]
+	POPJ P,
+
+SUBTTL PTCL Command - change protocol
+	;change protocol used (GENRL to TENEX or vice versa)
+
+PTCL:	DBJOT [PTCL:]
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI	;get ASCII of type wanted
+		CAMN A,[ASCII /TENEX/]
+		 JRST POSACK	;already in TENEX!
+		CAME A,[ASCII /GENRL/]
+		 NEGACK 120,[That protocol not implemented.]
+		.IOT NTOC,[-1]	;send positive ACK in tenex ptcl, and
+		TRZ F,%PTCL	;change ptcl flag to GENRL,
+		JRST PTCL5]	;and reconnect.
+	MOVE A,ARGPTS
+	MOVE B,[440700,,[ASCIZ /TENEX/]]
+	PUSHJ P,STRGE		;wants tenex?
+	 CAIA
+	  JRST [MOVE A,[440700,,[ASCIZ /+
+@/]]
+		PUSHJ P,NOUT	;send out positive ack
+		TRO F,%PTCL	;and flip flag to TENEX
+		JRST PTCL5]	;and go reconnect.
+	MOVE B,[440700,,[ASCIZ /GENRL/]]
+	PUSHJ P,STRGE
+	 NEGACK 120,[That protocol not implemented.]
+	JRST POSACK		;already in GENRL.
+
+PTCL5:	.SUSET [.SAMSK2,,[1_NTIC]]	;turn off ints for net command chan
+;	.CLOSE NTIC,
+;	.CLOSE NTOC,
+	PUSHJ P,CCNOPN		;go reopen with same sockets in different size.
+	.SUSET [.SIMSK2,,[1_NTIC]]	;restore interruptability
+	JRST POSACK		;and send off a POSACK first thing.
+
+CCNOPN:	MOVEI A,8.		;use 8-bit bytes
+	TRNE F,%PTCL		;unless tenex ptcl, in which case
+	 MOVEI A,36.		;use 36-bit
+	HRRM A,CONNTB+NTIC	;change size
+	HRRM A,CONNTB+NTOC
+	MOVEI NCH,NTOC
+	PUSHJ P,NCOPNU		;open net channel specified
+	 JSR LOGOUT
+	MOVEI NCH,NTIC
+	PUSHJ P,NCOPNU
+	 JSR LOGOUT
+
+;wait for fully open connections
+	MOVEI A,NTIC
+	NETHANG 900.,A,4,[5,10,11]	;wait for input conn.
+	 JSR LOGOUT
+	MOVEI A,NTOC
+	NETHANG 900.,A,4,5	;wait for output conn.
+	 JSR LOGOUT
+	POPJ P,			;done!
+
+SUBTTL AUXS Command - allocate auxiliary socket
+	;allocate socket.
+
+AUXS:	DBJOT [AUXS:]
+	TRNE F,%PTCL		;if tenex ptcl,
+	 JRST [	PUSHJ P,NWRDI
+		MOVE S1,A	;get type in S1 (0 RECV, -1 SEND) relative to server
+		PUSHJ P,NWRDI
+		MOVE S2,A	;get size (8,32,36)
+		ADDI S1,8.	;get 7 for type=output, 8 for type=input.
+		JRST AUXS0]
+	SKIPN D,ARGPTS		;get 1st arg ptr
+	 NEGACK 110,[What type and size?]
+
+	SETZ S1,		;get acc into known state
+	ILDB C,D		;get arg (should be single char)
+	CAIN C,"S		;wants send socket?
+	 JRST [MOVEI S1,7		;yes, wants type 7=aux. output socket
+		DBJOT [ S ]
+		JRST .+1]
+	CAIN C,"R		;wants receive socket?
+	 JRST [MOVEI S1,8.		;yes, wants type 8=aux. input socket
+		DBJOT [ R ]
+		JRST .+1]
+	ILDB C,D		;see if any more chars
+	CAIN C,0
+	 CAIN S1,0		;or if the char was s/r
+	  NEGACK 220,[Bad direction specification.]	;wrong char or too many
+
+	SKIPN A,ARGPTS+1	;get 2nd arg, ptr to size
+	 NEGACK 221,[What size?]
+	PUSHJ P,DECCVT		;convert decimal string to value
+	MOVE S2,A		;store in s2(no checking for now)
+
+	;ignore 3rd arg for now.
+	;find a free socket and set up table info
+AUXS0:	MOVSI B,-SKTNUM		;search over all sockets
+AUXS1:	SKIPE CONNTB(B)		;zero entry means free
+	 JRST AUXS2		;nope
+	MOVE C,B		;aha! see if gender correct (in/out=r/s)
+	XOR C,S1		;xor channel with desired type
+	TRNN C,1		;see if both odd or both even
+	 JRST AUXS3		;both same, success!
+AUXS2:	AOBJN B,AUXS1
+	NEGACK 210,[No sockets free.]
+
+AUXS3:	MOVEM S1,CHTYTB(B)	;put type in.
+	SETZM CHPRTB(B)		;set to no process
+	HRRZM S2,CONNTB(B)	;put size in.
+
+	;now get ptr's to output lined up
+	MOVE A,LSOCTB(B)	;get local socket #
+	TRNE F,%PTCL
+	 JRST [	.IOT NTOC,[-1]	;first, pos ack (?!)
+		.IOT NTOC,A	;return socket #
+		HRRZ B,B
+		.IOT NTOC,B	;and channel # as "handle".
+		JRST ACKEN2]
+	PUSHJ P,CVTOCT		;convert to octal string
+	DBJOT [AR>]
+	.IOT NTOC,["+]		;positive ack
+	PUSHJ P,NOUT		;output string
+
+	;now send 'handle' (channel # of socket)
+	.IOT NTOC,[40]		;space
+	HRRZ A,B		;get channel #
+	PUSHJ P,CVTOCT		;convert to octal string
+	PUSHJ P,NOUT
+	DBJOT [XS>]
+	JRST POSACK
+
+SUBTTL CONN Command - open connection on auxiliary socket
+;open connection
+CONN:	DBJOT [CONN:]
+	TRNE F,%PTCL 
+	 JRST [	PUSHJ P,NWRDI	;get handle in A
+		JRST CONN0]
+	SKIPN A,ARGPTS	;put ptr to arg in a
+	 NEGACK 110,[What handle and socket?]
+
+	;FIRST arg- handle (should be channel #)
+	PUSHJ P,OCTCVT		;CONVERT to # in A
+CONN0:	PUSHJ P,HDLCHK		;CHECK
+	MOVE NCH,A		;saveum
+	MOVE B,CHTYTB(NCH)	;get type of channel
+	CAIE B,7		;either 7 or 8 is ok to 'conn'
+	 CAIN B,8
+	  SKIPA
+	   NEGACK 260,[Socket not allocated.]
+
+	;socket handle ok, now get foreign socket
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI
+		JRST CONN02]
+	SKIPN A,ARGPTS+1	;ptr to 2nd arg
+	 NEGACK 110,[What socket?]
+
+	PUSHJ P,OCTCVT		;convert
+CONN02:	MOVEM A,FSOCTB(NCH)	;take on faith
+
+	;now get foreign host, or use user's if none specified
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI
+		CAIN A,
+		 MOVE A,HOSTTB	;get his host if none specified
+		JRST CONN03]
+	SKIPN A,ARGPTS+2
+	 SKIPA A,HOSTTB		;clever, huh
+	  PUSHJ P,OCTCVT
+CONN03:	MOVEM A,HOSTTB(NCH)	;storem
+
+	;now try to open it.(don't acknowledge until learn results.)
+;	SETZ S2,		;must set mode bits. clear acc
+;	HRRZ A,CONNTB(NCH)	;find byte size
+;	CAIN A,8.		;network ascii?
+;	 JRST CONN1		;kludge here. use 7-bit mode if '8-bit'
+;				;so that block .iot's win with
+;				;the usual 5-chars/wd devices
+;	TRO S2,44		;if not 8-bit ascii, use byte image
+;	DPB A,[061400,,S2]	;put size into byte field
+;	TROA S2,10		;put in block mode and skip over
+;
+;CONN1:	 TRO S2,40		;8-bit ascii
+;	DPB NCH,[000100,,S2]	;set input or output from ch #
+;	MOVE A,S2		;mode bits in A for NETOPN
+;	PUSHJ P,NETOPN		;try to open it
+	PUSHJ P,NCOPNU
+	 NEGACK 272,[Open of socket failed.]	;maybe later, rty to figure out why with .status.
+	MOVE A,NCH
+	NETHANG 900.,A,4,[5,10,11]	;make sure it opens
+	 SKIPA			;if lose
+	  JRST CONN2		;if win
+	XCT CLSETB(NCH)		;close it if lost after open
+	NEGACK 270,[RFC sent but...]
+
+CONN2:	MOVEI A,1		;note 'opened' in conntb
+	HRLM A,CONNTB(NCH)
+	DBJOT [-conn]
+	JRST POSACK		;finally thru
+
+;ptr in a to asciz handle (channel #). convert and check.
+HDLCHK:	CAIL A,2		;test range
+	 CAILE A,SKTNUM
+	  NEGACK 260,[Bad handle.]
+	POPJ P,
+
+SUBTTL CLOSE Command - close auxiliary socket connection
+	;close a connection and maybe deallocate
+CLOSE:	DBJOT [CLOSE:]
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI	;get handle
+		JRST CLOSE0]
+	SKIPN A,ARGPTS		;get handle
+	 JRST CLOSE3		;null arg=flush all but link???
+	PUSHJ P,OCTCVT
+CLOSE0:	PUSHJ P,HDLCHK		;convert and check range.
+	MOVE NCH,A		;returns value in a
+
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI	; 0 flush allocation too, -1 keep allocated.
+		MOVE B,A
+		JRST CLOSE1]
+	SKIPN A,CONNTB(NCH)	;check its entry
+	 NEGACK 260,[Connection never allocated.]
+	ANDI A,-1		;mask size away to leave 'state'
+	JUMPE A,CLOSE1		;need only deallocate
+	XCT CLSETB(NCH)		;close it
+	HRLM A,CONNTB(NCH)	;mark not open
+CLOSE1:	TRNN F,%PTCL
+	 MOVE B,ARGPTS+1	;if general ptcl, see if non-null 2nd arg
+	CAIN B,			;if null,
+	 SETZM CONNTB(NCH)	;deallocate.
+	JRST POSACK
+
+CLOSE3:	PUSHJ P,CLSAUX		;close all auxiliaries (but not user)
+	JRST POSACK
+
+SUBTTL LINK Command - create TTY link to user
+;link-- hairiest command. must take 3 args of 2 handles and
+;one user-id, check out all three, then open a sty and
+;start up the two necessary processes. (sty to net, net
+;to sty)
+
+LINKI:	DBJOT [LINKI:]
+	TRNE F,%PTCL
+	 NEGACK 101,[Not implemented for TENEX protocol.]
+	MOVE S2,[4,,NTIC]
+	MOVE S3,[3,,NTOC]
+	MOVE D,ARGPTS
+	TRO F,%LINKI
+	JRST LINK19		;jump right in
+
+LINK:	DBJOT [LINK:]
+	TRZ F,%LINKI
+	MOVEI B,1		;loop twice to get 2 handles
+	SETZB S2,S3		;set to known state
+LINK1:	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI	;get handle
+		JRST LINK11]
+	SKIPN A,ARGPTS(B)	;get ptr to handle
+	 NEGACK 110,[With what to whom?]
+	PUSHJ P,OCTCVT
+LINK11:	PUSHJ P,HDLCHK		;convert and check range
+	HLRZ C,CONNTB(A)	;check "open" status of conn.
+	CAIN C,0		;open if non-z
+	 NEGACK 801,[Connection not open.]
+	MOVE C,CHTYTB(A)	;check channel availability
+	CAIE C,7
+	 CAIN C,8.
+	  CAIA			;okay, is free
+	   NEGACK 271,[Connection already in use.]
+
+	SUBI C,4		;convert type to 'link'
+	HRL A,C			; a= type,,chan
+	;put channel stuff in right acc
+	TRNN C,1		;sign bit= 1 for output, 0 for input
+	 SKIPA S2,A		;if bit=0,put chn. in s2 (input)
+	  MOVE S3,A		;if bit=1,put chn. in s3 (output)
+
+	SOJGE B,LINK1		;do all this twice
+
+	CAIE S2,0		;check that both not same type (ie both
+	 CAIN S3,0		;acc's given something)
+	  NEGACK 651,[Connections must be hetero-socketual.]
+
+;now check user-id given. may be a tty # or uname (a nice feature
+;of ^_c is is that both are done automatically)
+
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI
+		TLNE A,-1	;is it a TTY #? (LH zero)
+		 JRST [	PUSHJ P,TSTRGX	;no, get rest of ASCIZ string.
+			MOVE D,[440700,,INBUF]
+			JRST LINK20]
+		PUSHJ P,CVTOCT	;TTY #, must cvt to ascii octal string.
+		MOVE D,A
+		JRST LINK20]
+	MOVE D,ARGPTS+2		;get ptr in d to ident
+LINK19:	CAIN D,
+	 NEGACK 110,[Let me see your user-id.]
+LINK20:	MOVEM D,USRSTR		;save bp to user-name string
+
+;ok, all three arguments appear to check out. now find two
+;free channels for sty in and sty out.
+
+	MOVEI B,1		;twice, like for handles
+LINK2:	MOVE C,B		;get start # (1 or 0 for odd or even checking)
+LINK3:	ADDI C,2
+	CAIL C,NMAXCH		;stop if reach end
+	 NEGACK 620,[No channel available for STY.]
+	SKIPE CHTYTB(C)		;zero means free
+	 JRST LINK3		;loop til find or die
+	MOVEM C,D(B)		;even/0/input into d, odd/1/output into s1
+	SOJGE B,LINK2
+	;got all chans needed.
+	HRLI D,6		;insert their types
+	HRLI S1,5
+
+;now must open sty on channels found.  'd' is input to prog. from sty
+;(output from sty/tty) and 's1' is output from prog. to sty
+; (input to sty/tty)
+;for time being, use unit mode.
+;bit 3.3 in .open means (for input) full (0) or half(1) duplex.
+;bit 3.4 means don't hang on input .iot's. return halted
+;        pointer in block mode, -1 in unit mode.
+
+
+	MOVEI A,[14,,'STY]	;in from sty (unit)- 3.3 for half-dup (no echoing)
+	SKIPN STYHDX		;skip if this is ok with switch setting
+	 MOVEI A,[10,,'STY]	;else use fulldplx
+	XCT OPENTB(D)		;open
+	 NEGACK 620,[Can't open pseudo TTY.]
+
+	MOVEI A,[1,,'STY]	;out to sty (unit)
+	XCT OPENTB(S1)		;open
+	 JRST [	XCT CLSETB(D)
+		NEGACK 620,[Can't open pseudo TTY.]]
+
+;now have them open. try to make link....
+
+	MOVEI A,37	;<cntrl-backarrow>
+	XCT IOTTB(S1)	;send to sty
+	MOVEI A,"C	;command for link
+	XCT IOTTB(S1)	;send too
+
+	;now follow with user-id (tty # or uname)
+	MOVE B,USRSTR
+	JRST .+2
+LINK5:	XCT IOTTB(S1)	;send it
+	ILDB A,B	;get char
+	JUMPN A,LINK5	;send up to ASCIZ
+	MOVEI A,40
+	XCT IOTTB(S1)	;send final space to initiate link
+
+	;now see if it won. flush chars up to space to get result char
+LINK6:	SKIPE STYHDX	;continue if fulldplx and must flush echo
+	 JRST LINK72	;else don't flush, go look for response char
+LINK7:	XCT IOTTB(D)	;get input from sty
+	JUMPL A,[MOVEI A,1
+		.SLEEP A,
+		JRST .-1] ;if no input avail, loop for it
+	CAIE A,40
+	 JRST LINK7	;flush till our space is reached
+
+LINK72:	XCT IOTTB(D)	;here it is!
+	JUMPL A,[MOVEI A,1
+		.SLEEP A,
+		JRST .-1]
+	CAIN A,"G	;link made?
+	 JRST LINK8	;yes, go start processes!
+	CAIN A,"F	;free console?
+	 JRST LINK7	;must go get space and next char to find result.
+	CAIN A,"O	;start of "ok" (synonym for "g")?
+	 JRST LINK8	;yes, also go win.
+	CAIN A,"B	;for "BUSY"?
+	 NEGACK 621,[User's TTY busy, try again.]
+	CAIN A,"Q	;for "QUERYING"?
+	 JRST LINK7	;yes, go up and wait for final reply.
+			;must go to LINK7 so that the UERYING is flushed.
+
+	XCT CLSETB(D)	;none of those, assume failed. close sty in
+	XCT CLSETB(S1)	;and sty out
+	CAIN A,"R	; R for "REFUSED"?
+	 NEGACK 603,[Refused by user.]
+	CAIN A,"?	; ? for unknown TTY or user?
+	 NEGACK 605,[User not online.]
+	NEGACK 604,[Can't complete link for unknown reason.]
+
+;everything set! now start processes.  net to sty process
+;has a special starting address to implement tenex crock of
+;waiting for rubout before starting.
+
+LINK8:	.CALL [SETZ ? 'CNSGET ? S1 ? SETZM A]	;get just vert. size of "screen"
+	 JSR LOGOUT
+	.CALL [SETZ ? 'CNSSET ? S1 ? A ? SETZ [SETZ-1]] ; set horiz size very large
+	 JSR LOGOUT		;so that line-contin doesn't default to 72, but
+				;instead will get contin'd on linkee's screen.
+	MOVE A,[3,,SNLINK]	;3= sty->net link pro.
+	MOVE B,D		;type,,input ch #  (sty)
+	MOVE C,S3		;type,,output ch # (net)
+	PUSHJ P,PCRETE		;start
+
+	MOVE A,[2,,NSLK0]	;2= net->sty link process
+	TRNE F,%LINKI		;but if in LINKI mode,
+	 MOVE A,[2,,NSLINK]	;don't hack rubout kludge with NSLK0.
+	MOVE B,S2		;type,,input ch # (net)
+	MOVE C,S1		;type,,output ch # (sty)
+	PUSHJ P,PCRETE		;pro. create.
+	JRST POSACK
+
+SUBTTL BREAK Command - break TTY link
+
+BREAK:	DBJOT [BREAK:]
+	TRNE F,%PTCL
+	 JRST [	PUSHJ P,NWRDI	;get arg = tty # to unlink
+		JRST .+1]	;and cheerfully ignore for now.
+	MOVSI D,-NMAXPR		;ptr to process tables
+BREAK1:	MOVE A,PRTYTB(D)	;get type
+	JUMPE A,BREAK2		;if nothing there
+	CAIE A,2		;see if type link (2 or 3)
+	 CAIN A,3
+	  PUSHJ P,BREAK3	;break if so
+BREAK2:	AOBJN D,BREAK1
+	JRST POSACK
+
+BREAK3:	.SUSET [.SPICLR,,[0]]
+	PUSH P,U
+	PUSH P,IN
+	PUSH P,OUT
+	HRRZ U,D
+	HLRZ IN,PRCHTB(D)
+	HRRZ OUT,PRCHTB(D)
+	PUSHJ P,PRDIE
+	POP P,OUT
+	POP P,IN
+	POP P,U
+	.SUSET [.SPICLR,,[-1]]
+	POPJ P,
+SUBTTL Socket tables and open-connection rtns
+	; NETOPN uses mode bits in A.  NCHOPN merely uses table data.
+NETOPN:	PUSH P,A
+	JRST NCOPN3
+
+NCOPNU:	TRZA F,%NBLKM
+NCOPNB:	 TRO F,%NBLKM
+	PUSH P,A
+	PUSH P,B
+	HRRZ B,CONNTB(NCH)	;get size for chan
+	SETZ A,
+	CAIN B,8.
+	 JRST [	MOVEI A,40		;mode bits for 8-bit byte
+		JRST NCOPN1]
+	MOVEI A,44		;if not 8-bit ascii, use byte image
+	DPB B,[110600,,A]	;put size into byte field
+NCOPN1:	TRNE F,%NBLKM
+	 TRO A,2		;set block mode if desired.
+	TRNE NCH,1		;is channel # odd?
+	 TRO A,1		;set type to output if so.
+	POP P,B
+
+NCOPN3:	.CALL [SETZ ? SIXBIT /OPEN/
+		4000,,A		;mode bits in A
+		NCH		;channel #
+		['NET,,0]	;device
+		LSOCTB(NCH)	;local socket #
+		FSOCTB(NCH)	;foreign socket #
+		SETZ HOSTTB(NCH)] ;foreign host
+	 CAIA
+	  AOS -1(P)
+	POP P,A
+	POPJ P,
+
+RCHBLK:	BLOCK 7		;used by .rchst calls
+IRCHBL:	BLOCK 7		;used by interrupt handler .rchst calls
+
+CONNTB:	BLOCK SKTNUM	;status,,byte size (lh 0 means not open, all 0 means unallocated)
+LSOCTB:	BLOCK SKTNUM	;local socket
+FSOCTB:	BLOCK SKTNUM	;foreign socket
+HOSTTB:	BLOCK SKTNUM	;foreign host
+
+SUBTTL Overall process system documentation
+;format of tables:
+;		prqutb  (a crude process queue)
+;	# slots is max. no. of processes allowed.  each is
+;	unique-- the 'active' state is indicated by a
+;	non-zero pc stored in the slot, and the blocked
+;	state by a zero slot. acc 'u' is process index.
+
+;		prchtb   (process channels)
+;			indexed by 'u'
+;	lh/ input channel   rh/ output channel
+
+;		iottb    (.iot instruction table)
+;	indexed by channel #; holds ready-to-xct .iot's
+;	that take their pointer or char from acc a.
+;	i.e. format:  .iot <#>,a
+
+;		opentb    (.open instruction table)
+;	similar to iottb, only using 'a' as index reg.
+;	pointing to the .open block.
+;	i.e. format:  .open <#>,(a)
+
+;		clsetb     (.close instr. table)
+;	similar to iottb
+
+;		cmsktb   (channel bit mask table)
+;	indexed by channel #, gives bit shifted to
+;	right position for masking in various things
+;	(like interrupt words)
+
+
+
+;clock interrupt does:
+;	1) checks state of process that was active. if slot
+;		non-zero, is still active-- saves accs + pc
+;		if zero, was blocked(finished)-- clear bit
+;		for its input channel in master defer word,
+;		unless it was null job. (acc. u=> -1)
+;	2) looks for next process to run, by first loading
+;		count of total processes,
+;	3) stepping down thru process table (with wrap-around)
+;		looking for next non-zero slot.
+;	4) if it stops having found one, it runs the process
+;		pointed to by its index, by loading its accs
+;		(except for null job) and setting the pc to
+;		start at.
+;		if it counts out, the index is set to -1 and
+;		the pc is set for the null job.
+;	5) dismisses, using (possibly changed) defer word and
+;		pc.
+
+
+;input interrupt on a channel does:
+;	1) checks state of channel; if ok,gets id from chan. tb
+;	2) puts start of process in prqutb, indicating 'active'
+;	4) if running null job, set clock interrupt.
+;	5) set defer bit for this channel in
+;		master exit defer word. (only clock routine can
+;		clear) master defer word is used by all
+;		int. routines when exiting.
+;	6) dismisses. all input ints use same call (no pc mod)
+
+
+;what processes do:
+;process -1 is the null job and is actually the sequence
+;		jfcl
+;		.hang
+;			which just hangs waiting
+;	for an interrupt of some kind.
+;process 0 is the user-server process which initiates all other
+;	processes, handles commands, etc--the real brains
+;	of the server.
+;process <n> is some type of auxiliary set up by process 0.
+;	most commonly these are expected to be sty-net and
+;	net-sty processes for the 'link' function.  this is
+;	however quite general; the function of
+;	an auxiliary is simply the transfer of information
+;	from one channel (input) to another (output).
+
+;	a typical auxiliary simply reads in via block mode a
+;	buffer-full of data, and outputs same, until
+;	there is no more data, upon which it blocks by
+;	zeroing its prqutb entry and generating a clock
+;	interrupt.
+
+
+
+SUBTTL Process tables
+NMAXCH==16	;maximum number of channels(up to 16)
+NMAXPR==3	;maximum number of processes(up to nmaxch/2)
+
+NACTPR:	-1	;#-1 of active (runnable) processes.
+NSTRYI:	0	;# of stray datamarks seen(ie # ins' to flush)
+
+	NULJOB		;process index of -1 refers to null job
+PRQUTB:	BLOCK NMAXPR
+PRSTTB:	BLOCK NMAXPR	;process starting addr.
+PRCHTB:	BLOCK NMAXPR	;process channels (lh in, rh out)
+PRTYTB:	BLOCK NMAXPR	;process type (1=user,2=link in,3=l.out)
+PRPDL:	BLOCK NMAXPR	;process PDL ptr
+
+PRPDLT:	BLOCK NMAXPR*20.
+
+IOTTB:	REPEAT 20 .IOT <.RPCNT>,A
+OPENTB:	REPEAT 20 .OPEN <.RPCNT>,(A)
+CLSETB:	REPEAT 20 .CLOSE <.RPCNT>,
+NETSTB:	REPEAT 20 .NETS <.RPCNT>,
+STATTB:	REPEAT 20 .STATUS <.RPCNT>,A
+
+CHTYTB:	BLOCK NMAXCH		;channel type (see TYPVEC)
+CHPRTB:	BLOCK NMAXCH		;starting addr of process for it, if input.
+INTVEC:	BLOCK NMAXCH		;address of input int. service rtn for chan
+CMSKTB:	REPEAT NMAXCH <1_<.RPCNT>>
+
+;typvec holds addrs of service routines for each channel type.
+TYPVEC:	[JSR LOGOUT]	;type 0 is error
+	[JSR LOGOUT]	;user output chan (to net)
+	SRVUSR		;user input chan (from net)
+	[JSR LOGOUT]	;link net output socket
+	SRVLNK		;link net input socket
+	[JSR LOGOUT]	;sty output
+	SRVSTY		;sty input
+	[JSR LOGOUT]	;7=unassigned aux. output socket
+	[JSR LOGOUT]	;8=unassigned aux. input socket
+
+	; I-O buffers for channels. (maybe should flush.)
+BUFFS:	REPEAT NMAXPR 440700,,<BUFFER+<.RPCNT*20.>>
+BUFFER:	BLOCK NMAXPR*20.
+
+LINBF==50
+INBUF:	BLOCK LINBF
+
+NULJOB:	JFCL		;null process (index -1) when nothing to do
+	.HANG
+	JRST .-2
+
+IRP ACC,,[A,B,C,D]
+SAVE!ACC:	BLOCK NMAXPR
+TERMIN
+
+SUBTTL Process manipulating routines
+	;PCRETE takes 3 args in accs a,b,c:
+	;acc a->  <type of process>,,<starting addr for input int.>
+	;acc b->  <type of ch.>,,<# of input channel>
+	;acc c->  <type of ch.>,,<# of output channel>
+
+PCRETE:	PUSH P,D		;need another acc
+	DBJOT [<P]
+	MOVSI D,-NMAXPR		;aobjn thru process tables
+	SKIPN PRTYTB(D)		;look for free (0) slot
+	 JRST PCRET1		;foundum!
+	AOBJN D,.-2
+	;incredible, no room for process??
+	POP P,D
+	XCT CLSETB(D)
+	XCT CLSETB(S1)		;close sty
+	POP P,A			;flush return popj
+	NEGACK 620,[Can't create link process.]
+PCRET1:	.SUSET [.SPICLR,,[0]]	;avoid inconsistent tables
+	HLRZM A,PRTYTB(D)	;set process type(=existence)
+	HRRZM A,PRSTTB(D)	;set starting addr for each input int.
+	HRLM B,PRCHTB(D)	;specify process input ch
+	HRRM C,PRCHTB(D)	;specify process output ch
+	HLRZM B,CHTYTB(B)	;set ch. type
+	HLRZM C,CHTYTB(C)	;set ch. type
+	HRRZM D,CHPRTB(B)	;specify process for channel
+	HRRZM D,CHPRTB(C)	;specify process for channel
+	MOVEI A,(D)		;get 
+	IMULI A,20.		;set up 20 wds for PDL
+	ADDI A,PRPDLT
+	HRLI A,-20.
+	MOVEM A,PRPDL(D)	;store PDL ptr for process.
+
+	HLRZ A,B		;check ch type
+	CAIE A,6		;sty in?
+	 JRST PCRET2
+	XCT IOTTB(B)		;flush sty buffer
+	JUMPGE A,.-1
+	MOVE A,[.RESET]
+	DPB B,[270400,,A]	;form .reset instr.
+	XCT A			;just in case.
+PCRET2:	MOVE A,CMSKTB(B)	;get int. bit mask for input ch.
+	DBJOT [P>]
+	.SUSET [.SIMSK2,,A]	;enable input ints. for it
+	.SUSET [.SADF2,,A]	;turn off any defer bit(this mostly for styi)
+	.SUSET [.SIFPIR,,A]	;and be sure first interrupt gets ticked off!
+	.SUSET [.SPICLR,,[-1]]	;re-enable all ints.
+	POP P,D
+	POPJ P,
+
+
+PRKILL:	.SUSET [.SPICLR,,[0]]
+	PUSHJ P,PRDIE
+	.SUSET [.SPICLR,,[-1]]
+PRBLCK:	SETZM PRQUTB(U)			;zero queue entry indicates blocked
+	.SUSET [.SIPIRQ,,[10000]]	;clock int.
+	JRST NULJOB			;go .hang
+
+PRDIE:	CAIG U,
+	 JSR LOGOUT		;null job or server??
+	SETZM PRTYTB(U)		;flush this proc
+	SETZM PRSTTB(U)
+	SETZM PRCHTB(U)
+	CAIGE IN,SKTNUM
+	 SETZM CONNTB(IN)
+	CAIGE OUT,SKTNUM
+	 SETZM CONNTB(OUT)
+	SETZM CHTYTB(IN)
+	SETZM CHTYTB(OUT)
+	XCT CLSETB(IN)
+	XCT CLSETB(OUT)
+	POPJ P,
+
+
+;jsp d,prchst   returns if input avail, blocks if not, kills if dead
+PRCHST:	XCT STATTB(IN)	; .STATUS <in>,A
+	LDB A,[140600,,A] ;get condition
+	CAIN A,5	;in open state?
+	 JRST PRBLCK	;block if so
+	CAIE A,10	;input avail?
+	 CAIN A,11
+	  JRST (D)	;return if so
+	JRST PRKILL	;alas, in unhealthy state. kill entire process.
+
+SUBTTL Interrupt vectoring and .REALT handler
+;nice to have macro like:
+;intgrp <pi level> <interrupt on> <new pc>
+;but pi level hack requires hair to get all group bits right
+
+IPDLEN==30.
+IPDLP:	-IPDLEN,,IDPL
+IDPL:	BLOCK IPDLEN
+
+INTBLK:	IPDLP		;loc of pdl pointer
+
+	10000		;wd 1 enable, for slow clock (0.5 sec)
+	0
+	10000		;defer only self and i/o ints.
+	-1
+	CLKINT		;pc to start at
+
+	0		;no wd 1 ints
+	177777		;enable all i/o channels
+	10000		;defer clock
+	-1		;and all 2nd wd ints (incl. self)
+	CHNINT		;new pc
+
+	200000,,0	;realt interrupt
+	0
+	-1,,777377	;defer everything but ioc's
+	-1
+	RLTINT
+
+	400		;wd 1 enable, for ioc errs
+	0
+	-1		;defer wds.  defer everything in the world.
+	-1
+	IOCINT		;pc to start this group at
+
+LINTBLK=.-INTBLK
+
+M2DEFR:	0		;2nd defer word for clock and i/o dismissing.
+
+RLTACT:	0
+RLTMIN:	0
+
+RLTINT:	TRNE F,%ICPFF	;in icp phase?
+	 JSR LOGOUT	;yes, die
+	SKIPE RLTACT	;any actions in last minute?
+	 JRST RLTDIS	;yep...return safely
+RLTIN1:	PUSH P,I	;no...incrment count of inactive minutes
+	MOVEI I,1
+	ADDB I,RLTMIN
+	CAILE I,15.	;15 min timeout
+	 JSR LOGOUT
+	POP P,I
+	CAIA
+RLTDIS:	 SETZM RLTMIN	;zero counter if active
+	SETZM RLTACT	;always reset testing counter
+	.CALL [SETZ ? 'DISMIS ? SETZ IPDLP]
+
+
+IOCINT:	JSR LOGOUT	;maybe be smarter later.
+
+SUBTTL I-O Interrupt handler
+	; I-O channel interrupt handler....
+
+CHNINT:	DBJOT [{]
+	AOS RLTACT		;action occurred
+	MOVE II,IPDLP
+	MOVE II,-3(II)		;get 2nd int. wd from stack
+CHNIN1:	JFFO II,.+2		;count zeros to first bit, put in ich
+	JRST CHNDIS		;no ints. left to service.
+
+	SUBI ICH,35.		;get -<# of channel>
+	MOVN ICH,ICH		;now have channel #
+	ANDCM II,CMSKTB(ICH)	;mask out the int. bits immediately
+	SKIPE I,CHTYTB(ICH)	;get channel type
+	 PUSHJ P,@TYPVEC(I)	;go service, check condition
+	  JRST CHNIN1		;no input avail, ignore.
+
+	;here means input available...
+	SKIPE I,CHTYTB(ICH)	;make sure it belongs to a process
+	 CAIN I,8.		;0 has nothing. 8 is unassigned input connection.
+	  JRST CHNIN1
+	MOVE I,CMSKTB(ICH)	;get mask: 1_<ch #>
+	IORM I,M2DEFR		;set defer bit for this channel
+
+CHNIN2:	MOVE ICH,CHPRTB(ICH)	;now, get proc. # for this chan.
+	MOVE I,PRSTTB(ICH)	;and pc to start proc. at
+	MOVEM I,PRQUTB(ICH)	;and put pc in queue table.
+	AOS NACTPR		;and incr. # active procs.
+	JRST CHNIN1		;and see if any ints left.
+
+CHNDIS:	SKIPE DEBUG
+	 OUTI DBCH,"}
+	CAIGE U,		;now, if null job was being run,
+	 .SUSET [.SIPIRQ,,[10000]]	;request clock interrupt.
+	MOVE II,IPDLP
+	.CALL [SETZ
+		'DISMIS
+		IPDLP		;pdl pointer
+		(II)		;same pc
+		0,,-2(II)	;same 1st defer wd
+		SETZ M2DEFR]	;new 2nd defer wd
+
+SUBTTL Clock Interrupt handler
+	;slow clock interrupt handler
+
+CLKINT:	JUMPL U,CLK3		;if running null job, look around for real ones.
+	SKIPE PRQUTB(U)		;most recent process still active?
+	 JRST CLK2		;yep. go see if have to block or not.
+
+	;no, blocked itself. clear it for input interrupting.
+	DBJOT [|]
+	MOVEM P,PRPDL(U)	;save PDL and accs
+	MOVEM A,SAVEA(U)
+	MOVEM B,SAVEB(U)
+	MOVEM C,SAVEC(U)
+	MOVEM D,SAVED(U)
+	HLRZ ICH,PRCHTB(U)	;get input channel for this proc
+	MOVE II,CMSKTB(ICH)	;get mask for this chan. #
+	ANDCAM II,M2DEFR	;and turn off defer bit.
+	SOSL NACTPR		;decrement # of active procs - any left?
+	 JRST CLK3		;yes- look for others to start up
+	SETO U,			;no- start null job
+	JRST CLKDIS
+
+	;involuntarily interrupted, must we block?
+CLK2:	DBJOT [!]
+	MOVE I,IPDLP		;get and
+	MOVE I,(I)
+	MOVEM I,PRQUTB(U)	;save pc interrupted from.
+	SKIPG NACTPR		;any other processes active?
+	 JRST CLKDIS		;no--keep running this one!
+
+	MOVEM P,PRPDL(U)	;must block him, save world.
+	MOVEM A,SAVEA(U)
+	MOVEM B,SAVEB(U)
+	MOVEM C,SAVEC(U)
+	MOVEM D,SAVED(U)
+
+CLK3:	SOJL U,CLK4		;search up, wrap down if hit top
+	SKIPN PRQUTB(U)		;active?
+	 JRST CLK3		;nope
+	JRST CLK5		;found one, go start it
+CLK4:	MOVEI U,NMAXPR-1	;wrap down to bottom
+	SKIPN PRQUTB(U)		;active?
+	 SOJGE U,.-1		;no (null job results if counts out)
+	JUMPL U,CLKDIS
+
+CLK5:	MOVE A,SAVEA(U)		;restore its accs
+	MOVE B,SAVEB(U)
+	MOVE C,SAVEC(U)
+	MOVE D,SAVED(U)
+	HLRZ IN,PRCHTB(U)	;restore channel #'s
+	HRRZ OUT,PRCHTB(U)
+	MOVE P,PRPDL(U)
+
+;the dismis call restores pc from prqutb.
+
+CLKDIS:	MOVE II,IPDLP
+	.CALL [SETZ ? 'DISMIS ? IPDLP
+		PRQUTB(U)	;new pc
+		0,,-2(II)	;old 1st defer wd
+		SETZ M2DEFR]	;new 2nd defer wd
+
+SUBTTL Input service routines
+	;int. servicer for command input
+SRVUSR:	INETST I,ICH	;get channel state
+	SKIPGE IRCHBLK+3 ;ins received?
+	 JRST SRVU10	;yes, net int; go process it.
+
+SRVU1:	AOS (P)		;assume we'll win...
+	CAIE I,11	;if input avail and not closed,
+	 CAIN I,10	;same for closed but avail.
+	  POPJ P,	;do win!
+	CAIE I,5	;merely open?
+	 JSR LOGOUT	;no! bad state, die!
+	SOS (P)		;return w/o skipping, no input.
+	POPJ P,
+
+
+;ins network interrupt received. must flush input up to next
+;datamark, provided this one is not to be thrown away.
+
+SRVU10:	SKIPE NSTRYI		;any ins's to be thrown away?
+	 JRST [	SOS NSTRYI
+		JRST SRVU1]	;yup, disregard it.
+
+;close all auxiliary channels not being used for link.
+;all aux. chans are noted in chtytb as type .ge.7
+;if channel has a process, kill that process also.(nastier)
+
+	PUSHJ P,CLSAUX		;close aux. channels
+	PUSHJ P,INSFLS		;flush to matching datamark
+	.RESET NTIC,		;turn off bit
+	AOS (P)			;return as if input avail.
+	POPJ P,
+
+CLSAUX:	PUSH P,I
+	PUSH P,ICH
+	MOVSI ICH,-NMAXCH	;aobjn ptr
+SRVU11:	MOVE I,CHTYTB(ICH)	;get channel type
+	CAIL I,7		;ok if less than 7
+	 JRST SRVU13		;uh-oh. go kill it.
+SRVU12:	AOBJN ICH,SRVU11
+	JRST SRVU14		;now set up input flusher
+
+SRVU13:	XCT CLSETB(ICH)		;close channel
+	SETZM CHTYTB(ICH)
+	HRRZ I,ICH		;see if it might be net chan	
+	CAIL I,SKTNUM
+	 JRST SRVU12		;nope. nothing else to reset
+	SETZM CONNTB(ICH)
+	SETZM FSOCTB(ICH)
+	SETZM HOSTTB(ICH)
+	JRST SRVU12
+
+SRVU14:	POP P,ICH
+	POP P,I
+	POPJ P,
+
+INSFLS:	MOVEI A,NTIC
+	NETHANG 60.*60.*30.,A,5,[10,11]
+	 JSR LOGOUT
+	CAIE A,242	;datamark?
+	 JRST INSFLS
+	POPJ P,		;found it. now return.
+
+SUBTTL Processes for TTY link I-O transfer
+
+;net to sty process. first time starts at nslk0, changes its own
+;start addr then to be nslink. this implements aforesaid tenex
+;crock of waiting for rubout.
+
+NSLK0:	XCT IOTTB(IN)		;get a chr if input avail.
+	CAIN A,177		;rubout?
+	 JRST NSLK1		;yep, can now start working (stupid TENEX hack)
+	JSP D,PRCHST		;no. see if input avail.
+	JRST NSLK0		;loop if yes
+NSLK1:	MOVEI A,NSLINK		;set up standard start addr
+	MOVEM A,PRSTTB(U)	;now will do standard thing.
+	JRST NSLNK1		;go into standard proc.
+
+NSLINK:	MOVE C,CMSKTB(IN)	;set unique bit mask for crlf flag
+	XCT IOTTB(IN)		;get chr
+	TLZE (C)		;last chr cr? (reset always)
+	 JRST [	CAIE A,^J
+		 JRST .+1
+		JRST NSLNK1]
+	CAIN A,^M		;cr?
+	 TLO (C)		;set flag
+	CAIE A,37		;censor cntrl-backarrows
+	 XCT IOTTB(OUT)		;output chr.
+NSLNK1:	JSP D,PRCHST		;more input avail?
+	JRST NSLINK		;yup
+
+
+
+SNLINK:	XCT IOTTB(IN)		;get char from sty
+	JUMPL A,[XCT NETSTB(OUT) ;nothing further to read-force out thru molasses net buffer
+		JRST PRBLCK]	;and block.
+	XCT IOTTB(OUT)		;else output to net.
+	JRST SNLINK		;pretty simple, huh?
+
+;net input to link   service routine
+;channel # in ich (don't clobber it or ii)
+SRVLNK:	INETST I,ICH	;get channel state into i
+	CAIE I,10	;input avail?
+	 CAIN I,11
+	  JRST POPJ1	;skip return.
+	CAIN I,5	;merely open?
+	 POPJ P,	;merely return.
+
+	PUSH P,ICH
+	.SUSET [.SPICLR,,[0]]	;arrgh! it died...stop everything
+	HRRZ I,ICH		;get its process id
+	SETZM PRTYTB(I)
+	SETZM PRSTTB(I)
+	MOVE ICH,PRCHTB(I)
+	SETZM PRCHTB(I)
+	HLRZ I,ICH
+	HRRZ ICH,ICH		;input ch in i, output ch in ich
+	CAIN I,NTIC
+	 JSR LOGOUT
+	CAIN ICH,NTOC
+	 JSR LOGOUT
+	CAIGE I,SKTNUM
+	 SETZM CONNTB(I)
+	CAIGE ICH,SKTNUM
+	 SETZM CONNTB(ICH)
+	SETZM CHTYTB(I)
+	SETZM CHTYTB(ICH)
+	XCT CLSETB(I)
+	XCT CLSETB(ICH)
+	.SUSET [.SPICLR,,[-1]]	;turn world back on
+	POP P,ICH
+	POPJ P,
+
+
+STYHDX:	-1	;zero when sty should be opened in full-duplex mode, else non-z
+
+SRVSTY:	AOS (P)		;sty process can handle case of no input.
+	POPJ P,
+SUBTTL Various ASCIZ string handling routines
+	;output ASCIZ string over net.  BP in A.
+NOUT:	PUSH P,A
+	PUSH P,B
+	JRST .+2
+	.IOT NTOC,B
+	ILDB B,A
+	JUMPN B,.-2
+	POP P,B
+	POP P,A
+	POPJ P,
+
+;convert octal string (ptr in a) to value in a
+OCTCVT:	MOVEM A,CVTPTR'
+	MOVEI A,8.
+	MOVEM A,RADIX'
+	JRST STGCVT
+
+;convert decimal string (ptr in a) to value in a
+DECCVT:	MOVEM A,CVTPTR'
+	MOVEI A,10.
+	MOVEM A,RADIX'
+	
+STGCVT:	PUSH P,B
+	SETZ A,
+STGCV1:	ILDB B,CVTPTR
+	JUMPE B,STGCV2
+	IMUL A,RADIX'
+	ADDI A,-"0(B)
+	JRST STGCV1
+STGCV2:	POP P,B
+	POPJ P,
+
+
+CVTPT:	440700,,.+1
+	BLOCK 3		;enough for 15 digits
+
+;convert value in a to asciz string with ptr in a
+CVTOCT:	PUSH P,B
+	MOVE B,CVTPT
+	MOVEM B,CVTPTR'
+	PUSHJ P,CVTOC1
+	SETZ B,
+	IDPB B,CVTPTR	;make asciz
+	MOVE A,CVTPT	;put ptr in a
+	POP P,B
+	POPJ P,
+CVTOC1:	IDIVI A,8.	;get remainder (octal digit) in b
+	JUMPE A,CVTOC2
+	PUSH P,B
+	PUSHJ P,CVTOC1
+	POP P,B
+CVTOC2:	ADDI B,"0	;cvt to ascii
+	IDPB B,CVTPTR
+	POPJ P,
+
+	;ASCIZ bp in A, cvt to 6bit in A
+CVTSIX:	PUSHAE P,[B,C,D,S1]
+	MOVE B,[440600,,S1]
+	SETZ S1,
+	MOVEI C,6
+CVT61:	ILDB D,A
+	CAIN D,40
+	 JUMPN S1,CVT62
+	JUMPE D,CVT62
+	CAIL D,141
+	 CAILE D,172
+	  CAIA
+	   SUBI D,40
+	SUBI D,40
+	IDPB D,B
+	SOJG C,CVT61
+CVT62:	MOVE A,S1
+	POPAE P,[S1,D,B,C]
+	POPJ P,
+
+
+
+	; input tenex-ptcl ASCIZ argument, given 1st wd already in A.
+TSTRGX:	PUSH P,A
+	PUSH P,B
+	MOVSI B,-LINBF
+	JRST TSTRG1
+
+	;input tenex-ptcl ASCIZ argument into INBUF.
+TSTRG:	PUSH P,A
+	PUSH P,B
+	PUSHJ P,NWRDI
+TSTRG1:	MOVEM A,INBUF(B)
+	TRNE A,376	;skip if this word is last (null in last char position)
+	 AOBJN B,.-3	;else get more wds.
+	POP P,B
+	POP P,A
+	POPJ P,
+
+	;compares ASCIZ strings (BPs in A and B), skips if equal.
+STRGE:	PUSHAE P,[A,B,C,D]
+STRGE1:	ILDB C,A
+	ILDB D,B
+	CAIE C,(D)
+	 JRST STRGE7
+	JUMPN C,STRGE1
+	AOS -4(P)		;counted out and equal all the way.
+STRGE7:	POPAE P,[D,C,B,A]
+	POPJ P,
+
+	;forces ASCIZ string to uppercase; bp in A
+UPPRZ:	PUSHAE P,[A,B]
+	JRST UPPRZ3
+UPPRZ2:	CAIL B,141
+	 CAILE B,172
+	  CAIA		;not lowercase
+	   SUBI B,40	;cvt to upper
+	DPB B,A
+UPPRZ3:	ILDB B,A
+	JUMPN B,UPPRZ2
+	POPAE P,[B,A]
+	POPJ P,
+
+	;counts # chars in ASCIZ string, takes bp and leaves cnt in A
+ASCNTR:	PUSHAE P,[B,C]
+	SETZ C,
+	ILDB B,A
+	CAIE B,
+	 AOJA C,.-2
+	MOVE A,C
+	POPAE P,[C,B]
+	POPJ P,
+
+END GO
