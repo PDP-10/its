@@ -348,6 +348,7 @@
 - XHOST, tool for replacing host nicknames with real hostnames.
 - XLISP, teaches Lisp -- part of TEACH system.
 - WA, a Wumpus advisor game.
+- WAR, old Spacewar.
 - WEBSER, HTTP server.
 - WHAT, humorous quips to various "what" questions.
 - WHO%, list index/uname/jname/%time in sorted list.
