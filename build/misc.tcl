@@ -509,6 +509,23 @@ expect ":KILL"
 respond "*" ":midas games;ts ckr_agb;ckr\r"
 expect ":KILL"
 
+# Old Spacewar
+respond "*" ":cwd spcwar\r"
+respond "*" ":midas;324 spcwar; war\r"
+expect ":KILL"
+respond "*" ":midas spcwar; stars\r"
+expect ":KILL"
+respond "*" ":midas;324 spcwar; math\r"
+expect ":KILL"
+respond "*" ":stink\r"
+respond "\n" "mspcwar; war\033l\033\033"
+respond "\n" "mstars\033l\033\033"
+respond "\n" "mmath\033l\033\033"
+respond "\n" "jwar\033d\033\033"
+respond "\n" "\033y"
+respond " " "dsk0:.;@ war\r"
+respond "*" ":kill\r"
+
 # Spacewar, standalone
 respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; newwar\r"
 respond "ITS version" "NO\r"
