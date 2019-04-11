@@ -189,3 +189,6 @@ proc update_microcode {} {
 proc clib_switches {} {
     respond "with ^C" "KS10==1\r\003"
 }
+
+proc patch_lisp {} {
+}
