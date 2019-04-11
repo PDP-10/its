@@ -1,5 +1,9 @@
 log_progress "ENTERING BUILD SCRIPT: LISP"
 
+
+# PDP-6 LISP.
+patch_lisp
+
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
 respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
