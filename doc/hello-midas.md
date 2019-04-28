@@ -11,11 +11,11 @@ Step by step guide on how to create a hello world in MIDAS.
     
     a==1                                ;Define two accumulators,
     b==2                                ;A and B.
-    ch==1                               ;Output chanel number.
+    ch==1                               ;Output channel number.
     
     start:  .open ch,[.uao,,'tty]       ;Open channel to TTY, for ASCII output.
              .lose
-            move a,[440700,,hello]      ;Load A with byte poiter to string.
+            move a,[440700,,hello]      ;Load A with byte pointer to string.
     loop:   ildb b,a                    ;Load B from string.
             jumpe b,[.logout 2,]        ;End on zero byte.
             .iot ch,b                   ;Print byte.
