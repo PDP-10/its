@@ -285,6 +285,7 @@
 - SPROUTS, topological game invented by Conway.
 - SRCCOM, compares/merges source files, and compares binary files.
 - SRDATE, set reference date on a file.
+- SSV4, SSV for Imlac PDS-4.
 - STINK, linker.
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
