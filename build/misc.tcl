@@ -1651,6 +1651,10 @@ respond "*" ":palx rug;_ar\r"
 respond "COMPUTER=" "1\r"
 expect ":KILL"
 
+# TORTIS
+respond "*" ":midas;324 radia;_tortis\r"
+expect ":KILL"
+
 # BBN Logo
 respond "*" ":cwd bbn\r"
 respond "*" ":macro\r"

@@ -322,6 +322,7 @@
 - TMPKIL, delete old files from .TEMP.
 - TREES, list toplevel jobs.
 - TREK, Star Trek game.
+- TORTIS, toddler's own recursive turtle interpreter system.
 - TOSBLK, convert PALX binaries to SBLK.
 - TV-11, Knight TV PDP-11.
 - TVEDIT, paint program.
