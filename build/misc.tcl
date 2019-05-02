@@ -1202,6 +1202,10 @@ expect ":KILL"
 respond "*" ":midas sys2; ts tvedit_sysen2; tvedit\r"
 expect ":KILL"
 
+# Assemble SSV4.
+respond "*" ":midas imlac; ts assv4_assv4\r"
+expect ":KILL"
+
 # Maze War
 respond "*" ":midas /t sysbin;_imsrc; maze\r"
 respond "with ^C" "MOUSE==1\r\003"
