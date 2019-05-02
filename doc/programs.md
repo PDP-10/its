@@ -24,6 +24,7 @@
 - ARGUS, alerts you when specified users login or logout.
 - ARPA, gateway from Chaosnet to Arpanet and Internet.
 - AS8748, 8748 assembler.
+- ASSV4, assemble SSV4.
 - ATSIGN CHAOS, Chaosnet support.
 - ATSIGN DEVICE, load device drivers.
 - ATSIGN TARAKA, starts dragons.
