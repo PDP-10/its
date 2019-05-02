@@ -567,6 +567,10 @@ expect ":KILL"
 respond "*" ":midas;324 dsk0:.;@ pornis_rwg; pornis\r"
 expect ":KILL"
 
+# 3406
+respond "*" ":midas;324 dsk0:.;@ 3406_stan.k; 3406\r"
+expect ":KILL"
+
 # 340D
 respond "*" ":midas stan.k;mod11 bin_340d\r"
 expect ":KILL"

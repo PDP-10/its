@@ -5,6 +5,7 @@
 - 11SIM, PDP-11 emulator.
 - 11STNK, PDP-11 linker.
 - 20XCVT, convert TOPS-20 CSAVE file to PDUMP.
+- 3406, PDP-6 part of 340D.
 - 340D, Datapoint emulator for 340 display.
 - @, cross reference generation tool.
 - ACNVRT/MCNVRT/PCNVRT/UCNVRT, asciizer and binarator.
