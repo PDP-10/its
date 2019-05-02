@@ -1206,6 +1206,14 @@ expect ":KILL"
 respond "*" ":midas imlac; ts assv4_assv4\r"
 expect ":KILL"
 
+# SSV4, SSV for PDS-4.
+respond "*" ":imlac;assv4\r"
+respond "NUMBER" ">"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; ssv4 iml_imlac; ssv4b >\r"
+respond "@" "\021"
+
 # Maze War
 respond "*" ":midas /t sysbin;_imsrc; maze\r"
 respond "with ^C" "MOUSE==1\r\003"
