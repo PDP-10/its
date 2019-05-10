@@ -556,6 +556,14 @@ expect ":KILL"
 respond "*" ":midas dsk0:.;@ titler_mb; titler\r"
 expect ":KILL"
 
+# Knight TV Spacewar
+respond "*" ":midas gjd;_swr data\r"
+expect ":KILL"
+respond "*" ":job swr\r"
+respond "*" ":load gjd; swr bin\r"
+respond "*" "first\033,last\033\060ygjd; swr ships\r"
+respond "*" ":kill\r"
+
 # MLIFE
 respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
 expect ":KILL"
