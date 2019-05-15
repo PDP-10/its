@@ -21,7 +21,7 @@ start() {
 
     brctl show > config.log
     ifconfig -a >> config.log
-    route -n > config.log
+    route -n >> config.log
 
     #
     tunctl -t $TAP -u $USER
