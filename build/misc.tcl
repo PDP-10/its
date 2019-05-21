@@ -1439,7 +1439,10 @@ respond "*" ":stinkr\r"
 respond "=" "x c/clib\r"
 respond "=" "l sysen2/oinit.stk\r"
 respond "=" "o sys3/ts.oinit\r"
-respond "=" "\0"
+# Use the ^_ octal-input feature of ITS to send \0. The space ends the
+# octal digits without ITS passing it through to the program. Using octal
+# input works around Mac OS X and BSD which require literal \0s to be doubled.
+respond "=" "\0370 "
 expect ":KILL"
 
 # Versatec spooler
