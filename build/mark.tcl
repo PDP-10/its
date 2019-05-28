@@ -7,7 +7,7 @@ mark_packs
 respond "DDT" "tran\033g"
 respond "#" "0"
 respond "OK" "y"
-expect -timeout 300 EOT
+expect -timeout 3000 EOT
 
 respond "DDT" $emulator_escape
 
@@ -48,6 +48,7 @@ respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
 respond "*" ":midas dsk0:.;_system;its\r"
+set timeout 1000
 its_switches
 expect ":KILL"
 

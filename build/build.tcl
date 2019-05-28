@@ -124,7 +124,7 @@ proc build_macsyma_portion {} {
     type "#'(lambda (x) (cond ((not (memq x\r"
     type "'(DUMMY)\r"
     type ")) (doit x)))) (append todo todoi))"
-    set timeout 1000
+    set timeout 10000
     expect {
 	";BKPT" {
 	    type "(quit)"
@@ -193,10 +193,10 @@ type ":dump\r"
 respond "_" "dump links full list\r"
 respond "LIST DEV =" "tty\r"
 respond "TAPE NO=" "1\r"
-expect -timeout 3000 "REEL"
+expect -timeout 30000 "REEL"
 respond "_" "rewind\r"
 respond "_" "icheck\r"
-expect -timeout 3000 "_"
+expect -timeout 30000 "_"
 type "quit\r"
 
 shutdown
