@@ -19,12 +19,12 @@ designed as a language in which to manipulate language: words and sentences."
 
 Brian Harvey
 
-Logo was initially created by Wally Feurzeig, Seymour Papert, and Cynthia
-Solomon in 1967 as part of a National Science Foundation sponsored research
-project conducted at Bolt, Beranek & Newman, Inc., in Cambridge, Massachusetts.
-In 1969 Dr. Seymour Papert started the Logo Group at the MIT Artificial Intelligence
-Lab. Throughout the 1970s the majority of Logo development was conducted at MIT
-in the Artificial Intelligence Lab and the Division for Study and Research in
+Logo was initially created by Wally Feurzeig, Seymour Papert, Daniel G.Bobrow,
+Cynthia Solomon and Richard Grant in 1967 as part of a National Science Foundation 
+sponsored research project conducted at Bolt, Beranek & Newman, Inc., in Cambridge, 
+Massachusetts. In 1969 Dr. Seymour Papert started the Logo Group at the MIT Artificial 
+Intelligence Lab. Throughout the 1970s the majority of Logo development was conducted 
+at MIT in the Artificial Intelligence Lab and the Division for Study and Research in
 Education, using large research computer systems, such as ITS powered PDP-10.
 
 Our goal is to make that early Logo systems available to a wider audience of
