@@ -138,3 +138,6 @@ respond "*" ":move turnip; ts view, sys3;\r"
 
 # VDIR
 respond "*" ":link sys3; ts vdir, ts view\r"
+
+# RMODE
+respond "*" ":link sys1; ts rmode, .teco.;\r"
