@@ -1115,6 +1115,10 @@ respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
 
+# Display all Type 342 characters.
+respond "*" ":midas dsk0:maint;_tst342\r"
+expect ":KILL"
+
 # KL10 microcode assembler
 respond "*" ":midas sysbin;_syseng;micro\r"
 expect ":KILL"
