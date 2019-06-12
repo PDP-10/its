@@ -1115,6 +1115,15 @@ respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
 
+respond "*" ":job maint\r"
+# KA10 needs the .OLD files.
+translate_diagnostics
+respond "*" ":load maint; part a\r"
+respond "*" ":start\r"
+respond "PARt a" "\032"
+expect -re {>>|\)}
+type ":kill\r"
+
 # Display all Type 342 characters.
 respond "*" ":midas dsk0:maint;_tst342\r"
 expect ":KILL"
