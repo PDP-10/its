@@ -1111,6 +1111,10 @@ respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
 expect ":KILL"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 
+# ZOTZ
+respond "*" ":midas ksc; ts zotz_zotz\r"
+expect ":KILL"
+
 # KA10 maintenance
 respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
