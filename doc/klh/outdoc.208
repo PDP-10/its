@@ -1,0 +1,454 @@
+---------------- Documentation for OUT output package -----------------
+This file should be MC:KSC;?OUT >
+	or [SRI-NIC]<NICPROG>OUT.DOC
+
+Contents:
+	Brief usage summary
+	Basic intro to OUT
+	OUT items
+	Miscellaneous cautions etc.
+	Conversion: How to convert old FWRITE/UUOs stuff to OUT.
+
+NOTE: the OUT package is often in a state of development, and this
+documentation may not accurately reflect actual features.  Normally,
+however, anything that used to work should continue to work unless
+otherwise noted.
+
+	Comments & suggestions welcomed!
+
+Usage:
+	.INSRT KSC;OUT	or  .INSRT <NICPROG>OUT		; to invoke package
+
+Syntax:	OUT(chan,func(args),(" Literal string "),func(args)...)
+	chan - channel to output these items on.
+	func(args) - function-like "item" that usually outputs its args.
+
+Basic channel types:
+	OUT(ch,OPEN)			; Initialize for a "real" ITS channel
+	OUT(ch,OPEN(UC$IOT,[jfn])	; Ditto on TNX
+	OUT(ch,OPEN(UC$BPT,[bp],[lim]))	; Writes up to <lim> chars using <bp>
+
+Basic items:
+	("Literal string")
+	D([num])	; outputs number in decimal
+	O([num])	; outputs number in octal
+	F([num])	; outputs number as floating-point.
+	S([# bytes],[bp])	; Outputs byte string
+	TZ([asciz])	; Outputs ASCIZ string
+
+General description:
+
+	These are macros and routines supporting a new output package
+interface, OUT, which is the successor to FWRITE.  The basic idea is
+quite similar, but the syntax of the invoking macro is different and
+much more flexible.  The intent is to make the OUT macro and
+supporting routines efficient enough and general enough that no other
+means of output should be necessary.  In particular, none of the
+individual "item" types should ever be invoked other than via OUT, and
+use of output UUO's or "direct" system output calls should be avoided.
+
+STANDARD OUTPUT:
+	One important concept to remember is that there is always a
+"current output channel", or "standard output", identified by
+accumulator "OC".  All output, by any means whatever, always goes to
+the standard output!  If no channel argument is given to the OUT,
+output simply defaults to this standard output, which is quite
+efficient.  When a channel argument IS given, OUT will set the
+standard output to this new channel, but always restores the previous
+value at the end of the call; thus OUT never permanently alters the
+value of OC.  The only exception to this is the construct
+OUT(,CH(chan)) which explicitly requests that the standard output be
+set to <chan>.  The channel number should normally be within the range
+0 to 17 inclusive; this is a default rather than a real limitation
+since the range can be increased at assembly time.
+
+OUT "ITEMS":
+	Within an OUT call, any reasonable number of "items" or
+"literal strings" may be specified.  (Currently the definition of
+reasonable is about 16).  A literal string is simply a STRUNG-type
+string enclosed in parentheses; an item consists of an item name,
+which may or may not have arguments associated with it.  If arguments
+are given, they must be enclosed in parentheses immediately after the
+item name.  The number of arguments an item takes depends on the
+particular item (some take a variable number).  It is one exemplary
+feature of the OUT macro that furnishing too few or too many arguments
+will only affect that particular item; it will never destroy the
+overall functioning of the OUT call.  Examples:
+	OUT(TYOC,("This is example "),D(CNT),(" of"),D(TOT,5),EOL)
+
+	The use of literal strings should be obvious.
+	TYOC - During execution of this OUT, the standard output will
+		be temporarily set to TYOC.
+	D(CNT) - outputs the value at CNT in decimal.
+	D(TOT,5) - outputs the value at TOT in decimal, right adjusting
+		it within a 5-column field.  This is an example
+		of how some items can take more than one argument.
+	EOL - simply outputs a CRLF.  This demonstrates an item
+		with no arguments at all.
+
+!!!!! CAVEAT !!!!!!
+	In order to provoke the right behavior from MIDAS, OUT must be
+a "parenthesized call"; a "<", "(", or "[" must come immediately after
+the OUT with no intervening space.  There is no "free format"; blanks
+or CRLFs between items will screw the stupid macro parser.  Fixing this
+would require some changes to MIDAS.
+
+Under the covers:
+
+OUT can assemble in two basic ways; each of these can be specifically
+requested by using the names OUTCOD or OUTCAL instead of "OUT".
+	OUT for default (normally OUTCOD)
+	OUTCOD forces "inline" assembly
+	OUTCAL forces single instruction CALL
+
+OUTCOD - In-line code
+	PUSH P,OC		; Or nothing if std output
+	MOVEI OC,CH		; Or nothing if std output
+	<inline instrs>
+	POP P,OC		; Or nothing if std output
+
+OUTCAL - In-line call
+	PUSHJ P,[HRLM OC,(P)	; Or nothing if std output
+		MOVEI OC,CH	; Or nothing if std output
+		<inline instrs>
+		HLRZ OC,(P)	; Or nothing if std output
+		POPJ P, ]
+
+	OUTCOD is the default and is used to get fast inline code,
+especially when using standard output.  OUTCAL has the overhead of a
+PUSHJ/POPJ, but has the feature of being both skippable and XCT-able,
+and lends itself to constants optimization, again especially when using
+standard output.
+	General policy should be to use OUT for everything except
+where a one-instruction invocation is specifically needed; for these,
+use OUTCAL.  The OUTCAL invocation should not be used for any other
+reason, in order to clearly identify such places.  Similarly, OUTCOD
+should only be used where it is essential that the code produced be
+inline.  
+	There is no preference implied for one or the other form
+of OUT invocation; this merely makes sure that nothing will break
+if the default form used by OUT is changed.
+
+Channel Opening, types, & manipulation:
+
+OPEN(itype,aval,alim,abytsize)	Open a channel.
+		This does NOT imply that the "hard" channel is likewise
+		opened from the OS viewpoint; that must be done by user.
+	abytsize - byte size, only used by UC$BUF.
+	alim - # bytes maximum to output.  Defaults to infinity.
+		Attempts to output more will be no-ops.
+		Note: In some cases, using FMT item truncation is simpler.
+		Note: UC$BUF uses different interpretation.
+	itype - as below.  Defaults to UC$IOT.
+	UC$IOT	- "Hard" OS-opened output channel.
+		aval - [jfn #], on TNX only.
+		eg: OUT(tyoc,OPEN(UC$IOT,[.priou])) on TNX.
+	UC$BUF	- Ditto but buffered.
+		aval - as for IOT.
+		alim - buffer to use.
+			If positive, a buffer of that many BYTES is allocated.
+			Zero or default allocates one page's worth.
+			If negative, is taken as AOBJN -<# wds>,,<loc of buff>
+		abytsize - byte size to use.
+			Defaults to 7 (standard ASCII)
+		eg: OUT(bc,OPEN(UC$BUF,,[-bflen,,buff]))
+	UC$BPT	- Byte pointer.
+		aval - BP to output with.
+		eg: OUT(bpc,OPEN(UC$BPT,[440700,,stuff]))
+	UC$UAR	- UUO Area.
+		aval = ARPT to specific area.
+		eg: OUT(ac,OPEN(UC$UAR,omfar))
+	UC$NUL	- Null output sink.
+	UC$SAO	- with UUO LISTS, like SAOBEG.
+		aval - pointer to LSE (defaults to current LSE)
+		eg: OUT(lc,OPEN(UC$SAO,$arloc+msgar))
+	UC$XCT	- XCT operation
+		aval - Instr to XCT (takes byte in U1, chan in OC)
+		eg: OUT(xc,OPEN(UC$XCT,[call hacko]))
+	UC$TRN	- TRANslated channel
+		aval - channel # to translate output to.
+			Ignores "alim".
+		eg: OUT(dtyoc,OPEN(UC$TRN,[tyoc]))
+
+FRC	Force out all buffered output.  No-op for anything
+		but a UC$BUF type channel.
+CLS	Close the channel.  Implies FRC.  Unlike OPEN, this actually
+		WILL effect closure of the "hard" channel to the OS.
+
+PTV(aret)	Returns pointer-value for channel.  Generally speaking
+		this tries to be the # of bytes output on the channel
+		since it was opened, but for certain channel types this
+		may be different:
+		BUF - # of bytes currently in buffer.
+		UAR - # of chars in whole area (between beg and $ARWPT)
+		TRN - value for translated channel.
+
+CH(ichan)	Set standard output to channel specified.
+		This will not last beyond the current OUT invocation
+		unless no channel was specified to the OUT, i.e.
+		the default std output is in use.
+		eg: OUT(,CH(chan)) does the right thing.
+
+FMT(ITEM,iwid,iprec,ifill)	Hairy field formatting output.
+		Outputs ITEM (can be any item, with args) according to
+		formatting parameters:
+		iwid - Field width in columns.
+			If positive, output is right justified.
+			If negative, output is left justified.
+			Output is never truncated by this parameter.
+			Defaults to zero (no justification)
+		iprec - "precision"; max # of chars to output.
+			This parameter DOES truncate output!!
+			Truncation happens before justification.
+			Defaults to infinity.
+		ifill - "fill character" to use as justification padding.
+			Defaults to blank.
+
+LIST OF OUT ITEMS:
+
+	The following terminology will be used in describing OUT items
+	and the arguments they take:
+	ITEM(ixxx,axxx,{opt1,opt2}...)
+		ITEM - name of item
+		{...} - args in braces are optional.
+		ixxx - "immediate" arg, MOVEI'd.  xxx is rest of arg name.
+		axxx - "addressed" arg, MOVE'd.   xxx is rest of arg name.
+	Common names:
+		abp - address of a byte pointer.
+		acnt - address of a count.
+		aval - address of a value (implied numerical)
+		a6 - address of a sixbit word.
+
+C(ich)	Character.  Outputs single byte (since this is MOVEI'd
+		it only goes up to 18 bits).
+;  W(aval) Word.  Outputs single byte (MOVE'd, so can be up to 36 bits).
+; or B(aval) Byte.
+;		Not implemented yet; just listed for consideration.
+
+S(acnt,abp)	String.  Outputs cnt bytes from source bp.
+TS(astr)	String variable.  Address of [,,cnt ? bp]
+TA(arpt)	Area.  Address is of an ARBLK for an area.
+TZ(asciz)	ASCIZ.  Address is of an ASCIZ string.
+TZ$(aasciz)	ASCIZ, RH of value is address of ASCIZ.  A bit crockish.
+TC(ascnt)	ASCNT.  Address is of [cnt,,[ascii /str/]]
+TPZ(abp)	BYTEZ.  Outputs from bp until zero byte.
+TPC(acrock)	Ugh. Address is of [cnt,,[bp]].  Obsoleted by "S".
+
+$$OHST items:	----------------------------------------
+
+HN(aval)	Host number.  Outputs value as octal host #, simplifying
+		if possible.
+HND(aval)	Like HN but decimal Internet address format.
+HST(aval)	Host name.  If no name for given number, becomes "HND".
+
+$$OERR item:	----------------------------------------
+
+ERR({aerr})	Outputs error message for given error # from system.
+		If none specified, or value is -1, outputs message
+		for last error encountered by program, e.g. as in
+		OUT(,ERR).
+
+SIMPLE items:	---------------------------------------
+
+CRLF		Outputs a CR and LF.
+EOL		End-of-Line, same as CRLF.
+TAB		Outputs a TAB char
+SP		Outputs a space char
+LPAR,RPAR	Parentheses, (Left and Right)
+LBRK,RBRK	Brackets, [Left and Right]
+LBRC,RBRC	Braces, {Left and Right}
+LABR,RABR	Angle-brackets, <Left and Right>
+
+SIXBIT output:	-------------------------------------------
+
+6W(a6)		6-bit word, all 6 chars.
+6F(a6)		6-bit "Filename" - no trailing blanks
+6Q(a6)		6-bit Quoted filename - Like 6F, but certain chars special
+			in a filename are quoted with ^Q.
+			These chars are anything not alphanumeric or "-".
+
+NUMERICAL OUTPUT:	----------------------------------------------
+
+D(aval,{ifld})		Decimal output
+O(aval,{ifld})		Octal
+X(aval,{ifld})		Hexadecimal
+	aval - number to output
+	ifld - width of the field to output in.
+		If positive, string will be right justified.
+		If negative, string will be left justified.
+		Output will never be truncated by this parameter.
+
+RH(aval)	RH as oooooo	(6 octal digits)
+LH(aval)	LH similar.
+H(aval)		Halfword as LH,,RH
+
+RHV(aval)	RH as positive octal value
+LHV(aval)	Similar
+HV(aval)	Similar
+
+RHS(aval)	RH as Signed octal number (i.e. sign extension)
+LHS(aval)	Similar
+HS(aval)	Similar
+
+$$OFLT Floating-point Output:	--------------------------------------
+
+F(aval,{ifld,iprec})	Floating-point "F" - mmm.nnn
+E(aval,{ifld,iprec})	Floating-point "E" - m.nnnnnnE+ee
+G(aval,{ifld,iprec})	Floating-point "G" - F or E as appropriate.
+	aval, ifld - as for D,O,X
+	iprec - Precision.
+		Specifies # of digits to right of the decimal point.
+
+$$OTIM Time Output items:	--------------------------------------
+
+	; All of these take an optional time-word argument.
+	; If this is not specified, the current time is used.
+TIM(HMS,{atim})		Time as "hh:mm:ss"
+TIM(MDY,{atim})		Date as "mm/dd/yy"
+TIM(YMD,{atim})		Date as "yymmdd"
+TIM(MDYT,{atim})	Datime as "mm/dd/yy hh:mm:ss"
+TIM(MONTH,{atim})	Month as "Month"
+TIM(MON,{atim})		Month as "MON"
+TIM(DOW,{atim})		Day of week as "Fooday"
+TIM(DOW3,{atim})	Day of week as "Foo"
+TIM(F1,{atim})		Datime as "dd MON yy hhmm ZON"
+TIM(F2,{atim})		Datime as "dd Month yyyy hh:mm ZON"
+TIM(F3,{atim})		Datime as "dd MON yy hhmm-ZON"
+TIM(RFC1,{atime})	Datime as RFC822 "dd Mon yy hh:mm:ss ZON"
+TIM(RFC2,{atime})	Datime as RFC822 (RFC1) but with short DOW.
+
+
+DEFINING NEW "OUT" ITEMS:
+
+	Pick some item name <itm> of 4 chars or less.
+	Then set up the following definitions:
+
+	DEFINE OUT"$!<itm> (ARG1,ARG2,...)	; Args !! MUST BE BALANCED !!!
+	<code to output or set up for a CALL OX!<itm> >
+	TERMIN
+
+OX!<itm>:	<entry pt for direct call.  Usually assumes arg in U3>
+	<actual code implementing
+	 the output function.
+	 Must use STDOUT, STDOBP, or USCOPT
+	 for output. >
+	RET		; To return when done.
+
+
+The code must "never" leave OC altered. (exceptions to this should be left
+to package-internal routines).  Note that U2 may be = to OC, so
+it is good form to avoid using U2 unless saving/restoring is better
+than using just 3 ACs.
+Note also the common convention (though not restriction) that direct calls
+pass a single arg in U3.
+Other than this, ACs U1-U4 are freely available.
+
+Actual output mechanism:
+	Within the code for an output item, there are two
+	fundamental ways to output stuff:
+
+Byte:
+	STDOUT		- outputs byte in U1 over channel in OC.
+			No ACs are clobbered.
+	STDOUT(arg)	- same but does MOVEI U1,arg prior to STDOUT.
+			This saves some coding.  Note arg is balanced,
+			so beware of commas or single bracket-chars!!!
+	STDOBP	- Same as STDOUT, but assumes that a byte ptr is in U3
+		and takes care to preserve it should an area-shift happen
+		as a result of the output.  Thus U3 may change.
+String:				; This is how to do string output
+	MOVE U3,[byte ptr]	; U3 takes byte pointer
+	SKIPLE U4,[# of bytes]	; U4 takes # bytes (must be positive!)
+	 CALL @USCOPT(OC)	; Invoke string output for channel!
+				; All of U1, U3, U4 and U2 (if != OC)
+				; may be clobbered.
+
+WRITING "XCT" CHANNEL CODE:
+
+	(This stuff currently only talks about existing XCT
+	facility, which is slated for flavorful expansion)
+
+	The argument to the OPEN should be a single instruction
+	which outputs the byte in U1.  The channel # is available in OC.
+	Usually this will have to be a CALL to some routine,
+	and the following conditions hold:
+		No ACs should be clobbered!!  This includes U1 and OC.
+		<guess thats all>
+
+	In future, arg will be a pointer to a vector block which specifies
+	all the goodies such as string-mode dispatch, overflow dispatch,
+	etc. as well as the unit-mode instruction.
+
+------------------------------------------------------------------------
+
+CONVERSION OF OLD FWRITE/UUOS CODE:
+
+	The original intent was that all programs which still used
+FWRITE/UUOS for output would continue to work without modification.
+This was true for a long time but was changed in order to better
+modularize packages.  Thus, old software that used to depend on NUUOS
+and FWRITE alone may not assemble properly without the following
+addition:
+	$$OUUO==1	; This must be defined prior to the .INSRT of NUUOS
+
+That should be all that is needed to ensure that such programs
+continue to work.  Of course, if they make unwarranted use of any UUO
+package internals, they may require some checking.  The following
+discussion explains how to convert old programs (if there are any left)
+on the assumption that this will always be desirable.
+
+Steps to convert ancient NUUOS-only software:
+
+(0) Set $$OUUO==1 and resolve undefined symbols.
+	Because output-related functions have been moved to the OUT
+	package, any references to symbols defined therein will now fail,
+	unless OUT" is prefixed to these references.  This is a
+	deliberate incompatibility to help flush out such refs and
+	tag them for easy future checking.
+
+(1) Check out any UUO definitions.
+	Programs which define their own UUO's will need some checking
+	to make sure they conform to standards described in the
+	UUO documentation (MC:KSC;?UUOS > on ITS).
+	If no UUO's are defined, you already win.
+
+(2) Verify operation.
+	No other changes to the sources should be necessary, provided
+	steps (0) and (1) have been satisfied.
+
+	It is remotely possible that certain FWRITEs will not work, because
+	the FWRITE macro no longer expands into UUOs.  However, the new code
+	should have exactly the same results.  Code which assumes that FWRITE
+	assembles into a single instruction (and tries to skip over it) will
+	lose grossly, but DESERVEs to lose because the doc has always said
+	not to try that.
+
+Now the new OUT macro is included and can be used in place of or in
+combination with FWRITE.  Since it incorporates new item types, is
+cleaner, and faster, its use is preferable for new output statements.
+Its only disadvantage is that it is slightly more painful to set up
+literal strings; however, improvements to MIDAS macro parsing may fix
+this someday.
+
+(3) Set things up for removal of the $$OUUO==1.
+	This switch controls inclusion of the old output UUOs,
+	including OUTOPN and OUTPTV.  It defaults to 0, which will
+	DISABLE all output UUOs!!
+	This is the most significant conversion step since you have
+	to be sure that none of these UUO's remain in the source;
+	all should have been converted to use OUT by then.
+	Since FWRITE still works, this primarily means that any
+	code which directly invokes these UUO's should be changed.
+	The main advantage is that they no longer gobble up most of
+	the space in the UUO table, so that you can use the entries
+	for more useful purposes.
+
+(4) ?? Replace instances of FWRITE?
+	It is intended that FWRITE will continue to work under
+	the new OUT package, although it will not be further developed;
+	only OUT will have new features.  At some point in the future,
+	it may be that all programs will have abandoned the
+	use of FWRITE, which can then be flushed or recycled.
+
+	MAKSTR and CONC will be given OUT-style constructions as well.
+
