@@ -192,3 +192,9 @@ proc clib_switches {} {
 
 proc patch_lisp {} {
 }
+
+proc translate_diagnostics {} {
+    # PART K doesn't work on the KS10.
+    respond "*" "\033\024"
+    respond " " "dsk: maint; part k, part l\r"
+}
