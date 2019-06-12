@@ -283,6 +283,7 @@
 - SHUTDN, shut down ITS.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
+- SPEEDY, instruction timing test.
 - SPELL/ESPELL, spell checker.
 - SPROUTS, topological game invented by Conway.
 - SRCCOM, compares/merges source files, and compares binary files.
