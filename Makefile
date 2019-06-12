@@ -34,7 +34,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
       kldcp libdoc lisp _mail_ midas quux scheme manual wp chess ms macdoc \
       aplogo _klfe_ pdp11 chsncp cbf rug bawden llogo eak clib teach pcnet \
-      combat pdl minits mits_s chaos hal -pics- imlac maint cent ksc
+      combat pdl minits mits_s chaos hal -pics- imlac maint cent ksc klh
 BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
       c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
       maint imlac _www_ gt40 llogo bawden sysbin -pics- lmman r
