@@ -378,3 +378,4 @@
 - YAHTZE, the game of Yahtzee.
 - YOW, print Zippyisms.
 - ZAP, dump TV bitmap as an XGP scan file.
+- ZOTZ, instruction timing test.
