@@ -38,6 +38,7 @@
 - BINPRT, display information about a binary executable file.
 - BITPRT, print JCL as bits.
 - BKG, a Backgammon game.
+- BOLIO, typesetting.
 - BOOTVT, GT40 boot ROM.
 - BYE, say goodbye to user. Used in LOGOUT scripts.
 - CALPRT, decode a .CALL instruction's CALL block.

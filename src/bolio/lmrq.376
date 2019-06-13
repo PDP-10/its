@@ -1,0 +1,1682 @@
+;;; -*-Lisp-*- machine manual request processor
+
+(include ((#+TENEX dsk bolio) justdf lisp))
+
+
+;;; The following specials are peculiar to this file
+(DECLARE (SPECIAL group-depth
+		  group-flavor
+		  DEFUN-PRE-LEADING
+		  FIGURE-POST-LEADING
+		  THIN-LEAD-MILLS
+		  TABLE-ITEM-PRE-LEADING
+		  TABLE-ITEM-POST-LEADING
+		  TABLE-ITEM-WIDTH	;Inside .TABLE, width of item field
+		  TABLE-ITEM-FONT	;Inside .TABLE, font for items
+		  TABLE-ITEM-INDEX-NAME	;Inside .TABLE, if non-null name of index to
+					; which the items should be added.
+		  ITEM-KINDEX-FLAG	;.KITEM/.ITEM/.KINDEX communication
+
+		  DEFUN-ARG-SEPARATION
+		  DEFUN-ARG-SEPARATION-INTERNAL
+		  DEFUN-CONTINUATION-INDENT
+		  DEFUN-CONTINUATION-INDENT-INTERNAL
+
+		  ;; These variables of lists of (string page-number)
+		  ;; Except a number indicates an amount of leading to be inserted.
+		  ;; These control the style of what .defspec and .defmac do
+		  DEFINITION-MARKER-EXDENTATION	;mills in from right margin (or nil)
+		  DEFINITION-MARKER-SPACE		;mills space before it
+		  DEFINITION-MARKER-FONT		;font number
+		  DEFINITION-SPECIAL-CHARACTER-FONT	;font # for "{" etc.
+		  DEFINITION-AMPERSAND-KEYWORD-FONT
+		  DEFINITION-COLON-KEYWORD-FONT
+		  DEFINITION-TOKEN-FONT
+
+		  REQUEST-EOL-P		;T if have already read up to end of request line
+		  ENVIRONMENT-TYPE	;What we are inside
+		  CURRENT-DEFUN-NAME	;Implicit arg for .KITEM
+		  DEFSPEC-LINE-PROC-TABLE
+		  REQUEST-NAME
+		  )
+	 (FIXNUM TABLE-ITEM-WIDTH ))
+
+(SETQ DEFUN-ARG-SEPARATION 100. DEFUN-CONTINUATION-INDENT 666.)
+(SETQ DEFSPEC-LINE-PROC-TABLE NIL)
+
+;These defaults are randomly chosen
+(SETQ DEFINITION-MARKER-EXDENTATION 500.)	;1/2 inch in from right margin
+(SETQ DEFINITION-MARKER-SPACE 500.)		;At least 1/2 inch between it and template
+(SETQ DEFINITION-MARKER-FONT ITALIC-FONT)	;Put it in italics I guess
+(SETQ DEFINITION-SPECIAL-CHARACTER-FONT LISP-TEXT-FONT)	; ...Maybe TEXT-FONT?
+(SETQ DEFINITION-AMPERSAND-KEYWORD-FONT TEXT-FONT)
+(SETQ DEFINITION-COLON-KEYWORD-FONT LISP-TEXT-FONT)	; BOLDER
+(SETQ DEFINITION-TOKEN-FONT ITALIC-FONT)	;What the tokens go in
+(SETQ FIGURE-POST-LEADING 200.)
+
+;;;; request-initialize, request-finalize
+
+;Called at the start of processing, to init stuff in this file and its brethren
+; (sectionization, e.g.).
+(DEFUN REQUEST-INITIALIZE ()
+  (SETQ ENVIRONMENT-TYPE 'TEXT
+	DEFUN-ARG-SEPARATION-INTERNAL (CONVERT-MILLS DEFUN-ARG-SEPARATION)
+	DEFUN-CONTINUATION-INDENT-INTERNAL (CONVERT-MILLS DEFUN-CONTINUATION-INDENT)
+	group-depth 0
+	PENDING-FIGURES NIL)
+  (initialize-listings)
+  (initialize-sectionization))
+
+
+;;; Called at end of document.  Outputs table of contents and indices.
+(DEFUN REQUEST-FINALIZE ()
+  (SETQ INPUT-FILE '||)  ;Don't print something wierd in the page footer
+  (SETQ TABLE-OF-CONTENTS (CONS PRIMARY-SECTION-TOC-LEADING TABLE-OF-CONTENTS))
+  (STYLE-FINALIZE)	;Do something style-dependent (separate function so not compiled)
+  )
+
+;;; We have just read a period at the start of a line.  Read up to the
+;;; next CRLF, process it, and return.
+(DEFUN PROCESS-REQUEST ()
+    (SETQ REQUEST-EOL-P NIL  ;Don't bind, if called recursively want to see inner guy's flush
+	  JUST-INLINE-COMMAND-LINE NIL
+	  REQUEST-NAME NIL)
+    (PROCESS-REQUEST-1 (STRING-INTERN (GET-WORD-STRING))))
+
+
+(DEFUN PROCESS-REQUEST-1 (REQUEST-NAME)
+  (LET ((TEM))
+      (COND ((SETQ TEM (GET REQUEST-NAME 'REQUEST))
+	     (FUNCALL TEM))
+	    ((BARF '|Undefined request:| REQUEST-NAME)))
+      (FLUSH-REQUEST-LINE)))
+
+(DEFUN FLUSH-REQUEST-LINE ()
+  (OR REQUEST-EOL-P
+      (COND (JUST-INLINE-COMMAND-LINE
+	       (SETQ JUST-INLINE-COMMAND-LINE NIL))
+	    (T (DO CH (JIN-TYI) (JIN-TYI) (= CH #\LF)
+		   (DECLARE (FIXNUM CH))))))
+  (SETQ REQUEST-EOL-P T)
+  NIL)
+
+(DECLARE (FIXNUM (REQUEST-CH)))
+
+(DEFUN REQUEST-CH ()
+  (COND (REQUEST-EOL-P #\CR)
+	(JUST-INLINE-COMMAND-LINE
+	  (LET ((CH (JUST-INLINE-TYI)))
+	    (DECLARE (FIXNUM CH))
+	    (COND ((MINUSP CH) (SETQ REQUEST-EOL-P T) #\CR)
+		  (T CH))))
+	(T (LET ((CH (jin-TYI)))
+	     (DECLARE (FIXNUM CH))
+	     (COND ((= CH #\CR)
+		    (JIN-TYI)	;LF
+		    (SETQ REQUEST-EOL-P T)))
+	     CH))))
+
+;;; Get next word out of request line, as a string.  Words are delimited
+;;; by spaces.  NIL if nothing left on line.
+;;; Also words can have quotes around them
+(DEFUN GET-WORD-STRING ()
+  ;; First, skip blanks, and check for EOL
+  (DO ((CH (REQUEST-CH) (REQUEST-CH))) 
+      ((NOT (OR (= CH #\SP) (= CH #\TAB) (= CH #\CR) (= CH #\LF)))
+       ;; Now CH is first character of word
+       (TO-STRING-RECLAIM
+	 (NREVERSE
+	   (IF (= CH #/")
+	       (DO ((CH-LIST NIL (CONS CH CH-LIST))
+		    (CH (REQUEST-CH) (REQUEST-CH)))
+		   ((= CH #/") CH-LIST)
+		 (AND REQUEST-EOL-P
+		      (BARF "Unbalanced quotes in argument to" REQUEST-NAME)))
+	       (DO ((CH-LIST (NCONS CH) (CONS CH CH-LIST))
+		    (CH (REQUEST-CH) (REQUEST-CH)))
+		   ((OR (= CH #\SP) (= CH #\TAB) (= CH #\CR) (= CH #\LF))
+		    CH-LIST))))))
+    (DECLARE (FIXNUM CH))
+    (IF REQUEST-EOL-P (RETURN NIL))))
+
+;Get a word or parenthesized expression
+(DEFUN GET-SEXP-STRING ()
+  ;; First, skip blanks, and check for EOL
+  (DO ((CH (REQUEST-CH) (REQUEST-CH)))
+      ((NOT (OR (= CH #\SP) (= CH #\TAB) (= CH #\LF)))
+       (DO ((CH-LIST NIL) (PAREN-LEVEL 0))
+	   ((OR (= CH #\CR) (AND (ZEROP PAREN-LEVEL)
+				 (OR (= CH #\SP) (= CH #\TAB))))
+	    (AND CH-LIST (TO-STRING-RECLAIM (NREVERSE CH-LIST))))
+	 (DECLARE (FIXNUM PAREN-LEVEL))
+	 (CASEQ CH
+	   (#/( (SETQ PAREN-LEVEL (1+ PAREN-LEVEL)))
+	   (#/) (SETQ PAREN-LEVEL (1- PAREN-LEVEL))))
+	 (PUSH CH CH-LIST)
+	 (SETQ CH (REQUEST-CH))))
+    (DECLARE (FIXNUM CH))))
+
+;;; Get the rest of the line as a string.  Delete enclosing quotes if present,
+;;; for compatibility with R macros from 5 years ago.
+(DEFUN GET-LINE-STRING ()
+  (DO ((CH-LIST NIL (CONS CH CH-LIST))
+       (CH (REQUEST-CH) (REQUEST-CH))
+       (FIRST-CH -1)
+       (LAST-CH -1 CH))
+      (REQUEST-EOL-P
+       (TO-STRING-RECLAIM
+	 (IF (AND (= FIRST-CH #/") (= LAST-CH #/") (CDR CH-LIST))
+	     (CDR (NREVERSE (CDR CH-LIST)))	;Strip quotes
+	     (NREVERSE CH-LIST))))
+    (DECLARE (FIXNUM CH FIRST-CH LAST-CH))
+    (AND (MINUSP FIRST-CH) (SETQ FIRST-CH CH))))
+
+;;; Check proper nesting
+(DEFUN CHECK-ENV (DESIRED-ENV RQNAME)
+  (COND ((NOT (EQ ENVIRONMENT-TYPE DESIRED-ENV))
+	 (BARF ENVIRONMENT-TYPE '|wrong type environment for .| RQNAME)
+	 (SETQ ENVIRONMENT-TYPE DESIRED-ENV))))
+
+;Hook to truncate headings as necessary.
+; If NIL, then STANDARD-BOLIO-TRUNCATE-HEADING-AT-HYPHENEATION-BOUNDARY
+; will be used (q.v.).
+(defvar set-heading-truncation-hook
+  nil)
+
+;;; First .CHAPTER or .SECTION on a page sets heading for that page
+;;; Always sets heading for subsequent pages
+(DEFUN SET-HEADING (name)
+  (setq name (funcall
+	       (or set-heading-truncation-hook
+		   #'standard-bolio-truncate-heading-at-hyphenation-boundary)
+	       name))
+  (COND ((NOT HEADING-SET-THIS-PAGE)
+	 (SETQ HEADING-SET-THIS-PAGE T)
+	 (SETQ EVEN-TOP-LEFT-HEADING
+	       (SETQ ODD-TOP-RIGHT-HEADING name))))
+  (SETQ NEXT-EVEN-TOP-LEFT-HEADING
+	(SETQ NEXT-ODD-TOP-RIGHT-HEADING NAME)))
+
+;Simple dumb disgusting hook.  Kept because this was the first one written,
+; not that that is any reason.
+(defun standard-bolio-simple-heading-truncation (orig-name &aux name fl)
+  ;This is disgusting but it works, and you only lose at all when it
+  ; is actually doing the truncation.  Also, some of the numbers in here
+  ; should be parameterized or something.
+  (loop until (< (string-width name text-font)
+		 (- (// (- RIGHT-MARGIN LEFT-MARGIN) 2)
+		    (convert-mills (* thin-space-width 10.))))
+	do (setq name (substring name 0 (1- (string-length name)))
+		 fl t))
+  (COND (FL (FORMAT T "~&(The heading /"~A/"~% has been truncated to /"~A/")~%"
+		    (make-symbol orig-name) (make-symbol name)))))
+
+;This is the standard hook.  It truncates successively backwards to spaces
+; or hyphens, and adds an elipsis at the end.  The space will be omitted,
+; but not the hyphen.  e.g., "Fucking Around in the Brand-X Environment"
+; might get truncated to "Fucking Around in the..." or also to 
+; "Fucking around in the Brand-..." depending on various parameters.
+(defun standard-bolio-truncate-heading-at-hyphenation-boundary (orig-name)
+  (let ((wid (- (// (- right-margin left-margin) 2)
+		(convert-mills (* thin-space-width 10.))))
+	(name))
+    (declare (fixnum wid))
+    (if (< (string-width orig-name text-font) wid) orig-name
+	(loop for i from (1- (string-length orig-name)) downto 0
+	      as ch fixnum = (ar-1 orig-name i)
+	      when (or (= ch #\sp) (= ch #/-))
+	        when (< (string-width
+			  (setq name (string-append
+				       (substring
+					 orig-name 0 (if (= ch #/-) (1+ i) i))
+				       '|...|))
+			  text-font)
+			wid)
+		  do (format t '|~&(Heading /"~A/"~%  truncated to /"~A/")~%|
+			     (make-symbol orig-name) (make-symbol name))
+		  and return name
+	      finally (ferror () "Holy shit, what kind of heading is /"~A/"?"
+			      (make-symbol orig-name))))))
+
+
+;;;; Specific Requests
+
+(DEFPROP C NULL-REQUEST REQUEST)
+(DEFPROP COMMENT NULL-REQUEST REQUEST)
+
+(DEFPROP DEFUN DEFUN-REQUEST REQUEST)
+(DEFPROP DEFUN1 DEFUN1-REQUEST REQUEST)
+
+(DEFUN DEFUN-REQUEST ()
+  (CHECK-ENV 'TEXT 'DEFUN)
+  (OR (NEED-SPACE-MILLS 1000.) ;1 inch
+      (OUTPUT-LEADING-MILLS DEFUN-PRE-LEADING))
+  (CHECK-FONT-STATUS TEXT-FONT)
+  ((LAMBDA (LEFT-INDENT ENVIRONMENT-TYPE EXTRA-LEFT-INDENT-FIRST-LINE-OF-PARAGRAPH)
+      (DEFUN1-REQUEST)  ;Gobble the arguments, put out line, index, etc.
+      (FLUSH-REQUEST-LINE)
+      (DEFUN-HORRIBLE-TAB-CROCK)
+      (*CATCH 'DEFUN (MAIN-LOOP)))
+   (CONVERT-MILLS 500.) ;1/2 inch indent
+   'DEFUN
+   0))
+
+(DEFUN DEFUN1-REQUEST ()
+  (CHECK-ENV 'DEFUN 'DEFUN1)
+  (SETQ CUR-HPOS 0)
+  ((LAMBDA (FUNCTION-NAME JIN-CUR-FONT)
+      (OR FUNCTION-NAME (BARF '|Function name missing in .DEFUN or .DEFUN1|))
+      (SETQ CURRENT-DEFUN-NAME FUNCTION-NAME)
+      (ADD-TO-LISTING FUNCTION-NAME 'FUNCTION-INDEX)
+      (AUTO-SETQ FUNCTION-NAME '|fun|)
+      (SET-HPOS LEFT-MARGIN)
+      (PUT-STRING-FLUSH-LEFT FUNCTION-NAME)
+      (DEFUN-LINE-PROC))
+   (GET-WORD-STRING)
+   LISP-TITLE-FONT)
+  (SETQ BEGIN-NEW-PARAGRAPH NIL))
+
+;Continuation
+(DEFPROP DEFUNC DEFUNC-REQUEST REQUEST)
+
+(DEFUN DEFUNC-REQUEST ()
+  (CHECK-ENV 'DEFUN 'DEFUNC)
+  ((LAMBDA (JIN-CUR-FONT)
+	(JOUT-WHITE-SPACE (SETQ CUR-HPOS (+ LEFT-MARGIN LEFT-INDENT 128.)))
+	(DEFUN-LINE-PROC))
+   LISP-TITLE-FONT))
+
+(DEFUN DEFUN-LINE-PROC ()
+      (DEFUN-LINE-PROC-NO-NEWLINE)
+      (DEFUN-LINE-PROC-NEWLINE))
+
+(DEFUN DEFUN-LINE-PROC-NO-NEWLINE (&optional remark?)
+  (if remark?
+      ;If he specified a random "remark", then we pretend he did a special
+      ; form, which is capable of doing the hairy parsing, and in fact is
+      ; compatible with what we are defined to handle here, almost:
+      (let ((definition-special-character-font text-font))
+	(defspec-line-proc-no-newline remark?))
+      ;Otherwise, we can do it a bit quicker ourselves.  (Is this true?)
+      ;Copy the rest of the line, changing font from time to time
+      ; The rules are italics unless it begins with an ampersand or colon
+      (DO ((WD (GET-SEXP-STRING) (GET-SEXP-STRING))
+	   (JIN-CUR-FONT 0)  ;Font 0 same as text-font, this hack prevents
+	   (font-pdl-level 0))	;special characters when we shouldn't
+	  ((NULL WD))
+	(DECLARE (FIXNUM CH font-pdl-level))
+	(SETQ WD (DEFUN-LINE-FONTIFY-ARG WD))
+	(cond ((> (+ cur-hpos DEFUN-ARG-SEPARATION-INTERNAL (string-push-get-width wd))
+		  (- right-margin right-indent))
+	         (line-advance)
+		 (jout-white-space
+		    (setq cur-hpos (+ left-margin left-indent
+				      DEFUN-CONTINUATION-INDENT-INTERNAL))))
+	      (t (jout-white-space DEFUN-ARG-SEPARATION-INTERNAL)
+		 (setq cur-hpos (+ cur-hpos DEFUN-ARG-SEPARATION-INTERNAL))))
+	(setq font-pdl-level (font-pdl 0))
+	(output-nofill-line)			; output buffered string
+	(jin-cleanup)
+	(check-font-pdl-level font-pdl-level))))
+
+(DEFUN DEFUN-LINE-PROC-NEWLINE ()
+      (LINE-ADVANCE)
+      (SETQ BEGIN-NEW-PARAGRAPH NIL)  ;We don't want to see any leading
+      (DEFUN-HORRIBLE-TAB-CROCK))
+
+;;; This fixes the bug where there is inter-paragraph leading between
+;;; the defun line and the text, due to a tab in the input that shouldn't
+;;; have been there.
+;;; Gobble white-space characters after a .defun line
+(DEFUN DEFUN-HORRIBLE-TAB-CROCK ()
+  (DO ((CH (JIN-TYI) (JIN-TYI)))
+      ((AND (NOT (= CH #\CR)) (NOT (WHITE-SPACE-P CH)))
+       (JIN-UNTYI))
+    (DECLARE (FIXNUM CH))))
+
+(DEFUN DEFUN-LINE-FONTIFY-ARG (WD)
+  (CASEQ (AR-1 WD 0)
+    (#/& (SETQ JIN-CUR-FONT definition-ampersand-keyword-font) WD)
+    (#/: (setq jin-cur-font definition-colon-keyword-font) wd)
+    (#/( ;Outer parentheses in font 1.  Inside part in font 2
+         (SETQ JIN-CUR-FONT TEXT-FONT)
+	 (LET ((N (STRING-LENGTH WD)))
+	   (STRING-APPEND
+	     '|(/| (ascii (+ (if (= (ar-1 wd 1) #/:)
+				   definition-colon-keyword-font
+				   definition-token-font)
+			       60))
+	     (SUBSTRING WD 1 (1- N)) '|*| (SUBSTRING WD (1- N) N))))
+    (T (SETQ JIN-CUR-FONT definition-token-font) WD)))
+
+(DEFPROP END_DEFUN END-DEFUN-REQUEST REQUEST)
+
+(defun end-documentation-block (name end-name font-to-check)
+  (let ((old-environment-type environment-type))
+    (check-env name end-name)
+    (and font-to-check (check-font-status font-to-check))
+    (if (eq name old-environment-type) (*throw name nil)
+      (fbarf nil "(Assuming you are really closing a .~S request)"
+             old-environment-type)
+      (*throw old-environment-type nil))))
+
+(DEFUN END-DEFUN-REQUEST ()
+  (end-documentation-block 'defun 'end_defun text-font))
+
+;;;; defmac, defspec
+
+(DEFPROP DEFMAC DEFMAC-REQUEST REQUEST)
+(DEFPROP DEFMAC1 DEFMAC1-REQUEST REQUEST)
+(DEFPROP END_DEFMAC END-DEFUN-REQUEST REQUEST)
+(DEFPROP DEFSPEC DEFSPEC-REQUEST REQUEST)
+(DEFPROP DEFSPEC1 DEFSPEC1-REQUEST REQUEST)
+(DEFPROP END_DEFSPEC END-DEFUN-REQUEST REQUEST)
+
+(DEFUN DEFMAC-REQUEST ()
+  (CHECK-ENV 'TEXT 'DEFMAC)
+  (OR (NEED-SPACE-MILLS 1000.) ;1 inch
+      (OUTPUT-LEADING-MILLS DEFUN-PRE-LEADING))
+  (CHECK-FONT-STATUS TEXT-FONT)
+  ((LAMBDA (LEFT-INDENT ENVIRONMENT-TYPE EXTRA-LEFT-INDENT-FIRST-LINE-OF-PARAGRAPH)
+      (DEFMAC1-REQUEST)  ;Put out line, index, etc.
+      (*CATCH 'DEFUN (MAIN-LOOP)))
+   (CONVERT-MILLS 500.) ;1/2 inch indent
+   'DEFUN
+   0))
+
+(DEFUN DEFMAC1-REQUEST ()
+  (CHECK-ENV 'DEFUN 'DEFMAC1)
+  (SETQ CUR-HPOS 0)
+  ((LAMBDA (FUNCTION-NAME JIN-CUR-FONT)
+      (OR FUNCTION-NAME (BARF '|Function name missing in .DEFMAC or .DEFMAC1|))
+      (SETQ CURRENT-DEFUN-NAME FUNCTION-NAME)
+      (ADD-TO-LISTING FUNCTION-NAME 'MACRO-INDEX)
+      (AUTO-SETQ FUNCTION-NAME '|fun|)
+      (SET-HPOS LEFT-MARGIN)
+      (PUT-STRING-FLUSH-LEFT FUNCTION-NAME)
+      (defspec-line-proc '|Macro|))
+   (GET-WORD-STRING)
+   LISP-TITLE-FONT))
+
+(DEFUN DEFSPEC-REQUEST ()
+  (CHECK-ENV 'TEXT 'DEFSPEC)
+  (OR (NEED-SPACE-MILLS 1000.) ;1 inch
+      (OUTPUT-LEADING-MILLS DEFUN-PRE-LEADING))
+  (CHECK-FONT-STATUS TEXT-FONT)
+  ((LAMBDA (LEFT-INDENT ENVIRONMENT-TYPE EXTRA-LEFT-INDENT-FIRST-LINE-OF-PARAGRAPH)
+      (DEFSPEC1-REQUEST)  ;Put out line, index, etc.
+      (*CATCH 'DEFUN (MAIN-LOOP)))
+   (CONVERT-MILLS 500.) ;1/2 inch indent
+   'DEFUN
+   0))
+
+(DEFUN DEFSPEC1-REQUEST ()
+  (CHECK-ENV 'DEFUN 'DEFSPEC1)
+  (SETQ CUR-HPOS 0)
+  ((LAMBDA (FUNCTION-NAME JIN-CUR-FONT)
+      (OR FUNCTION-NAME (BARF '|Function name missing in .DEFSPEC or .DEFSPEC1|))
+      (SETQ CURRENT-DEFUN-NAME FUNCTION-NAME)
+      (ADD-TO-LISTING FUNCTION-NAME 'SPECIAL-FORM-INDEX)
+      (AUTO-SETQ FUNCTION-NAME '|fun|)
+      (SET-HPOS LEFT-MARGIN)
+      (PUT-STRING-FLUSH-LEFT FUNCTION-NAME)
+      (defspec-line-proc '|Special Form|))
+   (GET-WORD-STRING)
+   LISP-TITLE-FONT))
+
+
+;;;; Special-form arglist hacking
+
+;Process the syntax pattern for a special form.
+;parentheses, square brackets, curly brackets printed in font 3
+;all other characters in font 2
+;spaces turn into DEFUN-ARG-SEPARATION
+;First line has a right-justified remark in italics, set off by
+;at least as much space as 1/2 its own width.
+;Remark is usually "Special Form".
+;
+;Conventions are:
+; Parentheses are themselves
+; Square brackets surround optional items
+; ... after an item means zero or more of it
+; {item1 item2}... means zero or more alternations of item1, item2
+;DEFINITION-MARKER-EXDENTATION	;mills in from right margin (or nil)
+;DEFINITION-MARKER-SPACE	;mills space before it
+;DEFINITION-MARKER-FONT		;font number
+
+(defun defspec-line-proc (remark)
+  (defspec-line-proc-no-newline remark)
+  (defspec-line-proc-newline))
+
+(defun defspec-line-proc-newline ()
+  (defun-line-proc-newline))
+
+
+
+(defun defspec-line-proc-no-newline (remark &aux remark-string remark-width)
+  (cond ((null remark))
+	((setq remark-string (assq remark defspec-line-proc-table))
+	 (setq remark-width (caddr remark-string)
+	       remark-string (cadr remark-string)))
+	(t (setq remark-string (if (stringp remark) remark
+				   ;Else cache the string we create:
+				   (just-string remark))
+		 remark-width
+		 (+ (string-width remark-string definition-marker-font)
+		    (convert-mills definition-marker-space)
+		    (convert-mills (or definition-marker-exdentation 0))))
+	   (push (list remark remark-string remark-width)
+		 defspec-line-proc-table)))
+  (do ((wd (get-defspec-token-string) (get-defspec-token-string))
+       (first-line t)
+       (frobs-on-this-line? t)
+       (margin (- right-margin right-indent remark-width))
+       (jin-cur-font italic-font) (font-pdl-level 0))
+      ((null wd)
+       (when (and first-line remark)
+	 (when (> cur-hpos margin)
+	   ;Remember, the variable margin includes the needed space on
+	   ; both sides of the remark string.
+	   (line-advance)
+	   ;In case the remark is not right justified, but rather just spaced
+	   ; from the current position by definition-marker-space.
+	   (jout-white-space
+	      (setq cur-hpos (+ left-margin left-indent
+				defun-continuation-indent-internal))))
+	 (put-defspec-remark remark-string)))
+    (declare (fixnum ch margin font-pdl-level))
+    (cond ((> (+ cur-hpos defun-arg-separation-internal
+		 (string-push-get-width wd))
+	      margin)
+	   (cond ((and first-line remark)
+		  (setq first-line nil)
+		  (do ((init-pos (jin-get-pos)) (ch (jin) (jin)))
+		      ((= ch 12)
+		       (jin-absorb init-pos (jin-get-pos))
+		       (jin-cleanup))
+		    (declare (fixnum init-pos ch)))
+		  (cond ((and frobs-on-this-line?
+			      (> (+ cur-hpos defun-arg-separation-internal)
+				 margin))
+			   ;The remark doesn't fit with anything!
+			   ; Defer it.
+			   (setq first-line t))
+			(t (put-defspec-remark remark-string)
+			   (setq margin (+ margin remark-width))))
+		  (jin-push lf-str)
+		  (jin-push wd)))
+	   (line-advance)
+	   (setq frobs-on-this-line? nil)
+	   (jout-white-space
+	      (setq cur-hpos (+ left-margin left-indent
+				defun-continuation-indent-internal))))
+	  (t (jout-white-space defun-arg-separation-internal)
+	     (setq cur-hpos (+ cur-hpos defun-arg-separation-internal))
+	     (setq frobs-on-this-line? t)))
+    (setq font-pdl-level (font-pdl 0))
+    (output-nofill-line)			; output buffered string
+    (jin-cleanup)
+    (check-font-pdl-level font-pdl-level)))
+
+(defun put-defspec-remark (remark-string)
+  (let ((jin-cur-font definition-marker-font))
+    (if definition-marker-exdentation
+	(put-string-flush-right remark-string
+	     (- right-margin right-indent
+		(convert-mills definition-marker-exdentation)))
+	(jout-white-space (convert-mills definition-marker-space))
+	(put-string-flush-left remark-string))))
+
+
+(defvar defspec-delimiters
+  '(#/| #/( #/) #/[ #/] #/{ #/} #/.))
+
+(defun get-defspec-token-string ()
+  ;; First, skip blanks, and check for EOL
+  (cond ((not (null request-eol-p)) nil)
+	(just-inline-command-line (break get-defspec-token-string))
+	(t (do ((ch (jin-tyi) (jin-tyi)))
+	       ((not (= ch 40))
+		(cond ((= ch 15)
+		       (jin-tyi)
+		       (setq request-eol-p t)
+		       nil)
+		      (t (do ((ch-list (ncons ch) (cons ch ch-list))
+			      (ch (jin-tyi) (jin-tyi)))
+			     ((or (= ch 40) (= ch 15) (= ch 11))
+			      (cond ((= ch 15)
+				     (jin-tyi)
+				     (setq request-eol-p t)))
+			      (to-string-reclaim
+			        (fix-defspec-ch-list (nreverse ch-list))))))))
+	     (declare (fixnum ch))))))
+
+(defun fix-defspec-ch-list (ch-list)
+  (cond ((null ch-list) ())
+	((or (= (car ch-list) #/:) (= (car ch-list) #/&))
+	   (loop for l on (cdr ch-list)
+		 when (member (car l) defspec-delimiters)
+		   return (rplaca
+			    (rplacd l (list* #/* (car l)
+					     (fix-defspec-ch-list (cdr l))))
+			    #^F)
+		 finally (nconc ch-list (list #^F #/*)))
+	   (list* #^F (+ (if (= (car ch-list) #/&)
+			     definition-ampersand-keyword-font
+			     definition-special-character-font)
+			 60)
+		  ch-list))
+	((member (car ch-list) defspec-delimiters)
+	   (loop for l on (cdr ch-list)
+		 when (not (member (car l) defspec-delimiters))
+		   return (rplaca
+			    (rplacd l (list* #/* (car l)
+					     (fix-defspec-ch-list (cdr l))))
+			    #^F)
+		 finally (nconc ch-list (list #^F #/*)))
+	   (list* #^F (+ definition-special-character-font 60) ch-list))
+	((or (= (car ch-list) #\sp) (= (car ch-list) #\tab))
+	   (rplacd ch-list (fix-defspec-ch-list (cdr ch-list))))
+	(t (do ((prev ch-list l) (l (cdr ch-list) (cdr l)))
+	       ((null l))
+	     (cond ((or (= (car l) #\sp) (= (car l) #\tab)
+			(member (car l) defspec-delimiters))
+		      (return (rplacd prev (fix-defspec-ch-list l))))))
+	   ch-list)))
+
+
+;;;; defvar
+
+(DEFPROP DEFVAR DEFVAR-REQUEST REQUEST)
+(DEFPROP DEFVAR1 DEFVAR1-REQUEST REQUEST)
+(DEFPROP END_DEFVAR END-DEFVAR-REQUEST REQUEST)
+
+(DEFUN DEFVAR-REQUEST ()
+  (CHECK-ENV 'TEXT 'DEFVAR)
+  (OR (NEED-SPACE-MILLS 1000.) ;1 inch
+      (OUTPUT-LEADING-MILLS DEFUN-PRE-LEADING))
+  (CHECK-FONT-STATUS TEXT-FONT)
+  ((LAMBDA (LEFT-INDENT ENVIRONMENT-TYPE EXTRA-LEFT-INDENT-FIRST-LINE-OF-PARAGRAPH)
+      (DEFVAR1-REQUEST)  ;Gobble the arguments, put out line, index, etc.
+      (FLUSH-REQUEST-LINE)
+      (DEFUN-HORRIBLE-TAB-CROCK)
+      (*CATCH 'DEFVAR (MAIN-LOOP)))
+   (CONVERT-MILLS 500.) ;1/2 inch indent
+   'DEFVAR
+   0))
+
+(DEFUN DEFVAR1-REQUEST ()
+  (CHECK-ENV 'DEFVAR 'DEFVAR1)
+  (SETQ CUR-HPOS 0)
+  (let ((variable-name (get-word-string))
+	(other-randomness (get-line-string))
+	(jin-cur-font lisp-title-font))
+    (or variable-name (barf '|Variable name missing in .DEFVAR or .DEFVAR1|))
+    (ADD-TO-LISTING VARIABLE-NAME 'VARIABLE-INDEX)
+    (AUTO-SETQ VARIABLE-NAME '|var|)
+    (SET-HPOS LEFT-MARGIN)
+    (PUT-STRING-FLUSH-LEFT VARIABLE-NAME)
+    (cond ((plusp (string-length other-randomness))
+	     (setq jin-cur-font text-font)
+	     (output-nofill-string (just-string '|  |))
+	     (output-nofill-string other-randomness)))
+    (put-defspec-remark '|Variable|)
+    (LINE-ADVANCE)
+    (SETQ BEGIN-NEW-PARAGRAPH NIL)))
+
+(DEFUN END-DEFVAR-REQUEST ()
+  (end-documentation-block 'defvar 'end_defvar text-font))
+
+
+;;;; Not Yet Supported
+
+;;; These requests don't exist yet.
+;Surely we want to barf if anyone tries to use them!
+;(DEFPROP GLOSSARY NULL-REQUEST REQUEST)
+;(DEFPROP END_GLOSSARY NULL-REQUEST REQUEST)
+;(DEFPROP XREF NULL-REQUEST REQUEST)
+;(DEFPROP NYI NULL-REQUEST REQUEST)
+
+;;;; Code Blocks
+
+(defvar *lisp-block-font)
+
+(DEFPROP LISP LISP-REQUEST REQUEST)
+(DEFPROP END_LISP END-LISP-REQUEST REQUEST)
+
+(DEFVAR LISP-BLOCK-LEADING NIL)
+
+(DEFUN LISP-REQUEST ()
+  ;If there is a blank line before this, i.e. starting a new
+  ;paragraph, leave blank space
+  (lisp-request-1 (get-numeric-arg) (get-numeric-arg)))
+
+(defun lisp-request-1 (indentation font)
+  (COND (BEGIN-NEW-PARAGRAPH
+	 (SETQ BEGIN-NEW-PARAGRAPH NIL)
+	 (OUTPUT-LEADING-MILLS INTERPARAGRAPH-LEADING)
+	 (OUTPUT-PENDING-LEADING))
+	(LISP-BLOCK-LEADING
+	 (OUTPUT-LEADING-MILLS LISP-BLOCK-LEADING)
+	 (OUTPUT-PENDING-LEADING)))
+  (LET ((LEFT-INDENT (+ LEFT-INDENT
+			;an additional half inch, by default
+			(convert-mills (or indentation 500.))))
+	(ENVIRONMENT-TYPE 'LISP)
+	(*lisp-block-font (or font lisp-block-font))
+	(FILL-MODE-P NIL))
+    (let ((jin-cur-font *lisp-block-font))
+      (FLUSH-REQUEST-LINE)
+      (CHECK-FONT-STATUS *lisp-block-font)
+      (frobnicate-group 'lisp)
+      (COND (LISP-BLOCK-LEADING
+	     (OUTPUT-LEADING-MILLS LISP-BLOCK-LEADING)
+	     (OUTPUT-PENDING-LEADING))))))
+
+(DEFUN END-LISP-REQUEST ()
+  (CHECK-ENV 'LISP 'END_LISP)
+  (CHECK-FONT-STATUS *lisp-block-font)
+  (SETQ BEGIN-NEW-PARAGRAPH NIL) ;Lisp code blocks often used in the middle of a paragraph.
+  (END-GROUP 'lisp))
+
+(defvar *english-block-font)
+
+(DEFVAR ENGLISH-BLOCK-LEADING
+  NIL)
+
+(DEFUN english-REQUEST ()
+  ;If there is a blank line before this, i.e. starting a new paragraph, leave blank space
+  (english-request-1 (get-numeric-arg) (get-numeric-arg)))
+
+(defun english-request-1 (indentation font)
+  (COND (BEGIN-NEW-PARAGRAPH
+	 (SETQ BEGIN-NEW-PARAGRAPH NIL)
+	 (OUTPUT-LEADING-MILLS INTERPARAGRAPH-LEADING)
+	 (OUTPUT-PENDING-LEADING))
+	(ENGLISH-BLOCK-LEADING
+	 (OUTPUT-LEADING-MILLS ENGLISH-BLOCK-LEADING)
+	 (OUTPUT-PENDING-LEADING)))
+  (LET ((LEFT-INDENT (+ LEFT-INDENT
+			; Indent arg or 1/2 inch
+			(CONVERT-MILLS (or indentation 500.))))
+	(ENVIRONMENT-TYPE 'english)
+	(*english-block-font (or font text-font))
+	(FILL-MODE-P t))
+    (let ((jin-cur-font *english-block-font))
+      (FLUSH-REQUEST-LINE)
+      (CHECK-FONT-STATUS *english-block-font)
+      (frobnicate-group 'english)
+      (COND (ENGLISH-BLOCK-LEADING
+	     (OUTPUT-LEADING-MILLS ENGLISH-BLOCK-LEADING)
+	     (OUTPUT-PENDING-LEADING))))))
+
+(DEFUN END-english-REQUEST ()
+  (CHECK-ENV 'english 'END_english)
+  (CHECK-FONT-STATUS *english-block-font)
+  ;English code blocks often used in the middle of a paragraph:
+  (SETQ BEGIN-NEW-PARAGRAPH NIL)
+  (END-GROUP 'english))
+
+(defprop english english-request request)
+(defprop end_english end-english-request request)
+
+;;*** This request is a crock and should be replaced ***
+;;*** For compatibility with old garbage the exdent amount is in XGP units ***
+(DEFPROP EXDENT EXDENT-REQUEST REQUEST) 
+(DEFUN EXDENT-REQUEST ()
+  (LET ((LEFT-INDENT (- LEFT-INDENT (CONVERT-MILLS (* (GET-NUMERIC-ARG) 5))))
+	(TITLE-STRING (GET-LINE-STRING))
+	(JIN-CUR-FONT text-font))
+    (OUTPUT-PENDING-LEADING)
+    (SET-HPOS (+ LEFT-MARGIN LEFT-INDENT))
+    (PUT-STRING-FLUSH-LEFT TITLE-STRING)
+    (LINE-ADVANCE)))
+
+;;;; Regular Text Justifier Stuff
+
+(DEFUN EOF-REQUEST ()
+  (cond ((not (eq environment-type 'text))
+	 (barf '|Unterminated| environment-type '|at end of file|))
+	(group-start-filepos
+	 (barf '|End of file inside a group--something is wrong|)))
+  (setq group-start-filepos nil)
+	;Otherwise it will likely blow out inside the index printer
+	;In any case, hopeless to retrench across files
+  (setq jin-stack-level 0) ;Kludge--defeat error check
+  (JIN-END-INSERT-FILE))
+
+(DEFPROP BREAK NULL-REQUEST REQUEST) ;everything breaks right now
+(DEFPROP BR NULL-REQUEST REQUEST)
+(DEFPROP PAGE NEXT-PAGE REQUEST)
+
+(defprop nopara nopara-request request)
+(defun nopara-request ()
+  (output-leading (* (or (get-numeric-arg) 1) xgp-line-height))
+  (setq begin-new-paragraph nil))
+
+(DEFPROP GROUP GROUP-REQUEST REQUEST)
+(DEFPROP END_GROUP END-GROUP-REQUEST REQUEST)
+(DEFPROP APART END-GROUP-REQUEST REQUEST)
+
+(SETQ GROUP-START-FONT-PDL (*ARRAY NIL 'FIXNUM 10))
+
+
+(defun frobnicate-group (group-flavor)
+    (let ((group-depth (1+ group-depth)))
+      (and (*catch (cond ((= group-depth 1)
+			    (SETQ GROUP-START-FILEPOS (JIN-TYI-GET-FILEPOS)
+				  GROUP-START-VPOS CUR-VPOS
+				  GROUP-START-FILL-MODE-P FILL-MODE-P
+				  GROUP-START-BP (NUMBER-COPY OUTPUT-BP)
+				  GROUP-START-FONT JIN-CUR-FONT)
+			    (FILLARRAY GROUP-START-FONT-PDL 'FONT-PDL)
+			    'group)
+			 (t 'inner-group))
+		   (main-loop))
+	   ;; If the *catch returns T, then it was thrown out of by
+	   ;; GROUP-RETRENCH, so we need to do a main-loop over again
+	   (*catch 'group (main-loop)))))
+
+(defun group-request ()
+    (flush-request-line)
+    (frobnicate-group 'group))
+
+
+(DEFUN GROUP-RETRENCH ()
+  (JIN-TYI-SET-FILEPOS GROUP-START-FILEPOS)
+  (SETQ JIN-CUR-FONT GROUP-START-FONT
+	CUR-VPOS GROUP-START-VPOS
+	FILL-MODE-P GROUP-START-FILL-MODE-P
+	OUTPUT-BP GROUP-START-BP)
+  (FILLARRAY 'FONT-PDL GROUP-START-FONT-PDL)
+  (SETQ GROUP-START-FILEPOS NIL)  ;Don't do twice if longer than a page
+  (next-page)
+  (*throw 'group t))
+
+(DEFUN END-GROUP-REQUEST () 
+    (cond ((zerop group-depth)
+	   (BARF '|.END_GROUP or .APART not inside a .GROUP|)))  
+    (end-group 'group))
+
+
+(defun end-group (flavor)
+  (cond ((zerop group-depth)
+	   (barf '|Stray termination command for| flavor '|group found.|))
+	((not (eq group-flavor flavor))
+	   (barf '|Mismatched groups: expecting| group-flavor
+		 '|but found| flavor))
+	((= group-depth 1)
+	   (SETQ GROUP-START-FILEPOS NIL GROUP-START-BP NIL)
+	   (*throw 'group nil))
+	(t (*throw 'inner-group nil))))
+;The rest of the work is done in NEXT-PAGE
+
+;IGNORE, END_IGNORE
+
+(DEFUN NULL-REQUEST () NIL)
+
+(defprop insert insert-request request)
+(defun insert-request ()
+  (jin-insert-file (mergef (mergef (string-intern (get-line-string))
+				   #+ITS '|* >| #-ITS '|* TEXT|)
+			   input-file-specified)))
+
+(DEFPROP HEADINGS HEADINGS-REQUEST REQUEST)
+(DEFUN HEADINGS-REQUEST ()
+  (LET ((WD (GET-WORD-STRING)))
+    (COND ((STRING-EQUAL WD 'ON) (SETQ SUPPRESS-HEADINGS NIL)
+				 (RESET-PAGE-NUMBER 1))
+	  ((STRING-EQUAL WD 'OFF) (SETQ SUPPRESS-HEADINGS T))
+	  (T (BARF '|.HEADINGS arg of | WD '| should be ON or OFF|)))))
+
+(DECLARE (REMPROP 'READ-FROM-STRING '*LEXPR))		;I guess this fixes something
+
+(DEFUN READ-FROM-STRING (STR)
+  (DO ((I 0 (1+ I))
+       (N (STRING-LENGTH STR))
+       (L NIL (CONS (AR-1 STR I) L)))
+      ((= I N) (prog1 (readlist (setq l (nreverse l)))
+		      (reclaim l (setq l nil))))
+    (DECLARE (FIXNUM I N))))
+
+;Return numeric argument or NIL if no more args
+(DEFUN GET-NUMERIC-ARG ()
+  (LET ((STRING (GET-WORD-STRING)))
+    (AND STRING
+	 (LOOP FOR I FROM 0 BELOW (STRING-LENGTH STRING)
+	       AS CH FIXNUM = (AR-1 STRING I)
+	       WITH RESULT FIXNUM = 0
+	       WHEN (OR (> #/0 CH) (> CH #/9))
+	         DO (FBARF "/"~A/" where numeric argument to .~A expected"
+			   (STRING-INTERN STRING) REQUEST-NAME)
+		    (RETURN NIL)
+	       DO (SETQ RESULT (+ (* RESULT 10.) (- CH #/0)))
+	       FINALLY (RETURN RESULT)))))
+
+;;; .NEED n   (mills)
+(DEFPROP NEED NEED-REQUEST REQUEST)
+
+(DEFUN NEED-REQUEST ()
+  (NEED-SPACE-MILLS (OR (GET-NUMERIC-ARG) 0)))
+
+(DEFPROP SPACE SPACE-REQUEST REQUEST)
+(DEFPROP SP SPACE-REQUEST REQUEST)
+
+(noDEFUN SPACE-REQUEST ()
+  (DO NLINES (OR (GET-NUMERIC-ARG) 1) (1- NLINES) (ZEROP NLINES)
+    (DECLARE (FIXNUM NLINES))
+    (LINE-ADVANCE)))
+
+(defun space-request ()
+   (setq chars-on-this-page-p t)		;So it works even at top of page
+   (output-leading (* (or (get-numeric-arg) 1) xgp-line-height)))
+
+(DEFPROP NOFILL NOFILL-REQUEST REQUEST)
+(DEFPROP FILL FILL-REQUEST REQUEST)
+
+(DEFUN NOFILL-REQUEST ()
+  (SETQ FILL-MODE-P NIL))
+
+(DEFUN FILL-REQUEST ()
+  (SETQ FILL-MODE-P T))
+
+;;;; Figures
+
+(DEFPROP FIGURE FIGURE-REQUEST REQUEST)
+
+;.FIGURE title height {text height-above-bottom}...
+;heights are in mills
+;This leaves enough space, either here or at the state of a new page,
+;for the figure.  Optionally some lines of centered text may be specified.
+(DEFUN FIGURE-REQUEST ()
+  (LET ((TITLE (GET-WORD-STRING))
+	(HEIGHT (CONVERT-MILLS
+		  (MIN (OR (GET-NUMERIC-ARG)
+			   (BARF ".FIGURE needs at least two arguments"))
+		       (- ALARM-VPOS TOP-TEXT-VPOS)))))
+    (OR (PLUSP (STRING-LENGTH TITLE)) (SETQ TITLE NIL))
+    (SETQ PENDING-FIGURES
+	  (NCONC PENDING-FIGURES
+		 (NCONS
+		   (LIST* HEIGHT TITLE
+			  (LOOP UNTIL REQUEST-EOL-P
+				NCONC (LIST (GET-WORD-STRING)
+					    (CONVERT-MILLS
+					     (OR (GET-NUMERIC-ARG)
+						 100.))))))))
+    (OR PROCESSING-PARAGRAPH
+	(OUTPUT-FIGURES NIL))))
+
+(DEFUN OUTPUT-FIGURES (FORCE)
+  (LET ((HPOS-TO-BE-RESTORED CUR-HPOS))
+    (LOOP WHILE PENDING-FIGURES
+	  AS FIG = (CAR PENDING-FIGURES)
+	  WHEN (> (CAR FIG) (- ALARM-VPOS-INTERNAL CUR-VPOS))
+	    WHEN FORCE DO (LET ((PENDING-FIGURES NIL)) (NEXT-PAGE))
+	    ELSE RETURN T
+	  AS BOTTOM-VPOS FIXNUM = (+ CUR-VPOS (CAR FIG))
+	  DO (LOOP FOR (TEXT POS) ON (CDDR FIG) BY 'CDDR
+		   WITH JIN-CUR-FONT = TEXT-FONT
+		   DO (SET-VPOS (- BOTTOM-VPOS POS))
+		      (PUT-STRING-CENTERED TEXT
+				    (// (+ LEFT-MARGIN RIGHT-MARGIN) 2)))
+	     (AND (CADR FIG) (ADD-TO-LISTING (CADR FIG) 'TABLE-OF-FIGURES))
+	     (POP PENDING-FIGURES)
+	     (SETQ CHARS-ON-THIS-PAGE-P T)
+	     (SET-VPOS BOTTOM-VPOS)
+	     (OUTPUT-LEADING-MILLS FIGURE-POST-LEADING)
+	     (SETQ CUR-HPOS HPOS-TO-BE-RESTORED)	;Sigh.....
+	     (OUTPUT-PENDING-LEADING))))	;Effectively LINE-ADVANCE
+
+
+;;;; Table Stuff
+
+
+(DEFPROP TABLE TABLE-REQUEST REQUEST)
+(DEFPROP FTABLE FTABLE-REQUEST REQUEST)
+(DEFPROP ITEM ITEM-REQUEST REQUEST)
+(DEFPROP ITEM1 ITEM1-REQUEST REQUEST)
+(DEFPROP END_TABLE END-TABLE-REQUEST REQUEST)
+
+(SETQ TABLE-ITEM-INDEX-NAME NIL)
+(SETQ ITEM-KINDEX-FLAG NIL)
+(DEFUN FTABLE-REQUEST ()
+  (LET ((TABLE-ITEM-INDEX-NAME 'FUNCTION-INDEX))
+    (TABLE-REQUEST)))
+
+;;; .TABLE item-font left-indent item-white-space-width right-indent 
+;;;		item-pre-leading item-post-leading
+(DEFUN TABLE-REQUEST ()
+  (DO ((TABLE-ITEM-FONT (OR (GET-NUMERIC-ARG) LISP-TEXT-FONT))
+       (L-I (CONVERT-MILLS (OR (GET-NUMERIC-ARG) 0)))
+       (TABLE-ITEM-WIDTH (CONVERT-MILLS (OR (GET-NUMERIC-ARG) 1000.)))
+       (RIGHT-INDENT (+ RIGHT-INDENT (CONVERT-MILLS (OR (GET-NUMERIC-ARG) 0))))
+       (TABLE-ITEM-PRE-LEADING (CONVERT-MILLS (OR (GET-NUMERIC-ARG) THIN-LEAD-MILLS)))
+       (TABLE-ITEM-POST-LEADING (CONVERT-MILLS (OR (GET-NUMERIC-ARG) 0))))
+      NIL
+    (DECLARE (FIXNUM L-I))
+    (FLUSH-REQUEST-LINE)
+    (CHECK-FONT-STATUS TEXT-FONT)
+    (DO ((LEFT-INDENT (+ LEFT-INDENT L-I TABLE-ITEM-WIDTH))
+	 (EXTRA-LEFT-INDENT-FIRST-LINE-OF-PARAGRAPH 0)
+	 (ENVIRONMENT-TYPE 'TABLE))
+	NIL
+      (*CATCH 'TABLE (MAIN-LOOP)))))
+
+(DEFUN END-TABLE-REQUEST ()
+  (end-documentation-block 'table 'end_table text-font))
+
+;Give this bag-biter a top level binding so that if we have a .ITEM
+;outside a .TABLE we don't get a Lisp error which precludes seeing the Bolio error.
+(SETQ TABLE-ITEM-PRE-LEADING 0
+      TABLE-ITEM-POST-LEADING 0)
+
+;;; .ITEM and index as keyword for last function documented
+(DEFUN (KITEM REQUEST) ()
+  (LET ((ITEM-KINDEX-FLAG CURRENT-DEFUN-NAME))
+    (ITEM-REQUEST)))
+
+;;; .ITEM text to be exdented
+(DEFUN ITEM-REQUEST ()
+  (OR (NEED-SPACE-MILLS 250.)	;1/4 inch - a couple lines
+      (OUTPUT-LEADING TABLE-ITEM-PRE-LEADING))
+  (ITEM1-REQUEST))
+
+(DEFUN ITEM1-REQUEST ()
+  (CHECK-ENV 'TABLE 'ITEM)
+  (CHECK-FONT-STATUS TEXT-FONT)
+  (DO ((STR (GET-LINE-STRING))
+       (JIN-CUR-FONT TABLE-ITEM-FONT)
+       (LEFT-INDENT (- LEFT-INDENT TABLE-ITEM-WIDTH)))
+      NIL
+    (AND CHARS-ON-THIS-LINE-P (LINE-ADVANCE))
+    (AND TABLE-ITEM-INDEX-NAME (ADD-TO-LISTING STR TABLE-ITEM-INDEX-NAME))
+    (AND ITEM-KINDEX-FLAG
+	 (ADD-TO-LISTING
+	    (list str (STRING-APPEND '|(for | ITEM-KINDEX-FLAG '|)|))
+	    'KEYWORD-INDEX))
+    (SET-HPOS (+ LEFT-MARGIN LEFT-INDENT))
+    (PUT-STRING-FLUSH-LEFT STR))
+  (SETQ BEGIN-NEW-PARAGRAPH NIL)
+  (COND ((AND (< (+ CUR-HPOS (CONVERT-MILLS (MAX MIN-WHITE-SPACE-BETWEEN-WORDS
+						 MIN-WHITE-SPACE-AFTER-ITEM)))
+		 (+ LEFT-MARGIN LEFT-INDENT))
+	      (NOT (= (JIN-TYIPEEK) 56)))	;Dot-command causes a break
+	 ) ;Next line starts at LEFT-INDENT on this line
+	(T (LINE-ADVANCE)	;Item too wide, next line starts on next line
+	   (OUTPUT-LEADING TABLE-ITEM-POST-LEADING))))
+
+;;; Continued .ITEM
+(DEFPROP ITEMC ITEMC-REQUEST REQUEST)
+(DEFUN ITEMC-REQUEST ()
+  (CHECK-ENV 'TABLE 'ITEMC)
+  (DO ((STR (GET-LINE-STRING))
+       (JIN-CUR-FONT TABLE-ITEM-FONT)
+       (LEFT-INDENT (- LEFT-INDENT TABLE-ITEM-WIDTH)))
+      NIL
+    (AND CHARS-ON-THIS-LINE-P (LINE-ADVANCE))
+    (SET-HPOS (+ LEFT-MARGIN LEFT-INDENT))
+    (PUT-STRING-FLUSH-LEFT STR))
+  (SETQ BEGIN-NEW-PARAGRAPH NIL)
+  (COND ((< (+ CUR-HPOS (CONVERT-MILLS (MAX MIN-WHITE-SPACE-BETWEEN-WORDS
+					    MIN-WHITE-SPACE-AFTER-ITEM)))
+	    (+ LEFT-MARGIN LEFT-INDENT))
+	 ) ;Next line starts at LEFT-INDENT on this line
+	(T (LINE-ADVANCE)  ;Item too wide, next line starts on next line
+	   (OUTPUT-LEADING TABLE-ITEM-POST-LEADING))))
+
+;;;; More Random Requests
+
+(DEFPROP RAGGED_RIGHT RAGGED-RIGHT-REQUEST REQUEST)
+(DEFUN RAGGED-RIGHT-REQUEST ()
+  (SETQ RAGGED-RIGHT (CONVERT-MILLS (OR (GET-NUMERIC-ARG) 250.))))
+
+(DEFPROP CENTER CENTER-REQUEST REQUEST)
+(DEFUN CENTER-REQUEST ()
+  (PUT-STRING-CENTERED (GET-LINE-STRING) (// (+ LEFT-MARGIN RIGHT-MARGIN) 2))
+  (LINE-ADVANCE))
+
+(DEFPROP SPREAD SPREAD-REQUEST REQUEST)
+(DEFUN SPREAD-REQUEST ()
+  (LET ((DELIMITER (LOOP AS CH = (JIN-TYI) WHILE (= CH 40) FINALLY (RETURN CH))))
+    (LET ((LEFT (GET-DELIMITED-STRING DELIMITER))
+	  (MIDDLE (GET-DELIMITED-STRING DELIMITER))
+	  (RIGHT (GET-DELIMITED-STRING DELIMITER)))
+    (SET-HPOS LEFT-MARGIN)
+    (PUT-STRING-FLUSH-LEFT LEFT)
+    (PUT-STRING-CENTERED MIDDLE (// (+ LEFT-MARGIN RIGHT-MARGIN) 2))
+    (PUT-STRING-FLUSH-RIGHT RIGHT RIGHT-MARGIN)
+    (LINE-ADVANCE))))
+
+(DEFUN GET-DELIMITED-STRING (DELIMITER)
+  (to-string-reclaim
+    (LOOP FOR CH = (JIN-TYI)
+	  WHEN (OR (= CH 15) REQUEST-EOL-P)
+	  DO (BARF '|Missing delimiter | DELIMITER)
+	     (SETQ CH DELIMITER REQUEST-EOL-P T)
+	  UNTIL (= CH DELIMITER)
+	  COLLECT CH)))
+
+
+;;;; Bolio Variables
+
+
+(DEFPROP SETQ SETQ-REQUEST REQUEST)
+(DEFUN SETQ-REQUEST ()
+  (LET ((VARIABLE (STRING-INTERN (GET-WORD-STRING)))
+	(VALUE (GET-WORD-STRING)))
+    (or value (fbarf "Who are you trying to fool with a .setq of ~A to NIL?"
+		     variable))
+    (cond ((string-equal value '|page|)
+	     (setq value (string-append value '| |
+					(string-number page-number))))
+	  ((string-equal value '|page-number|)
+	     (setq value (string-number page-number)))
+	  ((or (string-equal value '|css-number|)
+	       (string-equal value '|section-number|))
+	     (setq value (css-number-string)))
+	  ((string-equal value '|chapter-number|)
+	     (setq value (string-number chapter-number)))
+	  ((string-equal value '|section-page|)
+	     (setq value (section-page-string)))
+	  ((string-equal value '|next|)
+	     (let ((counter (string-intern (get-word-string))))
+	       (cond ((null (setq value (get counter 'bolio-counter)))
+		      (barf '|Not a defined Bolio counter:| counter)
+		      (setq value counter))
+		     (t (putprop counter (1+ value) 'bolio-counter)
+			(setq value (string-number value)))))))
+    (OR (= (REQUEST-CH) #\CR)
+	(BARF '|Extraneous garbage at end of line in .SETQ; maybe missing quotes?|))
+    (JUST-SETQ VARIABLE VALUE)))
+
+(DEFUN AUTO-SETQ (NAME SUFFIX)
+  (LET ((VARIABLE (STRING-INTERN (STRING-APPEND NAME '|-| SUFFIX)))
+	(VALUE (STRING-APPEND '|page | (STRING-NUMBER PAGE-NUMBER))))
+    (JUST-SETQ VARIABLE VALUE)))
+
+(DEFUN JUST-SETQ (VARIABLE VALUE)
+    (PUTPROP VARIABLE VALUE 'JUST-VALUE)
+    (OR (MEMQ VARIABLE ALL-THE-VARIABLES)
+	(PUSH VARIABLE ALL-THE-VARIABLES))
+    (COND ((MEMQ VARIABLE JUST-UNDEFINED-VARIABLES)
+	     (SETQ JUST-UNDEFINED-VARIABLES
+		   (DELQ VARIABLE JUST-UNDEFINED-VARIABLES))
+	     (PUSH VARIABLE JUST-FORWARD-REFERENCED-VARIABLES))))
+
+(DEFUN JUST-SYMEVAL (VARIABLE DEFAULT-VALUE IN)
+  (LET ((VALUE (GET VARIABLE 'JUST-VALUE)))
+    (COND ((NOT (NULL VALUE)) VALUE)
+	  (T (FBARF1 (NOT INHIBIT-UNDEFINED-VARIABLE-BARFING)
+		     '|~A has no value in ~A| VARIABLE IN)
+	     (OR (MEMQ VARIABLE JUST-UNDEFINED-VARIABLES)
+		 (PUSH VARIABLE JUST-UNDEFINED-VARIABLES))
+	     (IF (SYMBOLP DEFAULT-VALUE) (JUST-STRING DEFAULT-VALUE)
+		 DEFAULT-VALUE)))))
+
+
+(DEFUN SAVE-VARIABLES (FILE-NAME)
+  (LET ((FILE (OPEN FILE-NAME '(OUT ASCII BLOCK))))
+    (LOOP FOR X IN ALL-THE-VARIABLES
+	  DO (PRINT (LIST 'DEFPROP X
+			  (make-symbol (GET X 'JUST-VALUE))
+			  'JUST-VALUE)
+		    FILE))
+    (TERPRI FILE)
+    (CLOSE FILE)))
+
+(defprop counter counter-request request)
+(defun counter-request ()
+  (let ((counter (string-intern (get-word-string)))
+	(initial-value (or (get-numeric-arg) 1)))
+    (putprop counter initial-value 'bolio-counter)))
+
+;;;; Flavor definition stuff
+
+; Flavor documentation guy punches out forms like
+;  (defprop flavor-name string flavor-documentation)
+
+(defprop flavor-documentation flavor-documentation-request request)
+(defun flavor-documentation-request ()
+  (let ((flavor-name-string (get-word-string)) (flavor-name) (tem))
+    (setq flavor-name (string-intern flavor-name-string))
+    (flush-request-line)
+    (cond ((setq tem (get flavor-name 'flavor-documentation))
+	   (jin-push tem)				;I wonder if all this BS works?
+	   (jin-push flavor-name-string)
+	   (jin-push '|/
+/|)
+	   (let ((request-eol-p nil))
+	     (defflavor-request))
+	   (end-defflavor-request))
+	  (t (barf flavor-name '|has no flavor-documentation property|)))))
+
+
+;;;; Various Index Definitions
+
+
+(deflisting flavor-index
+  (:title |Flavor Index|)
+  (:type :index)
+  (:columns 2)
+  (:request flavindex)
+  (:request (flavindexf nil t)))
+
+
+(deflisting message-index
+  (:title |Message Index|)
+  (:type :index)
+  (:columns 2)
+  (:request msgindex)
+  (:request (msgindexf nil t)))
+
+
+(deflisting initoption-index
+  (:title |Window Creation Options| )
+  (:type :index)
+  (:columns 2))
+
+
+(deflisting condition-index
+  (:title |Condition Name Index|)
+  (:type :index)
+  (:columns 2)
+  (:request condition_index)
+  (:request (condition_indexf nil t)))
+
+
+;;;; defcondition
+
+(defprop defcondition defcondition-request request)
+(defprop defcondition1 defcondition1-request request)
+(defprop end_defcondition end-defcondition-request request)
+
+(defun defcondition-request ()
+  (check-env 'text 'defcondition)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.)) 
+	(environment-type 'defcondition)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defcondition1-request)
+    (*catch 'defcondition (main-loop))))
+
+(defun defcondition1-request ()
+  (check-env 'defcondition 'defcondition1)
+  (setq cur-hpos 0)
+  (let ((condition-name (get-word-string)) (jin-cur-font lisp-title-font))
+    (or condition-name
+	(barf '|Condition name missing in .DEFCONDITION or .DEFCONDITION1|))
+    (setq current-defun-name condition-name)
+    (add-to-listing condition-name 'condition-index)
+    (auto-setq condition-name '|condition|)
+    (set-hpos left-margin)
+    (put-string-flush-left condition-name)
+    (let ((definition-token-font lisp-title-font))
+      (defun-line-proc-no-newline '|Condition|))
+    (defun-line-proc-newline)
+    (setq begin-new-paragraph nil)))
+
+(defun end-defcondition-request ()
+  (end-documentation-block 'defcondition 'end_defcondition text-font))
+
+;;;; defcondition_flavor
+
+
+(defprop defcondition_flavor defcondition-flavor-request request)
+(defprop defcondition_flavor1 defcondition-flavor1-request request)
+(defprop end_defcondition_flavor end-defcondition-flavor-request request)
+
+(defun defcondition-flavor-request ()
+  (check-env 'text 'defcondition-flavor)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (setq cur-hpos 0)
+  (let ((left-indent (convert-mills 500.)) 
+	(environment-type 'defcondition-flavor)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defcondition-flavor1-request)
+    (*catch 'defcondition-flavor (main-loop))))
+
+(defun defcondition-flavor1-request ()
+  (check-env 'defcondition-flavor 'defcondition-flavor1)
+  (setq cur-hpos 0)
+  (let ((condition-flavor-name (get-word-string))
+	(jin-cur-font lisp-title-font))
+    (or condition-flavor-name
+	(barf '|Condition name missing in .DEFCONDITION_FLAVOR or .DEFCONDITION_FLAVOR1|))
+    (setq current-defun-name condition-flavor-name)
+    (add-to-listing condition-flavor-name 'flavor-index)
+    (add-to-listing condition-flavor-name 'condition-index)
+    (auto-setq condition-flavor-name '|condition-flavor|)
+    (set-hpos left-margin)
+    (put-string-flush-left condition-flavor-name)
+    (let ((definition-token-font lisp-title-font))	; rather than italics.
+      (defun-line-proc-no-newline '|Condition Flavor|))
+    (defun-line-proc-newline)
+    (setq begin-new-paragraph nil)))
+
+(defun end-defcondition-flavor-request ()
+  (end-documentation-block
+     'defcondition-flavor 'end_defcondition_flavor text-font))
+
+;;;; defmessage
+
+(defvar *message-descriptor*
+  '|Operation|)
+
+(defprop defmessage defmessage-request request)
+(defprop defmessage1 defmessage1-request request)
+(defprop end_defmessage end-defmessage-request request)
+
+(defun defmessage-request ()
+  (check-env 'text 'defmessage)
+  (or (need-space-mills 1000.) ;1 inch
+      (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  ((lambda (left-indent environment-type extra-left-indent-first-line-of-paragraph)
+      (defmessage1-request)  ;Gobble the arguments, put out line, index, etc.
+      (flush-request-line)
+      (defun-horrible-tab-crock)
+      (*catch 'defmessage (main-loop)))
+   (convert-mills 500.) ;1/2 inch indent
+   'defmessage
+   0))
+
+(defun defmessage1-request ()
+  (check-env 'defmessage 'defmessage1)
+  (setq cur-hpos 0)
+  ((lambda (message-name jin-cur-font)
+      (or message-name
+	  (barf '|Message name missing in .defmessage or .defmessage1|))
+      (add-to-listing message-name 'message-index)
+      (auto-setq message-name '|message|)
+      (set-hpos left-margin)
+      (put-string-flush-left message-name)
+      (defun-line-proc-no-newline *message-descriptor*)
+      (defun-line-proc-newline))
+   (get-word-string)
+   lisp-title-font)
+  (setq begin-new-paragraph nil))
+
+(defun end-defmessage-request ()
+  (end-documentation-block 'defmessage 'end_defmessage text-font))
+
+
+;;;; defmethod
+
+(defprop defmethod defmethod-request request)
+(defprop defmethod1 defmethod1-request request)
+(defprop end_defmethod end-defmethod-request request)
+
+(defun defmethod-request ()
+  (check-env 'text 'defmethod)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'method-definition)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defmethod1-request)  ;Gobble the arguments, put out line, index, etc.
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (*catch 'method-definition (main-loop))))
+
+(declare (special defmethod-suppress-flavor-name))
+(setq defmethod-suppress-flavor-name nil)
+
+(defun defmethod1-request ()
+  (check-env 'method-definition 'defmethod1)
+  (defmethod1-request-hack lisp-text-font))
+
+(defun defmethod1-request-hack (font-to-use)
+  (setq cur-hpos 0)
+  (let* ((flavor-name (get-word-string))
+	 (message-name (get-word-string))
+	 (uncoloned-message-name message-name))
+    (or flavor-name
+	(barf '|Flavor name missing in .defmethod or .defmethod1|))
+    (or message-name
+	(barf '|Message name missing in .defmethod or .defmethod1|))
+    (if (= (ar-1 message-name 0) #/:)
+	(setq uncoloned-message-name
+	      (substring message-name 1 (string-length message-name)))
+      (fbarf '|Message ~S in defmethod ~S missing colon|
+	     (make-symbol message-name) (make-symbol flavor-name)))
+    (add-to-listing
+       (list message-name (string-append '|(to | flavor-name '|)|))
+       'message-index)
+    (just-setq
+      (string-intern (string-append
+		       flavor-name '|-| uncoloned-message-name '|-method|))
+      (string-append '|page | (string-number page-number)))
+    (set-hpos left-margin)
+    (let ((jin-cur-font lisp-title-font))
+      (put-string-flush-left message-name))
+    (cond ((not defmethod-suppress-flavor-name)
+	     (let ((definition-token-font lisp-text-font)
+		   (definition-marker-font font-to-use))
+	       (defspec-line-proc-no-newline
+		 (string-append '|2Operation on* | flavor-name))
+	       (defspec-line-proc-newline)))
+	  (t (defun-line-proc-no-newline)
+	     (let ((jin-cur-font font-to-use))
+	       (put-string-flush-left-maybe-terpri-first
+		 (string-append '|2Operation on* | flavor-name))
+	       (defun-line-proc-newline))))))
+
+(defun end-defmethod-request ()
+  (end-documentation-block 'method-definition 'end_defmethod text-font))
+
+
+;;;; defmetamethod
+
+(defprop defmetamethod defmetamethod-request request)
+(defprop defmetamethod1 defmetamethod1-request request)
+(defprop end_defmetamethod end-defmetamethod-request request)
+
+(defun defmetamethod1-request ()
+  (check-env 'method-definition 'defmetamethod1)
+  (defmethod1-request-hack italic-font))
+
+(defun defmetamethod-request ()
+  (check-env 'text 'defmetamethod)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'method-definition)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defmetamethod1-request)
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (*catch 'method-definition (main-loop))))
+
+
+(defun end-defmetamethod-request ()
+  (end-documentation-block 'method-definition 'end_defmetamethod text-font))
+
+
+
+;;;; definstvar
+
+(defprop definstvar definstvar-request request)
+(defprop definstvar1 definstvar1-request request)
+(defprop end_definstvar end-definstvar-request request)
+
+(defun definstvar-request ()
+  (check-env 'text 'definstvar)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'method-definition)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (definstvar1-request)  ;Gobble the arguments, put out line, index, etc.
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (*catch 'method-definition (main-loop))))
+
+(declare (special definstvar-suppress-flavor-name))
+(setq definstvar-suppress-flavor-name nil)
+
+(defun definstvar1-request ()
+  (check-env 'method-definition 'definstvar1)
+  (definstvar1-request-hack lisp-text-font))
+
+(defun definstvar1-request-hack (font-to-use)
+  (setq cur-hpos 0)
+  (let ((flavor-name (get-word-string)) (instvar-name (get-word-string)))
+    (or flavor-name
+	(barf '|Flavor name missing in .definstvar or .definstvar1|))
+    (or instvar-name
+	(barf '|Instvar name missing in .definstvar or .definstvar1|))
+    (add-to-listing
+       (list instvar-name (string-append '|(of | flavor-name '|)|))
+       'variable-index)
+    (just-setq
+      (string-intern
+        (string-append flavor-name '|-| instvar-name '|-instvar|))
+      (string-append '|page | (string-number page-number)))
+    (set-hpos left-margin)
+    (let ((jin-cur-font lisp-title-font))
+      (put-string-flush-left instvar-name))
+    (cond ((not definstvar-suppress-flavor-name)
+	     (let ((definition-token-font lisp-text-font)
+		   (definition-marker-font font-to-use))
+	       (defspec-line-proc-no-newline
+		 (string-append '|2Instance variable of *| flavor-name))
+	       (defspec-line-proc-newline)))
+	  (t (defun-line-proc-no-newline)
+	     (let ((jin-cur-font font-to-use))
+	       (put-string-flush-left-maybe-terpri-first
+		 (string-append '|2Instance variable of* | flavor-name))
+	       (defun-line-proc-newline))))))
+
+(defun end-definstvar-request ()
+  (end-documentation-block 'method-definition 'end_definstvar text-font))
+
+
+;;;; defmetainstvar
+
+(defprop defmetainstvar defmetainstvar-request request)
+(defprop defmetainstvar1 defmetainstvar1-request request)
+(defprop end_defmetainstvar end-defmetainstvar-request request)
+
+(defun defmetainstvar1-request ()
+  (check-env 'method-definition 'defmetainstvar1)
+  (definstvar1-request-hack italic-font))
+
+(defun defmetainstvar-request ()
+  (check-env 'text 'defmetainstvar)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'method-definition)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defmetainstvar1-request)
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (*catch 'method-definition (main-loop))))
+
+
+(defun end-defmetainstvar-request ()
+  (end-documentation-block 'method-definition 'end_defmetainstvar text-font))
+
+;;;; defflavor
+
+
+(defprop defflavor defflavor-request request)
+(defprop defflavor1 defflavor1-request request)
+(defprop end_defflavor end-defflavor-request request)
+
+(defun defflavor-request ()
+  (check-env 'text 'defflavor)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (setq cur-hpos 0)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'defflavor)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defflavor1-request)
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (setq begin-new-paragraph nil)
+    (*catch 'defflavor (main-loop))))
+
+
+(defun defflavor1-request ()
+  (check-env 'defflavor 'defflavor1)
+  (let ((flavor-name (get-word-string)) (jin-cur-font lisp-title-font))
+    (or flavor-name
+	(barf '|Flavor name missing in .defflavor or .defflavor1|))
+    (add-to-listing flavor-name 'flavor-index)
+    (auto-setq flavor-name '|flavor|)
+    (set-hpos left-margin)
+    (put-string-flush-left flavor-name)
+    (let ((definition-token-font lisp-title-font))
+      (defun-line-proc-no-newline '|Flavor|))
+    (defun-line-proc-newline)))
+
+(defun end-defflavor-request ()
+  (end-documentation-block 'defflavor 'end_defflavor text-font))
+
+
+;;;; definitoption
+
+(defprop definitoption definitoption-request request)
+(defprop definitoption1 definitoption1-request request)
+(defprop end_definitoption end-definitoption-request request)
+
+(defun definitoption-request ()
+  (check-env 'text 'definitoption-request)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'definitoption)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (definitoption1-request)
+    (setq begin-new-paragraph nil)
+    (defun-horrible-tab-crock)
+    (*catch 'definitoption (main-loop))))
+
+
+(defun definitoption1-request ()
+  (definitoption1-request-hack lisp-text-font))
+
+(defun definitoption1-request-hack (font-to-use)
+  (let ((flavor-name (get-word-string))
+	(option-name (get-word-string))
+	(jin-cur-font lisp-title-font))
+    (check-env 'definitoption 'definitoption1-request)
+    (setq cur-hpos 0)
+    (or flavor-name (barf '|Flavor name missing in .definitoption|))
+    (or option-name (barf '|Option name missing in .definitoption|))
+    (add-to-listing
+       (list option-name (string-append '|(for | flavor-name '|)|))
+       'initoption-index)
+    (just-setq (string-intern (string-append flavor-name '|-|
+				 (substring option-name 1 (string-length option-name))
+				 '|-init-option|))
+	       (string-append '|page | (string-number page-number)))
+    (set-hpos left-margin)
+    (put-string-flush-left option-name)
+    (defspec-line-proc-no-newline
+      (string-append '|Init option for /| (string-number font-to-use)
+		     flavor-name '|/*|))
+    (defspec-line-proc-newline)))
+
+(defun end-definitoption-request ()
+  (end-documentation-block 'definitoption 'end_definitoption text-font))
+
+
+;;;; defmetainitoption
+
+(defprop defmetainitoption defmetainitoption-request request)
+(defprop defmetainitoption1 defmetainitoption1-request request)
+(defprop end_defmetainitoption end-defmetainitoption-request request)
+
+(defun defmetainitoption-request ()
+  (check-env 'text 'defmetainitoption-request)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'definitoption)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defmetainitoption1-request)
+    (setq begin-new-paragraph nil)
+    (defun-horrible-tab-crock)
+    (*catch 'definitoption (main-loop))))
+
+
+(defun defmetainitoption1-request ()
+  (definitoption1-request-hack italic-font))
+
+
+(defun end-defmetainitoption-request ()
+  (end-documentation-block 'definitoption 'end_defmetainitoption text-font))
+
+
+;;;; defresource
+
+(defprop defresource defresource-request request)
+(defprop defresource1 defresource1-request request)
+(defprop end_defresource end-defresource-request request)
+
+(defun defresource-request ()
+  (check-env 'text 'defresource)
+  (or (need-space-mills 1000.) (output-leading-mills defun-pre-leading))
+  (check-font-status text-font)
+  (let ((left-indent (convert-mills 500.))
+	(environment-type 'defresource)
+	(extra-left-indent-first-line-of-paragraph 0))
+    (defresource1-request)  ;Gobble the arguments, put out line, index, etc.
+    (flush-request-line)
+    (defun-horrible-tab-crock)
+    (*catch 'defresource (main-loop))))
+
+
+(defun defresource1-request ()
+  (check-env 'defresource 'defresource1)
+  (setq cur-hpos 0)
+  (let ((resource-name (get-word-string)) (jin-cur-font lisp-title-font))
+    (or resource-name
+	(barf '|Resource name missing in .defresource or .defresource1|))
+    (add-to-listing resource-name 'resource-index)
+    (auto-setq resource-name '|resource|)
+    (set-hpos left-margin)
+    (put-string-flush-left resource-name)
+    (defun-line-proc-no-newline '|Resource|)
+    (defun-line-proc-newline)
+    (setq begin-new-paragraph nil)))
+
+(defun end-defresource-request ()
+  (end-documentation-block 'defresource 'end_defresource text-font))
+
+
+(defun put-string-flush-left-maybe-terpri-first (string)
+  (cond ((> (+ cur-hpos DEFUN-ARG-SEPARATION-INTERNAL (string-push-get-width string))
+	    (- right-margin right-indent))
+	 (line-advance)
+	 (jout-white-space
+	   (setq cur-hpos (+ left-margin left-indent
+			     DEFUN-CONTINUATION-INDENT-INTERNAL))))
+	(t (jout-white-space DEFUN-ARG-SEPARATION-INTERNAL)
+	   (setq cur-hpos (+ cur-hpos DEFUN-ARG-SEPARATION-INTERNAL))))
+  (output-nofill-line)				; output buffered string
+  (jin-cleanup))
+
+
+;;;; Random functions
+
+(DEFUN JUST-YES-OR-NO-P (FORMAT-STRING &REST FORMAT-ARGS)
+
+    (LOOP WITH (BARFP ANS)
+	  AS ^W = NIL ; Paranoia
+	  DO (LEXPR-FUNCALL 'FORMAT MSGFILES FORMAT-STRING FORMAT-ARGS)
+	  WHEN BARFP
+	    DO (FORMAT MSGFILES '|~&Answer either /"Yes/" or /"No/": |)
+	  WHEN (SETQ ANS ((LAMBDA (ECHOFILES) (READLINE TYI))
+			  (if (or (null log-file) (MEMQ LOG-FILE ECHOFILES))
+			      ECHOFILES
+			      (CONS LOG-FILE ECHOFILES))))
+	    WHEN (MEMQ (SETQ ANS (JUST-SYMBOL-CANON ANS)) '(YES NO))
+	      RETURN (EQ ANS 'YES)
+	  DO (SETQ BARFP T)))
+
+
+(DEFUN JUST-SYMBOL-CANON (SYM)
+
+  (IMPLODE
+     (LOOP FOR CH FIXNUM IN (NREVERSE (JUST-SYMBOL-TRIM
+				         (NREVERSE (JUST-SYMBOL-TRIM
+						      (EXPLODEN SYM)))))
+		   WHEN (> CH 96.)
+		     WHEN (< CH 123.)
+		       DO (SETQ CH (- CH 32.))
+		   COLLECT CH)))
+
+
+(DEFUN JUST-SYMBOL-TRIM (CHARS)
+
+    (LOOP FOR L ON CHARS AS CH FIXNUM = (CAR L)
+	  WHEN (NOT (= CH 40))
+	    WHEN (NOT (= CH 11))
+	      RETURN L))
