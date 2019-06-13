@@ -154,6 +154,7 @@ if {$env(BASICS)!="yes"} {
     source $build/scheme.tcl
     source $build/muddle.tcl
     source $build/sail.tcl
+    source $build/typeset.tcl
 }
 
 bootable_tapes
