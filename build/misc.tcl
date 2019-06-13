@@ -1444,6 +1444,17 @@ respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 respond "*" ":midas sys2; ts otj6_tj6; otj6\r"
 expect ":KILL"
 
+# Binary patch Lisp image to work on ITS not named AI, ML, MC, or DM.
+# This is for Bolio.
+respond "*" ":job purqio\r"
+respond "*" ":load sys; purqio 2138\r"
+respond "*" "udirset+20/"
+# Cross fingers, nop out valret, hope for best!
+respond ".VALUE" "JFCL\r"
+respond "UNPURE" ":corblk pure .\r"
+respond "*" ":pdump sys; purqio 2138\r"
+respond "*" ":kill\r"
+
 # OINIT
 respond "*" ":cwd c\r"
 respond "*" ":cc sysen2/oinit\r"
