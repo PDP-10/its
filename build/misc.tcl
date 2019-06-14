@@ -1434,6 +1434,9 @@ respond "*" ":link sys3; ts r, r; ts r42\r"
 # r; rmacro 1 -> r; r macros
 # sys3; ts itype -> r; ts itype
 
+# Revert patch to [CLIB] 16 to avoid use of the FIX instruction on a KA10.
+patch_clib_16
+
 # C library for drawing on a TV display.
 respond "*" ":cwd clib\r"
 respond "*" ":cc tv.>\r"

@@ -198,3 +198,6 @@ proc translate_diagnostics {} {
     respond "*" "\033\024"
     respond " " "dsk: maint; part k, part l\r"
 }
+
+proc patch_clib_16 {} {
+}

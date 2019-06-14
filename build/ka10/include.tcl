@@ -191,3 +191,19 @@ proc translate_diagnostics {} {
     respond "*" "\033\024"
     respond " " "dsk: maint; part k, part k.old\r"
 }
+
+proc patch_clib_16 {} {
+    respond "*" ":job clib\r"
+    respond "*" "\033\060l"
+    respond " " "c; \[clib\] 16\r"
+    respond "*" "23237/"
+    respond "FIX" "ufa 1,775763\n"
+    respond "JRST" "tlo 2,777000\r"
+    respond "\n" "23244/"
+    respond "FIX" "ufa 1,775763\n"
+    respond "MOVN" "tlo 2,777000\n"
+    respond "JRST" "movn 2,2\r"
+    respond "\n" "\033\060y"
+    respond " " "c; \[clib\] 16\r"
+    respond "*" ":kill\r"
+}
