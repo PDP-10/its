@@ -306,6 +306,7 @@
 - SYSMSG, displays system messages.
 - SYSTEM GEN, low level DECtape formatting.
 - RABBIT, Scheme compiler.
+- RALP, post processing for R line printer output files.
 - TAGS, generate tags table for sources.
 - TALK/WHO/WHOJ/WHOM/USERS, list users.
 - TBMOFF, turn TAC or TIP binary mode off.
