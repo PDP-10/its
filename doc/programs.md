@@ -261,6 +261,7 @@
 - PWORD, replacement for ATSIGN HACTRN that requires registered logins.
 - QB, the game of Qubic.
 - QUOTE, prints out a random quote.
+- R, typesetting software.
 - REATTA, reattaches disowned jobs to terminal.
 - RECORD, save TV display contents as text file.
 - REDRCT, redirect IP routing.
