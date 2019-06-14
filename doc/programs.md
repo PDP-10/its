@@ -263,6 +263,7 @@
 - REATTA, reattaches disowned jobs to terminal.
 - RECORD, save TV display contents as text file.
 - REDRCT, redirect IP routing.
+- REDUCE...
 - RIPDEV, replacement for MLDEV for no-longer-existing machines.
 - RMAIL, mail reading client.
 - RMODE, text editor.
