@@ -1425,6 +1425,15 @@ expect ":KILL"
 respond "*" ":testc\r"
 expect "Done."
 
+# R, text formatter.
+respond "*" ":link sys3; ts r, r; ts r42\r"
+# sys2; ts rr -> r; ts rr
+# .info.; r info -> r; r info
+# .info.; r recent -> r; r recent
+# r; r macros -> r; r30 rmac
+# r; rmacro 1 -> r; r macros
+# sys3; ts itype -> r; ts itype
+
 # C library for drawing on a TV display.
 respond "*" ":cwd clib\r"
 respond "*" ":cc tv.>\r"
