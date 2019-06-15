@@ -103,6 +103,7 @@
 - EXPN/VRFY, query remote SMTP server.
 - FACTOR, factor integers.
 - FAIL, assembler from SAIL.
+- FAILSA, read FAILSAFE tapes.
 - FCDEV, talk to LispM file server.
 - FDIR, fast directory listing.
 - FED, font editor.
