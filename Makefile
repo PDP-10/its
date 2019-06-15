@@ -35,15 +35,15 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       kldcp libdoc lisp _mail_ midas quux scheme manual wp chess ms macdoc \
       aplogo _klfe_ pdp11 chsncp cbf rug bawden llogo eak clib teach pcnet \
       combat pdl minits mits_s chaos hal -pics- imlac maint
-BIN = sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap c decsys \
-      graphs draw datdrw fonts fonts1 fonts2 games macsym maint imlac \
-      _www_ gt40 llogo bawden sysbin -pics- lmman r
+BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
+      c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
+      maint imlac _www_ gt40 llogo bawden sysbin -pics- lmman r
 MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
 # These are not included on the tape.
 DOCIGNORE=-e '\.(jpeg|pdf|info|md)$$' -e '^(dcg|github)$$'
 # These are on the minsys tape.
-BINIGNORE=-e '^(ka10|ks10|sys)$$'
+BINIGNORE=-e '^(ka10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
@@ -102,12 +102,12 @@ $(OUT)/minsrc.tape: $(ITSTAR)
 $(OUT)/minsys.tape: $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ks10 _ sys
-	$(ITSTAR) -rf $@ -C bin sys
+	$(ITSTAR) -rf $@ -C bin/minsys sys
 
 $(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
-	$(ITSTAR) -rf $@ -C bin sys
+	$(ITSTAR) -rf $@ -C bin/minsys sys
 
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
