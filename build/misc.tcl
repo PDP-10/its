@@ -353,6 +353,10 @@ expect ":KILL"
 respond "*" ":midas moon; ts jedgar_moon; jedgar\r"
 expect ":KILL"
 
+# failsa
+respond "*" ":midas moon;_failsa\r"
+expect ":KILL"
+
 # ports
 respond "*" ":midas sys2;ts ports_sysen2;ports\r"
 expect ":KILL"
