@@ -1751,6 +1751,7 @@ respond "*" ":midas .; @ tenth_aap; tenth\r"
 expect ":KILL"
 respond "*" ":midas /t aap; ts tenth_tenth\r"
 respond "end input with ^C" "TS==1\r"
+respond "\n" "KS==0\r"
 respond "\n" "\003"
 expect ":KILL"
 
