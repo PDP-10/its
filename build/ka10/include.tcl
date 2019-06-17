@@ -185,7 +185,8 @@ proc patch_lisp {} {
 }
 
 proc translate_diagnostics {} {
-    # Not yet:  "dsk: maint; part f, part f.old\r"
+    respond "*" "\033\024"
+    respond " " "dsk: maint; part f, part f.old\r"
     respond "*" "\033\024"
     respond " " "dsk: maint; part g, part g.old\r"
     respond "*" "\033\024"
