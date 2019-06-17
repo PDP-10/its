@@ -1,5 +1,5 @@
 proc start_dskdmp_its {} {
-    start_dskdmp build/sims/boot
+    start_dskdmp build/pdp10-ka/boot
 
     respond "DSKDMP" "its\r"
     patch_its_and_go

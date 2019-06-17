@@ -53,7 +53,7 @@ we'd be delighted to test this on a real KS10.
 To build ITS with this repository, you need some tools installed:
 make, C compiler, and expect.  For KA10, you also need SDL or SDL2 for
 the Type 340 display.  Ensure all submodules are checked out, and then
-type `make EMULATOR=simh`, `make EMULATOR=sims`, or `make
+type `make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, or `make
 EMULATOR=klh10`.  This will leave built files in the `out` directory,
 one of which is a disk image with ITS installed.
 
