@@ -56,7 +56,7 @@ DSKDMP = bin/ks10/boot/dskdmp.rp06
 
 KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
 SIMH=tools/simh/BIN/pdp10
-KA10=tools/sims/BIN/ka10
+KA10=tools/sims/BIN/pdp10-ka
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -82,7 +82,7 @@ out/klh10/stamp: $(OUT)/rp0.dsk
 out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 	$(TOUCH) $@
 
-out/sims/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6)
+out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6)
 	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
@@ -153,7 +153,7 @@ build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
 build/simh/stamp: $(SIMH) start
 	$(TOUCH) $@
 
-build/sims/stamp: $(KA10) start
+build/pdp10-ka/stamp: $(KA10) start
 	$(TOUCH) $@
 
 out/klh10/system:
@@ -170,9 +170,9 @@ out/simh/system:
 	$(MKDIR) $(OUT)/system
 	cp build/simh/config.* $(OUT)/system
 
-out/sims/system:
+out/pdp10-ka/system:
 	$(MKDIR) $(OUT)/system
-	cp build/sims/config.* $(OUT)/system
+	cp build/pdp10-ka/config.* $(OUT)/system
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
@@ -205,7 +205,7 @@ $(SIMH):
 	$(MAKE) -C tools/simh pdp10
 
 $(KA10):
-	$(MAKE) -C tools/sims ka10 TYPE340=y
+	$(MAKE) -C tools/sims pdp10-ka TYPE340=y
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar
