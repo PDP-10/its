@@ -56,6 +56,10 @@ proc make_ntsddt {} {
     respond "dsksw=" "0\r"
     respond "1PRSW=" "1\r"
     expect ":KILL"
+
+    # Old NTS DDT with 340 support.
+    respond "*" ":midas dsk0:.;@ ntsddt_syseng; ntsddt\r"
+    expect ":KILL"
 }
 
 proc make_salv {} {

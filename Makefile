@@ -65,7 +65,7 @@ TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
 
 H3TEXT=$(shell cd build; ls h3text.*)
-DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.*)
+DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
 SALV=$(shell cd src; ls kshack/nsalv.* syseng/format.* syseng/rfn.*)
 KSFEDR=$(shell cd src; ls kshack/ksfedr.*)
 DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)

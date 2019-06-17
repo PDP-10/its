@@ -49,10 +49,6 @@ expect ":KILL"
 respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
 expect ":KILL"
 
-# Old NTS DDT with 340 support.
-respond "*" ":midas;324 dsk0:.;@ ntsddt_syseng; ntsddt\r"
-expect ":KILL"
-
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
 expect ":KILL"
 
@@ -1608,14 +1604,6 @@ expect ":KILL"
 
 # KL10 diagnostics console program.
 respond "*" ":palx kldcp; kldcp\r"
-expect ":KILL"
-
-# KL10 NTSDDT.
-respond "*" ":midas dsk0:.;@ ntsddt_system;ddt\r"
-respond "cpusw=" "2\r"
-respond "ndsk=" "1\r"
-respond "dsksw=" "3\r"
-respond "1PRSW=" "1\r"
 expect ":KILL"
 
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
