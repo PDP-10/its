@@ -43,7 +43,7 @@ MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 # These are not included on the tape.
 DOCIGNORE=-e '\.(jpeg|pdf|info|md)$$' -e '^(dcg|github)$$'
 # These are on the minsys tape.
-BINIGNORE=-e '^(ka10|ks10|minsys)$$'
+BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
@@ -57,6 +57,7 @@ DSKDMP = bin/ks10/boot/dskdmp.rp06
 KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
 SIMH=tools/simh/BIN/pdp10
 KA10=tools/sims/BIN/pdp10-ka
+KL10=tools/sims/BIN/pdp10-ka
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -85,14 +86,23 @@ out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6)
 	$(TOUCH) $@
 
+out/pdp10-kl/stamp: $(OUT)/rp04.1
+	$(TOUCH) $@
+
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
 	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
+$(OUT)/rp04.1: $(OUT)/kl-minsys.tape $(OUT)/minsrc.tape $(OUT)/kl-magdmp.tap $(OUT)/sources.tape
+	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+
 $(OUT)/magdmp.tap: $(MAGFRM)
 	cd bin/ka10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt @.salv > ../../../$@
+
+$(OUT)/kl-magdmp.tap: $(MAGFRM)
+	cd bin/kl10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt salv.bin > ../../../$@
 
 $(OUT)/minsrc.tape: $(ITSTAR)
 	$(MKDIR) $(OUT)
@@ -107,6 +117,11 @@ $(OUT)/minsys.tape: $(ITSTAR) $(OUT)/system
 $(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
+	$(ITSTAR) -rf $@ -C bin/minsys sys
+
+$(OUT)/kl-minsys.tape: $(ITSTAR) $(OUT)/system
+	$(MKDIR) $(OUT)
+	$(ITSTAR) -cf $@ -C bin/kl10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
 
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
@@ -156,6 +171,9 @@ build/simh/stamp: $(SIMH) start
 build/pdp10-ka/stamp: $(KA10) start
 	$(TOUCH) $@
 
+build/pdp10-kl/stamp: $(KL10) start
+	$(TOUCH) $@
+
 out/klh10/system:
 	$(MKDIR) $(OUT)/system
 	cp=0; ca=0; \
@@ -173,6 +191,10 @@ out/simh/system:
 out/pdp10-ka/system:
 	$(MKDIR) $(OUT)/system
 	cp build/pdp10-ka/config.* $(OUT)/system
+
+out/pdp10-kl/system:
+	$(MKDIR) $(OUT)/system
+	cp build/pdp10-kl/config.* $(OUT)/system
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
@@ -206,6 +228,9 @@ $(SIMH):
 
 $(KA10):
 	$(MAKE) -C tools/sims pdp10-ka TYPE340=y
+
+$(KL10):
+	$(MAKE) -C tools/sims pdp10-ka
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar
