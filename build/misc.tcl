@@ -1304,6 +1304,10 @@ respond "=" "0\r"
 respond "=" "1\r"
 expect ":KILL"
 
+# 80TRAN
+respond "*" ":midas klh; ts 80tran_80tran\r"
+expect ":KILL"
+
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
 respond "*" ":job cc\r"

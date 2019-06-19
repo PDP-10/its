@@ -7,6 +7,7 @@
 - 20XCVT, convert TOPS-20 CSAVE file to PDUMP.
 - 3406, PDP-6 part of 340D.
 - 340D, Datapoint emulator for 340 display.
+- 80TRAN, translate 8080 program.
 - @, cross reference generation tool.
 - ACNVRT/MCNVRT/PCNVRT/UCNVRT, asciizer and binarator.
 - ACCLNK, sets com-link accept bit for specified TTY.
