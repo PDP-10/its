@@ -1308,6 +1308,17 @@ expect ":KILL"
 respond "*" ":midas klh; ts 80tran_80tran\r"
 expect ":KILL"
 
+respond "*" ":cwd klh\r"
+respond "*" ":midas dfoo\r"
+expect ":KILL"
+respond "*" ":klh;80tran klh; dmlp 8080_dfoo bin\r"
+expect ":kill"
+
+respond "*" ":midas nfoo\r"
+expect ":KILL"
+respond "*" ":klh;80tran klh; newlp 8080_nfoo bin\r"
+expect ":kill"
+
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
 respond "*" ":job cc\r"
