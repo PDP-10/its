@@ -15,8 +15,8 @@ Note: `XX` means the name of the ITS you are building.
 1. First examine SYSTEM; CONFIG > for changes you want to make.  Look for the text `IFE MCOND XX,[` to find the section for the machine named XX.
 
    KA10 options you may want to consider:
-   - DC10P, RP10P the kind of tape drives.
-   - TM10A or TM10B, the kind of tape drive.
+   - DC10P, RP10P the kind of disk controller.
+   - TM10A or TM10B, the kind of tape controller.
    - NUNITS and NEWDTP, number and kind of DECtape drives.
    - TEN11P to enable the Rubin 10-11 interface.  Subordinate options are Knight TV, XGP, CHAOS-11.
    - PDP6P to use an auxiliary PDP-6.
@@ -27,6 +27,9 @@ Note: `XX` means the name of the ITS you are building.
    - RM03P, RM80P, RP06P, RP07P, the kind of disk drive.
    - DZ11P, terminal ports.
    - CH11P, Chaosnet interface.
+
+   KL10 options:
+   ...
 
    Common options:
    - NQS, the number of disk drives.
@@ -71,7 +74,7 @@ Note: `XX` means the name of the ITS you are building.
      2. Load DDT: <code>L<kbd>$</kbd>DDT</code>
      3. Give ITS and its symbols to DDT: <code>T<kbd>$</kbd>NITS BIN</code>
      4. You're now in DDT.  Exit back to DSKDMP: <code><kbd>$</kbd>U</code>
-     5. Merge in (N)SALV.  For KA10: <code>M<kbd>$</kbd>SALV</code>  For KS10: <code>M<kbd>$</kbd>NSALV BIN</code>
+     5. Merge in (N)SALV.  For KA10: <code>M<kbd>$</kbd>SALV BIN</code>  For KS10: <code>M<kbd>$</kbd>NSALV BIN</code>
      6. Write the result to disk: <code>D<kbd>$</kbd>NITS</code>  Again, it's prudent to invent a new file name here.  Use <code>F<kbd>$</kbd></code> for a file listing.
 
    - Timesharing DDT method.
@@ -81,6 +84,13 @@ Note: `XX` means the name of the ITS you are building.
      3. Merge in (N)SALV without symbols.  For KA10: <code><kbd>$</kbd><kbd>$</kbd>1L .; @ SALV</code>  For KS10: <code><kbd>$</kbd><kbd>$</kbd>1L .; NSALV BIN</code>
      4. Merge in ITS with symbols: <code><kbd>$</kbd><kbd>$</kbd>L .; NITS BIN</code>
      5. Write the result to disk: <code><kbd>$</kbd>Y .; @ NITS</code>
+
+   - Non timesharing DDT method for KL10.
+
+     1. Shut down ITS and reboot into NTSDDT.
+     2. Load ITS: <code><kbd>$</kbd>L .; NITS BIN</code>
+     3. Merge in SALV: <code><kbd>$</kbd><kbd>$</kbd>L .; SALV BIN</code>
+     4. Write the result to disk: <code><kbd>$</kbd>Y .; @ NITS</code>
 
 5. If you're in DSKDMP and want to run ITS right away after dumping it, type <code>G<kbd>$</kbd></code>.  You're now in DDT.  You can examine ITS, set breakpoints, etc.  Type <code><kbd>$</kbd>G</code> to start ITS.
 
