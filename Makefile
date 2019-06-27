@@ -92,7 +92,7 @@ $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/mag
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
-	cd bin/ka10/boot; ../../../$(MAGFRM) @.ddt @.salv > ../../../$@
+	cd bin/ka10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt @.salv > ../../../$@
 
 $(OUT)/minsrc.tape: $(ITSTAR)
 	$(MKDIR) $(OUT)
