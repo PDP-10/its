@@ -124,6 +124,7 @@ proc dump_nits {} {
     respond "\n" "\033u"
     respond "DSKDMP" "m\033salv bin\r"
     respond "\n" "d\033nits\r"
+    respond "\n" "g\033"
 }
 
 proc magdmp_switches {} {

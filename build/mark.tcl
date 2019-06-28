@@ -62,4 +62,3 @@ frontend_bootstrap
 shutdown
 start_dskdmp
 dump_nits
-respond "\n" "g\033"
