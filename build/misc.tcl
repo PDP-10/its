@@ -1645,7 +1645,7 @@ respond "DEBSW=" "0\r"
 expect ":KILL"
 
 # KL10 diagnostics console program.
-respond "*" ":palx kldcp; kldcp\r"
+respond "*" ":palx kldcp;_kldcp\r"
 expect ":KILL"
 
 # KL10 diagnostic console utility
