@@ -202,3 +202,6 @@ proc translate_diagnostics {} {
 
 proc patch_clib_16 {} {
 }
+
+proc copy_to_klfe {file} {
+}
