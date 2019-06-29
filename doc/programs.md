@@ -164,6 +164,7 @@
 - JOTTO, word-guessing game.
 - KERMIT, file transfer.
 - KLDCP, KL10 diagnostics console program.
+- KLDCPU, KL10 diagnostics console utility.
 - KLFEDR, KL10 frontend directory tool.
 - KLRUG, KL10 frontend debugger.
 - KN10, KS10 frontend software.
