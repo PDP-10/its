@@ -155,6 +155,7 @@ proc bootable_tapes {} {
 }
 
 proc update_microcode {} {
+    copy_to_klfe "ucode;u1 ram"
 }
 
 proc clib_switches {} {
@@ -188,4 +189,9 @@ proc patch_clib_16 {} {
     respond "\n" "\033\060y"
     respond " " "c; \[clib\] 16\r"
     respond "*" ":kill\r"
+}
+
+proc copy_to_klfe {file} {
+    respond "*" ":klfedr write $file\r"
+    expect ":KILL"
 }

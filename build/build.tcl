@@ -139,6 +139,11 @@ proc mkdir {name} {
     type ":vk\r"
 }
 
+proc move_to_klfe {file} {
+    copy_to_klfe $file
+    respond "*" ":delete $file\r"
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
