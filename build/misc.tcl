@@ -1617,6 +1617,12 @@ expect ":KILL"
 respond "*" ":palx kldcp; kldcp\r"
 expect ":KILL"
 
+# KL10 diagnostic console utility
+respond "*" ":palx kldcp;_kldcpu\r"
+expect ":KILL"
+respond "*" ":pcnvrt kldcp; kldcpu bin\r"
+move_to_klfe "kldcp; kldcpu a11"
+
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
 # First, the "AI" IOELEV, also known as CHAOS-11.
 # STUFF prefers to have it in the "." directory.
