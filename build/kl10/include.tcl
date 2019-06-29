@@ -163,27 +163,29 @@ proc clib_switches {} {
 }
 
 proc patch_lisp {} {
-    respond "*" ":job lisp\r"
-    respond "*" ":load .; @ lisp\r"
-    respond "*" "33777//\031"
-    respond "*" "\033q\033,777777\033\033z"
-    respond "*" "pitele+13/"
-    respond "FSC" "push p,b\n"
-    respond "FSC" "jrst patch\r"
-    respond "\n" "patch/"
-    respond "0" "move b,echocc\n"
-    respond "0" "add b,ticc\n"
-    respond "0" "dpb b,.+3\n"
-    respond "0" "pop p,b\n"
-    respond "0" "jrst pitele+15\n"
-    respond "0" "331000,,a\r"
-    respond "\n" "\033y"
-    respond " " "dsk0:.;@ lisp\r"
-    respond "*" ":kill\r"
 }
 
 proc translate_diagnostics {} {
+    respond "*" "\033\024"
+    respond " " "dsk: maint; part f, part f.old\r"
+    respond "*" "\033\024"
+    respond " " "dsk: maint; part g, part g.old\r"
+    respond "*" "\033\024"
+    respond " " "dsk: maint; part k, part k.old\r"
 }
 
 proc patch_clib_16 {} {
+    respond "*" ":job clib\r"
+    respond "*" "\033\060l"
+    respond " " "c; \[clib\] 16\r"
+    respond "*" "23237/"
+    respond "FIX" "ufa 1,775763\n"
+    respond "JRST" "tlo 2,777000\r"
+    respond "\n" "23244/"
+    respond "FIX" "ufa 1,775763\n"
+    respond "MOVN" "tlo 2,777000\n"
+    respond "JRST" "movn 2,2\r"
+    respond "\n" "\033\060y"
+    respond " " "c; \[clib\] 16\r"
+    respond "*" ":kill\r"
 }
