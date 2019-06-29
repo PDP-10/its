@@ -1132,43 +1132,6 @@ type ":kill\r"
 respond "*" ":midas dsk0:maint;_tst342\r"
 expect ":KILL"
 
-# KL10 microcode assembler
-respond "*" ":midas sysbin;_syseng;micro\r"
-expect ":KILL"
-respond "*" ":job micro\r"
-respond "*" ":load sysbin; micro bin\r"
-respond "*" ":start purify\r"
-respond "TS MICRO" "sys; ts micro\r"
-respond "*" ":kill\r"
-
-# Microcode ASCIIzer and binarator converter.
-respond "*" ":midas sysbin;_syseng;cnvrt\r"
-expect ":KILL"
-respond "*" ":link sys1;ts mcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
-
-# KS10 microcode assembler
-respond "*" ":midas kshack;ts micro_micro\r"
-expect ":KILL"
-
-# KL10 microcode.
-respond "*" ":micro ucode;u1=ucode;its,define,macro,basic,skpjmp,shift,arith,fp,byte,io,eis,blt\r"
-expect ":KILL"
-respond "*" ":ucnvrt ucode; u1\r"
-expect ":KILL"
-# Write the RAM file to the front end filesystem:
-# :klfedr write ucode;u1 ram
-
-# KS10 microcode.
-# It doesn't seem to work very well when purified.
-respond "*" ":kshack;micro kshack;mcr 262=kshack;its,ks10,simple,flt,extend,inout,itspag,pagef\r"
-expect ":KILL"
-respond "*" ":copy kshack; mcr ram, .; ram ram\r"
-
-update_microcode
-
 # KNS10, KS10 console
 respond "*" ":cwd kshack\r"
 respond "*" ":cross\r"
@@ -1544,6 +1507,50 @@ expect ":KILL"
 respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
 expect ":KILL"
 
+mkdir ".klfe."
+respond "*" ":move .temp.; -read- -this-, .klfe.;\r"
+copy_to_klfe "kldcp; kldcp hlp"
+
+# KL10 microcode assembler
+respond "*" ":midas sysbin;_syseng;micro\r"
+expect ":KILL"
+respond "*" ":job micro\r"
+respond "*" ":load sysbin; micro bin\r"
+respond "*" ":start purify\r"
+respond "TS MICRO" "sys; ts micro\r"
+respond "*" ":kill\r"
+
+# Microcode ASCIIzer and binarator converter.
+respond "*" ":midas sysbin;_syseng;cnvrt\r"
+expect ":KILL"
+respond "*" ":link sys1;ts mcnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
+respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
+
+respond "*" ":mcnvrt .; @ ddt\r"
+expect ":KILL"
+respond "*" ":rename .; @ a10, ddt a10\r"
+move_to_klfe ".; ddt a10"
+
+# KS10 microcode assembler
+respond "*" ":midas kshack;ts micro_micro\r"
+expect ":KILL"
+
+# KL10 microcode.
+respond "*" ":micro ucode;u1=ucode;its,define,macro,basic,skpjmp,shift,arith,fp,byte,io,eis,blt\r"
+expect ":KILL"
+respond "*" ":ucnvrt ucode; u1\r"
+expect ":KILL"
+
+# KS10 microcode.
+# It doesn't seem to work very well when purified.
+respond "*" ":kshack;micro kshack;mcr 262=kshack;its,ks10,simple,flt,extend,inout,itspag,pagef\r"
+expect ":KILL"
+respond "*" ":copy kshack; mcr ram, .; ram ram\r"
+
+update_microcode
+
 # KL10 front end dumper
 respond "*" ":midas dsk0:.;@ fedump_kldcp; fedump\r"
 expect ":KILL"
@@ -1636,8 +1643,7 @@ respond "FILENAME" ".temp.; ioelev bin\r"
 expect ":KILL"
 respond "*" ":pcnvrt .temp.; ioelev bin\r"
 expect ":KILL"
-# Write the file to the front end filesystem:
-# :klfedr write .temp.; ioelev a11
+move_to_klfe ".temp.; ioelev a11"
 
 # The KL10 "MX-DL" IOELEV won't assemble due to CHADD being undefined.
 # Maybe roll back to IOELEV 431, or fix it in new version 433.  Maybe

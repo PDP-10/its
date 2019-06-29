@@ -213,3 +213,6 @@ proc patch_clib_16 {} {
     respond " " "c; \[clib\] 16\r"
     respond "*" ":kill\r"
 }
+
+proc copy_to_klfe {file} {
+}
