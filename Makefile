@@ -64,6 +64,7 @@ MAGFRM=tools/dasm/magfrm
 GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
+KLFEDR=tools/dasm/klfedr
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -119,10 +120,19 @@ $(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
 
-$(OUT)/kl-minsys.tape: $(ITSTAR) $(OUT)/system
+leftparen:=(
+rightparen:=)
+KLDCPDIR=$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)
+
+$(OUT)/kl-minsys.tape: $(ITSTAR) $(OUT)/system $(KLDCPDIR)
 	$(MKDIR) $(OUT)
-	$(ITSTAR) -cf $@ -C bin/kl10 _ sys
+	$(ITSTAR) -cf $@ -C $(OUT) _klfe_
+	$(ITSTAR) -rf $@ -C bin/kl10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
+
+$(KLDCPDIR): $(KLFEDR)
+	$(MKDIR) $(OUT)/_klfe_
+	$(KLFEDR) > "$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)"
 
 $(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
@@ -238,7 +248,7 @@ $(ITSTAR):
 $(WRITETAPE):
 	$(MAKE) -C tools/tapeutils
 
-$(MAGFRM):
+$(MAGFRM) $(KLFEDR):
 	$(MAKE) -C tools/dasm
 
 $(TV11):
