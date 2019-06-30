@@ -1523,6 +1523,7 @@ expect ":KILL"
 mkdir ".klfe."
 respond "*" ":move .temp.; -read- -this-, .klfe.;\r"
 copy_to_klfe "kldcp; kldcp hlp"
+#copy_to_klfe "kldcp; kldcp doc"
 
 # KL10 microcode assembler
 respond "*" ":midas sysbin;_syseng;micro\r"
