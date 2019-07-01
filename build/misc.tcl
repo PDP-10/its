@@ -1623,6 +1623,8 @@ expect ":KILL"
 # "MX" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
 expect ":KILL"
+# 11STNK expects a copy in the . directory.
+respond "*" ":copy sysbin; klrug bin, .;\r"
 
 # PDP-11 debugger.
 respond "*" ":palx dsk0:.;11ddt 16k_kldcp; 11ddt\r"
