@@ -165,6 +165,7 @@
 - KERMIT, file transfer.
 - KLDCP, KL10 diagnostics console program.
 - KLDCPU, KL10 diagnostics console utility.
+- KLDDT, KL10 standalone debugger.
 - KLFEDR, KL10 frontend directory tool.
 - KLRUG, KL10 frontend debugger.
 - KN10, KS10 frontend software.
