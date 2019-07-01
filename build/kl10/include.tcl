@@ -18,6 +18,20 @@ proc mark_packs {} {
     respond "NO =" "0\r"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "0\r"
+
+    respond "\n" "mark\033g"
+    respond "UNIT #" "1"
+    respond "#1?" "y"
+    respond "NO =" "1\r"
+    respond "ALLOC =" "3000\r"
+    respond "PACK ID =" "1\r"
+
+    respond "\n" "mark\033g"
+    respond "UNIT #" "2"
+    respond "#2?" "y"
+    respond "NO =" "2\r"
+    respond "ALLOC =" "3000\r"
+    respond "PACK ID =" "2\r"
 }
 
 proc prepare_frontend {} {
@@ -82,6 +96,20 @@ proc dump_nits {} {
     respond "\n" "t\033salv bin\r"
     respond "\n" "\033y"
     respond " " "salv\r"
+
+    # Since we bootstrap with a 1-pack ITS, we need to copy the MFD to
+    # the fresh packs.
+    respond "\n" "\033l"
+    respond " " "salv\r"
+    respond "\n" "ucop\033g"
+    respond "UNIT #" "0"
+    respond "UNIT #" "1"
+    respond "OK?" "Y"
+    respond "DDT" "ucop\033g"
+    respond "UNIT #" "0"
+    respond "UNIT #" "2"
+    respond "OK?" "Y"
+    expect "DDT"
 
     # Now dump the new ITS.
     respond "\n" "\033l"
