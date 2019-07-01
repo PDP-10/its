@@ -677,6 +677,19 @@ respond "Command" "d"
 respond "*" ":pdump sys2; ts macro\r"
 respond "*" ":kill\r"
 
+# MACSYM and MONSYM universal files.
+respond "*" ":cwd decsys\r"
+respond "*" ":macro\r"
+respond "*" "macsym.unv=macsym.mac\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+respond "*" ":macro\r"
+respond "*" "monsym.unv=monsym.mac\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+
 # CROSS, assembler
 respond "*" ":macro\r"
 respond "*" "cross=cross\r"
@@ -1542,6 +1555,24 @@ respond "*" ":micro ucode;u1=ucode;its,define,macro,basic,skpjmp,shift,arith,fp,
 expect ":KILL"
 respond "*" ":ucnvrt ucode; u1\r"
 expect ":KILL"
+
+# KLDDT
+respond "*" ":cwd kldcp\r"
+respond "*" ":macro\r"
+respond "*" "klddt=klddt\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+respond "*" ":dec sys:link\r"
+respond "*" "klddt/go\r"
+respond "EXIT" ":start 45\r"
+respond "Command:" "d"
+respond "*" "\033y"
+respond " " "kldcp; klddt bin\r"
+respond "*" ":kill\r"
+respond "*" ":mcnvrt kldcp; klddt bin\r"
+expect ":KILL"
+move_to_klfe "kldcp; klddt a10"
 
 # KS10 microcode.
 # It doesn't seem to work very well when purified.
