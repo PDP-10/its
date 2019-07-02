@@ -1627,21 +1627,22 @@ expect ":KILL"
 respond "*" ":copy sysbin; klrug bin, .;\r"
 
 # PDP-11 debugger.
-respond "*" ":palx dsk0:.;11ddt 16k_kldcp; 11ddt\r"
-respond "PDP11=" "45\r"
-respond "FPPSW=" "1\r"
-respond "MAPSW=" "1\r"
-respond "HCOR=" "40000\r"
+# 16K is used with the DL10 IOELEV.
+respond "*" ":palx .; 11ddt 16k_kldcp; 11ddt\r"
+respond "PDP11=" "40\r"
+respond "EISSW=" "0\r"
+respond "MAPSW=" "0\r"
+respond "HCOR=" "100000\r"
 respond "TT10SW=" "0\r"
 respond "VT05SW=" "0\r"
 respond "DEBSW=" "0\r"
 expect ":KILL"
-
+# 14K is used with the console IOELEV.
 respond "*" ":palx dsk0:.;11ddt 14k_kldcp; 11ddt\r"
-respond "PDP11=" "45\r"
-respond "FPPSW=" "1\r"
-respond "MAPSW=" "1\r"
-respond "HCOR=" "34000\r"
+respond "PDP11=" "40\r"
+respond "EISSW=" "0\r"
+respond "MAPSW=" "0\r"
+respond "HCOR=" "70000\r"
 respond "TT10SW=" "0\r"
 respond "VT05SW=" "0\r"
 respond "DEBSW=" "0\r"
@@ -1664,20 +1665,15 @@ respond "*" ":palx dsk0:.;_system;ioelev\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
-# The KL10 console "MX" IOELEV.  Put it in SYSBIN as to not conflict
-# with the "AI" IOELEV.
-respond "*" ":palx sysbin;_system;ioelev\r"
+# The KL10 console "MX" IOELEV.
+respond "*" ":palx .; cons11_system;ioelev\r"
 respond "MACHINE NAME =" "MX\r"
 expect ":KILL"
 respond "*" ":11stnk\r"
-# Rumour has it 11DDT 14K should be used, but then 11STNK barfs on
-# KLDCP.  KLRUG works better.
-respond "*" "R"
-respond "FILENAME" "\r"
+respond "*" "D"
+respond "FILENAME" ".; 11ddt 14k\r"
 respond "*" "L"
-respond "FILENAME" "kldcp; kldcp bin\r"
-respond "*" "L"
-respond "FILENAME" "sysbin; ioelev bin\r"
+respond "FILENAME" ".; cons11 bin\r"
 respond "*" "A"
 respond "FILENAME" ".temp.; ioelev bin\r"
 expect ":KILL"
