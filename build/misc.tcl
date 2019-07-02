@@ -1651,6 +1651,15 @@ expect ":KILL"
 # KL10 diagnostics console program.
 respond "*" ":palx kldcp;_kldcp\r"
 expect ":KILL"
+respond "*" ":11stnk\r"
+respond "*" "R"
+respond "FILENAME" "\r"
+respond "*" "L"
+respond "FILENAME" "kldcp; kldcp bin\r"
+respond "*" "B"
+respond "FILENAME" ".temp.; kldcp bin\r"
+expect ":KILL"
+move_to_klfe ".temp.; kldcp bin"
 
 # KL10 diagnostic console utility
 respond "*" ":palx kldcp;_kldcpu\r"
