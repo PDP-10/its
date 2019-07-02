@@ -1690,9 +1690,12 @@ respond "*" ":pcnvrt .temp.; ioelev bin\r"
 expect ":KILL"
 move_to_klfe ".temp.; ioelev a11"
 
-# The KL10 "MX-DL" IOELEV won't assemble due to CHADD being undefined.
-# Maybe roll back to IOELEV 431, or fix it in new version 433.  Maybe
-# link with 11DDT 16K.
+# The KL10 "MX-DL" IOELEV.  Put in same directory as KLRUG BIN.
+# TS BOOT11 stuffs it over DL10 in timesharing.  TS 11BOOT makes a
+# @ BOOT11 to stuff out of timesharing.
+respond "*" ":palx sysbin;_system;ioelev\r"
+respond "MACHINE NAME =" "MX\r"
+expect ":KILL"
 
 # MINITS
 respond "*" ":cwd mits.s\r"
