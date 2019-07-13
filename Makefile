@@ -237,7 +237,7 @@ $(SIMH):
 	$(MAKE) -C tools/simh pdp10
 
 $(KA10):
-	$(MAKE) -C tools/sims pdp10-ka TYPE340=y
+	$(MAKE) -C tools/sims pdp10-ka
 
 $(KL10):
 	$(MAKE) -C tools/sims pdp10-ka
