@@ -1,7 +1,6 @@
 proc start_dskdmp_its {} {
     start_dskdmp build/pdp10-kl/boot
 
-    respond "DSKDMP" "ddt\r"
     respond "\n" "\033l"
     respond " " "its bin\r"
     respond "\n" "\033\033l"
@@ -87,20 +86,12 @@ proc peek_switches {} {
 }
 
 proc dump_nits {} {
-    # Run the new DSKDMP from disk here, to check that it works.
-    respond "DSKDMP" "dskdmp\r"
-
-    respond "DSKDMP" "l\033ddt\r"
-
-    # Dump an executable @ SALV.
-    respond "\n" "t\033salv bin\r"
-    respond "\n" "\033y"
-    respond " " "salv\r"
+    sleep 3
 
     # Since we bootstrap with a 1-pack ITS, we need to copy the MFD to
     # the fresh packs.
     respond "\n" "\033l"
-    respond " " "salv\r"
+    respond " " "salv bin\r"
     respond "\n" "ucop\033g"
     respond "UNIT #" "0"
     respond "UNIT #" "1"
