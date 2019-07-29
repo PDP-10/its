@@ -54,6 +54,7 @@ proc make_ntsddt {} {
     respond "cpusw=" "0\r"
     respond "ndsk=" "0\r"
     respond "dsksw=" "0\r"
+    respond "dsktp=" "0\r"
     respond "1PRSW=" "1\r"
     expect ":KILL"
 
@@ -75,8 +76,8 @@ proc make_dskdmp {} {
     respond "?" "ASK\r"
     respond "HRIFLG=" "N\r"
     respond "BOOTSW=" "N\r"
-    respond "RP06P=" "N\r"
-    respond "RP07P=" "N\r"
+    respond "R11R6P=" "N\r"
+    respond "R11R7P=" "N\r"
     respond "RM03P=" "N\r"
     respond "RM80P=" "N\r"
     respond "RH10P=" "N\r"

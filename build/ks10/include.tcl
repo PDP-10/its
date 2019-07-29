@@ -92,6 +92,7 @@ proc its_switches {} {
 proc make_ntsddt {} {
     respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
     respond "cpusw" "3\r"
+    respond "dsktp=" "1\r"
     respond "New One Proceed" "1\r"
     expect ":KILL"
 }
