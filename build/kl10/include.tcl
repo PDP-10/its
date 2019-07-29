@@ -1,6 +1,7 @@
 proc start_dskdmp_its {} {
     start_dskdmp build/pdp10-kl/boot
 
+    sleep 3
     respond "\n" "\033l"
     respond " " "its bin\r"
     respond "\n" "\033\033l"
@@ -15,6 +16,7 @@ proc mark_packs {} {
     respond "UNIT #" "0"
     respond "#0?" "y"
     respond "NO =" "0\r"
+    expect -timeout 300 "VERIFY"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "0\r"
 
@@ -22,6 +24,7 @@ proc mark_packs {} {
     respond "UNIT #" "1"
     respond "#1?" "y"
     respond "NO =" "1\r"
+    expect -timeout 300 "VERIFY"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "1\r"
 
@@ -29,6 +32,7 @@ proc mark_packs {} {
     respond "UNIT #" "2"
     respond "#2?" "y"
     respond "NO =" "2\r"
+    expect -timeout 300 "VERIFY"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "2\r"
 }
@@ -49,6 +53,7 @@ proc make_ntsddt {} {
     respond "cpusw=" "0\r"
     respond "ndsk=" "1\r"
     respond "dsksw=" "3\r"
+    respond "dsktp=" "0\r"
     respond "1PRSW=" "0\r"
     expect ":KILL"
 }
@@ -66,11 +71,12 @@ proc make_dskdmp {} {
     respond "?" "ASK\r"
     respond "HRIFLG=" "N\r"
     respond "BOOTSW=" "N\r"
-    respond "RP06P=" "N\r"
-    respond "RP07P=" "N\r"
+    respond "R11R6P=" "N\r"
+    respond "R11R7P=" "N\r"
     respond "RM03P=" "N\r"
     respond "RM80P=" "N\r"
     respond "RH10P=" "Y\r"
+    respond "R10R6P=" "N\r"
     respond "NUDSL=" "500.\r"
     respond "KS10P=" "N\r"
     respond "KL10P=" "N\r"

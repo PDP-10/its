@@ -1518,6 +1518,8 @@ expect ":KILL"
 
 # KL10 front end directory tool
 respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
+respond "RP06P=" "0\r"
+respond "RP04P=" "1\r"
 expect ":KILL"
 
 mkdir ".klfe."
