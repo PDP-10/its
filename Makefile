@@ -58,6 +58,9 @@ KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
 SIMH=tools/simh/BIN/pdp10
 KA10=tools/sims/BIN/pdp10-ka
 KL10=tools/sims/BIN/pdp10-ka
+KS10_PACKS=$(OUT)/rp0.dsk
+KA10_PACKS=$(OUT)/dc10.0 $(OUT)/dc10.1 $(OUT)/dc10.2 $(OUT)/dc10.3
+KL10_PACKS=$(OUT)/$(OUT)/rp04.1
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -78,25 +81,25 @@ all: $(SMF) $(OUT)/stamp tools/supdup/supdup
 
 check: all check-dirs
 
-out/klh10/stamp: $(OUT)/rp0.dsk
+out/klh10/stamp: $(KS10_PACKS)
 	$(TOUCH) $@
 
-out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
+out/simh/stamp: $(KS10_PACKS) $(GT40)
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6)
+out/pdp10-ka/stamp: $(KA10_PACKS) $(GT40) $(TV11) $(PDP6)
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp: $(OUT)/rp04.1
+out/pdp10-kl/stamp: $(KL10_PACKS)
 	$(TOUCH) $@
 
-$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
+$(KS10_PACKS): build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
 	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
-$(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
+$(KA10_PACKS): $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
-$(OUT)/rp04.1: $(OUT)/kl-minsys.tape $(OUT)/minsrc.tape $(OUT)/kl-magdmp.tap $(OUT)/sources.tape
+$(KL10_PACKS): $(OUT)/kl-minsys.tape $(OUT)/minsrc.tape $(OUT)/kl-magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
