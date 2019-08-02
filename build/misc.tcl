@@ -190,6 +190,7 @@ expect ":KILL"
 respond "*" ":link sys2;ts =,sys;ts srccom\r"
 
 respond "*" ":midas .mail.;comsat_sysnet;comsat\r"
+comsat_switches
 expect ":KILL"
 
 respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"

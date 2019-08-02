@@ -192,3 +192,7 @@ proc copy_to_klfe {file} {
     respond "*" ":klfedr write $file\r"
     expect ":KILL"
 }
+
+proc comsat_switches {} {
+    respond "Limit to KA-10 instructions" "y\r"
+}
