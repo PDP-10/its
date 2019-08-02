@@ -194,6 +194,7 @@ comsat_switches
 expect ":KILL"
 
 respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"
+dqxdev_switches
 expect ":KILL"
 
 respond "*" "comsat\033j"
