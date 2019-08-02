@@ -217,3 +217,7 @@ proc patch_clib_16 {} {
 
 proc copy_to_klfe {file} {
 }
+
+proc comsat_switches {} {
+    respond "Limit to KA-10 instructions" "y\r"
+}
