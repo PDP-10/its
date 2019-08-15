@@ -4,6 +4,7 @@ proc start_dskdmp_its {} {
     sleep 3
     respond "\n" "\033l"
     respond " " "its bin\r"
+    sleep 2
     respond "\n" "\033\033l"
     respond " " "salv bin\r"
     respond "\n" "\033y"
