@@ -142,3 +142,6 @@ respond "*" ":link sys3; ts vdir, ts view\r"
 
 # RMODE
 respond "*" ":link sys1; ts rmode, .teco.;\r"
+
+# Make TECORD within Emacs work
+respond "*" ":link info;tecord 999999,.teco.;tecord >\r"
