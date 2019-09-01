@@ -1624,7 +1624,7 @@ respond "*" ":palx gt40;_gt40;gtlem\r"
 expect ":KILL"
 
 # KL10 front end debugger.  Put it in the same directory as the
-# "MX" IOELEV.
+# "MC" IOELEV.
 respond "*" ":palx sysbin;_syseng; klrug\r"
 expect ":KILL"
 # 11STNK expects a copy in the . directory.
@@ -1678,9 +1678,9 @@ respond "*" ":palx dsk0:.;_system;ioelev\r"
 respond "MACHINE NAME =" "AI\r"
 expect ":KILL"
 
-# The KL10 console "MX" IOELEV.
+# The KL10 console "MC" IOELEV.
 respond "*" ":palx .; cons11_system;ioelev\r"
-respond "MACHINE NAME =" "MX\r"
+respond "MACHINE NAME =" "MC\r"
 expect ":KILL"
 respond "*" ":11stnk\r"
 respond "*" "D"
@@ -1694,11 +1694,11 @@ respond "*" ":pcnvrt .temp.; ioelev bin\r"
 expect ":KILL"
 move_to_klfe ".temp.; ioelev a11"
 
-# The KL10 "MX-DL" IOELEV.  Put in same directory as KLRUG BIN.
+# The KL10 "MC-DL" IOELEV.  Put in same directory as KLRUG BIN.
 # TS BOOT11 stuffs it over DL10 in timesharing.  TS 11BOOT makes a
 # @ BOOT11 to stuff out of timesharing.
 respond "*" ":palx sysbin;_system;ioelev\r"
-respond "MACHINE NAME =" "MX\r"
+respond "MACHINE NAME =" "MC\r"
 expect ":KILL"
 
 # MINITS
