@@ -11,9 +11,9 @@ install_linux() {
     sudo apt-get install -my git make gcc libncurses-dev autoconf
     case "$EMULATOR" in
         simh) sudo apt-get install -y simh;;
-        pdp10-ka) sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
+        pdp10-k?) sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
               sudo apt-get install -y libx11-dev libxt-dev libsdl2-dev
-              sudo apt-get install -y libsdl2-image-dev;;
+              sudo apt-get install -y libsdl2-image-dev libpcap-dev;;
         klh10) sudo apt-get install -y libusb-1.0-0-dev;;
     esac
 }
