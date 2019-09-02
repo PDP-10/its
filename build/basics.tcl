@@ -6,7 +6,11 @@ pdset
 respond "*" ":login db\r"
 sleep 1
 
-type ":rename .;@ its, .;@ oits\r"
+# Normally we'd save the old ITS as OITS, but since it was used for
+# bootstrapping with another configuration, it's no longer any use.
+type ":delete .;@ its\r"
+
+# The new ITS is now canonical.
 respond "*" ":rename .;@ nits, .;@ its\r"
 sleep 1
 
