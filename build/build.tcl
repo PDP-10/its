@@ -164,6 +164,17 @@ if {$env(BASICS)!="yes"} {
 
 bootable_tapes
 
+# Make BACKUP directory and copy some important files there.
+
+mkdir "backup"
+
+respond "*" ":copy .; @ its, dsk0: backup;\r"
+respond "*" ":copy .; @ ddt, dsk0: backup;\r"
+respond "*" ":copy .; @ $salv, dsk0: backup;\r"
+respond "*" ":copy sys; ts ddt, dsk0: backup;\r"
+respond "*" ":copy sys; ts dump, dsk0: backup;\r"
+respond "*" ":copy sys; ts midas, dsk0: backup;\r"
+
 # make output.tape
 
 respond "*" $emulator_escape
