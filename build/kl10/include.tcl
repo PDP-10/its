@@ -101,10 +101,14 @@ proc dump_nits {} {
 
     sleep 3
 
-    # Since we bootstrap with a 1-pack ITS, we need to copy the MFD to
-    # the fresh packs.
+    # Dump an executable @ SALV.
     respond "\n" "\033l"
     respond " " "$salv bin\r"
+    respond "\n" "\033y"
+    respond " " "$salv\r"
+
+    # Since we bootstrap with a 1-pack ITS, we need to copy the MFD to
+    # the fresh packs.
     respond "\n" "ucop\033g"
     respond "UNIT #" "0"
     respond "UNIT #" "1"
