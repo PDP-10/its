@@ -1,4 +1,8 @@
+set salv "salv"
+
 proc start_dskdmp_its {} {
+    global salv
+
     start_dskdmp build/pdp10-kl/boot
 
     sleep 3
@@ -6,7 +10,7 @@ proc start_dskdmp_its {} {
     respond " " "its bin\r"
     sleep 2
     respond "\n" "\033\033l"
-    respond " " "salv bin\r"
+    respond " " "$salv bin\r"
     respond "\n" "\033y"
     respond " " "its\r"
     patch_its_and_go
@@ -93,12 +97,14 @@ proc peek_switches {} {
 }
 
 proc dump_nits {} {
+    global salv
+
     sleep 3
 
     # Since we bootstrap with a 1-pack ITS, we need to copy the MFD to
     # the fresh packs.
     respond "\n" "\033l"
-    respond " " "salv bin\r"
+    respond " " "$salv bin\r"
     respond "\n" "ucop\033g"
     respond "UNIT #" "0"
     respond "UNIT #" "1"
@@ -113,7 +119,7 @@ proc dump_nits {} {
     respond "\n" "\033l"
     respond " " "its bin\r"
     respond "\n" "\033\033l"
-    respond " " "salv bin\r"
+    respond " " "$salv bin\r"
     respond "\n" "\033y"
     respond " " "nits\r"
 }

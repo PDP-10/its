@@ -1,3 +1,5 @@
+set salv "nsalv"
+
 proc start_dskdmp_its {} {
     global out
     start_dskdmp $out/minsys.tape
@@ -126,20 +128,22 @@ proc peek_switches {} {
 }
 
 proc dump_nits {} {
+    global salv
+
     # Run the new DSKDMP from disk here, to check that it works.
     respond "DSKDMP" "dskdmp bin\r"
 
     respond "DSKDMP" "l\033ddt\r"
 
     # Dump an executable @ NSALV.
-    respond "\n" "t\033nsalv bin\r"
+    respond "\n" "t\033$salv bin\r"
     respond "\n" "\033u"
-    respond "DSKDMP" "d\033nsalv\r"
+    respond "DSKDMP" "d\033$salv\r"
 
     # Now dump the new ITS.
     respond "\n" "t\033its bin\r"
     respond "\n" "\033u"
-    respond "DSKDMP" "m\033nsalv bin\r"
+    respond "DSKDMP" "m\033$salv bin\r"
     respond "\n" "d\033nits\r"
     respond "\n" "g\033"
 }
