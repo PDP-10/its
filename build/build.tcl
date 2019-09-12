@@ -21,11 +21,21 @@ if {![info exists env(MACSYMA)]} {
     set env(MACSYMA) "yes"
 }
 
+proc cleanup {} {
+    global spawn_id
+    close -i $spawn_id
+    sleep 1
+    exec kill [exp_pid $spawn_id]
+}
+
 proc abort {} {
     puts ""
     puts "The last command timed out."
     exit 1
 }
+
+exit -onexit cleanup
+trap {exit 1} {SIGINT SIGTERM}
 
 proc type s {
     sleep .1
