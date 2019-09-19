@@ -53,16 +53,19 @@ we'd be delighted to test this on a real KS10.
 To build ITS with this repository, you need some tools installed:
 make, C compiler, and expect.  For KA10, you also need SDL or SDL2 for
 the Type 340 display.  Ensure all submodules are checked out, and then
-type `make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, or `make
-EMULATOR=klh10`.  This will leave built files in the `out` directory,
-one of which is a disk image with ITS installed.
+type `make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, `make
+EMULATOR=pdp10-kl`, or `make EMULATOR=klh10`.  This will leave built
+files in the `out` directory, one of which is a disk image with ITS
+installed.
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
-Enter.  When you see the `DSKDMP` prompt, type `its`, press Enter, and
-then `ESC g`.  Eventually, you will see `SYSTEM JOB USING THIS
-CONSOLE`.  You are now ready to log in, so type Control-Z.  See
-[doc/DDT.md](doc/DDT.md) for a list of useful commands.  When done,
-shut down orderly by typing `:lock` and then `5down`.
+Enter.  If you see the `DSKDMP` prompt, type `its`, press Enter, and
+then `ESC g`.  If you use the `pdp10-kl` emulator there is no prompt
+and you need to type `Esc L ITS`, press Enter, and then `ESC g`.
+Eventually, you will see `SYSTEM JOB USING THIS CONSOLE`.  You are now
+ready to log in, so type Control-Z.  See [doc/DDT.md](doc/DDT.md) for
+a list of useful commands.  When done, shut down orderly by typing
+`:lock` and then `5down`.
 
 ITS can optionally use some additional peripheral devices.  To attach
 a simulated GT40 graphics terminal, type `./start gt40` when booting
@@ -132,9 +135,9 @@ There is a [detailed list of all installed programs](doc/programs.md).
 ### Network Support
 
 Currently, networking is only supported under the KLH10 and SIMH KA10
-emulators. The SIMH KS10 does not have the necessary support. As of
-this release, only the ITS monitor, host table tools, and binary host
-table are installed.
+and KL10 emulators. The SIMH KS10 does not have the necessary
+support. As of this release, only the ITS monitor, host table tools,
+and binary host table are installed.
 
 Currently, basic TCP network support is in the build, in addition to
 both a TELNET/SUPDUP server, and both TELNET and SUPDUP clients.

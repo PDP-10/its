@@ -57,7 +57,7 @@ DSKDMP = bin/ks10/boot/dskdmp.rp06
 KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
 SIMH=tools/simh/BIN/pdp10
 KA10=tools/sims/BIN/pdp10-ka
-KL10=tools/sims/BIN/pdp10-ka
+KL10=tools/sims/BIN/pdp10-kl
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -240,7 +240,7 @@ $(KA10):
 	$(MAKE) -C tools/sims pdp10-ka
 
 $(KL10):
-	$(MAKE) -C tools/sims pdp10-ka
+	$(MAKE) -C tools/sims pdp10-kl
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar

@@ -1135,7 +1135,7 @@ respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
 
 respond "*" ":job maint\r"
-# KA10 needs the .OLD files.
+# KA10 needs the .OLD files.  KL10 and KS10 the newer.
 translate_diagnostics
 respond "*" ":load maint; part a\r"
 respond "*" ":start\r"
