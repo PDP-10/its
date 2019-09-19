@@ -21,7 +21,7 @@ proc mark_packs {} {
     respond "UNIT #" "0"
     respond "#0?" "y"
     respond "NO =" "0\r"
-    expect -timeout 300 "VERIFY"
+    expect -timeout 300 "VERIFICATION BEGINS"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "0\r"
 
@@ -29,7 +29,7 @@ proc mark_packs {} {
     respond "UNIT #" "1"
     respond "#1?" "y"
     respond "NO =" "1\r"
-    expect -timeout 300 "VERIFY"
+    expect -timeout 300 "VERIFICATION BEGINS"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "1\r"
 
@@ -37,7 +37,7 @@ proc mark_packs {} {
     respond "UNIT #" "2"
     respond "#2?" "y"
     respond "NO =" "2\r"
-    expect -timeout 300 "VERIFY"
+    expect -timeout 300 "VERIFICATION BEGINS"
     respond "ALLOC =" "3000\r"
     respond "PACK ID =" "2\r"
 }
@@ -55,8 +55,8 @@ proc its_switches {} {
 proc make_ntsddt {} {
     # KL10 NTSDDT.
     respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
-    respond "cpusw=" "0\r"
-    respond "ndsk=" "1\r"
+    respond "cpusw=" "2\r"
+    respond "ndsk=" "3\r"
     respond "dsksw=" "3\r"
     respond "dsktp=" "0\r"
     respond "1PRSW=" "0\r"
@@ -84,7 +84,7 @@ proc make_dskdmp {} {
     respond "R10R6P=" "N\r"
     respond "NUDSL=" "500.\r"
     respond "KS10P=" "N\r"
-    respond "KL10P=" "N\r"
+    respond "KL10P=" "Y\r"
     expect ":KILL"
 }
 
@@ -129,7 +129,7 @@ proc dump_nits {} {
 }
 
 proc magdmp_switches {} {
-    respond "KL10P=" "n\r"
+    respond "KL10P=" "y\r"
     respond "TM10BP=" "y\r"
     respond "340P=" "n\r"
 }
@@ -175,12 +175,7 @@ proc patch_lisp {} {
 }
 
 proc translate_diagnostics {} {
-    respond "*" "\033\024"
-    respond " " "dsk: maint; part f, part f.old\r"
-    respond "*" "\033\024"
-    respond " " "dsk: maint; part g, part g.old\r"
-    respond "*" "\033\024"
-    respond " " "dsk: maint; part k, part k.old\r"
+    # KL10 doesn't need any translations.
 }
 
 proc patch_clib_16 {} {
@@ -205,9 +200,9 @@ proc copy_to_klfe {file} {
 }
 
 proc comsat_switches {} {
-    respond "Limit to KA-10 instructions" "y\r"
+    respond "Limit to KA-10 instructions" "n\r"
 }
 
 proc dqxdev_switches {} {
-    respond "Limit to KA-10 instructions" "y\r"
+    respond "Limit to KA-10 instructions" "n\r"
 }

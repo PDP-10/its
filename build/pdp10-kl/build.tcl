@@ -3,7 +3,7 @@ set out "out/$env(EMULATOR)"
 set emulator_escape "\034"
 
 proc start_salv {} {
-    uplevel #0 {spawn ./tools/sims/BIN/pdp10-ka build/pdp10-kl/init}
+    uplevel #0 {spawn ./tools/sims/BIN/pdp10-kl build/pdp10-kl/init}
     setup_timeout
     respond "MAGDMP\r\n" "l\033ddt\r"
     respond "\n" "t\033salv bin\r"
@@ -17,7 +17,7 @@ proc start_dskdmp args {
     } {
         set ini "build/pdp10-kl/boot2"
     }
-    set foo "spawn ./tools/sims/BIN/pdp10-ka $ini"
+    set foo "spawn ./tools/sims/BIN/pdp10-kl $ini"
     uplevel #0 $foo
     setup_timeout
 }
