@@ -19,7 +19,7 @@
 
 ### Programming
 
-- MIDAS: [manual](info/midas.25)
+- MIDAS: [manual](info/midas.26)
 - PDP-10: [instructions](info/pdp-10.15)
 - LISP: [manual](info/lisp.15), [compiler](info/lispc.6)
 - TECO: [primer](_teco_/teco.primer), [manual](info/tecman.20),
