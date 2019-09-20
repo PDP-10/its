@@ -6,7 +6,7 @@ Note: `XX` means the name of the ITS you are building.
 
 0. Here are manuals for all programs mentioned below:
 
-   - [MIDAS](info/midas.25)
+   - [MIDAS](info/midas.26)
    - [SALV](kshack/nsalv.order)
    - [DSKDMP](sysdoc/dskdmp.order)
    - [DDT](_info_/ddtord.1462)
