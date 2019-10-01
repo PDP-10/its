@@ -91,7 +91,7 @@ proc shutdown {} {
     respond "_" "q"
     expect ":KILL"
     respond "*" ":logout\r"
-    respond "NOW IN DDT" $emulator_escape
+    respond "SHUTDOWN COMPLETE" $emulator_escape
 }
 
 proc ip_address {string} {
