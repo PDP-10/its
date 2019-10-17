@@ -1147,6 +1147,13 @@ type ":kill\r"
 respond "*" ":midas dsk0:maint;_tst342\r"
 expect ":KILL"
 
+# Test one-proceed.
+respond "*" ":midas maint;ts 1proc_1proc test\r"
+expect ":KILL"
+respond "*" ":maint;1proc\r"
+expect "SUCCESSFUL"
+expect ":KILL"
+
 # KNS10, KS10 console
 respond "*" ":cwd kshack\r"
 respond "*" ":cross\r"
