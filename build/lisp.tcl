@@ -867,3 +867,9 @@ respond "T" "(load '((teach) teach dump))"
 expect ":KILL"
 
 respond "*" ":rename teach;ts xlisp,ts lisp\r"
+
+# Munching squares for display terminals.
+respond "*" ":complr\r"
+respond "_" "lars; munch lisp\r"
+respond "_" "\032"
+type ":kill\r"
