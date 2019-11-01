@@ -106,7 +106,13 @@ respond "*" "info\033\023"
 respond "*" ":emacs\r"
 expect "INFO Dumped"
 expect ":KILL"
-respond "*" ":tctyp la36\r"
+respond "*" ":tctyp la36"
+# Race condition here.  Since the terminal type is set to AAA, the CR
+# character is stored as %TDCRL in the output buffer.  But if TCTYP
+# changes the terminal type to LA36 before the %TDCRL is processed,
+# the code outputs nothing since that is the behavior on a printing
+# terminal.
+send "\r"
 expect ":KILL"
 # The previous file version was 62, dated 1982-01-05.
 respond "*" ":rename emacs; tsinfo >, tsinfo 63\r"
@@ -134,7 +140,9 @@ respond "*" ":cwd kmp\r"
 respond "*" "kmp\033\023"
 respond "*" ":dumpt \033turnip;view\r"
 expect "Dumped to"
-respond "*" ":tctyp la36\r"
+respond "*" ":tctyp la36"
+# Race condition.  See previous :tctyp la36.
+send "\r"
 respond "*" ":move turnip; ts view, sys3;\r"
 
 # VDIR
