@@ -416,23 +416,27 @@ standard()
 			codeword =<< 3;
 			data = *blkp++;
 			switch (code) {
-	case 0:		value =+ data; outval ();
-			continue;
-	case 1:		value =+ wcons(wleft(data),reloc(wright(data)));
+
+	case 0:		value = add_both (value, data);
 			outval ();
 			continue;
-	case 2:		value =+ wcons(reloc(wleft(data)),wright(data));
+	case 1:		data = wcons(wleft(data), reloc(wright(data)));
+			value = add_both (value, data);
 			outval ();
 			continue;
-	case 3:		value =+ wcons(reloc(wleft(data)),
-				reloc(wright(data)));
+	case 2:		data = wcons(reloc(wleft(data)), wright(data));
+			value = add_both (value, data);
+			outval ();
+			continue;
+	case 3:		data = wcons(reloc(wleft(data)), reloc(wright(data)));
+			value = add_both (value, data);
 			outval ();
 			continue;
 	case 4:		sym = data;
-			value =+ getval (sym, 0);
+			value = getval (value, sym, 0);
 			continue;
 	case 5:		sym = data;
-			value =+ getval (sym, 1);
+			value = getval (value, sym, 1);
 			continue;
 	case 6:		linkreq (data, *blkp++);
 			continue;
@@ -458,6 +462,10 @@ standard()
 			}
 		}
 	}
+
+int add_both (x, y)
+
+	{return (wcons (wleft(x) + wleft(y), wright(x) + wright(y)));}
 
 outval ()
 

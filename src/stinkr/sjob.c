@@ -28,7 +28,7 @@ jinit ()
 
 	while (--jnwindow >= 0)
 		{jcpage[jnwindow] = -1;
-		jwpage[jnwindow] = pg_get (1);
+		jwpage[jnwindow] = pgget (1);
 		jwindow[jnwindow] = jwpage[jnwindow] << PAGE_SHIFT;
 		}
 	jnwindow = 0;

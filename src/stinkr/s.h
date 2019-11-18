@@ -1,7 +1,7 @@
-# include "c.defs"
+# include <c.defs>
 
 # define PAGE_SHIFT 10
-# ifdef tops20
+# ifndef ITS
 #    define PAGE_SHIFT 9
 # endif
 
@@ -11,7 +11,7 @@
 
 # define ORIGIN_0 0100
 # define ORIGIN_1 0400000
-# ifdef tops20
+# ifndef ITS
 #    define ORIGIN_0 0140
 # endif
 
@@ -83,3 +83,7 @@ typedef struct _progent progent;
 # define wleft(w) ((w)>>18)
 # define wright(w) ((w)&0777777)
 # define wcons(l,r) (((l)<<18)|((r)&0777777))
+
+# define LHALF halves (0777777, 0)
+# define RHALF 0777777
+# define ACFIELD halves (0740, 0)

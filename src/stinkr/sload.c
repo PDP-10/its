@@ -88,7 +88,7 @@ leprog ()
 		}
 	}
 
-getval (n, sub) name n; int sub;
+getval (value, n, sub) name n; int value, sub;
 
 	{symbol s;
 	int swap, action, flags, global;
@@ -100,28 +100,32 @@ getval (n, sub) name n; int sub;
 
 	if (!global)
 		{error ("reference to local symbol %x not implemented", n);
-		return (0);
+		return (value);
 		}
 	s = symfind (n);
 	if (symdefined (s))
-		{int val;
+		{int val, nval;
 		val = symvalue (s);
 		if (swap) val = wswap (val);
 		if (sub) val = -val;
-		switch (action) {
-		case fa_word:	break;
-		case fa_right:	val =& 0777777; break;
-		case fa_left:	val =& ~0777777; break;
-		case fa_ac:	val =& 0740000000; break;
-			}
-		return (val);
+		nval = compute_fixup (action, value, val);
+		if (debug) cprint (" changed %o => %o", value, nval);
+		return (nval);
 		}
 	if (ovflag)
 		{error ("%x undefined in assignment", n);
-		return (0);
+		return (value);
 		}
 	symaddfix (s, fixcons (sub, swap, action, loc));
-	return (0);
+	return (value);
+	}
+
+int fmasks [] {halves (0777777, 0777777), RHALF, LHALF, ACFIELD};
+
+int compute_fixup (kind, old, new)
+
+	{kind = fmasks[kind];
+	return ((old & ~kind) | (((old & kind) + (new & kind)) & kind));
 	}
 
 linkreq (n, chain) name n; int chain;
@@ -224,14 +228,23 @@ reloc (l)
 
 	{int n, o;
 
+	if (l < 0 || l >= 01000000)
+		{error ("bad relocatable value");
+		return (0);
+		}
+	n = nvsegs - 1;
+	if (l >= segvorg[n] + segvsiz[n]) return (creloc[0] + l - 01000000);
 	n = nvsegs;
-	while (--n >= 0) if ((o = l - segvorg[n]) >= 0) break;
-	if (o<0)
+	while (--n >= 0)
+	    if ((o = l - segvorg[n]) >= 0) break;
+	if (n < 0)
 		{error ("virtual address %o not in any segment", l);
 		return (0);
 		}
+	if (o > segvsiz[n])	/* permit label at end of segment */
+		error ("virtual address %o beyond end of segment", l);
 	n = creloc[n] + o;
-	if (n<0 || n>=01000000)
+	if (n < 0 || n >= 01000000)
 		{error ("address wraparound");
 		n =& 0777777;
 		}
@@ -242,7 +255,7 @@ char *actnam[] {"word", "right half of", "left half of", "AC of"};
 
 dofixup (f, val) fixup f;
 
-	{int lc, action, sub, swap;
+	{int lc, action, sub, swap, oval, nval;
 	sub = fixsub (f);
 	swap = fixswap (f);
 	action = fixact (f);
@@ -251,11 +264,7 @@ dofixup (f, val) fixup f;
 		actnam[action], lc, val);
 	if (swap) {val = wswap (val); if (debug) cprint (" (swap)");}
 	if (sub) {val = -val; if (debug) cprint (" (subtract)");}
-	switch (action) {
-	case fa_word:	break;
-	case fa_right:	val =& 0777777; break;
-	case fa_left:	val =& ~0777777; break;
-	case fa_ac:	val =& 0740000000; break;
-		}
-	jwrite (lc, jread (lc) + val);
+	oval = jread (lc);
+	jwrite (lc, nval = compute_fixup (action, oval, val));
+	if (debug) cprint (" changed %o => %o", oval, nval);
 	}
