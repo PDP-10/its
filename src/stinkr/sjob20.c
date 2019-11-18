@@ -29,24 +29,7 @@ int j_kill (j)
 	{_KFORK (j);
 	}
 
-int pg_get (n)
-
-	{static int space[(NWINDOW+1)*PAGE_SIZE];
-		/* space used for windows */
-	static int *sp {space};
-		/* pointer to next available page */
-
-	int i, pn;
-	i = sp;
-	if (i & PAGE_MASK)	/* sp hasn't been aligned yet */
-		{i =+ PAGE_MASK;
-		i =& ~PAGE_MASK;
-		}
-	pn = i >> PAGE_SHIFT;	/* page number of allocated page */
-	i =+ PAGE_SIZE;		/* advance to next page */
-	sp = i;
-	return (pn);
-	}
+pgget (n) {return (pg_get (n) >> PAGE_SHIFT);}
 
 pgwzero (jch, p)
 	int jch;

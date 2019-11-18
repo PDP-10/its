@@ -14,6 +14,8 @@ int jbhandle (j)
 	{return (j_ch (j));
 	}
 
+pgget (n) {return (pg_get (n));}
+
 pgwzero (jch, p)
 	int jch;
 	int p;

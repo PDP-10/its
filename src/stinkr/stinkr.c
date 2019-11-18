@@ -341,11 +341,20 @@ int sopen (fnbuf, m, o) char fnbuf[], *o;
 			}
 		f = copen (fnbuf, m, o);
 		if (f == OPENLOSS)
-			{cprint ("\nUnable to open %s\n", fnbuf);
-			cprint ("Use what filename instead ('*' to ignore)? ");
-			gets (temp);
-			if (temp[0] == '*' && temp[1] == 0) return (OPENLOSS);
-			if (temp[0]) stcpy (temp, fnbuf);
+			{char *p, c;
+			f = copen ("", 'w');
+			cprint (f, "\nUnable to open %s\n", fnbuf);
+			cprint (f, "Use what filename instead\
+ ('*' to ignore)? ");
+			cclose (f);
+			f = copen ("", 'r');
+			p = temp;
+			while ((c = cgetc (f)) && c != '\n') *p++ = c;
+			*p++ = 0;
+			cclose (f);
+			if (temp[0] == 0 || (temp[0] == '*' && temp[1] == 0))
+				return (OPENLOSS);
+			stcpy (temp, fnbuf);
 			}
 		else return (f);
 		}
