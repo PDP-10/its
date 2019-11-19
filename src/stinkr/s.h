@@ -84,6 +84,8 @@ typedef struct _progent progent;
 # define wright(w) ((w)&0777777)
 # define wcons(l,r) (((l)<<18)|((r)&0777777))
 
+# define halves(_LH,_RH) (((_LH) << 18) | (_RH))
+
 # define LHALF halves (0777777, 0)
 # define RHALF 0777777
 # define ACFIELD halves (0740, 0)
