@@ -1,4 +1,4 @@
-# include <c.defs>
+# include "c.defs"
 
 # define PAGE_SHIFT 10
 # ifndef ITS
