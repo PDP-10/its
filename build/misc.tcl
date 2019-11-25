@@ -1434,7 +1434,7 @@ expect ":KILL"
 # STINKR
 respond "*" ":cwd stinkr\r"
 respond "*" ":link stinkr; c defs, c;\r"
-respond "*" ":c;cc sjob.c sjob10.c sload.c sread.c ssym.c stinkr.c\r"
+respond "*" ":cc sjob.c sjob10.c sload.c sread.c ssym.c stinkr.c\r"
 expect ":KILL"
 respond "*" ":stinkr stinkr\r"
 expect ":KILL"
