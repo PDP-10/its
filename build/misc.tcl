@@ -1193,6 +1193,10 @@ respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
+# IMGOUT
+respond "*" ":midas sys3; ts imgout_cbf; imgout\r"
+expect ":KILL"
+
 # Dump TV bitmap as XGP scan file.
 # TVREAD expects the binary in BKPH.
 respond "*" ":midas bkph; ts zap_zap\r"
