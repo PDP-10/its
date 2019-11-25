@@ -1,0 +1,349 @@
+title imgout - Outputs JCL in Image mode
+
+IFNDEF ITSSW,ITSSW==IFE <.OSMIDAS-SIXBIT/ITS/>,[-1] .ELSE 0
+IFNDEF TNXSW,TNXSW==IFE <<.OSMIDAS-SIXBIT/TENEX/>&<.OSMIDAS-SIXBIT/TWENEX/>>,[-1] .ELSE 0
+
+IFN TNXSW,.DECSAV
+f==0
+a==1
+b==2
+c==3
+d==4
+e==5
+t==6
+tt==7
+cnt==10	; # chars left to read from buffer
+p==17
+
+call==<pushj p,>
+ret==<popj p,>
+popj1:	aosa (p)
+popaj:	 pop p,a
+apopj:	ret
+
+DEFINE MDBP7 AC		; Back up 7-bit BP in AC
+	ADD AC,[070000,,]	; Incr P
+	CAIG AC,		; If went to prev,
+	 SUB AC,[430000,,1]	; point to prev.
+TERMIN
+
+go:	move p,[-100,,pdl]	; setup PDL ptr
+	call sysini		; Do sys-dep initialization
+	movei a,jclbuf
+	movei b,ljclbuf*5
+	call sysjcl		; Get JCL if any
+	 jrst quitx		; JCL too long???
+	jumple b,quit		; Jump if no JCL at all.
+	move cnt,b
+	; Now have
+	; A/ BP to JCL
+	; CNT/ # chars in JCL
+	
+
+	call sysopn		; Open TTY in superimage/binary mode
+
+	setz e,			; number flag in low bit
+	setzb c,d		; zero accumulators
+
+jloop:	sojl cnt,quit
+	ildb b,a		; get a char
+	caige b,"0		; is it a number?
+	 jrst nonum
+	caile b,"9
+	 jrst nonum
+	imuli d,10.		; mulitply decimal accumulatr
+	ash c,3			; and the octal one
+	addi c,-"0(b)		; and add it into accumulators
+	addi d,-"0(b)
+	tro e,1			; set the "was a number" flag
+	jrst jloop
+
+nonum:	trze e,1		; was last a number?
+	 jrst [
+	   cain b,".		; trailing period makes a number decimal
+	    move c,d
+	   exch b,c
+	   pushj p,systyo
+	   exch b,c
+	   setzb c,d
+	   cain b,".
+	    jrst jloop
+	   jrst .+1 ]
+	cain b,40		; spaces can be freely used as delimiters
+	 jrst jloop
+	cain b,"'		; quoted char?
+	 jrst quote
+	cain b,"/		; quoted char?
+	 jrst quote
+	cain b,"^		; controllify?
+	 jrst cntrl
+	caie b,^J
+	 cain b,^M		; end of JCL?
+	  jrst quit
+	cain b,"$		; dollar sign translates to escape
+	 movei b,33
+	pushj p,systyo
+	jrst jloop
+
+quote:	move f,b		; save char that got us here
+	sojl cnt,quit		; If sudden end of buffer, ignore it.
+	ildb b,a		; get next char immediately
+	cain b,^M		; sudden end of buffer?
+	 jrst quit
+	pushj p,systyo
+	jrst jloop
+
+cntrl:	move f,b		; save char that got us here
+	sojl cnt,quit
+	ildb b,a		; get next char
+	cain b,^M		; sudden end of buffer?
+	 jrst quit
+	andcmi b,100		; controlify it
+	pushj p,systyo
+	jrst jloop
+
+
+quit:	call syscls		; Restore TTY mode if needed
+quitx:	call sysdon		; Die peacefully, never return
+
+lpdl==100
+pdl:	block 100
+
+ljclbuf==400			; up to 1280 characters of JCL?
+jclbuf:	block ljclbuf
+
+SUBTTL ITS init, file reading, file writing
+
+IFN ITSSW,[
+
+SYSIFN:	[ASCIZ /HOSTS >/]	; Input filename
+
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT/A/ ? B ((SETZ))]
+TERMIN
+
+INCH==1		; Input channel
+ERRCHN==2	; Error input channel
+OCH==16		; File output channel
+TYOC==17	; TTY output channel, for error messages
+
+
+; SYSINI - Called at startup to initialize OS-dependent stuff.
+
+SYSINI:	POPJ P,
+
+; SYSJCL - Called to read in a JCL line if any.
+;	A/ address to read JCL into
+;	B/ # chars available
+; Returns .+1 if JCL too long for buffer.
+; Returns .+2:
+;	A/ BP to ASCIZ JCL string
+;	B/ # chars of JCL read  (-1 = no JCL at all)
+; Clobbers T, TT
+
+SYSJCL:	MOVEI T,(B)		; Save # chars avail
+	SETZ B,
+	.SUSET [.ROPTIO,,TT]
+	TLNN TT,%OPCMD		; Has our superior said it has a cmd?
+	 SOJA B,POPJ1		; Nope.
+	CAIG T,5*3		; Ensure reasonable JCL buffer size
+	 RET
+	IDIVI T,5		; Get # words we can use
+	ADDI T,(A)		; Get 1st non-usable addr
+	SETOM -1(T)		; Ensure last word non-zero
+	MOVEI TT,1(A)		; Zero the buffer
+	HRLI TT,(A)
+	SETZM (A)
+	BLT TT,-2(T)		; Zap!
+	HRLI A,5
+	.BREAK 12,A		; Try to read command string.
+	SETZM -1(T)		; Get rid of terminating -1
+	SKIPE -2(T)		; Next-to-last word should still be zero
+	 RET			; Ugh, didn't have room for all of it.
+	SKIPN (A)
+	 JRST POPJ1		; Nothing there.
+	HRLI A,440700		; Hurray, all's well!  Make a BP
+	MOVE TT,A		; Count # of chars in JCL.
+	ILDB T,TT
+	JUMPE T,POPJ1
+	AOJA B,.-2
+
+
+; SYSDON - Called to terminate program gracefully.
+
+SYSDON:	.LOGOUT 1,
+
+; SYSHLT - Called to halt program violently.  If user tries to continue,
+;	oblige resignedly.
+
+SYSHLT:	.VALUE
+	RET
+
+; SYSOPN - Called to open TTY for superimage output
+
+SYSOPN:	.open 1,[%tjsio+.uio,,'tty]
+	 .lose %lsfil
+	RET
+
+
+; SYSTYO - Called to output char in B
+
+systyo: ; %TDQOT all characters for CRTSTY users..
+;	cail b,200		; does char need quoting?
+	 .iot 1,[%tdqot]	; > 200 quote it
+	.iot 1,b		; send char
+	popj p,
+
+; SYSCLS - Close TTY output channel, restore modes
+
+SYSCLS:	RET		; Nothing needed, ITS wins.
+
+
+];IFN ITSSW
+
+SUBTTL TNX init, file reading, file writing
+
+IFN TNXSW,[
+
+FL20X:	0		; Zero if 10X, -1 if 20X.
+
+SYSINI:	SETZM FL20X		; Default assumes TENEX.
+	MOVE A,['LOADTB]
+	SYSGT			; See if LOADTB table defined...
+	CAIN B,
+	 SETOM FL20X		; If not, must be Twenex.
+	RET
+
+SYSJCL:	SKIPN FL20X
+	 JRST SYSJCT	; Jump to handle Tenex differently.
+	MOVEI TT,(A)	; Save buffer addr
+	HRLI TT,440700	; Make a BP out of it.
+	SETZ A,		; Check RSCAN.
+	RSCAN		; See if have anything in RSCAN buffer.
+	 SETO A,	; Huh?  Shouldn't happen, but ignore it.
+	CAIL A,(B)	; Ensure there's enough room for the input.
+	 RET		; No, take failure return.
+	SKIPG B,A	; Find # chars waiting for us
+	 JRST [	MOVE A,TT	; None, just return.
+		JRST POPJ1]
+	MOVEI T,(B)
+	PUSH P,C
+	MOVNI C,(A)	; Aha, set up cnt for SIN
+	MOVE B,TT
+	MOVEI A,.PRIIN	; Now ready for business...
+	SIN
+	POP P,C
+	SETZ A,
+	IDPB A,B	; Ensure string is ASCIZ.
+	MOVE A,TT	; Set up original BP
+	MOVEI B,(T)	; and original length
+
+	; Now must flush cruft that crufty EXEC sticks in crufty
+	; front of crufty line!!
+	IRP PRE,,[RUN,ERUN]		; Cruft to flush
+	CAILE B,<.LENGTH /PRE/>
+	 JRST [	IRPC X,,[PRE]
+			ILDB T,A
+			CAIE T,"X
+			 CAIN T,"X-40
+			  CAIA
+			   JRST .+1
+			TERMIN
+		ILDB T,A
+		CAIE T,40
+		 JRST .+1
+		SUBI B,1+<.LENGTH /PRE/>
+		JRST SYSJC2]
+	MOVE A,TT		; Restore original BP
+	TERMIN
+	; Now flush the crufty name of the program or file being run.
+SYSJC2:	ILDB T,A		; Flush spaces
+	CAIN T,40
+	 SOJA B,.-2
+	JUMPLE B,POPJ1		; Return if zero cnt (with right BP)
+	ILDB T,A
+	CAILE T,40
+	 SOJA B,.-2		; Flush until random ctl seen (space, ^M)
+	SUBI B,1
+	CAIE T,40		; If it wasn't a space,
+	 SETZ B,		; then forget about the whole thing.
+	JRST POPJ1
+
+; Get JCL if on TENEX
+
+SYSJCT:	MOVEI TT,(A)
+	HRLI TT,440700
+	MOVEI T,(B)
+	SETZ B,
+	MOVEI A,.PRIIN
+	BKJFN		; Get prev char
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Shouldn't happen, but claim no JCL if so
+	PBIN		; Get the char
+	CAIE A,40	; Space?
+	 SOJA B,[MOVE A,TT
+		JRST POPJ1]	; Nope, no JCL.
+
+	; TENEX "JCL" desired, must read directly from .PRIIN.
+	; This code provides a very crude rubout facility.
+	PUSH P,TT	; Save original BP
+SYSJC4:	PBIN
+	CAIE A,^_	; TENEX EOL?
+	 CAIN A,^M	; or CR?
+	  JRST SYSJC5
+	CAIN A,177	; Rubout?
+	 SOJA B,[CAIGE B,
+		 AOJA B,SYSJC4
+		MOVEI A,"/
+		PBOUT
+		LDB A,TT
+		PBOUT
+		MDBP7 TT
+		JRST SYSJC4]
+	IDPB A,TT
+	CAIL B,-3(T)		; Ensure enough room for terminator chars
+	 JRST POPAJ		; Ugh!  Restore BP and take failure return.
+	AOJA B,SYSJC4
+
+SYSJC5:	MOVEI A,^M
+	IDPB A,TT
+	SETZ A,
+	IDPB A,TT		; Ensure string is ASCIZ.
+	POP P,A			; Restore BP to start of string.
+	AOJA B,POPJ1		; Include terminating CR in count.
+
+SYSDON:	HALTF
+	JRST .-1	; Never allow continuation
+SYSHLT:	HALTF
+	RET
+
+.SCALAR OLDMOD
+SYSOPN:	PUSH P,A
+	PUSH P,B
+	MOVEI A,.PRIOU
+	RFMOD
+	MOVEM B,OLDMOD
+	MOVEI A,.TTBIN
+	DPB A,[.BP TT%DAM,B]
+	MOVEI A,.PRIOU
+	SFMOD			; Set TTY mode to binary.
+	POP P,B
+	POP P,A
+	RET
+
+
+SYSCLS:	MOVEI A,.PRIOU
+	MOVE B,OLDMOD		; Restore old mode.
+	SFMOD
+	RET
+
+SYSTYO:	PUSH P,A
+	MOVEI A,.PRIOU
+	BOUT
+	POP P,A
+	RET
+
+
+];IFN TNXSW
+
+	end go
