@@ -796,6 +796,7 @@ respond "*" ":link sys1;ts suset,sys1;ts pr\r"
 respond "*" ":link sys1;ts doc,sys1;ts pr\r"
 respond "*" ":link sys1;ts intrup,sys1;ts pr\r"
 respond "*" ":link sys1;ts ttyvar,sys1;ts pr\r"
+respond "*" ":link sys1;ts prim,sys1;ts pr\r"
 
 respond "*" ":link .info.;its .calls,sysdoc;.calls >\r"
 respond "*" ":link .info.;its uuos,sysdoc;uuos >\r"
