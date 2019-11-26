@@ -223,6 +223,7 @@ respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 respond "*" ":midas sysbin;_sra; gcmail\r"
 expect ":KILL"
 respond "*" ":link dragon; hourly gcmail,sysbin; gcmail bin\r"
+respond "*" ":link dragon; hourly gcbulk,sysbin; gcmail bin\r"
 
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "N\r"
