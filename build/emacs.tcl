@@ -8,6 +8,7 @@ sleep 2
 respond "TECPUR" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys;ts teco,.teco.;tecpur >\r"
+respond "*" ":link sys;ts t, sys; ts teco\r"
 
 respond "*" ":link sys2;ts emacs,emacs;ts >\r"
 respond "*" ":link sys2;ts ne,emacs;ts >\r"
@@ -30,6 +31,7 @@ respond "&" "mmrun\033purify\033dump\033ts 163\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
 respond "*" ":link sys2;ts edit,sys2;ts emacs\r"
+respond "*" ":link sys2;ts e, sys2; ts emacs\r"
 
 # BABYL, BABYLM, CACHE, FIXLIB, IVORY, MKDUMP, OUTLINE-MODE, PL1,
 # TEACH-C100, TMACS and WORDAB are generated with IVORY.
@@ -118,6 +120,7 @@ expect ":KILL"
 # The previous file version was 62, dated 1982-01-05.
 respond "*" ":rename emacs; tsinfo >, tsinfo 63\r"
 respond "*" ":link sys2;ts info,emacs;tsinfo >\r"
+respond "*" ":link sys2;ts h, sys2; ts info\r"
 
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033XLoad Library\033docond\r"

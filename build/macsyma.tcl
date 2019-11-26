@@ -282,6 +282,7 @@ respond "(C1)" "quit();"
 respond "*" ":copy aljabr;user profil,macsym;\r"
 respond "*" ":link macsym;check fasl,ellen;\r"
 respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
+respond "*" ":link sys;ts a,sys3; ts macsym\r"
 respond "*" ":link demo;manual demo,demo;manual >\r"
 respond "*" ":link manual;manual demo,demo;manual demo\r"
 
