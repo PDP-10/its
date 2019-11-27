@@ -242,6 +242,11 @@ respond "*" ":midas sysbin;_sysnet;mails\r"
 expect ":KILL"
 respond "*" ":link device; chaos mail, sysbin; mails bin\r"
 
+# DIGEST
+respond "*" ":midas digest; ts digest_digest\r"
+expect ":KILL"
+respond "*" ":link dragon; hourly digest, digest; ts digest\r"
+
 # TIME
 respond "*" ":midas sys1;ts time_sysen2;time\r"
 expect ":KILL"
