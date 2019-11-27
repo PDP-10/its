@@ -82,6 +82,7 @@
 - DDTDOC, interactive DDT documentation.
 - DECUUO, TOPS-10 and WAITS emulator.
 - DFTP, Datacomputer file transfer.
+- DIGEST, digestify a mailing list.
 - DIRCPY, copy directory.
 - DIRDEV, list directories, sorted or subsetted.
 - DIRED, directory editor (independent from EMACS DIRED).
