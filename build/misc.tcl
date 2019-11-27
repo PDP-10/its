@@ -247,6 +247,10 @@ respond "*" ":midas digest; ts digest_digest\r"
 expect ":KILL"
 respond "*" ":link dragon; hourly digest, digest; ts digest\r"
 
+# MBXLOC
+respond "*" ":midas digest; ts mbxloc_mbxloc\r"
+expect ":KILL"
+
 # TIME
 respond "*" ":midas sys1;ts time_sysen2;time\r"
 expect ":KILL"
