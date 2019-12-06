@@ -21,6 +21,14 @@ if {![info exists env(MACSYMA)]} {
     set env(MACSYMA) "yes"
 }
 
+# Set the timeout from the environment variable TIMEOUT.  Default to
+# 300 seconds.
+if {[info exists env(TIMEOUT)]} {
+    set baseline_timeout $env(TIMEOUT)
+} else {
+    set baseline_timeout 300
+}
+
 proc cleanup {} {
     global spawn_id
     close -i $spawn_id
@@ -110,6 +118,8 @@ proc respond_load { r } {
 }
 
 proc build_macsyma_portion {} {
+    global baseline_timeout
+
     respond "*" "complr\013"
     respond "_" "\007"
     respond "*" "(load \"liblsp;iota\")"
@@ -133,10 +143,10 @@ proc build_macsyma_portion {} {
 	    type "(quit)"
 	}
     }
-    set timeout 100
+    set timeout $baseline_timeout
 }
 
-set timeout 100
+set timeout $baseline_timeout
 proc setup_timeout {} {
     # Don't do this until after you've called "spawn", otherwise it'll cause a
     # read from stdin which will return EOF if stdin isn't a tty.
