@@ -5,7 +5,7 @@ respond "*" ":midas ts stinkm_stink\r"
 expect ":KILL"
 
 respond "*" ":xfile assem xfile\r"
-expect -timeout 2000 "Assembly done!"
+expect -timeout 300 "Assembly done!"
 
 mkdir "mudsav"
 

@@ -24,7 +24,7 @@ respond "*" ":link sys;ts load,sys;ts dump\r"
 type ":dump\r"
 respond "_" "load links crdir sorry\r"
 respond "FILE=" "*;* *\r"
-expect -timeout 30000 "E-O-T"
+expect -timeout 3000 "E-O-T"
 respond "_" "quit\r"
 expect ":KILL"
 
