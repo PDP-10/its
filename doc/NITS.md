@@ -71,7 +71,7 @@ Note: `XX` means the name of the ITS you are building.
      2. Load DDT: <code>L<kbd>$</kbd>DDT</code>
      3. Give ITS and its symbols to DDT: <code>T<kbd>$</kbd>NITS BIN</code>
      4. You're now in DDT.  Exit back to DSKDMP: <code><kbd>$</kbd>U</code>
-     5. Merge in (N)SALV.  For KA10: <code>M<kbd>$</kbd>SALV</code>  For KS10: <code>M<kbd>$</kbd>NSALV BIN</code>
+     5. Merge in (N)SALV.  For KA10: <code>M<kbd>$</kbd>SALV BIN</code>  For KS10: <code>M<kbd>$</kbd>NSALV BIN</code>
      6. Write the result to disk: <code>D<kbd>$</kbd>NITS</code>  Again, it's prudent to invent a new file name here.  Use <code>F<kbd>$</kbd></code> for a file listing.
 
    - Timesharing DDT method.
