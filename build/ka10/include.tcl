@@ -48,7 +48,7 @@ proc frontend_bootstrap {} {
 }
 
 proc its_switches {} {
-    respond "MACHINE NAME =" "KA\r"
+    respond "MACHINE NAME =" "TF\r"
 }
 
 proc make_ntsddt {} {
@@ -68,7 +68,7 @@ proc make_ntsddt {} {
 proc make_salv {} {
     respond "*" ":midas dsk0:.;_system;salv\r"
     respond "time-sharing?" "n\r"
-    respond "machine?" "KA\r"
+    respond "machine?" "TF\r"
     expect ":KILL"
 }
 
@@ -91,7 +91,7 @@ proc make_dskdmp {} {
 }
 
 proc dump_switches {} {
-    respond "WHICH MACHINE?" "KA\r"
+    respond "WHICH MACHINE?" "TF\r"
 }
 
 proc peek_switches {} {
@@ -152,7 +152,7 @@ proc bootable_tapes {} {
     create_tape "$out/magdmp.tape"
 
     type ":magfrm\r"
-    respond "?" "KA\r"
+    respond "?" "TF\r"
     respond "?" "Y"
     respond "_" "W"
     respond "FROM" ".; @ DDT\r"
