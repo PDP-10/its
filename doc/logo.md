@@ -6,18 +6,18 @@
  ourselves. In fact the work on LOGO to which I have devoted much of the past
  years consists precisely of developing such forces in positive directions."
 
-Seymour Papert
+**Seymour Papert**
 
 "Logo is the name for a philosophy of education and for a continually 
  evolving family of computer languages that aid its realization."
 
-Harold Abelson
+**Harold Abelson**
 
 "Historically, this idea that Logo is mainly turtle graphics is a mistake. 
-Logo’s name comes from the Greek word for word, because Logo was first
+Logo’s name comes from the Greek word for *word*, because Logo was first
 designed as a language in which to manipulate language: words and sentences."
 
-Brian Harvey
+**Brian Harvey**
 
 Logo was initially created by Wally Feurzeig, Seymour Papert, Daniel G.Bobrow,
 Cynthia Solomon and Richard Grant in 1967 as part of a National Science Foundation 
@@ -143,7 +143,7 @@ The emulator must be run on the KA10 simulator which supports the Type 340 displ
 
 11LOGO system was one of the major logo versions of the 70s and included not only
 the LOGO evaluator but also a dedicated time-sharing system which serviced about
-dozen users. MIT AI MEMO 313 cites among the system developers Ron Label, Joe Cohen,
+dozen users. MIT AI MEMO 313 cites among the system developers Ron Lebel, Joe Cohen,
 Nat Goodman, Hal Abelson, Roger Hale, Radia Perlman. The 11LOGO display controller
 was designed and built by Tom Knight. The document also cited contributions of Richard
 Greenblatt on matters of system design and, of course, Seymour Papert and Cynthina
