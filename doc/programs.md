@@ -212,6 +212,7 @@
 - MINI36, mini Chaosnet file server (36-bit).
 - MINITS, mini-ITS network utility.
 - MINIC, mini Chaosnet file server (old).
+- MINSKY TRON, display hack translated from the PDP-1.
 - MLDEV/MLSLV, allows access to remote systems as devices (e.g. DB:).
 - MLIFE, Mike Speciner's Conway Life.
 - MODEMS, modems dragon.

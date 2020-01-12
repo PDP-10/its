@@ -609,6 +609,10 @@ respond "*" ":midas /t dsk0: .; @ munch_lars; munch\r"
 respond "with ^C" ".iotlsr==jfcl\r\003"
 expect ":KILL"
 
+# Minskytron, translated from PDP-1.
+respond "*" ":midas lars; ts minsky_minsky tron\r"
+expect ":KILL"
+
 # PI
 respond "*" ":midas sys3;ts pi_rwg; ran\r"
 expect ":KILL"
