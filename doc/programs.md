@@ -186,6 +186,7 @@
 - LOCK, shut down system.
 - LOGO, BBN Logo.
 - LOOKUP, looks up user info in INQUIR database.
+- LORENZ, Edward Lorenz' strange attractor.
 - LOSS (device).
 - LOTCLN - LOGOUT TIMES cleanup program.
 - LSPEED, set TTY line parameters.
