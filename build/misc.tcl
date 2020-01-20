@@ -610,8 +610,9 @@ respond "with ^C" ".iotlsr==jfcl\r\003"
 expect ":KILL"
 
 # Minskytron, translated from PDP-1.
-respond "*" ":midas lars; ts minsky_minsky tron\r"
+respond "*" ":midas dsk0: lars; ts minsky_minsky tron\r"
 expect ":KILL"
+respond "*" ":link dsk0: .; @ minsky, lars; ts minsky\r"
 
 # Edward Lorenz' strange attactor.
 respond "*" ":midas dsk0: lars; ts lorenz_lorenz\r"
