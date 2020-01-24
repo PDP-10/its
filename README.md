@@ -71,8 +71,9 @@ avoid the 5 minute grace period: type `:logout`.  When ITS writes
 `SHUTDOWN COMPLETE`, it's safe to stop the emulator.
 
 ITS can optionally use some additional peripheral devices.  To attach
-a simulated GT40 graphics terminal, type `./start gt40` when booting
-ITS.
+a simulated GT40 graphics terminal, type `./start gt40`.  If you run
+the KA10 emulator, you can use the Knight TV raster display by typing
+`./start tv11 tvcon`.  On a TV, type <kbd>F1</kbd> instead of <kbd>Control-Z</kbd>.
 
 To install your personal user files, add a subdirectory under `user`
 with your files inside.  They will be copied to ITS.  The directory
