@@ -619,6 +619,10 @@ respond "*" ":midas dsk0: lars; ts lorenz_lorenz\r"
 expect ":KILL"
 respond "*" ":link dsk0: .; @ lorenz, lars; ts lorenz\r"
 
+# Mandelbrot.
+respond "*" ":midas lars; ts tvbrot_tvbrot\r"
+expect ":KILL"
+
 # PI
 respond "*" ":midas sys3;ts pi_rwg; ran\r"
 expect ":KILL"
