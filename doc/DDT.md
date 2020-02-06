@@ -43,3 +43,5 @@ The ◊ character represents typing <kbd>ESC</kbd>, or holding down the
 | man 2 open    |                      | :call open               |
 | dmesg         |                      | :sysmsg                  |
 | uptime        |                      | :time                    |
+| echo "Hello World!" | | <kbd>^W</kbd>:◊<kbd>^V</kbd>Hello World! <kbd>^W</kbd>◊<kbd>^V</kbd> *(in an xfile)* |
+| \#Comment     |       | <kbd>^W</kbd>:◊Comment◊<kbd>^V</kbd> *(in an xfile)* |
