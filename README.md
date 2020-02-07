@@ -64,12 +64,16 @@ then `ESC g`.  If you use the `pdp10-kl` emulator there is no prompt
 and you need to type `Esc L ITS`, press Enter, and then `ESC g`.
 Eventually, you will see `SYSTEM JOB USING THIS CONSOLE`.  You are now
 ready to log in, so type Control-Z.  See [doc/DDT.md](doc/DDT.md) for
-a list of useful commands.  When done, shut down orderly by typing
-`:lock` and then `5down`.
+a list of useful commands.
+
+To shut down ITS, type `:lock` and then `5down`.  Log yourself out to
+avoid the 5 minute grace period: type `:logout`.  When ITS writes
+`SHUTDOWN COMPLETE`, it's safe to stop the emulator.
 
 ITS can optionally use some additional peripheral devices.  To attach
-a simulated GT40 graphics terminal, type `./start gt40` when booting
-ITS.
+a simulated GT40 graphics terminal, type `./start gt40`.  If you run
+the KA10 emulator, you can use the Knight TV raster display by typing
+`./start tv11 tvcon`.  On a TV, type <kbd>F1</kbd> instead of <kbd>Control-Z</kbd>.
 
 To install your personal user files, add a subdirectory under `user`
 with your files inside.  They will be copied to ITS.  The directory

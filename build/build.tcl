@@ -193,10 +193,10 @@ type ":dump\r"
 respond "_" "dump links full list\r"
 respond "LIST DEV =" "tty\r"
 respond "TAPE NO=" "1\r"
-expect -timeout 3000 "REEL"
+expect -timeout 6000 "REEL"
 respond "_" "rewind\r"
 respond "_" "icheck\r"
-expect -timeout 3000 "_"
+expect -timeout 6000 "_"
 type "quit\r"
 
 shutdown
