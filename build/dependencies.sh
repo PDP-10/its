@@ -18,6 +18,15 @@ install_linux() {
     esac
 }
 
+install_freebsd() {
+    pkg upgrade -y
+    pkg install -y gmake git expect
+    case "$EMULATOR" in
+        pdp10-ka) pkg install -y sdl2 sdl2_image pkgconf;;
+        pdp10-kl) pkg install -y autoconf;;
+    esac
+}
+
 install_osx() {
     true
 }
