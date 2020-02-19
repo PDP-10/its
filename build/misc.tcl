@@ -572,6 +572,14 @@ respond "designs" "\r"
 respond "suns" "\r"
 expect ":KILL"
 
+# PDP-6/10 Dazzle Dart
+respond "*" ":midas games;ts dazdrt_klh; dazdrt\r"
+respond "Run under ITS?" "YES\r"
+expect ":KILL"
+respond "*" ":midas;324 dsk0:.;@ dazdrt_klh; dazdrt\r"
+respond "Run under ITS?" "NO\r"
+expect ":KILL"
+
 # Dazzle Dart, video game for the Logo group PDP-11/45
 respond "*" ":palx bs;_dazzle\r"
 expect ":KILL"
