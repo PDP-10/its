@@ -24,6 +24,7 @@ install_freebsd() {
     case "$EMULATOR" in
         pdp10-ka) pkg install -y sdl2 sdl2_image pkgconf;;
         pdp10-kl) pkg install -y autoconf;;
+        klh10) pkg install -y pkgconf autotools;;
     esac
 }
 
