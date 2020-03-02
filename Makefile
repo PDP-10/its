@@ -48,7 +48,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6
+SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -66,6 +66,7 @@ GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
+DATAPOINT=tools/vt05/dp3300
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -85,7 +86,7 @@ out/klh10/stamp: $(OUT)/rp0.dsk
 out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6)
+out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT)
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp: $(OUT)/rp04.1
@@ -258,6 +259,9 @@ $(TV11):
 
 $(PDP6):
 	$(MAKE) -C tools/pdp6/emu
+
+$(DATAPOINT):
+	$(MAKE) -C tools/vt05 dp3300
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
