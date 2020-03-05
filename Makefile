@@ -67,6 +67,7 @@ TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
+VT52=tools/vt05/vt52
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -86,7 +87,7 @@ out/klh10/stamp: $(OUT)/rp0.dsk
 out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT)
+out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52)
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp: $(OUT)/rp04.1
@@ -262,6 +263,9 @@ $(PDP6):
 
 $(DATAPOINT):
 	$(MAKE) -C tools/vt05 dp3300
+
+$(VT52):
+	$(MAKE) -C tools/vt05 vt52
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
