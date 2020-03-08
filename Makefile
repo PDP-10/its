@@ -48,7 +48,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05
+SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05 tek4010
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -68,6 +68,7 @@ PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
+TEK=tools/tek4010/tek4010
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -87,7 +88,7 @@ out/klh10/stamp: $(OUT)/rp0.dsk
 out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52)
+out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK)
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp: $(OUT)/rp04.1
@@ -266,6 +267,12 @@ $(DATAPOINT):
 
 $(VT52):
 	$(MAKE) -C tools/vt05 vt52
+
+tek-hack:
+	rm $(TEK)
+
+$(TEK): tek-hack
+	$(MAKE) -C tools/tek4010 tek4010
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
