@@ -1074,6 +1074,11 @@ respond "*" ":midas sys3;ts expn_sysnet;expn\r"
 expect ":KILL"
 respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
 
+# MUSCOM
+respond "*" ":midas sysbin;_syseng; muscom\r"
+expect ":KILL"
+respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
+
 # WHOLIN
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
