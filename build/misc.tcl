@@ -13,6 +13,17 @@ respond "*" "purify\033g"
 respond "TS MIDAS" "midas;ts 324\r"
 respond "*" ":kill\r"
 
+# MIDAS 77, needed for MUSRUN.
+respond "*" ":job midas\r"
+respond "*" ":load sysbin; midas 77bin\r"
+# Patch to accomodate more symbols returned from .GETSYS.
+respond "*" "tsymgt+5/"
+respond "P" "10\r"
+respond "\n" "purify\033g"
+expect "PURIFIED"
+respond "*" ":pdump midas; ts 77\r"
+respond "*" ":kill\r"
+
 # MACTAP
 respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
 expect ":KILL"
