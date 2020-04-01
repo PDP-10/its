@@ -35,6 +35,7 @@
 - BABYLM, mail sending program for EMACS.
 - BALANC/MOVDIR, balances directories.
 - BDAY, happy birthday demon.
+- BIG, music processor.
 - BINPRT, display information about a binary executable file.
 - BITPRT, print JCL as bits.
 - BKG, a Backgammon game.
