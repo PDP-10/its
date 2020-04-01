@@ -1090,6 +1090,21 @@ respond "*" ":midas sysbin;_syseng; muscom\r"
 expect ":KILL"
 respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
 
+# MUSRUN
+respond "*" ":midas;77\r"
+respond "MIDAS.77" "SYSBIN;_SYSENG; MUSRUN\r"
+expect ":KILL"
+respond "*" ":midas;77\r"
+respond "MIDAS.77" "SYSBIN;_SYSENG; H10D\r"
+expect ":KILL"
+respond "*" ":stink\r"
+respond "\n" "msysbin; musrun\033l\033\033"
+respond "\n" "mh10d\033l\033\033"
+respond "\n" "jmusrun\033?d\033\033"
+respond "\n" "\033y"
+respond " " "sys1; ts musrun\r"
+respond "*" ":kill\r"
+
 # WHOLIN
 respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
 expect ":KILL"
