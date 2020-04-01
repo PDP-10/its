@@ -239,6 +239,11 @@ respond "*" ":link dragon; hourly gcbulk,sysbin; gcmail bin\r"
 respond "*" ":midas sysbin;qmail_ksc;qmail\r"
 respond "PWORD version (Y or N)? " "N\r"
 expect ":KILL"
+respond "*" ":job qmail\r"
+respond "*" ":load sysbin;\r"
+respond "*" "purify\033g"
+respond "QMAIL BIN" "\r"
+respond "*" ":kill\r"
 
 respond "*" ":link sys;ts mail,sysbin;qmail bin\r"
 respond "*" ":link sys;ts qmail,sysbin;qmail bin\r"
@@ -771,8 +776,13 @@ expect ":KILL"
 respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
 
 # file
-respond "*" ":midas device;chaos file_syseng;file\r"
+respond "*" ":midas sysbin;_syseng;file\r"
 expect ":KILL"
+respond "*" ":job file\r"
+respond "*" ":load sysbin;\r"
+respond "*" "purify\033g"
+respond "CHAOS FILE" "\r"
+respond "*" ":kill\r"
 
 # filei, fileo
 respond "*" ":midas device;chaos filei_eak;file\r"
@@ -886,8 +896,13 @@ respond "*" ":midas sysnet;ts yow_sysen2; yow\r"
 expect ":KILL"
 
 # @
-respond "*" ":midas sys;ts @_sysen1;@\r"
+respond "*" ":midas sysbin;_sysen1;@\r"
 expect ":KILL"
+respond "*" ":job @\r"
+respond "*" ":load sysbin;\r"
+respond "*" "purify\033g"
+respond "TS @" "\r"
+respond "*" ":kill\r"
 
 # PLAN/CREATE
 respond "*" ":midas sys3;ts create_syseng;create\r"
