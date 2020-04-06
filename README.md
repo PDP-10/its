@@ -127,6 +127,7 @@ Some major applications:
 - Macsyma, symbolic math
 - Maze War, game
 - Midas, assembler
+- Muscom and musrun, for playing music
 - PDP-11 simulator
 - Scheme, interpreter
 - Spacewar!, game
