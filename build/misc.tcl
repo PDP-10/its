@@ -440,7 +440,7 @@ expect ":KILL"
 respond "*" ":link device;tcp syn015,sysbin;datsrv bin\r"
 
 # WEBSER
-respond "*" ":xfile hack;make webser\r"
+respond "*" ":xfile sysnet;make webser\r"
 expect -timeout 300 "*:kill"
 
 # mailt
