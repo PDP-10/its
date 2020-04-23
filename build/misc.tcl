@@ -1360,6 +1360,31 @@ expect ":KILL"
 respond "*" ":midas sys2; ts tvedit_sysen2; tvedit\r"
 expect ":KILL"
 
+# BLKLDR, Imlac secondary block loader.
+respond "*" ":midas sysbin;_imsrc; blkldr\r"
+expect ":KILL"
+# IMTRAN will put the file IMLAC; IMLAC BLKLDR first in its output.
+# The BLKLDR file should say !blk ldr! on the first line.
+respond "*" ":create imlac; imlac blkldr\r"
+respond "help." "!blk ldr!\r\003"
+respond "*" "imtran\033\013"
+# The IMTRAN output is in block loader format, but the block loader
+# itself is in the special TTY bootstrap format.  Patch IMTRAN to not
+# write flat data without blocks.
+respond "@" "\032"
+type "smalup+5/"
+respond "EMIT2" "jfcl\r"
+type "smalup+11/"
+respond "EMIT4" "jfcl\r"
+type "datlup+4/"
+respond "EMIT4" "jfcl\r"
+type "prgend/"
+type "jrst prgen1+4\r"
+type "\033p"
+type "imlac; imlac blkldr_sysbin; blkldr bin\r"
+respond "@" "\021"
+expect ":KILL"
+
 # SSV 22, Imlac scroll saver
 respond "*" ":midas;324 sysbin;_imsrc; ssv22\r"
 expect ":KILL"
