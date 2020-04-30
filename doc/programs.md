@@ -312,6 +312,7 @@
 - SUPARD, draw ARDS graphics to SUPDUP.
 - SUPDUP, Supdup client.
 - SWAR, Imlac Spacewar.
+- SYMFORM, Imlac symbol editor.
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.
 - SYSMSG, displays system messages.
