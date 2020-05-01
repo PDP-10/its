@@ -1360,6 +1360,16 @@ expect ":KILL"
 respond "*" ":midas sys2; ts tvedit_sysen2; tvedit\r"
 expect ":KILL"
 
+# SSV 22, Imlac scroll saver
+respond "*" ":midas;324 sysbin;_imsrc; ssv22\r"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; ssv22 iml_sysbin; ssv22 bin\r"
+respond "@" "\021"
+expect ":KILL"
+respond "*" ":link imlac; .prgm. normal, imlac; ssv22 iml\r"
+type ":vk\r"
+
 # Assemble SSV4.
 respond "*" ":midas imlac; ts assv4_assv4\r"
 expect ":KILL"
