@@ -34,9 +34,15 @@ board on a Type 340 display.  Type
 <code>FANCY<kbd>TAB</kbd>2<kbd>Enter</kbd></code> to get the fanc
 chess board.
 
-### Maze War
+### Maze
 
-First multi-user first person shooter.  Type `:games;maze` to play.
+First multi-user first person shooter.  When logged in on an Imlac,
+type `:games;maze c` to play.  The `c` is necessary to avoid
+restrictions on when the game can be played.  Use `r` to start a robot
+player.
+
+Game controls are: Arrow keys to move around, ESC to fire, and TAB to
+see the overhead view.  ^Z exits back to ITS.
 
 ### MAZLIB
 
