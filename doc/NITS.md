@@ -57,9 +57,10 @@ Note: `XX` means the name of the ITS you are building.
 
 3. Assemble ITS.  It's prudent to store the binary in the `.` directory with a new name.  E.g.
 
-   `:MIDAS .;NITS BIN_SYSTEM; ITS`
+   `:MIDAS DSK0:.;NITS BIN_SYSTEM; ITS`
 
    Answer the question `MACHINE NAME = ` with `XX`.
+   Forgetting to specify `DSK0:` may later cause `FNF` and `PKNMTD` errors on `DKSDMP` during steps 5 and 6.
 
 4. If you made a change to (N)SALV, you should update @ (N)SALV.  The latter is just (N)SALV dumped with its symbol table and DDT in the core image.
 
