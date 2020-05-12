@@ -11,7 +11,9 @@ Here are manuals for all programs mentioned below:
    - [LOCK](_info_/lock.order)
 
 ## Step 1. Machine configuration
-First examine `SYSTEM; CONFIG >` for changes you want to make.  Look for the text `IFE MCOND XX,[` to find the section for the machine named `XX`. If you are creating a new machine name, use one of the existing blocks as a base. For example, if you are giving your KA10 ITS the name `XX`, make a copy of the `KA` block and rename it `XX`. There are already preconfigured machines for several simulators.
+First examine `SYSTEM; CONFIG >` for changes you want to make.  Look for the text `IFE MCOND XX,[` to find the section for the machine named `XX`. There are already preconfigured machines for several simulators.
+
+If you are building a machine with a new name, make sure to read [Victor's guide](https://its.victor.se/wiki/rename) first, as well as [this issue](https://github.com/PDP-10/its/issues/441).
 
 If you want to connect your machine to a network, this is also where you define its network address.
 
@@ -35,9 +37,9 @@ If you want to connect your machine to a network, this is also where you define 
    - DZ11P, terminal ports.
    - CH11P, Chaosnet interface.
 
-If you are creating a new machine name, you will have to add it to the terminal database too.
    To change properties for terminals, edit the file `SYSTEM; TTYTYP >`.
    Look for the section headed `MCONDX XX,{` or create it based on an existing one.
+If you are creating a new machine name, you will have to add it to the terminal database too.
 
 
 ## Step 2. Disk re-configuration (optional)
