@@ -80,20 +80,34 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: $(SMF) $(OUT)/stamp tools/supdup/supdup
+all: its $(OUT)/emulators tools/supdup/supdup
+
+its: $(SMF) $(OUT)/stamp
 
 check: all check-dirs
 
 out/klh10/stamp: $(OUT)/rp0.dsk
 	$(TOUCH) $@
 
-out/simh/stamp: $(OUT)/rp0.dsk $(GT40)
+out/klh10/emulators:
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3 $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK)
+out/simh/stamp: $(OUT)/rp0.dsk
+	$(TOUCH) $@
+
+out/simh/emulators: $(GT40)
+	$(TOUCH) $@
+
+out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
+	$(TOUCH) $@
+
+out/pdp10-ka/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK)
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp: $(OUT)/rp04.1
+	$(TOUCH) $@
+
+out/pdp10-kl/emulators:
 	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
