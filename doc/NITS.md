@@ -49,7 +49,7 @@ If you changed the disk configuration, you should probably reassemble (N)SALV an
 
    For DSKDMP, use one of the default configurations, or use ASK and enter values for all parameters.
    - On a KA10, use the HRIFLG switch to make a new DSKDMP paper tape to boot from.
-   - On a KS10, use the BOOTSW switch to make a new DSKDMP boot block and save it as `.; BT BIN`  Then write it to the front end file system:
+   - On a KS10, use the BOOTSW switch to make a new DSKDMP boot block and save it as `.; BT BIN`.  Then write it to the front end file system:
      ```
      :KSFEDR
      !WRITE
@@ -62,10 +62,11 @@ If you changed the disk configuration, you should probably reassemble (N)SALV an
 ## Step 3. Assemble ITS
 It's prudent to store the binary in the `.` directory with a new name.  E.g.
 
-   `:MIDAS DSK0:.;NITS BIN_SYSTEM; ITS`
+    :MIDAS DSK0:.;NITS BIN_SYSTEM; ITS
 
-   Answer the question `MACHINE NAME = ` with `XX`.
-   Forgetting to specify `DSK0:` may later cause `FNF` and `PKNMTD` errors on `DKSDMP` during steps 5 and 6.
+Answer the question `MACHINE NAME =` with `XX`.
+
+Forgetting to specify `DSK0:` may later cause `FNF` and `PKNMTD` errors on `DKSDMP` during steps 5 and 6 if the ITS binary ends up on a disk pack other than the first one.
 
 ## Step 4. Update (N)SALV (optional)
 If you made a change to (N)SALV, you should update @ (N)SALV.  The latter is just (N)SALV dumped with its symbol table and DDT in the core image.
