@@ -94,7 +94,7 @@ Use this unless you have a good reason not to.
   5. Merge in (N)SALV.  For KA10: <code>M<kbd>$</kbd>SALV BIN</code>  For KS10: <code>M<kbd>$</kbd>NSALV BIN</code>
   6. Write the result to disk: <code>D<kbd>$</kbd>NITS</code>  Again, it's prudent to invent a new file name here.  Use <code>F<kbd>$</kbd></code> for a file listing.
 
-If you forgot to specify `DSK0:` in Step 2, or the disk order has changed, you might get `FNF` (FileNotFound) and `PKNMTD` (PacKNotMounTeD) errors. You can mount (load) the other disk packs using the `L$n$` command (with `n` the disk pack to load) and then retry.
+If you forgot to specify `DSK0:` in Step 2, or the disk order has changed, you might get `FNF` (FileNotFound) and `PKNMTD` (PacKNotMounTeD) errors. You can mount (load) the other disk packs using the <code>L<kbd>$</kbd>n<kbd>$</kbd></code> command (with `n` the disk pack to load) and then retry.
 
 ### Timesharing DDT method.
 
