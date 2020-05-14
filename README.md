@@ -107,6 +107,7 @@ There are some short introductions for beginners:
 - [Com link mode](doc/comlink.md)
 - [Logo](doc/logo.md)
 - [PDP-6](doc/pdp6.md)
+- [Networking](doc/networking.md)
 
 A list of [known ITS machines](doc/machines.md).
 
