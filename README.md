@@ -95,6 +95,7 @@ Here is an overview of the repository:
 See the [`doc` subdirectory](doc) for documentation.
 
 There are some short introductions for beginners:
+- [How to create a new user](doc/new-user.md)
 - [DDT cheat sheet for Unix users](doc/DDT.md)
 - [Basic editing with EMACS](doc/EMACS.md)
 - [TECO survival guide](doc/TECO.md)
