@@ -95,7 +95,7 @@ out/klh10/emulators:
 out/simh/stamp: $(OUT)/rp0.dsk
 	$(TOUCH) $@
 
-out/simh/emulators: $(GT40)
+out/simh/emulators: $(GT40) $(VT52)
 	$(TOUCH) $@
 
 out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
@@ -107,7 +107,7 @@ out/pdp10-ka/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK)
 out/pdp10-kl/stamp: $(OUT)/rp04.1
 	$(TOUCH) $@
 
-out/pdp10-kl/emulators:
+out/pdp10-kl/emulators: $(VT52) $(TEK)
 	$(TOUCH) $@
 
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
