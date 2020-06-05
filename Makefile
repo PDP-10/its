@@ -39,7 +39,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       digest prs decus
 BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
       c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
-      maint _www_ gt40 llogo bawden sysbin -pics- lmman r shrdlu \
+      maint _www_ gt40 llogo bawden sysbin -pics- lmman r shrdlu imlac \
       pdp10
 MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
