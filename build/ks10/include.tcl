@@ -1,3 +1,6 @@
+#Default ITS name for KS10.
+set mchn "DB"
+
 set salv "nsalv"
 
 proc start_dskdmp_its {} {
@@ -87,7 +90,9 @@ proc frontend_bootstrap {} {
 }
 
 proc its_switches {} {
-    respond "MACHINE NAME =" "DB\r"
+    global mchn
+
+    respond "MACHINE NAME =" "$mchn\r"
     respond "Configuration?" "RP06\r"
 }
 
@@ -120,7 +125,9 @@ proc make_dskdmp {} {
 }
 
 proc dump_switches {} {
-    respond "WHICH MACHINE?" "DB\r"
+    global mchn
+
+    respond "WHICH MACHINE?" "$mchn\r"
 }
 
 proc peek_switches {} {

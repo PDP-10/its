@@ -7,6 +7,14 @@ proc log_progress {x} {
 
 log_progress "ENTERING MAIN BUILD SCRIPT"
 
+if [info exists env(MCHN)] {
+    set mchn "$env(MCHN)"
+}
+
+puts ""
+puts "BUILDING $mchn ITS"
+puts ""
+
 # If the environment variable BASICS is set to "yes", only build
 # the basics; ITS, tools, infastructure.
 if {![info exists env(BASICS)]} {
