@@ -1,3 +1,6 @@
+#Default ITS name for KA10.
+set mchn "KA"
+
 set salv "salv"
 
 proc start_dskdmp_its {} {
@@ -48,7 +51,8 @@ proc frontend_bootstrap {} {
 }
 
 proc its_switches {} {
-    respond "MACHINE NAME =" "KA\r"
+    global mchn
+    respond "MACHINE NAME =" "$mchn\r"
 }
 
 proc make_ntsddt {} {
@@ -66,9 +70,11 @@ proc make_ntsddt {} {
 }
 
 proc make_salv {} {
+    global mchn
+
     respond "*" ":midas dsk0:.;_system;salv\r"
     respond "time-sharing?" "n\r"
-    respond "machine?" "KA\r"
+    respond "machine?" "$mchn\r"
     expect ":KILL"
 }
 
@@ -91,7 +97,9 @@ proc make_dskdmp {} {
 }
 
 proc dump_switches {} {
-    respond "WHICH MACHINE?" "KA\r"
+    global mchn
+
+    respond "WHICH MACHINE?" "$mchn\r"
 }
 
 proc peek_switches {} {
@@ -142,8 +150,9 @@ proc magdmp_switches {} {
 proc bootable_tapes {} {
     global emulator_escape
     global out
+    global mchn
 
-    respond "*" ":midas .;magdmp bin.ka_syseng;magdmp\r"
+    respond "*" ":midas .;magdmp bin.${mchn}_syseng;magdmp\r"
     respond "PTRHRI=" "n\r"
     magdmp_switches
     expect ":KILL"
@@ -152,7 +161,7 @@ proc bootable_tapes {} {
     create_tape "$out/magdmp.tape"
 
     type ":magfrm\r"
-    respond "?" "KA\r"
+    respond "?" "$mchn\r"
     respond "?" "Y"
     respond "_" "W"
     respond "FROM" ".; @ DDT\r"
