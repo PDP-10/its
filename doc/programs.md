@@ -67,6 +67,7 @@
 - COMSAT, mail server.
 - COOKIE BEAR, prank.
 - CMD, DDT subroutines.
+- CRASH, Imlac game.
 - CRC, compute file CRC.
 - CRASH, Imlac game?
 - CREATE, creates a text file in your home directory from console input.
