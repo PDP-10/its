@@ -1443,8 +1443,16 @@ respond "*" ":imtran\r"
 respond "@" "imlac; pong iml_imlac; pong bin\r"
 respond "@" "\021"
 
-# CRASH
+# CRASH, PDS-4 version
 respond "*" ":midas imlac;_imsrc; crash\r"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; crash4 iml_imlac; crash bin\r"
+respond "@" "\021"
+# PDS-1 version
+respond "*" ":midas /t imlac;_imsrc; crash\r"
+respond "with ^C" "PDS4==0\r\003"
+respond "with ^C" "PDS4==0\r\003"
 expect ":KILL"
 respond "*" ":imtran\r"
 respond "@" "imlac; crash iml_imlac; crash bin\r"
