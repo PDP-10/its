@@ -29,6 +29,9 @@ if {![info exists env(MACSYMA)]} {
     set env(MACSYMA) "yes"
 }
 
+# If the NODUMP environment variable is set, don't do the final full
+# dump.
+
 proc cleanup {} {
     global spawn_id
     close -i $spawn_id
@@ -193,19 +196,20 @@ respond "*" ":copy sys; ts ddt, dsk0: backup;\r"
 respond "*" ":copy sys; ts dump, dsk0: backup;\r"
 respond "*" ":copy sys; ts midas, dsk0: backup;\r"
 
-# make output.tape
-
-respond "*" $emulator_escape
-create_tape "$out/output.tape"
-type ":dump\r"
-respond "_" "dump links full list\r"
-respond "LIST DEV =" "tty\r"
-respond "TAPE NO=" "1\r"
-expect -timeout 6000 "REEL"
-respond "_" "rewind\r"
-respond "_" "icheck\r"
-expect -timeout 6000 "_"
-type "quit\r"
+if {![info exists env(NODUMP)]} {
+    # make output.tape
+    respond "*" $emulator_escape
+    create_tape "$out/output.tape"
+    type ":dump\r"
+    respond "_" "dump links full list\r"
+    respond "LIST DEV =" "tty\r"
+    respond "TAPE NO=" "1\r"
+    expect -timeout 6000 "REEL"
+    respond "_" "rewind\r"
+    respond "_" "icheck\r"
+    expect -timeout 6000 "_"
+    type "quit\r"
+}
 
 shutdown
 quit_emulator
