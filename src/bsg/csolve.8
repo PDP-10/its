@@ -1,0 +1,769 @@
+;;; Hungarian cube solving program  BSG 3/20/80-3/30/80
+;;; using his own algorithm.
+
+(defun multicsp macro (x)
+       (and (status feature Multics)(cadr x)))
+
+(defun itsp macro (x)
+       (and (status feature ITS)(cadr x)))
+
+(multicsp (%include cube-solve-dcls))
+(itsp (includef '|bsg;csolve dcls|))
+(multicsp
+(or (get 'make-face-front 'subr)
+    (load (catenate (car (namelist (truename infile))) '|>cube-utils|))))
+
+(or (boundp 'tracing-cube)(setq tracing-cube nil))
+(setq cube-meters '(meter-180-turns meter-single-turns meter-belt-turns
+                                    meter-180-belt-turns))
+
+(declare (special cube-meters meter-180-turns meter-single-turns
+                  meter-belt-turns meter-180-belt-turns))
+;;;
+;;; Definition of runtime-position variables, usually interpreted in
+;;; transformed or canonicalized coordinate systems.
+;;;
+
+(setq UPPER-LEFT '(1 1)
+      TOP-CENTER '(1 2)
+      UPPER-RIGHT '(1 3)
+      LEFT-MIDDLE '(2 1)
+      CENTER '(2 2)
+      RIGHT-MIDDLE '(2 3)
+      LOWER-LEFT '(3 1)
+      BOTTOM-CENTER '(3 2)
+      LOWER-RIGHT '(3 3)
+      LEFT-COL 1 CENTER-COL 2 RIGHT-COL 3
+      TOP-ROW 1 MIDDLE-ROW 2 BOTTOM-ROW 3)
+
+;;;----------------------------------------------------------------------
+
+;;;
+;;;  This hacker is called at the end of every with-front-and-top
+;;;  macro, as well as by the tracer.  Its purpose is to reflect
+;;;  all rotations of the total cube performed while the cube frame
+;;;  was lambda bound down under the lambda.
+;;;
+
+(defun reprocess-cube-rot-stack (stack oldstack)
+       (do ((s stack (cdr s))(rev nil))
+           ((eq s oldstack)(mapc 'relive-one-cube-rot rev))
+           (setq rev (cons (car s) rev)))
+       (or cube-face-lambda-level (setq cube-pending-rot-stack nil)))
+
+(defun relive-one-cube-rot (rot)
+       (rotate-cube (car rot)(cadr rot)))
+
+
+;;;
+;;;  These guys are called to perform all the significant rotations of
+;;;  faces and cube, by all parts of solve-cube.  They allow tracing
+;;;  and instrumentation to be centralized.  "Insignificant" rotations
+;;;  are those performed as part of cube framing, and are not traced.
+;;;  Those are only cube rotations, of course, not face rotations.
+
+;;;  "tracing-cube" must be set by some external agency, who supplies
+;;;   the lexpr cube-trace, too, which gets 1-n pname-symbol args to
+;;;   be printed catenated.
+
+(defun turn (face how)
+       (and tracing-cube
+            (0-level-cube-context
+              (cube-trace
+                '|rotate-face: |
+                (ascii (+ 60 face))
+                '| (|
+                (cube-trace-describe-face face)
+                '|) |
+                (cube-trace-describe-rotation how)
+                '| |)))
+       (cond ((and (numberp how)(= how 180.))(add-one-to meter-180-turns))
+             (t (add-one-to meter-single-turns)))
+       (rotate-face face how))
+
+(defun cube-trace-describe-rotation (how)
+       (cond ((eq how 'right) 'clockwise)
+             ((eq how 'left) 'countercw)
+             (t '|180.|)))
+
+(defun cube-trace-describe-face (face)
+       (all-faces i
+                  (cond ((= (symeval (face-names i)) face)
+                         (return (face-names i))))))
+
+(defun turn-face-top-hold-front (face)
+       (let ((how-much
+               (case= face
+                      (TOP nil)
+                      (BOTTOM 180.)
+                      (RHS 'left)
+                      (LHS 'right)
+                      (t (cbarf)))))
+            (cond (how-much
+                    (and tracing-cube
+                         (let ((oldfront FRONT))
+                              (0-level-cube-context
+                                (cube-trace
+                                  '|Rotate cube |
+                                  (cube-trace-describe-rotation how-much)
+                                  '| around |
+                                  (cube-trace-describe-face oldfront)
+                                  '| |))))
+                    (turn-cube FRONT how-much)))))
+
+(defun turn-center-belt-180 ()
+       (turn-center-belt-trace FRONT BACK)
+       (add-one-to meter-180-belt-turns)
+       (turn-cube RHS 180.)
+       (rotate-face RHS 180.)
+       (rotate-face LHS 180.))
+
+(defun turn-center-belt-up ()
+       (turn-center-belt-trace FRONT TOP)
+       (add-one-to meter-belt-turns)
+       (turn-cube RHS 'right)
+       (rotate-face RHS 'left)
+       (rotate-face LHS 'right))
+
+(defun turn-center-belt-down ()
+       (turn-center-belt-trace TOP FRONT)
+       (add-one-to meter-belt-turns)
+       (turn-cube RHS 'left)
+       (rotate-face RHS 'right)
+       (rotate-face LHS 'left))
+
+(defun turn-cube (about how)
+       (or cube-dont-stack-rots (setq cube-pending-rot-stack
+                                      (cons (list about how)
+                                            cube-pending-rot-stack)))
+       (rotate-cube about how))
+
+(defun turn-center-belt-trace (from to)
+       (and tracing-cube
+            (0-level-cube-context
+              (cube-trace '|Turn |
+                          (cube-trace-describe-face from)
+                          '| center to |
+                          (cube-trace-describe-face to)
+                          '| |))))
+
+(defun turn-rhs-down () (turn RHS 'left))
+(defun turn-lhs-down ()(turn LHS 'right))
+(defun turn-rhs-up ()(turn RHS 'right))
+(defun turn-lhs-up ()(turn LHS 'left))
+(defun turn-lhs-180 ()(turn LHS 180.))
+(defun turn-rhs-180 ()(turn RHS 180.))
+
+;;;
+;;;  These guys are used to turn faces to bring sides or little cubes
+;;;  to given faces.  They correspond to "turn by visual inspection
+;;;  until this gets here".  The names are supposed to convey the argument
+;;;  order.  A "cubie" (lat., "cubiculum") is a little cube, as distinguished
+;;;  from the whole cube.
+
+(defun rotate-cubie-to-place-on-face (face ptop cubie to)
+       (let (((fface row col)(find-cubie cubie)))
+            (or (= face fface)(error '|rotate-cubie-to-place-on-face: | cubie 'fail-act))
+            (with-front-and-top
+              (face ptop (row col))
+              (rotate-place-to-place-on-front (list row col) to))))
+
+(defun rotate-cubie-to-place-on-front (cubie to)
+       (rotate-cubie-to-place-on-face FRONT TOP cubie to))
+
+(defun rotate-place-to-place-on-face (face ptop from to)
+       (with-front-and-top
+         (face ptop)
+         (rotate-place-to-place-on-front from to)))
+
+(defun rotate-place-to-place-on-front (from to)
+       (let ((rot (find-cube-face-match-rot from to)))
+            (and rot (turn FRONT rot))))
+
+(defun rotate-face-till-this-comes-here (face this here)
+       (let ((rot (develop-rotation-so-that-this-comes-here face this here)))
+            (and rot (turn face rot))))
+
+;;;
+;;;  This is the solution-driver.  He calls friends to perform all the
+;;;  phases.  ^L's separate the phases in this file.
+;;;
+
+(defun solve-cube ()
+       (setq save-interesting-cube-for-later-analysis (listarray 'cube))
+       (setq cube-pending-rot-stack nil cube-dont-stack-rots nil cube-face-lambda-level nil)
+       (mapc '(lambda (x)(set x 0)) cube-meters)  ;zero the meters.
+
+;;;   Solve the cube.
+
+       (set-0-level-cube-bindings)
+       (solve-front-cube-corners)
+       (solve-front-cube-edges)
+       (solve-back-cube-corners)
+       (solve-back-cube-edges)
+       (clean-up-central-belt-of-cube)
+       (get-center-belt-cubies-in-right-place)
+       (adjust-center-belt-cubie-parities))
+
+
+(defun reinstate-cube ()
+       (fillarray 'cube save-interesting-cube-for-later-analysis))
+
+(defun resolve-cube ()
+       (reinstate-cube)
+       (solve-cube))
+
+(defun solve-front-cube-corners ()
+       (let ((frontcolor (colors FRONT)))
+            (place-front-upper-left-cubie (list frontcolor (colors LHS)(colors TOP)))
+            (place-front-upper-right-cubie (list frontcolor (colors TOP)(colors RHS)))
+            (place-front-lower-left-cubie (list frontcolor (colors LHS)(colors BOTTOM)))
+            (place-front-lower-right-cubie (list frontcolor (colors RHS)(colors BOTTOM)))))
+
+(defun place-front-upper-left-cubie (cubie)
+       (hack-until-placed
+         (let (((face row col)(find-cubie cubie)))
+              (case= face
+                     (FRONT (rotate-cubie-to-place-on-front cubie UPPER-LEFT)
+                            (placed))
+                     (BACK (normal-view
+                             BACK ((row col))
+                             (cond ((equal (list row col) UPPER-LEFT)
+                                    (turn TOP 180.))
+                                   (t (rotate-cubie-to-place-on-front cubie LOWER-RIGHT)
+                                      (turn-rhs-180))))
+                           (placed))
+                     (t (with-front-and-top
+                          (face FRONT (row col))
+                          (case= col
+                                 (LEFT-COL  (turn-lhs-up))
+                                 (RIGHT-COL (turn-rhs-up)))))))))
+
+(defun place-front-upper-right-cubie (cubie)
+       (hack-until-placed
+         (let (((face row col)(find-cubie cubie)))
+              (case= face
+                     (FRONT
+                       (normal-front-top
+                         ((row col))
+                         (case= row
+                                (TOP-ROW (placed))
+                                (t (turn BOTTOM 180.)))))
+                     (BACK
+                       (rotate-cubie-to-place-on-face BACK TOP cubie LOWER-LEFT)
+                       (turn-rhs-180)(placed))
+                     (BOTTOM
+                       (rotate-cubie-to-place-on-face BOTTOM FRONT cubie UPPER-RIGHT)
+                       (turn-rhs-up)(placed))
+                     (TOP
+                       (normal-view
+                         TOP ((row col))
+                         (case (list row col)
+                               (UPPER-RIGHT (turn-rhs-down)(placed))
+                               (UPPER-LEFT (turn TOP 180.))
+                               (t (turn-rhs-up)))))
+                     (LHS
+                       (normal-view
+                         LHS ((row col))
+                         (case row
+                               (TOP-ROW (turn-lhs-down))    ;m.b. upper lh
+                               (t (turn BOTTOM 'left)))))
+                     (RHS
+                       (normal-view
+                         RHS ((row col))
+                         (rotate-cubie-to-place-on-front cubie LOWER-LEFT)
+                         (turn BOTTOM 'right)))))))
+
+
+(defun place-front-lower-left-cubie (cubie)
+       (hack-until-placed
+         (let (((face row col)(find-cubie cubie)))
+              (case= face
+                     (FRONT
+                       (normal-front-top
+                         ((row col))
+                         (case= col
+                                (LEFT-COL (placed))
+                                (t (turn BOTTOM 180.))))) ;;must be low rt
+                     (BACK
+                       (rotate-cubie-to-place-on-face BACK TOP cubie LOWER-LEFT)
+                       (turn BOTTOM 180.)
+                       (placed))
+                     (TOP
+                       (case= (normal-view TOP ((row col)) col)
+                              (LEFT-COL (turn BACK 'right)) ;left from frt
+                              (RIGHT-COL (turn BACK 'left))))
+                     (BOTTOM
+                       (case (with-front-and-top (BOTTOM FRONT (row col))
+                                                 (list row col))
+                             (LOWER-RIGHT (turn BACK  'left))    ;rgt frm frt
+                             (LOWER-LEFT (turn BACK 'right))
+                             (t (turn BOTTOM 180.))))
+                     (RHS
+                       (normal-view
+                         RHS ((row col))
+                         (case (list row col)
+                               (UPPER-RIGHT (turn RHS 180.))
+                               (LOWER-RIGHT (turn BOTTOM 'right))
+                               (LOWER-LEFT (turn BOTTOM 'left)(placed)))))
+                     (LHS
+                       (normal-view
+                         LHS ((row col))
+                         (case (list row col)
+                               (LOWER-LEFT (turn BOTTOM 'right)(placed))
+                               (UPPER-LEFT (turn-lhs-180))
+                               (LOWER-RIGHT (turn BOTTOM 'left)))))))))
+
+
+(defun place-front-lower-right-cubie (cubie)
+       (hack-until-placed
+         (let (((face row col)(find-cubie cubie)))
+              (case= face
+                     (FRONT (placed))
+                     (BACK                        ;make case 2 or 3
+                       (rotate-cubie-to-place-on-face BACK TOP cubie LOWER-LEFT)
+                       (under-conjugated-transform
+                         ((turn-lhs-up))
+                         (turn BOTTOM 'right)))
+                     (t
+                       (let (((row col)(with-front-and-top (face BACK (row col)) (list row col))))
+                            (case= row
+                                   (BOTTOM-ROW;;case 4
+                                     (case face
+                                           (BOTTOM
+                                             (under-conjugated-transform
+                                               ((turn TOP 'right)) ;;rl lf
+                                               (turn-rhs-up)))
+                                           (RHS
+                                             (under-conjugated-transform
+                                               ((turn-lhs-up))
+                                               (turn BOTTOM 'left)))))
+                                   (TOP-ROW
+                                     (case= col
+                                            (LEFT-COL
+                                              (rotate-face-till-this-comes-here BACK face BOTTOM)
+                                              (under-conjugated-transform
+                                                ((turn TOP 'right))   ;really left as seen from front
+                                                (turn-rhs-up)))
+                                            (RIGHT-COL
+                                              (rotate-face-till-this-comes-here BACK face RHS)
+                                              (under-conjugated-transform
+                                                ((turn-lhs-up))
+                                                (turn BOTTOM 'left))))))))))))
+
+
+(defun solve-front-cube-edges ()
+       (do-for-items face (TOP RHS BOTTOM LHS)
+                     (with-front-and-top (FRONT face)
+                                         (solve-front-upper-center-cubie
+                                           (list (colors FRONT) (colors face))))))
+
+(defun turn-middle-belt-to (side)
+       (with-front-and-top (FRONT side)
+                           (turn-center-belt-up)))
+
+(defun solve-front-upper-center-cubie (cubie)
+       (hack-until-placed
+         (let (((face row col)(find-cubie cubie))
+               ((other-face)(find-cubie (reverse cubie))))
+              (case= face
+                     (FRONT
+                       (normal-front-top
+                         ((row col))
+                         (case (list row col)
+                               (TOP-CENTER (placed))
+                               (t (with-front-and-top
+                                    (FRONT other-face)
+                                    (under-conjugated-transform ((turn-center-belt-up))
+                                                                (turn BACK 'right)))))))
+                     (BACK
+                       (rotate-cubie-to-place-on-face BACK TOP cubie TOP-CENTER)
+                       (under-conjugated-transform ((turn-center-belt-up))
+                                                   (turn BACK 180.))
+                       (placed))
+                     (t (case (with-front-and-top
+                                (face BACK (row col))
+                                (list row col))
+                              (TOP-CENTER
+                                (case= face
+                                       (TOP (turn BACK 'right))
+                                       (BOTTOM (turn BACK 'right))
+                                       (t (under-conjugated-transform ((turn-center-belt-up))
+                                                                      (rotate-face-till-this-comes-here BACK face TOP))
+                                          (placed))))
+                              (BOTTOM-CENTER
+                                (with-front-and-top
+                                  (FRONT face)
+                                  (under-conjugated-transform ((turn-center-belt-up))
+                                                              (turn BACK 'right))))
+                              (t
+                                (let (active inactive up down (oldtop TOP) (origback BACK)
+                                             ((row col)(with-front-and-top (face BACK (row col))(list row col))))
+                                     (rotate-face-till-this-comes-here FRONT TOP other-face)
+                                     (with-front-and-top
+                                       (FRONT face)
+                                       (cond ((= col RIGHT-COL)
+                                              (setq active RHS inactive LHS up 'right down 'left))
+                                             (t (setq active LHS inactive RHS up 'left down 'right)))
+                                       (turn active down)
+                                       (turn-middle-belt-to inactive)
+                                       ;;Cube rotated, need magic designations of f/b
+                                       (turn origback up)   ;=new active
+                                       (turn-middle-belt-to origback) ;=new active
+                                       (rotate-face-till-this-comes-here FRONT other-face oldtop)
+                                       (placed))))))))))
+
+
+
+(defun solve-back-cube-corners ()
+       (get-back-corners-right-color (colors BACK))
+       (get-back-corners-right-permutation)
+       (rotate-cubie-to-place-on-face             ;just for show
+         BACK TOP (list (colors BACK)(colors RHS)(colors TOP)) UPPER-LEFT))
+
+
+(defun get-back-corners-right-color (color)
+       (hack-until-placed
+         (let (((lhmatches rhmatches)(find-back-upcubes color)))
+              (cond (lhmatches
+                      (turn-face-top-hold-front (car lhmatches))
+                      (under-conjugated-transform
+                        ((right-hand-cube-hammer))
+                        (let (((nlhmatches nrhmatches)(find-back-upcubes color)))
+                             (cond (nrhmatches
+                                     (rotate-face-till-this-comes-here BACK (car nrhmatches) BOTTOM))
+                                   (t (cube-put-non-matcher-in color BACK TOP LOWER-RIGHT))))))
+                    (rhmatches
+                      (turn-face-top-hold-front (car rhmatches))
+                      (under-conjugated-transform
+                        ((left-hand-cube-hammer))
+                        (let (((nlhmatches nrhmatches)(find-back-upcubes color)))
+                             (cond (nlhmatches
+                                     (rotate-face-till-this-comes-here BACK (car nlhmatches) BOTTOM))
+                                   (t (cube-put-non-matcher-in color BACK TOP LOWER-LEFT))))))
+                    (t (placed))))))
+
+
+(defun find-back-upcubes (color)
+       (let (rhups lhups)
+            (do-for-items face (TOP RHS BOTTOM LHS)
+                          (cond ((eq color (fetch-cube-in-orientation-pair UPPER-LEFT face BACK))
+                                 (push face lhups)))
+                          (cond ((eq color (fetch-cube-in-orientation-pair UPPER-RIGHT face BACK))
+                                 (push face rhups))))
+            (list (reverse lhups)(reverse rhups))))
+
+(defun cube-put-non-matcher-in (color face ptop where)
+       (hack-until-placed
+         (do-for-items corner (UPPER-LEFT UPPER-RIGHT LOWER-RIGHT LOWER-LEFT)
+                       (cond ((not (eq color (fetch-cube-in-orientation-pair corner face ptop)))
+                              (rotate-place-to-place-on-face face ptop corner where)
+                              (placed))))))
+
+;;;
+;;;  The Great Hammers of the cube, which transform the back
+;;;  and the front such that rotation of the back can be mapped
+;;;  into nontrivial permutation of the back while leaving the front
+;;;  intact.
+
+(defun right-hand-cube-hammer ()
+       (turn TOP 'right)
+       (turn-rhs-up)
+       (turn BACK 'left)
+       (turn-rhs-down))
+
+(defun undo-right-hand-hammer ()
+       (turn-rhs-up)
+       (turn BACK 'right)
+       (turn-rhs-down)
+       (turn TOP 'left))
+
+(defun left-hand-cube-hammer ()
+       (turn TOP 'left)
+       (turn-lhs-up)
+       (turn BACK 'right)
+       (turn-lhs-down))
+
+(defun undo-left-hand-hammer ()
+       (turn-lhs-up)
+       (turn BACK 'left)
+       (turn-lhs-down)
+       (turn TOP 'right))
+
+
+(defun get-back-corners-right-permutation ()
+       (let ((analysis (analyze-back-corner-permutations)))
+            (caseq analysis
+                   ('placed)                      ;WHEE!!!!
+                   ('random
+                     (under-conjugated-transform ((right-hand-cube-hammer))
+                                                 (turn BACK 'left))
+                     (turn BACK 180.)
+                     (under-conjugated-transform ((left-hand-cube-hammer))
+                                                 (turn BACK  'left))
+                     (let ((nanalysis (analyze-back-corner-permutations)))
+                          (caseq nanalysis
+                                 ('placed)
+                                 ('random (cbarf))
+                                 (t (and tracing-cube (cube-trace '|Wierd screw back corner case |))
+                                    (get-back-corners-right-permutation)))))
+                   (t
+                     (rotate-face-till-this-comes-here BACK analysis LHS)
+                     (under-conjugated-transform ((right-hand-cube-hammer))
+                                                 (turn BACK 'right))
+                     (turn BACK 'right)
+                     (under-conjugated-transform ((left-hand-cube-hammer))
+                                                 (turn BACK 'right))))))
+
+(defun analyze-back-corner-permutations ()
+       (let (dualmatches)
+            (do-for-items face (TOP RHS BOTTOM LHS)
+                          (and (eq (fetch-cube-in-orientation-pair UPPER-LEFT face BACK)
+                                   (fetch-cube-in-orientation-pair UPPER-RIGHT face BACK))
+                               (push face dualmatches)))
+            (case= (length dualmatches)
+                   (0 'random)
+                   (1 (car dualmatches))
+                   (2 (cbarf))
+                   (3 (cbarf))
+                   (4 'placed))))
+
+(defun solve-back-cube-edges ()
+       (hack-until-placed                         ;for more fun
+         (let ((did-work-this-time nil))
+              (do-for-items face (TOP RHS BOTTOM LHS)
+                            (let ((bcolor (colors BACK))
+                                  (fcolor (fetch-cube-in-orientation-pair
+                                            LOWER-LEFT face BACK)))
+                                 (setq did-work-this-time
+                                       (solve-back-cube-hacker bcolor fcolor)))
+                            (and did-work-this-time (return nil)))
+              (or did-work-this-time (placed)))))
+
+(defun solve-back-cube-hacker (bcolor fcolor)
+       (let ((rightful-cubie (list bcolor fcolor))
+             (alter-ego (list fcolor bcolor))
+             (did-work-this-time nil))
+            (hack-until-placed
+              (let (((face . nil)(find-cubie (list fcolor bcolor '*))))
+                   (let ((found-place (find-cubie rightful-cubie))
+                         (other-place (find-cubie alter-ego))
+                         (needed-place (cons BACK (cube-xy-inverse-transform BACK face TOP-ROW CENTER-COL))))
+                        (case needed-place        ;what's there?
+                              (found-place (placed))   ;got it
+                              (other-place        ;parity error only
+                                (right-hand-cube-wrench (car found-place) FRONT))
+                              (t (back-cube-edge-solver-caller face rightful-cubie)
+                                 (setq did-work-this-time t))))))
+            did-work-this-time))
+
+(defun back-cube-edge-solver-caller (face cubie)
+       (with-front-and-top
+         (face BACK)
+         (rotate-cube face 'right)
+         (back-edge-cube-solver
+           cubie
+           (list (fetch-cube-in-orientation-pair RIGHT-MIDDLE FRONT TOP)
+                 (fetch-cube-in-orientation-pair LEFT-MIDDLE RHS TOP)))))
+
+(defun back-edge-cube-solver (cubie impostor)
+       (let (((face row col)(find-cubie cubie)))
+            (case= face
+                   (RHS (setq cubie (reverse cubie)))
+                   (LHS (cbarf))
+                   (t (with-front-and-top (face RHS (row col))
+                                          (case row (BOTTOM-ROW (cbarf)))))))   ;thought we solved LHS
+       (let (((face row col)(find-cubie cubie)))  ;may have swapped parity.
+            (case= (with-front-and-top (face RHS (row col)) row)
+                   (TOP-ROW                       ;On RHS's edges
+                     (rotate-face-till-this-comes-here RHS face TOP)
+                     (under-conjugated-transform
+                       ((turn TOP 180.))(back-cube-edge-magic impostor)))
+                   (t
+                     (rotate-center-belt-till-this-comes-here face TOP)
+                     (case= (with-front-and-top (face RHS (row col)) col)
+                            (RIGHT-COL
+                              (under-conjugated-transform
+                                ((turn TOP 'right))
+                                (back-cube-edge-magic impostor)))
+                            (t
+                              (under-conjugated-transform
+                                ((turn TOP 'left))
+                                (back-cube-edge-magic impostor))))))))
+
+(defun back-cube-edge-magic (impostor)
+       ;; good guy is on back on our LHS
+       (let (((face . nil)(find-cubie impostor)))
+            (let ((rot (develop-rotation-so-that-this-comes-here RHS face TOP)))
+                 (and rot (turn RHS rot))
+                 (under-conjugated-transform
+                   ((turn TOP 'left))(turn-center-belt-up))
+                 (and rot (turn RHS (cdr (assoc rot '((right . left)(left . right)(180. . 180.)))))))))
+
+(defun rotate-center-belt-till-this-comes-here (this here)
+       (let ((rot (develop-rotation-so-that-this-comes-here RHS this here)))
+            (case rot
+                  (nil)
+                  ('right (turn-center-belt-up))
+                  ('left (turn-center-belt-down))
+                  (180. (turn-center-belt-180)))))
+
+(defun clean-up-central-belt-of-cube ()
+       ;;Rotate back plane to convenience
+       (let ((needed-back-northwest-cubie-looking-west
+               (list (fetch-cube-in-orientation-pair UPPER-RIGHT LHS TOP)
+                     (fetch-cube-in-orientation-pair LOWER-LEFT TOP BACK)
+                     (colors BACK))))             ;above two from front n.w.
+            (let (((face . nil)(find-cubie needed-back-northwest-cubie-looking-west)))
+                 (rotate-face-till-this-comes-here BACK face LHS)))
+       ;;Rotate halfway-back plane to convenience
+       (with-front-and-top
+         (TOP BACK)
+         (let ((topcolor (fetch-cube-in-orientation-pair LOWER-RIGHT FRONT TOP)))
+              (let (((face . nil)(find-cubie (list topcolor))))   ;center guy
+                   (with-front-and-top
+                     (FRONT LHS)
+                     (rotate-center-belt-till-this-comes-here face FRONT))))))
+
+(defun get-center-belt-cubies-in-right-place ()
+       ;; All centers are now in place. Colors of sides therefore right.
+       (hack-until-placed
+         (let (((both-guys-right one-guy-right guys-swapped one-swapped)
+                (analyze-center-belt-edge-permutations)))
+              (case= (length both-guys-right)
+                     (0)                          ;hack on
+                     (4 (placed))
+                     (t (cbarf)))                 ;Think about it.
+              (case= (length guys-swapped)
+                     (0 (case= (length one-guy-right)
+                               (0 (case= (length one-swapped)
+                                         (0 (cube-swap-center-edges TOP))
+                                         ;;This is GUARANTEED to move off case.
+                                         (t (cube-swap-center-edges (car one-swapped)))))
+                               (3 (cbarf))
+                               (1 (cbarf))
+                               (t (cube-center-edge-triple-switch one-guy-right))))
+                     (1 (cbarf))
+                     (3 (cbarf))
+                     (t (cube-swap-center-edges (car guys-swapped)))))))
+
+(defun analyze-center-belt-edge-permutations ()
+       (let (both-right one-right swapped one-swapped)
+            (do-for-items
+              face (TOP RHS BOTTOM LHS)
+              (with-front-and-top
+                (face BACK)
+                (let ((lhcubie (list (colors FRONT)(colors LHS)))
+                      (rhcubie (list (colors FRONT)(colors RHS))))
+                     (let ((lhmatch (absolute-match-cubie lhcubie LEFT-MIDDLE))
+                           (rhmatch (absolute-match-cubie rhcubie RIGHT-MIDDLE)))
+                          (cond ((and lhmatch rhmatch)(push face both-right))
+                                ((or lhmatch rhmatch)(push face one-right))
+                                (t (setq lhmatch (absolute-match-cubie rhcubie LEFT-MIDDLE)
+                                         rhmatch (absolute-match-cubie lhcubie RIGHT-MIDDLE))
+                                   (cond ((and lhmatch rhmatch)(push face swapped))
+                                         ((or lhmatch rhmatch)(push face one-swapped)))))))))
+            (list both-right one-right swapped one-swapped)))
+
+(defun absolute-match-cubie (cubie place)
+       (setq place (cons FRONT (cube-xy-inverse-transform FRONT TOP (car place)(cadr place))))
+       (cond ((equal (find-cubie cubie) place) t)
+             ((equal (find-cubie (reverse cubie)) place) t)
+             (t nil)))
+
+(defun cube-swap-center-edges (face)
+       (with-front-and-top
+         (face BACK) (with-front-and-top (RHS face)
+                                         (turn-center-belt-180)
+                                         (turn BOTTOM 180.)
+                                         (turn-center-belt-180)
+                                         (turn BOTTOM 180.))))
+
+(defun cube-center-edge-triple-switch (one-right-list)
+       (do-list face one-right-list
+                (with-front-and-top
+                  (face BACK)
+                  (with-front-and-top
+                    (FRONT LHS)
+;;; Find the face who must exist with rightness on bottom.
+                    (cond ((absolute-match-cubie
+                             (list (colors face)(colors BOTTOM))
+                             BOTTOM-CENTER)
+                           (cube-ce-triple-switch-hacker)
+                           (return nil)))))))
+
+(defun cube-ce-triple-switch-hacker ()            ;Bawden hack
+       (let ((the-guy-on-our-top
+               (list (fetch-cube-in-orientation-pair TOP-CENTER FRONT TOP)
+                     (fetch-cube-in-orientation-pair BOTTOM-CENTER TOP BACK))))
+            (cond ((cube-ce-3sw-matcher the-guy-on-our-top FRONT TOP)
+                   (cbarf))                       ;= placed, cant be.
+                  ((cube-ce-3sw-matcher the-guy-on-our-top TOP BACK)
+                   (turn-center-belt-down)
+                   (turn TOP 180.)
+                   (turn-center-belt-up)
+                   (turn TOP 180.))
+                  ((cube-ce-3sw-matcher the-guy-on-our-top BACK BOTTOM)
+                   (turn TOP 180.)
+                   (turn-center-belt-down)
+                   (turn TOP 180.)
+                   (turn-center-belt-up))
+                  (t (cbarf)))))                  ;Where'd he go?
+
+(defun cube-ce-3sw-matcher (cubie f1 f2)
+       (let ((fcolor1 (colors f1))
+             (fcolor2 (colors f2))
+             (ccolor1 (car cubie))
+             (ccolor2 (cadr cubie)))
+            (or (and (eq fcolor1 ccolor1)(eq fcolor2 ccolor2))
+                (and (eq fcolor1 ccolor2)(eq fcolor2 ccolor1)))))
+
+
+(defun adjust-center-belt-cubie-parities ()
+       (let (((two-wrong one-wrong)(analyze-center-belt-cubie-parities)))
+            (case= (length two-wrong)
+                   (4 (crossface-wrench-parity TOP)
+                      (crossface-wrench-parity BOTTOM))
+                   (1 (crossface-wrench-parity (car two-wrong)))
+                   (0 (case= (length one-wrong)
+                             (0)                  ;The cube is solved.
+                             (1 (cbarf))
+                             (2 (cbarf))
+                             (3 (cbarf))
+                             (4 (under-conjugated-transform
+                                  ((turn TOP 180.))
+                                  (let (((now-two-wrong . nil)(analyze-center-belt-cubie-parities)))
+                                       (or (= (length now-two-wrong ) 1)(cbarf))
+                                       (crossface-wrench-parity (car now-two-wrong))))))))))
+
+(defun analyze-center-belt-cubie-parities ()
+       (let (two-wrong one-wrong)
+            (do-for-items face (TOP RHS BOTTOM LHS)
+                          (let ((howmany (analyze-face-side-parity face)))
+                               (case= howmany     ;counts CORRECTS not bads
+                                      (0 (push face two-wrong))
+                                      (1 (push face one-wrong)))))
+            (list two-wrong one-wrong)))
+
+(defun analyze-face-side-parity (face)
+       (let ((count 0))
+            (cond ((eq (colors face)(fetch-cube-in-orientation-pair RIGHT-MIDDLE face BACK))
+                   (add-one-to count)))
+            (cond ((eq (colors face)(fetch-cube-in-orientation-pair LEFT-MIDDLE face BACK))
+                   (add-one-to count)))
+            count))
+
+(defun crossface-wrench-parity (sideface)
+       (left-hand-cube-wrench sideface BACK)
+       (right-hand-cube-wrench sideface FRONT))
+
+(defun right-hand-cube-wrench (pfront ptop)
+       (with-front-and-top (pfront ptop)
+                           (1to4 x (turn FRONT 'right)
+                                 (turn-middle-belt-to LHS))))
+
+(defun left-hand-cube-wrench (pfront ptop)
+       (with-front-and-top (pfront ptop)
+                           (1to4 x (turn FRONT 'left)
+                                 (turn-middle-belt-to LHS))))
+
