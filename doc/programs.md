@@ -77,6 +77,7 @@
 - CTIMES, Chaosnet time server.
 - CTIMSR, Chaosnet time server.
 - CTN, networking "supdup" CRTSTY.
+- CUBE, Rubik's cube.
 - D, SUDS drawing program
 - DATE, print date and time.
 - DATSRV, server for RFC 867 Daytime protocol.
