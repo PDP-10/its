@@ -1,0 +1,831 @@
+TITLE BANNER -- BANNER PRINTING IN XGP FONTS -- PDL 3/26/76
+; multi-font capability and a few other fixes by KLH 11/18/77
+; arbitrary filling-text capability by SWG 12/29/77
+; random trivia by KLH 1/20/78
+
+.MLLIT==1
+
+A=1
+B=2
+C=3
+D=4
+E=5
+F=6
+G=7
+H=10
+I=11
+
+FILL=12		; bptr to chars of fill-in text
+MES=13		; bptr to characters of banner
+CC=14		; bptr to character matrix of character
+CHR=15		; pointer to font definition of character
+FP=16		; pointer to font buffer in use
+
+P=17		; pdl pointer
+
+; channels
+
+IC==1		; input channel
+OC==2		; output channel
+TYOC==3		; tty output channel
+
+define syscal a,b
+.call [setz ? sixbit/a/ ? b ((setz))]
+termin
+
+; ===================================================================
+;		variable area
+; ===================================================================
+
+; random variables
+
+SIDE:	-1		; side printing (default)
+CCSAVE:	0		; saved bptr to character buffer
+
+; output buffer hacking variables
+
+LF:	^K		; character to use for linefeeds
+SPACES:	0		; number of successive spaces (ignored if ^m next)
+OCNT:	-500.		; number of characters left in output buffer
+OBPTR:	440700,,OBUF	; output byte pointer to output buffer
+OBUF:	BLOCK 101.	; output buffer
+
+; Memory mapping vars
+
+ffpage:	begpag		; First free page
+ffword:	begpag*2000	; First free word (not necessarily ffpage*2000)
+
+; Font table & buffer organization
+
+mxfnts==10.	; Max # of fonts allowed
+nfonts:	0	; # fonts specified
+fnttab:	block mxfnts	; pointers to font buffers, indexed by font #
+
+	; Format of a font buffer.  Labels are indices.
+	offset -.
+fbnum::	0		; # of this font (0, 1, etc)
+fbname:: 0		; FN1 or "name" of this font
+fbhigh:: 0		; height of font (taken from file for full wd ref)
+fbchar:: block 200	; table of pointers to character definitions
+fbfile:: 0		; This is first word of KST font file.
+	offset 0	; Note also that FBFILE = length of header.
+
+; base font information (font 0)
+
+LINEMX:	120.		; max chars per line on output
+HIGH:	0		; font height (i.e. fbhigh(fp) for font 0)
+CENTER:	0		; centering info.  mod (linemx/high) / 2
+VFACT:	1		; vertical multiplicative factor
+HFACT:	1		; horizontal multiplicative factor
+
+; individual character information
+
+RSTWID:	0		; character raster width
+CHRWID:	0		; character width
+LFTKRN:	0		; left kern of character
+
+ROWBYT:	0		; number of bytes per row
+TOTBYT:	0		; total bytes for character
+
+; file specs
+
+FNTFIL:			; font file being used
+FNTDEV:	SIXBIT /DSK/
+FNTNM1:	SIXBIT /40VSHD/
+FNTNM2:	SIXBIT /KST/
+FNTSNM:	SIXBIT /FONTS/
+
+OUTFIL:			; file to output to
+OUTDEV:	SIXBIT /DSK/
+OUTNM1:	SIXBIT /_BANNE/
+OUTNM2:	SIXBIT />/
+OUTSNM:	0
+
+ERROPN:	SIXBIT /   ERR/ ? 4 ? 0
+
+COMPTR:	0		; byte pointer to command buffer
+COMMND:	BLOCK 70	; command buffer
+	-1		; fence for JCL
+MESBUF:	BLOCK 70	; message buffer (copied from commnd buffer)
+FILBUF:	ASCIZ "*"	; fill-in text buffer (")
+	BLOCK 50
+
+PDL:	BLOCK 40	; pdl buffer
+
+; ===================================================================
+;		actual start of program here
+; ===================================================================
+
+START:	MOVE	P,[-40,,PDL-1]
+	.SUSET	[.RSNAM,,OUTSNM]
+	.OPEN	TYOC,[.uao,,'tty]
+	 .VALUE	[ASCIZ /:CAN'T OPEN TTY?/]
+
+	.BREAK	12,[5,,COMMND]
+	MOVE	A,[440700,,COMMND]
+	MOVEM	A,COMPTR
+	SKIPN	COMMND		; none there?
+	JRST	QUIT		; then quit
+
+	caia		; skip into loop
+swnext:	 pop p,0
+	PUSH	P,COMPTR
+	ILDB	A,COMPTR
+	cain a,"|		; Print vertically
+	 jrst [	setzm side
+		jrst swnext]
+	cain a,"-		; Print horizontally (default)
+	 jrst [	setom side
+		jrst swnext]
+	cain a,"^		; Specify LF character
+	 jrst [	ildb a,comptr	; get next
+		trz a,140	; controlify it
+		movem a,lf	; store as LF character.
+		jrst swnext]
+
+SWLOSE:	POP	P,COMPTR
+
+	MOVEI	D,OUTFIL	; read name of output file
+	PUSHJ	P,SCNAME
+	 jfcl		; let a null spec default.
+	pushj p,banopn		; Try to open it before proceeding.
+
+	; Copy fill-in part of command line into fill-in buffer
+	MOVE	B,[441000,,MESBUF]
+	MOVE	C,[440700,,FILBUF]
+FILGET:	ILDB	A,COMPTR
+	CAIN	A,""		; fill-in defaulted?
+	 JRST	MESNXT		; yes: get message
+	CAIE	A,"(		; begins with a (
+	 JRST	FILGET
+FILNXT:	ILDB	A,COMPTR
+	CAIE	A,"\		; \ quotes next character a la MUDDLE
+	 JRST	FILQUT
+FILCOM:	ILDB	A,COMPTR
+	JRST	FILPUT
+FILQUT:	CAIE	A,")		; ) quotes next character only if its )
+	 JRST	FILPUT
+	ILDB	A,COMPTR
+	CAIE	A,")
+	JRST	MESGET
+FILPUT:	IDPB	A,C
+	JRST	FILNXT
+
+	; Copy message part of command line into message buffer
+MESGET:	ILDB	A,COMPTR
+	cain a,
+	 .value [asciz /: No message specified? î:KILL /]
+	CAIE	A,""		; begins with a "
+	 JRST	MESGET
+MESNXT:	ILDB	A,COMPTR
+	cain a,
+	 .value [asciz /: Message not terminated with a "? î:KILL /]
+	CAIN	A,"\		; \ quotes next character a la MUDDLE
+	 jrst [	ILDB A,COMPTR
+		caie a,"^		; see if quotable char
+		 cain a,""
+		  jrst mesput		; Yes, quote it.
+		TRO	A,200		; no, turn on funny bit for command ch
+		JRST	MESPUT]
+	cain a,^F		; Font select?
+	 jrst [	tro a,200	; turn on bit to distinguish from uparrow-F
+		jrst mesput]
+	CAIN	A,""		; " quotes next character only if its "
+	 jrst [	ILDB A,COMPTR
+		CAIE A,""
+		 JRST GETFNT
+		JRST MESPUT]
+	cain a,"^		;Controlify?
+	 jrst [	ildb a,comptr
+		andi a,37
+		jrst mesput]
+MESPUT:	IDPB	A,B
+	JRST	MESNXT
+
+; ===================================================================
+;		read in and set up fonts
+; ===================================================================
+
+GETFNT:	setzm nfonts		; Clear # fonts
+getflp:	MOVEI	D,FNTFIL	; read next name of font to use
+	PUSHJ	P,SCNAME
+	 jrst [	skipe nfonts	; no filenames left, see if any fonts read
+		 jrst prtmes	; Yup, go check message
+		jrst .+1]	; Nope, must read default in.
+
+; this section of code reads in a font file.  it maps from the core
+; job enough pages to hold it, and then iots to fill the new pages.
+; it could map directly from the file, but this would not work over
+; the net, which is where the best font files live.  (i.e.: AI).
+
+	syscal open,[[.bii,,ic] ? fntdev ? fntnm1 ? fntnm2 ? fntsnm
+		movem erropn+2]
+	 JRST	FNTLOS
+	syscal fillen,[movei ic ? movem b]
+	 .VALUE	[ASCIZ /:CAN'T GET FILLEN OF FONT FILE?/]
+	movn a,b		; Get neg of cnt
+	hrlzs a
+	hrr a,ffword		; set up AOBJN for IOT (but not quite)
+	move c,nfonts
+	hrrzm a,fnttab(c)	; Save pointer to font buffer
+	addi b,fbfile		; add in length of buffer header
+	addi a,fbfile		; also add to aobjn ptr and finish it.
+	addb b,ffword		; Update first free loc
+	move c,ffpage		; now see if need core.
+	lsh c,10.
+	subi b,(c)		; get # words needed.
+	jumpg b,[addi b,1777	; Yep, need core. round up.
+		lsh b,-10.
+		move c,b	; save # free pages
+		movns b
+		hrlzs b
+		hrr b,ffpage	; Now have page AOBJN to pgs to get
+		syscal corblk,[movei %cbndw	; get new pages
+			movei %jself ? b ? movei %jsnew]
+		 .value [asciz /: Corblk failed? î/]
+		addm c,ffpage	; update first free page
+		jrst .+1]
+	.iot ic,a	; get the file
+	.close ic,	; got it... yummy.
+
+	; set up other stuff in font buffer.
+	move d,nfonts
+	move fp,fnttab(d)	; get ptr to font buffer
+	movem d,fbnum(fp)	; save # of this font
+	move a,fntnm1
+	movem a,fbname(fp)	; and name.
+
+	movei d,fbfile(fp)	; get ptr to font file.
+	AOS	D		; skip KSTID
+	hrrz a,(d)		; get height
+	movem a,fbhigh(fp)	; store as full wd ref.
+	skipn nfonts	; if reading base font,
+	 MOVEM	A,HIGH	; save specially too.
+
+	MOVEI	B,1
+	SETO	C,
+CHRLUP:	CAMN	B,(D)
+	 jrst [	hrr a,1(d)	; get char value for this def.
+		addi a,fbchar(fp)	; get addr in table to store at
+		movem d,(a)	; store pointer to char def.
+		aoja d,chrlup]
+	CAME	C,(D)
+	 AOJA	D,CHRLUP
+	aos nfonts		; Done! bump count of fonts.
+	jrst getflp		; and get another.
+
+; ===================================================================
+;		here to check message and do final setups
+; ===================================================================
+
+	; Check out chars of message.
+PRTMES:	MOVE	MES,[441000,,MESBUF]
+	move fp,fnttab		; Get base font to start with.
+	SETZM	B
+PRTCHK:	ILDB	A,MES
+	JUMPE	A,PRTCH1
+	trne a,200		; command char?
+	 jrst [	pushj p,fntsel		; check for font selection.
+		 jrst prtchk		; font selected, get another char.
+		jrst prtchk]		; nope, but ignore anyway.
+	addi a,fbchar(fp)
+	skipe (a)
+	 JRST	PRTCHK
+
+BADCHR:	SETOM	B
+	MOVEI	A,[ASCIZ /Font /]
+	pushj p,linout
+	move a,fbnum(fp)
+	addi a,"0
+	.iot tyoc,a
+	.iot tyoc,[40]
+	.iot tyoc,["(]
+	move b,fbname(fp)
+	pushj p,osix
+	movei a,[asciz /) does not contain character "/]
+	PUSHJ	P,LINOUT
+	LDB	A,MES
+	CAIL	A,40
+	 JRST	BADCH1
+	.IOT	TYOC,["^]
+	ADDI	A,100
+BADCH1:	.IOT	TYOC,A
+	MOVEI	A,[ASCIZ /".
+/]
+	PUSHJ	P,LINOUT
+	JRST	PRTCHK
+
+PRTCH1:	JUMPN	B,QUIT
+
+	; Do final setup before vectoring to appropriate print rtn
+	move fp,fnttab		; Begin with base font
+	MOVE	MES,[441000,,MESBUF]
+	MOVE	FILL,[440700,,FILBUF]
+	SKIPE	SIDE		; what if turkey wants side print?
+	JRST	PRTSID		; Jump to side print,
+			; drop thru to vertical print.
+
+; ===================================================================
+;		vertical printing (debug only)
+; ===================================================================
+
+PRTVRT:	MOVEI	A,60
+	CAMGE	A,HIGH
+	 JRST	TOOBIG
+	IDIV	A,HIGH
+	MOVEM	A,VFACT
+	CAIN	A,1
+	MOVEI	B,2
+	CAIN	A,2
+	MOVEI	B,3
+	CAIGE	A,3
+	 JRST	PRTVR1
+	IMULI	A,3
+	LSH	A,-1
+	MOVE	B,A
+
+PRTVR1:	MOVEM	B,HFACT
+	PUSHJ	P,BANOUT	; open output file
+
+MESLUP:	ILDB	A,MES
+	JUMPE	A,MESEND
+	pushj p,fntsel		; check for font selection
+	 jrst meslup		; font changed, get another char
+	TRZN	A,200		; function char?
+	JRST	MESLU1
+	PUSHJ	P,DOFUNC
+	JRST	MESLUP
+
+MESLU1:	addi a,fbchar(fp)	; get addr of char slot
+	move chr,(a)		; get pointer to char defn.
+	MOVEI	CC,3(CHR)	; ildb to matrix
+	HRLI	CC,441000
+
+	MOVN	E,fbhigh(fp)
+
+LINREP:	MOVN	G,VFACT
+	MOVE	H,CC
+LINLUP:	HRRZ	B,2(CHR)	; character width
+
+	MOVE	C,B		; centering
+	IMUL	C,HFACT
+	SUB	C,LINEMX
+	MOVNS	C
+	LSH	C,-1
+	MOVEM	C,CENTER
+
+	MOVNS	B		; count of bits to line
+	MOVE	CC,H
+
+BYTLUP:	ILDB	C,CC
+	MOVNI	D,8.		; count of bits in byte
+
+BITLUP:	MOVN	F,HFACT
+	MOVEI	A," 
+BITLU1:	TRNE	C,1
+	PUSHJ	P,FILBYT
+	PUSHJ	P,OUTCHR
+	AOJL	F,BITLU1
+	AOJGE	B,ENDLIN	; count bits per line
+	LSH	C,-1		; move to next bit
+	AOJL	D,BITLUP	; count bits per byte
+	JRST	BYTLUP
+
+ENDLIN:	PUSHJ	P,CRLF
+	MOVE	C,CENTER
+	MOVEM	C,SPACES
+	AOJL	G,LINLUP	; count line repetitions
+	AOJL	E,LINREP	; count lines
+	JRST	MESLUP		; next character
+
+; ===========================================================
+; funny functions within banner
+; ===========================================================
+
+DOFUNC:	CAIG	A,"z
+	 CAIGE	A,"a
+	  SKIPA
+	   SUBI	A,40
+
+	CAIE	A,"L
+	 JRST	NOFUNC
+	MOVEI	A,^L		; L - leave white space (2 pages)
+	PUSHJ	P,QFORM
+	PUSHJ	P,QFORM
+	POPJ	P,
+
+NOFUNC:
+popj1:	AOS	(P)
+	POPJ	P,
+
+	; Check for font selection.  Char in A, bp in MES.  Skips
+	; if no change in font.
+fntsel:	caie a,200+^F	; font-select command char?
+	 jrst popj1	; nope, return w/skip
+	push p,mes	; save ptr
+	ildb a,mes	; get next
+	cail a,"0	; see if nmber
+	 caile a,"9
+	  jrst [pop p,mes	; nope, restore ptr
+		movei a,200+^F	; and original char
+		jrst popj1]
+	skipn fp,fnttab-"0(a)	; aha, change font.
+	 jrst [	move b,a
+		movei a,[asciz /Error - Font /]
+		pushj p,linout
+		.iot tyoc,b
+		movei a,[asciz / selected but unspecified!
+/]
+		pushj p,linout
+		jrst quit]
+	pop p,0		; flush saved ptr
+	popj p,		; and return w/o skip.
+
+; ===================================================================
+;		here to side print
+; ===================================================================
+
+; figure out mult factor for vertical and horizontal
+PRTSID:	MOVEI	A,1
+	MOVEM	A,VFACT
+	MOVE	A,LINEMX
+	CAMGE	A,HIGH
+	 JRST	TOOBIG		; cretinous Enterprise font
+	IDIV	A,HIGH		; 120 for lptrs
+	SKIPE	A
+	MOVEM	A,VFACT		; mult factor
+
+	SETZM	CENTER
+	LSH	B,-1		; hack centering on page
+	SKIPE	A
+	MOVEM	B,CENTER	; for centering on page
+
+	MOVEI	B,1
+	CAIL	A,3
+	MOVEI	B,2
+	MOVEM	B,HFACT
+
+	PUSHJ	P,BANOUT	; open for output
+
+SIDLUP:	ILDB	A,MES
+	JUMPE	A,MESEND
+	pushj p,fntsel		; check for font select
+	 jrst sidlup		; font changed, get another char
+	TRZN	A,200
+	 JRST	SIDLU1
+	PUSHJ	P,DOFUNC
+	JRST	SIDLUP
+
+SIDLU1:	addi a,fbchar(fp)	; get addr of slot
+	move chr,(a)		; get pointer to char defn
+	MOVEI	CC,3(CHR)	; ildb to matrix
+	HRLI	CC,441000
+	MOVEM	CC,CCSAVE
+
+	HLRE	B,1(CHR)	; left kern
+	MOVEM	B,LFTKRN
+	JUMPGE	B,GETRST
+	PUSHJ	P,HCRLF		; hack left kern
+	SOJG	B,.-1
+
+GETRST:	HLRZ	B,2(CHR)	; raster width
+	MOVEM	B,RSTWID
+
+	HRRZ	C,2(CHR)	; character width
+	MOVEM	C,CHRWID
+	MOVE	F,B
+	ADDI	F,7
+	IDIVI	F,8.		; number bytes per row
+	MOVEM	F,ROWBYT
+
+	IMUL	F,fbhigh(fp)	; total number of bytes
+	SUB	F,ROWBYT
+	MOVEM	F,TOTBYT
+
+	MOVEI	D,1		; bit in byte
+	MOVN	H,HFACT		; number of times to do each line
+	MOVN	B,RSTWID	; number of columns of printing
+
+
+NXTCOL:	MOVE	F,TOTBYT
+	MOVE	A,CENTER	; centering on page
+	MOVEM	A,SPACES
+
+SIDBYT:	PUSHJ	P,GETBYT	; into C
+
+	MOVN	I,VFACT
+	MOVEI	A," 
+SIDBY1:	TRNE	C,(D)
+	PUSHJ	P,FILBYT
+
+	PUSHJ	P,OUTCHR
+	AOJL	I,SIDBY1
+
+	SUB	F,ROWBYT	; move to next row
+	JUMPG	F,SIDBYT
+
+	PUSHJ	P,CRLF		; end of line (this column)
+
+	AOJL	H,NXTCOL
+	AOJGE	B,SIDTRL	; hack trailing blank columns
+	MOVN	H,HFACT
+	LSH	D,1
+	CAIE	D,400
+	JRST	NXTCOL		; into next byte
+
+	MOVEI	D,1
+	AOS	TOTBYT
+	JRST	NXTCOL
+
+; calculate trailing blank lines
+;  n = char.width - raster width + left kern
+SIDTRL:	MOVE	B,CHRWID
+	SUB	B,RSTWID
+	ADD	B,LFTKRN
+	JUMPLE	B,SIDLUP
+	PUSHJ	P,HCRLF
+	SOJG	B,.-1
+	JRST	SIDLUP
+
+; get the right byte -- passed byte number in F, returns byte in C
+GETBYT:	PUSH	P,F
+	IDIVI	F,4
+	ADD	F,CCSAVE
+	MOVE	C,(F)
+	LDB	C,BYTES(G)
+	POP	P,F
+	POPJ	P,
+
+BYTES:	341000,,C		; byte table for 8-bit bytes
+	241000,,C
+	141000,,C
+	041000,,C
+
+; get a byte of fill-in text into A
+FILBYT:	ILDB	A,FILL
+	SKIPE	A
+	POPJ	P,
+	MOVE	FILL,[440700,,FILBUF]
+	ILDB	A,FILL
+	POPJ	P,
+
+TOOBIG:	MOVEI	A,[ASCIZ /Font specified is too large to fit on a banner./]
+	PUSHJ	P,LINOUT
+	JRST	QUIT
+
+FNTLOS:	MOVEI	A,[ASCIZ /OPEN of FONT file /]
+	PUSHJ	P,LINOUT
+	MOVEI	A,FNTFIL
+	JRST	ERROUT
+
+OUTLOS:	MOVEI	A,[ASCIZ /OPEN of OUTPUT file /]
+	PUSHJ	P,LINOUT
+	MOVEI	A,OUTFIL
+
+ERROUT:	MOVE	B,(A)
+	PUSHJ	P,OSIX
+	.IOT	TYOC,[":]
+	MOVE	B,3(A)
+	PUSHJ	P,OSIX
+	.IOT	TYOC,[";]
+	MOVE	B,1(A)
+	PUSHJ	P,OSIX
+	.IOT	TYOC,[" ]
+	MOVE	B,2(A)
+	PUSHJ	P,OSIX
+	MOVEI	A,[ASCIZ / failed: /]
+	PUSHJ	P,LINOUT
+	.OPEN	IC,ERROPN
+	JRST	QUIT
+
+ERRLUP:	.IOT	IC,B
+	CAIGE	B,40
+	JRST	QUIT
+	.IOT	TYOC,B
+	JRST	ERRLUP
+
+OSIX:	PUSH	P,A
+	MOVE	A,[440600,,B]
+OSIXL:	CAMN	A,[000600,,B]
+	JRST	OSIXX
+	ILDB	A
+	JUMPE	OSIXX
+	ADDI	" 
+	.IOT	TYOC,
+	JRST	OSIXL
+OSIXX:	POP	P,A
+	POPJ	P,
+
+LINOUT:	HRLI	A,440700
+LINOU1:	ILDB	A
+	JUMPE	[POPJ P,]
+	.IOT	TYOC,
+	JRST	LINOU1
+
+; end of message -- terminate with ff, exit
+MESEND:	PUSHJ	P,FORM
+	pushj p,bancls
+
+; here to quit
+QUIT:	.CLOSE	OC,
+	.BREAK	16,160000
+
+; ===================================================================
+; 		output buffer handling routines
+; ===================================================================
+
+BANOPN:	syscal open,[[.bio,,oc] ? outdev ? outnm1 ? outnm2 ? outsnm
+		3000,,erropn+2]
+	 jrst outlos
+	syscal renmwo,[movei oc ? [sixbit /_banne/] ? [sixbit /output/]
+		3000,,erropn+2]
+	 jrst outlos
+	popj p,
+
+bancls:	syscal renmwo,[movei oc ? outnm1 ? outnm2 ? 3000,,erropn+2]
+	 jrst outlos
+	.close oc,
+	popj p,
+
+	; two ff's to give a completely blank page
+banout:	PUSHJ	P,QFORM
+	PUSHJ	P,QFORM
+	POPJ	P,
+
+; special output routines for special hacks
+
+CRLF:	MOVEI	A,^M		; crlf
+	PUSHJ	P,OUTCHR
+	MOVE	A,LF		; line feed char
+	PUSHJ	P,OUTCHR
+	POPJ	P,
+
+HCRLF:	PUSH	P,H		; do hfact crlf's
+	MOVN	H,HFACT
+	PUSHJ	P,CRLF
+	AOJL	H,.-1
+	POP	P,H
+	POPJ	P,
+
+FORM:	MOVEI	A,^L		; do form feed and clear buffer
+	PUSHJ	P,OUTCHR
+	POPJ	P,
+
+; character output routines
+SPHACK:	AOS	SPACES
+	POPJ	P,
+
+OUTCHR:	CAIN	A," 
+	 JRST	SPHACK
+	CAIE	A,^M
+	 JRST	.+3
+	  SETZM	SPACES
+	  JRST	OUTCH1
+	SKIPN	SPACES
+	 JRST	OUTCH1
+
+	PUSH	P,A		; output a bunch of spaces
+	PUSH	P,B
+	MOVEI	A," 
+	MOVN	B,SPACES
+	SETZM	SPACES
+OUTSPC:	PUSHJ	P,OUTCH1
+	AOJL	B,OUTSPC
+	POP	P,B
+	SKIPA	A,(P)		; recover real character
+
+; output character without checking for spaces
+OUTCH1:	PUSH	P,A
+	IDPB	A,OBPTR
+	CAIN	A,^L
+	JRST	FLUSH
+OUTXXX:	AOSE	OCNT
+	JRST	OUTCHX
+	MOVE	A,[-100.,,OBUF]
+OUTIT:	.IOT	OC,A
+	MOVE	A,[440700,,OBUF]
+	MOVEM	A,OBPTR
+	MOVNI	A,500.
+	MOVEM	A,OCNT
+	SETZM	OBUF
+	MOVE	A,[OBUF,,OBUF+1]
+	BLT	A,OBUF+99.
+OUTCHX:	POP	P,A
+	POPJ	P,
+
+QFORM:	PUSH	P,A		; this form doesn't clear buffer out
+	MOVEI	A,^L
+	IDPB	A,OBPTR
+	JRST	OUTXXX
+
+; here to flush output buffer to disk
+FLUSH:	MOVEI	A,0
+REPEAT	5,IDPB	A,OBPTR
+	HRRZ	A,OBPTR
+	SUBI	A,OBUF-1
+	MOVNS	A
+	HRLS	A
+	HRRI	A,OBUF
+	JRST	OUTIT
+
+
+; ===================================================================
+; 		command line reading and parsing section
+; ===================================================================
+
+; read a file spec - skip if got something.  no skip if nothing.
+SCNAME:	PUSH	P,D
+	PUSH	P,B
+	PUSH	P,C
+	MOVSI	C,-2
+	HRRI	C,1(D)
+	pushj p,getsyl	; initial syl for test
+	 jrst scnxx	; not a single syl? no skip return.
+	jrst scngt2
+SCNGET:	PUSHJ	P,GETSYL
+	JRST	SCNX
+scngt2:	JUMPE	B,SCNX
+	CAIN	A,':
+	MOVEM	B,(D)
+	CAIE	A,';
+	JRST	.+3
+	MOVEM	B,3(D)
+	CAIE	A,'_
+	JUMPG	A,SCNGET
+	MOVEM	B,(C)
+	JUMPL	A,SCNX
+	AOBJN	C,SCNGET
+SCNX:	aos -3(p)	; skip return
+scnxx:	POP	P,C
+	POP	P,B
+	POP	P,D
+	POPJ	P,
+
+; get a syllable from command buffer
+GETSYL:	PUSH	P,C
+	PUSH	P,[0]
+	MOVEI	B,(P)
+	HRLI	B,440600
+GETSLP:	PUSHJ	P,GETCCA
+	JRST	GETOUT
+	JUMPL	A,GETSX
+	CAIN	A,^Q
+	JRST	GETQOT
+	SUBI	A,40
+	JUMPL	A,GETSX
+	JUMPE	A,GETSP
+	CAIE	A,':
+	CAIN	A,';
+	JRST	GETSX
+GETSPT:	CAIL	A,100
+	SUBI	A,40
+	TLNN	B,770000
+	JRST	GETSLP
+	IDPB	A,B
+	JRST	GETSLP
+
+GETQOT:	ILDB	A,COMPTR
+	SUBI	A,40
+	JUMPGE	A,GETSPT
+	JRST	GETSX
+GETSP:	TLNE	B,400000
+	JRST	GETSLP
+GETSX:	AOS	-2(P)
+GETOUT:	POP	P,B		; character word
+	POP	P,C
+	POPJ	P,
+
+; read a character from command buffer
+GETCCA:	PUSH	P,COMPTR
+	ILDB	A,COMPTR
+	CAIE	A,"(
+	CAIN	A,""
+	JRST	GETSTP
+	jumpe a,getstp	; ensure always read EOF again.
+	POP	P,0
+	cain a,",	; comma separates filenames
+	 jrst getccx
+	CAIN	A,^I
+	MOVEI	A,40
+	CAIN	A,^M
+	JRST	GETCCX
+	CAIN	A,"
+	MOVEI	A,",
+	SKIPA
+GETCCX:	SETOM	A
+	AOS	(P)
+	POPJ	P,
+
+GETSTP:	POP	P,COMPTR
+	POPJ	P,
+
+; ===================================================================
+;		buffer to read in font file
+; ===================================================================
+
+VARIAB
+CONSTA
+
+begpag==<.+1777>/2000	; # of first free page.
+
+	END	START

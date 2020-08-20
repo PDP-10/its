@@ -2017,6 +2017,10 @@ expect ":KILL"
 respond "*" ":midas sys;ts monit_dmcg;monit\r"
 expect ":KILL"
 
+# BANNER
+respond "*" ":midas sys3;ts banner_sysen2; banner\r"
+expect ":KILL"
+
 # IBMASC
 respond "*" ":midas sys3;ts ibmasc_sysen1;ibmasc\r"
 expect ":KILL"
