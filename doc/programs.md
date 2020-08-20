@@ -34,6 +34,7 @@
 - BABYL, mail reading/sending program for EMACS.
 - BABYLM, mail sending program for EMACS.
 - BALANC/MOVDIR, balances directories.
+- BANNER, make banners on line printer.
 - BDAY, happy birthday demon.
 - BIG, music processor.
 - BINPRT, display information about a binary executable file.
