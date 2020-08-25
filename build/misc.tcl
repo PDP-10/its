@@ -24,6 +24,12 @@ expect "PURIFIED"
 respond "*" ":pdump midas; ts 77\r"
 respond "*" ":kill\r"
 
+# MIDAS 73, bootstrapped from 77.
+respond "*" ":midas;77\r"
+respond "MIDAS.77" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
+respond "*" ":midas;73\r"
+respond "MIDAS.73" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
+
 # MACTAP
 respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
 expect ":KILL"
