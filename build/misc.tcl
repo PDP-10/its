@@ -29,6 +29,8 @@ respond "*" ":midas;77\r"
 respond "MIDAS.77" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
 respond "*" ":midas;73\r"
 respond "MIDAS.73" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
+respond "*" ":xfile midas; patch 73\r"
+expect ":kill"
 
 # MACTAP
 respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
