@@ -68,6 +68,10 @@ expect ":KILL"
 respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
 expect ":KILL"
 
+# mark
+respond "*" ":midas;324 dsk0:.;@ mark_syseng; mark\r"
+expect ":KILL"
+
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
 expect ":KILL"
 
