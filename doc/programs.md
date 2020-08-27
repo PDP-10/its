@@ -209,6 +209,7 @@
 - MAIL, mail sending client.
 - MAILS, Chaosnet mail server.
 - MAILT, allows editing mail (from :MAIL) in EMACS.
+- MARK, mark a DECtape.
 - MAZE, Maze War game.
 - MAZLIB, maze game for EMACS.
 - MCL, subsystem for compiling individual Macsyma files.
