@@ -369,6 +369,7 @@
 - UPTINI, program to create new UPTIME DATA.
 - URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
+- UTNAM, set DECtape name.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VDIR, view directory.
 - VIEW, view file.

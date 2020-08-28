@@ -72,6 +72,10 @@ expect ":KILL"
 respond "*" ":midas;324 dsk0:.;@ mark_syseng; mark\r"
 expect ":KILL"
 
+# utnam
+respond "*" ":midas sys3; ts utnam_lars; utnam\r"
+expect ":KILL"
+
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
 expect ":KILL"
 
