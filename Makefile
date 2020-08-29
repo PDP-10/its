@@ -25,7 +25,7 @@ SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       tensor transl wgd zz graphs lmlib pratt quux scheme gsb ejs mudsys \
       draw wl taa tj6 budd sharem ucode rvb kldcp math as imsrc gls demo \
       macsym lmcons dmcg hibou agb gt40 rug maeda ms kle aap common \
-      fonts zork 11logo kmp info aplogo bkph bbn pdp11 chsncp sca music1 \
+      fonts lcf 11logo kmp info aplogo bkph bbn pdp11 chsncp sca music1 \
       moon teach ken lmio1 llogo a2deh chsgtv clib sys3 lmio turnip \
       mits_s rab stan_k bs cstacy kp dcp2 -pics- victor imlac rjl mb bh \
       lars drnil radia gjd maint bolio cent shrdlu vis cbf digest prs jsf \
