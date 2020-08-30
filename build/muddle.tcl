@@ -1,7 +1,7 @@
 log_progress "ENTERING BUILD SCRIPT: MUDDLE"
 
 respond "*" ":cwd mudsys\r"
-respond "*" ":midas ts stinkm_stink\r"
+respond "*" ":midas ts stink_sysen2;stink 121t\r"
 expect ":KILL"
 
 respond "*" ":xfile assem xfile\r"
@@ -9,7 +9,7 @@ expect -timeout 300 "Assembly done!"
 
 mkdir "mudsav"
 
-respond "*" ":stinkm\r"
+respond "*" ":mudsys;stink\r"
 respond "STINK." "MMUD56 STINK\033@\033\033"
 expect  "SETPUR"
 respond "\n" "D\033\033"
