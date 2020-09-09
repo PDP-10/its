@@ -1,20 +1,27 @@
 log_progress "ENTERING BUILD SCRIPT: MUDDLE"
 
-respond "*" ":cwd mudsys\r"
-respond "*" ":midas ts stink_sysen2;stink 121t\r"
+# STINK 121T, used to build Muddle
+respond "*" ":midas mudsys;ts stink_sysen2;stink 121t\r"
 expect ":KILL"
-
-respond "*" ":xfile mud56 assem\r"
-expect -timeout 300 "Assembly done!"
 
 mkdir "mudsav"
 
-respond "*" ":mudsys;stink\r"
-respond "STINK." "MMUD56 STINK\033@\033\033"
-expect  "SETPUR"
-respond "\n" "D\033\033"
-respond "\n" ":xfile mud56 init\r"
-expect -timeout 100 "Init done!"
+proc build_muddle {dir version} {
+	respond "*" ":cwd $dir\r"
+
+	respond "*" ":xfile mud$version assem\r"
+	expect -timeout 300 "Assembly done!"
+
+	respond "*" ":mudsys;stink\r"
+	respond "STINK." "MMUD$version STINK\033@\033\033"
+	expect  "SETPUR"
+	respond "\n" "D\033\033"
+	respond "\n" ":xfile mud$version init\r"
+	expect -timeout 100 "Init done!"
+}
+
+build_muddle "muds54" "54"
+build_muddle "mudsys" "56"
 
 respond "*" ":midas sys3; ts mudinq_sysen2; mudinq\r"
 expect ":KILL"
