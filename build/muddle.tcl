@@ -16,7 +16,7 @@ respond "\n" "D\033\033"
 respond "\n" "strng/\0331\"56^?^?^?\033\r"
 respond "\n" ":pdump mudsav; ts mud56\r"
 respond "*" ":start\r"
-respond "..PERM/" ":pdump mudsav; ts mdl56\r"
+respond "*" ":pdump mudsav; ts mdl56\r"
 respond "*" ":kill\r"
 
 respond "*" ":midas sys3; ts mudinq_sysen2; mudinq\r"
