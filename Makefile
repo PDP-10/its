@@ -29,7 +29,7 @@ SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       moon teach ken lmio1 llogo a2deh chsgtv clib sys3 lmio turnip \
       mits_s rab stan_k bs cstacy kp dcp2 -pics- victor imlac rjl mb bh \
       lars drnil radia gjd maint bolio cent shrdlu vis cbf digest prs jsf \
-      decus bsg
+      decus bsg muds54
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
