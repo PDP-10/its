@@ -23,6 +23,12 @@ proc build_muddle {dir version} {
 build_muddle "muds54" "54"
 build_muddle "mudsys" "56"
 
+# Generate SAV FILE and FIXUP FILE for Muddle pure code library
+respond "*" ":midas mudsys; ts mksvfl_mudsys;mksvfl\r"
+expect ":KILL"
+respond "*" ":mudsys;mksvfl\r"
+expect ":KILL"
+
 respond "*" ":midas sys3; ts mudinq_sysen2; mudinq\r"
 expect ":KILL"
 respond "*" ":link sys3; ts purge, sys3; ts mudinq\r"
