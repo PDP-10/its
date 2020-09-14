@@ -985,6 +985,10 @@ expect ":KILL"
 respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
 expect ":KILL"
 
+# HOSTAT
+respond "*" ":midas sys2;ts hostat_sysen2;hostat\r"
+expect ":KILL"
+
 # LSPEED
 respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
 expect ":KILL"
