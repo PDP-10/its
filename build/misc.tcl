@@ -143,7 +143,7 @@ respond "System?" "ITS\r"
 expect ":KILL"
 respond "*" ":link sys2;ts dc,sys1;ts dcrock\r"
 
-# Zork
+# Not Zork
 respond "*" ":midas sys3;ts zork_sysen3;zork\r"
 expect ":KILL"
 
