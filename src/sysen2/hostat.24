@@ -1,0 +1,316 @@
+	title HOSTAT  Host status slurper/printer
+
+; Mark Crispin, AI, May 1977
+
+.insrt MRC;MACROS
+
+define TYPE string
+ move x,[point. 7,[ascii\string\]]
+ movx y,<.length\string\>
+ syscal SIOT,[	clarg. tto
+		%clarg x
+		%clarg y]
+  .lose %lssys
+termin
+
+acdef. [x y z a]			; accumulators
+
+acdef. [tto htb icp nti]		; I/O channels
+
+nd. pdllen==50.				; push down list length
+nd. ntibfl==2000.			; words in net input buffer
+
+pdl:	block pdllen			; push down list
+ntibfr:	block ntibfl			; net input buffer
+ntiptr:	block 1				; net input pointer
+ntictr:	block 1				; net input pointer
+
+; I/O subroutines
+
+; NOUT numeric output
+; accepts in x:	base to use for outputting the number
+;	     y:	number to be output
+; returns:  +1:	always, with y and z clobbered
+
+nout=call .
+	idivi y,(x)			; snarf a digit
+	save z				; save the lowest order digit
+	caxe y,%zeros			; got them all?
+	 nout				; nope
+	retr y				; get a digit to output
+	addx y,"0			; convert to ASCII
+	.iot tto,y			; output it
+	return				; and return
+
+; SOUT string output
+; accepts in x:	pointer to string (0 in LH means ASCIZ string)
+; returns   +1:	always, with updated string pointer in x; 0 & y clobbered
+
+sout=call .
+	txnn x,%lhalf			; is there a left half?
+	 hrli x,440700			; yes, make it a 7 bit pointer
+	save x				; save pointer away
+	movx y,%zeros			; initialize string counter
+	ildb x				; get a character
+	jumpn [aoja y,.-1]		; count character if non-null
+	retr x				; else restore pointer
+	movem y,strlen'			; save string length
+	syscal SIOT,[	clarg. tto	; output to TTY
+			%clarg x	; string pointer
+			%clarg y]	; byte counter
+	 .lose %lssys			; ? ? ?
+	return				; and return
+
+; NIN numeric input
+; accepts in x:	base of number to be input
+; returns   +1:	always, with number in y, break character in z
+
+nin=call .
+	movx y,%zeros			; initially zero
+	bin				; get a character
+	caxl z,"0			; non-numeric?
+	 caxl z,"0(x)			; or out of base?
+	  return			; yes, return
+	imuli y,(x)			; shift over old value
+	addi y,-"0(z)			; add in new digit
+	jrst .-6			; and get next character
+
+; BIN byte input from network
+; returns   +1:	always, with input character in z
+
+bin=call .
+	sosg ntictr			; anything in this buffer?
+	 .lose				; no, lose big
+	ildb z,ntiptr			; yes, get a character
+	return				; and return
+
+; Start of program
+
+hostat:	movx p,pdl(-pdllen)		; load PDP
+	syscal OPEN,[	clctl. .uao	; open in single ASCII mode
+			clarg. tto	; TTY output channel
+			clarg. ('TTY)]	; the TTY
+	 .lose %lsfil			; ? ? ?
+	syscal OPEN,[	clctl. .bai	; open in block ASCII mode
+			clarg. htb	; host table channel
+			clarg. ('DSK)	; device
+			clarg. 'HOSTS1	; fn1
+			clarg. sixbit/>/; fn2
+			clarg. 'SYSBIN]	; sname
+	 .lose %lsfil			; ? ? ?
+	move x,[-100.,,hsttab_-10.]	; 100. pages starting at HSTTAB
+	syscal CORBLK,[	clarg. %cbndr	; map pages, fail if can't get all
+			clarg. %jself	; this job
+			x		; pointer to pages to load
+			clarg. htb]	; channel to do it on
+	 skipn x,hsttab			; check first word of host table
+	  .lose				; didn't read it all or bad?
+	caxe x,'HOSTS1			; right first word?
+	 .lose				; bad file?
+	type [Getting survey from MIT-DMS...]
+	syscal OPEN,[	clctl. .uii\40050; open on gensymmed socket, 32 bits
+			clarg. icp	; on ICP channel
+			clarg. ('NET)	; ARPAnet
+			clarg. %fword	; gensymmed socket
+			clarg. 17	; survey socket
+			clarg. 106]	; MIT-DMS
+	 jrst [	type [Can't access survey information]
+		.logout 1,]		; and die
+	syscal NETBLK,[	clarg. icp	; hang on ICP channel
+			clarg. %nsrfs	; until not "RFC sent"
+			%clval x]	; new socket state
+	 .lose %lssys			; ? ? ?
+	jumpe x,[	type [Connection closed]
+			.logout 1,]	; suicide
+	syscal RFNAME,[	clarg. icp	; socket status on ICP channel
+			repeat 2,%clval x]; local socket number
+	 .lose %lssys			; ? ? ?
+	addx x,2			; compute receive socket
+	.iot icp,y			; find out foreign receive socket
+	.close icp,			; close off ICP socket
+	addx y,1			; compute foreign transmit socket
+	syscal OPEN,[	clctl. .uai\40	; open in single ASCII mode
+			clarg. nti	; net input channel
+			clarg. ('NET)	; ARPAnet
+			%clarg x	; local socket
+			%clarg y	; foreign socket
+			clarg. 106]	; MIT-DMS
+	 .lose %lsfil			; can't establish connection
+	syscal NETBLK,[	clarg. nti	; net input channel
+			clarg. %nsrfs	; wait until not "RFC sent"
+			%clval x]	; new socket state
+	 .lose %lssys			; ? ? ?
+	jumpe x,[.lose]			; connection closed?
+	store <point. 7,ntibfr>,ntiptr,,x; load pointer to text buffer
+	store %zeros,ntictr		; empty buffer initially
+getbfr:	syscal NETBLK,[	clarg. nti	; wait on net input channel
+			clarg. %nsopn]	; for not "open with no input"
+	 .lose %lssys			; ? ? ?
+	syscal WHYINT,[	clarg. nti	; status of net input channel
+			repeat 2,%clval y; socket status
+			%clval z]	; number of characters
+	 .lose %lssys			; ? ? ?
+	jumpe z,[	andx y,%rhalf	; throw out left half
+			jumpe y,gotbfr	; won if connection closed
+			.lose]		; random condition?
+	addm z,ntictr			; add in buffer size
+	move a,ntictr			; get buffer size now
+	caxle a,5*ntibfl		; larger than maximum buffer size?
+	 .lose				; ? ? ?
+	syscal SIOT,[	clarg. nti	; read in a buffer
+			%clarg x	; buffer pointer
+			%clarg z]	; buffer counter
+	 .lose %lssys			; ? ? ?
+	jrst getbfr			; loop for more of buffer
+
+gotbfr:	type [ Ok
+
+Survey of ]
+	movx x,10.			; decimal
+	nin				; get the month
+	caxe z,<",>			; ended in comma?
+	 .lose				; ? ? ?
+	jumple y,[.lose]		; bad month?
+	caxle y,12.			; bad month?
+	 .lose				; ? ? ?
+	move x,[[asciz/January /]
+		[asciz/February /]
+		[asciz/March /]
+		[asciz/April /]
+		[asciz/May /]
+		[asciz/June /]
+		[asciz/July /]
+		[asciz/August /]
+		[asciz/September /]
+		[asciz/October /]
+		[asciz/November /]
+		[asciz/December /]]-1(y); load pointer to month
+	sout				; output month
+	movx x,10.			; decimal base
+	nin				; get day
+	caxe z,<",>			; got a comma?
+	 .lose				; ? ? ?
+	jumple y,[.lose]		; bad day?
+	caxle y,31.			; bad day?
+	 .lose				; ? ? ?
+	nout				; output the day of month
+	type [, ]
+	movx x,10.			; decimal base
+	nin				; get the year
+	caxe z,<",>			; comma?
+	 .lose				; ? ? ?
+	jumple y,[.lose]		; bad year?
+	nout				; output the year
+	.iot tto,[" ]
+	movx x,10.			; decimal base
+	nin				; get hours
+	caxe z,<",>			; comma?
+	 .lose				; ? ? ?
+	jumpl y,[.lose]			; bad hours?
+	caxle y,23.			; bad hours?
+	 .lose				; ? ? ?
+	caxge y,10.			; two digits?
+	 .iot tto,["0]			; no, fill out to two digits
+	nout				; output hours
+	.iot tto,[":]
+	movx x,10.			; decimal base
+	nin				; get minutes
+	caxe z,^M			; terpri?
+	 .lose				; ? ? ?
+	jumpl y,[.lose]			; bad minutes?
+	caxle y,59.			; bad minutes?
+	 .lose				; ? ? ?
+	caxge y,10.			; two digits?
+	 .iot tto,["0]			; no, fill out to two digits
+	nout				; output it
+	type [
+
+Host #	Decimal	    Name	Status
+
+]
+	bin				; gobble the line feed
+	caxe z,^J			; line feed?
+	 .lose				; ? ? ?
+
+hstlup:	movx x,10.			; decimal base
+	nin				; get a number
+	jumpe y,[	caxe z,<"->	; is this the end?
+			 .lose		; ? ? ?
+			.logout 1,]	; suicide
+	caxe z,<",>			; followed by a comma?
+	 .lose				; ? ? ?
+	caxge y,1000			; four digit number?
+	 .iot tto,[" ]			; three or less
+	caxge y,100			; three digit number?
+	 .iot tto,[" ]			; two or less
+	caxge y,10			; two digit number?
+	 .iot tto,[" ]			; one digit
+	movx x,8.			; octal base
+	move a,y			; save host number
+	nout				; output the number
+	.iot tto,[^I]			; tab in
+	move y,a			; get host number back
+	caxge y,1000.			; four digit number?
+	 .iot tto,[" ]			; three or less
+	caxge y,100.			; three digit number?
+	 .iot tto,[" ]			; two or less
+	caxge y,10.			; two digit number?
+	 .iot tto,[" ]			; one digit
+	movx x,10.			; decimal base
+	nout				; output host number in decimal
+	.iot tto,[^I]			; tab over again
+	move x,hsttab+7			; get rel addr of numbers table
+	movei z,2(x)			; get rel addr of numbers entries
+	move y,hsttab(x)		; get number of table entries
+gethnm:	camn a,hsttab(z)		; check for matching host number
+	 jrst gothnm			; got host name
+	add z,hsttab+1(x)		; go to next entry
+	sojg y,gethnm			; and loop for more
+	skipa x,[[asciz/RANDOM-PLACE/]-hsttab]; for unknown hosts
+gothnm:	 hrrz x,hsttab+1(z)		; get host name address
+	addi x,hsttab			; make absolute address
+	sout				; output it
+	skipg x,strlen'			; get length of outputed string
+	 .lose				; ? ? ?
+	caxge x,8.			; more than a tab stop?
+	 .iot tto,[^I]			; no, go to next tab stop
+	movx x,10.			; decimal base
+	nin				; get status
+	caxe z,<",>			; followed by a comma?
+	 .lose				; ? ? ?
+	jumpl y,[.lose]			; ? ? ?
+	caxle y,7			; valid code?
+	 .lose				; ? ? ?
+	move x,[[asciz/	Random
+/]
+		[asciz/	Host Dead
+/]
+		[asciz/	NCP Down
+/]
+		[asciz/	Not Responding
+/]
+		[asciz/	Refusing
+/]
+		[asciz/	Host Up
+/]
+		[asciz/	Unknown
+/]
+		[asciz/	Unable to Poll
+/]](y)					; get right message
+	sout				; output it
+	movx x,10.			; any base is okay here
+	nin				; get a number
+	caxe z,^M			; terpri now?
+	 .lose				; ? ? ?
+	bin				; get the line feed
+	caxe z,^J			; was it a line feed?
+	 .lose				; ? ? ?
+	jrst hstlup			; get next host
+
+; Generate literals
+
+	variables ? constants
+
+hsttab=<.+1777>&-2000			; start of host table
+
+	end HOSTAT

@@ -142,6 +142,7 @@
 - HEXIFY, convert COM file into Intel HEX format.
 - HOST, display information about a network host.
 - HOSTAB, display HOSTS2 format host table.
+- HOSTAT, display status for ARPANET hosts.
 - HOSTS3, the host table compiler.
 - HSNAME, displays user's HSNAME.
 - HSNDEV, HSNAME device.
