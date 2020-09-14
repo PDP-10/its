@@ -91,5 +91,5 @@ Enter a cave and hunt a creature called a wumpus.  To play this, type
 
 ### Zork
 
-There appears before you a huge figure clothed in a dark robe.  As you
-shrink back in awe, he speaks: "Please help us get Zork running!"
+Classic text adventure game.  To play, type `zork^K`.  For more information,
+see [madadv.info](madman/madadv.info) and [madadv.help](madman/madadv.info).
