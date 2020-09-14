@@ -52,3 +52,7 @@ expect ":KILL"
 
 respond "*" ":midas sys3; ts pick_sysen2; pick\r"
 expect ":KILL"
+
+# Zork startup
+respond "*" ":midas sys2; ts zork_taa; zork\r"
+expect ":KILL"
