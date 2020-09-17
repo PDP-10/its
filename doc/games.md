@@ -91,5 +91,17 @@ Enter a cave and hunt a creature called a wumpus.  To play this, type
 
 ### Zork
 
-Classic text adventure game.  To play, type `zork^K`.  For more information,
-see [madadv.info](madman/madadv.info) and [madadv.help](madman/madadv.info).
+Classic text adventure game.  To play, type `zork^K`.  For the save
+function to work, you must be logged in, have a user directory, and
+have a "\_MSGS_ *\<user name>*" file in it.  For example, if you chose
+the user name FOO:
+
+```
+:login foo
+:print foo; ..new. (udir)
+:create foo; _msgs_ foo
+^C
+```
+
+For more information, see [madadv.info](madman/madadv.info) and
+[madadv.help](madman/madadv.info).
