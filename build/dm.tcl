@@ -10,3 +10,9 @@ expect ":KILL"
 # Demon status.  Self purifying.
 respond "*" ":midas sysen2; ts demst_sysen2; demst\r"
 expect ":KILL"
+
+# Gun down dead demons.
+respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
+type ":vk\r"
+respond "*" ":midas sys; atsign gunner_sysen2; gunner\r"
+expect ":KILL"
