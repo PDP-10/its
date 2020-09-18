@@ -86,6 +86,7 @@
 - DCROCK, digital watch.
 - DDTDOC, interactive DDT documentation.
 - DECUUO, TOPS-10 and WAITS emulator.
+- DEMSTR, demon starter.
 - DFTP, Datacomputer file transfer.
 - DIGEST, digestify a mailing list.
 - DIRCPY, copy directory.
