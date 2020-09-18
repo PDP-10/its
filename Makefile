@@ -294,8 +294,8 @@ tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
 
 $(SMF):
-	$(GIT) submodule sync `dirname $@`
-	$(GIT) submodule update --init `dirname $@`
+	$(GIT) submodule sync --recursive `dirname $@`
+	$(GIT) submodule update --recursive --init `dirname $@`
 
 tools/simh/BIN/pdp11:
 	$(MAKE) -C tools/simh pdp11
