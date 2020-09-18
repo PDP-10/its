@@ -178,6 +178,7 @@ if {$env(BASICS)!="yes"} {
 	source $build/macsyma.tcl
     }
     source $build/scheme.tcl
+    source $build/dm.tcl
     source $build/muddle.tcl
     source $build/sail.tcl
     source $build/typeset.tcl
