@@ -16,3 +16,10 @@ respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
 type ":vk\r"
 respond "*" ":midas sys; atsign gunner_sysen2; gunner\r"
 expect ":KILL"
+
+# Line printer unspooler demon.
+respond "*" ":midas sys; atsign unspoo_sysen1; unspoo\r"
+# Just accept the defaults for now.
+respond "(CR) FOR DEVICE LPT, nn FOR Tnn" "\r"
+respond "(CR) FOR .LPTR. DIRECTORY, OR TYPE NEW NAME" "\r"
+expect ":KILL"
