@@ -364,6 +364,7 @@
 - TYPE8, type 8-bit file.
 - UFIND, find users.
 - ULISP, Lisp in Lisp.
+- UNSPOO, line printer unspooler demon.
 - UNTALK, split-screen comm-link program.
 - UNTRAN, untranslate an Imlac program.
 - UP/DOWN, check if host is online.
