@@ -125,17 +125,22 @@ $(OUT)/magdmp.tap: $(MAGFRM)
 $(OUT)/kl-magdmp.tap: $(MAGFRM)
 	cd bin/kl10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt salv.bin > ../../../$@
 
-$(OUT)/minsrc.tape: $(ITSTAR)
+$(OUT)/touch-stamp: build/timestamps.txt
+	build/stamp.sh $<
+	$(MKDIR) $(OUT)
+	$(TOUCH) $@
+
+$(OUT)/minsrc.tape: $(OUT)/touch-stamp $(ITSTAR)
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C src $(MINSRC)
 	$(ITSTAR) -rf $@ -C $(OUT) system
 
-$(OUT)/minsys.tape: $(ITSTAR) $(OUT)/system
+$(OUT)/minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ks10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
 
-$(OUT)/ka-minsys.tape: $(ITSTAR) $(OUT)/system
+$(OUT)/ka-minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
@@ -144,7 +149,7 @@ leftparen:=(
 rightparen:=)
 KLDCPDIR=$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)
 
-$(OUT)/kl-minsys.tape: $(ITSTAR) $(OUT)/system $(KLDCPDIR)
+$(OUT)/kl-minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system $(KLDCPDIR)
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C $(OUT) _klfe_
 	$(ITSTAR) -rf $@ -C bin/kl10 _ sys
@@ -154,12 +159,9 @@ $(KLDCPDIR): $(KLFEDR)
 	$(MKDIR) $(OUT)/_klfe_
 	$(KLFEDR) > "$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)"
 
-$(OUT)/sources.tape: $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
+$(OUT)/sources.tape: $(OUT)/touch-stamp $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
 	$(RM) -f src/*/*~
-	$(TOUCH) -t 198110061903.37 'bin/emacs/einit.:ej'
-	$(TOUCH) -t 198109192142.56 'bin/emacs/[pure].162'
-	$(TOUCH) -t 198103312041.45 'bin/emacs/[prfy].173'
 	$(ITSTAR) -cf $@ -C src $(SRC)
 	$(ITSTAR) -rf $@ -C doc $(DOC)
 	$(ITSTAR) -rf $@ -C bin $(BIN)
