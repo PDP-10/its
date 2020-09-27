@@ -101,6 +101,7 @@ There are some short introductions for beginners:
 - [TECO survival guide](doc/TECO.md)
 - [DDT debugging newbie guide](doc/debugging.md)
 - [Hello MIDAS](doc/hello-midas.md)
+- [Hello Maclisp](doc/hello-lisp.md)
 - [Introduction to Muddle](doc/muddle.md)
 - [DUMP and itstar](doc/DUMP-itstar.md)
 - [Games](doc/games.md)
