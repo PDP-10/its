@@ -37,3 +37,5 @@ Step by step guide on how to create a hello world in MIDAS.
 6. Run the program.
 
        :hello
+
+The sample program can be found in the HELLO directory.
