@@ -34,3 +34,5 @@ file and writes out `ts hello`.
   (suspend ":kill " '(ts hello))      ;Save image as an executable program.
   (hello))                            ;Executable program will start from here.
 ```
+
+These files are available in the HELLO directory.
