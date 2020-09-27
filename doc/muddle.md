@@ -66,6 +66,8 @@ Hello, muddled world!
 :KILL
 ```
 
+The sample program can be found in the HELLO directory.
+
 ### More Information
 
 For more information, see these documents:
