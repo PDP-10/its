@@ -60,20 +60,29 @@ installed.
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
 Enter.  If you see the `DSKDMP` prompt, type `its`, press Enter, and
-then `ESC g`.  If you use the `pdp10-kl` emulator there is no prompt
-and you need to type `Esc L ITS`, press Enter, and then `ESC g`.
+then <kbd>ESC</kbd><kbd>G</kbd>.  If you use the `pdp10-kl` emulator there is no prompt
+and you need to type <kbd>ESC</kbd><kbd>L</kbd> `ITS`, press Enter, and then <kbd>ESC</kbd><kbd>G</kbd>.
 Eventually, you will see `SYSTEM JOB USING THIS CONSOLE`.  You are now
-ready to log in, so type Control-Z.  See [doc/DDT.md](doc/DDT.md) for
+ready to log in, so type <kbd>CTRL</kbd><kbd>Z</kbd>.  See [doc/DDT.md](doc/DDT.md) for
 a list of useful commands.
+
+Alternatively to logging in directly in the system console window, 
+which will always be displaying daemon messages, you may prefer to 
+use a seperate terminal session for logging in.  To do this just
+run `telnet localhost 10003` from another shell window and press
+<kbd>CTRL</kbd><kbd>Z</kbd> to log in there.
 
 To shut down ITS, type `:lock` and then `5down`.  Log yourself out to
 avoid the 5 minute grace period: type `:logout`.  When ITS writes
-`SHUTDOWN COMPLETE`, it's safe to stop the emulator.
+`SHUTDOWN COMPLETE`, it's safe to stop the emulator.  Press <kbd>CTRL</kbd><kbd>\\</kbd>
+to escape to the simulator command prompt and `quit` to close it.  If
+you had a separate telnet user session running you can similary
+press <kbd>CTRL</kbd><kbd>\[</kbd> and then exit telnet.
 
 ITS can optionally use some additional peripheral devices.  To attach
 a simulated GT40 graphics terminal, type `./start gt40`.  If you run
 the KA10 emulator, you can use the Knight TV raster display by typing
-`./start tv11 tvcon`.  On a TV, type <kbd>F1</kbd> instead of <kbd>Control-Z</kbd>.
+`./start tv11 tvcon`.  On a TV, type <kbd>F1</kbd> instead of <kbd>CTRL</kbd><kbd>Z</kbd>.
 
 To install your personal user files, add a subdirectory under `user`
 with your files inside.  They will be copied to ITS.  The directory
