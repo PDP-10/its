@@ -287,7 +287,7 @@ $(VT52):
 	$(MAKE) -C tools/vt05 vt52
 
 tek-hack:
-	rm -f $(TEK)
+	rm $(TEK)
 
 $(TEK): tek-hack
 	$(MAKE) -C tools/tek4010 tek4010
