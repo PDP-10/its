@@ -9,3 +9,8 @@ respond "*" ":otj6\r"
 respond "_" "hur;ddtmem\r"
 respond "_" "\032"
 type ":kill\r"
+
+# LISP Machine Progress Report, by Alan Bawden et al.
+respond "*" ":tj6\r"
+respond "_" "lmdoc;paper_lmdoc;paper\r"
+expect ":KILL"
