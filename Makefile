@@ -29,14 +29,14 @@ SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       moon teach ken lmio1 llogo a2deh chsgtv clib sys3 lmio turnip \
       mits_s rab stan_k bs cstacy kp dcp2 -pics- victor imlac rjl mb bh \
       lars drnil radia gjd maint bolio cent shrdlu vis cbf digest prs jsf \
-      decus bsg muds54 hello
+      decus bsg muds54 hello rrs
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
       kldcp libdoc lisp _mail_ midas quux scheme manual wp chess ms macdoc \
       aplogo _temp_ pdp11 chsncp cbf rug bawden llogo eak clib teach pcnet \
       combat pdl minits mits_s chaos hal -pics- imlac maint cent ksc klh \
-      digest prs decus bsg madman hur lmdoc
+      digest prs decus bsg madman hur lmdoc rrs
 BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
       c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
       maint _www_ gt40 llogo bawden sysbin -pics- lmman r shrdlu imlac \
