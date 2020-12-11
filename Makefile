@@ -251,7 +251,7 @@ $(KLH10):
 	$(MKDIR) tmp; \
 	cd tmp; \
 	export CONFFLAGS_USR="-DKLH10_DEV_DPTM03=0 $$CONFFLAGS_USR"; \
-	../configure --enable-lights --bindir="$(CURDIR)/build/klh10"; \
+	../configure --bindir="$(CURDIR)/build/klh10"; \
 	$(MAKE) -C bld-ks-its; \
 	$(MAKE) -C bld-ks-its install
 
