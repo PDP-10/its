@@ -34,6 +34,7 @@ install_osx() {
     case "$EMULATOR" in
         simh) brew install sdl2;;
         pdp10-*) brew install sdl2;;
+        klh10) brew install automake;;
     esac
 }
 
