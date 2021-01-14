@@ -846,6 +846,19 @@ respond "_" "2500;zap\r"
 respond "_" "\032"
 type ":kill\r"
 
+# 2500 microcode
+respond "*" ":cwd minsky\r"
+respond "*" "lisp\013"
+respond "Alloc?" "n\r"
+respond "*" "(setq gc-overflow '(lambda (x) t))"
+respond "T)" "(setsyntax '/, 'a '/,)"
+respond "T" "(load \"minsky;tvdis\")"
+respond "T" "(load \"2500;zap\")"
+respond_load "(array im fixnum 4096)"
+respond "IM" "(zap tvdis)"
+respond "FINISH)" "(quit)"
+expect ":KILL"
+
 # TEACH;TS XLISP
 
 respond "*" ":complr\r"
