@@ -837,6 +837,15 @@ respond "?" "1700\r"
 expect ":KILL"
 respond "*" ":link sys1; ts llogo, llogo; ts llogo\r"
 
+# 2500 assembler
+respond "*" ":complr\r"
+respond "_" "\007"
+respond "*" "(load 'ioc)"
+respond_load "(maklap)"
+respond "_" "2500;zap\r"
+respond "_" "\032"
+type ":kill\r"
+
 # TEACH;TS XLISP
 
 respond "*" ":complr\r"
