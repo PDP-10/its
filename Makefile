@@ -71,6 +71,7 @@ KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
+SIMH_IMLAC=tools/sim-h/BIN/imlac $(OUT)/ssv22.iml
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -101,7 +102,7 @@ out/simh/emulators: $(GT40) $(VT52)
 out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(TOUCH) $@
 
-out/pdp10-ka/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK)
+out/pdp10-ka/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp: $(OUT)/rp04.1
@@ -176,11 +177,12 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 	$(MKDIR) $(OUT)
 	$(WRITETAPE) -n 2560 $@ $(RAM) $(DSKDMP)
 
-$(OUT)/bootvt.bin $(OUT)/aplogo.ptp: $(OUT)/output.tape
+$(OUT)/bootvt.bin $(OUT)/aplogo.ptp $(OUT)/ssv22.iml: $(OUT)/output.tape
 	$(RM) -rf $(OUT)/tmp
 	$(MKDIR) -p $(OUT)/tmp
 	$(ITSTAR) -xf $< -C $(OUT)/tmp
 	$(CP) $(OUT)/tmp/gt40/bootvt.bin $(OUT)/bootvt.bin
+	-$(CP) $(OUT)/tmp/imlac/ssv22.iml $(OUT)/ssv22.iml
 	-$(CP) $(OUT)/tmp/aplogo/logo.ptp $(OUT)/aplogo.ptp
 	$(RM) -rf $(OUT)/tmp
 
@@ -301,6 +303,9 @@ $(SMF):
 
 tools/sim-h/BIN/pdp11:
 	$(MAKE) -C tools/sim-h pdp11
+
+tools/sim-h/BIN/imlac:
+	$(MAKE) -C tools/sim-h imlac
 
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
