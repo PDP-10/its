@@ -99,6 +99,25 @@ Here is an overview of the repository:
 - out - build output.
 - user - optional user files installed in ITS.
 
+### Terminal Emulators
+
+Several emulators for terminals and peripheral processors are built
+along with ITS.  They can be started conveniently with the `start`
+script, or separately.  Not all terminal emulators are set up to work
+with all PDP-10 emulators by default.
+
+| Name    | Description       | Type   | klh10 | pdp10-ka | pdp10-kl | simh
+| ------- | ----------------- | ------ | ----- | -------- | -------- | ----
+| type340 | Type 340          | vector | no    | yes      | no       | no
+| gt40    | GT40 PDP-11       | vector | no    | yes      | no       | yes
+| imlac   | Imlac PDS-1       | vector | no    | yes      | no       | no
+| simh_imlac | Imlac PDS-1    | vector | no    | yes      | no       | no
+| tv11    | Knight TV PDP-11  | cpu    | no    | yes      | no       | no
+| tvcon   | Knight TV console | raster | no    | yes      | no       | no
+| datapoint | Datapoint 3300  | text   | no    | yes      | no       | no
+| vt52    | VT52              | text   | no    | yes      | yes      | yes
+| tek     | Tektronix 4010    | vector | no    | yes      | yes      | no
+
 ### Documentation
 
 See the [`doc` subdirectory](doc) for documentation.
