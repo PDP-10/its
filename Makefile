@@ -50,7 +50,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05 tek4010
+SUBMODULES = dasm itstar klh10 mldev simh sim-h sims supdup tapeutils tv11 pdp6 vt05 tek4010
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -64,7 +64,7 @@ KL10=tools/sims/BIN/pdp10-kl
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
-GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
+GT40=tools/sim-h/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
@@ -299,8 +299,8 @@ $(SMF):
 	$(GIT) submodule sync --recursive `dirname $@`
 	$(GIT) submodule update --recursive --init `dirname $@`
 
-tools/simh/BIN/pdp11:
-	$(MAKE) -C tools/simh pdp11
+tools/sim-h/BIN/pdp11:
+	$(MAKE) -C tools/sim-h pdp11
 
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
