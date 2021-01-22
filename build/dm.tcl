@@ -27,3 +27,9 @@ expect ":KILL"
 # Arpanet survey demon.
 respond "*" ":midas sys; atsign survey_survey; survey\r"
 expect ":KILL"
+
+# Survey giver demon.
+respond "*" ":midas survey; atsign surgiv_surgiv\r"
+expect ":KILL"
+respond "*" ":link sys; atsign surgiv, survey;\r"
+type ":vk\r"
