@@ -23,3 +23,7 @@ respond "*" ":midas sys; atsign unspoo_sysen1; unspoo\r"
 respond "(CR) FOR DEVICE LPT, nn FOR Tnn" "\r"
 respond "(CR) FOR .LPTR. DIRECTORY, OR TYPE NEW NAME" "\r"
 expect ":KILL"
+
+# Arpanet survey demon.
+respond "*" ":midas sys; atsign survey_survey; survey\r"
+expect ":KILL"

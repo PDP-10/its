@@ -320,6 +320,7 @@
 - STYLOG, convert PTY output file into ASCII file.
 - SUPARD, draw ARDS graphics to SUPDUP.
 - SUPDUP, Supdup client.
+- SURVEY, survey Arpanet hosts.
 - SWAR, Imlac Spacewar.
 - SYSCHK, check up on system job.
 - SYSLOD, system load histogram.
