@@ -321,6 +321,7 @@
 - SUPARD, draw ARDS graphics to SUPDUP.
 - SUPDUP, Supdup client.
 - SURGIV, survey giver demon.
+- SURSND, Arpanet survey sender demon.
 - SURVEY, survey Arpanet hosts.
 - SWAR, Imlac Spacewar.
 - SYSCHK, check up on system job.

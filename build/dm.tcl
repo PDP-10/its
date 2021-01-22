@@ -33,3 +33,7 @@ respond "*" ":midas survey; atsign surgiv_surgiv\r"
 expect ":KILL"
 respond "*" ":link sys; atsign surgiv, survey;\r"
 type ":vk\r"
+
+# Survey sender demon.
+respond "*" ":link sys; atsign sursnd, survey;\r"
+type ":vk\r"
