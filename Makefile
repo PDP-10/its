@@ -81,37 +81,45 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: its $(OUT)/emulators tools/supdup/supdup
+all: its $(OUT)/stamp/emulators tools/supdup/supdup
 
-its: $(SMF) $(OUT)/stamp
+its: $(SMF) $(OUT)/stamp/its
 
 check: all check-dirs
 
-out/klh10/stamp: $(OUT)/rp0.dsk
+out/klh10/stamp/its: $(OUT)/rp0.dsk
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/klh10/emulators:
+out/klh10/stamp/emulators:
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/simh/stamp: $(OUT)/rp0.dsk
+out/simh/stamp/its: $(OUT)/rp0.dsk
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/simh/emulators: $(GT40) $(VT52)
+out/simh/stamp/emulators: $(GT40) $(VT52)
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp: $(OUT)/rp03.2 $(OUT)/rp03.3
+out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp: $(OUT)/rp04.1
+out/pdp10-kl/stamp/its: $(OUT)/rp04.1
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/emulators: $(VT52) $(TEK)
+out/pdp10-kl/stamp/emulators: $(VT52) $(TEK)
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape build/$(EMULATOR)/stamp
+$(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape $(OUT)/stamp/pdp10
 	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
@@ -126,22 +134,22 @@ $(OUT)/magdmp.tap: $(MAGFRM)
 $(OUT)/kl-magdmp.tap: $(MAGFRM)
 	cd bin/kl10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt salv.bin > ../../../$@
 
-$(OUT)/touch-stamp: build/timestamps.txt
+$(OUT)/stamp/touch: build/timestamps.txt
 	build/stamp.sh $<
-	$(MKDIR) $(OUT)
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-$(OUT)/minsrc.tape: $(OUT)/touch-stamp $(ITSTAR)
+$(OUT)/minsrc.tape: $(OUT)/stamp/touch $(ITSTAR)
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C src $(MINSRC)
 	$(ITSTAR) -rf $@ -C $(OUT) system
 
-$(OUT)/minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system
+$(OUT)/minsys.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ks10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
 
-$(OUT)/ka-minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system
+$(OUT)/ka-minsys.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/system
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C bin/ka10 _ sys
 	$(ITSTAR) -rf $@ -C bin/minsys sys
@@ -150,7 +158,7 @@ leftparen:=(
 rightparen:=)
 KLDCPDIR=$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)
 
-$(OUT)/kl-minsys.tape: $(OUT)/touch-stamp $(ITSTAR) $(OUT)/system $(KLDCPDIR)
+$(OUT)/kl-minsys.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/system $(KLDCPDIR)
 	$(MKDIR) $(OUT)
 	$(ITSTAR) -cf $@ -C $(OUT) _klfe_
 	$(ITSTAR) -rf $@ -C bin/kl10 _ sys
@@ -160,7 +168,7 @@ $(KLDCPDIR): $(KLFEDR)
 	$(MKDIR) $(OUT)/_klfe_
 	$(KLFEDR) > "$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)"
 
-$(OUT)/sources.tape: $(OUT)/touch-stamp $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)/syshst/$(H3TEXT)
+$(OUT)/sources.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/stamp/pdp10 $(OUT)/syshst/$(H3TEXT)
 	$(MKDIR) $(OUT)
 	$(RM) -f src/*/*~
 	$(ITSTAR) -cf $@ -C src $(SRC)
@@ -196,16 +204,20 @@ $(OUT)/bootvt.img: $(OUT)/bootvt.bin tools/dasm/palx
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
 
-build/klh10/stamp: $(KLH10) start build/klh10/dskdmp.ini
+out/klh10/stamp/pdp10:: $(KLH10) start build/klh10/dskdmp.ini
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-build/simh/stamp: $(SIMH) start
+out/simh/stamp/pdp10: $(SIMH) start
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-build/pdp10-ka/stamp: $(KA10) start
+out/pdp10-ka/stamp/pdp10: $(KA10) start
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-build/pdp10-kl/stamp: $(KL10) start
+out/pdp10-kl/stamp/pdp10: $(KL10) start
+	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
 out/klh10/system:
