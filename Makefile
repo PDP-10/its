@@ -12,6 +12,10 @@ SED ?= sed
 TEST ?= test
 GIT ?= git
 CAT ?= cat
+WGET ?= wget
+TAR ?= tar
+
+IMAGES=http://hactrn.org/images/
 
 include conf/network
 
@@ -84,6 +88,17 @@ OUT=out/$(EMULATOR)
 all: its $(OUT)/stamp/emulators tools/supdup/supdup
 
 its: $(SMF) $(OUT)/stamp/its
+
+download: $(OUT)/stamp/pdp10
+	$(WGET) $(IMAGES)/$(EMULATOR).tgz
+	$(TAR) xzf $(EMULATOR).tgz
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $(OUT)/stamp/touch
+	$(CP) -r $(EMULATOR)/syshst $(OUT)
+	$(CP) -r $(EMULATOR)/system $(OUT)
+	$(CP) $(EMULATOR)/*.tape $(OUT)
+	$(CP) $(EMULATOR)/rp0* $(OUT)
+	$(TOUCH) $(OUT)/stamp/its
 
 check: all check-dirs
 
