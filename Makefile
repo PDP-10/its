@@ -166,7 +166,6 @@ $(OUT)/sources.tape: $(OUT)/touch-stamp $(ITSTAR) build/$(EMULATOR)/stamp $(OUT)
 	$(ITSTAR) -rf $@ -C doc $(DOC)
 	$(ITSTAR) -rf $@ -C bin $(BIN)
 	$(ITSTAR) -rf $@ -C $(OUT) syshst
-	-cd user; ../$(ITSTAR) -rf ../$@ *
 
 $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	$(MKDIR) $(OUT)

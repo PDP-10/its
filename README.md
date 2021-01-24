@@ -84,11 +84,6 @@ a simulated GT40 graphics terminal, type `./start gt40`.  If you run
 the KA10 emulator, you can use the Knight TV raster display by typing
 `./start tv11 tvcon`.  On a TV, type <kbd>F1</kbd> instead of <kbd>CTRL</kbd><kbd>Z</kbd>.
 
-To install your personal user files, add a subdirectory under `user`
-with your files inside.  They will be copied to ITS.  The directory
-name is limited to six characters, and file names must have two
-six-character parts separated by a period.
-
 Here is an overview of the repository:
 - bin - PDP-10 binary files necessary to bootstrap the system.
 - build - build scripts.
