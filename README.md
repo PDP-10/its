@@ -1,7 +1,6 @@
 # Incompatible Timesharing System
 
-[![Travis CI Build Status](https://travis-ci.org/PDP-10/its.svg?branch=master)](https://travis-ci.org/PDP-10/its)
-[![GitLab CI Build Status](https://gitlab.com/PDP-10/its/badges/master/pipeline.svg)](https://gitlab.com/PDP-10/its/commits/master)
+![CI Build Status](https://github.com/PDP-10/its/workflows/Build/badge.svg)
 
 ### About ITS
 
