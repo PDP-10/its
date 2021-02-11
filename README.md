@@ -47,15 +47,23 @@ The goals are:
 The build currently runs on the SIMH and KLH10 emulators.  Of course,
 we'd be delighted to test this on a real KS10.
 
-### Usage
+### Building
 
-To build ITS with this repository, you need some tools installed:
-make, C compiler, and expect.  For KA10, you also need SDL or SDL2 for
-the Type 340 display.  Ensure all submodules are checked out, and then
-type `make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, `make
+To build ITS with this repository, you need some tools installed; see
+the table below.  Ensure all submodules are checked out, and then type
+`make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, `make
 EMULATOR=pdp10-kl`, or `make EMULATOR=klh10`.  This will leave built
-files in the `out` directory, one of which is a disk image with ITS
+files in the `out` directory, some of which are disk images with ITS
 installed.
+
+| Emulator | Dependencies |
+| --- | --- |
+| klh10 | git, c compiler, make, expect, curses, autoconf
+| simh | git, c compiler, make, expect, curses, autoconf, sdl2
+| pdp10-ka | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
+| pdp10-kl | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
+
+### Usage
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
 Enter.  If you see the `DSKDMP` prompt, type `its`, press Enter, and
