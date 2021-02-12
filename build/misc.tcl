@@ -1487,6 +1487,14 @@ respond "*" ":imtran\r"
 respond "@" "imlac; crash iml_imlac; crash bin\r"
 respond "@" "\021"
 
+# SYMFORM
+respond "*" ":midas imlac;_imsrc; symfor\r"
+expect ":KILL"
+respond "*" ":imtran\r"
+respond "@" "imlac; symfor iml_imlac; symfor bin\r"
+respond "@" "\021"
+expect ":KILL"
+
 # KLH's Knight TV clock.
 respond "*" ":midas klh; ts tinyw_klh; clock\r"
 respond "=" "1\r"
