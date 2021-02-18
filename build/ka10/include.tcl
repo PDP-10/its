@@ -1,6 +1,7 @@
 #Default ITS name for KA10.
 set mchn "KA"
 
+set cpu "ka10"
 set salv "salv"
 
 proc start_dskdmp_its {} {
@@ -183,26 +184,6 @@ proc clib_switches {} {
     respond "with ^C" "\003"
 }
 
-proc patch_lisp {} {
-    respond "*" ":job lisp\r"
-    respond "*" ":load .; @ lisp\r"
-    respond "*" "33777//\031"
-    respond "*" "\033q\033,777777\033\033z"
-    respond "*" "pitele+13/"
-    respond "FSC" "push p,b\n"
-    respond "FSC" "jrst patch\r"
-    respond "\n" "patch/"
-    respond "0" "move b,echocc\n"
-    respond "0" "add b,ticc\n"
-    respond "0" "dpb b,.+3\n"
-    respond "0" "pop p,b\n"
-    respond "0" "jrst pitele+15\n"
-    respond "0" "331000,,a\r"
-    respond "\n" "\033y"
-    respond " " "dsk0:.;@ lisp\r"
-    respond "*" ":kill\r"
-}
-
 proc translate_diagnostics {} {
     respond "*" "\033\024"
     respond " " "dsk: maint; part f, part f.old\r"
@@ -237,4 +218,7 @@ proc comsat_switches {} {
 
 proc dqxdev_switches {} {
     respond "Limit to KA-10 instructions" "y\r"
+}
+
+proc processor_basics {} {
 }

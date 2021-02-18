@@ -1,12 +1,12 @@
 log_progress "ENTERING BUILD SCRIPT: MISC"
 
+# MIDAS 324, needed for older programs.
 respond "*" ":midas /t sysbin; midas 324bin_midas; midas 324\r"
 respond "\n" "itssw==1\r"
 respond "\n" "ptr==100\r"
 respond "\n" "ldbi=ildb\r"
 respond "\n" "dpbi=idpb\003"
 expect ":KILL"
-
 respond "*" ":job midas\r"
 respond "*" ":load sysbin; midas 324bin\r"
 respond "*" "purify\033g"
@@ -62,27 +62,6 @@ expect "*"
 # salv, timesharing versions
 respond "*" ":midas sys1;ts salv_system;salv\r"
 respond "time-sharing?" "y\r"
-expect ":KILL"
-
-# macdmp, PDP-10 hardware read in, with 340 support.
-respond "*" ":midas;77\r"
-respond "MIDAS.77" ".;MACDMP RIM10_SYSENG; MACDMP MOBY1\r"
-expect ":KILL"
-# macdmp, PDP-6 read in hack.
-respond "*" ":midas;77\r"
-respond "MIDAS.77" ".;MACDMP RIM2_SYSENG; MACDMP 6U32\r"
-expect ":KILL"
-
-# system gen
-respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
-expect ":KILL"
-
-# mark
-respond "*" ":midas;324 dsk0:.;@ mark_syseng; mark\r"
-expect ":KILL"
-
-# utnam
-respond "*" ":midas sys3; ts utnam_lars; utnam\r"
 expect ":KILL"
 
 respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
@@ -562,114 +541,12 @@ expect ":KILL"
 respond "*" ":midas games;ts ckr_agb;ckr\r"
 expect ":KILL"
 
-# Old Spacewar
-respond "*" ":cwd spcwar\r"
-respond "*" ":midas;324 spcwar; war\r"
-expect ":KILL"
-respond "*" ":midas spcwar; stars\r"
-expect ":KILL"
-respond "*" ":midas;324 spcwar; math\r"
-expect ":KILL"
-respond "*" ":stink\r"
-respond "\n" "mspcwar; war\033l\033\033"
-respond "\n" "mstars\033l\033\033"
-respond "\n" "mmath\033l\033\033"
-respond "\n" "jwar\033d\033\033"
-respond "\n" "\033y"
-respond " " "dsk0:.;@ war\r"
-respond "*" ":kill\r"
-
-# Spacewar, standalone
-respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; spcwar\r"
-respond "ITS version" "NO\r"
-respond "interrupt" "NO\r"
-respond "ships" "\r"
-respond "designs" "\r"
-respond "suns" "\r"
-respond "recording" "\r"
-expect ":KILL"
-
-# Spacewar, timesharing
-respond "*" ":midas games;ts spcwar_spcwar; spcwar\r"
-respond "ITS version" "YES\r"
-respond "ships" "\r"
-respond "designs" "\r"
-respond "suns" "\r"
-expect ":KILL"
-
-# PDP-6/10 Dazzle Dart
-respond "*" ":midas games;ts dazdrt_klh; dazdrt\r"
-respond "Run under ITS?" "YES\r"
-expect ":KILL"
-respond "*" ":midas;324 dsk0:.;@ dazdrt_klh; dazdrt\r"
-respond "Run under ITS?" "NO\r"
-expect ":KILL"
-
 # Dazzle Dart, video game for the Logo group PDP-11/45
 respond "*" ":palx bs;_dazzle\r"
 expect ":KILL"
 
 # TOSBLK, convert from PALX binary to SBLK.
 respond "*" ":midas pdp11;ts tosblk_tosblk\r"
-expect ":KILL"
-
-# TITLER
-respond "*" ":midas dsk0:.;@ titler_mb; titler\r"
-expect ":KILL"
-
-# Knight TV Spacewar
-respond "*" ":midas gjd;_swr data\r"
-expect ":KILL"
-respond "*" ":job swr\r"
-respond "*" ":load gjd; swr bin\r"
-respond "*" "first\033,last\033\060ygjd; swr ships\r"
-respond "*" ":kill\r"
-respond "*" ":midas games;ts tvwar_spcwar; tvwar\r"
-expect ":KILL"
-
-# MLIFE
-respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
-expect ":KILL"
-respond "*" ":midas;324 /t dsk0:.;@ mlife_rwg;mlife\r"
-respond "with ^C" "TS==0\r\003"
-expect ":KILL"
-
-# MLIFE
-respond "*" ":midas;324 dsk0:.;@ pornis_rwg; pornis\r"
-expect ":KILL"
-
-# 3406
-respond "*" ":midas;324 dsk0:.;@ 3406_stan.k; 3406\r"
-expect ":KILL"
-
-# 340D
-respond "*" ":midas stan.k;mod11 bin_340d\r"
-expect ":KILL"
-respond "*" ":link sys1;ts 340d, stan.k; mod11 bin\r"
-
-# TV-munching square.
-respond "*" ":midas sys2;ts munch_sysen2;munch\r"
-expect ":KILL"
-
-# Munching squares for 340 display.
-respond "*" ":midas lars; ts munch_munch\r"
-expect ":KILL"
-respond "*" ":midas /t dsk0: .; @ munch_lars; munch\r"
-respond "with ^C" ".iotlsr==jfcl\r\003"
-expect ":KILL"
-
-# Minskytron, translated from PDP-1.
-respond "*" ":midas dsk0: lars; ts minsky_minsky tron\r"
-expect ":KILL"
-respond "*" ":link dsk0: .; @ minsky, lars; ts minsky\r"
-
-# Edward Lorenz' strange attactor.
-respond "*" ":midas dsk0: lars; ts lorenz_lorenz\r"
-expect ":KILL"
-respond "*" ":link dsk0: .; @ lorenz, lars; ts lorenz\r"
-
-# Mandelbrot.
-respond "*" ":midas lars; ts tvbrot_tvbrot\r"
 expect ":KILL"
 
 # PI
@@ -989,10 +866,6 @@ expect ":KILL"
 respond "*" ":midas sys2;ts hostat_sysen2;hostat\r"
 expect ":KILL"
 
-# LSPEED
-respond "*" ":midas sys1;ts lspeed_syseng;lspeed\r"
-expect ":KILL"
-
 # PROBE
 respond "*" ":link syseng;its defs,sys;itsdfs >\r"
 respond "*" ":midas sysbin;probe bin_bawden;probe\r"
@@ -1142,21 +1015,6 @@ respond "*" ":midas sysbin;_syseng; muscom\r"
 expect ":KILL"
 respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
 
-# MUSRUN
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_SYSENG; MUSRUN\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_SYSENG; H10D\r"
-expect ":KILL"
-respond "*" ":stink\r"
-respond "\n" "msysbin; musrun\033l\033\033"
-respond "\n" "mh10d\033l\033\033"
-respond "\n" "jmusrun\033?d\033\033"
-respond "\n" "\033y"
-respond " " "sys1; ts musrun\r"
-respond "*" ":kill\r"
-
 # BIG
 respond "*" ":midas;77\r"
 respond "MIDAS.77" "SYSBIN;_SYSENG; BIG\r"
@@ -1293,10 +1151,6 @@ respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 respond "*" ":midas ksc; ts zotz_zotz\r"
 expect ":KILL"
 
-# KA10 maintenance
-respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
-expect ":KILL"
-
 respond "*" ":job maint\r"
 # KA10 needs the .OLD files.  KL10 and KS10 the newer.
 translate_diagnostics
@@ -1306,24 +1160,12 @@ respond "PARt a" "\032"
 expect -re {>>|\)}
 type ":kill\r"
 
-# Display all Type 342 characters.
-respond "*" ":midas dsk0:maint;_tst342\r"
-expect ":KILL"
-
 # Test one-proceed.
 respond "*" ":midas maint;ts 1proc_1proc test\r"
 expect ":KILL"
 respond "*" ":maint;1proc\r"
 expect "SUCCESSFUL"
 expect ":KILL"
-
-# KNS10, KS10 console
-respond "*" ":cwd kshack\r"
-respond "*" ":cross\r"
-respond "*" "FOR21.DAT/PTP,KNS10.PNT/M80/OCT/CRF/EQ:PASS2:SCECOD=CONDEF.M80,HCORE.M80,CMDS.M80,SUBRTN.M80,DR.M80,MSG.M80,STORE.M80\r"
-expect "Core used"
-respond "*" "\003"
-type ":kill\r"
 
 # XXFILE
 respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
@@ -1364,29 +1206,8 @@ respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 respond "*" ":midas sys3; ts imgout_cbf; imgout\r"
 expect ":KILL"
 
-# Dump TV bitmap as XGP scan file.
-# TVREAD expects the binary in BKPH.
-respond "*" ":midas bkph; ts zap_zap\r"
-expect ":KILL"
-
 # LINES
 respond "*" ":midas bkph; ts lines_lines\r"
-expect ":KILL"
-
-# View bitmap file on TV.
-respond "*" ":midas sys2; ts tvread_vis; tvread\r"
-expect ":KILL"
-
-# Save TV display as bitmap file.
-respond "*" ":midas sys2; ts tvwrit_sysen2; tvwrit\r"
-expect ":KILL"
-
-# Save TV display as text file.
-respond "*" ":midas sys2; ts record_sysen2; record\r"
-expect ":KILL"
-
-# TV paint program.
-respond "*" ":midas sys2; ts tvedit_sysen2; tvedit\r"
 expect ":KILL"
 
 # BLKLDR, Imlac secondary block loader.
@@ -1486,22 +1307,6 @@ expect ":KILL"
 respond "*" ":imtran\r"
 respond "@" "imlac; crash iml_imlac; crash bin\r"
 respond "@" "\021"
-
-# KLH's Knight TV clock.
-respond "*" ":midas klh; ts tinyw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "1\r"
-expect ":KILL"
-respond "*" ":midas klh; ts bigw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "0\r"
-respond "=" "0\r"
-expect ":KILL"
-respond "*" ":midas klh; ts digiw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "0\r"
-respond "=" "1\r"
-expect ":KILL"
 
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
@@ -1699,14 +1504,6 @@ respond "*" ":kill\r"
 respond "*" ":midas sys3;ts cmd_dcp; cmd\r"
 expect ":KILL"
 
-# XGP spooler
-respond "*" ":midas sys2;ts xgpspl_sysen2;xgpspl\r"
-expect ":KILL"
-
-# XGP unspooler
-respond "*" ":midas sysbin;_syseng;scrimp\r"
-expect ":KILL"
-
 # XGP and GLP
 respond "*" ":midas sysbin;xgp bin_sysen2;xqueue\r"
 expect ":KILL"
@@ -1729,92 +1526,6 @@ respond "*" ":midas device;jobdev xgp_sysen2;xgpdev\r"
 expect ":KILL"
 respond "*" ":midas /t device;jobdev glp_sysen2;xgpdev\r"
 respond "with ^C" "GLP==1\r\003"
-expect ":KILL"
-
-# XD, view XGP files on TV.
-respond "*" ":midas sys3;ts xd_sysen2;xd\r"
-expect ":KILL"
-
-# KL10 front end directory tool
-respond "*" ":midas sys1;ts klfedr_syseng;klfedr\r"
-respond "RP06P=" "0\r"
-respond "RP04P=" "1\r"
-expect ":KILL"
-
-mkdir ".klfe."
-respond "*" ":move .temp.; -read- -this-, .klfe.;\r"
-copy_to_klfe "kldcp; kldcp hlp"
-#copy_to_klfe "kldcp; kldcp doc"
-
-# KL10 microcode assembler
-respond "*" ":midas sysbin;_syseng;micro\r"
-expect ":KILL"
-respond "*" ":job micro\r"
-respond "*" ":load sysbin; micro bin\r"
-respond "*" ":start purify\r"
-respond "TS MICRO" "sys; ts micro\r"
-respond "*" ":kill\r"
-
-# Microcode ASCIIzer and binarator converter.
-respond "*" ":midas sysbin;_syseng;cnvrt\r"
-expect ":KILL"
-respond "*" ":link sys1;ts mcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
-
-respond "*" ":mcnvrt .; @ ddt\r"
-expect ":KILL"
-respond "*" ":rename .; @ a10, ddt a10\r"
-move_to_klfe ".; ddt a10"
-
-# KS10 microcode assembler
-respond "*" ":midas kshack;ts micro_micro\r"
-expect ":KILL"
-
-# KL10 microcode.
-respond "*" ":micro ucode;u1=ucode;its,define,macro,basic,skpjmp,shift,arith,fp,byte,io,eis,blt\r"
-expect ":KILL"
-respond "*" ":ucnvrt ucode; u1\r"
-expect ":KILL"
-
-# KLDDT
-respond "*" ":cwd kldcp\r"
-respond "*" ":macro\r"
-respond "*" "klddt=klddt\r"
-expect "CORE USED"
-respond "*" "\003"
-respond "*" ":kill\r"
-respond "*" ":dec sys:link\r"
-respond "*" "klddt/go\r"
-respond "EXIT" ":start 45\r"
-respond "Command:" "d"
-respond "*" "\033y"
-respond " " "kldcp; klddt bin\r"
-respond "*" ":kill\r"
-respond "*" ":mcnvrt kldcp; klddt bin\r"
-expect ":KILL"
-move_to_klfe "kldcp; klddt a10"
-
-# KS10 microcode.
-# It doesn't seem to work very well when purified.
-respond "*" ":kshack;micro kshack;mcr 262=kshack;its,ks10,simple,flt,extend,inout,itspag,pagef\r"
-expect ":KILL"
-respond "*" ":copy kshack; mcr ram, .; ram ram\r"
-
-update_microcode
-
-# KL10 front end dumper
-respond "*" ":midas dsk0:.;@ fedump_kldcp; fedump\r"
-expect ":KILL"
-
-# PDP-11 linker.
-respond "*" ":midas sys1;ts 11stnk_kldcp;11stnk\r"
-expect ":KILL"
-respond "*" ":link .; ts boot11, sys1; ts 11stnk\r"
-
-# CARPET, remote PDP-11 debugger through Rubin 10-11 interface.
-respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
 expect ":KILL"
 
 # GTLOAD, load programs into GT40.
@@ -1840,101 +1551,10 @@ expect ":KILL"
 respond "*" ":palx gt40;_gt40;gtlem\r"
 expect ":KILL"
 
-# KL10 front end debugger.  Put it in the same directory as the
-# "MC" IOELEV.
-respond "*" ":palx sysbin;_syseng; klrug\r"
-expect ":KILL"
-# 11STNK expects a copy in the . directory.
-respond "*" ":copy sysbin; klrug bin, .;\r"
-
-# PDP-11 debugger.
-# 16K is used with the DL10 IOELEV.
-respond "*" ":palx .; 11ddt 16k_kldcp; 11ddt\r"
-respond "PDP11=" "40\r"
-respond "EISSW=" "0\r"
-respond "MAPSW=" "0\r"
-respond "HCOR=" "100000\r"
-respond "TT10SW=" "0\r"
-respond "VT05SW=" "0\r"
-respond "DEBSW=" "0\r"
-expect ":KILL"
-# 14K is used with the console IOELEV.
-respond "*" ":palx dsk0:.;11ddt 14k_kldcp; 11ddt\r"
-respond "PDP11=" "40\r"
-respond "EISSW=" "0\r"
-respond "MAPSW=" "0\r"
-respond "HCOR=" "70000\r"
-respond "TT10SW=" "0\r"
-respond "VT05SW=" "0\r"
-respond "DEBSW=" "0\r"
-expect ":KILL"
-
-# KL10 diagnostics console program.
-respond "*" ":palx kldcp;_kldcp\r"
-expect ":KILL"
-respond "*" ":11stnk\r"
-respond "*" "R"
-respond "FILENAME" "\r"
-respond "*" "L"
-respond "FILENAME" "kldcp; kldcp bin\r"
-respond "*" "B"
-respond "FILENAME" ".temp.; kldcp bin\r"
-expect ":KILL"
-move_to_klfe ".temp.; kldcp bin"
-
-# KL10 diagnostic console utility
-respond "*" ":palx kldcp;_kldcpu\r"
-expect ":KILL"
-respond "*" ":pcnvrt kldcp; kldcpu bin\r"
-move_to_klfe "kldcp; kldcpu a11"
-
-# IOELEV, PDP-11 doing I/O for the PDP-10 host.
-# First, the "AI" IOELEV, also known as CHAOS-11.
-# STUFF prefers to have it in the "." directory.
-respond "*" ":palx dsk0:.;_system;ioelev\r"
-respond "MACHINE NAME =" "AI\r"
-expect ":KILL"
-
-# The KL10 console "MC" IOELEV.
-respond "*" ":palx .; cons11_system;ioelev\r"
-respond "MACHINE NAME =" "MC\r"
-expect ":KILL"
-respond "*" ":11stnk\r"
-respond "*" "D"
-respond "FILENAME" ".; 11ddt 14k\r"
-respond "*" "L"
-respond "FILENAME" ".; cons11 bin\r"
-respond "*" "A"
-respond "FILENAME" ".temp.; ioelev bin\r"
-expect ":KILL"
-respond "*" ":pcnvrt .temp.; ioelev bin\r"
-expect ":KILL"
-move_to_klfe ".temp.; ioelev a11"
-
-# The KL10 "MC-DL" IOELEV.  Put in same directory as KLRUG BIN.
-# TS BOOT11 stuffs it over DL10 in timesharing.  TS 11BOOT makes a
-# @ BOOT11 to stuff out of timesharing.
-respond "*" ":palx sysbin;_system;ioelev\r"
-respond "MACHINE NAME =" "MC\r"
-expect ":KILL"
-
 # MINITS
 respond "*" ":cwd mits.s\r"
 respond "*" ":palx test_config\r"
 respond ":::" "777\r"
-expect ":KILL"
-
-# TV-11.  STUFF prefers it to be in the "." directory.
-respond "*" ":palx dsk0:.;_system;tv\r"
-expect ":KILL"
-
-# XGP-11.  STUFF prefers it to be SYSBIN; VXGP BIN.
-respond "*" ":palx sysbin;vxgp bin_sysen2;xgp\r"
-expect ":KILL"
-
-# CCONS.  STUFF prefers it to be in the CONS directory.
-mkdir "cons"
-respond "*" ":palx cons;_lmcons;ccons\r"
 expect ":KILL"
 
 # ITS universal file.
@@ -2013,27 +1633,11 @@ expect "Core used"
 respond "*" "\003"
 respond "*" ":kill\r"
 
-# TENTH, toy Forth for KS10.
-respond "*" ":midas .; @ tenth_aap; tenth\r"
-expect ":KILL"
+# TENTH, toy Forth.
 respond "*" ":midas /t aap; ts tenth_tenth\r"
 respond "end input with ^C" "TS==1\r"
 respond "\n" "KS==0\r"
 respond "\n" "\003"
-expect ":KILL"
-
-# 11BOOT
-respond "*" ":midas;324 sys3;ts 11boot_syseng;11boot\r"
-expect ":KILL"
-# Note, must be run with symbols loaded.
-# Takes IOELEV BIN and KLRUG BIN from the current directory.
-respond "*" ":cwd sysbin\r"
-respond "*" "11boot\033\013"
-expect ":KILL"
-respond "*" ":move sysbin;@ boot11, .;\r"
-
-# STUFF
-respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
 expect ":KILL"
 
 # GEORGE

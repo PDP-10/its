@@ -1,6 +1,7 @@
 #Default ITS name for KS10.
 set mchn "DB"
 
+set cpu "ks10"
 set salv "nsalv"
 
 proc start_dskdmp_its {} {
@@ -187,23 +188,8 @@ proc bootable_tapes {} {
     expect ":KILL"
 }
 
-proc update_microcode {} {
-    type ":ksfedr\r"
-    respond "!" "write\r"
-    respond "Are you sure" "yes\r"
-    respond "Which file" "ram\r"
-    expect "Input from"
-    sleep 1
-    respond ":" ".;ram ram\r"
-    respond "!" "quit\r"
-    expect ":KILL"
-}
-
 proc clib_switches {} {
     respond "with ^C" "KS10==1\r\003"
-}
-
-proc patch_lisp {} {
 }
 
 proc translate_diagnostics {} {
@@ -224,4 +210,10 @@ proc comsat_switches {} {
 
 proc dqxdev_switches {} {
     respond "Limit to KA-10 instructions" "n\r"
+}
+
+proc processor_basics {} {
+    # Create KS10 bootable tape.
+    respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
+    expect ":KILL"
 }

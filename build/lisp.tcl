@@ -1,9 +1,6 @@
 log_progress "ENTERING BUILD SCRIPT: LISP"
 
 
-# PDP-6 LISP.
-patch_lisp
-
 # lisp
 respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
 respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
@@ -650,10 +647,7 @@ respond "*" ":link sys2;ts lispt,sys2;ts edit\r"
 respond "*" ":midas lisp; slave fasl_l; slave\r"
 expect ":KILL"
 
-# Lisp display slave, PDP-6 and PDP-10 versions.
-respond "*" ":midas sys; atsign 6slave_sysen2; ld10\r"
-respond "   PDP6F = " "1\r"
-expect ":KILL"
+# Lisp display slave, PDP-10 and GT40 version.
 respond "*" ":midas sys; atsign 10slav_sysen2; ld10\r"
 respond "   PDP6F = " "0\r"
 respond "GT40F=" "1\r"
@@ -719,8 +713,6 @@ type ":kill\r"
 
 # Knight TV Spacewar
 respond "*" ":lisp gjd; sine lisp\r"
-expect ":KILL"
-respond "*" ":midas games;ts tvwar_spcwar; tvwar\r"
 expect ":KILL"
 
 # Kermit

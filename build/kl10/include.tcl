@@ -1,6 +1,7 @@
 #Default ITS name for KL10.
 set mchn "KL"
 
+set cpu "kl10"
 set salv "salv"
 
 proc start_dskdmp_its {} {
@@ -172,16 +173,9 @@ proc bootable_tapes {} {
     expect ":KILL"
 }
 
-proc update_microcode {} {
-    copy_to_klfe "ucode;u1 ram"
-}
-
 proc clib_switches {} {
     ### UFA or FIX?!?  Probably the latter.
     respond "with ^C" "\003"
-}
-
-proc patch_lisp {} {
 }
 
 proc translate_diagnostics {} {
@@ -215,4 +209,7 @@ proc comsat_switches {} {
 
 proc dqxdev_switches {} {
     respond "Limit to KA-10 instructions" "n\r"
+}
+
+proc processor_basics {} {
 }
