@@ -158,9 +158,6 @@ respond "*" ":midas device;jobdev loss_syseng;loss\r"
 expect ":KILL"
 respond "*" ":link device;jobdev los,device;jobdev loss\r"
 
-respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
-expect ":KILL"
-
 respond "*" ":midas syshst;_syshst;hosts3\r"
 expect ":KILL"
 respond "*" ":link syshst;ts hosts3,syshst;hosts3 bin\r"
@@ -300,12 +297,6 @@ respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
 respond "*" ":link device;chaos name,sys;ts name\r"
 
-# Name Dragon
-respond "*" ":link syseng;tvkbd rooms, sysen2;\r"
-type ":vk\r"
-respond "*" ":midas sysbin;_sysen2;namdrg\r"
-expect ":KILL"
-
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"
 
@@ -360,3 +351,5 @@ expect ":KILL"
 # GT40 boot ROM.
 respond "*" ":palx gt40;_gt40;bootvt\r"
 expect ":KILL"
+
+processor_basics

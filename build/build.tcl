@@ -173,6 +173,7 @@ source $build/basics.tcl
 
 if {$env(BASICS)!="yes"} {
     source $build/misc.tcl
+    source $build/$cpu/processor.tcl
     source $build/lisp.tcl
     if {$env(MACSYMA)=="yes"} {
 	source $build/macsyma.tcl
