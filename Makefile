@@ -65,6 +65,7 @@ KLH10=tools/klh10/tmp/bld-ks-its/kn10-ks-its
 SIMH=tools/simh/BIN/pdp10
 KA10=tools/sims/BIN/pdp10-ka
 KL10=tools/sims/BIN/pdp10-kl
+KS10=tools/sims/BIN/pdp10-ks
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -131,6 +132,14 @@ out/pdp10-kl/stamp/its: $(OUT)/rp04.1
 	$(TOUCH) $@
 
 out/pdp10-kl/stamp/emulators: $(VT52) $(TEK)
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
+out/pdp10-ks/stamp/its: $(OUT)/rp0.dsk
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
+out/pdp10-ks/stamp/emulators: $(GT40) $(VT52)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -234,6 +243,10 @@ out/pdp10-kl/stamp/pdp10: $(KL10) start
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
+out/pdp10-ks/stamp/pdp10: $(KS10) start
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
 out/klh10/system:
 	$(MKDIR) $(OUT)/system
 	cp=0; ca=0; \
@@ -255,6 +268,10 @@ out/pdp10-ka/system:
 out/pdp10-kl/system:
 	$(MKDIR) $(OUT)/system
 	cp build/pdp10-kl/config.* $(OUT)/system
+
+out/pdp10-ks/system:
+	$(MKDIR) $(OUT)/system
+	cp build/pdp10-ks/config.* $(OUT)/system
 
 build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
 	cp=';'; ca=''; \
@@ -291,6 +308,9 @@ $(KA10):
 
 $(KL10):
 	$(MAKE) -C tools/sims pdp10-kl
+
+$(KS10):
+	$(MAKE) -C tools/sims pdp10-ks
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar
