@@ -452,6 +452,11 @@ respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
 # rmtdev
 respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
+expect ":KILL"
+
+# mmodem
+respond "*" ":midas sys3; ts mmodem_gz; mmodem\r"
+expect ":KILL"
 
 # Compile ADVENT and dump it out with DECUUO.
 respond "*" ":cwd games\r"
