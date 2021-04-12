@@ -60,7 +60,7 @@ installed.
 | --- | --- |
 | klh10 | git, c compiler, make, expect, curses, autoconf
 | simh | git, c compiler, make, expect, curses, autoconf, sdl2
-| pdp10-ka | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
+| pdp10-ka | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, sdl2-net, gtk3
 | pdp10-kl | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
 
 ### Usage
