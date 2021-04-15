@@ -31,6 +31,7 @@ install_freebsd() {
 }
 
 install_osx() {
+    brew update
     case "$EMULATOR" in
         simh) brew install sdl2;;
         pdp10-*) brew install sdl2;;
