@@ -193,6 +193,7 @@
 - LLOGO, Logo implemented in Maclisp.
 - LOADP, displays system load.
 - LOCK, shut down system.
+- LOGASS, 6502 assembler in Logo.
 - LOGO, BBN Logo.
 - LOOKUP, looks up user info in INQUIR database.
 - LORENZ, Edward Lorenz' strange attractor.
