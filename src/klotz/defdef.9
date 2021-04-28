@@ -1,0 +1,134 @@
+;;;-*-LISP-*-
+; The code for defining instructions,  addressing modes, and pseudo-ops.
+
+(herald defdef) ;close enough.
+
+(declare (setq defmacro-for-compiling t)
+	 (*lexpr aerror)
+	 (*expr tokenize-rest-of-line read-in-delimited-string match)
+	 (array* (notype (*assem-read-table* 200)))
+	 (fixsw t))
+
+(defmacro defins (name cycles &rest args)
+	  `(progn 'compile
+	     (putprop ',name ',args 'ADDRESS-MODE-ALIST)
+	     (putprop ',name ',cycles 'CYCLES)))
+
+;Here is the code for defining read macros.
+(defmacro defarmac (char argl &rest body)
+  (let ((name (implode (cons (ascii char) '#.(exploden "-ASSEM-READMACRO")))))
+    `(progn 'compile
+	    (defun (,name lexscan) ,argl ,@body)
+	    (store (*assem-read-table* ,char)
+		   (get ',name 'lexscan))
+	    t)))
+
+(defun process-pattern (pattern)
+  (do ((pattern pattern (cdr pattern))
+       (new-pattern)
+       (element)
+       (dispatch))
+      ((null pattern) (nreverse new-pattern))
+    (push
+     (cond ((atom (setq element (car pattern))) element)	;a literal
+	   ((setq dispatch (get (cadr element) 'PATTERN-MACRO))
+	    (funcall dispatch))
+	   (t (error "Unknown pattern element - process-pattern")))
+     new-pattern)))
+
+(defmacro defpred (name &rest body)
+  `(putprop ',name 
+	    #'(lambda () ,@body)
+	    'PATTERN-MACRO))
+
+(defpred BYTE-OR-WORD					;the arg. vip GETs it.
+  (list '* #'(lambda (exp)
+	       (no-illegal-chars-in-expression-p exp))))
+
+(defpred BYTE
+  (list '* #'(lambda (exp)
+	       (and (no-illegal-chars-in-expression-p exp)
+		    (eight-bits-p exp)))))
+
+(defpred TWO-BYTES
+  (list '* #'(lambda (exp)
+	       (and (no-illegal-chars-in-expression-p exp)
+		    (sixteen-bits-p exp)))))
+
+(defpred BYTE-OR-UNDEFINED
+  (list '* #'(lambda (exp)
+	       (and (no-illegal-chars-in-expression-p exp)
+		    (or (eight-bits-p exp)
+			(asem-unbound-p exp))))))
+(defpred ANY-EXPRESSION
+  (list '* #'(lambda (exp)
+	       (no-illegal-chars-in-expression-p exp))))
+				 
+(defpred UNDEFINED-EXPRESSION
+  (list '* #'(lambda (exp)
+	       (and (no-illegal-chars-in-expression-p exp)
+		    (assem-defined-p exp)))))
+
+(defpred REGISTER
+  (list '> #'(lambda (name)
+	       (get name 'REGISTER))))
+
+(defun no-illegal-chars-in-expression-p (exp)
+  (doesnt-contain '(/) /( /,) exp))
+
+(defun doesnt-contain (atoms lst)
+  (*catch 'LOST
+    (do ((atoms atoms (cdr atoms)))
+	((null atoms) t)
+      (do ((exprs lst (cdr exprs)))
+	  ((null exprs) t)
+	(cond ((eq (car atoms) (car exprs))
+	       (*throw 'lost nil)))))))
+
+;This conses the variables used in the pattern up in reverse order from their occurence.
+;A function is built up using this as a lambda-list and applied to the output of the
+;pattern matcher. It, conses up the variables' values in reverse order.
+; (vip ((> foo bar) $ (* baz))) => (baz bar)
+; (vip ((REGISTER BAR) /, (BYTE BAZ))) => (baz bar)
+
+(defun variables-in-pattern (pattern)
+  (do ((pattern pattern (cdr pattern))
+       (vars) (element))
+      ((null pattern) vars)
+    (cond ((not (atom (setq element (car pattern))))
+	   (push (car element) vars)))))))
+
+
+(defmacro defregister (name nbytes)
+  `(put ,name ,nbytes 'REGISTER))
+	  
+(defmacro defamode (name nbytes pattern &rest forms)
+  `(progn 'compile
+	  (declare (special ,name))
+	  (putprop ',name ,nbytes 'INSTRUCTION-LENGTH)
+	  (putprop ',name ,(process-pattern pattern) 'ADDRESS-MODE-PATTERN)
+	  (putprop ',name
+		   #'(lambda (OP ,@(variables-in-pattern pattern))
+		       ,@forms)
+		   'AMODE-FORMS)))
+
+(defun let-read-in-function (type body)
+  (cond ((null type) body)
+	(t `((let ((,type
+		    ,(cond ((eq type 'string)
+			    '(read-in-delimited-string))
+			   ((eq type 'toklst)
+			    '(tokenize-rest-of-line))
+			   (t
+			    (error
+			     "Type of argument not STRING, NIL, or TOKLST to DEF-PSEUDO-OP.")))))
+	       ,@body)))))
+
+(defmacro def-pseudo-op (name p-or-i varlst &rest body)
+  (cond ((eq p-or-i 'prefix)
+	 `(defun (,name ASSEM-PREFIX-OP) ()
+	    ,@(let-read-in-function (car varlst) body)))
+	((eq p-or-i 'infix)
+	 `(defun (,name ASSEM-INFIX-OP) ,(cdr varlst)
+	    ,@(let-read-in-function (car varlst) body)))
+	(t (error "Bad syntax type in def-pseudo-op -- not prefix or infix"))))

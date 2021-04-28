@@ -1,0 +1,147 @@
+;;;-*-LISP-*-
+; MacLisp Cross Assembler
+; The Tokenizer. The routines for reading in tokens and strings.
+
+(herald tokenz)
+(defvar assem-ibase 10.)
+(defvar number-context-p nil)
+(defvar *untyi-char* nil)
+(defvar *assem-input-stream* nil)
+
+(eval-when (compile eval)
+	   (setq max-token-size 20))
+
+(declare (special *token-char-buffer* *assem-read-table*)
+	 (array* (fixnum (*token-char-buffer* #.max-token-size))
+		 (notype (*assem-read-table* 200)))
+	 (*lexpr aerror)
+	 (fixsw t)
+	 (setq defmacro-for-compiling nil))
+
+(array *token-char-buffer* fixnum #.max-token-size))
+
+;;; characters read in are consed onto a stack, which costs
+;;; much less than heap consing. Since the stack pointer will be
+;;; always small it will be an interned fixnum, so we don't lose
+;;; by causing fixnum consing there. On the lisp machine we might
+;;; simply use cons-in-area, although stack allocation has advantages
+;;; even over that.
+
+(defmacro popbuff (j)
+	  `(prog1 (*token-char-buffer* ,j)
+		  (setq ,j (1- ,j))))
+
+(defmacro pushbuff (c j)
+	  `(prog1 (setq ,j (1+ ,j))
+		  ; adding 1 first makes it look like a list stack.
+		  (store (*token-char-buffer* ,j) ,c)))
+
+;;; GETTOK is not re-entrant with respect to interrupt calling.
+;;; Note special variable for untyi.
+(defun gettok () (let ((it (gettok1))) (cond ((null it) (terpri) it)
+					     (t (princ it) (tyo #\sp) it))))
+(defun gettok1 (&AUX
+	       (SP 0) (dispatch)
+	       (CH 0))
+       (declare (fixnum SP CH))
+       (*catch 'END-OF-LINE
+	       (do () (nil)
+		   (setq ch (agetchar))
+		   (cond ((or (= ch #\sp) (= ch #\tab))
+			  (cond ((zerop SP))		; whitespace.
+				(t (return (make-token SP)))))
+			 ((setq dispatch (*assem-read-table* ch))	;only readmacro chars
+			  (cond ((zerop SP)		;have something here.
+				 (return (funcall dispatch ch)))
+				(t (unagetchar ch)
+				   (return (make-token SP)))))
+			 (t (pushbuff ch SP)))))) ;regular character.
+
+
+(defun decimal-charp (ch) (not (or (> ch #/9) (< ch #/0))))
+
+(defun make-token (SP)
+       ; check to see if it can be a number.
+       (cond ((represents-a-numberp SP)
+	      (do ((number 0 (+ number
+				(* factor (numeric-value (popbuff SP)))))
+		   (factor 1 (* factor assem-ibase)))
+		  ((zerop SP) number)))
+	     (t
+	      (make-symbol SP))))
+
+
+(defun make-symbol (SP
+		    &AUX (list-buffer '#,(DO ((j 0 (1+ j))
+					      (l nil (cons nil l)))
+					     ((= j #.max-token-size) l))))
+       ; to call IMPLODE we must have a list, but we don't want to
+       ; cons. All the stuff above is to that the list will be consed only
+       ; once, but not be in pure storage (since we rplaca it).
+       (and (> SP #.max-token-size)
+	    (aerror "Token too big." (listarray *token-char-buffer*)))
+       (let ((right-size-sublist (nthcdr (- #.max-token-size SP) list-buffer)))
+	    (do ((l right-size-sublist (cdr l))
+		 (j 1 (1+ j)))
+		((null l) (implode right-size-sublist))
+		(rplaca l (*token-char-buffer* j)))))
+
+
+(defun represents-a-numberp (SP)
+       (or number-context-p
+	   ;if non-nil, we're in a recursive gettok because of a base-conversion readmacro
+	   (and (decimal-charp (*token-char-buffer* 1))
+		(do ((c))
+		    ((zerop SP) t)
+		    (setq c (popbuff SP))
+		    (or (decimal-charp c)
+			(a-f-charp c)
+			(return nil))))))
+
+(defun a-f-charp (c) (not (or (> c #/F) (< c #/A))))
+
+(defun numeric-value (charn)
+       (cond ((decimal-charp charn)
+	      (- charn #/0))
+	     (t (- charn #.(- #/A 10.)))))
+
+(defun agetchar ()
+       (char-upcase
+	(cond (*untyi-char* (prog1 *untyi-char* (setq *untyi-char* ())))
+	      ((tyi *assem-input-stream* nil)) ;if something, return it.
+	      (t (aerror "End of file without .END.")))))
+
+(defun unagetchar (char)
+       (setq *untyi-char* char))
+
+(defun char-upcase (ch)
+       (cond ((and (> ch #.(1- #/a)) (< ch #.(1+ #/z)))
+	      (- ch #.(- #/a #/A)))
+	     (t ch)))
+
+;since this is REST of line, if we get an EOL token we return nil, as
+;that is the rest of the line.
+(defun tokenize-rest-of-line () ;For Pseudo-op's and Op's use.
+       (do ((token (gettok) (gettok))
+	    line)
+	   ((null token) (nreverse line)) ;null token is end of line.
+	   (or (null token) (push token line))))
+
+(defun gobble-rest-of-line ()
+       (do () ((= (agetchar) #\cr) (agetchar)))) ;eat up to cr, then lf.
+       
+
+(defun read-in-delimited-string () ;|  "HELLO"   | => HELLO
+       (do ((delimiter)
+	    (charlst)
+	    (char (agetchar) (agetchar)))
+	   (nil)
+	   (cond (delimiter
+		  (cond ((= char delimiter)
+			 (gobble-rest-of-line)
+			 (return (implode (nreverse charlst))))
+			(t (push char charlst))))
+		 ((or (= char #\sp) (= char #\tab)))
+		 (t (setq delimiter char)))))
+
+

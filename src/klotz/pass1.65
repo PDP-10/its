@@ -1,0 +1,137 @@
+;;;-*-LISP-*-
+;;The main body of the assembler. Conses up a big list of
+;;the code, one line at a time. If there is no undefined reference on a a
+;;line, it is completely assembled at read-time. Otherwise, a notation is made of 
+;;undefined references. Later, when these references are resolved the code
+;;with the undefined reference is completed.
+;;See the file KLOTZ;PASS1 IDEAS for documentation.
+
+(herald pass1)
+
+(declare (special *input-filename* *assem-input-stream*)
+	 (fixsw t)
+	 (*lexpr aerror)
+	 (*expr gettok tokenize-rest-of-line eval-expression match)
+	 (setq defmacro-for-compiling nil))
+
+(eval-when (compile eval)
+	   (or (get 'commac 'version)
+	       (load "commac")))
+
+(defvar /.) ;Current address.
+(defvar assem-obase 16.)
+
+(defun assemble (*input-filename*)
+  (assem-set '/. 0)					;default.
+  (let ((*assem-input-stream* (open *input-filename* '(in ascii dsk block))))
+    (unwind-protect
+     (let ((the-code (assemble-code))
+	   (undef-ref-count (write-out-symbol-table)))
+       (setq *foo-code* the-code)
+       (write-out-code the-code)
+       (print (format nil "~A assembled. ~D undefined symbols."
+		      *input-filename* undef-ref-count)))
+     (close *assem-input-stream*))))
+
+
+(defun assemble-code ()
+  (let ((last-cons (ncons nil)))
+    (do ((line (assemble-code-line) (assemble-code-line))
+	 (assembled-code-list last-cons))
+	((eq line '*EOF*) (cdr assembled-code-list))	;I think we can afford the extra cons.
+      (cond ((not (null line))
+	     (rplacd last-cons line)
+	     (cond ((atom (cadr line)) (setq last-cons (last line)))
+		   (t (setq last-cons (ncons line)))))))))
+
+(defun assemble-code-line (&aux (op? (gettok)) dispatch token-save)
+  (cond ((setq dispatch (get op? 'ADDRESS-MODE-ALIST))	;LDA, etc. Mnemonics.
+	 (handle-instruction op? dispatch))
+	((setq dispatch (get op? 'ASSEM-PREFIX-OP))
+	 (funcall dispatch))
+	((setq token-save op?
+	       op? (gettok)
+	       dispatch (get op? 'ASSEM-INFIX-OP))
+	 (funcall dispatch token-save))
+	(t (aerror "Bad Op or Pseudo-Op" op? token-save (tokenize-rest-of-line))
+	   (increment-dot 2)				;Somebody goofed, but let's try to save the rest.
+	   (list 0 0)))) ;Put this where the code would have gone.
+
+
+(defun handle-instruction (name modes)
+  (do ((modes modes (cdr modes)) ;;((mode opcode) (mode opcode)...)
+       (argl (tokenize-rest-of-line))
+       (values))
+      ((null modes) (aerror "Addressing mode not recognized" name argl))
+    (cond ((setq values (match
+			 (get (caar modes) 'ADDRESS-MODE-PATTERN)
+			 argl))
+	   (increment-dot (get (caar modes) 'INSTRUCTION-LENGTH))
+	   (return
+	    (cond ((eq values t) (funcall (get (caar modes) 'AMODE-FORMS)
+					  (cadar modes)))
+		  (t (lexpr-funcall (get (caar modes) 'AMODE-FORMS)
+				    (cadar modes)	;Opcode for this mode.
+				    values))))))))	;of expressions from pattern matching.
+
+(defun handle-forward-references-for (label)
+  (do ((refs (get label 'FORWARD-REF) (cdr refs)))
+      ((null refs) (remprop label 'FORWARD-REF))
+    (eval-expression (car refs)))) ;works by side effect.
+
+;;; I/O
+;From here on down is fucked and should be flushed as soon as possible.
+(defun write-out-symbol-table (&aux property)
+  (let* ((filename (namelist *input-filename*))
+	 (stream (open (progn (rplaca (last filename) 'SYMTAB) filename) 'out))
+	 (base assem-obase)
+	 (undefined-reference-count 0))
+    (unwind-protect
+     (mapatoms		      ;One day the assembler symbols will be on their on obarray.
+      #'(lambda (sym)
+	  (cond ((setq property (get sym 'ASSEM-SYMBOL-VALUE))
+		 (princ sym stream)
+		 (tyo #\tab stream)
+		 (princ property stream)
+		 (terpri stream))
+		((setq property (get sym 'FORWARD-REF))
+		 (princ sym stream)
+		 (tyo #\tab stream)
+		 (princ (length property) stream)
+		 (princ " undefined references."
+			stream)
+		 (terpri stream)
+		 (setq undefined-reference-count
+		       (1+ undefined-reference-count)))))))
+    (close stream)
+    undefined-reference-count))
+
+
+(defun hex-digit (num)
+  (cond ((< num 10.) (+ num #/0))
+	 (t (+ num #.(- #/A 10.)))))
+
+(defun twos-complement-hex-byte (byte)
+       (cond ((minusp byte) (hex-byte (+ 256. byte)))
+	     (t (hex-byte byte))))
+       
+(defun hex-byte (byte &aux (lst  '(nil nil)))	;Constant list used for implode.
+       (rplaca lst (hex-digit (// byte 16.)))
+       (rplaca (cdr lst) (hex-digit (logand byte 15.)))
+       (implode lst))
+
+;This never writes out the PC when it changes.
+(defun write-out-code (it)
+       (let* ((filename (namelist *input-filename*))
+	      (stream (open (progn (rplaca (last filename) 'PAPERT) filename) 'out)))
+	     (unwind-protect
+	      (do ((it it (cdr it))
+		   (bytes 1 (1+ bytes)))
+		  ((null it) t)
+		  (princ (twos-complement-hex-byte (car it)) stream)
+		  (tyo #\space stream)
+		  (cond ((= 8. bytes)
+			 (terpri stream)
+			 (setq bytes 0)))))
+	     (close stream))
+       t)
