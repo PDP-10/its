@@ -1,0 +1,259 @@
+;-*-lisp-*-
+;expression evaluator.
+
+;Reader beware - a lot of this code is pretty hacked to avoid consing.
+;I am not a fanatic about this sort of thing, but one must be careful
+;when a piece of code is going to be called many thousands of times.
+
+;idea is this: we take the list, and try to find a value for anything
+;that is not defined as an infix pseudo-op. when we find such values,
+;we rplaca them in; if we don't find a value for one or more of them,
+;we do not attempt to evaluate the expression past this level; i.e.,
+;this:
+;(eval-expression '(foo + bar))
+;if foo has no assem-symbol-value and bar's is 3, turns into:
+;(foo + 3)
+;whereas, if foo had an assem-symbol-value of 1, (4) would be
+;returned. That is, when we can, we turn the entire expression into a
+;number, and then listify it.
+;Referencing an undefined symbol also has the effect of pushing a
+;pointer to the list it is in on the FORWARD-REF property of that
+;symbol, so that it can later be resolved when the symbol is defined.
+;Some people believe that this sort of silly hair required by a
+;one-pass assembler that allows forward referencing is worth the
+;trouble. More sane people write two-pass assemblers. Most people write
+;in COBOL.
+;When the symbol is eventually defined, we mapc eval-expression over
+;the FORWARD-REF list, thereby bashing all the previous references
+;with the actual value of the symbol, or maybe of the entire
+;expression.
+;So, consider: if we do:
+;(eval-expression '(foo + bar))
+;and both foo and bar are undefined, we put a pointer to the list
+;'(foo + bar) in the FORWARD-REF property of both foo and bar. Later
+;on, if foo is defined to be 3, we run eval-expression on (foo + bar)
+;and get (3 + bar). Since eval-expression bashes its argument (like
+;nreverse, and such), the code-list has this, and so does the
+;FORWARD-REF property of bar. When we get a definition for bar, we
+;win. Get the picture?
+
+;To define an infix operator, we must put it on the list of infix
+;operators, make it self delimiting (by calling DEFARMAC) if we want
+;it to be and it is a single character (multiple-character
+;self-delimiters are not supported), and also specify what operation
+;it should perform on its two arguments. The same is true of prefix
+;operators; except they should be placed on our list of prefix
+;operators.
+
+;the following macros can be used to define operators and cause them
+;to point to their associated functions.
+
+(herald eval)
+
+(declare (fixsw t)
+	 (special refers-forward)
+	 (setq defmacro-for-compiling nil)
+	 (*lexpr aerror))
+
+(eval-when (compile eval)
+	   (or (get 'commac 'version)
+	       (load "klotz;commac")))
+
+(defmacro def-infix-op (op opfunction)
+	  `(putprop ,op #',opfunction 'ARITH-INFIX-OP))
+
+(defmacro def-prefix-op (op opfunction)
+	  `(putprop ,op #',opfunction 'ARITH-PREFIX-OP))
+
+(defmacro get-prefix-op-function (op)
+	  `(get ,op 'ARITH-PREFIX-OP))
+
+(defmacro get-infix-op-function (op)
+	  `(get ,op 'ARITH-INFIX-OP))
+
+(defmacro infix-op-p (op)
+	  `(get-infix-op-function ,op))
+
+(defmacro prefix-op-p (op)
+	  `(get-prefix-op-function ,op))
+
+(defmacro assem-op-p (op)
+	  `(or (eq ,op '>)
+	       (eq ,op '<)
+	       (infix-op-p ,op)
+	       (prefix-op-p ,op)))
+
+;resets lst to itself, minus leading subexpression. returns value
+;of leading subexpression.
+
+(defmacro next-value (lst)
+	  `(cond ((eq (car ,lst) '<)
+		  (let ((temp (get-subexpression ,lst)))
+		       (prog2 nil
+			      (car (eval-arith-expr (cdr ,lst)))
+			      (setq ,lst temp))))
+		 (t (prog2 nil
+			   (car ,lst)
+			   (setq ,lst (cdr ,lst))))))
+
+;prefix/infix-op-funcall calls the prefix/infix op op on the args rest
+(defmacro infix-op-funcall (op firstarg secondarg)
+	  `(funcall (get-infix-op-function ,op)
+		    ,firstarg ,secondarg))
+
+(defmacro prefix-op-funcall (op arg)
+	  `(funcall (get-prefix-op-function ,op) ,arg))
+
+;functions used by assembler
+			
+;gets symbol values for symbols if they exist; sets their FORWARD-REF
+;properties if not. 
+(defun replace-with-values (expr-list &aux (refers-forward nil))
+       (do ((nextcdr expr-list (cdr nextcdr)))
+	   ((null nextcdr) refers-forward)
+	   (rplaca nextcdr (assem-symeval-check (car nextcdr) expr-list))))
+
+(defun assem-symeval (symbol)
+       (cond ((numberp symbol) symbol)
+	     ((get symbol 'ASSEM-SYMBOL-VALUE))))
+
+(defmacro set-sym-forward-ref (symbol in-list)
+	  `(let ((current (get ,symbol 'FORWARD-REF)))
+		(cond ((member ,in-list current))
+		      (t (putprop ,symbol (cons ,in-list current)
+				  'FORWARD-REF)))
+		,in-list))
+
+(defun assem-symeval-check (symbol list)
+       (cond ((assem-op-p symbol) symbol)
+	     ((assem-symeval symbol))	;if non-nil, returned
+	     (t (set-sym-forward-ref symbol list)
+		(setq refers-forward t) symbol)))
+
+(defun eval-expression-for-pattern (expr)
+       (cond ((atom expr)
+	      (cond ((assem-symeval expr))
+		    (t expr)))		;since this is atomic we can't forward-ref it.
+	     ((replace-with-values expr) expr)		;if referred forward, this
+	     (t (number-or-expression  ;Converts (4) to 4. Leaves everything else as is.
+		 (eval-arith-expr expr)))))
+
+(defun eval-expression (expr)
+       (cond ((replace-with-values expr) expr)		;if referred forward, this
+	     (t (number-or-expression  ;Converts (4) to 4. Leaves everything else as is.
+		 (eval-arith-expr expr)))))	;is all. Else this.
+
+(defun number-or-expression (it)
+       (cond ((atom it) it)
+	     ((or (null (cdr it)) (numberp (car it)))
+	      (car it))
+	     (t it)))
+
+;eval-arith-expr also bashes its arg - rplacd's it with nil, and
+;rplaca's it with the answer. So it returns a list of the number the
+;expression evaluated to.
+(defun eval-arith-expr (expr-list)
+       (let ((lst expr-list))
+	    (do ((current
+		  (cond ((null lst)
+			 (aerror "Null expression?") 0)
+			((prefix-op-p (car lst))
+			 (prefix-op-funcall (pop lst)
+					    (next-value lst)))
+			(t (next-value lst)))
+		  (infix-op-funcall (pop lst)
+				    current
+				    (next-value lst))))
+		((null lst)
+		 (rplacd expr-list nil)
+		 (rplaca expr-list current)))))
+		 
+
+;we don't cons when we can help it (we never cons). Truncates its arg
+;to the subexpression (minus trailing >) and returns list after end of
+;subexpression.
+(defun get-subexpression (list)
+       (do ((nxtcdr list (cdr nxtcdr))
+	    (local-depth 1))
+	   ((and (= 1 local-depth)
+		 (eq (cadr nxtcdr) '>))
+	    (prog2 nil
+		   (cddr nxtcdr)
+		   (rplacd nxtcdr nil)))
+	   (cond ((eq (cadr nxtcdr) '>)
+		  (setq local-depth (1- local-depth)))
+		 ((eq (cadr nxtcdr) '<)
+		  (setq local-depth (1+ local-depth))))
+	   (and (null (cdr nxtcdr))
+		(prog2
+		 (aerror "unmatched angle brackets")
+		 (return nil)))))
+
+;these are already self-delimiters, so I'm not calling DEFARMAC on
+;them. If I did, however, the call would look like this:
+;(defarmac #/+
+;	  (ascii #/+))
+
+(def-prefix-op '+ +)
+
+(def-prefix-op '- -)
+
+(def-infix-op '+ +)
+
+(def-infix-op '- -)
+
+(def-infix-op '// //)
+
+(def-infix-op '* *)
+
+(def-infix-op '&
+      (lambda (val1 val2)
+	      (logand val1 val2)))
+
+(def-infix-op '!
+      (lambda (val1 val2)
+	      (logand val1 val2)))
+
+;;; Here are various predicates for use in the defamode patterns.
+
+(defun eight-bits-p (exp)
+       (let ((val (or (assem-symeval exp) (eval-expression exp))))
+	    (cond ((numberp val) (< val 256.))
+		  (t nil))))
+
+(defun eight-bits-or-undefined-p (exp)
+       (let ((val (or (assem-symeval exp) (eval-expression exp))))
+	    (cond ((numberp val) (< val 256.))
+		  (t t))))
+
+(defun assem-undefined-p (exp)
+       (not (assem-defined-p exp)))
+
+(defun assem-defined-p (exp)
+       (or (assem-symeval exp)
+	   (and (not (atom exp)) (numberp (eval-expression exp)))))
+
+(defun lo-8 (expression)
+       (cond ((assem-undefined-p word)
+	      (eval-expression `(< ,word & 255. >)))
+	     ((eight-bits-p word) word)
+	     (t (logand (assem-symeval word) 255.))))
+
+(defun hi-8 (word)
+       (cond ((symbolp word)
+	      (// (assem-symeval-and-put-fref word) 256.))
+	      (assem-undefined-p word)
+	      (eval-expression `(< word // 256. >)))
+	     (t (// (assem-symeval word) 256.))))
+
+(defun assem-set (symbol value)
+  (putprop symbol value 'ASSEM-SYMBOL-VALUE))
+
+(defun assem-symeval-or-eval (exp)
+  (or (assem-symeval exp) (eval-expression exp)))
+
+(defun increment-dot (amount)
+  (assem-set '/. (+ amount (get '/. 'ASSEM-SYMBOL-VALUE))))
+
+(defmacro logand (&rest args)
+	  `(boole 1 ,@args))
