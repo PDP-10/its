@@ -28,13 +28,13 @@ respond "*" ":link syseng;tvkbd rooms, sysen2;\r"
 type ":vk\r"
 respond "*" ":midas sysbin;_sysen2;namdrg\r"
 expect ":KILL"
-respond "*" ":link channa;rakash namdrg, sysbin; namdrg bin;\r"
+respond "*" ":link channa;rakash namdrg, sysbin; namdrg bin\r"
 type ":vk\r"
 
 # STUFF
 respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
 expect ":KILL"
-respond "*" ":link channa;rakash tvfix, sys1; ts stuff;\r"
+respond "*" ":link channa;rakash tvfix, sys1; ts stuff\r"
 type ":vk\r"
 
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
