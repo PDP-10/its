@@ -1638,6 +1638,14 @@ expect "Core used"
 respond "*" "\003"
 respond "*" ":kill\r"
 
+# Atari 800 terminal emulator Chameleon by Jack Palevich.
+respond "*" ":cwd atlogo\r"
+respond "*" ":cross\r"
+respond "*" "supdup,supdup=supdup/m65\r"
+expect "Core used"
+respond "*" "\003"
+respond "*" ":kill\r"
+
 # TENTH, toy Forth.
 respond "*" ":midas /t aap; ts tenth_tenth\r"
 respond "end input with ^C" "TS==1\r"
