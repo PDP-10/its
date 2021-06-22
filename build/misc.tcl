@@ -832,15 +832,8 @@ respond "*" ":midas sys1;ts pty_sysen1;pty\r"
 expect ":KILL"
 
 # PRUFD
-respond "*" ":midas sysbin;prufd bin_sysen2;prufd\r"
+respond "*" ":midas sys1;ts prufd_sysen2;prufd\r"
 expect ":KILL"
-
-# patch PRUFD to use the TTY: device rather than the LPT: device
-respond "*" ":job prufd\r"
-respond "*" ":load sysbin;prufd bin\r"
-respond "*" "nlinks+14/ A,,646471\r"
-type ":pdump sys1;ts prufd\r"
-respond "*" ":kill\r"
 
 # udir
 respond "*" ":midas sys3;ts nudir_sysen3; nudir\r"
