@@ -22,16 +22,51 @@ proc mark_pack {unit pack id} {
 }
 
 proc mark_packs {} {
+    # Bootstrap ITS uses just packs 2 and 3.
     mark_pack "0" "2" "2"
     mark_pack "1" "3" "3"
-    mark_pack "2" "0" "0"
-    mark_pack "3" "1" "1"
 }
 
 proc prepare_frontend {} {
 }
 
 proc frontend_bootstrap {} {
+}
+
+proc finish_mark {} {
+    global emulator_escape
+    global build
+    global out
+
+    # Here's a dance to get around the fact that the bootstrapping ITS
+    # may have a different disk format from the target.  First save
+    # all files to tape.  Next, run the new SALV to mark the disks
+    # using the target format.  Finally load back the files from tape.
+
+    respond "*" $emulator_escape
+    create_tape "$out/reboot.tape"
+    type ":dump\r"
+    respond "_" "dump links full\r"
+    respond "TAPE NO=" "0\r"
+    expect -timeout 6000 "_"
+    type "quit\r"
+
+    exec -ignorestderr $build/magdmp.sh $out
+
+    respond "*" $emulator_escape
+    quit_emulator
+    start_salv build/pdp10-ka/init2
+
+    mark_pack "0" "2" "2"
+    mark_pack "1" "3" "3"
+    mark_pack "2" "0" "0"
+    mark_pack "3" "1" "1"
+
+    respond "DDT" "tran\033g"
+    respond "#" "0"
+    respond "OK" "y"
+    expect -timeout 300 EOT
+    respond "DDT" $emulator_escape
 }
 
 proc its_switches {} {
@@ -82,8 +117,16 @@ proc make_dskdmp {} {
     global emulator_escape
     global out
 
+    # On-disk @ DSKDMP.
     respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
     dskdmp_switches "N"
+    expect ":KILL"
+
+    # Paper tape DSKDMP.  This is used for booting ITS.
+    respond "*" $emulator_escape
+    punch_tape "$out/dskdmp.rim"
+    type ":midas ptp:_system;dskdmp\r"
+    dskdmp_switches "Y"
     expect ":KILL"
 }
 
@@ -110,21 +153,8 @@ proc dump_nits {} {
     respond "\n" "\033u"
     respond "DSKDMP" "d\033$salv\r"
 
-    # Since we bootstrap with a 2-pack ITS, we need to copy the MFD to
-    # the fresh packs.
-    respond "\n" "$salv\r"
-    respond "\n" "ucop\033g"
-    respond "UNIT #" "0"
-    respond "UNIT #" "2"
-    respond "OK?" "Y"
-    respond "DDT" "ucop\033g"
-    respond "UNIT #" "0"
-    respond "UNIT #" "3"
-    respond "OK?" "Y"
-    respond "DDT" "\033u"
-
     # Now dump the new ITS.
-    respond "DSKDMP" "t\033its bin\r"
+    respond "\n" "t\033its bin\r"
     respond "\n" "\033u"
     respond "DSKDMP" "m\033$salv bin\r"
     respond "\n" "d\033nits\r"

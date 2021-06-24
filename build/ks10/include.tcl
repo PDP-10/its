@@ -94,6 +94,10 @@ proc frontend_bootstrap {} {
     expect ":KILL"
 }
 
+proc finish_mark {} {
+    shutdown
+}
+
 proc its_switches {} {
     global mchn
 

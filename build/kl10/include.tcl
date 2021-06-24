@@ -42,6 +42,10 @@ proc prepare_frontend {} {
 proc frontend_bootstrap {} {
 }
 
+proc finish_mark {} {
+    shutdown
+}
+
 proc its_switches {} {
     global mchn
 
