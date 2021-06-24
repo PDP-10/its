@@ -59,6 +59,6 @@ make_dskdmp
 
 frontend_bootstrap
 
-shutdown
+finish_mark
 start_dskdmp
 dump_nits
