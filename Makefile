@@ -145,7 +145,7 @@ $(OUT)/rp04.1: $(OUT)/kl-minsys.tape $(OUT)/minsrc.tape $(OUT)/kl-magdmp.tap $(O
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/magdmp.tap: $(MAGFRM)
-	cd bin/ka10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt @.salv > ../../../$@
+	cd bin/ka10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt salv.bin > ../../../$@
 
 $(OUT)/kl-magdmp.tap: $(MAGFRM)
 	cd bin/kl10/boot; ../../../$(MAGFRM) magdmp.bin @.ddt salv.bin > ../../../$@
