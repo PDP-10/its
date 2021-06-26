@@ -6,7 +6,7 @@ proc start_salv {} {
     uplevel #0 {spawn ./tools/sims/BIN/pdp10-ka build/pdp10-ka/init}
     setup_timeout
     respond "MAGDMP\r\n" "l\033ddt\r"
-    respond "\n" "t\033salv\r"
+    respond "\n" "t\033salv bin\r"
 }
 
 proc start_dskdmp args {
