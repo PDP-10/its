@@ -108,7 +108,7 @@ proc dskdmp_switches {hriflg} {
     respond "RM80P=" "N\r"
     respond "RH10P=" "N\r"
     respond "DC10P=" "N\r"
-    respond "NUDSL=" "250.\r"
+    respond "NUDSL=" "500.\r"
     respond "KS10P=" "N\r"
     respond "KL10P=" "N\r"
 }
