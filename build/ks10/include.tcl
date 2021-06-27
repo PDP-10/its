@@ -17,14 +17,18 @@ proc start_dskdmp_its {} {
     patch_its_and_go
 }
 
-proc mark_packs {} {
+proc mark_pack {unit pack id} {
     respond "\n" "mark\033g"
-    respond "Format pack on unit #" "0"
+    respond "Format pack on unit #" "$unit"
     respond "Are you sure you want to format pack on drive" "y"
-    respond "Pack no ?" "0\r"
+    respond "Pack no ?" "$pack\r"
     respond "Verify pack?" "n"
     respond "Alloc?" "3000\r"
-    respond "ID?" "foobar\r"
+    respond "ID?" "$id\r"
+}
+
+proc mark_packs {} {
+    mark_pack "0" "0" "foobar"
 }
 
 proc prepare_frontend {} {
