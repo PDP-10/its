@@ -62,11 +62,10 @@ proc make_salv {} {
     expect ":KILL"
 }
 
-proc make_dskdmp {} {
-    respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
+proc dskdmp_switches {hriflg} {
     expect "Configuration"
     respond "?" "ASK\r"
-    respond "HRIFLG=" "N\r"
+    respond "HRIFLG=" "$hriflg\r"
     respond "BOOTSW=" "N\r"
     respond "R11R6P=" "N\r"
     respond "R11R7P=" "N\r"
@@ -77,6 +76,14 @@ proc make_dskdmp {} {
     respond "NUDSL=" "250.\r"
     respond "KS10P=" "N\r"
     respond "KL10P=" "N\r"
+}
+
+proc make_dskdmp {} {
+    global emulator_escape
+    global out
+
+    respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
+    dskdmp_switches "N"
     expect ":KILL"
 }
 
