@@ -20,30 +20,20 @@ proc start_dskdmp_its {} {
     patch_its_and_go
 }
 
+proc mark_pack {unit pack id} {
+    respond "\n" "mark\033g"
+    respond "UNIT #" "$unit"
+    respond "#$unit?" "y"
+    respond "NO =" "$pack\r"
+    expect -timeout 300 "VERIFICATION BEGINS"
+    respond "ALLOC =" "3000\r"
+    respond "PACK ID =" "$id\r"
+}
+
 proc mark_packs {} {
-    respond "\n" "mark\033g"
-    respond "UNIT #" "0"
-    respond "#0?" "y"
-    respond "NO =" "0\r"
-    expect -timeout 300 "VERIFICATION BEGINS"
-    respond "ALLOC =" "3000\r"
-    respond "PACK ID =" "0\r"
-
-    respond "\n" "mark\033g"
-    respond "UNIT #" "1"
-    respond "#1?" "y"
-    respond "NO =" "1\r"
-    expect -timeout 300 "VERIFICATION BEGINS"
-    respond "ALLOC =" "3000\r"
-    respond "PACK ID =" "1\r"
-
-    respond "\n" "mark\033g"
-    respond "UNIT #" "2"
-    respond "#2?" "y"
-    respond "NO =" "2\r"
-    expect -timeout 300 "VERIFICATION BEGINS"
-    respond "ALLOC =" "3000\r"
-    respond "PACK ID =" "2\r"
+    mark_pack "0" "0" "0"
+    mark_pack "1" "1" "1"
+    mark_pack "2" "2" "2"
 }
 
 proc prepare_frontend {} {
