@@ -27,7 +27,7 @@ proc mark_pack {unit pack id} {
     respond "ID?" "$id\r"
 }
 
-proc mark_packs {} {
+proc mark_bootstrap_packs {} {
     mark_pack "0" "0" "foobar"
 }
 

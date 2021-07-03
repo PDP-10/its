@@ -30,7 +30,7 @@ proc mark_pack {unit pack id} {
     respond "PACK ID =" "$id\r"
 }
 
-proc mark_packs {} {
+proc mark_bootstrap_packs {} {
     mark_pack "0" "0" "0"
     mark_pack "1" "1" "1"
     mark_pack "2" "2" "2"
