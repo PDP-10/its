@@ -17,12 +17,14 @@ proc start_salv args {
 }
 
 proc start_dskdmp args {
+    global mchn
+
     quit_emulator
     set ini ""
     if {[llength $args] == 1} {
         set ini [lindex $args 0]
     } {
-        set ini "build/pdp10-ka/boot2"
+        set ini "build/mchn/$mchn/boot"
     }
     set foo "spawn ./tools/sims/BIN/pdp10-ka $ini"
     uplevel #0 $foo
@@ -69,4 +71,5 @@ proc initialize_comsat {} {
 }
 
 source build/ka10/include.tcl
+source build/mchn/$mchn/mchn.tcl
 source build/build.tcl

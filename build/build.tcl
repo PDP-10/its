@@ -7,10 +7,6 @@ proc log_progress {x} {
 
 log_progress "ENTERING MAIN BUILD SCRIPT"
 
-if [info exists env(MCHN)] {
-    set mchn "$env(MCHN)"
-}
-
 puts ""
 puts "BUILDING $mchn ITS"
 puts ""

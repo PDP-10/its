@@ -2,7 +2,7 @@ log_progress "ENTERING BUILD SCRIPT: MARK"
 
 start_salv
 
-mark_packs
+mark_bootstrap_packs
 
 respond "DDT" "tran\033g"
 respond "#" "0"

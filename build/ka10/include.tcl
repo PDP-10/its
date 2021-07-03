@@ -1,5 +1,9 @@
-#Default ITS name for KA10.
-set mchn "KA"
+if [info exists env(MCHN)] {
+    set mchn "$env(MCHN)"
+} else {
+    #Default ITS name for KA10.
+    set mchn "KA"
+}
 
 set cpu "ka10"
 set salv "salv"
@@ -21,7 +25,7 @@ proc mark_pack {unit pack id} {
     respond "PACK ID =" "$id\r"
 }
 
-proc mark_packs {} {
+proc mark_bootstrap_packs {} {
     # Bootstrap ITS uses just packs 2 and 3.
     mark_pack "0" "2" "2"
     mark_pack "1" "3" "3"
@@ -36,6 +40,7 @@ proc frontend_bootstrap {} {
 proc finish_mark {} {
     global emulator_escape
     global build
+    global mchn
     global out
 
     # Here's a dance to get around the fact that the bootstrapping ITS
@@ -55,12 +60,9 @@ proc finish_mark {} {
 
     respond "*" $emulator_escape
     quit_emulator
-    start_salv build/pdp10-ka/init2
+    start_salv build/mchn/$mchn/init
 
-    mark_pack "0" "2" "2"
-    mark_pack "1" "3" "3"
-    mark_pack "2" "0" "0"
-    mark_pack "3" "1" "1"
+    mark_packs
 
     respond "DDT" "tran\033g"
     respond "#" "0"
@@ -97,22 +99,6 @@ proc make_salv {} {
     expect ":KILL"
 }
 
-proc dskdmp_switches {hriflg} {
-    expect "Configuration"
-    respond "?" "ASK\r"
-    respond "HRIFLG=" "$hriflg\r"
-    respond "BOOTSW=" "N\r"
-    respond "R11R6P=" "N\r"
-    respond "R11R7P=" "N\r"
-    respond "RM03P=" "N\r"
-    respond "RM80P=" "N\r"
-    respond "RH10P=" "N\r"
-    respond "DC10P=" "N\r"
-    respond "NUDSL=" "500.\r"
-    respond "KS10P=" "N\r"
-    respond "KL10P=" "N\r"
-}
-
 proc make_dskdmp {} {
     global emulator_escape
     global out
@@ -134,10 +120,6 @@ proc dump_switches {} {
     global mchn
 
     respond "WHICH MACHINE?" "$mchn\r"
-}
-
-proc peek_switches {} {
-    respond "with ^C" "340P==1\r\003"
 }
 
 proc dump_nits {} {
