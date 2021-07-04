@@ -18,10 +18,19 @@ proc start_dskdmp_its {} {
 proc mark_pack {unit pack id} {
     respond "\n" "mark\033g"
     respond "UNIT #" "$unit"
-    respond "#$unit?" "y"
-    respond "NO =" "$pack\r"
-    expect -timeout 300 "VERIFICATION"
-    respond "ALLOC =" "3000\r"
+    # The DC-10 SALV doesn't ask "are you sure?"
+    expect -exact "#$unit?" {
+        type "y"
+        respond "NO =" "$pack\r"
+    } "NO =" {
+        type "$pack\r"
+    }
+    # DC-10 doesn't print a verification message.
+    expect -timeout 300 -exact "VERIFICATION" {
+        respond "ALLOC =" "3000\r"
+    } "ALLOC =" {
+        type "3000\r"
+    }
     respond "PACK ID =" "$id\r"
 }
 
