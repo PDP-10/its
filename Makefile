@@ -14,6 +14,7 @@ GIT ?= git
 CAT ?= cat
 WGET ?= wget
 TAR ?= tar
+MCHN ?= DB
 
 IMAGES=http://hactrn.org/images/
 
@@ -219,7 +220,7 @@ $(OUT)/bootvt.img: $(OUT)/bootvt.bin tools/dasm/palx
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
 
-out/klh10/stamp/pdp10:: $(KLH10) start build/klh10/dskdmp.ini
+out/klh10/stamp/pdp10:: $(KLH10) start out/klh10/dskdmp.ini
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -257,7 +258,7 @@ out/pdp10-kl/system:
 	$(MKDIR) $(OUT)/system
 	cp build/pdp10-kl/config.* $(OUT)/system
 
-build/klh10/dskdmp.ini: build/klh10/dskdmp.txt Makefile
+out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
 	cp=';'; ca=''; \
 	$(TEST) $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
 	$(SED) -e 's/%IP%/$(IP)/' \
