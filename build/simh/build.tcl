@@ -60,4 +60,5 @@ proc initialize_comsat {} {
 }
 
 source build/ks10/include.tcl
+source build/mchn/$mchn/mchn.tcl
 source build/build.tcl

@@ -1,5 +1,9 @@
-#Default ITS name for KS10.
-set mchn "DB"
+if [info exists env(MCHN)] {
+    set mchn "$env(MCHN)"
+} else {
+    #Default ITS name for KS10.
+    set mchn "DB"
+}
 
 set cpu "ks10"
 set salv "nsalv"
@@ -100,7 +104,37 @@ proc prepare_frontend {} {
 }
 
 proc finish_mark {} {
-    shutdown
+    global emulator_escape
+    global build
+    global mchn
+    global out
+
+    # Here's a dance to get around the fact that the bootstrapping ITS
+    # may have a different disk format from the target.  First save
+    # all files to tape.  Next, run the new SALV to mark the disks
+    # using the target format.  Finally load back the files from tape.
+
+    respond "*" $emulator_escape
+    create_tape "$out/reboot.tape"
+    type ":dump\r"
+    respond "_" "dump links full\r"
+    respond "TAPE NO=" "0\r"
+    expect -timeout 6000 "_"
+    type "quit\r"
+
+    respond "*" $emulator_escape
+    quit_emulator
+    start_salv
+
+    mark_packs
+
+    respond "DDT" $emulator_escape
+    mount_tape "$out/reboot.tape"
+    type "tran\033g"
+    respond "#" "0"
+    respond "OK" "y"
+    expect -timeout 300 EOT
+    respond "DDT" $emulator_escape
 }
 
 proc its_switches {} {
@@ -126,26 +160,17 @@ proc make_salv {} {
 
 proc make_dskdmp {} {
     respond "*" ":midas dsk0:.;_system;dskdmp\r"
-    expect "Configuration"
-    respond "?" "ksrp06\r"
-    respond "Assemble BOOT?" "no\r"
+    dskdmp_switches "no"
     expect ":KILL"
 
     respond "*" ":midas dsk0:.;bt_system;dskdmp\r"
-    expect "Configuration"
-    respond "?" "ksrp06\r"
-    respond "Assemble BOOT?" "yes\r"
+    dskdmp_switches "yes"
     expect ":KILL"
 }
 
 proc dump_switches {} {
     global mchn
-
     respond "WHICH MACHINE?" "$mchn\r"
-}
-
-proc peek_switches {} {
-    respond "with ^C" "\003"
 }
 
 proc dump_nits {} {
