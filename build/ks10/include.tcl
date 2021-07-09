@@ -35,6 +35,12 @@ proc prepare_frontend {} {
     global emulator_escape
     global out
 
+    patch_its_and_go
+    pdset
+
+    respond "*" ":login db\r"
+    sleep 1
+
     type ":ksfedr\r"
     respond "File not found" "create\r"
     expect -re {Directory address: ([0-7]*)\r\n}
@@ -63,21 +69,16 @@ proc prepare_frontend {} {
     respond "on unit #" "0"
     respond "address: " "$dir\r"
     respond "DDT" $emulator_escape
-    quit_emulator
 
-    start_its
-    respond "DSKDMP" "its\r"
+    start_dskdmp
+    respond "DSKDMP" "nits\r"
     patch_its_and_go
     pdset
 
     respond "*" ":login db\r"
     sleep 1
-    
-    type $emulator_escape
-    mount_tape "$out/minsrc.tape"
-}
+    type ":vk\r"
 
-proc frontend_bootstrap {} {
     respond "*" ":midas sysbin;_kshack;ksfedr\r"
     expect ":KILL"
     respond "*" ":delete sys;ts ksfedr\r"
@@ -92,6 +93,10 @@ proc frontend_bootstrap {} {
     respond ":" ".;bt bin\r"
     respond "!" "quit\r"
     expect ":KILL"
+
+    shutdown
+    start_dskdmp "$out/sources.tape"
+    respond "DSKDMP" "nits\r"
 }
 
 proc finish_mark {} {

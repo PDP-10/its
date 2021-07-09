@@ -43,9 +43,6 @@ proc mark_bootstrap_packs {} {
 proc prepare_frontend {} {
 }
 
-proc frontend_bootstrap {} {
-}
-
 proc finish_mark {} {
     global emulator_escape
     global build
