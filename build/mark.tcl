@@ -17,7 +17,8 @@ pdset
 respond "*" ":login db\r"
 sleep 1
 
-prepare_frontend
+type $emulator_escape
+mount_tape "$out/minsrc.tape"
 
 type ":dump\r"
 respond "_" "load links crdir sorry\r"
@@ -57,8 +58,7 @@ make_salv
 
 make_dskdmp
 
-frontend_bootstrap
-
 finish_mark
 start_dskdmp
 dump_nits
+prepare_frontend
