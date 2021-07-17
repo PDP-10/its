@@ -14,7 +14,16 @@ GIT ?= git
 CAT ?= cat
 WGET ?= wget
 TAR ?= tar
+
+ifeq ($(EMULATOR),pdp10-ka)
+MCHN ?= KA
+else
+ifeq ($(EMULATOR),pdp10-kl)
+MCHN ?= KL
+else
 MCHN ?= DB
+endif
+endif
 
 IMAGES=http://hactrn.org/images/
 
@@ -224,11 +233,11 @@ out/klh10/stamp/pdp10:: $(KLH10) start out/klh10/dskdmp.ini
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/simh/stamp/pdp10: $(SIMH) start
+out/simh/stamp/pdp10: $(SIMH) start out/simh/boot
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/pdp10: $(KA10) start
+out/pdp10-ka/stamp/pdp10: $(KA10) start out/pdp10-ka/run
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -265,6 +274,12 @@ out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
 	    -e 's/%GW%/$(GW)/' \
 	    -e "s/%CHAOSP%/$$cp/" \
 	    -e "s|%CHAOSA%|$$ca|" < $< > $@
+
+out/simh/boot: build/mchn/$(MCHN)/boot
+	cp $< $@
+
+out/pdp10-ka/run: build/mchn/$(MCHN)/run
+	cp $< $@
 
 $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 	$(MKDIR) $(OUT)/syshst
