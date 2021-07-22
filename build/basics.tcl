@@ -99,7 +99,7 @@ expect ":KILL"
 respond "*" ":job peek\r"
 respond "*" ":load sysbin;peek bin\r"
 respond "*" "purify\033g"
-respond "Idle" "q"
+respond {$G} "q"
 expect ":KILL"
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
