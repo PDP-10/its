@@ -96,6 +96,10 @@ respond "*" ":kill\r"
 
 respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 147\r"
 
+# Support canonical phrase "er emacs;emacs init$ @y :m(hfx*)$"
+# at end of personal init file
+respond "*" ":link emacs;emacs init,emacs;* emacs\r"
+
 # make TS BABYL
 respond "*" ":midas sys3;ts babyl_kmp;babyl\r"
 expect ":KILL"
