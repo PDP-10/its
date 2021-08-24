@@ -62,6 +62,7 @@
 - CKR, Alan Baisley's checkers program.
 - CLOCK, analogue, small, or digital clock.
 - CLOGO, Logo programming language.
+- CLU, compiled programming language.
 - COMBAT, submit jobs to the Muddle compiler.
 - COMIFY, convert HEX to COM format.
 - COMPLR, Lisp compiler.

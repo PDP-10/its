@@ -152,6 +152,7 @@ Some major applications:
 
 - Adventure, game
 - C10, C compiler
+- CLU, progamming language.
 - DDT, debugger
 - Emacs, editor
 - Logo, interpreter

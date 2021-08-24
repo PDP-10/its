@@ -1,0 +1,1468 @@
+; This file gives the standard definitions of registers,
+; some data blocks, and code generation macros throughout the
+; CLU system. It need only be included on the first pass of the
+; assembly.
+
+; non-gc'd scratch regs (contents unchanged by reloc or gc)
+n0=: 0		; scratch 1 (may not contain an address!)
+n1=: 1		; scratch 2
+n2=: 2		; scratch 3 
+n3=: 3		; scratch 4
+
+; relocatable registers (rh relocatable but not gc'd)
+r0=: 4		; reloc register 1
+r1=: 5		; reloc register 2
+
+; gc'd scratch regs (lh should have type code, rh should have reference)
+g0=: 6		; gc scratch 1
+g1=: 7		; gc scratch 2
+
+; return object reg (a single gc'd ref)
+rr=: 10		; must be a ref
+
+; activation registers	(all non-gc'd)
+br=: 11	; blt register (both halves reloc)
+xr=: 12	; x-fer register (rh reloc)
+er=: 13	; environment register (rh reloc)
+lr=: 14	; linkage register (rh reloc)
+pr=: 15	; procedure register (rh reloc)
+mr=: 16  ; module register (rh reloc)
+
+; stack pointer (stack frames are a basis of gc)
+sp=: 17	; (rh reloc)
+
+; Opcodes not supported by MIDAS
+jov=jfcl+(400)	; jump on fixed overflow
+jfov=jfcl+(040)	; jump on floating overflow
+
+; interesting  constants
+myvers==:1,,1	; current version number (format,,features)
+
+typgen==:0	; gt means generate type codes
+tcflag==:typgen	; type checking flag for macros
+
+ttyicn==:1	; tty input channel #
+ttyocn==:2	; tty output channel #
+
+ifn	%its,[
+	pgsize==:1024.	; size of memory page in words
+	pglog2==:10.	; log2 of page size
+	hipage==:254.	; start of funny pages (last 2)
+	chmax==:17	; max # of channels available
+	]
+ifn	%pits,[
+	tyijfn==:100	; tty input jfn
+	tyojfn==:101	; tty output jfn
+	pgsize==:512.	; size of memory page in words
+	pglog2==:9.	; log2 of page size
+	hipage==:510.	; start of funny pages (last 2)
+	chmax==:27	; max # of channels available
+	]
+
+; true xor false must equal true+false !!!
+true==: 777777
+false==: 0
+
+; Interesting constant addresses in memory
+comadr==:100		; common vectors address
+nulls$==:600		; null string location
+syslo==:6*1024.		; lowest system address (leave space for GC)
+userlo==:32.*1024.	; lowest user address
+memlen==:2*pgsize	; initial space for the gc-able memory
+gchi==:hipage*pgsize-1	; highest possible gc-address (ever)
+gclo==:gchi-memlen+1	; lowest possible gc-address (intially)
+work$==:hipage*pgsize	; loader working area address (for 1 page)
+mover==:work$+pgsize	; moving area
+ones==:777777		; halfword of ones (highest address)
+
+; string stuff
+bpword==: 5		; number of bytes per word
+chsize==: 7		; bits per character
+bsize==: chsize*100,,0	; mask for byte ptr for strings
+wsize==: 004400,,000000	; mask for full-word byte ptr
+hichar==: 177		; the highest char (must be 177, 377, or 777 !)
+%lbchr==: .1stwd ascii ""
+%eschr==: .1stwd ascii "\"
+
+; macros start here
+define	.here	label
+label==.-proc$
+termin
+
+; $catch starts a catch level for error handlers
+define	$catch	var
+dd%==dd%+1
+pushsym	ca%,dd%
+pushsym	co%,co%$
+co%$==.
+hrrom	sp,var
+termin
+
+; $cause is  used  to signal  an  exception within  in  a  clu
+; routine. The name of the  error is a standard argument  that
+; should refer  to an  exception descriptor.  the num  is  the
+; literal number  of  arguments  given to  be  signalled  (not
+; including name), and a bunch of arguments may be given along
+; with the call  (or arguments  may be  pushed first).  Unlike
+; signal, $cause does not transfer control out of the frame.
+define	$cause	name,num,[bunch]
+args	bunch
+movei	rr,num
+push	sp,rr
+tdlink	.caul,.caur,name
+push	sp,.caul(.caur)
+jsp	xr,causer
+termin	
+
+; $cont restarts a loop started by $loop
+define	$cont
+symn jrst lp%,\lp%,(pr)
+termin
+
+; $crtnb test returns true if the test skips, false otherwise
+define	$crtnb	test/
+test
+$rtnc	$false
+$rtnc	$true
+termin
+
+; $crtnc reg,cond,caddr; tests the register for the condition
+; (l,le,e,n,g,ge) and returns the constant at caddr if the cond is true.
+define	$crtnc	reg,cond,caddr
+jump!cond	reg,caddr+1
+rtn$==rtn$+1
+termin
+
+; $crtnrr reg,cond; tests the register for the condition
+; (l,le,e,n,g,ge) and returns rr if the condition is true.
+define	$crtnrr	reg,cond
+jump!cond	reg,exiter
+rtn$==rtn$+1
+termin
+
+; $elf is an else-if construct useful in case statements, etc.
+; it is used much like $if, except that it does not start a new level
+; of conditional, and needs no matching $fi.
+define	$elf line/
+$else	line
+termin
+
+; $else starts the else-clause of the conditional, and is
+; optional. the else-clause is terminated by $fi.
+define	$else line/
+symn	jrst	f%,\if%$,-proc$(pr)
+symn	e%,\el%$,==.
+e%==e%+1
+el%$==e%
+line
+termin
+
+; $etagcase finishes up a tagcase.
+define	$etagcase
+$fi
+popsym	tag%
+termin
+
+; $except starts an exception handler for the current catch level.
+define	$except	var,[names,vars,labels]
+symn	jrst dd%,\ca%$,(pr)
+ifge	co%$,[co%$==co%$-.,,co%$]
+.exc==0
+irp	each,,names
+	.exc==.exc+1
+	termin
+.exx==.exc,,.-proc$
+pushsym	z%,co%$
+pushsym	z%,.exx
+pushsym z%,var&ones
+irp	name,,names
+	pushsym	z%,name
+	termin
+irp	each,,labels
+	$label	each
+	termin
+.flg==0
+irp	each,,vars
+	ifse	each,*,{.flg==1
+			.istop}
+	pop	sp,each
+	termin
+ife	.flg,{
+	hrr	sp,var
+	}
+termin
+
+; this is necessary prior to the arguments for a $myield
+define	$fakef
+push	sp,$none
+push	sp,$none
+termin
+
+; $fi terminates a conditional statement or expression.
+define	$fi
+symn	e%,\el%$,==.
+symn	f%,\if%$,==.
+popsym	if%
+popsym	el%
+termin
+
+; $for starts a for-loop  using an iterator  given by iter,  a
+; variable given by var (special case for rr), and a label  to
+; name the loop.
+define	$for	label,[var],iter/
+iter
+$go	label
+.for.==0
+.for1==0
+irp	each,,var
+	.for.==.for.+1
+	termin
+ifg	.for.-1,[
+	massn	var
+	]
+ife	.for.-1,[
+	irp	each,,var
+		assn	each,rr
+		termin
+	]
+termin
+
+; $frame makes a frame in a qproc
+define	$frame
+jsp	r0,framer
+termin
+
+; $gents generates all entry blocks
+define	$gents
+tvec+m%+1
+litgen	m%
+0
+termin
+
+; $go is used to perform a forward jump inside a procedure.
+; l is a label that is local to the procedure.
+define	$go l
+if2	[.la==0
+	.6bit=='l
+	.lag==0
+	repeat	g%,[
+		.la==.la+1
+		symn	.lax==l6%,\.la
+		symn	.lap==lm%,\.la
+		ife	.lap-proc$,[
+			ife	.lax-.6bit,[.lag==.la]
+			]
+		]
+	kvetch	.lag,e,Can't $go to non-existent label l !
+	symn	jrst	g%,\.lag,(pr)
+	]
+if1	[0]
+termin
+
+; $if starts a conditional statement or expression. the result
+; is dependent on  the last instruction  before the $then.  if
+; that  instruction  skips,  the  $then  block  is   executed,
+; otherwise the $else block is exected. this may be nested  to
+; 64. levels.
+define	$if line/
+f%==f%+1
+pushsym	if%,if%$
+if%$==f%
+e%==e%+1
+pushsym	el%,el%$
+el%$==e%
+line
+termin
+
+; $iff is like $ift, except that false causes $then, true causes
+; $else to be executed.
+define	$iff line/
+$if	$testf	line
+termin
+
+; $ift is like $if,  except that it only  accepts one line  of
+; code for the test,  and the boolean  value in rr  determines
+; the branch executed (true causes $then, false cause $else).
+define	$ift line/
+$if	$test	line
+termin
+
+; $init initializes all sorts of stuff for the header files
+define	$init
+zap	[m%,p%,x%,r%,s%,n%,c%,e%,f%,q%,d%,dd%,cl%,ov%,rlink%,rpage%,rline%,vname%]
+termin
+
+; $itpop pops one level of iterator off the stack without  the
+; hair  of  actually  resuming,   and  returns  to  the   next
+; instruction
+define	$itpop
+jsp	xr,itpop
+termin
+
+; $label is used to define a label for $go's
+define	$label l
+if1	[
+	pushsym	g%,.-proc$
+	pushsym	l6%,'l
+	pushsym	lm%,proc$
+	]
+termin
+
+; $loop is used to start a loop inside a procedure. loops  may
+; be nested. getting out of a loop may be done with a $go or a
+; $rtn.
+define	$loop
+pushsym	lp%,.-proc$
+termin
+
+; $mrtn n,[bunch]  returns an  n-tuple of  objects (which  are
+; pushed onto the stack) from  a function. it creates code  to
+; be executed by  the mexit routine,  which also performs  the
+; appropriate exit stuff. the br register is set up to do  the
+; blt from top of stack to top of stack, and (sp) is set up to
+; have the difference between the number of return objects and
+; the number of arguments.
+define	$mrtn	n,[bunch]
+rtn$==rtn$+1
+args	bunch
+.n.==n
+.m.==.n.&ones
+.r.==.n.&777777000000
+.f.==0
+ifn	.r.,{
+	movei	rr,.m.(.r.)
+	hrli	rr,(tmrtn)
+	hrrz	r0,sp
+	subi	r0,-1(rr)
+	movei	br,-1-narg$(er)
+	hrl	br,r0
+	jrst	mexit
+	.stop}
+ife	.r.,{
+	link	.m.,tmrtn+.n.
+	move	rr,.m.(lr)
+	movei	br,-1-narg$(er)
+	hrli	br,1-.n.(sp)
+	jrst	mexit
+	.stop}
+termin
+
+; $myield n,[bunch] does the same  thing as $mrtn except  that
+; it yields multiple objects instead of returning them.
+define	$myield	n,[bunch]
+args	bunch
+link	.m.,tmrtn+n
+assn	rr,.m.(lr)
+jsp	xr,myield
+termin
+
+; $pool terminates a loop.
+define	$pool
+kvetch	lp%$,e,A $pool has occurred without a corresponding $loop !
+popsym	lp%
+symn jrst ,\lp%$,(pr)
+termin
+
+; $qrtn item,cut; is used to put  the item into rr and to  cut
+; back the stack and quickly exit.
+define	$qrtn	item,cut
+ifsn rr,item,{move	rr,item}
+subi	sp,cut
+jrst	exitex
+rtn$==rtn$+1
+termin
+
+; $resume resumes the iterator closest on the stack.
+define	$resume
+jrst	resume
+termin
+
+; $rof terminates the loop labelled by label.
+define	$rof	label
+jrst	resume
+$label	label
+termin
+
+; $rtn returns the object given by obj, which is special cased
+; for rr.
+define	$rtn	obj
+ifsn rr,obj,{move	rr,obj}
+jrst	exiter
+rtn$==rtn$+1
+termin
+
+; $rtnc returns a constant, which must have a jsp xr,exitc  at
+; one after the object!!!!
+define	$rtnc	obj
+jrst	obj+1
+rtn$==rtn$+1
+termin
+
+; $tag generates the  code to conditionally  perform the  next
+; code based on whether the tag matches the integers given  in
+; the list.
+define	$tag	[taglst]
+ifn	tag%$,{
+	$elf
+	}
+tag%$==tag%$+1	
+.tag.==.
+irp	each,,taglst
+	cain	n1,each
+	skipa
+	termin
+ife	.-.tag.,{
+	skipa
+	}
+	$then
+termin
+
+; $tagcase starts the  code for a  tagcase statement. the  var
+; given is the current variable for tagcasing. the save  given
+; is an auxilliary variable given to save the old contents  of
+; the variable.
+define	$tagcase	var,save
+refchk	rr,var
+repchk	rr,torep
+hrrz	n1,(rr)
+ifsn	save,,{movem	rr,save}
+move	rr,1(rr)
+ifsn	rr,var,{movem	rr,var}
+pushsym	tag%,tag%$
+tag%$==0
+$if
+termin
+
+; $test skips if rr holds true
+define	$test	line/
+line
+came	rr,$true
+termin
+
+; $testf is like $test, except that it skips on false.
+define	$testf	line/
+line
+came	rr,$false
+termin
+
+; $then starts the then-clause of the conditional statement.
+; the then-clause is terminated by $else, $fi, or $elf.
+define	$then line/
+symn	jrst	e%,\el%$,-proc$(pr)
+line
+termin
+
+; $uncatch ends a catch block, the stack is restored.
+define	$uncat var
+symn	dd%,\ca%$,==.-proc$
+popsym	ca%
+ifn	ca%,{symn	ca%$==ca%,\ca%,
+	}
+popsym	co%
+hrr	sp,var
+termin
+
+; $yield yields an object in the iterator fashion. rr contains
+; the yielded object.
+define	$yield	obj
+assn	rr,obj
+jsp	xr,yield
+termin
+
+; alloc amount,reg assumes that the  amount is expressed in  a
+; form fit for a movni rr,amount;  which puts the negative  of
+; the amount  into  rr. Then  the  allocation takes  place  by
+; adding that number to  $memhi. If the  amount is dynamic  or
+; more than a page then a check is done for stack collision (a
+; collision causes a GC). The reg argument is assumed to be  a
+; register that holds  a code word  to be out  into the  first
+; word of the allocated memory. Note that a procedure that has
+; an explicit alloc must not allow asynchronous interrupts  to
+; occur since  rr and  $memhi can  be in  funny states  midway
+; through an alloc.
+define	alloc	size,codreg
+propt%==propt%\prc.ni
+movni	rr,size
+addb	rr,$memhi
+camg	rr,$stkhi
+ pushj	sp,memout
+movem	codreg,(rr)
+termin
+
+; anyize  thing,type; gives the thing the given type code
+define	anyize	thing,type
+push	sp,thing
+typreg	rr,type
+hrrz	n0,rr
+caie	n0,t%any
+dpb	rr,$typbp
+pop	sp,thing
+termin
+
+; args is used to push a list of arguments
+define	args [bunch]
+irp each,,bunch
+	push	sp,each
+	termin
+termin
+
+; arrgen nargs; makes an array from nargs on top of the stack,
+; where the low bound is the bottom-most argument.
+define	arrgen	nargs
+movei	r1,-nargs+2(sp)
+hrli	r1,-nargs+1
+jsp	xr,amake
+move	n1,-nargs+1(sp)
+hrrm	n1,ar.cod(rr)
+subi	sp,nargs
+termin
+
+; assn  is   used  to   assign   one  variable   to   another.
+; registers may be  used as  variables, as may  slots  in  the
+; linkage section. rr  is creamed by  the  execution of  assn,
+; and is recognized as a special case.
+define	assn x,y
+ifsn rr,y,{
+	move	rr,y}
+ifsn rr,x,{
+	movem	rr,x}
+termin
+
+; call calls  the procedure  with  the clu  name given  by  p,
+; number of  arguments  given by  n,  and arguments  given  by
+; bunch. arguments  may  be pushed  prior  to using  call,  of
+; course. a procedure call block (pcb) is put into the linkage
+; section (or cluster parm sect or proc parm sect) for use  by
+; the runtime system.
+define	call	[p],nargs,[bunch]
+.nargs==nargs+0
+kvetch	-pgsize&.nargs,n,Bad number of arguments: nargs !
+args	bunch
+pnchk	.ccv,.ccf,.cct,.ccs,p
+rlinkx	.ccr,6,[tcrep+pc.dat ? jlink ? .nargs ? .ccs ? .cct ? .ccv ]
+ife	.ccf,{
+	link	.ccl,tpcb+.ccr
+	move	mr,.ccl(lr)
+	xct	en.set(mr)
+	.stop}
+ifn	.ccf&tdc.pp,{
+	pplink	.ccl,tpcb+.ccr
+	hlro	r0,en.par(mr)
+	move	mr,.ccl(r0)
+	xct	en.set(mr)
+	.stop}
+ifn	.ccf&tdc.cp,{
+	cplink	.ccl,tpcb+.ccr
+	hrro	r0,en.par(mr)
+	move	mr,.ccl(r0)
+	xct	en.set(mr)
+	.stop}
+termin
+
+; cluster starts the  definition of a  cluster, where name  is
+; the clu name for the cluster, rep is the type object for the
+; cluster's representation, parms is a list of internal  names
+; for the  cluster parameters,  and  opers is  a list  of  the
+; internal names of the externally available operations of the
+; cluster. the cluster name is  the first item in the  linkage
+; section.
+define	cluster	name,atype,rep,[parms],[opers]
+printc	/
+cluster name
+/
+.atype==atype+0
+pushsym	m%,.atype
+rep$==rep+0
+zap	[l%,cp%,qproc%,propt%,od%opt,od%,.tflg]
+slink	lnk,name
+ifn	.atype,[.tflg==.atype&typmsk-<tcpd&typmsk>]
+ife	.tflg,{
+	ctype%==tcpd
+	pushsym	cp%,.atype
+	pushsym	cp%,rep$
+	}
+ifn	.tflg,{
+	ctype%==ttd
+	pushsym	l%,.atype
+	pushsym	l%,rep$
+	}
+irp parm,,parms
+	pushsym	cp%,parm
+	termin
+pushsym	c%,.
+if2	{symn	link$==cl%,\c%
+	 ifn link$,[link$==link$+refs$]
+	 symn	cparm$==d%,\c%
+	 ifn cparm$,[cparm$==cparm$+refs$]
+	 symn	odata$==ov%,\c%
+	 ifn odata$,[odata$==odata$+refs$]
+	 }
+termin
+
+; corp terminates the definition of a procedure or  operation.
+; name is the  external name for  the procedure (must  include
+; cluster name). anames are the clu names for the arguments to
+; the procedure, and vnames  are the clu  names for the  local
+; variables.
+define	corp name,[anames,vnames]
+kvetch	rtn$,e,Warning: no $rtn's found in procedure.
+jrst	frog
+kvetch	if%$,n,Outstanding $if's, I think !
+kvetch	el%$,n,Not all $if's properly ended !
+kvetch	lp%,n,Not all $loops are kosher !
+kvetch	ca%,n,Not all $catch blocks ended !
+.perr.==.-proc$
+kvetch	.perr.,l,Oh SHIT: end of procedure is before its beginning !
+litgen	z%
+.pname.==.-proc$
+strlit	name
+narg$x==0
+irp aname,,anames
+	strlit aname
+	narg$x==narg$x+1
+	termin
+kvetch	narg$x-narg$,n,Warning: number of arguments in corp and proc disagree.
+ifn	vname%,[
+	irp vname,,vnames
+		strlit	vname
+		termin
+	vname%==0
+	]
+.psize.==.-proc$
+..vi==0
+ifn	v%,{..vi==v%(1)}
+vecgen	...vi,v%
+if1	[symn	vi%,\p%,==..vi+(...vi)
+	]
+ifn	errflg,[
+	printc	/
+name may have errors in it.
+/
+errflg==0]
+vecgen	..q%,pp%
+pushsym	q%,..q%
+if1	[pushsym	s%,.psize.
+	 pushsym	n%,.pname.
+	 pushsym	x%,.perr.+(propt%)
+	]
+zap	[qproc%,propt%,od%opt]
+termin
+
+; cpdesc creates a type descriptor for a cluster parm
+define	cpdesc	name,str,pos
+string	.cdps,str
+.cpdp==pos+0
+rlinkx	name,5,[tdrep+5 ? 0 ? tdc.pa+tdc.cp ? .cdps ? .cpdp ]
+name==tcpd+name
+termin
+
+; cplink name,val; creates  a link  with named  offset to  the
+; given value in the cluster parameter section
+define	cplink	name,val/
+pushsym	cp%,val
+name==cp%
+propt%==propt%\prc.cp
+termin
+
+; croak is used to generate a simple error message that gets
+; sent to ddt, and is used to indicate some basic failure, or some
+; unimplemented feature.
+define	croak string/
+.croks==.length `
+: string 
+
+`
+.crok.==<.croks+bpword+bpword>/bpword
+purwrd	..crok,tsrep+.croks
+repeat	.crok.-1,[
+	.strw.==.nthwd .rpcnt+1,asciz `
+: string 
+
+`
+	purwrd	..str,.strw.
+	]
+u.crok	1+..crok
+termin
+
+define	cvtdown	thing
+ifg	tcflag,{
+	push	sp,thing
+	ife	ctype%-ttd,[hrroi r0,2(lr)]
+	ife	ctype%-tcpd,[hrro r0,en.par(mr) ? hrroi r0,2(r0) ]
+	skipg	rr,(r0)
+	 jsp	xr,notype
+	dpb	rr,$typbp 
+	pop	sp,thing
+	}
+termin
+
+define	cvtup	thing
+ifg	tcflag,{
+	push	sp,thing
+	ife	ctype%-ttd,[hrroi r0,1(lr)]
+	ife	ctype%-tcpd,[hrro r0,en.par(mr) ? hrroi r0,1(r0) ]
+	skipg	rr,(r0)
+	 jsp	xr,notype
+	dpb	rr,$typbp 
+	pop	sp,thing
+	}
+termin
+
+; edesc creates a descriptor for an exception. this is treated
+; like a type, even though it isn't really a type. it is a lot
+; easier to check if it canonicalized like a type, however.
+define	edesc	name,ename,[bunch]
+tdchk	.edv,.edf,.edt,bunch
+string	.eds,ename
+rlinkx	name,5,[ tdrep+5 ? 0 ? tdc.ed+.edf ? .eds ? .edv ]
+name==.edt+name
+termin
+
+; this macro implements what erjmp SHOULD do
+define	ergo	loc
+ercal	ergot
+jump	loc
+termin
+
+define	fail	str
+ifn	qproc%,[jsp r0,framer]
+move	rr,str
+jsp	xr,nixon
+termin
+
+; fakef creates a  fake frame  on top  of the  stack with  two
+; words reserved  for  the frame.  this  must be  used  before
+; pushing values for a $myield!
+define	fakef
+$fakef
+termin
+
+; fixup places the values given  (v) starting at the  location
+; given (l), then restores the location counter.
+define	fixup	l,[v]
+.fix.==.
+.==l
+irp	each,,v
+	each
+	termin
+.==.fix.
+termin
+
+; force thing,type; insists  that the  given thing  is of  the
+; given type and leaves the thing in rr
+define	force	thing,type
+push	sp,thing
+typreg	rr,type
+ldb	n1,$typbp
+caie	n1,(rr)
+ jsp xr,badtyp
+pop	sp,rr
+termin
+
+; gettyp reg,src gets the type code from the src into the reg
+define	gettyp	reg,src
+.r==src
+hlrz	reg,src
+andi	reg,(typmsk)
+termin
+
+; icall calls an iterator instead of a procedure.
+define	icall	[p],n,[bunch]
+call	p,n,bunch
+termin
+
+; intoff disallows interrupts when we are doing something sneaky
+define	intoff
+aos	$intlock
+termin
+
+; inton allows interrupts when we are squeaky clean
+define	inton
+sosg	$intlock
+jsp	xr,yldout	; **** TEMP until chkout is present ****
+termin
+
+; isref	reg,src skips  if  src  is a  reference,  and  as  a
+; side-effect puts src into reg
+define	isref	reg,src
+skipl	reg,src
+termin
+
+; isrep	reg,type skips  if reg  points  to object  with  the
+; given rep type code (ref check assumed done)
+define	isrep	reg,type
+.t==type
+ife	.t&ones,[.t==(.t)]
+hlrz	n0,(reg)
+caie	n0,.t
+termin
+
+; isrsb	reg,src skips if src is  data, and as a  side-effect
+; puts src into reg
+define	isrsb	reg,src
+skipge	reg,src
+termin
+
+define	itdesc	iname,[args,ylds,sigs]
+pidesc	iname,tdc.it,args,ylds,sigs
+termin
+
+define	iter p,[args,vars,vinit],ptype,[parms]
+propt%==propt%\prc.it
+proc	p,args,vars,vinit,ptype,parms
+termin
+
+define	kvetch	expr,cond,line/
+if!cond	expr,[
+	.err	line
+	errflg==1	]
+termin
+
+; link creates a link to a literal word that gets placed in the
+; linkage section such that name is the offset.
+define	link name,liter/
+pushsym	l%,liter
+name==l%
+termin
+
+; litgen generates all current literals of the form x$n, where 
+; n is  an  octal number  from  0 to  x$-1.  this is  used  to
+; generate accumulated constants at convenient times.
+define	litgen x
+if1 {.=.+x
+    x==0
+    .stop}
+repeat	x,[
+	.x==.rpcnt+1
+	symn	x,\.x,
+	]
+x==0
+termin
+
+; massn is used to do a multiple assignment of objects to  the
+; given variables. rr  is presumed to  have a multiple  return
+; type value which  gives the number  of objects coming  back.
+; the assignments are made in  reverse order, though! so,  for
+; "x,y  :=   p(...)"  the   macro  must   be  written   "massn
+; [y(er),x(er)]".
+define	massn	[dst]
+.n.==0
+irp	each,,dst
+	.n.==.n.+1
+	termin
+mcheck	.n.
+irp	each,,dst
+	pop	sp,each
+	termin
+termin
+
+; mcall is used for internal  clu support system calls,  since
+; it presupposes  that  one  knows where  one  is  calling  at
+; assembly time.
+define	mcall p,[bunch]
+args	bunch
+..p==0
+if2	[..p=movei mr,p
+	 ife	..p&(17),{
+		 ifl	<..p&ones>-refs$,{
+			..p==..p+refs$
+			}
+		}
+	]
+..p
+xct	en.set(mr)
+termin
+
+; mcheck is used to check that  rr has a multiple return  type
+; value with n objects.
+define	mcheck n
+link	mrtn$,tmrtn+<n>
+came	rr,mrtn$(lr)
+jsp	xr,badrtn
+termin
+
+; mflush flushes the  arguments on the  stack after a  routine
+; that returns multiple arguments returns. No action is  taken
+; if rr does not contain a multiple return value.
+define	mflush
+hlrz	n1,rr
+cain	n1,(tmrtn)
+ subi	sp,(rr)
+termin
+
+; nprint is used to print a number
+define	nprint	prefix,num,rest
+printc	`prefix num rest
+`
+termin
+
+define	odget	reg,disp
+move	r0,en.odv(mr)
+move	reg,disp(r0)
+termin
+
+define	odlink	disp,init
+pushsym	od%,init+0
+disp==od%
+termin
+
+define	odset	reg,disp
+move	r0,en.odv(mr)
+movem	reg,disp(r0)
+termin
+
+define	oduse
+od%opt==1
+termin
+
+; pcall calls a ref generated by pcdesc
+define	pcall	ref,[bunch]
+args	bunch
+..pcal==ref
+if2	[ifl <..pcal&ones>-refs$,{..pcal==..pcal+refs$}]
+tdlink	.tal,.tar,..pcal
+move	mr,.tal(.tar)
+xct	en.set(mr)
+termin
+
+; pcdesc sets iname to a ref to a pcb
+define	pcdesc	iname,[pspec],nargs
+.ccn==nargs+0
+pnchk	.ccv,.ccf,.cct,.ccs,pspec
+rlinkx	.ccr,6,[tcrep+pc.dat ? jlink ? nargs ? .ccs ? .cct ? .ccv ]
+iname==ttd+.ccr
+ifn	.ccf&tdc.cp,[iname==tcpd+.ccr]
+ifn	.ccf&tdc.pp,[iname==tppd+.ccr]
+termin
+
+; pdesc creates a descriptor for a procedure object
+define	pdesc	iname,[spec]
+pnchk	.pdv,.pdf,.pdt,.pdn,spec
+rlinkx	.pd,6,[ tdrep+6 ? 0 ? tdc.xr+.pdf ? .pdn ? .pdt ? .pdv ]
+iname==ttd+.pd
+ifn	.pdf&tdc.cp,[iname==tcpd+.pd]
+ifn	.pdf&tdc.pp,[iname==tppd+.pd]
+termin
+
+; pidesc creates  a type  descriptor for  the return  type  of
+; either a procedure or iterator
+define	pidesc	iname,kind,[args,rtns,sigs]
+tdchk	.piv1,.pif1,.pit1,args
+tdchk	.piv2,.pif2,.pit2,rtns
+tdchk	.piv3,.pif3,.pit3,sigs
+rlinkx	.pid,7,[tdrep+7 ? 0 ? kind\.pif1\.pif2\.pif3 ? 0 ? .piv1 ? .piv2 ? .piv3 ]
+iname==.pit1+.pid
+ifg	.pit2-iname,[iname==.pit2+.pid]
+ifg	.pit3-iname,[iname==.pit3+.pid]
+termin
+
+; pnchk sets  the  typ  and nam  arguments  depending  on  the
+; procedure spec given. If  there is just  one element to  the
+; spec then it is a simple unadorned procedure name. If  there
+; is more than one element, then the first is a type (or  type
+; desc), the  second is  the operation  name (without  cluster
+; name or $),  and the  remaining elements  are the  procedure
+; parameters. The vec  arg gets set  to a vector  ref for  the
+; procedure parms, The flg arg gets  set as is does for  tdchk
+; (to show  parm dependence).  The  typ arg  gets set  to  the
+; cluster type  (0 if  none). The  name arg  gets set  to  the
+; procedure (or operation) name.
+define	pnchk	vec,flg,typ,name,[spec]
+zap	[.pnc,.pnf,.pnff,.pnt,name,vec,typ,flg]
+irp	each,,spec
+	.pnc==.pnc+1
+	termin
+ife	.pnc-1,{
+	string	name,spec
+	.stop}
+ifg	.pnc-1,[
+	.pnc==0
+	irp	each,rest,spec
+		.pnc==.pnc+1
+		ife	.pnc-1,[.pnt==each]
+		ife	.pnc-2,[
+			string	name,each
+			tdchk	vec,.pnff,.pnct,[rest]
+			.pnf==.pnf\.pnff
+			]
+		termin
+	ife	tppd&typmsk-<.pnt&typmsk>,[.pnf==.pnf\tdc.pp]
+	ife	tcpd&typmsk-<.pnt&typmsk>,[.pnf==.pnf\tdc.cp]
+	]
+typ==.pnt
+flg==.pnf
+termin
+
+; pops is used to pop things  from the stack to a given  bunch
+; of destinations.
+define	pops [bunch]
+irp each,,bunch
+	pop	sp,each
+	termin
+termin
+
+define	popsym	sym
+expung	sym!$
+ifg	sym,{
+	symn	sym!$==sym,\sym,
+	sym==sym-1}
+termin
+
+; ppdesc creates a type descriptor for a proc parm
+define	ppdesc	name,str,pos
+string	.ppds,str
+.ppdp==pos+0
+rlinkx	name,5,[tdrep+5 ? 0 ? tdc.pa+tdc.pp ? .ppds ? .ppdp ]
+name==tppd+name
+termin
+
+; pplink name,val; creates  a link  with named  offset to  the
+; given value in the procedure parameter section
+define	pplink	name,val/
+pushsym	pp%,val
+name==pp%
+propt%==propt%\prc.pp
+termin
+
+; proc starts  the  definition  of a  procedure  or  operation
+; within a cluster.  p is a  dummy except that  $p is a  label
+; that shows up in ddt for the basic system. args is a list of
+; internal names for the offsets  to the arguments, vars  does
+; the same  for the  variables,  while vinit  initializes  the
+; variables to something decent.
+define	proc p,[args,vars,vinit],ptype,[parms]
+zap	[pp%,errflg,if%,if%$,el%,el%$,lp%,lp%$,z%,rtn$,nvar$,narg$,ca%,ca%$,tag%,tag%$]
+zap	[errflg,.vin,.prf,co%,co%$,v%,..p,pparm$,..v]
+tdflg	.prf,ptype
+ifn	.prf&tdc.cp,[propt%==propt%\prc.cp]
+ifn	.prf&tdc.pp,[propt%==propt%\prc.pp]
+proc$==.
+irp	vin,,vinit
+	.vin==.vin+1
+	pushsym	v%,vin+0
+	termin
+irp var,,vars
+    nvar$==nvar$+1
+    var== nvar$
+    termin
+kvetch  .vin-nvar$,n,Warning: variable initialization of incorrect length.
+irp arg,,args
+    narg$== narg$+1
+    termin
+argdsp== -1-narg$
+irp arg,,args
+    arg==argdsp
+    argdsp==argdsp+1
+    termin
+irp parm,,parms
+	pushsym	pp%,parm
+	propt%==propt%\prc.pp
+	termin
+if2	[p%==p%+1
+	symn	..vi==vi%,\p%
+	ifn	..vi,{..vi==..vi+(refs$)}
+	..p==pushj sp,setup
+	ife	qproc%,[ife	..vi&ones,[..p==pushj sp,qsetup]]
+	ifn	qproc%,[..p==jsp xr,proc$+pr.go]
+	symn	pparm$==q%,\p%
+	ifn pparm$,[pparm$==pparm$+refs$]
+	]
+ptype$==ptype+0
+rlinkx	p,en.dat+od%opt,[terep+en.dat+od%opt ? ..p ? proc$(link$) ? ..vi ?
+		cparm$(pparm$) ? 0 ? ptype$ ? 0 ?
+		ifn	od%opt,{ tref+odata$}
+		]
+..newp==tref+p
+if2	[..m%==m%+1
+	 symn ..prep==m%,\..m%,+refs$
+	 ]
+pushsym	m%,..newp
+if2	[ifn	..prep-..newp,[.err Phase error on proc definition for p
+		nprint	old = ,\..prep
+		nprint	new = ,\..newp
+		]]
+$!p=.
+if1	[pushsym	p%,tref+.
+	.=.+pr.go]
+if2	[symn	tprep+s%,\p%
+	symn	x%,\p%
+	narg$+2
+	symn	n%,\p%
+	]
+termin
+
+define	ptdesc	iname,[args,rtns,sigs]
+pidesc	iname,tdc.pt,args,rtns,sigs
+termin
+
+; purgen generates the pure area
+define	purgen
+pur$lo:	litgen	r%
+pur$hi:	0
+termin
+
+; purwrd puts a purifiable word  into the pure area and   sets
+; the  name  to  be  OK  on  second  pass  (it  just  has  the
+; displacement on the first pass).
+define	purwrd	name,item
+name==r%
+r%==r%+1
+if1	{
+	.stop}
+name==name+pur$lo
+symn	r%,\r%,==item
+termin
+
+define	pushsym	sym,val
+sym==sym+1
+symn	sym,\sym,==val
+sym!$==val
+termin
+
+define	qproc	name,[args,vars,init],ptype,[pparms]
+qproc%==1
+proc	name,args,vars,init,ptype,pparms
+termin
+
+define	qsignal	name,num,[bunch]
+signal	name,num,bunch
+termin
+
+; Recgen [list] assumes that the components of the record have
+; been pushed onto the stack, but not in the right order  (but
+; it works if they are in order, also). The list given is  the
+; list of displacements in the record for the components (1 is
+; lowest disp, .c is highest disp).
+define	recgen	[list]
+.c==1
+irp	each,,list
+	.c==.c+1
+	termin
+movei	n1,.c
+jsp xr,vmake
+irp	each,,list
+	pop	sp,each(rr)
+	termin
+termin
+
+define	refchk	reg,src
+skipl	reg,src
+jsp	xr,notref
+termin
+
+define	repchk	reg,type
+.t==type
+ife	.t&ones,[.t==(.t)]
+hlrz	n0,(reg)
+caie	n0,.t
+jsp	xr,badrep
+termin
+
+define	reti name,[anames,vnames]
+corp name,anames,vnames
+termin
+
+; retsulc terminates the definition of a cluster with the name
+define	retsulc name,[parms]
+vecgen	..cl%,l%
+pushsym	cl%,..cl%
+vecgen	..d%,cp%
+pushsym	d%,..d%
+vecgen	..ov%,od%
+pushsym	ov%,..ov%
+termin	
+
+define	rlink	name,[items]
+.err	You can no longer use rlink! Use rlinkx instead!
+name==0
+termin
+
+define	rlinkx	name,size,[items]
+if1	[name==rlink%
+	items
+	rlink%==rlink%+size
+	.==.-1
+	]
+if2	[name== items
+	 ifn	rlink%,{
+		ifn	name-rlink%,{
+			radix	10.
+			rlinke	\rpage%,\rline%,\rsize%
+			radix	8
+			}
+		}
+	 rlink%==name+size
+	 rline%==.curln
+	 rpage%==.curpg
+	 rname%==sixbit |name|
+	 rsize%==size
+	 ]
+termin
+
+define	rlinke	pg,ln,siz
+.err	Warning: Bad rlinkx on page pg, line ln 
+printc	|				Name: |
+.tyo6	rname%
+printc	|, Size: siz
+|
+termin
+
+; rsbchk reg,src puts the src into the reg and checks to  make
+; sure that the thing  put there is  indeed raw seething  bits
+; (sign bit off)
+define	rsbchk	reg,src
+skipge	reg,src
+jsp	xr,notrsb
+termin
+
+; rtdesc creates a type  descriptor that specifies the  return
+; type of the given procedure.
+define	rtdesc	iname,[pspec]
+pnchk	.rtv,.rtf,.rtt,.rtn,pspec
+rlinkx	.rtd,6,[tdrep+6 ? 0 ? tdc.rt+.rtf ? .rtn ? .rtt ? .rtv ]
+iname==ttd+.rtd
+ifn	.rtf&tdc.cp,[iname==tcpd+.rtd]
+ifn	.rtf&tdc.pp,[iname==tppd+.rtd]
+termin
+
+define	scall	str,num,[bunch]
+.ccn==num+0
+kvetch	-100&.ccn,n,Bad number of arguments: nargs !
+args	bunch
+rlinkx	.ccr,6,[tcrep+pc.dat ? jlink ? .ccn ? str ? 0 ? 0 ]
+link	.ccl,tpcb+.ccr
+move	mr,.ccl(lr)
+xct	en.set(mr)
+termin
+
+; sdesc creates  the type  descriptor for  general types  with
+; string  selectors  (or  any  canonicalized  selectors)   for
+; arguments.
+define	sdesc	iname,xname,[bunch]
+tdchk	.tdv,.tdf,.tdt,bunch
+string	.tds,xname
+ife	.tdv,[.tdf==tdc.cp ? .tdt==tcpd]
+rlinkx	iname,5,[tdrep+5 ? 0 ? tdc.sd\.tdf ? .tds ? .tdv ]
+iname==.tdt+iname
+termin
+
+; signal is used to signal an exception in a clu routine.  the
+; name of the error is  a standard argument that should  refer
+; to an exception descriptor. the num is the literal number of
+; arguments given to be signalled (not including name), and  a
+; bunch of  arguments may  be given  along with  the call  (or
+; arguments may be pushed first).
+define	signal	name,num,[bunch]
+ifn	qproc%,[jsp r0,framer]
+args	bunch
+movei	rr,num
+push	sp,rr
+tdlink	.sigl,.sigr,name
+push	sp,.sigl(.sigr)
+jsp	xr,siggy
+termin	
+
+; slink creates  a link  to a  string such  that name  is  the
+; offset in the  linkage section for  the string reference  to
+; string.
+define	slink name,str/
+string	.slink,str
+link	name,.slink
+termin
+
+; string generates a string literal and assigns the code to name
+define	string	name,lit/
+.c==.1stwd ascii "lit"
+.c==.c&(774000)
+.q==%lbchr
+ife %lbchr-.c,{ irpc one,rest,lit
+		name==rest
+		.istop
+		termin
+	    .stop
+		}
+.str.==.lengt "lit"
+ife	.str.-4,{
+	ife	%eschr-.c,{
+		irpc one,rest,lit
+			name==tstr+rest
+			.istop
+			termin
+		.stop
+		}}
+ifle .str.,{
+	name==(%str)+nulls$
+	.stop}
+ife .str.-1,{
+	name==tstr+"lit
+	.stop}
+..str.==<.str.+bpword+bpword-1>/bpword
+purwrd	..str,tsrep+.str.
+name== (%str)+..str
+repeat	..str.-1,[
+	.strw.==.nthwd .rpcnt+1,ascii "lit"
+	purwrd	..str,.strw.
+	]
+termin
+
+; strlit generates  a string  literal  with the  in-line  word
+; being the reference to the string.
+define	strlit str/
+string	.strl.,str
+.strl.	
+termin
+
+; stypi reg,code sets the type code into the reg provided that
+; we are maintaining such codes. The ref bit is unchanged.
+define	stypi	reg,code
+ifg	typgen,[
+	.c==code
+	ife	.c&ones,[.c==(.c)]
+	tlz	reg,(typmsk)
+	tlo	reg,.c&(typmsk)
+	]
+termin
+
+; stypix reg,code sets  the type  code into  the reg  provided
+; that we are maintaining  such codes. The ref  bit is set  by
+; the type code.
+define	stypix	reg,code
+.c==code
+ife	.c&ones,[.c==(.c)]
+hrli	reg,.c
+termin
+
+; symn is a kludge designed to get around the miserable  midas
+; way of converting symbol values  to strings. n is usually  a
+; number generated between s and rest.
+define	symn s,n,rest/
+s!n!rest
+termin
+
+; tdchk sets the  rp and flg  args depending on  the bunch  of
+; type descriptors given.  The  rp gets a ref  to a vector  of
+; the parameters,  while  the flg  is  zero for  no  parameter
+; dependencies, and  has the  tdc.pp or  tdc.cp bits  set  for
+; appropriate other dependencies. An empty bunch returns rp  =
+; 0, flg = 0.
+define	tdchk	rp,flg,typ,[bunch]
+zap	[rp,.tdcm,.tdcf,.rpc]
+.tdct==ttd
+irp	each,,bunch
+	.tdcm==.tdcm+1
+	tdflg	.tdcf,each
+	termin
+ifg	.tdcm,[	rlinkx	rp,.tdcm+1,[tvec+.tdcm+1 ? irp each,,bunch ? each ? termin ]
+	        rp==tref+rp]
+ifn	.tdcf&tdc.cp,[.tdct==tcpd]
+ifn	.tdcf&tdc.pp,[.tdct==tppd]
+flg==.tdcf
+typ==.tdct
+termin
+
+; tdesc creates the type descriptor for general types.
+define	tdesc	iname,xname,[bunch]
+tdchk	.tdv,.tdf,.tdt,bunch
+string	.tds,xname
+rlinkx	iname,5,[tdrep+5 ? 0 ? tdc.td+.tdf ? .tds ? .tdv ]
+iname==.tdt+iname
+termin
+
+; tdflg sets the flags with tdc codes depending on the thing
+define	tdflg	flg,thing
+ife	tppd&typmsk-<thing&typmsk>,[flg==flg\tdc.pp]
+ife	tcpd&typmsk-<thing&typmsk>,[flg==flg\tdc.cp]
+termin
+
+; tdlink creates a link to a type descriptor, possibly setting
+; r1 with the right vector address  lnk gets set to the  disp,
+; and reg gets set to the right reg
+define	tdlink	lnk,reg,thing
+ife	thing&typmsk-<tppd&typmsk>,{
+	pplink	lnk,thing
+	hlrz	r1,en.par(mr)
+	reg==r1
+	.stop}
+ife	thing&typmsk-<tcpd&typmsk>,{
+	cplink	lnk,thing
+	hrrz	r1,en.par(mr)
+	reg==r1
+	.stop}
+link	lnk,thing
+reg==lr
+termin
+
+; typarg causes a  bunch of  type descriptors  to be   pushed,
+; regardless of whether they  are parameter-dependent or  not.
+; this code can  clobber any reg  <= xr. Type-descriptors  get
+; snapped.
+define	typarg	[bunch]
+irp	each,,bunch
+typreg	rr,each
+push	sp,rr
+termin
+termin
+
+; typreg  generates  code  to  put   a  type  code  (or   type
+; descriptor) into  a register  given by  reg. this  code  can
+; clobber any reg <= xr. Type-descriptors get snapped.
+define	typreg	dst,td
+tdlink	.tal,.tar,td
+hrroi	r0,.tal(.tar)
+skipg	rr,(r0)
+jsp	xr,notype
+assn	dst,rr
+termin
+
+; vargen var,vinit;  generates a  new  variable that  will  be
+; initialized to  vinit,  and  makes var  the  offset  of  the
+; variable so  that  var(er)  will be  the  address  when  the
+; procedure is run.
+define	vargen	var,vinit
+nvar$==nvar$+1
+var==nvar$
+.vin==.vin+1
+pushsym v%,vinit+0
+termin
+
+define	vecgen	name,vec
+..vnam==0
+..vgen==vec&ones
+ifn	..vgen,{
+	rlinkx	..vnam,..vgen+1,[tvec+1+..vgen
+		.x==0
+		repeat	..vgen,[
+			.x==.x+1
+			symn	vec,\.x,
+			]
+		]
+	}
+name==..vnam
+vec==0
+termin
+
+; xcall calls a procedure that is pointed to by rr.
+define	xcall	thing,n,[bunch]
+args	bunch
+ifsn	thing,,[assn rr,thing]
+hrrz	mr,rr
+xct	en.set(mr)
+termin
+
+define	zap	[stuff]
+irp	each,,stuff
+	each==0
+	termin
+termin
+
+; zdesc creates a descriptor for a procedure object vector for
+; selector-type clusters only!
+define	zdesc	iname,xname
+string	.zds,xname
+rlinkx	.pd,5,[ tdrep+5 ? 0 ? tdc.zd+tdc.cp ? .zds ? 0]
+iname==tcpd+.pd
+termin
+
+; Setup some first-pass quantities for $label & $go
+zap	[g%,g%$,l6%,l6%$,lm%,lm%$,rlink%]
+   
