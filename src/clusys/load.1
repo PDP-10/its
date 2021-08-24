@@ -1,0 +1,655 @@
+;****	A BASIC CLUSYS FILE    ****
+
+cluster	%load,0,0,[],[]
+	
+; %snap  should  be  called  with  the  address  of   a
+; procedure call block  (pcb) and the  address of  the
+; entry  block   of  the   procedure  executing   when
+; snapping. it will give a  nasty error if the  pc.lnk
+; field of  the pcb  does not  refer to  a word  which
+; refers back to the pcb.  it will give another  nasty
+; error if the pcb refers  to a procedure that is  not
+; present in the procedure table. snap returns (if all
+; is well) with the procedure object.
+
+propt%==prc.ni
+proc	%snap,[plnk,ent]
+	$label	retry		; we will try forever if necessary
+	refchk	r0,plnk(er)
+	repchk	r0,tcrep
+; lookup the procedure quickly or slowly
+	$if	skipn	pc.typ(r0)		; if no type to find
+		skipe	pc.par(r0)		; and no parms to fool with
+	$then	mcall	pfind,[pc.str(r0)]	; then look in ptab
+		aos	$snap			; and bump snapped count
+	$else	call	%desc$snap_pcb,1,[r0] ; look and perhaps build one
+	$fi
+; check the returned object for some validity
+	refchk	rr,rr
+	$if	came	rr,$none
+	$then	mcall	%dfail,[plnk(er)]
+	$fi
+; if block is an entry block, check the # of arguments
+	$if	isrep	rr,terep
+	$then	hrrz	r1,en.lpr(rr)	; get the pr for the found procedure
+		hrrz	n1,pr.cut(r1)	; get number of args for that procedure
+		hrrz	r0,plnk(er)
+		$if	skipl	n2,pc.num(r0)	; if #args < 0, then no test
+			cain	n2,-2(n1)	; adjust test for frame size
+		$then	slink	lnk,Snap found a bad # of args for: 
+			move	g0,lnk(lr)
+			$go	bitch
+		$fi
+	$fi
+; attempt to find (and replace) the pcb in cluster data
+	push	sp,rr
+	move	r0,ent(er)		; try to fixup linkage
+	hlro	r0,en.lpr(r0)
+	$ift	mcall	ld.sb,[r0,plnk(er),rr]
+	$then	$rtn	(sp)
+	$fi
+; attempt to find (and replace) the pcb in cluster parm dependent stuff
+	move	rr,(sp)
+	move	r0,ent(er)		; try to fixup cluster parms
+	hrro	r0,en.par(r0)
+	trnn	r0,ones
+	 $go	ppfix
+	$ift	mcall	ld.sb,[r0,plnk(er),rr]
+	$then	$rtn	(sp)
+	$fi
+	move	rr,(sp)
+; attempt to find (and replace) the pcb in proc parm dependent stuff
+	$label	ppfix
+	move	r0,ent(er)		; try to fixup proc parms
+	hlro	r0,en.par(r0)
+	trnn	r0,ones
+	 $rtn	rr
+	$ift	mcall	ld.sb,[r0,plnk(er),rr]
+	$then	$rtn	(sp)
+	$fi
+	move	rr,(sp)
+	$rtn	rr		; and return the procedure object
+
+	$label	bitch		; come here to bitch about something
+	mcall	crlf,[$tyo]	; get new line
+	mcall	ch.ws,[$tyo,g0]	; write the bitch
+	move	r0,plnk(er)
+	mcall	ch.ws,[$tyo,pc.str(r0)]	; write the name of the offender
+	mcall	crlf,[$tyo]
+	croak	$p gets you a listen loop (maybe).
+	call	listen,2,[$tyi,$tyo]	; call to listen again
+	$go	retry		; try again if we return
+corp	%snap,[plnk,ent]
+
+; %Load$replace(vec,item,repl) tries to replace all occurences
+; of item in vec by repl.  If there was a replacement, it returns
+; true, otherwise false.
+propt%==prc.ni
+proc	ld.sb,[vec,item,repl],[flag],[tbool+false]
+
+	move	r0,vec(er)
+	$if	trne	r0,-pgsize
+	$then	$rtnc	$false
+	$fi
+	$for	all,rr,mcall	loopv,[r0]
+		move	r0,item(er)
+		$if	came	r0,(rr)
+		$then	move	r1,repl(er)
+			movem	r1,(rr)
+			move	rr,$true
+			movem	rr,flag(er)
+		$fi
+	$rof	all
+	$rtn	flag(er)
+
+corp	%load$replace,[vec,item,replace],[flag]
+
+; xload takes a string and tries to open the named channel.
+; it then reads lines and treats them as file names to be fload'd
+; into the current environment.
+propt%==prc.ni
+proc	xload,[str],[chan],[0]
+	slink	lnk,read
+	mcall	ch.op,[lnk(lr),str(er)]
+	movem	rr,chan(er)
+	$loop
+		link	lnk,tchar+12
+		mcall	ch.rs,[chan(er),lnk(lr)]
+		assn	str(er),rr
+		mcall	s.siz,[rr]	
+		$if	camg	rr,$two
+		$then	mcall	ld.fl,[str(er)]
+		$else	mcall	ch.cl,[chan(er)]
+			$rtnc	$none
+		$fi
+	$pool
+
+corp	xload,[str],[chan]
+
+; %load$page(chan,addr) attempts to load in a page from
+; a load  file by  mapping it  in. If  successful,  it
+; makes the  page read-only  to prevent  funny  things
+; from happening.
+propt%==prc.ni
+proc	ld.np,[chan,addr]
+	movei	n0,0
+	hrrz	n1,chan(er)
+	hrrz	n2,addr(er)
+	idivi	n2,pgsize
+	$if	.call	ld.np1(pr)	; did we map it in?
+	$then
+	$elf	.call	ld.np2(pr)	; try to get new page for reading
+	$then	movei	n1,pgsize		; could not map it in, so try to read it
+		stypix	n1,(tint)
+		mcall	ch.rv,[chan(er),addr(er),n1]
+	$else	croak	Can't get the page to load!
+	$fi
+	$rtnc	$none
+ld.np1==.-proc$
+	setz
+	sixbit	/corblk/
+	5000,,%cbndr+%cbcpy	; copy, read
+	n0		; arg1 = 0 (no mod to ctrl bits)
+	1000,,%jself	; job = self
+	n2		; page number
+	setz	n1	; channel #
+ld.np2==.-proc$
+	setz
+	sixbit	/corblk/
+	5000,,%cbndr+%cbndw	; read & write the page
+	n0		; arg1 = 0 (no mod to ctrl bits)
+	1000,,%jself	; job = self
+	n2		; page number
+	setzi	%jsnew	; try for new page
+corp	%load$page,[chan,addr]
+
+; Fload takes a string for a file name, then  attempts
+; to open a load file  by that name. If successful  it
+; calls Load on the resulting channel.
+
+propt%==prc.ni
+proc	ld.fl,[name]
+	mcall	f.pa1,[name(er)]
+	movei	n1,'BIN
+	skipn	fb.nm2(rr)
+	 movsm	n1,fb.nm2(rr)
+	movei	n1,6		; read in block mode
+	mcall	f.opn,[n1,rr]	; try to open the file
+	vargen	chan,0
+	movem	rr,chan(er)
+	$if	hlrz	n1,rr	; did we get a channel?
+		cain	n1,(tchan)
+	$then	slink	lnk,Fload could not open 
+		mcall	s.cat,[lnk(lr),name(er)]
+		fail	rr
+	$fi
+	mcall	ld.ld,[chan(er)]	; load the file
+	mcall	ch.cl,[chan(er)]	; close the channel
+	$rtn	name(er)
+corp	fload,[name]
+
+; Load takes an open channel,  then reads in what  had
+; better be a  load file.  To wit, there  should be  a
+; JRST 1 in the  first page of  the file, followed  by
+; blocks with the format:
+; 	0:  -N,,addr
+; 	1-N: data
+; 	N: checksum
+; This loading process runs out when a block is  found
+; with N = 0. The first block to be loaded must be  in
+; the "load block" format given here:
+ 	ld.cod== 0	; tvec+5
+	ld.siz== 1	; size of load file
+	ld.low== 2	; virtual low bound
+	ld.ent== 3	; ref to entry block vector
+	ld.ver== 4	; CLU version number
+	ld.ref== 5	; ptr to ref area
+; Load then calls %load$fix to fix up the loaded stuff,
+; then runs around making  the entry blocks happy  and
+; entering them into the module table.
+
+propt%==prc.ni
+proc	ld.ld,[chan],[lolim,size,reloc,source,srclen],[0,0,0,0,0]
+	mcall	ld.np,[chan(er),$work]
+	movei	n1,1
+	hrli	n1,(jrst)
+	move	r0,$work
+	hrli	r0,-pgsize
+.here	ld.ld1		; Scan for a JRST 1 to start the file.
+		camn	n1,(r0)
+		jrst	ld.ld2(pr)
+		aobjn	r0,ld.ld1(pr)
+		jrst	ld.lde(pr)	; there had better be one!
+.here	ld.ld2		; Get the descriptor block & check it
+	movei	n1,6
+	hrli	n1,(tvec)
+	came	n1,ld.cod+2(r0)	; the first word must be tvec+6
+	jrst	ld.lde(pr)
+	hrrz	n1,1(r0)	; get the low addr from load format
+	hrrz	n2,2+ld.low(r0)	; and from the load block itself
+	came	n1,n2
+	jrst	ld.lde(pr)	; they had better match!
+	movem	n2,lolim(er)	; save the low limit
+	hlrz	n3,2+ld.ver(r0)	; get the version number
+	caie	n3,ones&(myvers); compare against format part
+	jrst	ld.lde(pr)	; otherwise we goof off
+	hrrz	n1,2+ld.siz(r0)
+	movem	n1,size(er)	; and the size of the memory
+	hrli	n1,(twvec)
+	alloc	(n1),n1		; grab enough memory to load into
+	intoff			; no interrupts, please
+	hrroi	r1,0(rr)	; point at the memory
+	movem	r1,reloc(er)	; save that address
+	movei	n3,0		; clear to force new virtual ptr
+.here	ld.ld3
+	jumpl	r0,ld.ld4(pr)	; if work ptr is valid, then use it
+	hrrm	n3,source(er)	; save the virtual ptr
+	hlrm	n3,srclen(er)
+	mcall	ld.np,[chan(er),$work]	; grab the page
+	move	r0,$work
+	hrli	r0,-pgsize	; get ptr to the work area
+	move	n3,source(er)	; get virtual ptr
+	hrl	n3,srclen(er)	; and the length
+.here	ld.ld4
+	jumpl	n3,ld.ld6(pr)	; if we can load another word, do so
+	aobjn	r0,ld.ld5(pr)	; skip checksum & check for new page needed
+	mcall	ld.np,[chan(er),$work]	; grab the page
+	move	r0,$work
+	hrli	r0,-pgsize	; get ptr to the work area
+.here	ld.ld5
+	$if	skipge	n3,(r0)	; get new virtual ptr & check for loading done
+	$then	mcall	ld.fx,[reloc(er),size(er),lolim(er),size(er),reloc(er)]
+		move	r0,reloc(er)	; get the first word address
+		$if	skipn	r1,ld.ref(r0)	; if there are strings to fix up
+		$then	add	r0,ld.siz(r0)
+			stypix	r0,(trel)
+			move	g1,r0
+			$loop			; then start to fix them
+				stypix	r1,(trel)
+				$if	camge	r1,g1		; test for end of area
+				$then	$go	sfixed
+				$fi
+				$if	skipl	n2,(r1)
+					tlnn	n2,repbit
+				$then	hlrz	n2,n2
+					$if	caie	n2,(tsrep) ; fix the string
+					$then	stypix	r1,(trel)
+						push	sp,g1
+						mcall	ld.sf,[r1]
+						pop	sp,g1
+						move	r1,rr
+					$elf	caie	n2,(tarep); skip the array block
+					$then	addi	r1,3
+					$elf	caie	n2,(torep); skip the oneof block
+					$then	addi	r1,2
+					$else	hrrz	n1,(r1)	; skip other blocks
+						addi	r1,(n1)
+					$fi
+				$else	aos	r1		; skip any other word
+				$fi
+			$pool
+			$label	sfixed
+		$fi
+
+		move	r0,reloc(er)	; get the first word address
+		$for	all,rr,call	loopv,1,[ld.ent(r0)] ; for all entry blocks, do
+		  move	g0,(rr)		; get the entry block
+		  $if	isrep	g0,terep
+		  $then	; this is an entry block
+			hrrz	r0,en.lpr(g0)	; get the proc
+			skipn	r0
+			 $resume		; don't enter anything not a procedure
+			push	sp,g0		; save the entry block
+			add	r0,pr.nam(r0)
+			move	rr,(r0)		; get the procedure name
+			hrro	r0,r0
+			push	sp,r0		; save the name address
+			mcall	tb.ca,[$mtab,rr]
+			hrro	r0,(sp)
+			movem	rr,(r0)		; canonicalize the name
+			movem	rr,(sp)		; save the name for later
+			mcall	tb.va,[$mtab,rr]	; get old entry
+			pop	sp,g0			; restore the name
+			pop	sp,g1			; restore the entry
+			push	sp,rr			; save the old guy
+			hrrz	r0,rr
+			mcall	tb.en,[$mtab,g0,g1]
+			pop	sp,rr	; restore the old guy
+			$if	camn	rr,$none
+			$then	movei	n1,relink ; change setup call
+				hrli	n1,(jsp xr,0)
+				movem	n1,en.set(rr) ; to relink
+			$fi
+		  $elf	isrep	g0,tdrep
+		  $then	; this is a descriptor for a cluster
+			push	sp,g0
+			mcall	tb.ca,[$mtab,td.nam(g0)]
+			pop	sp,g0
+			movem	rr,td.nam(g0)		; canon the name
+			mcall	tb.en,[$mtab,rr,g0]	; enter the type desc
+		  $fi
+		$rof	all
+		move	rr,chan(er)
+		jrst	ld.ldx(pr)
+	$fi
+	aobjp	r0,ld.ld3(pr)	; skip over block ptr word & get new page if needed
+.here	ld.ld6			; come here to move a bunch of words
+				; n3 is aobjn to virtual area
+				; r0 is aobjn to work area
+	hlre	n2,n3
+	movn	n2,n2		; get length of virtual ptr
+	hlre	n1,r0
+	movn	n1,n1		; and length of work ptr
+	camle	n1,n2
+	exch	n1,n2		; n1 now has min length to blt
+	hrrz	n0,n3
+	sub	n0,lolim(er)
+	jumpl	n0,ld.lde(pr)	; if low limit too low, error
+	hrrz	br,reloc(er)
+	add	br,n0		; save for destination address
+	add	n0,n1		; add in blt length
+	camle	n0,size(er)
+	jrst	ld.lde(pr)	; if too long to blt, then error
+	hrrz	r1,br		; get dest address
+	addi	r1,-1(n1)	; find last word address
+	hrl	br,r0		; get work area address as source
+	blt	br,(r1)		; move all possible words
+	hrl	n1,n1		; duplicate the size moved
+	add	n3,n1		; update the aobjn ptrs
+	add	r0,n1
+	jrst	ld.ld3(pr)	; and go test for source acceptability
+.here	ld.lde
+	croak	Bad load file!!!!
+	slink	lnk,Load failed.
+	move	rr,lnk(lr)
+.here	ld.ldx
+	inton			; ok to interrupt now
+	$rtn	rr
+corp	%load,[chan],[lolim,size,reloc,source,srclen]
+
+
+; %load$fix(src,srclen,reflow,reflen,reloc)  scans  the
+; area from src for srclen, looking for references  to
+; the area from reflow  to reflen, and relocates  such
+; references to point at the area starting at reloc.
+
+;	macro to perform one case
+define	.case	x
+jrst	lf.nxt(pr)
+$elf	caie	n2,(t!x)
+$then	.case.==0
+termin
+
+;	macro to skip a word of rsb's
+define	.skip	pos
+ifsn	pos,,[
+	kvetch	pos-.case.,n,Bad position in .skip pos !
+	.case.==.case.+1
+	]
+aobjp	r0,lf.ex(pr)
+move	n1,(r0)
+termin
+
+;	macro to relocate the right half of current word
+define	.rel	pos
+ifsn	pos,,[
+	kvetch	pos-.case.,n,Bad position in .rel pos !
+	.case.==.case.+1
+	]
+jsp	r1,lf.rel(pr)
+termin
+
+;	macro to relocate both halves of current word
+define	.pair	pos
+ifsn	pos,,[
+	kvetch	pos-.case.,n,Bad position in .pair pos !
+	.case.==.case.+1
+	]
+jsp	r1,lf.par(pr)
+termin
+
+;	macro to snap setup words
+define	.set	pos
+ifsn	pos,,[
+	kvetch	pos-.case.,n,Bad position in .set pos !
+	.case.==.case.+1
+	]
+jsp	r1,lf.set(pr)
+termin
+
+propt%==prc.ni
+proc	ld.fx,[src,srclen,reflow,reflen,reloc]
+	move	r0,src(er)
+	movn	n1,srclen(er)
+	hrl	r0,n1		; r1 is aobjn to source for fix
+	hrrz	g0,reflow(er)	; g0 points to ref bottom
+	hrrz	n3,reflen(er)	; n3 is size of ref area
+	move	g1,reloc(er)	; g1 points to start of reloc area
+.here	lf.get
+	$crtnc	r0,ge,$none
+	move	n1,(r0)
+.here	lf.nxt
+.case.==0
+	hlrz	n2,n1		; grab the type code
+	$if	skipl	n1
+	$then	.rel
+	$elf	trne	n2,repbit
+	$then	.skip
+	$elf	cail	n2,typrep+repbit
+	$then	croak	Bad rep code in %load$fix (ptr in r0)
+	$elf	caige	n2,typrsb+repbit
+	$then	croak	Bad rep code in %load$fix (ptr in r0)
+;	otherwise each .case is an $elf-$then pair
+; to handle the rep cases
+	.case	arep		; arrays
+		.skip	ar.cod
+		.rel	ar.rel
+		.rel	ar.vec
+	.case	crep		; call blocks
+		.skip	pc.cod
+		.set	pc.set
+		.skip	pc.num
+	.case	drep		; descriptors
+		.skip	td.cod
+		.rel	td.fix
+		.skip	td.opt
+	.case	erep		; entry blocks
+		.skip	en.cod
+		.set	en.set
+		.pair	en.lpr
+		$if	trnn	n1,ones	; if there is initialization
+		$then	movs	n1,n1	; en.vi is (ref+1,,rsb)
+			sos	n1
+			movem	n1,(r0)
+			.rel	en.vi
+			move	n1,-1(r0)
+			aos	n1
+			movsm	n1,-1(r0)
+			move	n1,(r0)	; remember, n1 has word in r0
+		$else	setzm	(r0)
+			.skip
+		$fi
+		.pair	en.par
+		.rel	en.tr
+	.case	orep		; oneofs
+		.skip	on.cod
+	.case	prep		; pure parts
+		; Remove indirection in the code that goes through jumpers.
+		hrrz	n2,pr.err(r0)
+		subi	n2,pr.go	; n2 has # of words to scan
+		movei	r1,pr.go(r0)	; r1 points to start of code
+		.here	ld.fx1
+			$if	skipl	n1,(r1)		; get the instruction
+			$then	tlz	n1,400000	; test for setz
+				skipe	n1
+				 movni	n2,1		; force end of loop
+			$elf
+				tlz	n1,777400	; clear off opcode & ac
+				cail	n1,jumplo	; don't try if too low
+				caile	n1,jumphi	; or if too high
+			$then	; could be indirect jrst or jumpxx
+				move	n3,(n1)		; get jrst from where n1 points
+				hlrz	n1,(r1)		; get instruction LH
+				trz	n1,777		; clear all but opcode
+				cain	n1,(jrst)	; if a jrst, then
+				 hrrm	n3,(r1)		; snap indirection
+				trz	n1,7777		; clear low 3 bits of opcode
+				cain	n1,(jump)	; if a jump*, then
+				 hrrm	n3,(r1)		; snap indirection
+			$fi
+			addi	r1,1
+			sojg	n2,ld.fx1(pr)
+
+		hrrz	n1,pr.err(r0)	; get disp to errors
+		hrl	n1,n1
+		add	r0,n1			; move over to errors
+		jrst	lf.get(pr)
+	.case	srep		; strings
+		movei	n1,bpword+bpword-1(n1)
+		idivi	n1,bpword	; get # of words to skip
+		hrl	n1,n1		; duplicate the number
+		add	r0,n1		; point at next stuff to fix
+		jrst	lf.get(pr)
+	.case	vec		; vectors
+		.skip
+	.case	wvec		; word vectors
+		hrl	n1,n1
+		add	r0,n1
+		jrst	lf.get(pr)
+	.case	xrep		; ref vector
+		hrrz	n1,n1
+		push	sp,n1
+		.skip
+		$loop
+			$if	sosg	(sp)
+			$then	.rel
+			$else	jrst	lf.nxt(pr)
+			$fi
+		$pool
+	$fi
+	jrst	lf.nxt(pr)
+
+.here	lf.par			; reloc a pair of refs (ref,,ref)
+	hlrz	n2,n1
+	sub	n2,g0
+	jumpl	n2,lf.rel(pr)
+	caml	n2,n3
+	jrst	lf.rel(pr)
+	add	n2,g1		; add in relocation
+	hrlm	n2,(r0)		; insert the left half back into mem
+.here	lf.rel
+	hrrz	n1,n1
+	sub	n1,g0		; check for validity of ref at bottom
+	jumpl	n1,lf.skp(pr)
+	caml	n1,n3		; must be under (or at) the top, too
+	jrst	lf.skp(pr)
+	add	n1,g1		; add in relocation
+	hrrm	n1,(r0)		; relocate the right half
+.here	lf.skp
+	.skip
+	jrst	(r1)		; and return to caller
+.here	lf.set
+	trne	n1,-typlo	; check for n1 being in the common area
+	jrst	lf.rel(pr)
+	trnn	n1,-comadr
+	jrst	lf.rel(pr)	; skip if it is not
+	hlrz	n2,(n1)
+	caie	n2,(jrst)	; is it a link to a jrst ?
+	jrst	lf.skp(pr)
+	hrr	n1,(n1)		; yes, so change it
+	movem	n1,(r0)
+	jrst	lf.skp(pr)	; and go skip the word
+
+.here	lf.ex			; to exit, come here
+	$rtnc	$none
+corp	%load$fix,[src,srclen,reflow,reflen,reloc]
+
+propt%==prc.ni
+proc	ld.sf,[rel]
+	refchk	r0,rel(er)
+	move	rr,r0		; save the start in rr
+	hrli	r0,(bsize)
+	move	r1,r0
+	hrro	g1,r1		; save the start
+	hrre	n3,(r0)		; grab the size in bytes
+	$loop
+		$if	sosl	n3
+		$then	$go	done
+		$fi
+		ildb	n1,r1	; grab byte from source
+		$label	again
+		$if	caie	n1,"\
+		$then	movei	n2,3
+			movei	n1,0
+			$loop
+				$if	sosl	n2
+				$then	$go	next
+				$fi
+				$if	sosl	n3
+				$then	idpb	n1,r0
+					$go	done
+				$fi
+				ildb	n0,r1
+				$if	cail	n0,"0
+					caile	n0,"7
+				$then	rot	n1,3
+					andi	n0,7
+					add	n1,n0
+					sos	(rr)	; keep track of chars missed
+				$elf	caie	n2,2
+				$then	; no # chars follow \
+					sos	(rr)	; keep track of chars missed
+					cain	n0,"n	; Newline
+					 movei	n0,12
+					cain	n0,"N
+					 movei	n0,12
+					cain	n0,"t	; Tab
+					 movei	n0,11
+					cain	n0,"T
+					 movei	n0,11
+					cain	n0,"p	; Page (form feed)
+					 movei	n0,14
+					cain	n0,"P
+					 movei	n0,14
+					cain	n0,"b	; Backspace
+					 movei	n0,10
+					cain	n0,"B
+					 movei	n0,10
+					cain	n0,"r	; carriage Return
+					 movei	n0,15
+					cain	n0,"R
+					 movei	n0,15
+					cain	n0,"v	; Vertical tab
+					 movei	n0,13
+					cain	n0,"V
+					 movei	n0,13
+					move	n1,n0	; default to literal char
+					$go	next
+				$else	idpb	n1,r0
+					move	n1,n0
+					$go	again
+				$fi
+			$pool
+		$fi
+		$label	next
+		idpb	n1,r0		; deposit byte to dest
+	$pool
+
+	$label	done
+	movei	n1,0
+	$loop
+		$if	came	r0,r1
+		$then	hrrz	n1,(rr)			; and the number of bytes
+			addi	n1,bpword+bpword-1	; adjust to get # of words
+			idivi	n1,bpword
+			add	rr,n1			; skip them
+			$rtn	rr			; and return the ptr
+		$fi
+		idpb	n1,r0		; clear out remainder of string
+	$pool
+
+corp	%load$string_fix,[rel]
+
+
+retsulc	%load
+

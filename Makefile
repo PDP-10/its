@@ -44,7 +44,7 @@ SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       mits_s rab stan_k bs cstacy kp dcp2 -pics- victor imlac rjl mb bh \
       lars drnil radia gjd maint bolio cent shrdlu vis cbf digest prs jsf \
       decus bsg muds54 hello rrs 2500 minsky danny survey librm3 librm4 \
-      klotz atlogo
+      klotz atlogo clusys
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
@@ -55,7 +55,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
 BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
       c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
       maint _www_ gt40 llogo bawden sysbin -pics- lmman r shrdlu imlac \
-      pdp10 madman survey rrs
+      pdp10 madman survey rrs clu clucmp
 MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
 # These are not included on the tape.
