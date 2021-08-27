@@ -1339,6 +1339,8 @@ respond "*" ":cc c10fnm.c\r"
 respond "*" ":cc c10io.c\r"
 respond "*" ":cc c10map.c\r"
 respond "*" ":cc c10pag.c\r"
+# C10SFD is obsolete, but used by R.
+respond "*" ":cc c10sfd.c\r"
 respond "*" ":cc c10tty.c\r"
 respond "*" ":cc ac.c\r"
 respond "*" ":cc apfnam.c\r"
