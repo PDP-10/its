@@ -168,6 +168,7 @@
 - INQUPD, processes INQUIR change requests.
 - LSRINI, creates an empty INQUIR database.
 - INSTAL, install executables on other ITS machines.
+- IPAK, manage archives with encryption.
 - IPLJOB, plot display lists.
 - ITSDEV, ITS device server.
 - ITSTER, Donald Fisk's block-stacking puzzle game.
