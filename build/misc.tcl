@@ -1500,6 +1500,8 @@ build_c_program "cprog/shell" "sys2/ts.shell" {clib/c10job.stk}
 
 build_c_program "cprog/search" "sys2/ts.search"
 
+build_c_program "cprog/ipak" "sys2/ts.ipak"
+
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
 respond "*" ":midas sys3;ts versa_dcp; versa\r"

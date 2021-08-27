@@ -200,12 +200,12 @@ imatch (s, dp) char *s; desc *dp;
 	if (fs.fn1)
 		{c6tos (fs.fn1, pattern);
 		c6tos (dp->name1, buffer);
-		if (!match (pattern, buffer)) return (FALSE);
+		if (!smatch (pattern, buffer)) return (FALSE);
 		}
 	if (fs.fn2)
 		{c6tos (fs.fn2, pattern);
 		c6tos (dp->name2, buffer);
-		if (!match (pattern, buffer)) return (FALSE);
+		if (!smatch (pattern, buffer)) return (FALSE);
 		}
 	return (TRUE);
 	}
@@ -442,4 +442,3 @@ error (s, a1, a2)
 	{cprint (cerr, s, a1, a2);
 	cputc ('\n', cerr);
 	}
-
