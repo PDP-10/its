@@ -304,6 +304,7 @@
 - SCRAM, encrypt/decrypt file.
 - SCRIMP, XGP unspooler.
 - SCRMBL/UNSCR, scramble/unscramble file.
+- SEARCH, search for string in files.
 - SEND/REPLY, replacements for DDT :SEND.
 - SENDS, Chaosnet SEND server.
 - SENSOR, an alternate message receiver.
