@@ -9,7 +9,7 @@ typedef struct {                    /* ITS filespec in sixbit */
                    fn1,                /* First filename */
                    fn2,                /* Second filename */
                    dir;                /* Directory */
-        } FILESPEC;
+        } filespec;
 
 #define TRUE       1
 #define FALSE      0
