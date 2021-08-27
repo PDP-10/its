@@ -1429,15 +1429,6 @@ expect ":KILL"
 respond "*" ":testc\r"
 expect "Done."
 
-# R, text formatter.
-respond "*" ":link sys3; ts r, r; ts r42\r"
-# sys2; ts rr -> r; ts rr
-# .info.; r info -> r; r info
-# .info.; r recent -> r; r recent
-# r; r macros -> r; r30 rmac
-# r; rmacro 1 -> r; r macros
-# sys3; ts itype -> r; ts itype
-
 # Revert patch to [CLIB] 16 to avoid use of the FIX instruction on a KA10.
 patch_clib_16
 
@@ -1459,6 +1450,20 @@ respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 # Old TJ6.
 respond "*" ":midas sys2; ts otj6_tj6; otj6\r"
 expect ":KILL"
+
+# Alan Snyder's R typesetting language.
+respond "*" ":cwd r\r"
+respond "*" ":cc rcntrl rdev rexpr rfile rfonts richar ridn rin rin1 rin2\r"
+respond "*" ":cc rits rline rlpt rmain rmisc rout rreadr rreg rreq1 rreq2\r"
+respond "*" ":cc rreq3 rtext rtoken rtrap rvaria rxgp\r"
+respond "*" ":stinkr r\r"
+respond "*" ":link sys3; ts r, r; ts r30\r"
+# sys2; ts rr -> r; ts rr
+# .info.; r info -> r; r info
+# .info.; r recent -> r; r recent
+# r; r macros -> r; r30 rmac
+# r; rmacro 1 -> r; r macros
+# sys3; ts itype -> r; ts itype
 
 # Binary patch Lisp image to work on ITS not named AI, ML, MC, or DM.
 # This is for Bolio.
