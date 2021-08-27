@@ -1496,6 +1496,8 @@ build_c_program "sysen2/oinit" "sys3/ts.oinit"
 # RALP
 build_c_program "cprog/ralp" "sys2/ts.ralp"
 
+build_c_program "cprog/shell" "sys2/ts.shell" {clib/c10job.stk}
+
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
 respond "*" ":midas sys3;ts versa_dcp; versa\r"

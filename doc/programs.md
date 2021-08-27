@@ -308,6 +308,7 @@
 - SENDS, Chaosnet SEND server.
 - SENSOR, an alternate message receiver.
 - SENVER, Chaosnet SEND server.
+- SHELL, Unix-like command line processor.
 - SHUTDN, shut down ITS.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
