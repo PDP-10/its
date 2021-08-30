@@ -1471,19 +1471,27 @@ respond "UNPURE" ":corblk pure .\r"
 respond "*" ":pdump sys; purqio 2138\r"
 respond "*" ":kill\r"
 
+proc build_c_program {input output {libs {}}} {
+    respond "*" ":cc $input\r"
+    expect ":KILL"
+    respond "*" ":stinkr\r"
+    respond "=" "x c/clib\r"
+    foreach lib $libs {
+        respond "=" "l $lib\r"
+    }
+    respond "=" "l $input.stk\r"
+    respond "=" "o $output\r"
+    # Use the ^_ octal-input feature of ITS to send \0.  The space
+    # ends the octal digits without ITS passing it through to the
+    # program.  Using octal input works around Mac OS X and BSD which
+    # require literal \0s to be doubled.
+    respond "=" "\0370 "
+    expect ":KILL"
+}
+
 # OINIT
 respond "*" ":cwd c\r"
-respond "*" ":cc sysen2/oinit\r"
-expect ":KILL"
-respond "*" ":stinkr\r"
-respond "=" "x c/clib\r"
-respond "=" "l sysen2/oinit.stk\r"
-respond "=" "o sys3/ts.oinit\r"
-# Use the ^_ octal-input feature of ITS to send \0. The space ends the
-# octal digits without ITS passing it through to the program. Using octal
-# input works around Mac OS X and BSD which require literal \0s to be doubled.
-respond "=" "\0370 "
-expect ":KILL"
+build_c_program "sysen2/oinit" "sys3/ts.oinit"
 
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
