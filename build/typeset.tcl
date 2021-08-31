@@ -14,3 +14,7 @@ type ":kill\r"
 respond "*" ":tj6\r"
 respond "_" "lmdoc;paper_lmdoc;paper\r"
 expect ":KILL"
+
+# R manual.
+respond "*" ":cwd r\r"
+respond "*" ":r rman.r\r"
