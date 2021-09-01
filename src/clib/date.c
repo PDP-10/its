@@ -74,7 +74,7 @@ int cal2u (cd)	cal *cd;
 
 f2cal (fdate, cd)	cal *cd;
 
-	{cd->year = 1900 + ((fdate>>27) & 0177);
+	{cd->year = 1900 + ((fdate>>27) & 0377);
 	if ((cd->month = (fdate>>23) & 017) > 12) cd->month = 0;
 	cd->day = (fdate>>18) & 037;
 	fdate = (fdate & 0777777) >> 1;
