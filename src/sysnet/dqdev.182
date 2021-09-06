@@ -1,0 +1,4247 @@
+;-*- Mode: MIDAS; Fonts: MEDFNT -*-
+.SYMTAB 5001.,7000.
+
+IF1,	TITLE	DQDEV - Domain Device
+		;CSTACY, summer 1985
+IF2,[	PRINTX /
+/
+	.TYO6 .FNAM1
+	PRINTX / /
+	.TYO6 .FNAM2
+	PRINTX/
+/]
+
+IFNDEF $$HST3,$$HST3==1		;Switch for HOSTS3 feature.
+
+comment 
+
+The DQ device implements the Resolver component of the Domain system
+for ITS.  Generally, the DQ device is opened with a pathname which
+specifies a query for information about a particular Domain resource.
+If the open fails, there was some problem.  If the open succeeds, data
+can be read in a format determined by the open mode, and the Class and
+Type of the query.  The usual interface to DQ: is through the routines
+in the RESOLV library.
+
+Note carefully that NAME ERROR means the domain does not exist, and
+that RESOURCE NOT FOUND means that the requested resource could not be
+found.  The former indicates that an authority for the domain says
+that the named domain does not exist, while the latter indicates that
+we could not find the requested resource.
+
+If SOPENed in unit-image mode, the pathname is a string
+of the form:  "DQ:Opcode;Class;Type;Domain-name".
+
+Opcode strings include:  HOSTS3 QUERY, IQUERY, CQUERYU and CQUERYM.
+
+Example:  "DQ:QUERY;IN;A;SRI-NIC.ARPA" asks for the Internet-class
+host address records for the domain SRI-NIC.ARPA.
+
+The NQUERY opcode is like setting %DRWOV.
+
+If %DRLNG is not set, the data words to read depends on the query being
+made, and the user is expected to know how to interpret them.  No domain
+system information is returned.  For example, for "DQ:IN;A;FOO" the
+words to be read are Internet host addresses.  As user software becomes
+more sophisticated, %DRLNG will be made available, and perhaps we will
+even reverse the semantics of the bit.
+
+If %DRLNG is set, the data words to read are:
+	1:	DQ-Version,,Header-length
+	2:	RCODE
+	3:	Bits: (AA,TC)
+	4:	ANCOUNT
+	5:	NSCOUNT
+	6:	ARCOUNT
+	7:	Number of data words next
+Followed by all the Resource Records, in the format:
+		Domain Name length in chars
+		ASCII Domain Name
+		Type
+		Class
+		TTL
+		Length of RDATA
+		RDATA
+
+Illicit RRs and %DRANY:
+
+Our database may contain "illicit" data.  These are RRs which we
+should not have, but somehow do.  Illicit data includes resources from
+zones placed in our database by us without any authority or consent.
+We use illicit data only in the absence of authoritative information.
+We NEVER actually give our user any illicit data, unless permission to
+do so was given by setting the %DRANY open bit.
+
+The database searching function (DBLUKR/RRCONS) will place illicit
+data on on the output list and CACHE it.  The database update routines
+will ignore the illicit RRs and add any authoritative RRs.  If the
+user sets %DRANY, and both illicit and authoritative data exists,
+essentially duplicate RRs may be output.  It is up the user to filter
+such duplicate data.
+
+
+
+.SEE OPNERR	;For a list of OPEN error codes we return.
+
+
+SUBTTL	Basic Definitions
+
+;;; Accumulators
+
+Z=0		;Super temp.
+A=1		;A - H general purpose.
+B=2
+C=3
+D=4
+E=5
+H=6
+PKT=7		;Packet pointer.
+W==PKT
+L=10		;LSE pointer.
+F=11		;Flags.
+OC=12		;OUT register.
+U1=13		;4 UUO Registers.
+U2=14
+U3=15
+U4=16
+T==U1		;Temps.
+TT==U2
+P=17		;Stack pointer.
+
+;;; I/O channels.
+
+UDPC==1		;ITS IP queue
+BOJ==2		;BOJ
+USR==3		;Client
+
+DKIC==4		;Disk input
+DKOC==5		;Disk output
+ERRCHN==6	;ERR device channel
+LOCKC==7	;For locking
+
+;;; UUO "channels".
+
+BRR==1		;BOJ buffer containing digested RRs for client
+TMPC==2		;Temporary chan for short jobs
+SAOCH==3	;Channel for %LTSAO jobs
+DBC==BRR	;NLISTS debugging info goes to BRR!
+
+;;; Device OPEN mode bits (not defined in ITS yet):
+
+%DR==1,,525252
+%DROUT==1	;1.1  Output
+%DRBLK==2	;1.2  Block
+%DRIMG==4	;1.3  Image
+%DRNRF==:10	;1.4  Don't update the database
+%DRLNG==:20	;1.5  Access long-form data
+%DRSII==:40	;1.6  Super-image (packet level)
+%DRWOV==:100	;1.7  Force net search and database update
+%DRAUT==:200	;1.8  Authoritative data required
+%DRANY==:400	;1.9  Illicit data allowed
+%DRWIZ==:40000	;2.6  Maintenance
+%DROJB==:100000	;2.7  Magical OJB device protocol
+%DRXXX==:200\400\1000\2000\4000\10000\20000
+
+;;; Accumulator F holds global control state flags.
+;;; In the RH, bits 1.1 through 2.4 are the OPEN mode bits above.
+
+OPNFLG==<.BP %DRANY\%DRAUT\%DRWOV\%DRSII\%DRLNG\%DRNRF\%DRIMG\%DRBLK\%DROUT,F>
+
+;;; Other flags in RH of F are:
+
+%PIBOJ==1_17.	;2.9 0 => new PI level request came in
+%FOPEN==1_16.	;2.8 Device is open
+%FOJBP==1_15.	;2.7 Doing weirdo OJB protocol
+%FJIOT==1_14.	;2.6 Luser last seen in an IOT
+%FJSIO==1_13.	;2.5 Luser last seen in a SIOT
+
+;;; Flags in LH of F are:
+
+%IOCER==1_17.	;Used by XCTIOC UUO
+%BLDRN==1_16.	;An expired record has been used
+%UPDAT==1_15.	;Current cache updated
+
+
+;;; Assorted symbols that ITS is missing.
+
+%NINTS==400000	;Interrupts push .JPC, .SUUOH, and LSPCL
+%ENADR==17	;Old error code for DIRECTORY NOT AVAILABLE
+IOCEOF==2	;IOC error code for END OF FILE
+
+.SEE OPNERR	;For a list of device OPEN errors.
+
+SUBTTL	Libraries, Macros
+
+;;; Pure storage macros
+PURPGB==4	;Lots of impure.
+.INSRT KSC;IVORY
+
+;;; Macros, Output, UUOs, and NLISTS.
+UAREAS==1	;Dynamic storage areas
+ULISTS==1	;Lists
+$$OUT==1	;Super super OUT package
+$$OERR==1	;ERR output type
+$$OTIM==1	;Time output items
+.INSRT DSK:KSC;NUUOS
+
+;;; Time manipulating routines.
+$$DSTB==1	;DST bit in time words
+$$ABS==1	;Absolute days/seconds conversions
+$$OUTT==1	;Tables for pretty output
+$$UPTM==1	;Rtns for system time-in-30'ths conversions
+.INSRT DSK:SYSENG;DATIME
+
+;;; HOSTS3 file lookup rtns
+IFN $$HST3,[
+$$ARPA==1
+$$CHAOS==1
+$$HOSTNM==1
+$$SYMLOOK==1
+IFE U2-OC,.ERR NETWRK temp ACs lose
+.INSRT SYSENG;NETWRK
+ ];$$HST3
+
+;;; 20x monitor coding support routines (avoid reinvention of wheel)
+.INSRT SRA;20XMAC
+
+CONSTANTS
+
+;;; Random macros.
+
+EQUALS PUSHER,PUSHAE
+EQUALS POPPER,POPAE
+
+HALT=<.BREAK 16,100000>
+
+;;; Macro to zap a buffer of contiguous words.
+DEFINE	ZAP BUFADR,BUFWDS
+	SETZM BUFADR
+	MOVE T,[BUFADR,,BUFADR+1]
+	BLT T,BUFADR+<BUFWDS-1>
+TERMIN
+
+;;; Macro to uppercase an ASCII character.
+DEFINE	UPPER CHR		
+	CAIL CHR,141		;lower "a"
+	  CAILE CHR,172		;lower "z"
+	    CAIA		;if got here, it's not lower a-z, skip
+	    SUBI CHR,40		;convert case
+TERMIN
+
+;;; Macro to help debug jobdevs.
+
+DEFINE	FUCKPT
+	CALL [	SETOM DEBUG
+		.SUSET [.ROPTION,,Z]
+		TLNE Z,%OPDDT
+		 RET
+		SYSCAL DETACH,[%CLIMM,,%JSELF]
+		 NOP
+		.VALUE [ASCIZ ":BreakpointSL DSK:DEVICE;JOBDEV DQ
+"]
+		RET ]
+TERMIN
+
+
+SUBTTL	Database definitions
+
+;;; UDP/IP definitions and routines.
+.INSRT CSTACY;UDPLIB
+
+;;; Domain protocol and DQDEV database definitions.
+$$DQDB==1
+.INSRT CSTACY;DQDEFS
+
+;;; Here we describe each valid Class and Type.
+;;;	Although there are currently only a few Classes and Types defined,
+;;;	their numeric codes can be up to 16 bits wide.  Also, nobody said
+;;;	the codes had to be allocated contiguously. So, rather than locate
+;;;	their descriptors positionally, we find them linearly searching the
+;;;	CLSTAB and TYPTAB tables. (We leave unused table slots zero, on the
+;;;	assumption there is no Class or Type whose code is 0.)  
+;;;	The other descriptor tables are indexed correspondingly.
+
+MAXCLS==256.			;Maximum # class codes.
+MAXTYP==256.			;Maximum # type codes.
+
+MAXKND==100.			;Maximum # class+type combinations allowed.
+				.SEE ORRK
+
+CLSTAB:	BLOCK MAXCLS		;These tables have the numeric codes
+TYPTAB:	BLOCK MAXTYP		;of the Class and Type items defined.
+
+CLSNAM:	BLOCK MAXCLS		;These tables have ptrs to ASCIZ names for
+TYPNAM:	BLOCK MAXTYP		;the items.  (Long in LH, short in RH.)
+
+.%CLSC==-1
+DEFINE	DEFCLASS NUM,&SHRT&,&LONG&
+	.%CLSC==.%CLSC+1
+	IFL MAXCLS-.%CLSC, .FATAL Class def wont fit bounds (increase MAXCLS)
+	TMPLOC CLSTAB+.%CLSC,{NUM}
+	TMPLOC CLSNAM+.%CLSC,{[ASCIZ LONG],,[ASCIZ SHRT]}
+TERMIN
+
+.%TYPC==-1
+DEFINE	DEFTYPE NUM,&SHRT&,&LONG&
+	.%TYPC==.%TYPC+1
+	IFL MAXTYP-.%TYPC, .FATAL Type def wont fit (increase MAXTYP)
+	TMPLOC TYPTAB+.%TYPC,{NUM}
+	TMPLOC TYPNAM+.%TYPC,{[ASCIZ LONG],,[ASCIZ SHRT]}
+TERMIN
+
+;;; Class and Type definitions:
+
+DEFCLASS DC$ANY,"*","Any"
+DEFCLASS DC$IN,"IN","DARPA Internet"
+DEFCLASS DC$CS,"CS","NSF CSnet"
+DEFCLASS DC$CH,"CH","CHAOSnet"
+
+DEFTYPE DT$A,"A","Host address"
+DEFTYPE DT$NS,"NS","Name server"
+DEFTYPE DT$MD,"MD","Mail destination"
+DEFTYPE DT$MF,"MF","Mail forwarder"
+DEFTYPE DT$CNA,"CNAME","Canonical name"
+DEFTYPE DT$SOA,"SOA","Start of authority zone"
+DEFTYPE DT$MB,"MB","Mailbox"
+DEFTYPE DT$MG,"MG","Mailgroup"
+DEFTYPE DT$MR,"MR","Mail rename"
+DEFTYPE DT$NUL,"NULL","NULL RR"
+DEFTYPE DT$WKS,"WKS","Well known service"
+DEFTYPE DT$PTR,"PTR","Pointer"
+DEFTYPE DT$HIN,"HINFO","Host information"
+DEFTYPE DT$MIN,"MINFO","Mail information"
+DEFTYPE DT$XFR,"AXFR","Zone transfer request"
+DEFTYPE DT$MLB,"MAILB","Mailbox related request"
+DEFTYPE DT$MLA,"MAILA","Mail agent request"
+DEFTYPE DT$ANY,"*","Any"
+
+
+;;; Here we name the opcodes.
+
+OPNAMS:	[ASCIZ "QUERY"],,DO$QRY
+	[ASCIZ "IQUERY"],,DO$YRQ
+	[ASCIZ "CQUERYM"],,DO$QCM
+	[ASCIZ "CQUERYU"],,DO$QCU
+	[ASCIZ "NQUERY"],,DO$WRO
+	[ASCIZ "HOSTS3"],,DO$TAB
+OPNAML==.-OPNAMS
+
+
+SUBTTL	Errors
+
+LVAR	ERRCOD:	0		;Error code from failing system call.
+
+LVAR	MAINT:	0		;Maint mode switch.
+LVAR	DEBUG:	0		;Debugging switch.
+LVAR	LOSER:	0		;Controls .LOSE when toplevel.
+
+;;; Various error points (which jump into pure code).
+
+LVAR	SYSLOS:	0 ? JSR AUTPSY	;ITS did something wrong.
+LVAR 	AUTPSY:	0 ? JRST AUTPY0	;Fatal condition encountered.
+LVAR	DIE:	0 ? JRST DEATH	;Normal death.
+
+AUTPY0:	SKIPN LOSER
+	 JRST DEATH
+	SOS Z,AUTPSY
+	HRLZ Z,Z
+	HRRI Z,%LSFIL
+	SYSCAL LOSE,[ Z ? AUTPSY ]
+	 NOP
+DEATH:	SKIPE DEBUG		;Program termination.
+	 .VALUE [ASCIZ ":PLUGH
+"]
+	.LOGOUT 1,
+
+
+
+
+
+
+
+SUBTTL	Misc.
+
+;;; Assorted Returns.
+
+POPJ1:	AOS (P)
+APOPJ::
+CPOPJ:	RET
+
+POPAJ:	POP P,A
+	RET
+
+POPBJ:	POP P,B
+	RET
+
+
+;;; Routine to purify code before dumping out installed device.
+
+PURIFY:	MOVE A,[<PURPGB-PURPGE>,,PURPGB]   ;Pure pages AOBJN.
+	SYSCAL CORBLK,[%CLIMM,,%CBNDR ? %CLIMM,,%JSELF ? A ? %CLIMM,,%JSELF]
+	 .LOSE %LSFIL
+	.VALUE [ASCIZ ":Purified.
+"]
+	JRST GO
+
+
+
+SUBTTL	Interrupts
+
+BVAR
+	LIPDL==50.		; Enough for 6 or so nestings of ints.
+INTPDP:	-LIPDL,,IPDL-1		; Interrupt PDL pointer.
+IPDL:	BLOCK LIPDL		;     "      "  stack.
+EVAR
+
+%BADINT==%PIPDL+%PIMPV+%PIWRO+%PIOOB+%PIIOC+%PIILO	;The bad conditions.
+
+TMPLOC 42,{-LTSINT,,TSINT}	;New style interrupt vector.
+TSINT:	%NINTS,,INTPDP
+	%PIPDL+%PIMPV\%PIWRO\%PIOOB ? 0 ? -1 ? -1 ? INTBAD
+	%PIIOC ? 0 ? -1#<%PIMPV\%PIOOB\%PIPDL\%PIWRO> ? -1 ? INTIOC
+	%PIILO ? 0 ? %PIILO ? 1_BOJ ? INTILO
+	%PIRLT ? 0 ? %PIRLT ? 1_BOJ ? INTRLT
+	0 ? 1_BOJ ? 0 ? 1_BOJ ? INTBOJ
+LTSINT==.-TSINT
+
+INTIOC:	NOP
+INTILO:	NOP
+INTBAD:	JSR AUTPSY
+
+
+
+SUBTTL	Real time clock
+
+;;; TIMER seconds,lossage-return
+
+DEFINE	TIMER SECS,?LOSRET
+	MOVE T,[600000,,[SECS*60.]]
+	.REALT T,
+	.SUSET [.SIMASK,,[%PIRLT]]
+	MOVEI T,LOSRET
+	MOVEM T,RLTRET
+TERMIN
+
+
+DEFINE	TIMOFF
+	.SUSET [.SAMASK,,[%PIRLT]]
+	.SUSET [.SAPIRQC,,[%PIRLT]]
+	SETZM RLTRET
+	MOVE Z,[400000,,[0]]
+	.REALT Z,
+	 NOP
+TERMIN
+
+
+LVAR	RLTRET:	0
+
+INTRLT:	MOVE Z,[400000,,[0]]
+	.REALT Z,
+	 NOP
+	SKIPE RLTRET
+	 SYSCAL DISMIS,[%CLBIT,,%NINTS ? INTPDP ? RLTRET ]
+	  JSR AUTPSY
+
+
+SUBTTL	Main program
+
+GO:	MOVE P,[-PDLLEN,,PDL-1]	;Initialize stack.
+	SETZ F,			;Clear all flags.
+	MOVE A,[-18.,,[	.ROPTION ? TLO %OPINT\%OPOPC\%OPLOK\%OPLKF
+			.RMASK1  ? IOR [%BADINT] ;Bad ints enabled!
+			.RDF1	 ? SETZ
+			.RMSK2	 ? IOR [1_BOJ]	;Enable BOJ interrupt
+			.RDF2	 ? SETZ
+			.RUNAME	 ? MOVEM UNAME
+			.RJNAME	 ? MOVEM JNAME
+			.RUIND	 ? MOVEM INDEX
+			.ROPTION ? MOVEM B ]]	;B gets new option bits.
+	SYSCAL USRVAR,[	%CLIMM,,%JSELF ? A ]
+	 JSR AUTPSY
+	TLNE B,%OPDDT		;If running under DDT
+	 JRST [	SETOM DEBUG	; do OJB hack.
+		MOVE A,[-2.,,[	.ROPTION ? TLO %OPOJB ]]
+		SYSCAL USRVAR,[	%CLIMM,,%JSELF ? A ]
+		 JSR AUTPSY
+		JRST GO10 ]
+	;; Now initialize our memory.
+GO10:	MOVE A,[-<FREEPG-OPKTPG>,,OPKTPG]	;Create IP packet buffers.
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDR+%CBNDW
+			%CLIMM,,%JSELF ? A ? %CLIMM,,%JSNEW ]
+	 JSR AUTPSY
+	ZAP OPKT,PG$SIZ		;Init network packet buffers.
+	ZAP IPKT,PG$SIZ
+	MOVE A,[-<FREEPG-377>,,FREEPG]
+	UARINIT A		;Initialize area UUOs and PAGSER.
+	MOVSI A,-NAREAS		;Make sure all ARBLKs declared closed,
+GO12:	MOVE B,ARPTBL(A)	;by getting ARPT to each
+	SETZM $AROPN(B)		;and zapping.
+	AOBJN A,GO12
+	MOVEI A,TMPAR		;Initialize temporary area!
+	CALL LSEOPN
+	CALL LKINIT		;Ensure database locks available.
+	MOVEI A,10\.UAO		;Set modes for unidirectional BOJ open.
+	MOVEM A,MYMODE		;Remember which mode we opened in.
+GOBOJ:	TRZ F,%PIBOJ		;Say there is work to do.
+	SYSCAL OPEN,[%CLBTW,,MYMODE ? %CLIMM,,BOJ ? [SIXBIT /BOJ/] ? SETZ ]
+	 JSR AUTPSY
+	.SUSET [.SIFPIR,,[1_BOJ]]
+	CAI			;Begin at PI level.
+	 .HANG			;Wait for an OPEN call to be processed.
+	JSR AUTPSY		;Should dismiss into NOOSE.
+
+LVAR	MYMODE:	0		;My BOJ: channel open mode bits.
+
+
+SUBTTL	BOJ interrupt handler and MP level dispatch
+
+;;; We use MP level to perform most requests, since we want to be able to
+;;; interrupt out of them if the user PCLSRs for one reason or another.
+;;; We use PI level to receive operation requests and to set up the args
+;;; for the MP level routines.  PI level clears the flag %PIBOJ.
+;;; When MP toplevel sees %PIBOJ set, it can go to sleep because all
+;;; outstanding tasks completed and no new ones have come in yet.
+;;; The flags %FJIOT\%FJSIO say the user was last seen asking for an IOT.
+;;; MP level routines clobber any ACs, PI level routines clobber only temps.
+;;;
+;;; All JOBRETs should JSR PCLSRD if they fail. Note that this prohibits
+;;; them from having any state.
+;;;
+;;; Currently this program does not know how to do very many things.
+;;; We can assume that if we are done working on opening up the file (Domain
+;;; Resolving) and there is something to do, tbc hat it must be outputting the
+;;; results (Resource Records) we found.  If in the future we support more
+;;; operations, we may need to implement a dispatch on the JOBOP opcode we
+;;; got from the most recent interrupt.
+
+;;; BOJFIN [addr]   Macro to dismiss a BOJ interrupt.
+DEFINE BOJFIN (ADDR)
+	JRST [	POPPER P,[ERRCOD,TT,T,Z]
+		.CALL [	SETZ ? 'DISMIS ? %CLBIT,,%NINTS
+ IFB [ADDR]		SETZ INTPDP
+ .ELSE			INTPDP ? SETZ ADDR
+		      ]
+	     ]		
+TERMIN
+
+LVAR	PCLSRI:	0 ? JRST PCLRTI	;Just like PCLSRD, except from interrupt level.
+LVAR	PCLSRD:	0 ? JRST PCLRET	;JSR here on losing JOBRET, jump to pure.
+LVAR	PCLSRP:	0		;Switch says some JOBRET was PCLSRd.
+LVAR	PCLSER: 0		;Place to stuff ERRCOD across BOJFIN (ugh)
+
+PCLRTI:	MOVE T,PCLSRI		;Fixup to reuse PCLRET recovery code
+	MOVEM T,PCLSRD
+	MOVE T,ERRCOD		;BOJFIN restores this
+	MOVEM T,PCLSER
+	BOJFIN [.+1]		;Leave BOJ PI level
+	SKIPA T,PCLSER		;Join MP level recovery code
+
+PCLRET: MOVE T,ERRCOD		;Bad state lossage?
+	JUMPE T,NOOSE		; Extremely bad state?  Fuck it.
+	CAIE T,%EBOJ
+	 .LOSE
+	SETOM PCLSRP		;No, call completed but not returned from.
+				;Fall into NOOSE!
+
+NOOSE:	TRNE F,%PIBOJ		;Here to hang ourselves.
+	 .HANG			; Work is done at MP level.
+	TRO F,%PIBOJ		;Fix stupid flag
+	TRNN F,%FOPEN		;If have pathname, but device not yet open
+	 JRST [	PUSHER P,[A,B,C]	;Cretinism
+		JRST OPEN50]	; go work on that.
+	TRNE F,%FJIOT\%FJSIO	;If user last seen in IOT or SIOT
+	 JRST OUTPUT		; work on outputting data.
+	JRST NOOSE		;Nothing to do right now - we'll just hang out.
+
+;;; MPFIN - Macro to return to main program level loop.
+MPFIN==:<JRST NOOSE>
+
+
+
+BVAR
+ARGS:	BLOCK 12.		;JOBCAL arg from client.
+ARGLEN==.-ARGS
+JOBOP:	0			;JOBCAL opcode from client.
+OPNMOD:	0			;Mode we were opened in.
+OPNARG:	0			;Addr of filename arg from ARGS.
+	PATHLN==103.		;Max length in wds of pathname.
+PATH:	BLOCK PATHLN		;The actual SOPEN pathname string.
+OPNLEN==.-OPNMOD
+EVAR
+
+INTBOJ:	PUSHER P,[Z,T,TT,ERRCOD]
+	ZAP ARGS,ARGLEN		;Our client has a system call for us.
+	MOVE TT,[-ARGLEN,,ARGS]	;Find out what it is.
+	SYSCAL JOBCAL,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? TT ? %CLOUT,,T]
+;	 JSR AUTPSY		; (Client shouldn't vanish here?)
+	 BOJFIN			; Try this instead
+	MOVE TT,T
+	EXCH TT,JOBOP		;Remember opcode for debugging purposes.
+	TLNE T,%JGCLS		;If user requested CLOSE
+	 JRST CLOSE		; ALWAYS oblige him. 
+	TLNE T,%JGFPD		;Is this is a PCLSRd call restarting?
+	 AOSE PCLSRP		;Yes, did last call complete without JOBRETing?
+	  JRST INTBO1		;No or no, treat this as a new call.
+	MOVE T,PCLSRD		;Did complete but didn't JOBRET
+	XCT -2(T)		;Try doing the JOBRET again
+	 JRST INTBO1		;Lost, just fake new operation
+	SETZM PCLSRD		;Paranoia
+	BOJFIN			;Won, dismiss and wait for new call.
+
+INTBO1:	SETZM PCLSRD		;New operation starting.
+	TRZ F,%FJIOT\%FJSIO\%PIBOJ
+	LDB T,[000400,,JOBOP]	;Pick up opcode.
+	TRNN F,%FOPEN		;Dispatch off opcode to a handler which
+	 JRST @OPNTBL(T)	;depends on whether we are already open.
+	JRST @CALTBL(T)
+
+;;; Dispatch table for initial JOBCAL request.
+
+OPNTBL:	OFFSET -.
+%JOOPN::	OPEN		;OPEN and SOPEN.
+%JOIOT::	OPNDIE		;Nothing else supported yet.
+%JOLNK::	OPNWTD
+%JORST::	OPNDIE
+%JORCH::	OPNDIE
+%JOACC::	OPNDIE
+%JORNM::	OPNWTD
+%JORWO::	OPNDIE
+%JOCAL::	OPNDIE		;No non-channel .CALLs supported yet.
+	OFFSET 0
+
+;;; Dispatch table for later JOBCAL requests.
+
+CALTBL:	OFFSET -.
+%JOOPN::	OPEN		;.OPEN
+%JOIOT::	IOT		;.IOT 
+%JOLNK::	CALWTD		;MLINK
+%JORST::	CALWTD		;.RESET 
+%JORCH::	CALWTD		;.RCHST 
+%JOACC::	CALWTD		;.ACCESS
+%JORNM::	CALWTD		;.FDELE (DELETE OR RENAME)
+%JORWO::	REOPEN		;.FDELE (RENMWO) 
+%JOCAL::	DOCALL		;.CALL 
+	OFFSET 0
+
+;;; Symbolic .CALL processor.
+;;; Note: most system calls are handled entirely at interrupt level.
+
+DOCALL:	MOVE T,ARGS+0		;Get the .CALL name.
+	CAMN T,[SIXBIT /SREAPB/]
+	 JRST SREAPB
+	JRST CALWTD		;Unknown symbolic call - "Wrong Type Device".
+
+
+;;; Non-fatal error returns.
+;;; CALWTD - Wrong Type Device for client's request.
+;;; CALERR - Other errors for client's request.
+
+CALWTD:	MOVSI T,%EBDDV
+CALERR:	SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? T ]
+	 NOP
+	BOJFIN
+
+CALDIE:	JSR AUTPSY		;Here for fatal JOBCALs.
+
+;;; BOJIOC - IOC error after opened.
+
+BOJIOC:	SYSCAL SETIOC,[%CLIMM,,BOJ ? T ]
+	 NOP
+	JSR AUTPSY		;Is this the right way to flush?
+
+
+
+SUBTTL	OPEN operation (main entry point)
+
+;;; OPEN - PI handler for (S)OPEN system call.
+
+OPEN:	PUSHER P,[A,B,C]
+	ZAP OPNMOD,OPNLEN	;Zap pathname.
+	MOVE A,ARGS+5		;Else this is the initial OPEN
+	MOVEM A,OPNMOD		;Which open mode client asking for.
+	DPB A,[OPNFLG]		;Stuff modes into our own flag bits.
+	TRNE A,%DRWIZ		;If a wizard is hacking us
+	 SETOM MAINT		; go into maintenance mode.
+	TRNE A,%DROJB		;If this is the weirdo subjob protocol
+	 TRO F,%FOJBP		; note that fact.
+	;; Here check for unimplemented modes...
+	TRNE A,%DROJB+%DRSII+%DRLNG+%DRNRF+%DRXXX
+	 JRST OPNNSM
+OPEN10:	MOVE B,ARGS+4		;Get device we're being opened as.
+	CAME B,[SIXBIT /DOMAIN/]
+	 CAMN B,[SIXBIT /DQ/]	;If not "DQ:" or "DOMAIN:"
+	  CAIA			; give "mode unavailable" error.
+	   JRST OPNNSM
+	TRNE F,%DROUT		;If client asking to write
+	 JRST [	MOVSI T,%ENSIO	; on us, give "wrong direction" error.
+		JRST OPNERR ]
+	TRZ A,777760		;Check his basic open mode.
+	TRC A,1			;Complement read/write.
+	TRO A,10		;Does this bit do anything?
+	CAME A,MYMODE		;If pipe mismatch
+	 JRST [ MOVEM A,MYMODE	; Set the mode our client wants
+		POPPER P,[C,B,A] ;and start opening all over for him.
+		BOJFIN [GOBOJ] ]
+	SKIPN A,ARGS+7		;If we were not SOPENed
+	 JRST OPESIX		; do special thing.
+
+;; Rejoin here on RENMWO
+OPEN20:	MOVEM A,OPNARG		;Stash away ptr to Bp for safekeeping.
+	CALL SOPEN		;Read argument string.
+	 JRST [	MOVSI T,%EBDRG	; If can't, error "meaningless args".
+		JRST OPNERR ]
+OPEN50:	CALL OPENAR		;Open up RRECS text area.
+	CALL RESOLV		;Locate the resource records.
+	 JRST OPNERR		; Not found, client's call fails.
+OPEN80:	MOVEI A,RRECS		;Get RR area.
+	SKIPN $AROPN(A)		;Make sure it's open.
+	 JRST OPNDIE
+	TRNN F,%DRIMG		;In ASCII mode
+	 JRST [ MOVE B,$ARWPT(A); Get write pointer (end of used area)
+		SUB B,$ARLOC(A)	; Make relative to beg
+		MULI B,5	; do bp hack
+		ADD C,UADBP7(B)	; Get # chars.
+		MOVE B,$ARLOC(A); Now cons up a Bp to start.
+		HRLI B,440700	
+		JRST OPEN90 ]
+	MOVE C,$ARWPT(A)	;Write ptr to end of area.
+	SUB C,$ARLOC(A)		;Find length from start.
+	MOVE B,$ARLOC(A)	;Get write ptr
+	HRLI B,444400		;Make Bp from it.
+OPEN90:	MOVEM B,BUF.BP		;Initialize Bp to data we found.
+	MOVEM C,BUF.CT		;Initialize Character count of data found.
+	SETZM IOT.CT		;No data given yet.
+	TRZ F,%FJSIO\%FJIOT	;Not IOTing yet
+	POPPER P,[C,B,A]
+	SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? %CLIMM,,1 ]
+	 JSR PCLSRI
+	TRO F,%FOPEN		;Device is now open.
+	BOJFIN [NOOSE]		;Dismiss to toplevel.
+
+;;; Here to handle RENMWO.
+REOPEN:	PUSHER P,[A,B,C]	;Pretend co-routines haven't been invented yet
+	TRNN F,%FOPEN		;Are we open?
+	 JRST OPNBCH		;No, error "bad channel"
+	SKIPE A,ARGS+10		;Get arg if SOPEN format rename
+	 JRST OPEN20		;Got it, rejoin main open code
+	MOVSI T,%EBDRG		;Otherwise, error "meaningless args".
+	JRST OPNERR
+
+
+;;; OPENAR - Opens up the RRECS text area.
+;;; Leaves default output channel on it.
+;;; Does not skip.
+;;;
+;;; KLUDGE WARNING:  Reuses area if already open, to avoid PAGSER overhead.
+
+OPENAR:	PUSHER P,[A,B]
+	SKIPE A,$ARLOC+RRECS		; Area already open?
+	 JRST [	TRNN F,%DRIMG		; Yeah. Reinit. Ascii mode?
+		 HRLI A,440700		; Yup, need byte pointer
+		MOVEM A,$ARWPT+RRECS	; Reinit write pointer
+		MOVEM A,$ARRPT+RRECS	; And read pointer
+IFN 0,{					; Seems like a waste of cycles
+		MOVS B,A		; Cons BLT argument
+		HRRI B,1(A)		; to zero out the area
+		MOVE A,$ARTOP+RRECS	; End of area (+1)
+		BLT B,-1(A)		; Zap!
+}					; (Well, put it back in if I'm wrong!)
+		MOVSI A,%ARTCH		; Assume not ascii
+		ANDCAM A,$ARTYP+RRECS	; so turn off flag
+		TRNE F,%DRIMG		; Is it ascii?
+		 JRST OPNAR9		; Nope, done
+		IORM A,$ARTYP+RRECS	; Is ascii, turn flag on
+		MOVE A,$ARLEN+RRECS	; Get area length
+		IMULI A,5		; Convert to chars
+		MOVNM A,$ARCHL+RRECS	; That's how much room is left
+		JRST OPNAR9 ]		; End of kludge.
+	DMOVE A,[%ARTZM,,RRECS ? [512.,,PG$SIZ]]	
+	TRNN F,%DRIMG		; Really do have to open area.
+	 TLO A,%ARTCH		; Set char mode bit iff needed
+	UAROPN A		; 1, 2, 3, thrash.
+OPNAR9:	MOVE A,$ARLEN+RRECS	; Kludge #2
+	TRNE F,%DRIMG		; Image mode?
+	 MOVNM A,$ARCHL+RRECS	; Yeah, bash count for OUT routines (yuk)
+	OUT(BRR,OPEN(UC$UAR,RRECS))
+	OUT(,CH(BRR))		; Twiddle to init and setup default channel
+	POPPER P,[B,A]
+	RET
+
+
+ERRORS:	EXPUNGE ERRORS
+; List of OPEN error codes we may return to the user:
+;
+; %ENSFL	NAME ERROR				(FILE NOT FOUND)
+; %ENSJB	RESOURCE NOT FOUND			(NO SUCH JOB)
+; %ENRDV	SERVER NOT AVAILABLE			(DEVICE NOT READY)
+; %ENADV	LOCAL DATABASE PROBLEM			(DEVICE NOT AVAILABLE)
+; %EBDFN	FORMAT ERROR				(ILLEGAL FILE NAME)
+; %ENADR	UNKNOWN CLASS				(DIR NOT AVAILABLE)
+; %ENSDR	UNKNOWN TYPE				(NON-EXISTENT DIR)
+; %ENAPK	AUTHORITATIVE DATA UNAVAILABLE		(PACK NOT MOUNTED)
+;
+; %ENNSM	MODE NOT AVAILABLE
+; %ENSIO	WRONG DIRECTION
+; %EBDDV	WRONG TYPE DEVICE
+;
+;
+; %EROPG	undefined				(CANT ACCESS PAGE)
+; %EBDFL	undefined				(UNRECOGNIZABLE FILE)
+; %EBDLK	undefined				(LINK TO NONEXT FILE)
+; %ETMLK	undefined				(LINK DEPTH EXCEEDED)
+; %EFLDR	undefined				(DIR FULL)
+; %ERODV	undefined				(DEV WRITE LOCKED)
+; %ENAFL	undefined				(FILE LOCKED)
+
+;;; Fatal error returns.
+OPNBCH:	MOVSI T,%EBDCH ? JRST OPNERR	; Bogus RENMWO (channel not open).
+OPNBFN:	MOVSI T,%EBDFN ? JRST OPNERR	; Bad File name for open.
+OPNNSM:	MOVSI T,%ENSMD ? JRST OPNERR	; Mode Unavailable for open.
+OPNWTD:	MOVSI T,%EBDDV ? JRST OPNERR	; Wrong type device for open.
+
+;;; OPNERR - Other fatal errors for open.
+OPNERR:	SKIPE MAINT		;If erring in Maint mode
+	 JRST OPEN80		; just output whatever we got.
+	TRNN F,%FOPEN		;Already open (RENMWO lossage)?
+	 .SUSET [.SMSK2,,[0]]	;No, ignore any BOJ interrupts while dying.
+	MOVEI A,12.		;Try to give fatal err up to one dozen times.
+	TRZ T,-1 		;Flush any RH bits - error code is in LH.
+OPNER1:	SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? T ]
+	 CAIA
+	  JRST OPNDIE
+	MOVE TT,[-ARGLEN,,ARGS]	;Receive request again for system call.
+	SYSCAL JOBCAL,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? TT ? %CLOUT,,T]
+	 JRST OPNDIE
+	TLNE T,%JGCLS		;If user requested CLOSE
+	 JRST CLOSE		; ALWAYS oblige him. 
+	TLNE T,%JGFPD		;If this is a PCLSRd call restarting
+	 SOJG A,OPNER1		; we can finish trying to give an error.
+
+OPNDIE:	TRNN F,%FOPEN		;RENMWO?
+	 JSR DIE		;No, just die.
+	POPPER P,[C,B,A]	;Yes, fix cretinism
+	BOJFIN [NOOSE]		;Dismiss to top level
+
+
+;;; SOPEN - Read SOPEN string.
+;;;   OPNARG/ ptr to arguments.
+;;; Maps in and reads the SOPEN arguments from the client's
+;;; address space, and copies the entire filename string into PATH.
+;;; Skips if successful.
+;;;
+;;; Note: I originally implemented this stuff by opening the client
+;;; on the USR device and IOTing the string from his address space.
+;;; This was slower and required hair to deal with the fact that the
+;;; client would be PCLSRd and ask for his SOPEN call a second time.
+
+SOPEN:	PUSHER P,[A,B,C]
+	HRRZ A,OPNARG		;Address of args.
+	LSH A,-10.		;Page in client's address space.
+	MOVEI B,CLNTPG		;Corresponding page in ours.
+	MOVE T,B		;Find the offset.
+	SUB T,A			;T has page difference.
+	IMULI T,PG$SIZ		;Will add in this to get our ptr.
+	.USET BOJ,[.RUINDEX,,C]	;Find job index of our client.
+	ADD C,[SETZ]		;Make into job spec.
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDR ? %CLIMM,,%JSELF
+			B ? C ? A ]
+	 JRST SOPE99
+	AOS A			;Try to get a second page so that
+	AOS B			;the pathname string can be a page long.
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDR ? %CLIMM,,%JSELF
+			B ? C ? A ]
+	 NOP			; OK, I guess it wasn't that long, huh.
+	MOVE A,[440700,,PATH]	;Now slurp up a copy of the pathname.
+	HRRZ B,OPNARG		;Get Y of arg in user's core.
+	ADD B,T			;Adjust to where we mapped it.
+	HLL B,OPNARG		;B has SOPEN ptr in our address space.
+	SETCM T,B		;See if our "Bp" is realy an AOBJN ptr.
+	MOVSI C,-1		;If it isn't, only one Bp to hack.
+	TLNE B,-1		;If LH is 0, treat as Bp.
+	 TLNE T,777700		;Might be AOBJN to <= 64 Bps.
+	  JRST SOPE15		; Nope, it's just a vanilla Bp.
+	MOVE C,B		;Save AOBJN ptr in C.
+SOPE10:	MOVE B,(C)		;Find next Bp.
+SOPE15:	TLNN B,-1		;If Bp has zero LH
+	 HRLI B,440700		; fix it up to first char in word.
+SOPE20:	ILDB Z,B		;Increment Bp and load character.
+	IDPB Z,A		;Stuff it.
+	JUMPN SOPE20		;Each string ends with null byte.
+	AOBJN C,SOPE10		;Go back for another Bp.
+SOPE90:	AOS -3(P)
+SOPE99:	POPPER P,[C,B,A]
+	RET
+
+
+
+SUBTTL	OPEN operation for special filenames
+
+;;; OPESIX - Open device to some sixbit filename.
+;;; Only certain magic filenames are available.
+;;;
+;;; .FILE. (DIR)  - Directory listing of DOMAIN	.SEE UFDLST
+;;; ..NEW. (DAT)  - Create and init database	.SEE NEWDAT
+;;;
+
+OPESIX:	PUSHER P,[A,B,C]
+	CALL OPENAR		;Open text area as usual.
+	MOVE A,ARGS+1
+	CAMN A,[SIXBIT /..NEW./]
+	 JRST [	MOVE A,ARGS+2
+		CAME A,[SIXBIT /(DAT)/]
+		 JRST .+1
+		MOVEI A,NEWDAT
+		JRST OPES50 ]		
+	CAMN A,[SIXBIT /.FILE./]
+	 JRST [	MOVE A,ARGS+2
+		CAME A,[SIXBIT /(DIR)/]
+		 JRST .+1
+		MOVEI A,UFDLST
+		JRST OPES50 ]
+OPES10:	JRST OPNBFN		;"Illegal file name".
+OPES50:	CALL (A)
+	 NOP
+OPES80:	MOVEI A,RRECS		;Get RR area.
+	SKIPN $AROPN(A)		;Make sure it's open.
+	 JRST OPNDIE
+	MOVE B,$ARWPT(A)	;Get write pointer (end of used area)
+	SUB B,$ARLOC(A)		;Make relative to beg
+	MULI B,5		;do bp hack
+	ADD C,UADBP7(B)		;Get # chars.
+	MOVE B,$ARLOC(A)	;Now cons up a BP to start.
+	HRLI B,440700
+	JUMPLE C,OPNBFN
+	MOVEM B,BUF.BP		;Initialize Bp to data we found.
+	MOVEM C,BUF.CT		;Initialize Character count of data found.
+	SETZM IOT.CT		;No data given yet.
+	TRO F,%FOPEN		;Also, device is now open!
+	SETOM PATH		;Make pathname appear extant.
+	POPPER P,[C,B,A]
+OPES90:	SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? %CLIMM,,1]
+	 JSR PCLSRI		;Ok boss, we're open
+	BOJFIN [NOOSE]		;Dismiss to toplevel.
+
+
+;;; UFDLST - Open up as directory.
+;;; For now, this just dumps the database.
+
+UFDLST:	PUSHER P,[A,B,C]
+	CALL RDLOCK		;Get a read lock.
+	 JRST [ MOVSI T,%ENADV	; Fail if cannot.
+		JRST OPNERR ]
+	CALL DBGET
+	 JSR AUTPSY
+	OUT(,("Database locked and loaded; "),D(USERS),(" readers."),EOL,EOL)
+	SETOM DEBCHP
+	MOVE L,$ARLOC+DOMAIN
+	CALL DEBLSE
+	 NOP
+	OUT(,CRLF,CRLF)
+	MOVE L,$ARLOC+DOMADR
+	CALL DEBLSE
+	 NOP
+	OUT(,CRLF)
+	POPPER P,[C,B,A]
+	RET
+
+;;; NEWDAT - Create new database.
+;;; The sname must be "XYZZY".
+
+NEWDAT:	PUSHER P,[A,B,C]
+	MOVE A,ARGS+3		;Get sname.
+	CAME A,[SIXBIT /XYZZY/]	;Require either magic incantation
+	 SKIPE MAINT		;or maint mode before munging database.
+	  CAIA
+	   JRST OPNBFN
+	CALL MAKDB		;Try to create database.
+	 JRST [ MOVSI T,%ENADV	; If any problems, report
+		JRST OPNERR ]	; device not available.
+	POPPER P,[C,B,A]
+	RET			;Else print out stats!
+
+
+SUBTTL	IOT operation and MP level output
+
+;;; When the user OPENs us up, a UUO area is created to contain the data
+;;; we will be sending down the BOJ pipeline.  The Domain Resolver uses
+;;; the OUTput UUOs to write data of some sort into the area.  
+;;;
+;;; The data in the area is emptied down the BOJ channel by the
+;;; output routines here.   We set up at (S)IOT interrupt level
+;;; and do real work at MP level.  The BOJ channel was opened as
+;;; an unbuffered UUO channel, and so we can use OUTput UUOs to
+;;; read the data from RRECS and write it on BOJ.
+
+
+;;; IOT - Control comes here at interrupt level.
+
+BVAR
+BUF.BP:	0			;Bp to unread data buffer. 
+BUF.CT:	0			;Length of data there.
+IOT.CT:	0			;How much we already given.
+IOTREQ:	0			;How much user is asking for.
+EVAR
+
+IOT:	PUSH P,A
+	MOVE A,ARGS+0		;Just pick up request args.
+	MOVEM A,IOTREQ
+	MOVE T,JOBOP
+	TRZ F,%FJIOT\%FJSIO	;Clear both operation flags
+	TLNN T,%JGSIO		;Note which operation being hacked.
+	 TROA F,%FJIOT
+	  TRO F,%FJSIO
+	POP P,A
+	BOJFIN			;Dismiss to MP level.
+
+;;; OUTPUT - Runs at MP level (may be interrupted).
+
+OUTPUT:	TRNN F,%DRBLK		;If unit mode
+	 JRST [	TRNE F,%FJSIO	; for SIOT
+		 SKIPA C,IOTREQ	;  get byte count
+		  MOVEI C,1	; for IOT, transfer one byte
+		JRST OUTP10 ]
+	HLRE C,IOTREQ		;Else for block mode
+	MOVNS C			;get wd count.
+	TRNN F,%DRIMG		;If ASCII
+	 IMULI C,5.		; make into chars.
+OUTP10:	MOVE D,BUF.CT		;D has chars in buffer.
+	SUB D,IOT.CT		;Find out how many he hasn't seen.
+	JUMPLE D,OUTEOF		; If he has seen everything, give EOF.
+	CAML D,C		;Else see if enough for this IOT.
+	 MOVE D,C		;D gets # of bytes we can give the user.
+	SUB C,D			;C gets number user wants beyond EOF.
+	TRNN F,%DRBLK		;If unit mode
+	 JRST [	MOVE E,D	; return data via SIOT.
+		SYSCAL SIOT,[%CLIMM,,BOJ ? BUF.BP ? D]
+		 JSR AUTPSY	;  Eh?
+		SUB E,D		; Compute number of chars given.
+		SKIPE D		; If he didn't take all we offered,
+		 SETZ C,	;  He was PCLSRd, so don't offer any more.
+		JRST OUTP50 ]
+	TRNE F,%DRIMG		;Block Image mode is simple: byte=word.
+	 JRST OUTP40		;Block ASCII mode needs a weird kludge.
+	IDIVI D,5.		;Convert chars back into words for IOT.
+	JUMPE D+1,OUTP40
+	JUMPG D,OUTP40
+OUTP20:	MOVSI D,-1.		;Else do last partial-word.
+	DPB D+1,[440300,,D]	;Adjust magic top bits in AOBJN ptr.
+	JRST OUTP42
+
+OUTP40:	MOVNS D			;Else block mode.
+	HRLZS D			;Make AOBJN to what we will give.
+OUTP42:	HRR D,BUF.BP
+	SKIPE IOT.CT		;Each time we IOT
+	 AOS D			; advance AOBJN ptr.
+	.IOT BOJ,D		;Return data via IOT.
+OUTP45:	SKIPGE D		;If creator didn't take all we offered, 
+	 SETZ C,		; he was PCLSRd, so don't try to any more.
+	MOVEI E,-1(D)		;Find # wds given.
+	SUB E,BUF.BP
+	ANDI E,-1
+	ADDM E,BUF.BP		;Update the Bp.
+	TRNN F,%DRIMG		;If in ASCII mode
+	 IMULI E,5.		; maintain count in chars, not words.
+OUTP50:	ADDM E,IOT.CT		;Update count of chars given.
+	JUMPN C,OUTP10		;Outstanding bytes this IOT? Try again.
+	MPFIN			;This IOT satisfied, return.
+
+.ERR	Decide if OUTEOF code should do JOBIOC or not!
+
+OUTEOF:	TRNN F,%FJSIO		;Reading past end of file!
+	 TRNE F,%DRBLK		;For SIOT or in block mode
+	  JRST [ SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? %CLIMM,,0]
+		  JSR PCLSRD
+		 MPFIN ]
+	TRNE F,%DRIMG		;In unit image mode, signal IOC error.
+	 JRST [	SYSCAL JOBIOC,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? %CLIMM,,IOCEOF]
+		 JSR PCLSRD
+		MPFIN ]
+	.IOT BOJ,[-1,,^C]	;In unit ASCII mode, give magic value.
+	MPFIN
+
+
+
+
+SUBTTL	Long filename parser
+BVAR
+QUOPC:	BLOCK 2.		;Opcode token from pathname.
+QUCLA:	BLOCK 2.		;Class token from pathname.
+QUTYP:	BLOCK 2.		;Type  token from pathname.
+
+QOP:	0			;Opcode number.
+QNAME:	0,,QNASTR		;SPT to the QNAME parsed from the pathname.
+QNASTR:	BLOCK PATHLN		;Actual string lives here.
+QCLASS:	0			;QCLASS code.
+QCLIDX:	0			;QCLASS descriptor index.
+QTYPE:	0			;QTYPE  code.
+QTYIDX:	0			;QTYPE descriptor index.
+EVAR
+
+;;; PARSE - Parse the ASCIZ pathname from A.
+;;; Skips if pathname appears to be properly formed.
+;;; If non-skip, OPEN error code returned in T.
+
+PARSE:	PUSHER P,[B,C]
+	SETZ B,
+	MOVE C,[-1,,":]
+	CALL PARNXT		;Skip over device name.
+	 JRST PARLUZ
+	MOVE B,[440700,,QUOPC]
+	MOVE C,[-1,,";]
+	CALL PARNXT		;Find Query Opcode.
+	 JRST PARLUZ
+	MOVEI T,0
+	IDPB T,B
+	MOVE B,[440700,,QUCLA]
+	MOVE C,[-1,,";]
+	CALL PARNXT		;Find Class token.
+	 JRST PARLUZ
+	MOVEI T,0
+	IDPB T,B
+	MOVE B,[440700,,QUTYP]
+	CALL PARNXT		;Find Type token.
+	 JRST PARLUZ
+	MOVEI T,0
+	IDPB T,B
+	SETZ C,
+	MOVE B,[440700,,QNASTR]
+	CALL PARNXT		;Find QNAME.
+	 NOP
+	SETZ T,
+	IDPB T,B
+	MOVEI A,QNASTR
+	CALL ASZLEN		;Make SPT for QNAME.
+	MOVEM A,QNAME
+	;;; Now look up the Query Opcode.
+PARS20:	MOVE A,[440700,,QUOPC]
+	MOVSI C,-OPNAML
+PARS21:	HLRZ B,OPNAMS(C)
+	HRLI B,440700
+	CALL STRCMP
+	 JRST [ AOBJN C,PARS21	
+		JRST PARLUZ ]
+	HRRZ A,OPNAMS(C)
+	MOVEM A,QOP
+	;; Now look up the Query Class.
+	MOVE A,[440700,,QUCLA]	;Bp to class token.
+	MOVSI C,-MAXCLS
+PARS23:	HRRZ B,CLSNAM(C)	;Get a class short-name.
+	HRLI B,440700		;ASCIZ Bp to it.
+	CALL STRCMP		;Is this it?
+	 JRST [	AOBJN C,PARS23	; No, try next name.
+		MOVSI T,%ENADR	;  Lossage: class not found.
+		JRST PARS99 ]
+	MOVE A,CLSTAB(C)	;Found it!
+	MOVEM A,QCLASS		;Save as QCLASS.
+	MOVEM C,QCLIDX
+	;; Now look up the Query Type.
+PARS30:	MOVE A,[440700,,QUTYP]	;Bp to type token.
+	MOVSI C,-MAXTYP
+PARS31:	HRRZ B,TYPNAM(C)	;Get a type short-name.
+	HRLI B,440700		;ASCIZ Bp to it.
+	CALL STRCMP		;Is this it?
+	 JRST [	AOBJN C,PARS31	; No, try next name.
+		MOVSI T,%ENSDR	;  Lossage: type not found.
+		JRST PARS99 ]
+	MOVE A,TYPTAB(C)	;Found it!
+	MOVEM A,QTYPE		;Save as QTYPE.
+	MOVEM C,QTYIDX
+	AOS -2(P)		;Parsed OK, winskip.
+PARS99:	POPPER P,[C,B]
+	RET
+
+PARLUZ:	MOVSI T,%EBDFN		;Here if pathname seems to
+	JRST PARS99		;be malformed (illegal file name).
+
+;;; PARNXT gets the next token from A into B.
+;;; RH C is break char, LH C is -1 to ignore spaces.
+
+PARNXT:	HLRZ TT,C		;See if should ignore spaces.
+	HRRZ C,C		;Break char.
+PARNX1:	ILDB T,A		;Get char.
+	JUMPE T,CPOPJ		;If null, return.
+	CAMN T,C		;Else if delimiter
+	 JRST POPJ1		; Skip.
+	JUMPE TT,PARNX2
+	CAIN T,40		;Ignore spaces.
+	 JRST PARNX1
+PARNX2:	SKIPE B			;If B nonzero Bp
+	 IDPB T,B		; copy chars.
+	JRST PARNX1
+
+
+SUBTTL	Domain Name Resolver
+
+;;; RESOLV calls the pathname parser, and examines the open mode
+;;; bits which specifies what the device is to resolve.  
+;;; The CACHE is set up, and then control is handed to the resolving
+;;; routine appropriate for the opcode.
+
+RESOLV:	PUSH P,A
+	MOVE A,[440700,,PATH]
+	CALL PARSE		;Parse resource pathname.
+	 JRST POPAJ		; Eh?  Make OPEN fail.
+	PUSH P,B
+IFN $$HST3,[
+	;; If we are using the HOSTS3 database feature, memory
+	;; management is a little different.  We don't need much
+	;; UUO area space, since we are not going to map in the database.
+	MOVE T,QOP		;Check query opcode.
+	CAIE T,DO$TAB		;If not hacking HOSTS3
+	 JRST RESO50		; continue to normal initialization.
+	SKIPE NETWRK"HSTADR	;If HOSTS3 data already set up
+	 JRST RESO60		; go init CACHE LSE.
+	OUT(BRR,CLS)		;Okay, need to reset memory.
+	MOVE A,[-<FREEPG-HSTPAG>,,FREEPG]
+	UARINIT A		;Initialize area UUOs and PAGSER.
+	MOVSI A,-NAREAS		;Make sure all ARBLKs declared closed,
+RESO20:	MOVE B,ARPTBL(A)	;by getting ARPT to each
+	SETZM $AROPN(B)		;and zapping.
+	AOBJN A,RESO20
+	MOVEI A,TMPAR		;Initialize temporary area!
+	CALL LSEOPN
+	CALL OPENAR		;Initialize output area and default channel.
+	MOVEI A,HSTPAG		;Map host table into top of memory.
+	MOVEI B,DKIC		;Use disk input channel.
+	CALL NETWRK"HSTMAP	;Open wide and say Ahh.
+	 JRST [	MOVSI T,%ENADV	;If can't get access to file
+		JRST RESO99 ]	; fail - local database problem.
+	TRNN F,%DRIMG
+	 OUTCAL(,("HOSTS3 database mapped in."),EOL)
+	JRST RESO60
+];$$HST3
+RESO50:	;; Read in the master Domain List.
+	CALL RDLOCK		;Get a read lock.
+	 JRST [ MOVSI T,%ENADV	; Fail if cannot.
+		JRST OPNERR ]
+	CALL DBGET		;Read in database.
+	 JSR AUTPSY
+	TRNN F,%DRIMG
+	 OUTCAL(,("Database locked and loaded; "),D(USERS),(" readers."),EOL)
+RESO60:	TRNN F,%DRIMG		;In ASCII mode
+	 JRST [	MOVE A,QCLIDX	; print out some debugging info.
+		HLRZ A,CLSNAM(A)	
+		MOVE B,QTYIDX
+		HLRZ B,TYPNAM(B)	
+		OUT(,("QCLASS: "),TZ(@A),TAB,("QTYPE: "),TZ(@B),EOL)
+		OUT(,("QNAME: "),TC(QNAME),EOL)
+		JRST .+1 ]
+	;; Now create a cache for the query we are processing.
+	MOVEI A,CACHE
+	CALL LSEOPN
+	MOVE L,$ARLOC+CACHE	;Make this the current LSE!
+	MAKELN B,[A$OUTL,,NIL ? %LTLST,,[[0]]]	;Set up output & results LN.
+	MAKELN A,[A$DB,,NIL ? %LTLST,,[B]]	;Set up root node for cache.
+	MOVEM A,$LLLST(L)
+	POP P,B
+	POP P,A
+	MOVE T,QOP
+	CAIN T,DO$QRY		;LOOKUP is for simple queries.
+	 CALRET LOOKUP
+	CAIN T,DO$YRQ		;LOOINV is for inverse queries.
+	 CALRET LOOINV
+	CAIN T,DO$WRO		;NQUERY query hack forces use of net.
+	 JRST [	TRO F,%DRWOV ? CALRET LOOKUP ]
+	CAIN T,DO$TAB		;HOSTS3 query just uses the host table.
+	 JRST HSTABL
+	MOVSI T,%EBDFN		;Other opcodes fail with FORMAT ERROR.
+RESO99:	RET			;Fail.
+
+
+comment 
+
+The main resolver routines are LOOKUP and LOOINV.
+All of the resolver's routines skip for success.  Upon failure they
+return an OPEN error code in the LH of T.  (The RH of T is available for
+use, if someday we need to pass around some other kind of error state.)
+
+For each class-type combination there is a "resource locator"
+subroutine to find the resource record(s) for a given domain name.
+Resource locators are made known to LOOKUP with the RL macro. 
+These subroutines find a resource as in a simple query, and may
+call whatever generic or special searching routines they like.
+There is a core CACHE area which should usually be searched before
+looking in the master Domain database or network servers.  When a
+resource record for a Domain is found by a search routine, the
+(entire) Domain is copied into the CACHE area.
+
+The CACHE is smaller than the master database and is likely to contain
+multiple pieces of information about a domain.  As the resource locator
+finds the desired data, it constructs an ordered list of CACHE-relative
+LPs pointing to the data.  The LP to this list (which is consed in
+CACHE off of the A$DB LN there) is returned to LOOKUP from the resource
+locator in acc A.  LOOKUP then calls MAKOUT to construct our device's
+output in RRECS.  
+
+Resource locators expect CACHE to be the current LSE, and the root node
+and A$OUTL node must be set up.  They may look at (but must also
+preserve) the QNAME, QCLASS, and QTYPE variables.  Resource locators
+smash no accs and skip return if they found something.
+
+The search routines pass their results back to the resource locator as
+unordered lists.  These lists are built off of the LN pointed at by the
+CAR of the A$OUTL hanging off the A$DB in the CACHE.
+
+Resource locators construct and return (in A) a list beginning with an
+A$OUTL node, whose CDR is three nodes: A$ANS, A$AUT, A$ADD (one for each
+section).  Each of those nodes has an ordered list of A$PAIRs specifying
+the RRs which are to appear in that section.  Each half of the value-word
+of an A$PAIR contains an 18-bit LP.  The LH points to the A$DOM node
+containing the RR; the RH points to the desired A$RR node.
+
+
+
+
+;;; Resource locator definitions:
+
+RLBLK==32.
+RLKND:	BLOCK RLBLK
+RLRTN:	BLOCK RLBLK
+
+.%RL==-1
+DEFINE	RL CLASS,TYPE,RTN
+	.%RL==.%RL+1
+	IFL RLBLK-.%RL, .FATAL Too many kinds of RLwers
+	TMPLOC RLKND+.%RL,{[TYPE,,CLASS]}
+	TMPLOC RLRTN+.%RL,{RTN}
+TERMIN
+
+RL DC$IN,DT$ANY,X.SIMP
+RL DC$IN,DT$A,X.SIMP
+RL DC$IN,DT$PTR,X.SIMP
+RL DC$IN,DT$CNA,X.SIMP
+RL DC$IN,DT$NS,X.SIMP
+RL DC$IN,DT$HIN,X.SIMP
+RL DC$IN,DT$MB,X.SIMP
+RL DC$IN,DT$MR,X.SIMP
+RL DC$IN,DT$MD,X.SIMP
+RL DC$IN,DT$MF,X.SIMP
+RL DC$IN,DT$MG,X.SIMP
+RL DC$IN,DT$MIN,X.SIMP
+RL DC$IN,DT$NUL,X.SIMP
+RL DC$IN,DT$WKS,X.SIMP
+
+
+;;; LOOKUP a domain name
+;;;   A/ query pathname 
+;;; Skip returns with results stuffed into RRECS.
+;;; Non-skip returns OPEN error code in T.
+
+LOOKUP:	PUSHER P,[A,B,C,D,E]
+	MOVE A,QNAME		;Begin search with the items
+	MOVE B,QCLASS		;the user asked for.  This will
+	MOVE C,QTYPE		;fan out until we find what we want.
+	MOVSI E,-RLBLK		;AOBJN to resource locators.
+LOOK20:	MOVE D,RLKND(E)		;Get a locator description.
+	JUMPE D,LOOK25		;Ignore empty ones.
+	HLRZ T,(D)		;Type is in LH.
+	HRRZ TT,(D)		;Class in in RH.
+	CAME T,C		;Type match?
+	 JRST LOOK25		; No, wrong locator.
+	CAMN TT,B		;Class match also?
+	 JRST LOOK40		; Yes! Go locate a resource.
+LOOK25:	AOBJN E,LOOK20		;No match, keep searching for handler.
+	MOVSI T,%ENAPK		;If no handler, no way to find the data!
+	JRST LOOK99
+LOOK40:	CALL @RLRTN(E)		;Dispatch to resource locator for search.
+	 JRST LOOK99		; It failed, OPEN errs according to T.
+	CALL MAKOUT		;Go make output for our user.
+	TRNN F,%DRIMG
+	 JRST [ OUT(,CRLF,("----------------------------------------"),EOL)
+		OUT(,("Dump of info cached this time:"),EOL)
+		SETOM DEBCHP
+		CALL DEBLSE
+		JRST LOOK90 ]
+LOOK90: AOS -5(P)
+LOOK99:	POPPER P,[E,D,C,B,A]
+	RET
+
+
+;;; LOOINV - Lookup Inverse
+;;; Inverse queries are handled slightly differently.
+
+LOOINV:	PUSHER P,[A,B,C]
+	MOVE A,QNAME		;Begin search with the items
+	MOVE B,QCLASS		;the user asked for.  This will
+	MOVE C,QTYPE		;fan out until we find what we want.
+	CAIN B,DC$IN		;Support Internet Host Address queries.
+	 CAIE C,DT$A
+	  JRST [ MOVSI T,%EBDFN
+		 JRST LOOI99 ]
+	MOVSI T,%EBDFN		;Doesn't work yet.
+LOOI99:	POPPER P,[C,B,A]
+	RET
+
+
+
+;;; HSTABL - Host table lookup
+;;;   A/ query pathname 
+;;; Skip returns with results stuffed into RRECS.
+;;; Non-skip returns OPEN error code in T.
+
+HSTABL:	PUSHER P,[A,B,C,D,E]
+	MOVE A,QNAME			;Search only for the items
+	MOVE B,QCLASS			;the user asked for.
+	MOVE C,QTYPE
+	FINDA D,[A$DB,,[$LLLST(L)]]	;Find root node.
+	 JSR AUTPSY
+	MOVE D,LISTAR(D)+1		;Get LP to result lists.
+	LDB T,[$LAFLD,,LISTAR(D)]
+	CAIN T,A$OUTL			;If LN is not output list
+	 SKIPN D			; or if missing altogether
+	  JSR AUTPSY			;   LSE not set up.
+	SETZ T,
+	HRRM T,LISTAR(D)		;Zap CDR -- null output list.
+	SETZM LISTAR(D)+1		;Zap CAR -- no results yet either.
+	CALL HSTBLK			;Straightforward search for resource.
+	 JRST HSTA99			; It failed, OPEN errs according to T.
+	MAKELN C,[A$ANS,,NIL ? %LTLST,,[A]]
+	HRRM C,LISTAR(D)		;Results go in ANSWER of output list.
+	CALL MAKOUT			;Go make output for our user.
+	TRNN F,%DRIMG
+	 JRST [ OUT(,CRLF,("----------------------------------------"),EOL)
+		OUT(,("Dump of info cached this time:"),EOL)
+		SETOM DEBCHP
+		CALL DEBLSE
+		JRST HSTA90 ]
+HSTA90: AOS -5(P)
+HSTA99:	POPPER P,[E,D,C,B,A]
+	RET
+
+
+
+SUBTTL	Internet Class Resource Locators
+
+;;; X.SIMP - Simple things
+;;;
+;;; This can be used to find the data for queries which want
+;;; only the named resource, and ignore Additional setion processing.
+
+X.SIMP:	PUSHER P,[L,D]
+	FINDA D,[A$DB,,[$LLLST(L)]]	;Find root node.
+	 JSR AUTPSY
+	MOVE D,LISTAR(D)+1		;Get LP to result lists.
+	LDB T,[$LAFLD,,LISTAR(D)]
+	CAIN T,A$OUTL			;If LN is not output list
+	 SKIPN D			; or if missing altogether
+	  JSR AUTPSY			;   LSE not set up.
+	SETZ T,
+	HRRM T,LISTAR(D)		;Zap CDR -- null output list.
+	SETZM LISTAR(D)+1		;Zap CAR -- no results yet either.
+	CALL SEARCH			;Straightforward search for resource.
+	 JRST X.SIM9			; Not found, return error code.
+	;; Now sort the list in A onto the output list.  
+	;; For simple queries, this is trivial, since all of the 
+	;; results go into the Answer section, and we leave the other empty.
+	MAKELN C,[A$ANS,,NIL ? %LTLST,,[A]]
+	HRRM C,LISTAR(D)
+	AOS -2(P)
+X.SIM9:	POPPER P,[D,L]
+	RET			   	;All done, LP for MAKOUT in A.
+
+
+SUBTTL	CSnet Class Resource Locators (none yet)
+
+SUBTTL	Chaosnet Class Resource Locators (none yet)
+
+SUBTTL	UUCP Class Resource Locators (none yet)
+
+SUBTTL	BITNET Class Resource Locators (none yet)
+
+
+SUBTTL	Generic Search Routine
+
+;;; SEARCH - Search for information.
+;;;   A/ ptr to QNAME
+;;;   B/ QCLASS
+;;;   C/ QTYPE
+;;;
+;;; CONSes any data found into current LSE.
+;;; Skips if the desired resource was found.
+;;; On success, caller may look for results list in CACHE.
+;;; Ptr to results is returned in A.
+;;;
+;;; The cache and the database (searched in that order) are assumed to
+;;; have data which is complete for the lifetime of the resource record
+;;; found.  A network server will not be consulted unless the RR is
+;;; missing, expired, or illicit.
+
+SEARCH:	PUSHER P,[B,C,E,L,QNAME]
+	MOVEM A,QNAME		;Put QNAME in canonical place.
+	TRNE F,%DRWOV		;If "overwriting", don't check database.
+	 JRST [	MOVE L,$ARLOC+DOMAIN
+		JRST SEAR70 ]
+	MOVE L,$ARLOC+CACHE	;First check is in the cruft found so far.
+	CALL DBLUKR		;Search database cache for resource.
+	 CAIA
+	  JRST SEAR90
+	MOVE A,QNAME
+	CALL DOMLSE		;L gets appropriate database LSE.
+	CALL DBLUKR		;Search master database for resource.
+	 CAIA
+	 JRST [	MOVE E,$ARLOC+CACHE
+		EXCH L,E	;Aha! Found it in database.
+		CALL RRCONS	;Copy results into the cache.
+		JRST SEAR90 ]
+	HLRZ TT,T		;Examine error code from database search.
+	CAIN TT,%ENSFL		;If authoritative Name Error
+	 JRST SEAR99		; search is definitely over.
+	;; Else try searching the network servers.
+SEAR70:	MOVE A,QNAME
+	CALL NTLUKR		;Search servers.
+	 CAIA			; Sigh, we lost.  Use error in T.
+SEAR90:	AOS -5(P)		;Skip return with LP to results in A!
+SEAR99:	POPPER P,[QNAME,L,E,C,B]
+	RET
+
+
+SUBTTL	Database searching
+
+;;; DOMAR is a macro for assigning certain zones to certain LSEs,
+;;; providing data isolation and locality.  Zones not mentioned
+;;; with DOMAR are assigned to the default LSE, DOMAIN.
+;;;
+;;; Most domains names are kept in the big DOMAIN LSE, but special
+;;; addressing domains, such as "44.0.3.10.IN-ADDR.ARPA" are kept in a
+;;; seperate area from the regular domains names.
+;;;
+;;; NOTE: Remember that if you mention any LSEs here which you expect to
+;;; be part of the database, you must also teach the database I/O
+;;; routines (include initialization code and DBGET/DBPUT) about them!
+
+DOMLL==1.
+DOMNAM:	BLOCK DOMLL
+DOMBLK:	BLOCK DOMLL
+
+.%DM==-1
+DEFINE	DOMAR LSE,NAM
+	.%DM==.%DM+1
+	IFL DOMLL-.%DM, .FATAL Too many domain areas
+	TMPLOC DOMNAM+.%DM,ASCNT NAM
+	TMPLOC DOMBLK+.%DM,{LSE}
+TERMIN
+
+DOMAR	DOMADR,[IN-ADDR.ARPA]		;DARPA Internet addresses live here.
+	;Maybe someday also:
+	;  CHAOS-ADDR.MIT.EDU for Chaosnet addresses.....
+	;  AI.MIT.EDU and/or MIT.EDU for local domains...
+
+
+;;; DOMLSE - Find LSE for a domain name. 
+;;;   A/ ASCNT ptr for a domain name,
+;;;
+;;; This routine loads L and does not skip!
+
+DOMLSE:	PUSHER P,[B,C,A]
+	HRLZI C,-DOMLL		;AOBJN ptr to domain/LSE tables.
+DOML10:	MOVE A,(P)		;Recover ASCNT for domain.
+	MOVE B,DOMNAM(C)	;Get ASCNT for zone.
+	CALL USBSEA		;Do they match?
+	 JRST [ AOBJN C,DOML10	; No, try another.
+		MOVEI B,DOMAIN	; If none left, assume DOMAIN.
+		JRST DOML90 ]
+	MOVE B,DOMBLK(C)	;Aha! Get LSE addr for this domain.
+DOML90:	MOVE L,$ARLOC(B)	;Load ye olde L-LSE ptr!
+	POPPER P,[A,C,B]
+	RET
+
+
+
+
+;;; DBLUKR - Look up Domain in current LSE.
+;;;   A/ QName, B/ QClass, C/ QType
+;;;
+;;; CACHEs the answers it finds, returns A: LP to results
+;;;
+;;; Skips if found desired resource.
+;;; Non-skip means resource not found, or illicit resource found.
+
+LVAR	DBLWCT:	0		;Keep count of nodes found this pass.
+LVAR	DBLCKT:	-1		;If nonzero, check RRs for expiration.
+LVAR 	DBLILL:	0		;If nonzero, some illicit data being returned.
+
+DBLUKA:	SETZM DBLCKT		;Enter here to disregard RR timeouts.
+DBLUKR:	PUSHER P,[B,C,D,H,E,DBLWCT,DBLCKT,DBLILL]
+	SETZM DBLWCT		;Zero count of nodes found.
+	;; Finda the domain by name in the current database LSE.
+	SEADOM D,[A,,[$LLLST(L)]]
+	 JRST [	MOVSI T,%ENSFL	; Domain not found.
+		CALL AUTHP	; NAME ERROR if we're authoritative.
+		 MOVSI T,%ENSJB	;  Else just RESOURCE NOT FOUND
+		SETZ A,
+		JRST DBLU99 ]	; Lose, lose.
+	MOVE A,LISTAR(D)+1	;CDAR points to Class list.
+	JUMPE A,DBBAD
+	HRRZ A,LISTAR(A)
+	SCAAR A,[A$CLAS,,A ? B]
+	 JRST DBBAD
+	MOVE A,LISTAR(A)+1	;Get this class sublist.
+	JUMPE A,DBBAD
+	MOVE E,A
+DBLU50:	HRRZ E,LISTAR(E)	;E gets list of A$RRs.
+	JUMPE E,DBLU90		;If no more RRs, done.
+DBLU60:	CAMN C,[DT$ANY]		;If searching for DT$ANY kind of data
+	 JRST [	MOVE B,E	; use any and all RRs.
+		JRST DBLU85 ]
+	SCAAR B,[A$RR,,E ? C]	;Else search for one of correct type.
+	 JRST DBLU90
+	SKIPN DBLCKT		;If not checking timeouts
+	 JRST DBLU85		; just go CONS it up.
+	MOVE H,LISTAR(B)+1	;Else CDAR to RR values list.
+	HRRZ H,LISTAR(H)
+	PUSH P,H		;Check RR to see if this is illicit data.
+	FINDA H,[A$DIST,,[H]]	;LP to distribution bits.
+	 JRST DBLU65
+	MOVE H,LISTAR(B)+1	;Pick up actual bits.
+	TRNE H,%AUAUS		;If we claim authority
+	 JRST DBLU65		; this RR is OK.
+	TRNE H,%AUILL		;Else if this RR is illicit
+	 SETOM DBLILL		; note that fact.
+DBLU65:	POP P,H
+	FINDA H,[A$TTD,,[H]]	;Find RR timeout.
+	 JRST DBLU80		; If missing, assume it timed out.
+	MOVE H,LISTAR(H)+1	;H has TTD.
+	CAMN H,[-1]		;Check for eternal validity
+	 JRST DBLU85		; and obey it.
+	PUSH P,A
+	CALL DATIME"TIMGET	;Find current time in A.
+	MOVE U1,A		;Stick it in here.
+	POP P,A
+	CAMLE H,U1		;If have not reached time-to-die
+	 JRST DBLU85		; assume we have the complete story.
+DBLU80:	TLO F,%BLDRN		;Else note that expired data encountered.
+	CAIA			;Do not add this to our answer.
+DBLU85:	 CALL DBLWIN		; OK, add B to list of RRs found.
+	JRST DBLU50		;CDR to next RR.
+	;; No more RRs, if we found anything, success return.
+DBLU90:	SKIPN DBLWCT		;If we didn't find anything
+	 JRST [	SETZ A,		; return no results.
+		JRST DBLU99 ]
+	SKIPN DBLILL		;Don't skip if returning any illicit data.
+	 AOS -8(P)		; Skip for success!
+DBLU99:	SETOM DBLCKT
+	SETZM DBLILL
+	POPPER P,[DBLILL,DBLCKT,DBLWCT,E,H,D,C,B]
+	RET
+
+DBBAD:	MOVSI T,%ENADV		;Database structure seems screwed up.
+	SETZ A,
+	JRST DBLU99
+
+
+
+
+;;; When we locate a resource in the database, we keep track of it.
+;;; DBLWIN is called with:
+;;;   B/ LP to A$RR we found
+;;;   D/ LP to A$DOM containing B
+;;;   L/ current LSE, where both A and D (and B) live.
+;;; This finds or creates the results list in the CAR of the A$OUTL,
+;;; and appends a new node onto it.
+
+DBLWIN:	PUSHER P,[B,C,D,L]
+	MOVE L,$ARLOC+CACHE		;Switch to cache area.
+	HRRZ C,B			;RH of pair gets RR.
+	HRL C,D				;LH of pair gets DOMAIN.
+	MAKELN B,[A$PAIR,,NIL ? %LTVAL,,[C]]
+	FINDA C,[A$DB,,[$LLLST(L)]]	;Look for root node.
+	 JSR AUTPSY			; Area not set up for Domains?
+	MOVE C,LISTAR(C)+1		;Find results/output list.
+	JUMPE C,DBLW99			; Missing?
+	LDB T,[$LAFLD,,LISTAR(C)]	;Better type check it.
+	CAIN T,A$OUTL			;If type of LN pointed to is wrong
+	 SKIPN C			; Or if list is missing
+	  JSR AUTPSY			;  lose, A$OUTL nonexistant!
+	SKIPN D,LISTAR(C)+1		;CAR of A$OUTL has LP to results.
+	 JRST [	MOVEM B,LISTAR(C)+1	; If results list is NIL
+		JRST DBLW90 ]		; begin it here in the CAR.
+	LNAPP [ LISTAR(D) ? B ]		;Else Append new node to CDR.
+DBLW90:	AOS DBLWCT			;Count a result node added.
+	MOVE A,LISTAR(C)+1		;Return LP to results so far.
+DBLW99:	POPPER P,[L,D,C,B]
+	RET
+
+
+;;; AUTHP - Authoritatve Predicate
+;;;   A/ ASCNT Domain name
+;;; Skips if we are authoritative for the domain.
+;;; Non-skip means someone else is the authority.
+
+AUTHP:	PUSHER P,[A,B,C,L]
+	MOVE L,$ARLOC+DOMAIN	;SOA recs live in DOMAIN.
+	FINDA C,[A$DB,,[$LLLST(L)]]
+	 JSR AUTPSY
+	MOVE C,LISTAR(C)+1	;CAR here has list of various junk.
+	FINDA C,[A$SOA,,[C]]	;Find LP to SOA list.
+	 JRST AUTH99		; Maybe were not an authority.
+	MOVE C,LISTAR(C)+1	;Pick up the list of names.
+AUTH10:	MOVE B,LISTAR(C)+1	;Get absolute string ASCNT.
+	ADD B,$LSLOC(L)
+	HLRZ T,B		;Length of this zone name.
+	JUMPE T,AUTH80		;Maybe we are the root authority.
+	HLRZ T,A		;Else check length of the domain name.
+	JUMPE T,AUTH99		;If asking about the root, lose.
+	CALL AUTHCE		;Ultimate substrings correspond?
+	 JRST AUTH80		; Yes!
+	HRRZ C,LISTAR(C)	;Else CDR to next name on list.
+	JUMPN C,AUTH10
+	CAIA
+AUTH80:	 AOS -4(P)		;Here to skip return!
+AUTH99:	POPPER P,[L,C,B,A]
+	RET
+
+;;; AUTHCE - Compares ultimate substrings to see if the
+;;;          domain in ASCNT A is "underneath" the domain in ASCNT B.
+;;;
+;;; Skip returns if A is superior to B.
+;;; If A is contained in B, does not skip.
+
+AUTHCE:	PUSHER P,[A,B,C,D]
+	HLRZ C,A		;Get len of Domain1.
+	HLRZ D,B		;Get len of Domain2.
+	HRLI A,440700
+	PTSKIP C,A		;A is Bp to the end of the Domain1.
+	HRLI B,440700
+	PTSKIP D,B		;B is Bp to the end of the Domain2.
+AUTHC1:	LDB T,A			;Get Domain1 char.
+	CAIL T,"a		;Fix case sensitivity, sigh
+	CAILE T,"z
+	 TRNA
+	  TRZ T,40
+	LDB TT,B		;Get Domain2 char.
+	CAIL TT,"a
+	CAILE TT,"z
+	 TRNA
+	  TRZ TT,40
+	CAME T,TT		;If they don't match
+	 JRST AUTHC8		; we lost.
+	SOSG D			;If Domain2 is exhausted
+	 JRST AUTHC9		; we are done.
+	SOSE C			;Else if there is more to go
+	 JRST [	DBP7 A		; back up each for another char.
+		DBP7 B
+		JRST AUTHC1 ]
+AUTHC8:	AOS -4(P)		;Lose - Skip return.
+AUTHC9:	POPPER P,[D,C,B,A]
+	RET
+
+
+
+
+SUBTTL	Network Server Search
+
+comment              Notes:
+
+NTLUKR could be more clever about where to being the search; it could
+search the database for authoritative domain servers.  It's not clear
+is this would be worth it, so for now we just begin our queries with
+the toplevel domain server.  This will always work.
+
+The approach used here (NETNS and NTCONS) does not preserve all the
+incidental information we find during the search process.  
+NTASK looks briefly at response packets to see if the search is over.
+If we are directed to some other server, NETNS parses the packet to
+find a domain server to ask.  When we finally get the answers we need,
+NTCONS uses RRPAR to extact the data from the answer packet and put it
+into the cache.
+
+I think this is the fastest thing to do, but note that it discards
+information about namservers rather than putting that information into
+the CACHE (where it might be added to our local database.)  Another
+way for the system to work would be for NTASK to parse *all* the RRs
+into the CACHE as they come in.  Then it would search the CACHE for
+the answers, and NETNS would search the CACHE for nameserver info.
+
+
+
+;;; NTLUKR - Look up Domain in distributed database over network
+;;;   A/ QName, B/ QClass, C/ QType
+;;;
+;;; Creates in CACHE a list of results and skip returns.
+;;; Returns LP to results in A.
+;;; Non-skip means not found, error code in T.
+
+LVAR	SRVLST:	0		;LP to list of initial servers.
+
+NTLUKR:	PUSHER P,[B,C,D,E,L,PKT,QNAME,QCLASS,QTYPE]
+	MOVEM A,QNAME		;Query variables into canonical place.
+	MOVEM B,QCLASS
+	MOVEM C,QTYPE
+	SETZM SRVLST
+	MOVE L,$ARLOC+TMPAR
+	MOVE A,LITSTR []	;Root domain's name.
+	CALL GETNS		;Find authoritative servers for it.
+	 JRST [ MOVSI T,%ENADV	; If none, LOCAL DATABASE PROBLEM.
+		JRST NTLU99 ]	; Lose.
+NTLU10:	MOVEM A,SRVLST		;Remember LP to list of servers.
+	MOVE E,A		;We'll CDR down them until one answers.
+NTLU20:	MOVE D,LISTAR(E)+1	;Get network address of a server.
+	CALL NTASK		;Try querying there.
+	JUMPN D,NTLU50
+NTLU25:	HRRZ E,LISTAR(E)	; try another server.
+	JUMPN E,NTLU20		;If no more servers, we lose.
+	LNDEL SRVLST		; All servers appear to be down.
+	MOVSI T,%ENRDV		; Say SERVER NOT AVAILABLE
+	JRST NTLU99
+
+NTLU50:	;; Here when we got some kind of answer from a server.
+	MOVEI PKT,IPKT		;Ptr to response packet.
+	LNDEL SRVLST		;Don't need these other guys now.
+	CAMN D,[-1]		;If directed to another authority
+	 JRST [ CALL NETNS	; find the new servers to ask
+		 JRST NTLUZ	; and go ask them.
+		JRST NTLU10 ]
+	CAME D,[2]		;Error response?
+	 JRST NTLU70		; No, go cons data.
+	LDB T,[IP$IHL (PKT)]	;Else process an error.
+	ADD PKT,T		;Look in UDP data area.
+	ADDI PKT,$UDPHL
+	LDB C,[DP$RCD (PKT)]	;Examine the response code.
+	CAIE C,1		;If "Format Error"
+	 CAIN C,4		; or "Not Implemented"
+	  JRST NTLU25		; just try another server.
+	CAIE C,2		;Likewise for "Server Failure"
+	 CAIN C,5		; and "Operation Refused"
+	  JRST NTLU25		; just try another server.
+	CAIE C,3		;Must be a "Name Error".
+	 JRST NTLU25		; If not, the server is fucked up.
+	LDB C,[DP$AA (PKT)]	;Check the authority bit.
+	SKIPE C			;If server really knows qname doesn't exist
+	 JRST [	MOVSI T,%ENSFL	; say NAME ERROR.
+		JRST NTLUZ1 ]
+	HRRZ E,LISTAR(E)	;Else try another server.
+	JUMPN E,NTLU20		;If none are left to try,
+	LNDEL SRVLST		;say RESOURCE NOT FOUND.
+	JRST NTLUZ
+
+NTLU70:	;; We got the data we were looking for.
+	CALL NTCONS		;Cons RRs from packet into CACHE.
+	 JRST NTLUZ
+	AOS -9(P)		;Skip return with results in A.
+NTLU99:	POPPER P,[QTYPE,QCLASS,QNAME,PKT,L,E,D,C,B]
+	RET
+
+;;; When we cannot locate a resource give RESOURCE NOT FOUND.
+
+NTLUZ:	MOVSI T,%ENSJB		;RESOURCE NOT FOUND.
+NTLUZ1:	SETZ A,			;No results.
+	JRST NTLU99		;Lossage return.
+
+
+;;; NTASK - Ask one network server about resource in QNAME,QTYPE.QCLASS
+;;;   D/ Internet address of server
+;;;
+;;; Returns in D:  0 if server did not respond
+;;;		  -1 if server responded with pointer to domain authority
+;;;                1 if server responded with desired domain data
+;;;		   2 if server responded with an error
+;;;
+;;; Response from server is in IPKT.
+;;; Does not skip.
+
+UDPTIM==4.			;Seconds allowed for UDP responses.
+SRVPRT:	DNPORT			;UDP port of Domain server.
+
+BVAR
+SRVHST:	0			;Server host being used.
+QID:	68.			;Query ID.
+PKTLEN:	0			;Packet length in bytes.
+EVAR
+
+NTASK:	PUSHER P,[A,B,C,E,PKT]
+	TRNN F,%DRIMG		;In ASCII mode, mention servers in use.
+	 OUTCAL(,("Asking host "),HND(D),EOL)
+	MOVEM D,SRVHST		;Remember which host to hack.
+	SETZM OPKT		;Zap output packet area.
+	MOVE A,[OPKT,,OPKT+1]
+	BLT A,OPKT+<PG$SIZ-1>
+	SETZM IPKT		;Zap input packet area.
+	MOVE A,[OPKT,,IPKT+1]
+	BLT A,IPKT+<PG$SIZ-1>
+	MOVE B,SRVPRT		;Find Domain server port.
+	MOVEI A,UDPC		;Channel to use.
+	CALL UDPOPN		;Set up our UDP queue.
+	 JRST NTALUZ
+	SETZ C,			;C will count total wds in packet.
+	MOVEI PKT,OPKT+$UDPD	;Ptr to UDP data.
+	CALL DOMQRY		;Make up our query.
+	MOVE A,SRVHST		;Host.
+	MOVE B,SRVPRT		;Port.
+	MOVEI PKT,OPKT		;Output area.
+	CALL MAKPKT		;Ok, packetize...
+	MOVEM C,PKTLEN		;Send off the query.
+	MOVEI A,UDPC
+	MOVEI PKT,OPKT
+	MOVE B,C
+NTAS20:	CALL UDPSND		;Send it off.
+	 JRST NTALUZ
+	MOVEI A,UDPC
+	MOVEI PKT,IPKT		;Address of packet to receive.
+	MOVEI B,PG$SIZ		;Max length of packet.
+	TIMER UDPTIM,NTALUZ	;Don't rexmit, just lose if no response.
+	SYSCAL IPKIOT,[A ? W ? B ? %CLOUT,,E]
+	 JSR AUTPSY
+	TIMOFF
+NTAS30:	MOVEI PKT		;Got it, go peek in UDP data.
+	LDB T,[IP$IHL (PKT)]
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	LDB A,[DP$QR (PKT)]	;Query/Response bit.
+	JUMPE A,NTALUZ		;If not Response, what the fuck!
+	LDB A,[DP$RCD (PKT)]	;A gets RCODE.
+	JUMPN A,[ MOVE D,[2]	; Check for error response.
+		  JRST NTAS99 ]	
+	LDB A,[DP$ANC (PKT)]	;No error. Get # Answers.
+	JUMPN A,[ MOVEI D,1	; OK, answers are good news.
+		  JRST NTAS99 ]
+	;; Hmmm, didn't get an error but didn't get any Answer either.
+;MOVE A,QTYPE		;Check to see if this was a Nameserver query.
+;CAME A,[DT$NS]		;If it was, don't allow redirection.
+; JRST NTAS50
+	LDB A,[DP$NSC (PKT)]	;Get # Authority records
+	JUMPN A,[ MOVE D,[-1]	; Ah, we got something to follow up.
+		  JRST NTAS99 ]
+NTAS50:	NOP			;Server making no sense ?!?
+NTALUZ:	SETZ D,			;Complete lossage (connection error.)
+NTAS99:	POPPER P,[PKT,E,C,B,A]
+	RET
+
+
+
+;;; GETNS - Get NameServer from database
+;;;  A/ Domain name
+;;; 
+;;; Searches the master database for IN,NS records and returns
+;;; in A the LP to a list of Internet host addresses to try.
+
+GETNS:	PUSHER P,[B,C,D,L]		;Save LP context on stack top.
+	CALL DOMLSE			;L gets appropriate database LSE.
+	SEADOM B,[A,,[$LLLST(L)]]	;Find Domain.
+	 JRST GETNS9			; No info for it.
+	MOVE A,LISTAR(B)+1		;Get Class list.
+	JUMPE A,GETNS9			; Eh?
+	HRRZ A,LISTAR(A)		;A is list of A$CLASes.
+	SCAAR A,[A$CLAS,,A ? [DC$IN]]	;Find Internet class data.
+	 JRST GETNS9			; None?
+	MOVE C,LISTAR(A)+1		;Find Resource Records there.
+	JUMPE C,GETNS9			; None?
+	SETZ A,				;A will be LP to data list.
+GETNS1:	HRRZ C,LISTAR(C)		;CDR to A$RR.
+	JUMPE C,GETNS8			;If no more, search is complete.
+	SCAAR B,[A$RR,,C ? [DT$NS]]	;Search for NameServer type data.
+	 JRST GETNS8			; No more suitable records.
+	MOVE B,LISTAR(B)+1		;Found one - pick up its sublist.
+	HRRZ B,LISTAR(B)		;CDR down to the actual info LNs.
+	FINDA D,[A$TTD,,[B]]		;Does data time out?
+	 JRST GETNS3			; No, just assume it's valid.
+	MOVE D,LISTAR(D)+1		;D has TTD.
+	CAMN D,[-1]			;Check for eternal validity.
+	 JRST GETNS3
+	PUSH P,A
+	CALL DATIME"TIMGET		;Find current time in A.
+	MOVE U1,A			;Stick it in here.
+	POP P,A
+	CAMG D,U1			;If have reached time-to-die
+GETNS3:	 TLO F,%BLDRN			; this resource record has expired.
+	FINDA D,[A$RRVAL,,[B]]		;Look for the RDATA.
+	 JRST GETNS1			; Missing? Ignore this record.
+	MOVE D,LISTAR(D)+1		;D has SLP to name of Name Server.
+	ADD D,$LSLOC(L)			;Make the SLP absolute ASCNT.
+	SEADOM B,[D,,[$LLLST(L)]]	;Look up *this* domain.
+	 JRST GETNS9			; No info for it.
+	MOVE B,LISTAR(B)+1		;Get Class list.
+	JUMPE B,GETNS9			; Eh?
+	HRRZ B,LISTAR(B)		;A is list of A$CLASes.
+	SCAAR B,[A$CLAS,,B ? [DC$IN]]	;Find Internet class data.
+	 JRST GETNS9			; None?
+	MOVE B,LISTAR(B)+1		;Find Resource Records there.
+	JUMPE B,GETNS9			; None?
+	PUSH P,C
+	MOVE C,B
+GETNS4:	HRRZ C,LISTAR(C)		;CDR to A$RR.
+	JUMPE C,GETNSL			;If no more, search is complete.
+	SCAAR B,[A$RR,,C ? [DT$A]]	;Search for Internet Address type data.
+	 JRST GETNSL			; No more suitable records.
+	MOVE B,LISTAR(B)+1		;Found one - pick up its sublist.
+	HRRZ B,LISTAR(B)		;CDR down to the actual info LNs.
+	FINDA D,[A$TTD,,[B]]		;Does data time out?
+	 JRST GETNS5			; No, just assume it's valid.
+	MOVE D,LISTAR(D)+1		;D has TTD.
+	CAMN D,[-1]			;Check for eternal validity.
+	 JRST GETNS5
+	PUSH P,A
+	CALL DATIME"TIMGET		;Find current time in A.
+	MOVE U1,A			;Stick it in here.
+	POP P,A
+	CAMG D,U1			;If have reached time-to-die
+GETNS5:	 TLO F,%BLDRN			; this resource record has expired.
+	FINDA D,[A$RRVAL,,[B]]		;Look for the RDATA.
+	 JRST GETNS1			; Missing? Ignore this record.
+	MOVE D,LISTAR(D)+1		;D has 36 bit Internet address.
+	EXCH L,-1(P)			;Get context to CONS data into.
+	MAKELN B,[A$VAL,,NIL ? %LTVAL,,[D]]
+	JUMPE A,[ MOVE A,B		; If first time through
+		  JRST GETNS7 ]		; init the list in A.
+	MOVEM B,LISTAR(A)		;Else append (LP to value into CDR).
+GETNS7:	EXCH L,-1(P)			;Switch back to database context.
+	;; Note that we only use the first host address found for
+	;; the Name Server.  (Otherwise could have looped GETNS4.)
+GETNSL:	POP P,C
+	JRST GETNS1			;Go try next NS Resource Record.
+GETNS8:	SKIPE A				;If we accumulated some results
+	 AOS -4(P)			; skip for success.
+GETNS9:	POPPER P,[L,D,C,B]
+	RET
+
+
+;;; NETNS - Get NameServer from Authority direction in network response
+;;;  W/ Ptr to Response packet
+;;; 
+;;; Skip returns A: has LP to a list of Internet host addresses to try.
+
+NETNS:	PUSHER P,[B,C,D,PKT]
+	SETZ D,			;D holds LP to results.
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	MOVE A,[DQ$NAM (PKT)]	;Bp to Question section.
+	LDB B,[DP$QDC (PKT)]	;Skip over the Question section.
+NETN10:	CALL NAMSKP		;QNAME.
+	ILDB Z,A ? ILDB Z,A	;QTYPE.
+	ILDB Z,A ? ILDB Z,A	;QCLASS.
+	SOJG B,NETN10
+	LDB B,[DP$ANC (PKT)]	;Count RRs before Authority section.
+	LDB C,[DP$NSC (PKT)]	;C has # RRs in the Authority section.
+	JUMPE C,NETN90		;If none, lose!
+	SKIPE B
+NETN15:	 CALL RRSKIP		;Skip over all the Answer RRs.
+	SOJG B,NETN15		;When done, A is Bp to first Authority RR.
+
+NETN20:	PUSHER P,[A,C]		;Remember where started and how many.
+	CALL NAMSKP		;Skip over the name.
+	LBWIDE B,A		;Check type.
+	CAME B,[DT$NS]		;Should be Name Server record.
+	 JRST NETN60
+	LBWIDE B,A		;Check class.
+	CAME B,[DC$IN]		;Should be Internet.
+	 JRST NETN60
+	ILDB Z,A ? ILDB Z,A	;Skip over the 32-bit TTL (assume valid).
+	ILDB Z,A ? ILDB Z,A	;Skip over RDATA length
+	ILDB Z,A ? ILDB Z,A	;Bp in A pts to substring header.
+	MOVE B,[DT$A]		;Looking for Internet Addresses.
+	MOVE PKT,-2(P)		;Ptr to packet.
+	CALL ADSECT		;Find Additional data.
+	 JRST NETN70		; Oh, shit! Fucking lazy server!!!
+	MOVE C,A		;C gets list of Bps.
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+NETN30:	MOVE A,LISTAR(C)+1	;Bp to Resource Record.
+	CALL NAMSKP		;Skip over the QNAME.
+	ILDB Z,A ? ILDB Z,A	;Skip over QTYPE
+	ILDB Z,A ? ILDB Z,A	;Skip over QCLASS.
+	ILDB Z,A ? ILDB Z,A	;Skip over TTL (assume valid) .SEE NETN70
+	ILDB Z,A ? ILDB Z,A
+	LBWIDE B,A		;Get RDATA length.
+	CAIE B,4		;If not 4 bytes
+	 JRST NETN50		; ignore this malformed IN/A record.
+	SETZ B,			;Built 36-bit Internet address in B.
+	ILDB T,A
+	LSH T,3*8.
+	IOR B,T			;Network.
+	ILDB T,A
+	LSH T,2*8.
+	IOR B,T			;Host.
+	ILDB T,A
+	LSH T,8.
+	IOR B,T			;Slot.
+	ILDB T,A
+	IOR B,T			;IMP.
+	MAKELN B,[A$VAL,,NIL ? %LTVAL,,[B]]
+	JUMPE D,[ MOVE D,B		; If first time through
+		  JRST NETN50 ]		; init the list in D.
+	MOVEM B,LISTAR(D)		;Else append (LP to value into CDR).
+	;; Someday maybe add smarts to pick best address for each Server.
+	;; Only need one however, so for now, just use the first one.
+NETN50:	;; HRRZ C,LISTAR(C)	;CDR to next Additional record.
+	;; JUMPN C,NETN20
+	LNDEL C			;Flush this list of addrs.
+NETN60:	POPPER P,[C,A]		;Recover Bp into Authority section.
+	CALL RRSKIP		;Skip over rest of this RR.
+	SOJN C,NETN20		;Loop for all Authority records.
+NETN90:	SKIPE A,D		;Return LP to results in A.
+	 AOS -4(P)		; Skip if found something.
+NETN99:	POPPER P,[PKT,D,C,B]
+	RET
+
+;;; Here when we have been directed to a different network server,
+;;; but have not been given its network address.
+;;;
+;;; Searches for data in this order: CACHE, DOMAIN, network queries.
+;;; If can't find it, we're just shit out of luck, I guess.
+
+NETN70:	JRST NETN60		;Always just SOL for now.
+
+
+;;; ADSECT - Additional Section processing
+;;;   W/ ptr to UDP data in packet
+;;;   A/ Bp to domain name in packet
+;;;   B/ Type of data desired
+;;;
+;;; Skip returns A: list of Bps to relavent RRs in packet.
+;;; Assumes that all RRs are of the correct CLASS.
+
+BVAR
+ADNAME:	0
+ADTYPE:	0
+EVAR
+
+ADSECT:	PUSHER P,[B,C,D,E,W]	;(Non-reentrant).
+	MOVEM A,ADNAME
+	MOVEM B,ADTYPE
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	SETZ D,			;D will hold LP to results.
+	MOVE A,[DQ$NAM (PKT)]	;Bp to Question section.
+	LDB B,[DP$QDC (PKT)]	;Skip over it.
+ADSE10:	CALL NAMSKP		;QNAME.
+	ILDB Z,A ? ILDB Z,A	;QTYPE.
+	ILDB Z,A ? ILDB Z,A	;QCLASS.
+	SOJG B,ADSE10
+	LDB B,[DP$ANC (PKT)]	;Count RRs before Additional section.
+	LDB T,[DP$NSC (PKT)]
+	ADD B,T			;B has # RRs to skip over.
+	SKIPE B
+ADSE15:	 CALL RRSKIP		;Skip over each one.
+	SOJG B,ADSE15		;When done, A is Bp to first Additional RR.
+	LDB C,[DP$ARC (PKT)]	;C has # RRs in the Additional section.
+	JUMPE C,ADSE70
+ADSE20:	MOVE E,A		;Remember where RR we're hacking begins.
+	MOVE B,ADNAME		;Get the target domain name.
+	CALL CMPCDN		;See if this RR has the same name.
+	 JRST [	CALL RRSKIP	; No, skip over the rest of it.
+		JRST ADSE70 ]	; Try next RR.
+	CALL NAMSKP		;Domain name matches.
+	LBWIDE B,A		;Now check the QTYPE.
+	CAME B,ADTYPE		;If this is not the desired type of record
+	 JRST ADSE69		; skip it.
+	;; We found a relavent RR, so CONS up a node with the Bp to it!
+	MAKELN B,[A$VAL,,NIL ? %LTVAL,,[E]]
+	JUMPE D,[ MOVE D,B		; If first time through
+		  JRST ADSE69 ]		; init the list in D.
+	MOVEM B,LISTAR(D)		;Else append (LP to value into CDR).
+ADSE69:	CALL RRSKI2
+ADSE70:	SOJG C,ADSE20		;Try another Additional RR.
+	SKIPE A,D		;Return results in A
+	 AOS -5(P)		; Skipping happily if we found anything.
+ADSE99:	POPPER P,[W,E,D,C,B]
+	RET
+
+
+;;; RRSKIP - Skip over RR pointed to by Bp in A.
+
+RRSKIP:	CALL NAMSKP		;Skip over the QNAME.
+RRSKI1:	LBWIDE T,A		;Skip over QTYPE
+RRSKI2:	LBWIDE T,A		;Skip over QCLASS.
+	LBWIDE T,A		;Skip over 32 bit TTL.
+	LBWIDE T,A
+	LBWIDE T,A		;Get RDATA length.
+RRSKI3:	ILDB Z,A		;Skip over RDATA.
+	SOJG T,RRSKI3
+	RET
+
+
+;;; CMPCDN - Compare Compressed Domain Names
+;;; Compares names in packet W from Bps A and B.
+;;; Skips if the names are the same.
+
+BVAR
+CMCMCM:	0			;Compression source.
+CMCML1:	0			;Length of a current substring.
+CMCML2:	0			;Length of other current substring.
+EVAR
+
+CMPCDN:	PUSHER P,[A,B,C,D]
+	MOVE T,[441000,,(PKT)]	;Compression code uses packet data as string.
+	MOVEM T,CMCMCM
+	SETZM CMCML1		;Init substring lengths.
+	SETZM CMCML2
+CMPCD1:	SKIPLE CMCML1		;Is substring exhausted?
+	 JRST CMPCD2		; No, keep hacking it.
+	ILDB C,A		;Yes - get length of next domain substring.
+	CAIL C,192.		;If this is a compression pointer
+	 JRST [	ILDB C,A	; Find offset into compression source.
+		MOVE A,C
+		ADJBP A,CMCMCM	; Chase ptr to a new name.
+		JRST CMPCD1 ]	; Continue there (new length coming up).
+	MOVEM C,CMCML1		;Nope, remember length.
+	SKIPE C			;Unless terminator byte
+CMPCD2:	 ILDB C,A		; Get char of domain.
+	SOS CMCML1		;Count chair.
+
+CMPCD3:	SKIPLE CMCML2		;Is substring exhausted?
+	 JRST CMPCD4		; No, keep hacking it.
+	ILDB D,B		;Yes - get length of next domain substring.
+	CAIL D,192.		;If this is a compression pointer
+	 JRST [	ILDB D,B	; Find offset into compression source.
+		MOVE B,D
+		ADJBP B,CMCMCM	; Chase ptr to a new name.
+		JRST CMPCD3 ]	; Continue there (new length coming up).
+	MOVEM D,CMCML2		;Nope, remember length.
+	SKIPE D			;Unless terminator byte
+CMPCD4:	 ILDB D,B		; Get char of domain.
+	SOS CMCML2
+	;; OK, C and D have real live characters. See if they match.
+	CAME C,D		;If the chars don't match
+	 JRST CMPCD9		; failure return.
+	SKIPE C			;If end of string
+	 CAMN A,B		; or EQ strings
+	  SKIPA			;  match!
+	   JRST CMPCD1		;   Else keep trucking.
+	AOS -4(P)		;Win - skip return.
+CMPCD9:	POPPER P,[D,C,B,A]
+	RET
+
+
+SUBTTL	Accumulate search results for answer
+
+;;; RRCONS - Resource Record CONS
+;;;   L/ LSE to CONS in
+;;;   A/ LP to list of of Domain,,RR pairs (this LP relative to L!)
+;;;   E/ LSE where nodes in A live
+;;;
+;;; This merges the Domains in A (from E) into the LSE in L.
+;;; Does not skip.  Clobbers no accs.
+;;;
+;;; !! Note:	The list in A is mutated so that the ptr pairs 	 !!
+;;; !!		are relative to the target LSE (L)		 !!
+
+RRCONS:	PUSHER P,[A,B,E]
+	CAMN E,L		;If the from-LSE and the to-LSE are the same
+	 JRST RRCO99		; nothing to do (maybe caller is confused?)
+RRCO10:	HLRZ B,LISTAR(A)+1	;Get LP to Domain.
+	EXCH L,E		;Okay, switch over to source LSE.
+	MOVE B,LISTAR(B)+1	;Also need the Domain's name.
+	ADD B,$LSLOC(L)		;Make the SLP absolute.
+	EXCH L,E		;Search the target LSE for the source Domain.
+	SEADOM B,[B,,[$LLLST(L)]]
+	 CAIA			;If new Domain - go copy entire tree.
+	  CALRET RRCMRG		; Otherwise must do hairy merging.
+	CALRET RRCADD
+	;; Above rtns return here to RRCO90...
+RRCO90:	HRRZ A,LISTAR(A)	;CDR to next Domain,,RR pair.
+	JUMPN A,RRCO10		;If NIL, all done, else CONS another one.
+RRCO99:	POPPER P,[B,A]
+	RET
+
+;;; Here to create a new Domain tree in the L-LSE.
+;;;   A/ L LP to Domain,,RR ptr-pair (in E-LSE)
+
+RRCADD:	PUSHER P,[B,C,D,H]
+	HLRZ B,LISTAR(A)+1	;Get LP to Domain.
+	LNCOPY D,[E ? B]	;Make copy of entire node in target LSE.
+	FINDA C,[A$DOM,,[$LLLST(L)]]		;Get Domain list.
+	 JRST [	FINDA C,[A$DB,,[$LLLST(L)]]	; Ours may be the first node.
+		 JSR AUTPSY			;  Eh? LSE not set up?
+		HRRM D,LISTAR(C)
+		JRST .+1 ]
+	LNAPP [C ? D]		;Append new Domain onto LSE.
+	;; Re-relativize ptr-pairs to LNs in the new LSE.
+	HRRZ C,LISTAR(A)+1	;Get LP to RR.
+	EXCH L,E		;Old ptr-pairs are relative to E-LSE.
+	SETZ H,			;H counts RR nodes.
+	MOVE B,LISTAR(B)+1	;CAR of Domain.
+	HRRZ B,LISTAR(B)	;CDR to Class.
+	MOVE B,LISTAR(B)+1	;CAR of Class.
+RRCA10:	HRRZ B,LISTAR(B)	;CDR down the RR chain.
+	CAME A,C		;Is this it?
+	 JRST [	AOS H		; No, keep looking.
+		JUMPN A,RRCA10	; If chain exhausted
+		JSR AUTPSY ]	;  RH of our ptr-pair is bogus!
+	EXCH L,E		;H has relative position of the RR.
+	HRLM D,LISTAR(A)+1	;The A$DOM ptr is easy - we just inserted it.
+	MOVE C,LISTAR(D)+1	;The A$RR ptr must be searched for, sigh.
+	HRRZ C,LISTAR(C)	;Cruise down the new domain's sublist.
+	MOVE C,LISTAR(C)+1
+RRCA20:	HRRZ C,LISTAR(C)	;CDR in C gets LP to next A$RR LN.
+	SOJGE H,RRCA20		;We know how far along this branch it is.
+	HRRM C,LISTAR(A)+1	;Poof!
+	POPPER P,[H,D,C,B]
+	JRST RRCO90
+
+
+;;; Here to merge Domain RRs.
+;;;   A/ L LP to Domain,,RR ptr-pair (in E-LSE)
+;;;   B/ extant A$DOM to merge into
+
+RRCMRG:	
+IFN 0,[
+	PUSHER P,[A,B]
+	HRRZ A,LISTAR(A)+1	;Get LP to source RR.
+	LNCOPY A,[E ? A]	;Copy the RR into our LSE.
+;;; *** What are the merge rules when going from DOMAIN->CACHE.
+;;;     Note that this info will be propogated back to DOMAIN,
+;;;     replacing the RRs there.
+RRCM99:	LNDEL A			;Flush the source copy A$RR.
+	POPPER P,[B,A]
+	HRLM B,LISTAR(A)+1	;Poof! Domain is in L.
+	HRRM H,LISTAR(A)+1	;So is the RR.
+];0
+	JRST RRCO90		;Now go back for another ptr-pair.
+
+
+
+
+
+
+
+;;; RRPAR creates a block of results:
+
+RB$NAM==0	;Bp to name.
+RB$LEN==1	;Length of name.
+RB$TYP==2	;Type.
+RB$CLA==3	;Class.
+RB$TTL==4	;TTL
+RB$TIM==5	;TTD
+RB$DAT==6	;LP to the parsed RDATA.
+ RBKLEN==7	; Length of block.
+
+;;; NTCONS - Cons data from response packet into CACHE.
+;;;   PKT/ Ptr to response packet
+;;;   Results checked against QCLASS and QTYPE.
+;;;
+;;; An A$DOM branch is CONSed for each Answer Section RR in the packet.
+;;; Returns A: Results list created in CAR of the A$OUTL.
+;;; Skips unless no answers.  Error code in T.
+
+BVAR
+ANSBLK:	440700,,ANSNAM
+	BLOCK RBKLEN-1
+ANSNAM:	BLOCK 256.
+EVAR
+
+NTCONS:	PUSHER P,[B,L,PKT]
+	MOVE L,$ARLOC+CACHE	;Will use CACHE area.
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	MOVE A,[DQ$NAM (PKT)]	;Bp to response.
+	LDB B,[DP$QDC (PKT)]	;Skip over Question section.
+NTCA10:	CALL NAMSKP		;QNAME.
+	ILDB Z,A ? ILDB Z,A	;QTYPE.
+	ILDB Z,A ? ILDB Z,A	;QCLASS.
+	SOJG B,NTCA10
+	LDB C,[DP$ANC (PKT)]	;Find # RRs in Answer section.
+	JUMPE C,NTCR99		;If none, we lost.
+NTCA20:	PUSH P,C
+	MOVE PKT,-1(P)		;Ptr to start of packet.
+	MOVEI B,ANSBLK		;Ptr to results block.
+	CALL RRPAR		;Parse Answer RR from A.
+	MOVE B,QCLASS		;Ensure results are of same
+	CAME B,ANSBLK+RB$CLA	;class and type as query.
+	 JRST NTCA60
+	MOVE B,QTYPE
+	CAMN B,[DT$ANY]
+	 JRST NTCA25
+	CAME B,ANSBLK+RB$TYP
+	 JRST NTCA60
+NTCA25:	PUSH P,A
+	MOVEI A,ANSBLK			;Pointer to results block.
+	CALL RRMAK			;Create complete domain list structure.
+	;; Now add the pointers in A to the CACHE's results list.
+	MAKELN A,[A$PAIR,,NIL ? %LTVAL,,[A]]
+	FINDA B,[A$DB,,[$LLLST(L)]]	;Find initial database node.
+	 JSR AUTPSY			; Should already be set up.
+	MOVE B,LISTAR(B)+1		;CAR should be results/output list.
+	LDB T,[$LAFLD,,LISTAR(B)]	;Better type check it.
+	CAIN T,A$OUTL			;If type of LN pointed to is wrong
+	 SKIPN B			; Or if list is missing
+	  JSR AUTPSY			;  lose, A$OUTL nonexistant!
+	SKIPN C,LISTAR(B)+1		;CAR of A$OUTL has LP to results.
+	 JRST [	MOVEM A,LISTAR(B)+1	; If results list is NIL
+		JRST NTCA59 ]		; begin it here in the CAR.
+	LNAPP [LISTAR(C) ? A ]		;Else Append new node to CDR.
+NTCA59:	POP P,A
+NTCA60:	POP P,C
+	SOJG C,NTCA20			;Loop for all Answers.
+	TLO F,%UPDAT
+	FINDA A,[A$DB,,[$LLLST(L)]]	;When done, return LP to
+	 JSR AUTPSY			;the results we found.
+	MOVE A,LISTAR(A)+1		;A gets LP to first result
+	JUMPE A,NTCR99
+	SKIPE A,LISTAR(A)+1
+	 AOS -3(P)
+NTCR99:	POPPER P,[PKT,L,B]
+	RET
+
+
+
+;;; RRMAK - Make a Resource Record
+;;;   A/ Ptr to results block from RRPAR
+;;;   L/ LSE
+;;;   PKT/ ptr to response packet
+;;;        This is used to find the authority info.
+;;;        Iff LH is -1, RH has the authority bit instead.
+;;;
+;;; Returns in A: <LP to A$DOM,,LP to A$RR>
+;;; 
+;;; This adds an RR to a domain node (creating the domain if needed.)
+
+RRMAK:	PUSHER P,[B,C,D,E]
+	MOVE B,A		;B gets ptr to results block.
+	HRRZ C,RB$NAM(B)	;Construct ASCNT to domain name.
+	HRL C,RB$LEN(B)		;See if domain already exists.
+	SEADOM A,[C,,[$LLLST(L)]]
+	 JRST [	MAKELN C,[A$VAL,,NIL ? %LTSTR,,[C]]
+		MAKELN A,[A$DOM,,NIL ? %LTLST,,[C]]
+		FINDA D,[A$DB,,[$LLLST(L)]]
+		 JSR AUTPSY
+		LNAPP [ LISTAR(D) ? A ]
+		JRST RRMA10 ]
+RRMA10:	HRLZ E,A		;Stash away LP to the domain.
+	MOVE A,LISTAR(A)+1	;CDAR points to Class list.
+	HRRZ T,LISTAR(A)	;D gets LP to A$CLAS.
+	JUMPE T,RRMA20		;If no Class list yet, start first one.
+	SCAAR A,[A$CLAS,,A ? RB$CLA(B)]
+	 CAIA
+	  JRST RRMA30
+RRMA20:	MAKELN C,[A$VAL,,NIL ? %LTVAL,,[RB$CLA(B)]]
+	MAKELN D,[A$CLAS,,NIL ? %LTLST,,[C]]
+	LNAPP [LISTAR(A) ? D]
+	MOVE A,D
+RRMA30:	MOVE A,LISTAR(A)+1	;Our class branch.
+	HRRZ D,LISTAR(A)	;D gets list of A$RRs.
+	SKIPE D			;If there are some RRs here already
+	 MOVE A,D		; we will append onto them.
+	MAKELN C,[A$VAL,,[RB$DAT(B)] ? %LTVAL,,[RB$TYP(B)]]
+	MAKELN D,[A$RR,,NIL ? %LTLST,,[C]]
+	LNAPP [A ? D]		;Attach RR to the list.
+	HRR E,D			;Stash away LP to it.
+	HRRZ A,LISTAR(C)	;A gets RDATA LP.
+	MAKELN C,[A$RC,,NIL ? %LTVAL,,[[0.]]]
+	PUSHER P,[A,PKT]
+	HLRZ A,PKT		;Is PKT a ptr?
+	CAIN A,-1		; Not if it has -1 in LH.
+	 JRST [	HRRZ A,PKT	; RH has immediate value.
+		JRST RRMA40 ]	; Go set authority bit.
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	LDB A,[DP$AA (PKT)]	;See if this is authoritative info.
+RRMA40:	MAKELN D,[A$DIST,,[C] ? %LTVAL,,[A]]	;%AUATH is bit 1.
+	POPPER P,[PKT,A]
+	MAKELN C,[A$TTD,,[D] ? %LTVAL,,[RB$TIM(B)]]
+	HRRM C,LISTAR(A)	;Tack the other junk onto the RR.
+RRMA90:	MOVE A,E		;Return <A$DOM,,A$RR>.
+RRMA99:	POPPER P,[E,D,C,B]
+	RET
+
+;;; RRPAR - Parse Resource Record into RR variable block
+;;; W/ ptr to IP packet
+;;; A/ Bp to RR (may be indexed off W relative to UDP data)
+;;; B/ ptr to variable block
+;;; L/ LSE to create RDATA node in
+
+RRPAR:	PUSHER P,[B,C,PKT]
+	MOVE Z,[-1]		;Zap results block, starting with RB$LEN.
+	MOVEM Z,RB$LEN(B)	;Will fill with illegal values.
+	MOVE T,B
+	AOS T
+	MOVE TT,B
+	HRL T,T
+	AOS T
+	ADDI TT,RBKLEN-1
+	BLT T,(TT)
+	LDB T,[IP$IHL (PKT)]	;Look in UDP data area.
+	ADD PKT,T
+	ADDI PKT,$UDPHL
+	PUSH P,B
+	MOVE B,RB$NAM(B)	;Bp to NAME.
+	MOVE C,[441000,,(PKT)]	;Compression code uses packet data as string.
+	CALL RRPNAM		;Decompress the domain name.
+	 NOP
+	POP P,B
+RRPA10:	MOVEM C,RB$LEN(B)	;Stuff length of ASCII domain name.
+	LBWIDE C,A		;Get TYPE.
+	MOVEM C,RB$TYP(B)	;Stuff it.
+	LBWIDE C,A		;Get CLASS.
+	MOVEM C,RB$CLA(B)	;Stuff it.
+	SETZ C,			;Compute 32 bit TTL in B.
+	ILDB T,A
+	LSH T,<32.-8.>
+	IOR C,T
+	ILDB T,A
+	LSH T,<32.-16.>
+	IOR C,T
+	ILDB T,A
+	LSH T,<32.-24.>
+	IOR C,T
+	ILDB T,A
+	IOR C,T
+	MOVEM C,RB$TTL(B)	;Stuff TTL into results block.
+RRPA30:	PUSH P,A		;Don't smash Bp.
+	PUSH P,B		;Don't smash ptr.
+	MOVE B,C		;Get TTL.
+	CALL DATIME"TIMGET	;Find current time in A
+	CALL DATIME"TIMADD	;Find out when this RR expires.
+	POP P,B			;Recover ptr to results.
+	MOVEM A,RB$TIM(B)	;Stuff expiration time into results block.
+	POP P,A			;Recover Bp.
+	PUSH P,B		;Don't smash ptr.
+	MOVE C,RB$TYP(B)	;Get Type we found
+	MOVE B,RB$CLA(B)	;Get Class we found.
+	CALL RRPDAT		;CONS in C an RDATA LN of this Class/Type.
+	POP P,B			;Recover ptr to results.
+	MOVEM C,RB$DAT(B)	;Stuff LP into results block.
+RRPA90:	POPPER P,[PKT,C,B]
+	RET
+
+;;; RRPAME- Decompress domain name in RR.
+;;;  A/ Bp to start of name in RR
+;;;  B/ Bp to ASCII destination string
+;;;  C/ Bp to compression source string
+;;; Updates A and B.  Returns length of ASCII NAME in C.
+
+RRPNAM:	PUSHER P,[D,H]
+	MOVE D,C		;D gets compression Bp.
+	SETZB C,H		;C couns chars, H preserves source Bp.
+RRPN10:	ILDB T,A		;Read label length.
+	JUMPE T,RRPN30		;If root encountered, all done!
+	CAIL T,300		;If this is a compression pointer
+	 JRST [	ILDB T,A	; Find offset into compression source.
+		SKIPN H		; If this is the first compression ptr
+		 MOVE H,A	;   stash the original Bp away now.
+		MOVE A,T	; Now we can smash A to new Bp.
+		ADJBP A,D	; Chase ptr to a new name.
+		JRST RRPN10 ]	; Continue there (new length coming up).
+	ADD C,T			;Update count of chars in label.
+RRPN20:	ILDB TT,A		;Get char of domain.
+	IDPB TT,B		;Stuff as ASCII.
+	SOJG T,RRPN20		;Finished with label when count exhausted.
+	MOVEI T,".		;After each label comes a delimiter.
+	IDPB T,B		;Stuff it.
+	AOS C			;Count it.
+	JRST RRPN10		;Then loop back for another label.
+RRPN30:	;; Root label encountered.
+	JUMPE C,RRPN35
+	MDBP7 B			;Back up over the trailing delimiter.
+	SOS C			;Corect count.
+RRPN35:	SETZ T,			;Erase trailing delimiter.
+	IDPB T,B		;ASCIZ string.
+	SKIPE H			;If Bp was munged for compression
+	 MOVE A,H		; restore it.
+	SKIPE C			;If nonzero length domain
+	 AOS -2(P)		; Skip
+RRPN99:	POPPER P,[H,D]		;Return.
+	RET
+
+
+;;; NAMSKP - Skip over a domain name.
+;;;   A/ Bp to domain name.
+;;; A is updated, we never skip.
+
+NAMSKP:	ILDB T,A		;Read a length.
+	CAIL T,192.		;If this is a compression ptr
+	 JRST [	ILDB T,A	; Skip the offset too
+		RET ]		; and now we're past the name.
+	JUMPE T,CPOPJ		;If zero, end of domain name.
+NAMSK1:	ILDB Z,A		;Else gobble characters.
+	SOJN T,NAMSK1
+	JRST NAMSKP		;Loop for all labels in this name.
+
+
+;;; RRPDAT - Create RDATA LN from response packet.
+;;;
+;;; The routine used to create an RDATA LP depends on the
+;;; Class and Type of the data in the packet.
+;;; The ANSWER macro is for mapping the kinds of answers
+;;; to the routines to handle them.
+;;;
+;;;  Arguments: ANAME, ATYPE, ACLASS, ATTL
+;;;             A/   Bp to RR data (that is, to the RDATA length word)
+;;;             PKT/ Ptr to packet UDP data
+;;;
+;;; A is updated to reflect processing of the RR, but no other ACs are
+;;; smashed.  The handlers skip unless there was an error.
+
+;;; Answer handler macrology:
+
+ANSFOO==32.
+ANSKND:	BLOCK ANSFOO
+ANSRTN:	BLOCK ANSFOO
+
+..ANSR==-1
+DEFINE	ANSWER CLASS,TYPE,RTN
+	..ANSR==..ANSR+1
+	IFL ANSFOO-..ANSR, .FATAL Too many kinds of Answers
+	TMPLOC ANSKND+..ANSR,{[TYPE,,CLASS]}
+	TMPLOC ANSRTN+..ANSR,{RTN}
+TERMIN
+
+ANSWER DC$IN,DT$NUL,RNULL
+ANSWER DC$IN,DT$A,RINADR
+ANSWER DC$IN,DT$CNA,RSTR
+ANSWER DC$IN,DT$NS,RSTR
+ANSWER DC$IN,DT$PTR,RSTR
+ANSWER DC$IN,DT$MR,RSTR
+ANSWER DC$IN,DT$MB,RSTR
+ANSWER DC$IN,DT$MD,RSTR
+ANSWER DC$IN,DT$MF,RSTR
+ANSWER DC$IN,DT$MG,RSTR
+ANSWER DC$IN,DT$MIN,RMAIL
+ANSWER DC$IN,DT$HIN,RHINFO
+ANSWER DC$IN,DT$WKS,RWKS
+ANSWER DC$IN,DT$SOA,RSOA
+
+;;; RRPDAT - CONS up one RDATA LN.
+;;;   A/ Bp to RDATA
+;;;   B/ Class to interpret as
+;;;   C/ Type to interpret as
+;;;   L/ LSE
+;;;
+;;; Returns an LP in C.
+
+RRPDAT:	PUSHER P,[B,E,H,PKT]
+	MOVE E,B
+	MOVE H,C
+	MOVSI B,-ANSFOO		;AOBJN to answer handlers.
+RRPD10:	MOVE C,ANSKND(B)	;Get a handler description.
+	JUMPE C,RRPD60		;Ignore empty ones.
+	HLRZ T,(C)		;Type is in LH.
+	HRRZ TT,(C)		;Class in in RH.
+	CAME T,H		;Type match?
+	 JRST RRPD60		; No, wrong handler.
+	CAMN TT,E		;Class match also?
+	 JRST [ CALL @ANSRTN(B)	; Yes! Hack the rest of this RR.
+		 JRST RRPD90
+		JRST RRPD99 ]
+RRPD60:	AOBJN B,RRPD10		;No match, keep searching for handler.
+RRPD90:	SETZ C,			;If unknown kind of RDATA, return NIL.
+RRPD99:	POPPER P,[PKT,H,E,B]
+	RET
+
+
+;;; RNULL - Answer Handler for Null data
+
+RNULL:	PUSH P,B
+	LBWIDE B,A		;Get RDATA length.
+RNULL1:	ILDB T,A		;Eat all the bytes.
+	SOJN B,RNULL1
+	POP P,B
+	SETZ C,			;Return NIL.
+	JRST POPJ1
+
+
+;;; RINADR - Answer Handler for Internet Address.
+
+RINADR:	PUSH P,B
+	SETZ C,
+	LBWIDE B,A		;Get RDATA length.
+	CAIE B,4		;If not 4 bytes
+	 JRST RINAD9		; ignore this malformed IN/A record.
+	SETZ B,			;Built 36-bit Internet address in B.
+	ILDB T,A
+	LSH T,3*8.
+	IOR B,T			;Network.
+	ILDB T,A
+	LSH T,2*8.
+	IOR B,T			;Host.
+	ILDB T,A
+	LSH T,8.
+	IOR B,T			;Slot.
+	ILDB T,A
+	IOR B,T			;IMP.
+	MAKELN C,[A$RRVAL,,NIL ? %LTVAL,,[B]]
+	AOS -1(P)
+RINAD9:	POP P,B
+	RET
+
+;;; RSTR - Answer Handler for compressed strings (eg: Nameserver, CNAME)
+
+RSTR:	PUSH P,B
+	LBWIDE B,A		;Get RDATA length (ignoring it.)
+	ZAP BUFFER,PG$SIZ	;Clear buffer for string.
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	MOVE C,[441000,,(PKT)]	;Compression code uses packet data as string.
+	CALL RRPNAM		;Decompress the domain name.
+	 NOP
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MAKELN C,[A$RRVAL,,NIL ? %LTSTR,,[B]]
+	POP P,B
+	JRST POPJ1
+
+;;; RWKS - Answer Handler for WKS type data.
+;;; RRVAL is (List <addr> <protocol> <bitmap1> <bitmap2> .... )
+
+RWKS:	PUSHER P,[B,D]
+	LBWIDE B,A		;B gets RDATA length.
+	CAIGE B,5		;If not minumum # of butes here
+	 JRST RWKS99		; ignore malformed WKS data.
+	SETZ C,			;Build 36-bit Internet address in C.
+	ILDB T,A
+	LSH T,3*8.
+	IOR C,T			;Network.
+	ILDB T,A
+	LSH T,2*8.
+	IOR C,T			;Host.
+	ILDB T,A
+	LSH T,8.
+	IOR C,T			;Slot.
+	ILDB T,A
+	IOR C,T			;IMP.
+	ILDB D,A		;Next comes the "Protocol" byte.
+	MAKELN D,[A$VAL,,NIL ? %LTVAL,,[D]]
+	MAKELN D,[A$VAL,,[D] ? %LTVAL,,[C]]
+	;; D now has list whose CDR will contain the port bitmap.
+	SUBI B,4
+	JUMPE B,RWKS80
+RWKS20:	SETZ C,			;Pack 32 bits/word into C.
+	MOVE TT,<32.-8.>	;Do it one octet at a time.
+RWKS25:	ILDB T,A
+	LSH T,(TT)
+	IOR C,T
+	SOJE B,RWKS80		;If no more octets, done.
+	SUBI TT,8.		;Compute shift factor.
+	JUMPG TT,RWKS25		;If room left in word, go for another byte.
+	MAKELN C,[A$VAL,,NIL ? %LTVAL,,[C]]
+	LNAPP [D ? C]		;Append this word to the bitmap.
+	JRST RWKS20		;Prepare for next word.
+RWKS80:	MAKELN C,[A$RRVAL,,NIL ? %LTLST,,[D]]
+	AOS -2(P)
+RWKS99:	POPPER P,[D,B]
+	RET
+
+;;; RSOA - Answer Handler for SOA type data.
+;;; RRVAL is simply the MNAME for now (since we don't use SOA records).
+
+RSOA:	PUSH P,B
+	LBWIDE B,A		;Get RDATA length (ignoring it.)
+	ZAP BUFFER,PG$SIZ	;Clear buffer for MNAME string.
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	MOVE C,[441000,,(PKT)]	;Compression code uses packet data as string.
+	CALL RRPNAM		;Decompress the domain name.
+	 NOP
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MAKELN C,[A$RRVAL,,NIL ? %LTSTR,,[B]]
+	;; Someday we may need to use the rest of this junk in this RR for
+	;; something, but for now just skip over it.
+	CALL NAMSKP		;Skip over RNAME.
+	LBWIDE B,A		;Skip over 16-bit SERIAL.
+	LBWIDE B,A		;Skip over 32-bit REFRESH.
+	LBWIDE B,A
+	LBWIDE B,A		;Skip over 32-bit RETRY.
+	LBWIDE B,A
+	LBWIDE B,A		;Skip over 32-bit EXPIRE.
+	LBWIDE B,A
+	LBWIDE B,A		;Skip over 16-bit MINIMUM.
+RSOA99:	POP P,B			;All done.
+	JRST POPJ1
+
+
+
+;;; RHINFO - Answer Handler for HINFO type data.
+;;; RRVAL is (List <CPU> <OS>)
+
+RHINFO:	PUSHER P,[B,D]
+	LBWIDE B,A		;Get RDATA length (ignoring it.)
+	ZAP BUFFER,PG$SIZ
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	ILDB C,A		;C gets length of CPU string.
+	CALL STRCOP		;Copy string into buffer.
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[B]]
+	ZAP BUFFER,PG$SIZ
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	ILDB C,A		;C gets length of OS string.
+	CALL STRCOP		;Copy string into buffer.
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MOVE C,D		;C gets LP to CPU.
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[B]]
+	HRRM D,LISTAR(C)	;Put LP to OS in CDR.
+	MAKELN C,[A$RRVAL,,NIL ? %LTLST,,[C]]
+	AOS -2(P)
+RHIN99:	POPPER P,[D,B]
+	RET
+
+
+
+;;; RMAIL - Answer Handler for MINFO.
+;;; RRVAL is (List <RMAILBX> <EMAILBX>)
+
+RMAIL:	PUSHER P,[B,D]
+	LBWIDE B,A		;Get RDATA length (ignoring it.)
+	ZAP BUFFER,PG$SIZ	;Clear buffer for RMAILBX string.
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	MOVE C,[441000,,(PKT)]	;Compression code uses packet data as string.
+	CALL RRPNAM		;Decompress the domain name.
+	 NOP
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[B]]
+	ZAP BUFFER,PG$SIZ	;Clear buffer for RMAILBX string.
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	MOVE C,[441000,,(PKT)]	;Compression code uses packet data as string.
+	CALL RRPNAM		;Decompress the domain name.
+	 NOP
+	HRLZ B,C		;Make an ASCNT ptr in B.
+	HRRI B,BUFFER
+	MOVE C,D		;C gets LP to RMAILBX.
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[B]]
+	HRRM D,LISTAR(C)	;Put EMAILBX into CDR.
+	MAKELN C,[A$RRVAL,,NIL ? %LTLST,,[D]]
+	AOS -2(P)
+RMAI99:	POPPER P,[D,B]
+	RET
+
+
+SUBTTL	Host table lookup
+
+IFN $$HST3,[
+
+;;; Before the transition to the distributed database is complete, we can
+;;; use a HOSTS3 table containing domain names.  This means applications
+;;; don't have a host table mapped in consuming their address space, and
+;;; we can debug the DQ: interface without having to trust the resolving
+;;; mechanism right away. Maybe when resolvers are running we might use 
+;;; the host table as some kind of a backup, but that's not here yet.
+
+;;; HSTBLK - Looks up host name and address information in a HOSTS3 file.
+;;;   A/ ptr to QNAME
+;;;   B/ QCLASS
+;;;   C/ QTYPE
+;;;
+;;; CONSes any data found into current LSE.
+;;; Skips if the desired resource was found.
+;;; On success, caller may look for results list in CACHE.
+;;; Ptr to results is returned in A.
+
+BVAR
+HSTNAM:	BLOCK 256.		;QNAME as ASCIZ hostname.
+
+HOSTS3:	440700,,ANSNAM		;Results block.
+	BLOCK RBKLEN-1
+HOSNAM:	BLOCK 256.
+EVAR
+
+HSTBLK:	PUSHER P,[B,C,D,E,QNAME,QCLASS,QTYPE]	;NETWRK rtns clobber E.
+	MOVEM A,QNAME		;Put args in canonical place.
+	MOVEM B,QCLASS
+	MOVEM C,QTYPE
+	CAIN B,DC$ANY
+	 JRST HSTB07
+	CAIE B,DC$IN		;Make sure class is either
+	 CAIN B,DC$CH		;Internet or Chaosnet.
+	  JRST HSTB07
+	MOVSI T,%ENAPK		;Else fail for lack of authoritative data.
+	JRST HSTB99
+
+HSTB07:	ZAP HSTNAM,256.		;NETWRK likes to see ASCIZ host names,
+	MOVE B,[440700,,HSTNAM]	;so copy the QNAME into here.
+	HLRZ C,A
+	HRLI A,440700
+	CALL STRCOP
+	SETZ Z,			;Tie off ASCIZ.
+	IDPB Z,B		;Now, see what we're up to.
+	MOVE C,QTYPE
+	CAIN C,DT$ANY		;Wildcard?
+	 MOVEI C,DT$A		;Yeah, fake as address lookup
+	CAIN C,DT$A		;Host name lookup?
+	 JRST HSTB30		; Yes, go do it.
+	CAIN C,DT$PTR		;Host address lookup?
+	 JRST HSTB10		; Yup, go do it.
+	CAIN C,DT$HIN		;Host information?
+	 JRST HSTB70		; Yup...
+	MOVSI T,%ENAPK		;None of above
+	JRST HSTB99		;Fail for lack of authoritative data.
+
+HSTB10:	;; Here for host address => name lookup.
+	MOVE A,QNAME
+	MOVE B,LITSTR [IN-ADDR.ARPA]
+	CALL AUTHCE		;See if IN-ADDR.
+	 JRST [	MOVE A,[440700,,HSTNAM]
+		CALL HSTBIP	;Convert 10.3.0.44.IN-ADDR to 1200,,600054.
+		JRST HSTB20 ]
+	MOVE B,LITSTR [CH-ADDR.MIT.EDU]
+	CALL AUTHCE		;See if CH-ADDR.
+	 JRST [	MOVE A,[440700,,HSTNAM]
+		CALL HSTBCH	;Convert 1440.CH-ADDR to 40700,,1440.
+		JRST HSTB20 ]
+	CAIA
+HSTB20:	 SKIPN A			;If didn't work
+	   JRST [ MOVSI T,%ENAPK	; must have been wrong domain.
+		  JRST HSTB99 ]
+	MOVE B,A
+	CALL NETWRK"HSTSRC	;Look up host by number.
+	 JRST [	MOVSI T,%ENSFL	; Unknown - NAME ERROR.
+		JRST HSTB99 ]
+	;; A now has ASCIZ bp to official host name.
+	ZAP HOSTS3,RBKLEN	;Will CONS results from this data.
+	MOVEI B,HOSTS3		;Ptr to block of results.
+	MOVE C,QNAME		;RR is for the QNAME given us.
+	HRRM C,RB$NAM(B)	;Stuff it.
+	HLRM C,RB$LEN(B)	;Stuff its length too.
+	MOVE C,QTYPE
+	MOVEM C,RB$TYP(B)	;Set type from QTYPE.
+	MOVE C,QCLASS
+	MOVEM C,RB$CLA(B)	;Set class from QCLASS.
+	SETZM RB$TTL(B)		;Time to live is zero I guess.
+	SETZM RB$TIM(B)		;Time to die  zero I guess.
+	CALL ASZLEN		;Convert host name data to ASCNT.
+	MAKELN C,[A$RRVAL,,NIL ? %LTSTR,,[A]]
+	MOVEM C,RB$DAT(B)	;Stuff LP.
+	MOVEI A,HOSTS3
+	MOVE PKT,[-1,,1]	;Turn on the authority bit.
+	CALL RRMAK		;Make up the RR.
+	MAKELN A,[A$PAIR,,NIL ? %LTVAL,,[A]]
+	FINDA B,[A$DB,,[$LLLST(L)]]	;Find initial database node.
+	 JSR AUTPSY			; Should already be set up.
+	MOVE B,LISTAR(B)+1		;CAR should be results/output list.
+	LDB T,[$LAFLD,,LISTAR(B)]	;Better type check it.
+	CAIN T,A$OUTL			;If type of LN pointed to is wrong
+	 SKIPN B			; Or if list is missing
+	  JSR AUTPSY			;  lose, A$OUTL nonexistant!
+	SKIPN C,LISTAR(B)+1		;CAR of A$OUTL has LP to results.
+	 JRST [	MOVEM A,LISTAR(B)+1	; If results list is NIL
+		JRST HSTB25 ]		; begin it here in the CAR.
+	LNAPP [LISTAR(C) ? A ]		;Else Append new node to CDR.
+HSTB25:	JRST HSTB80		;That's all there is to it.
+
+	;; Here for host name => address lookups.
+HSTB30:	MOVE A,[440700,,HSTNAM]
+	CALL NETWRK"HSTLOO	;Look up host name.
+	 JRST [	MOVSI T,%ENSFL	; Unknown - NAME ERROR.
+		JRST HSTB99 ]
+	MOVE B,A		;Now can look up by host address.
+	CALL NETWRK"HSTSRC	;Find SITE table entry.
+	 JRST [	MOVSI T,%ENADV	; Table fucked?
+		JRST HSTB99 ]
+	HRRZ E,NETWRK"STRADR(D)	;E gets ADDRESS table entry.
+HSTB40:	MOVE B,HSTTAB+NETWRK"ADDADR(E)	;Get address.
+	MOVE A,QCLASS
+	CAIN A,DC$ANY		;If desired class is ANY
+	 JRST HSTB45		; CONS any addresses.
+	CAIN A,DC$IN		;If desired class is Internet
+	 JRST [	TLNN B,(NETWRK"NE%UNT)
+		 JRST HSTB45	;  CONS only Internet addresses.
+		JRST HSTB50 ]	; Ignore others.
+	CAIE A,DC$CH		;Maybe desired class is CHAOS?
+	 JRST HSTB50		; No, unknown query class.
+	NETWRK"GETNET C,B	;Yes - CONS only Chaosnet addresses.
+	CAME C,[NETWRK"NW%CHS]	;If not Chaosnet
+	 JRST HSTB50		; unknown data class.
+HSTB45:	MOVE A,B		;A gets network address value.
+	ZAP HOSTS3,RBKLEN	;Will CONS results from this data.
+	MOVEI B,HOSTS3		;Ptr to block of results.
+	MOVE C,QNAME		;RR is for the QNAME given us.
+	HRRM C,RB$NAM(B)	;Stuff it.
+	HLRM C,RB$LEN(B)	;Stuff its length too.
+	MOVE C,QTYPE
+	MOVEM C,RB$TYP(B)	;Set type from QTYPE.
+	MOVE C,QCLASS
+	MOVEI C,DC$IN
+	NETWRK"GETNET T,A
+	CAMN T,[NETWRK"NW%CHS]
+	 MOVEI C,DC$CH
+	MOVEM C,RB$CLA(B)	;Set class from network number.
+	SETZM RB$TTL(B)		;Time to live is zero I guess.
+	SETZM RB$TIM(B)		;Time to die  zero I guess.
+	MAKELN C,[A$RRVAL,,NIL ? %LTVAL,,[A]]
+	MOVEM C,RB$DAT(B)	;Stuff LP.
+	MOVEI A,HOSTS3
+	MOVE PKT,[-1,,1]	;Turn on the authority bit.
+	CALL RRMAK		;Make up the RR.
+	MAKELN A,[A$PAIR,,NIL ? %LTVAL,,[A]]
+	FINDA B,[A$DB,,[$LLLST(L)]]	;Find initial database node.
+	 JSR AUTPSY			; Should already be set up.
+	MOVE B,LISTAR(B)+1		;CAR should be results/output list.
+	LDB T,[$LAFLD,,LISTAR(B)]	;Better type check it.
+	CAIN T,A$OUTL			;If type of LN pointed to is wrong
+	 SKIPN B			; Or if list is missing
+	  JSR AUTPSY			;  lose, A$OUTL nonexistant!
+	SKIPN C,LISTAR(B)+1		;CAR of A$OUTL has LP to results.
+	 JRST [	MOVEM A,LISTAR(B)+1	; If results list is NIL
+		JRST HSTB50 ]		; begin it here in the CAR.
+	LNAPP [LISTAR(C) ? A ]		;Else Append new node to CDR.
+
+HSTB50:	HRRZ E,HSTTAB+NETWRK"ADRCDR(E)
+	JUMPN E,HSTB40		;CDR to next address.
+	JRST HSTB80		;No more, onwards
+
+	;; Here for host name => host info lookups.
+	;; This should be class dependent, but since MIT is a rational place
+	;; where names are unique, it doesn't matter, so ignore QCLASS....
+HSTB70:	MOVE A,[440700,,HSTNAM]
+	CALL NETWRK"HSTLOO	;Look up host name.
+	 JRST [	MOVSI T,%ENSFL	; Unknown - NAME ERROR.
+		JRST HSTB99 ]
+	MOVE B,A		;Now can look up by host address.
+	CALL NETWRK"HSTSRC	;Find SITE table entry.
+	 JRST [	MOVSI T,%ENADV	; Table fucked?
+		JRST HSTB99 ]
+	HRRZ A,NETWRK"STRADR(D)	;Get first network address
+	MOVE A,HSTTAB+NETWRK"ADDADR(A)
+	NETWRK"GETNET A		;Get net number
+	CAME A,[NETWRK"NW%CHS]	;Determine class
+	 SKIPA A,[DC$IN]
+	 MOVEI A,<DC$CH>
+	MOVE B,QCLASS		;Get query class
+	CAIN B,DC$ANY		;Wild?
+	 MOVEM A,QCLASS		;Yeah, replace it with one we know is valid
+	MOVE E,NETWRK"STLSYS(D)	;E gets machine and opsys info.
+	MOVE A,[440700,,HSTTAB]	;Address of table
+	ADDI A,(E)		;Offset to hardware name
+	MOVE D,A		;Save byte pointer
+	CALL ASZLEN		;Count chars
+	EXCH A,D		;Swap kinds of pointers
+	ZAP BUFFER,PG$SIZ
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	HLRZ C,D		;Snarf count
+	CALL STRCOP		;Copy the string
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[D]]
+	HLRZS E			;Now software name
+	MOVE A,[440700,,HSTTAB]
+	ADDB A,E		;Keep copy of byte pointer
+	CALL ASZLEN		;Count bytes
+	EXCH A,E		;Swap pointers
+	ZAP BUFFER,PG$SIZ
+	MOVE B,[440700,,BUFFER]	;Bp to name we'll accumulate.
+	HLRZ C,E		;C gets length of OS string.
+	CALL STRCOP		;Copy string into buffer.
+	MOVE C,D		;C gets LP to CPU.
+	MAKELN D,[A$VAL,,NIL ? %LTSTR,,[E]]
+	HRRM D,LISTAR(C)	;Put LP to OS in CDR.
+	MAKELN E,[A$RRVAL,,NIL ? %LTLST,,[C]]
+	ZAP HOSTS3,RBKLEN	;Will CONS results from this data.
+	MOVEI B,HOSTS3		;Ptr to block of results.
+	MOVE C,QNAME		;RR is for the QNAME given us.
+	HRRM C,RB$NAM(B)	;Stuff it.
+	HLRM C,RB$LEN(B)	;Stuff its length too.
+	MOVE C,QTYPE
+	MOVEM C,RB$TYP(B)	;Set type from QTYPE.
+	MOVE C,QCLASS
+	MOVEM C,RB$CLA(B)	;Set class from QCLASS.
+	SETZM RB$TTL(B)		;Time to live is zero I guess.
+	SETZM RB$TIM(B)		;Time to die  zero I guess.
+	MOVEM E,RB$DAT(B)	;Stuff LP.
+	MOVEI A,HOSTS3
+	MOVE PKT,[-1,,1]	;Turn on the authority bit.
+	CALL RRMAK		;Make up the RR.
+	MAKELN A,[A$PAIR,,NIL ? %LTVAL,,[A]]
+	FINDA B,[A$DB,,[$LLLST(L)]]	;Find initial database node.
+	 JSR AUTPSY			; Should already be set up.
+	MOVE B,LISTAR(B)+1		;CAR should be results/output list.
+	LDB T,[$LAFLD,,LISTAR(B)]	;Better type check it.
+	CAIN T,A$OUTL			;If type of LN pointed to is wrong
+	 SKIPN B			; Or if list is missing
+	  JSR AUTPSY			;  lose, A$OUTL nonexistant!
+	SKIPN C,LISTAR(B)+1		;CAR of A$OUTL has LP to results.
+	 JRST [	MOVEM A,LISTAR(B)+1	; If results list is NIL
+		JRST HSTB80 ]		; begin it here in the CAR.
+	LNAPP [LISTAR(C) ? A ]		;Else Append new node to CDR.
+
+HSTB80:	FINDA A,[A$DB,,[$LLLST(L)]]	;Done!
+	 JSR AUTPSY		;Return Lp the results we found.
+	MOVE A,LISTAR(A)+1	;A gets LP to first result.
+	JUMPE A,HSTB99		;If none, fail.
+	SKIPE A,LISTAR(A)+1
+HSTB90:	 AOS -7(P)		;Skip return with LP to results in A!
+HSTB99:	POPPER P,[QTYPE,QCLASS,QNAME,E,D,C,B]
+	RET
+
+;;; HSTBIP, HSTBCH - Convert IN-ADDR or CH-ADDR domain string to number
+;;;   A/ ASCIZ domain string
+;;; Returns with number in A.  Returns zero if couldn't parse.
+
+HSTBCH:	PUSHER P,[B,C,D]
+	SETZ B,
+	CALL INPNUM		;Read one 16 bit octal number
+	IOR C,[NETWRK"NW%CHS]	;and then stuff in the constant network #.
+	MOVE A,C
+	POPPER P,[D,C,B]
+	RET
+
+HSTBIP:	PUSHER P,[B,C,D]
+	SETZ B,			;Read four decimal octets.
+	CALL INPNUM
+	DPB D,[001000,,B]
+	CALL INPNUM
+	DPB D,[101000,,B]
+	CALL INPNUM
+	DPB D,[201000,,B]
+	CALL INPNUM
+	DPB D,[301000,,B]
+	MOVE A,B		;Recover accumulated number.
+	POPPER P,[D,C,B]	;Return it.
+	RET
+
+INPNUM: SETZB C,D		;Accumulate octal number in C, decimal in D.
+INPNU1:	ILDB T,A		;Get character.
+	JUMPE T,CPOPJ		;If end of string, punt.
+	CAIL T,"0		;If not a digit, punt.
+	 CAILE T,"9
+	  RET
+	IMULI C,10		;Scale octal.
+	IMULI D,10.		;Scale decmal.
+	ADDI C,-"0(T)		;Add up octal.
+	ADDI D,-"0(T)		;Add up decimal.
+	JRST INPNU1		;Go back for more.
+
+
+];$$HST3
+
+SUBTTL	Output some Resource Records
+
+;;; MAKOUT - Make up resource information for user.
+;;;   L/ LSE containing A$OUTL
+;;;
+;;; Puts an ASCII or Image representation of the specified
+;;; output records into the RRECS area.  Filters the data
+;;; according to open mode bits such as %DRAUT.
+;;; Does not skip.
+;;;
+;;; As a side effect, MAKOUT updates the RR reference counts.
+;;;
+;;; * Note that we can only return information which is the
+;;; * same class as the QCLASS. We do not enforce this restriction,
+;;; * so the search routines had better have done the right thing!
+;;; * (This is in accordance with RFC883, I believe.)
+
+MAKOUT:	PUSHER P,[A,B]
+	FINDA A,[A$DB,,[$LLLST(L)]]
+	 JSR AUTPSY
+	MOVE A,LISTAR(A)+1
+	SKIPN LISTAR(A)		;If cant find output list
+	 JRST MAKOU9		; nothing to do.
+	LDB T,[$LAFLD,,LISTAR(A)]
+	CAIE T,A$OUTL
+	 JSR AUTPSY
+	TRNN F,%DRIMG
+	 OUTCAL(,CRLF,TAB,TAB,("ANSWER"),EOL)
+	FINDA B,[A$ANS,,[LISTAR(A)]]
+	 CAIA
+	  CALL MAKSEC
+	TRNN F,%DRIMG
+	 OUTCAL(,CRLF,TAB,TAB,("AUTHORITY"),EOL)
+	FINDA B,[A$AUT,,[LISTAR(A)]]
+	 CAIA
+	  CALL MAKSEC
+	TRNN F,%DRIMG
+	 OUTCAL(,CRLF,TAB,TAB,("ADDITIONAL"),EOL)
+	FINDA B,[A$ADD,,[LISTAR(A)]]
+	 CAIA
+	  CALL MAKSEC
+	TRNN F,%DRIMG
+	 OUTCAL(,CRLF)
+MAKOU9:	POPPER P,[A,B]
+	RET
+
+;;; MAKSEC - Make output section
+;;;   B/ LP to list of pairs
+;;;   QCLASS/ Class of data
+;;;   L/ LSE
+;;; This routine is the workhorse for MAKOUT.
+
+MAKSEC:	PUSHER P,[A,B,C,D]
+	MOVE B,LISTAR(B)+1	;LP to output-data pair.
+	TRNE F,%DRSII+%DRLNG	;Hairy modes let our user check the
+	 JRST MAKS10		; authority of the data instead.
+	HRRZ D,LISTAR(B)+1	;Get LP to Resource Record.
+	MOVE D,LISTAR(D)+1	;Pick up this RR's sublist.
+	MOVE A,LISTAR(D)+1	;This A$VAL has the Type code.
+	HRRZ D,LISTAR(D)	;CDR to the actual info LNs.
+	FINDA D,[A$DIST,,[D]]	;Find LP with distribution bits.
+	 JRST [	TRNE F,%DRANY
+		 JRST MAKS10
+		JRST MAKS80 ]
+	MOVE D,LISTAR(D)+1	;Filter our output on bits in D.
+	TRNE F,%DRANY		;Illicit data Ok?
+	 JRST [ TRNE F,%DRAUT	; Yes.  Check for authority.
+		 TRNE D,%AUAUS+%AUATH
+		  JRST MAKS10	; OK, output this data.
+		JRST MAKS80 ]
+	TRNN F,%DRAUT		;Real authority required?
+	 JRST [ TRNE D,%AUILL	; No, but illicit data not allowed.
+		 JRST MAKS80
+		JRST MAKS10 ]
+	TRNE D,%AUAUS+%AUATH	;If data is authoritative
+	 TRNE D,%AUILL		;and not illicit, output it.
+	  JRST MAKS80		; Else quality not good enough.
+MAKS10:	HLRZ D,LISTAR(B)+1	;LP to Domain.
+	MOVE D,LISTAR(D)+1	;Get the Domain.
+	MOVE D,LISTAR(D)+1	;Get SLP from VAL hanging off there.
+	ADD D,$LSLOC(L)		;Make absolute.
+	TRNN F,%DRIMG
+	 JRST [ OUT(,("Domain: "),TC(D),TAB)
+		OUT(,LBRC,D(QCLASS),(","))
+		JRST MAKS15 ]
+MAKS15:	HRRZ D,LISTAR(B)+1	;Get LP to Resource Record.
+	MOVE D,LISTAR(D)+1	;Pick up this RR's sublist.
+	MOVE A,LISTAR(D)+1	;This A$VAL has the Type code.
+	TRNN F,%DRIMG
+	 JRST [	OUT(,D(A),RBRC,EOL)
+		JRST MAKS20 ]
+MAKS20:	HRRZ D,LISTAR(D)	;CDR to the actual info LNs.
+	FINDA C,[A$DIST,,[D]]
+	 JRST MAKS30
+	TRNN F,%DRIMG
+	 JRST [	OUT(,("Dist: "),H(LISTAR(C)+1),TAB)
+		JRST MAKS30 ]
+MAKS30:	FINDA C,[A$RC,,[D]]
+	 JRST MAKS40
+	AOS LISTAR(C)+1		;Update RR reference count.
+	TRNN F,%DRIMG
+	 JRST [	OUT(,("Refcnt: "),D(LISTAR(C)+1),TAB)
+		JRST MAKS40 ]
+MAKS40:	FINDA C,[A$TTD,,[D]]
+	 JRST MAKS50
+	TRNN F,%DRIMG
+	 JRST [	OUT(,("Expires: "),TIM(MDYT,LISTAR(C)+1),EOL)
+		JRST MAKS50 ]
+MAKS50:	FINDA C,[A$RRVAL,,[D]]
+	 CAIA
+	  JRST MAKS70
+	TRNN F,%DRIMG
+	 JRST [	OUT(,("No data found for this Resource Record!"),EOL)
+		JRST MAKS75 ]
+MAKS70:	CALL MAKROT		;Output the RR value.
+MAKS75:	TRNN F,%DRIMG
+	 OUTCAL(,CRLF)
+MAKS80:	HRRZ B,LISTAR(B)	;CDR to next Resource Record pair.
+	JUMPN B,MAKS10
+MAKS99:	POPPER P,[D,C,B,A]
+	RET
+
+;;; MAKROT - Output the value of a Resource Record.
+;;;   A/ Type
+;;;   QCLASS/ Class
+;;;   C/ LP to actual value (an A$RRVAL LN)
+
+MAKROT:	PUSHER P,[A,B,C,D]
+	MOVE B,A		;B gets Type.
+	MOVE A,QCLASS		;A gets Class.
+	MOVSI T,-MAXKND
+MAKR40:	SKIPN ORRK(T)		;Class/Type codes are nonzero.
+	 JRST MAKR50		; If no entry here, try next one.
+	HLRZ D,ORRK(T)		;Class of this entry.
+	CAMN A,(D)		;Match?
+	 JRST MAKR80
+MAKR50:	AOBJN T,MAKR40
+	TRNN F,%DRIMG
+	 JRST [ OUT(,("How do I output this kind of record?"),EOL)
+		JRST MAKR99 ]
+	JRST MAKR99
+MAKR80:	HRRZ D,ORRK(T)		;Class matches.
+	CAME B,(D)		;Does  Type match?
+	 JRST MAKR50		; Nope.
+	MOVE D,ORRI(T)		;Yes - get Image mode output instruction.
+	TRNN F,%DRIMG		;But if in ASCII mode
+	 MOVE D,ORRA(T)		; use different routine.
+	JUMPE D,MAKR99		;If no routine, can't output.
+	XCT D			;Execute output routine!
+MAKR99:	POPPER P,[D,C,B,A]	;All done.
+	RET
+
+
+;;; These macros define the Resource Record data output routines.
+;;; OUTRRA defines an ASCII output routine for a certain class/type combo.
+;;; OUTRRI defines the Image output routine for the most recent OUTRRA.
+;;; !!! Call OUTRRA first, then immediately call OUTRRI !!!
+;;;
+;;;   RTN is an instruction to execute to output the RRVAL in LP C.
+;;;       The instruction may not smash accs and shouldn't skip.
+;;;       Routines expect class in A and type in B.
+
+ORRK:	BLOCK MAXKND
+ORRA:	BLOCK MAXKND
+ORRI:	BLOCK MAXKND
+
+.%OTRR==-1
+DEFINE	OUTRRA CLASS,TYPE,?RTN
+	.%OTRR==.%OTRR+1
+	TMPLOC ORRK+.%OTRR,{[CLASS],,[TYPE]}
+	TMPLOC ORRA+.%OTRR,RTN
+TERMIN
+
+DEFINE	OUTRRI ?RTN
+	TMPLOC ORRI+.%OTRR,RTN
+TERMIN
+
+
+OUTRRA DC$IN,DT$NUL,OUTCAL(,("DARPA Internet NULL RR."),EOL)
+
+OUTRRA DC$IN,DT$A,OUTCAL(,("DARPA Internet Host Address: "),HND(LISTAR(C)+1),EOL)
+OUTRRI OUTCAL(,W(LISTAR(C)+1))
+
+OUTRRA DC$IN,DT$NS,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$PTR,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$CNA,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$MR,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$MB,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$MD,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$MG,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$MF,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$IN,DT$HIN,CALL [ PUSHER P,[A,B]
+			   OUT(,("DARPA Internet Host information"),EOL)
+			   MOVE B,LISTAR(C)+1	;CAR has a string.
+			   MOVE A,LISTAR(B)+1
+			   ADD A,$LSLOC(L)	;Make absolute.
+			   OUT(,("CPU: "),TC(A),TAB)
+			   HRRZ A,LISTAR(B)	;CDR to next string.
+			   MOVE A,LISTAR(A)+1
+			   ADD A,$LSLOC(L)
+			   OUT(,("OS: "),TC(A),EOL)
+			   POPPER P,[B,A]
+			   RET ]
+OUTRRI CALL RRBAS2
+
+OUTRRA DC$IN,DT$SOA,CALL [ PUSHER P,[A]
+			   OUT(,("DARPA Internet Start of authority zone"),EOL)
+			   MOVE A,LISTAR(C)+1	;CAR has a string.
+			   ADD A,$LSLOC(L)	;Make absolute.
+			   OUT(,("MNAME: "),TC(A),EOL)
+			   POPPER P,[A]
+			   RET ]
+
+;;; Resources not yet implemented but may occur in database:
+
+OUTRRA DC$IN,DT$MIN,OUTCAL(,("Ignoring DARPA Internet MINFO record."),EOL)
+OUTRRA DC$IN,DT$WKS,OUTCAL(,("Ignoring DARPA Internet WKS record."),EOL)
+
+
+;;; RRASCI - Output a resource record whose value is a string.
+
+RRASCI:	PUSHER P,[A,B]
+	;; Find name of this class.
+	MOVE T,[-MAXCLS,,CLSTAB]
+RRASC1:	CAME A,(T)
+	 JRST [ AOBJN T,RRASC1
+		OUT(,("Class "),D(A))
+		SETZ A,
+		JRST RRASC3 ]
+	SUBI T,CLSTAB
+	HLRZ A,CLSNAM(T)
+	OUT(,TZ(@A))
+	;; Find name of this type.
+RRASC3:	MOVE T,[-MAXTYP,,TYPTAB]
+RRASC2:	CAME B,(T)
+	 JRST [	AOBJN T,RRASC2
+		OUT(,(" Type "),D(B),(": "))
+		SETZ B,
+		JRST RRASC5 ]
+	SUBI T,TYPTAB
+	HLRZ B,TYPNAM(T)
+	OUT(,(" "),TZ(@B),(": "))
+	;; Now find string value to print.
+RRASC5:	MOVE A,LISTAR(C)+1	;Get SLP.
+	ADD A,$LSLOC(L)		;Make absolute.
+	OUT(,TC(A),EOL)		;Output it.
+	POPPER P,[B,A]
+	RET
+
+
+OUTRRA DC$CH,DT$NUL,OUTCAL(,("CHAOSnet NULL RR."),EOL)
+
+OUTRRA DC$CH,DT$A,OUTCAL(,("CHAOSnet Host Address: "),RH(LISTAR(C)+1),EOL)
+OUTRRI OUTCAL(,W(LISTAR(C)+1))
+
+OUTRRA DC$CH,DT$PTR,CALL RRASCI
+OUTRRI CALL RRBASC
+
+OUTRRA DC$CH,DT$HIN,OUTCAL(,("CHAOSnet HINFO RR."),EOL)
+OUTRRI CALL RRBAS2
+
+;; Output string values for image mode.
+;;
+;; Format is 36 bit byte count followed by that many bytes of text.
+;; Ie, you can .IOT the count then use that to SIOT the rest of the
+;; string.  ASCIZ strings turn out to be a real pain and not that useful.
+
+;; Single string.
+RRBASC:	PUSHER P,[A,B,C]
+	MOVE A,LISTAR(C)+1	;Get SLP.
+	ADD A,$LSLOC(L)		;Make absolute.
+	OUT(,WLH(A),WBA(A))	;Count, then string
+	POPPER P,[C,B,A]
+	RET
+
+;; Same thing, but for double valued items (HINFO, MINFO, etc)
+RRBAS2:	PUSHER P,[A,B,C]
+	MOVE B,LISTAR(C)+1	;CAR has a string.
+	MOVE A,LISTAR(B)+1
+	ADD A,$LSLOC(L)		;Make absolute.
+	HRRZ B,LISTAR(B)	;CDR to next string.
+	MOVE B,LISTAR(B)+1
+	ADD B,$LSLOC(L)
+	OUT(,WLH(A),WBA(A),WLH(B),WBA(B))
+	POPPER P,[C,B,A]
+	RET
+
+
+SUBTTL	CLOSE operation (Database Updating)
+
+comment   *** Thoughts on caching and updating:
+
+The current implementation of our resolver mostly captures data which
+was explicitly asked for, and not incidental information.  This means
+(for example) that host addresses and names will be captured, but the
+nameserver forwarding information used to find them will not usually
+be.  It probably should be!  Also, there is the problem of incomplete
+information.  This can be solved by implementing the %DRWOV option.
+
+
+
+CLOSE:	.SUSET [.SMSK2,,[0]]	;Disable further BOJ interrupts.
+	.CLOSE BOJ,		;Close the BOJ channel.
+	TLNE F,%BLDRN\%UPDAT	;If any updating needed
+	 CALL UPDATE		; do it.
+	CALL UNLOCK		;Unlock any locks we have.
+	JSR DIE			;I guess this is all we do for now.
+
+;;; UPDATE - Updates DOMAIN from CACHE.
+;;; Merges entire contents of CACHE into DOMAIN.
+;;; Writes out new database.
+;;; Does not skip.
+
+UPDATE:	SKIPE MAINT		;If in maint mode
+	 JRST UPDA99		; better not risk munging the database.
+	CALL WRLOCK		;Ask for the only write-lock.
+	 CAIA			;If got it, proceed with database updates.
+	  JRST UPDA50
+	MOVE A,4.		;Else try for up to four minutes.
+	CALL UNLOCK		;Release our locks and let other guy win.
+UPDA20:	MOVEI T,30.*60.
+	.SLEEP T,		;Let's take a stress pill and lie down.
+	CALL RDLOCK		;Now get a new read lock.
+	 JRST UPDA20		; Go back to sleep if still being written.
+	SOJG A,UPDATE		;OK, ask for the write lock again.		
+	JRST UPDA99		;After a while, just punt.
+	;; OK, we now have the write lock on the database.
+UPDA50:	CALL DBGET		;Read in the latest database.
+	 JSR AUTPSY
+	TLNE F,%UPDAT		;If goodies are cached
+	 CALL ENCACH		; merge records into the database.
+	TLNE F,%BLDRN		;If expired RRs were used
+	 CALL REFRES		; Refresh all expired database records.
+	CALL DBPUT
+UPDA99:	RET
+
+
+
+;;; ENCACH - Merge records in CACHE into DOMAIN.
+;;;
+;;; Our database never contains duplicate resource records.
+;;; We assume that cached data is complete; either none or all of 
+;;; the resource records for a given {D,C,T} are present in the cache.
+;;;
+;;; Updating the database deletes any records which are similar to
+;;; the records in the cache. However, we only merge authoritative records
+;;; into our database. All the authoritative servers had better
+;;; always respond completely to our queries!
+
+ENCACH:	MOVE L,$ARLOC+CACHE
+	FINDA A,[A$DOM,,[$LLLST(L)]]
+	 JRST UPDA99
+ENCA10:	MOVE C,LISTAR(A)+1	;CAR has name VAL.
+	HRRZ C,LISTAR(C)	;CDR to Class list.
+	MOVE C,LISTAR(C)+1	;CAR has class.
+	HRRZ C,LISTAR(C)	;CDR to RR list.
+	MOVE C,LISTAR(C)+1	;CAR has type.
+	HRRZ C,LISTAR(C)	;LP to values list.
+	FINDA C,[A$DIST,,[C]]	;Find RR status bits.
+	 JRST ENCA70		; If missing, assume not authoritative.
+	MOVE C,LISTAR(C)+1
+	TRNN C,%AUATH		;Authoritative resource record?
+	 JRST ENCA70		; No, don't merge this into our database.
+	MOVE C,LISTAR(A)+1	;CAR of domain has its name.
+	MOVE C,LISTAR(C)+1	;Get SLP to it.
+	ADD C,$LSLOC(L)		;Absolutely.
+	PUSHER P,[A,L]
+	MOVE A,C
+	CALL DOMLSE		;L gets appropriate database LSE.
+	MOVE E,L
+	POPPER P,[L,A]
+	EXCH L,E		;Switch to DOMAIN context.
+	SEADOM B,[C,,[$LLLST(L)]]
+	 CAIA
+	  JRST [ CALL UPDMRG	;Aha! Merge the  domains in E(A) and L(B).
+		 JRST ENCA70 ]
+	;; No match.  Append this entire domain branch to the database.
+	FINDA B,[A$DOM,,[$LLLST(L)]]
+	 JRST [	FINDA B,[A$DB,,[$LLLST(L)]]
+		 JSR AUTPSY
+		JRST ENCA50 ]
+ENCA50:	LNCOPY C,[E ? A]	;Copy domain from CACHE into DOMAIN.
+	LNAPP [B ? C]		;Append domain to the database.
+ENCA70:	EXCH L,E		;Switch context back to CACHE.
+	HRRZ A,LISTAR(A)	;CDR to next domain there.
+	JUMPN A,ENCA10
+ENCA99:	RET
+
+;;; UPDMRG - Merge domain A in cache with domain B in database.
+;;; (Current LSE L is DOMAIN; CACHE is in E.)
+
+UPDMRG:	PUSHER P,[A,B,C,D,E,L]
+	EXCH L,E		;CACHE context.
+	MOVE A,LISTAR(A)+1	;Walk down source domain.
+	MOVE A,LISTAR(A)	;A gets LP to source Class list.
+UPDM10:	PUSH P,B		;Stash LP to the target domain.
+	MOVE D,LISTAR(A)+1	;Check out this source Class.
+	MOVE D,LISTAR(D)+1	;D gets the class #.
+	EXCH L,E		;DOMAIN context.
+	MOVE B,LISTAR(B)+1	;Walk down target domain.
+	MOVE B,LISTAR(B)	;B gets LP to target Class list.
+UPDM20:	MOVE C,LISTAR(B)+1	;Check out this target Class.
+	CAMN D,LISTAR(C)+1	;Match?
+	 JRST [	CALL UPDRRG	; Yes - merge the RRs.
+		JRST UPDM60 ]	; Then go hack another source class.
+	HRRZ T,LISTAR(B)	;No match, CDR to next target class.
+	SKIPE T			;If not null
+	 JRST [ MOVE B,T	; loop with it..
+		JRST UPDM20 ]
+	;; Else this is a new class.  Append it to the list in B.
+	LNCOPY C,[E ? A]	;Copy class from CACHE into DOMAIN.
+	LNAPP [B ? C]		;Append it to the existing list of classes.
+UPDM60:	EXCH L,E		;CACHE context.
+	POP P,B			;Recover LP to target domain.
+	HRRZ A,LISTAR(A)	;CDR to next source Class node.
+	JUMPN A,UPDM10		;Loop for all source data.
+	POPPER P,[L,E,D,C,B,A]	;Restore context and ACs.
+	RET
+
+;;; UPDRRG - Merge resource records in one Class.
+;;;   A/ LP to source Class list.
+;;;   C/ LP to matching target Class A$VAL
+;;; (Current LSE L is DOMAIN; CACHE is in E.)
+
+UPDRRG:	;; First, delete from the database any RRs which
+	;; are similar to the new RRs in the cache.
+	CALL UPRDEL
+	;; Next, add all types of cached RRs for this {D,C} to the database.
+	PUSH P,A		;Don't smash ACs.
+	EXCH L,E		;CACHE context.
+	MOVE A,LISTAR(A)+1	;Get LP to all the RRs in this Class.
+	MOVE A,LISTAR(A)
+	EXCH L,E		;DOMAIN context.
+	LNCOPY A,[E ? SETZ A]	;Copy all RRs into DOMAIN.
+	LNAPP [ LISTAR(C) ? A]	;Append them to the existing RRs.
+	POP P,A
+	RET
+
+UPRDEL:	PUSHER P,[A,B,C,D,H]
+	EXCH L,E		;CACHE context.
+	MOVE A,LISTAR(A)+1	;Get source class list.
+	MOVE A,LISTAR(A)	;A gets A$RR list there.
+UPRD10:	MOVE H,LISTAR(A)+1	;H gets source RR type.
+	MOVE H,LISTAR(H)+1
+	EXCH L,E		;DOMAIN context.
+UPRD20:	HRRZ D,LISTAR(C)	;C has current RR node.
+	JUMPE D,UPRD30
+UPRD21:	MOVE T,LISTAR(D)+1	;Get LP to type.
+	CAME H,LISTAR(T)+1	;Type match?
+	 JRST [	MOVE C,D	; No, try another RR.
+		JRST UPRD20 ]
+	MOVE B,D
+	HRRZ D,LISTAR(D)	;Get new CDR.
+	HRRM D,LISTAR(C)	;Splice out node.
+	LNDEL B			;Flush the node.
+	SKIPE D
+	 JRST UPRD21
+UPRD30:	EXCH L,E		;CACHE context.
+	HRRZ A,LISTAR(A)	;CDR to next A$RR.
+	JUMPN A,UPRD10
+	EXCH L,E		;Don't smash LSE ptrs.
+	POPPER P,[H,D,C,B,A]
+	RET
+
+
+
+;;; REFRES - Refresh any expired records in DOMAIN.
+
+REFRES:	RET
+
+
+SUBTTL	SREAPB operation
+
+;;; SREAPB - This doesn't do anything, but I figured I'd provide
+;;; for one random system call for device debugging purposes.
+;;; The channel number is in ARGS+3 and the reap bit in ARGS+4.
+
+SREAPB:	PUSHER P,[A]
+	MOVE A,ARGS+2		;Find number of arguments.
+	CAIE A,2		;Unless there are two args
+	 JRST [ MOVSI T,%ETFRG	; give "too few args" error.
+		JRST CALERR ]
+	SYSCAL JOBRET,[%CLERR,,ERRCOD ? %CLIMM,,BOJ ? %CLIMM,,1 ]
+	 NOP
+	POPPER P,[A]
+	BOJFIN
+
+
+
+SUBTTL	Database Searching UUOs
+
+; SEADOM AC,[[SPT],,[[list-ptr]]]
+;  Searches list pointed to by list-ptr for the specified Domain.
+;  Skips if found with LP to an A$DOM in AC.
+;  (Non-skip means search failed; AC is NIL.)
+
+UUODEF	SEADOM:,SEAD00
+SEAD00:	MOVE U3,@U40		;Get c(E) = [SPT],,[loc]
+	HRRZ U1,@(U3)		;U1 gets ptr to first node.
+IFSVU2,	PUSH P,U2
+SEAD10:	SKIPN U1		;UUO fails if ptr is zero.
+	 JRST [ LDB U2,UACFLD	; Return NIL.
+		MOVE U1,@NIL
+		MOVEM U1,(U2)
+		IFSVU2,	POP P,U2
+		UUOXRT ]
+	LDB U2,[$LAFLD,,LISTAR(U1)] ;Get attribute of this LN.
+	CAIE U2,A$DOM		;Domain node?
+	 JRST SEAD20		; No, keep looking.
+	MOVE U2,LISTAR(U1)+1	;U2 gets LP to CAR.
+	MOVE U3,LISTAR(U2)
+	LDB U4,[$LAFLD,,U3]	;Check CAR's attribute.
+	CAIE U4,A$VAL		;Should be an A$VAL.
+	 JRST SEAD20
+	TLNN U3,%LTSTR		;Should hold a string.
+	 JRST SEAD20
+SEAD12:	MOVE U4,LISTAR(U2)+1	;# chars in this string.
+	HLRZ U4,U4
+	MOVE U3,@U40		;Pick up UUO arg.
+	HLRZ U3,U3		;U3 gets target SPT.
+	HLRZ Z,(U3)		;Get length of target string.
+	CAMN Z,U4		;If lengths match
+	 JRST SEAD25		; go see if contents match too!
+SEAD20:	HRRZ U1,LISTAR(U1)	;Else get CDR to next Domain and try again.
+	JRST SEAD10
+SEAD25:	MOVE U2,LISTAR(U2)+1	;SPT to possible match.
+	ADD U2,$LSLOC(L)	;Make absolute.
+	MOVE U4,(U3)		;SPT to target string.
+SEAD30:	JUMPL U4,SEAD70		;See if any left to test.
+	TLNN U4,-1		;If string exhausted
+	 JRST SEAD70		; we have found the target!
+	MOVE Z,(U2)		;Get a word to test.
+	CAME Z,(U4)		;Match against target string.
+	 JRST SEAD20		; Failure to match, go try another Domain.
+	ADD U4,[-5,,1]		;Matches so far: decr char cnt, incr index.
+	AOJA U2,SEAD30		;Continue with next word in string.
+SEAD70:	LDB U2,UACFLD		;Found it - get result acc.
+	MOVEM U1,(U2)		;Store ptr to the A$DOM LN.
+IFSVU2,	POP P,U2
+	AOS UUORPC		;Skip on return
+	UUOXRT
+
+
+
+SUBTTL	Network Search Routines
+
+;;; DOMQRY - Build UDP query about a host name.
+;;;  QNAME, QCLASS, QTYPE have the query variables
+;;;  W/ ptr to packet UDP data 
+;;; Updates the datagram byte count in C.
+
+DOMQRY:	PUSHER P,[A,B,D,PKT]
+	;; Build the Header Section.
+	IDGEN A,QID
+	PKTDPB DP$ID,A
+	PKTDPB DP$OP,[DO$QRY]	;Standard QUERY operation.
+	PKTDPB DP$QR,[0]	;This is a request.
+	PKTDPB DP$RC,[0]	;No Recursion.
+	PKTDPB DP$QDC,[1]	;We have one question.
+DOMQ19:	ADDI C,3*4		;Count the Header Section.
+	;; Now build the Question Section.
+DOMQ20:	MOVE B,[DQ$NAM (PKT)]	;Bp to QNAME.
+	HRRZ A,QNAME		;Addr of ASCIZ qname from ASCNT.
+	HRLI A,440700		;Make into Bp.
+DOMQ22:	CALL CMPRES		;Find a domain name token.
+	JUMPE D,DOMQ27		; Maybe no more.
+	IDPB D,B		;Store the count.
+	AOS C			;Count length in QNAME.
+DOMQ24:	ILDB T,A		;Get char from name.
+	IDPB T,B		;Stuff it.
+	AOS C			;Count char in QNAME.
+	SOJG D,DOMQ24
+	ILDB T,A		;Gobble period seperator.
+	JRST DOMQ22		;Get next token.
+DOMQ27:	IDPB D,B		;Terminate with the zero token
+DOMQ29:	AOS C			;Count terminator.
+DOMQ30:	DPWIDE B,QTYPE		;Specify type of data we want.
+	DPWIDE B,QCLASS		;Specify class of data we want.
+DOMQ39:	ADDI C,4		;Count the QTYPE and QCLASS fields.
+DOMQ90:	POPPER P,[PKT,D,B,A]
+	RET
+
+
+;;; CMPRES - Compress a domain name.
+;;;   A/ Bp to ASCIZ string
+;;; 
+;;; What this routine really does is find periods in the
+;;; domain name you give it as an argument.  We currently
+;;; do not bother to send out compressed names.
+;;;
+;;; Returns in D the number of characters from
+;;; the string until and including the period.
+;;; A is NOT updated.
+
+CMPRES:	PUSH P,A
+	SETZ D,
+CMPRE1:	ILDB T,A
+	JUMPE T,CMPRE9
+	CAIN T,".
+	 JRST CMPRE9
+	AOJA D,CMPRE1
+CMPRE9:	POP P,A
+	RET
+
+
+
+SUBTTL	Database Primitives
+
+NIL:	[0]
+
+; SCAAR AC,[<attrib type>,,[list-ptr] ? [val]]
+;  One-deep search of the the list pointed to by list-ptr.
+;  (Ie., Looks at the CAAR of each node on list-ptr.)
+;  Skip returns with the LP to the node whose CAAR matched first.
+;  Else doesn't skip and AC is NIL.
+
+UUODEF	SCAAR,SEAC00
+SEAC00:	MOVE U3,@U40			;Get c(e)= $attr,,[loc].
+	HRRZ U1,(U3)			;Get c(Loc) = LP to first node.
+	HLRZS U3			;Get attrib type into RH.
+	MOVE U4,U40			;Now pick up <value> argument.
+	MOVE U4,@1(U4)
+IFSVU2,	PUSH P,U2
+	JUMPE U1,SEAC90
+SEAC10:	LDB U2,[$LAFLD,,LISTAR(U1)]	;Get attrib of LN pointed to.
+	CAIN U2,(U3)			;Equal to one we want?
+	 JRST [	MOVE U2,LISTAR(U1)+1	; Yes. get CAR of node.
+		CAME U4,LISTAR(U2)+1	; Values match?
+		 JRST SEAC20		;  No, keep CDRing on down...
+		;; Yes! Return LP to LN containing the winning CAAR.
+		AOS UUORPC		; Make skip.
+		JRST SEAC99 ]		; Return.
+SEAC20:	HRRZ U1,LISTAR(U1)		;No, get CDR and continue,
+	JUMPN U1,SEAC10			;as long as list still exists.
+SEAC90:	SETZ U1,			;Return NIL if not found.
+SEAC99:	LDB U2,UACFLD			;Get result acc
+	MOVEM U1,(U2)			;Store ptr.
+IFSVU2,	POP P,U2
+	UUOXRT
+
+
+;;; DBPUT - Database Writeout
+;;; Writes database LSEs to disk.
+;;; Does not skip; goes to AUTPSY if lost.
+
+DBPUT:	PUSHER P,[A,B,C]
+	MOVEI T,TMPFN1
+	SYSCAL OPEN,[%CLBIT,,.BIO ? %CLIMM,,DKOC ? DBDEV ? (T) ? 1(T) ? DBDIR]
+	 JSR AUTPSY
+	MOVEI A,DOMAIN
+	SETO B,
+	CALL LSEOUT		;First goes the DOMAIN regular-names LSE.
+	MOVEI A,DOMADR
+	SETO B,
+	CALL LSEOUT		;Second goes the DOMADR addr-names LSE.
+	MOVEI T,2*PG$SIZ
+	MOVE A,[-1,,[0]]	;Then two pages of zeros to guarantee that
+	.IOT DKOC,A		;readin CORBLKs win even if database is empty.
+	SOJG T,.-2
+	MOVEI T,DBFN1		;Now install this file as the new database.
+	SYSCAL RENMWO,[%CLIMM,,DKOC ? (T) ? 1(T) ]
+	 JSR AUTPSY
+	.CLOSE DKOC,
+	POPPER P,[C,B,A]
+	RET
+
+;;; DBGET - Database Readin.  
+;;; Skips returns unless error.
+
+DBGET:	PUSHER P,[A,B]
+	MOVEI T,DBFN1
+	SYSCAL OPEN,[[.BII,,DKIC] ? DBDEV ? (T) ? 1(T) ? DBDIR]
+	 JRST DBGET9
+	MOVEI A,DOMAIN
+	SETO B,
+	CALL LSEIN
+	 JRST DBGET9
+	MOVEI A,DOMADR
+	SETO B,
+	CALL LSEIN
+	 JRST DBGET9
+	.CLOSE DKIC,
+	AOS -2(P)
+DBGET9:	POPPER P,[B,A]
+	RET
+
+
+
+
+
+
+
+SUBTTL	Locks
+
+TMPLOC 43, LSWLST: 0		;Ptr to locked switch list.
+TMPLOC 44,{-CRITIL,,CRITIC}	;AOBJN ptr to critical code table
+
+;;; Critical code table pointed to by word 44!
+
+CRITIC:	LKIN32,,LKIN36		;For crashing in LKINIT
+	MOVEM A,LSWREQ
+	LKGRB1,,LKGRB2+1	;For crashing in LKGRAB
+	SETOM @A
+	RDLOC1,,RDLOC2		;For crashing in RDLOCK
+	SOS @A
+	UNLOC2,,UNLOC3		;For crashing in UNLOCK.
+	SOS @A
+CRITIL==.-CRITIC
+
+;;; RDLOCK - Obtain a non-exclusive Read database lock.
+;;; Skips if successful, tries only once!
+
+LVAR	RDLOKP:	0			;-1 if we have the read lock.
+
+RDLOCK:	.SUSET [.SPICLR,,[0]]	;Without-interrupts...
+	PUSHER P,[A,B,C]
+	SKIPE RDLOKP		;If already locked
+	 JRST RDLOC8		; don't lock it again.
+	SKIPN LOCKW		;If database is Write locked
+	 JRST RDLOC9		; fail.
+	MOVEI B,LOCKR		;Chain locked-switch list through here.
+	MOVEI A,USERS		;Database Read lock.
+RDLOC1:	AOS (A)			;Count ourselves.
+	MOVEM A,(B)		;1st wd in switch block has lock addr.
+	HRLZI C,(SOS @)		;2d wd has insn to unlock it.
+	HRR C,LSWLST		;Find CDR of locked switch list.
+	MOVEM C,1(B)		;Chain list through here.
+RDLOC2:	MOVEM B,LSWLST		;Install this switch block on list.
+	SETOM RDLOKP		;Remember that we acquired a read lock.
+RDLOC8:	AOS -3(P)
+RDLOC9:	POPPER P,[C,B,A]
+	.SUSET [.SPICLR,,[-1]]
+	RET
+
+;;; WRLOCK - Obtain the exclusive Read/Write database lock.
+;;; Waits for up to five minutes.
+;;; Skips if successful.
+
+LVAR	WRLOKP:	0		;-1 if we have the write lock 
+
+WRLOCK:	PUSHER P,[A,B,E]
+	SKIPE WRLOKP		;If already have write lock
+	 JRST WRLOC8		; claim success.
+	SKIPE RDLOKP		;Ensure that we have a read lock too.
+	 JRST WRLOC1		; Already have it, OK.
+	CALL RDLOCK		;Else ask for one.
+	 JRST WRLOC9		; Eh?
+WRLOC1:	MOVEI A,LOCKW		;Else here's write lock.
+	CALL LKGRAB		;Let's try to get it.
+	 JRST WRLOC9		; Fail if cannot.
+	;; Now we have Read/Write lock.
+	;; However, we must wait for any other readers to finish up.
+	MOVEI E,5*60.*2		;Try for up to five minutes.
+WRLOC2:	MOVE A,USERS		;See how many people have a read lock.
+	CAIN A,1		;If only one person has it
+	 JRST WRLOC8		; must be us!
+	MOVEI T,15
+	.SLEEP T,		;Take 1/2 second nap and try again.
+	JRST WRLOC2
+WRLOC8:	SETOM WRLOKP		;Note that we have write lock.
+	AOS -3(P)		;We are the only database Read/Writer!
+WRLOC9:	POPPER P,[E,B,A]
+	RET
+
+
+;;; LKGRAB - Grab a switch-lock.
+;;;   A/ addr of switch to swipe at
+;;; Skips if successfully grabbed switch for very own.
+;;; Doesn't skip if it was locked.  Tries only once!!!
+
+LKGRAB:	.SUSET [.SPICLR,,[0]]
+	AOSE (A)		;Try to get switch.
+	 RET			; Bah, already locked.
+LKGRB1:	HRRZ T,LSWLST		;Need to remember to unlock it.
+	HRLI T,(SETOM)		;Insn and CDR.
+	MOVEM T,1(A)		;Set them up.
+LKGRB2:	MOVEM A,LSWLST		;Place switch on list.
+	AOS (P)			;Skip, we got it.
+	.SUSET [.SPICLR,,[-1]]
+	RET
+
+
+LVAR	HAVLKS:	0		;-1 => Database locks initialized.
+
+;;; LKINIT - Lock Initializations
+;;; Returns when the database locks are initialized.
+;;; Goes to AUTPSY if unable to get at locks.
+
+LKINIT:	PUSHER P,[A,B]
+	SETZM HAVLKS		;Locks not available yet.
+LKIN10:	SYSCAL OPEN,[%CLBIT,,.BII ? %CLIMM,,LOCKC ? %CLERR,,A
+			DBDEV ? LCKFN1 ? LCKFN2 ? DBDIR ]
+	 CAIA
+	  JRST LKIN20		; OK, we have opened the locking file.
+	CAIE A,%ENSFL		;Else maybe lock file is missing.
+	 JSR AUTPSY		; No, some *really* random lossage.
+	SYSCAL OPEN,[%CLBIT,,.BIO ? %CLIMM,,LOCKC ? %CLERR,,A
+			DBDEV ? LCKFN1 ? LCKFN2 ? DBDIR ]
+	 JSR AUTPSY
+	MOVEI T,PG$SIZ
+LKIN17:	MOVE A,[-1,,[0]]	;Output zero wds for initial locks.
+	.IOT LOCKC,A
+	SOJG T,LKIN17
+	.CLOSE LOCKC,		;Close, creating file.
+	JRST LKIN10		;Now try opening it again.
+LKIN20:	;; Map in the locks file.
+	SYSCAL CORBLK,[	%CLIMM,,%CBNDW+%CBPUB ? %CLIMM,,%JSELF
+			%CLIMM,,LOCKPG ? %CLIMM,,LOCKC ]
+	 JSR AUTPSY
+	;; Now try to init. (Critical code is LKIN32 through LKIN36.)
+LKIN30:	SYSCAL RQDATE,[%CLOUT,,JUNK ? %CLOUT,,A]
+	 JSR SYSLOS
+	CAMN A,[-1]		;We need the system boot time
+	 JSR AUTPSY		; else we can't init.
+	MOVE B,A
+LKIN31:	EXCH A,LSWREQ		;Claim right of initializing.
+LKIN32:	CAME A,LSWREQ		;If we got the right to lock
+	 JRST LKIN35		; go initialize it.
+LKIN33:	CAMN B,LSWDON		;Else didn't get init rights.
+	 JRST LKIN90		; Either someone else has inited for us.
+	MOVEI A,30.		;Or initialization is in progress.
+	.SLEEP A,		;Wait for a moment in case other job dies.
+	MOVE A,B		;Then go try again.
+	JRST LKIN31		;Try to claim again.
+	;; (Add new locks here.);;
+LKIN35:	SETZM LOCKR		;Clear reference count.
+	SETZM USERS
+	SETOM LOCKW 		;Clear write lock.
+LKIN36:	MOVEM B,LSWDON		;Indicate lock init done.
+LKIN90:	SETOM HAVLKS		;Have the page and locks!
+	.CLOSE LOCKC,
+	POPPER P,[B,A]
+	RET
+
+
+;;; UNLOCK - Unlock everything on the locked switch list.
+;;; Does not skip.
+
+UNLOCK:	.SUSET [.SPICLR,,[0]]
+	PUSHER P,[A,B]
+	MOVE B,LSWLST		;Get list of locks.
+UNLOC1:	JUMPE B,UNLOC9		;If NIL, nothing to unlock!
+	HRRZ A,B		;Get lock addr or switch.
+	HLLZ T,1(B)		;Get insn to unlock it.
+	SKIPN T			;If missing
+	 HRLI T,(SETOM)		; assume it was a SETOM.
+	HLL A,T			;Set up critical instruction.
+	HRRZ B,1(B)		;Get CDR to next entry.
+	MOVEM B,LSWLST		;Splice lock out of chain.
+UNLOC2:	XCT A			;Now unlock it. (Critical insn!)
+UNLOC3:	SKIPE HAVLKS		;If we had database locks
+	 JRST [ HRRZ A,A	; Update our lock indicators.
+		CAIN A,LOCKR ? SETZM RDLOKP
+		CAIN A,LOCKW ? SETZM WRLOKP
+		JRST .+1 ]
+	JRST UNLOC1		;Loop for all locks.
+UNLOC9:	POPPER P,[B,A]		;Database completely unlocked by us.
+	.SUSET [.SPICLR,,[-1]]
+	RET
+
+
+
+
+SUBTTL	Create the initial database
+
+;;; *** This shouldn't rely on SRI-NIC, but does at the moment.
+;;; *** Eventually, we will init from a file or something.
+
+ROOHST:	LITSTR [SRI-NIC.ARPA]
+ROOADR:	1200,,63
+
+LVAR	DOMLST:	0		;LP to Domain-level list.
+
+MAKDB:	PUSHER P,[A,B,C,D,E]
+MAKD10:	CALL WRLOCK		;Seize write lock.
+	 JRST MAKD10		; Keep trying until we get it.
+	SYSCAL DELETE,[	DBDEV ? DBFN1 ? DBFN2 ? DBDIR ]
+	 NOP
+	SYSCAL OPEN,[	%CLBIT,,.BIO ? %CLIMM,,DKOC
+			DBDEV ? DBFN1 ? DBFN2 ? DBDIR ]
+	 JRST CPOPJ
+	MOVEI A,DOMAIN		;Create new LSE for Domain list.
+	CALL LSEOPN
+	MOVE L,$ARLOC+DOMAIN	;Ptr to Domain list in core.
+	MAKELN E,[A$VAL,,NIL ? %LTVAL,,[[DC$IN]]]
+	MAKELN D,[A$CLAS,,NIL ? %LTLST,,[E]]
+	MAKELN C,[A$VAL,,[D] ? %LTSTR,,[LITSTR []]] ;The "Root" Domain name.
+	MAKELN B,[A$DOM,,NIL ? %LTLST,,[C]]
+	MOVEM B,DOMLST
+	MAKELN A,[A$VAL,,NIL ? %LTSTR,,[LITSTR [AI.MIT.EDU]]]
+	MAKELN B,[A$SOA,,NIL ? %LTLST,,[A]]
+	MAKELN C,[A$VAL,,[B] ? %LTSTR,,[LITSTR [Main Domain List]]]
+	MAKELN A,[A$DB,,[DOMLST] ? %LTLST,,[C]]
+	MOVEM A,$LLLST(L)
+	;; Insert Nameserver RR for the root domain.
+	MAKELN C,[A$RRVAL,,NIL ? %LTSTR,,ROOHST]
+	MAKELN B,[A$VAL,,[C] ? %LTVAL,,[[DT$NS]]]
+	MAKELN A,[A$RR,,NIL ? %LTLST,,[B]]
+	HRRM A,LISTAR(E)
+	MAKELN D,[A$RC,,NIL ? %LTVAL,,[[69.]]]
+	MAKELN B,[A$DIST,,[D] ? %LTVAL,,[[%AUILL]]]
+	HRRM B,LISTAR(C)
+	;; Add another Domain which is the server for the Domain. 
+	MAKELN E,[A$VAL,,NIL ? %LTVAL,,[[DC$IN]]]
+	MAKELN D,[A$CLAS,,NIL ? %LTLST,,[E]]
+	MAKELN C,[A$VAL,,[D] ? %LTSTR,,ROOHST]
+	MAKELN B,[A$DOM,,NIL ? %LTLST,,[C]]
+	MOVE A,DOMLST
+	HRRM B,LISTAR(A)	;Stick onto CDR of Domain list.
+	MAKELN C,[A$RRVAL,,NIL ? %LTVAL,,[ROOADR]]
+	MAKELN B,[A$VAL,,[C] ? %LTVAL,,[[DT$A]]]
+	MAKELN A,[A$RR,,NIL ? %LTLST,,[B]]
+	HRRM A,LISTAR(E)
+	MAKELN D,[A$RC,,NIL ? %LTVAL,,[[69.]]]
+	MAKELN B,[A$DIST,,[D] ? %LTVAL,,[[%AUILL]]]
+	HRRM B,LISTAR(C)
+	MOVEI A,DOMADR		;Create new LSE for Domain list.
+	CALL LSEOPN
+	MOVE L,$ARLOC+DOMADR	;Ptr to Domain list in core.
+	MAKELN A,[A$DB,,NIL ? %LTSTR,,[LITSTR [Address Domain List]]]
+	MOVEM A,$LLLST(L)
+	CALL DBPUT		;Now write out it out to disk!
+	OUT(,("Database initialized at "),TIM(HMS),(" for "),6F(UNAME),EOL,EOL)
+MAKDBG:	SETOM DEBCHP		;Print debugging into into RRECS.
+	MOVE L,$ARLOC+DOMAIN
+	CALL DEBLSE
+	 NOP
+	OUT(,CRLF,CRLF)
+	MOVE L,$ARLOC+DOMADR
+	CALL DEBLSE
+	 NOP
+	POPPER P,[E,D,C,B,A]
+	JRST POPJ1		;All done.
+
+
+SUBTTL	Miscellaneous Subroutines and UUOs
+
+; USEA AC,[ASCNT [string]]	ASCNT String Equal
+;
+; Compare from ASCNT ptr in E to ASCNT ptr in AC.
+; Ignore case and skip if strings are equal.
+
+UUODEF	USEA:,USEA00
+USEA00:	SETOM UQSTRF		;Uppercase compare.
+	LDB U1,UACFLD		;Find AC.
+	MOVE U1,(U1)		;U1 gets an ASCNT.
+IFSVU2,	PUSH P,U2
+	MOVE U4,@U40		;U4 gets an ASCNT.
+	JRST UQSTR4		;Might as well re-use some code...
+
+;;; USBSEA	Uppercase string backwards compare.
+;;;   A/ string ASCNT
+;;;   B/ substring ASCNT
+;;;
+;;; This case-insensitively compares the two ASCNT strings backwards.
+;;; If B is a substring from the very end of A, skip return.
+;;; Otherwise do not skip.  Does not mung A or B.
+;;;
+;;;
+;;; Example:	MOVE A,LITSTR [FOO.BAR.BAZ]
+;;;		MOVE B,LITSTR [BAR.BAZ]
+;;;   		CALL USBSEA
+;;; 	Would skip return!
+
+USBSEA:	PUSHER P,[A,B,C,D]
+	HLRZ C,A		;Get len of string.
+	HLRZ D,B		;Get len of substr.
+	CAMLE D,C		;If substring is larger than string
+	 JRST USBS99		; it can't be contained in there.
+	HRLI A,440700
+	PTSKIP C,A		;A is Bp to the end of the string.
+	HRLI B,440700
+	PTSKIP D,B		;B is Bp to the end of the substr.
+USBS10:	LDB T,A			;Get string char.
+	LDB TT,B		;Get substr char.
+	CAME T,TT		;If they don't match
+	 JRST USBS99		; we lost.
+	SOSE D			;If substring not exhausted
+	 JRST [ DBP7 A		; Back up one char each.
+		DBP7 B		; String is at least as long as substring.
+		JRST USBS10 ]
+USBS90:	AOS -4(P)		;Else we are done!
+USBS99:	POPPER P,[D,C,B,A]
+	RET
+
+
+;;; STRCMP - Slow case-insensitive compare of aligned ASCIZ strings.
+;;;   A/ Bp to string
+;;;   B/ Bp to string
+;;; Skips if the strings are equal.  Does not mung Bps.
+
+STRCMP:	PUSHER P,[A,B]
+STRCM1:	ILDB T,A		;Gobble.
+	UPPER T
+	ILDB TT,B		;Gobble.
+	UPPER TT
+	CAME T,TT		;Gobble?
+	 JRST STRCM9		; No, gobble.
+	JUMPN T,STRCM1		;Gobble...
+	AOS -2(P)		;Gobble!
+STRCM9:	POPPER P,[B,A]
+	RET
+
+
+;;; ASZLEN - Return ASCNT for ASCIZ string in A.
+;;; Returns in A the <count,,addr>.
+
+ASZLEN:	SETZ TT,
+	MOVE T,A		;Copy Bp.
+	HRLI T,440700		;ASCIZ string.
+ASZLE1:	ILDB Z,T		;Get a char.
+	SKIPE Z			;If not null
+	 AOJN TT,ASZLE1		; count it.
+	HRRZ A,A		;Put addr in RH
+	HRL A,TT		;Put cnt  in LH.
+	RET			;All done.
+
+;;; STRCOP - Copy (uncompressed) string
+;;;   A/ Bp to source string
+;;;   B/ Bp to dest string
+;;;   C/ Length of source string
+;;; Updates A and B.
+
+STRCOP:	PUSH P,C
+STRCO1:	ILDB T,A
+	IDPB T,B
+	SOJG C,STRCO1
+	POP P,C
+	RET
+
+;;; XCTIOC -  Expected IOC error UUO.
+;;; NLISTS apparently requires this.
+
+LVAR 	XIOCP:	0		;Saved PDL ptr.
+
+UUODFE XCTIOC,UXCTIO		;Skip unless IOCER occurs
+UXCTIO:	TRO F,%IOCER
+IFE $$UCAL,PUSH P,UUORPC	;Ensure ret addr on stack since may xct UUO.
+	PUSH P,U40		;Must also save due to int lossage (40 zapped)
+	MOVEM P,XIOCP		;Save PDL pointer...
+	XCT @(P)		;Execute instruction...
+	 CAIA
+	  AOS -1(P)
+	AOS -1(P)
+IOCRET:	TRZ F,%IOCER
+	SUB P,[1,,1]		;Flush saved loc 40
+	RET			;Return from UUO.
+
+
+
+;;; OWNHST - Return own Internet host address in A.
+;;; Non-skip means we are not on the ARPAnet.
+
+OWNHST:	SYSCAL NETHST,[	%CLIMM,,-1 ? %CLOUT,,Z ? %CLOUT,,A]
+	 RET
+	LSHC A,-6		;Put 10 bits spacing between host/imp #s.
+	LSH B,-<2+8.>
+	LSHC A,<2+8.+6>
+	TLO A,(12_24.)		;and add ARPA network number.
+	JRST POPJ1	
+
+
+SUBTTL	Storage
+
+PRGNAM:	.FNAM1			;FN1, FN2 of source file assembled from.
+VERSHN:	.FNAM2
+
+BVAR
+JUNK:	0			;The kitchen sink.
+	PDLLEN==512.
+PDL:	BLOCK PDLLEN		;The stack.
+
+PATLEN==64.
+PAT:
+PATCH:	BLOCK PATLEN		;Patch area.
+
+INDEX:	-1			;Our job index.
+UNAME:	0			;Our job names
+JNAME:	0
+
+BUFFER:	BLOCK PG$SIZ		;A random buffer.
+
+;;; UUO Areas.
+
+RRECS:	BLOCK $ARSIZ	;Area for text of RRs (BOJ output buffer!)
+DOMAIN:	BLOCK $ARSIZ	;Domain names database area.
+DOMADR:	BLOCK $ARSIZ	;Domain addresses database area. 
+CACHE:	BLOCK $ARSIZ	;Domain names cache for current job.
+TMPAR:	BLOCK $ARSIZ	;Temporary area for various things.
+
+;;; Table of ARPT's to all standard ARBLK's to be flushed when coring down.
+ARPTBL:	RRECS
+	DOMAIN
+	DOMADR
+	CACHE
+	TMPAR
+NAREAS==.-ARPTBL
+
+EVAR
+LITTER:	CONSTANTS		;Now dump out all literals/constants here
+	VARCHK			;Now dump out all variables, and find
+				;How big impure and pure really are.
+
+;;; Memory management definitions (now that we know how big pgm is!)
+
+LASTPG==1+<.+PG$SIZ-1>/PG$SIZ	;First dedicated page.
+
+LOCKPG==LASTPG+0		;Actual locks mapped to this page.
+OPKTPG==LOCKPG+1		;For IP output packet.
+IPKTPG==OPKTPG+2		;For IP input  packet.
+CLNTPG==IPKTPG+2		;For mapping in client.
+FREEPG==CLNTPG+4		;First free page for PAGSER.
+
+IFN $$HST3, HSTPAG==377-200	;Reserve top 128K for HOSTS3 file.
+IFN $$HST3, HSTTAB=HSTPAG*PG$SIZ
+
+;;; Buffers pages.
+OPKT=OPKTPG*PG$SIZ
+IPKT=IPKTPG*PG$SIZ
+
+;;; Locks	.SEE LKIN35
+LSWLOC=:LOCKPG*2000		;Switch page starts here.
+LSWREQ=:LSWLOC+0		;Init Request flag.
+LSWDON=:LSWREQ+1		;Init Done flag.
+LOCKW=: LSWDON+1		;Database write-lock switch
+LOCKR=: LOCKW+2			;Database read-lock
+USERS=:	LOCKR+2			;Count of readers.
+
+END GO
+
+
+;;; Local Modes:
+;;; Mode:MIDAS
+;;; Comment column:32
+;;; End:
