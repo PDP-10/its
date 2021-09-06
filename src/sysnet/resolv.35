@@ -3,6 +3,20 @@
 
 SUBTTL	RESOLV - Interface to DOMAIN: device
 
+;;; Hacked 2005 by Bjorn Victor.
+;;; TODO:
+;;; - make the Chaos address domain (for DNS) a config parameter (cf DQDEV)
+;;; - search *both* HOSTS3 and QUERY
+;;; -- HOSTS3 is faster (since the DNS cache still isn't working)
+;;; -- until BIND supports the Chaos class officially, using DNS for Chaos
+;;;    is awkward (and in many situations after that point too).
+;;; - handle configurable default domain for HSTADR (if no . in name)
+;;;   (DQDEV should handle this)
+;;; NOTE:
+;;; - unfortunately this isn't fully compatible with NETWRK, so plugging
+;;;   it into NAME, SUPDUP, TELNET etc may not be so straight-forward.
+;;;   For NAME, it has been done.
+
 ;;; Initially, this will be very simple and provide minimal
 ;;; capabilities; as the device and the user software become
 ;;; more sophisticted, this will change.   Eventually this
@@ -104,6 +118,7 @@ SUBTTL	Routines from NETWRK
 
 ;;; GETNET macro to find host address.
 
+ife 0,[ ;; this is what it really should be, but...
 DEFINE GETNET AC,(ADDR)
 IFNB [ADDR] MOVE AC,ADDR
 	TLNN AC,(17_32.)	; Check for non-Internet type addrs
@@ -113,7 +128,14 @@ IFNB [ADDR] MOVE AC,ADDR
 	 TRZA AC,177777		;  Class B network, zap low 2 octets
 	  TRZ AC,377		;   Class C net, only zap 1 low octet
 TERMIN
-
+]
+.else [
+; Be compatible with the kludge in HOSTS3 that reduces the size of the network table.
+DEFINE GETNET AC,(ADDR)
+IFNB [ADDR] MOVE AC,ADDR
+	TDZ AC,[<1_24.>-1]
+TERMIN
+]
 
 ;;; OWNHST - Return own Internet host address in A.
 ;;;   A/ network number
@@ -146,6 +168,9 @@ CVH3NA:	PUSH P,B
 	CAIL B,1000		; If any of high 3 bits were set,
 	 JRST CVH3N3		;  it must be a HOSTS3 strange-fmt addr.
 	JUMPN B,CVH3N2		; If not zero, then must assume HOSTS2 fmt.
+;; Noone uses Arpanet anymore - but some use Chaosnet.
+;; Code kept for history.
+ifn 0,[
 	;; Old-format 8-bit Arpanet host number, or HOSTS2 with zero net.
 	CAILE A,377
 	 JRST CVH3N6	; If greater than 8 bits, assume HOSTS2, zero net.
@@ -153,6 +178,10 @@ CVH3NA:	PUSH P,B
 	LSH B,-<2+8.>
 	LSHC A,<2+8.+6>
 	TLO A,(12_24.)	; and add ARPA network number.
+]
+.else [
+	ior a,[nw%chs]
+]
 	JRST CVH3N3
 	;; HOSTS2 format number
 CVH3N2:	TRZE B,7	; Zap low 3 bits to ensure correct comparison
@@ -200,11 +229,23 @@ SUBTTL	HSTADR - Host name to netaddress
 ;;; Maybe should be expanded to return all possible addresses?
 
 ADDRS::
-IFN $$DQCH, CH.A: 440700,,[ASCIZ "DQ:HOSTS3;CH;A;"]
-IFN $$DQIN, IN.A: 440700,,[ASCIZ "DQ:HOSTS3;IN;A;"]
+;;IFN $$DQCH, CH.A: 440700,,[ASCIZ "DOMAIN:HOSTS3;CH;A;"]
+IFN $$DQCH, CH.A: 440700,,[ASCIZ "DOMAIN:QUERY;CH;A;"]
+;;IFN $$DQIN, IN.A: 440700,,[ASCIZ "DOMAIN:HOSTS3;IN;PTR;"]
+IFN $$DQIN, IN.A: 440700,,[asciz "DOMAIN:QUERY;IN;A;"]
 NADDRS==.-ADDRS
 
-HSTADN:	PUSHER P,[A,B,C,D]		;Must match HSTADR!!
+ifndef $$DQSRC,$$DQSRC==1
+
+ifn $$DQSRC,[	;; Domains to search
+	440700,,[0]
+doms:	;; Add yours here - make it configurable
+	440700,,[asciz ".update.uu.se"]
+	440700,,[asciz ".chaosnet.net"]
+ndoms==.-doms
+]
+
+HSTADN:	PUSHER P,[A,B,C,D,E]		;Must match HSTADR!!
 IFE $$DQRN,{				;Preserve channel unless hairy version
 	SYSCAL IOPUSH,[%CLIMM,,DQCH]
 	 NOP
@@ -215,11 +256,21 @@ IFN $$DQCH, CAMN B,[NW%CHS] ? HRROI D,<CH.A-ADDRS>
 	JUMPE D,HSTA99			;Punt if bad net type
 	JRST HSTAD1			;Join HSTADR code.
 
-HSTADR:	PUSHER P,[A,B,C,D]
+HSTADR:	PUSHER P,[A,B,C,D,E]
 IFE $$DQRN,{				;Preserve channel unless hairy version
 	SYSCAL IOPUSH,[%CLIMM,,DQCH]
 	 NOP
 }
+ifn $$DQSRC,[	;; Domain search
+	move b,-3(p)		;Check QNAME for dots
+hstad0:	ildb a,b
+	cain a,".
+	 jrst [	hrroi e,doms-1
+		jrst hsta00 ]	;. found
+	jumpn a,hstad0
+	movsi e,-ndoms
+hsta00:
+]
 	MOVSI D,-NADDRS			;AOBJN ptr to query commands.
 HSTAD1:	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
 	MOVE A,[440700,,NAMBUF]		;Cons filename
@@ -227,15 +278,111 @@ HSTAD1:	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
 	PUSHJ P,STRCPY			;Stuff it.
 	MOVE B,-3(P)			;Recover QNAME.
 	PUSHJ P,STRCPY		   	;Stuff it.
+ifn $$DQSRC,[
+	move b,doms(e)		;pick up domain
+	pushj p,strcpy
+]
 	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
 	PUSHJ P,DOOPEN			;Invoke the resolver
 	 JRST [	AOBJN D,HSTAD1		;Lost, try next class
+ifn $$DQSRC,	aobjn e,hsta00	;Try next domain
 		SETOM -3(P) ? JRST HSTA99 ]	;Did all classes, punt
 	SETOM -3(P)			;Paranoia (DQDEV IOT lossage)
 	.IOT DQCH,-3(P)			;Get the address
+IFE $$DQCH [
 	SKIPL -3(P)			;Did we really get anything???
 	 AOS -4(P)			;Won, skip return
+]
+.else [
+	skipge -3(p)
+	 jrst hsta99
+	aos -5(p)
+	trne d,-1		;Won on first ADDRS entry (Chaos)?
+	 jrst hsta99
+	move a,-3(p)
+	tlo a,(nw%chs)		;Set NW%CHS
+	movem a,-3(p)
+]
 HSTA99:
+IFE $$DQRN,{
+	.CLOSE DQCH,			;Tidy up
+	SYSCAL IOPOP,[%CLIMM,,DQCH]
+	 NOP
+}
+	POPPER P,[E,D,C,B,A]		;Fix acs
+	POPJ P,
+
+
+SUBTTL	HSTMX - Host name to mail exchange
+
+;;; HSTMX - Resolve host name into address of mail exchange
+;;;   A/ Bp to (asciz) host name.
+;;;
+;;; HSTMXN - Resolve host name into mail exchange address on specific network.
+;;;   A/ Bp to (asciz) host name.
+;;;   B/ Network number (as returned by GETNET).
+;;;
+;;; Both return:
+;;; +1:	Error,
+;;;   A/ -1
+;;; +2: Success,
+;;;   A/ HOSTS3 format address.
+;;;
+;;; Maybe should be expanded to return all possible addresses?
+
+MADDRS::
+IFN $$DQCH, CH.MX: 440700,,[ASCIZ "DOMAIN:QUERY;CH;MX;"]
+IFN $$DQIN, IN.MX: 440700,,[asciz "DOMAIN:QUERY;IN;MX;"]
+NMADDRS==.-MADDRS
+
+.vector mxbuf(mxbln==50.)	;Buffer for MX name
+
+HSTMXN:	PUSHER P,[A,B,C,D]		;Must match HSTMX!!
+IFE $$DQRN,{				;Preserve channel unless hairy version
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	SETZ D,				;Cons up appropriate AOBJN pointer
+IFN $$DQIN, TLNN B,(NE%UNT) ? HRROI D,<IN.MX-MADDRS>
+IFN $$DQCH, CAMN B,[NW%CHS] ? HRROI D,<CH.MX-MADDRS>
+	JUMPE D,HSTM99			;Punt if bad net type
+	JRST HSTMX1			;Join HSTMX code.
+
+HSTMX:	PUSHER P,[A,B,C,D]
+IFE $$DQRN,{				;Preserve channel unless hairy version
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	MOVSI D,-NMADDRS			;AOBJN ptr to query commands.
+HSTMX1:	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
+	MOVE A,[440700,,NAMBUF]		;Cons filename
+	MOVE B,MADDRS(D)			;Pick up a command.
+	PUSHJ P,STRCPY			;Stuff it.
+	MOVE B,-3(P)			;Recover QNAME.
+	PUSHJ P,STRCPY		   	;Stuff it.
+	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
+	PUSHJ P,DOOPEN			;Invoke the resolver
+	 JRST [	AOBJN D,HSTMX1		;Lost, try next class
+		move a,-3(p)	;Did all classes, try address
+		pushj p,hstadr
+		 trn
+		movem a,-3(p)	;save result
+		JRST HSTM98 ]
+	MOVE A,[440700,,mxbuf]			;dest Bp.
+	SETZM mxbuf				;Paranoia, clear string
+	.IOT DQCH,B			;Get byte count or IOC error
+	SYSCAL SIOT,[%CLIMM,,DQCH ? A ? B ? %CLERR,,T]	;Snarf string
+	 JRST HSTM99			;Punt
+	SETZ B,				;Ascizify result
+	IDPB B,A
+	SETOM -3(P)			;Paranoia
+	move a,[440700,,mxbuf]
+	pushj p,hstadr		;Resolve name of MX
+	 trn
+	movem a,-3(p)		;store result
+hstm98:	SKIPL -3(P)			;Did we really get anything???
+	 AOS -4(P)			;Won, skip return
+HSTM99:
 IFE $$DQRN,{
 	.CLOSE DQCH,			;Tidy up
 	SYSCAL IOPOP,[%CLIMM,,DQCH]
@@ -255,6 +402,9 @@ SUBTTL	HSTSRC - Netaddress into host name.
 ;;; Non-skip means unknown netaddress.
 
 HSTSRC:	PUSHER P,[A,B,C,D]		;Save acs (don't change this)
+	exch a,b		;standardize
+	PUSHJ P,STDHST		;net
+	exch a,b		;address
 IFE $$DQRN,{
 	SYSCAL IOPUSH,[%CLIMM,,DQCH]
 	 NOP
@@ -266,13 +416,14 @@ IFE $$DQRN,{
 IFN $$DQIN, TLNN C,(NE%UNT) ? MOVEI D,0	;IP = 0
 IFN $$DQCH, CAMN C,[NW%CHS] ? MOVEI D,1	;CH = 1
 	JUMPL D,HSTS99			;Lose if unknown
-	MOVE B,[440700,,[ASCIZ "DQ:HOSTS3;IN;PTR;"]
-		440700,,[ASCIZ "DQ:HOSTS3;CH;PTR;"]](D)
+	MOVE B,[440700,,[ASCIZ "DOMAIN:QUERY;IN;PTR;"]
+		440700,,[ASCIZ "DOMAIN:QUERY;CH;PTR;"]](D)
 	PUSHJ P,STRCPY			;Appropriate initial string
 	MOVE B,-2(P)			;Recover host address
 	PUSHJ P,@[ INAPRT ? CHAPRT ](D)	;Write it as appropriate
 	MOVE B,[440700,,[ASCIZ ".IN-ADDR.ARPA"]
-		440700,,[ASCIZ ".CH-ADDR.MIT.EDU"]](D)
+;; #### make this a config parameter
+		440700,,[ASCIZ ".CH-ADDR.NET"]](D)	;.CH-ADDR.MIT.EDU
 	PUSHJ P,STRCPY			;Appropriate trailing string
 	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
 	PUSHJ P,DOOPEN			;SOPEN or RENMWO as needed
@@ -343,8 +494,8 @@ SUBTTL	HSTINF - Get machine and opsys type, based on host name
 ;;; Non-skip means lost for some reason.
 
 HINFS::					;Possible HINFO queries to do
-CH.INF:	440700,,[ASCIZ "DQ:HOSTS3;CH;HINFO;"]
-IN.INF:	440700,,[ASCIZ "DQ:HOSTS3;IN;HINFO;"]
+ifn $$DQCH,CH.INF:	440700,,[ASCIZ "DOMAIN:QUERY;CH;HINFO;"]
+ifn $$DQIN,IN.INF:	440700,,[ASCIZ "DOMAIN:QUERY;IN;HINFO;"]
 NHINFS==.-HINFS				;(Try for Chaos first)
 
 HSTINF:	PUSHER P,[A,B,C,D]		;(Order is important)
@@ -385,6 +536,51 @@ IFE $$DQRN,{
 	POPJ P,
 
 
+SUBTTL	HSTCAN - Alias into canonical host name.
+
+;;; HSTCAN - Resolve host alias into canonical name.
+;;;   A/ Bp for tentative alias
+;;;   B/ Bp to receive canonical host name
+;;;
+;;; Skip returns if the host was found, depositing the name down A.
+;;; Non-skip means (B) was not an alias
+
+HSTCAN:	PUSHER P,[A,B,C,D]		;Save acs (don't change this)
+IFE $$DQRN,{
+	SYSCAL IOPUSH,[%CLIMM,,DQCH]
+	 NOP
+}
+	ZAP NAMBUF,NAMBLN		;Clear pathname buffer.
+	MOVE A,[440700,,NAMBUF]		;Cons up query string
+	MOVE B,[440700,,[ASCIZ "DOMAIN:QUERY;IN;CNAME;"]]
+	PUSHJ P,STRCPY			;Appropriate initial string
+	MOVE B,-3(P)			;Recover host alias name
+	pushj p,strcpy
+	MOVE A,[440700,,NAMBUF]		;Bp to pathname.
+	PUSHJ P,DOOPEN			;SOPEN or RENMWO as needed
+	 JRST HSTL99			; Host not found - lose!
+	MOVE A,-2(P)			;Recover dest Bp.
+	SETZ B,				;Paranoia, clear string
+	IDPB B,A
+	MOVE A,-2(P)			;BP again
+	.IOT DQCH,B			;Get byte count or IOC error
+	SYSCAL SIOT,[%CLIMM,,DQCH ? A ? B ? %CLERR,,T]	;Snarf string
+	 JRST HSTL99			;Punt
+	SETZ B,				;Ascizify result
+	IDPB B,A
+	MOVE A,-3(P)			;Once more into the breach...
+	ILDB B,A			;Get first byte of result
+	SKIPE B				;Empty?
+	 AOS -4(P)			;Won, skip return
+HSTL99:
+IFE $$DQRN,{
+	.CLOSE DQCH,			;Tidy up
+	SYSCAL IOPOP,[%CLIMM,,DQCH]
+	 NOP
+}
+	POPPER P,[D,C,B,A]		;Restore acs
+	POPJ P,
+
 SUBTTL	DOOPEN - Do the actual invokation of DQ: device
 
 ;;; Opening a DQ: device is expensive.  So for them as got lots
@@ -409,10 +605,14 @@ SUBTTL	DOOPEN - Do the actual invokation of DQ: device
 DOOPEN:	PUSH P,C			;Don't smash needlessly
 	.STATUS DQCH,C			;Check channel state
 	TRNN C,-1			;Ignore useless bits
-	 .OPEN DQCH,[ (<SIXBIT 'DQ'>+.UII) ? SETZ ? SETZ]
+comment | ;; #### Hmm.
+	 .OPEN DQCH,[ (<SIXBIT 'DOMAIN'>+.UII) ? SETZ ? SETZ]
 	  JFCL				;Open new server if needed
-	SYSCAL RENMWO,[%CLIMM,,DQCH ? A ? %CLERR,,T]
+	SYSCAL RENMWO,[%CLIMM+%drimg,,DQCH ? A ? %CLERR,,T]
 	 SKIPA				;Look up the data,
+|
+	SYSCAL SOPEN,[ [%DRIMG,,DQCH] ? A ? %CLERR,,T ]
+	 SKIPA
 
 IFN $$DQRN,{				;Winning multi query version?
 	  AOS -1(P)			;Yeah, skip return iff won
