@@ -5,6 +5,8 @@
 
 **********************************************************************/
 
+#include "clib.h"
+
 char *setfdir (buf, name, dir)
 	char *buf, *name, *dir;
 
