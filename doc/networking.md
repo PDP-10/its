@@ -89,7 +89,7 @@ To make ITS use DNS like a modern netizen, you need to do the following:
 	```
 
 	If you use Chaosnet, you need a DNS resolver which knows how to find Chaosnet data, e.g. from the server at DNS.Chaosnet.NET (which does NOT allow recursion).
-	Get in touch and I'll help you!
+	Get in touch and I'll help you (@bictorv)!
 
 ## Mail
 Check out this [external guide](https://its.victor.se/wiki/mail-setup)
