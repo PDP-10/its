@@ -286,6 +286,8 @@
 - QB, the game of Qubic.
 - QUOTE, prints out a random quote.
 - R, typesetting software.
+- RABBIT, Scheme compiler.
+- RALP, post processing for R line printer output files.
 - REATTA, reattaches disowned jobs to terminal.
 - RECORD, save TV display contents as text file.
 - REDRCT, redirect IP routing.
@@ -302,10 +304,12 @@
 - SCRAM, encrypt/decrypt file.
 - SCRIMP, XGP unspooler.
 - SCRMBL/UNSCR, scramble/unscramble file.
+- SEARCH, search for string in files.
 - SEND/REPLY, replacements for DDT :SEND.
 - SENDS, Chaosnet SEND server.
 - SENSOR, an alternate message receiver.
 - SENVER, Chaosnet SEND server.
+- SHELL, Unix-like command line processor.
 - SHUTDN, shut down ITS.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
@@ -333,8 +337,6 @@
 - SYSLOD, system load histogram.
 - SYSMSG, displays system messages.
 - SYSTEM GEN, low level DECtape formatting.
-- RABBIT, Scheme compiler.
-- RALP, post processing for R line printer output files.
 - TAGS, generate tags table for sources.
 - TALK/WHO/WHOJ/WHOM/USERS, list users.
 - TBMOFF, turn TAC or TIP binary mode off.
