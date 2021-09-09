@@ -52,19 +52,23 @@ If you use Chaosnet, you may be interested in joining the Global
 Chaosnet: read more about it at https://chaosnet.net.
 
 ## DNS
-To make ITS use DNS like a modern netizen, you need to do the following:
+To make ITS use DNS like a modern netizen, you need to do the following. The result will be that the `H3TEXT` table mentioned above will be consulted first, but if it doesn't contain the info you need, DNS will be used.
 
 1. Compile the handler for the DOMAIN: device, which interfaces to DNS.
 	```
 	:midas device;jobdev domain,sysnet;dqdev
 	```
+2. Initialize the database for DOMAIN:
+	```
+	:print domain:xyzzy;..new. (dat)
+	```
 2. Compile NAME and SUPDUP with a switch to use RESOLV library routines (with DNS support) if the NETWRK library routines (which uses HOSTS3 tables) fail. (`^C` below is Control-C.)
 	```
 	:midas sysbin;name_sysen2;/t
-	DODNS==1
+	DNSP==1
 	^C
 	:midas sysbin;supdup_sysnet;/t
-	DODNS==1
+	DNSP==1
 	^C
 	```
 3. Purify NAME. (`$` below is Escape.)
@@ -74,7 +78,7 @@ To make ITS use DNS like a modern netizen, you need to do the following:
 	debug[ 0
 	$g
 	```
-4. Compile COMSAT (the mail daemon) with a switch to use DOMAIN instead of DQ. (The "Limit to KA-10 instructions" question should be responded with "y" if you are using a KA-10, of course.)
+4. Compile COMSAT (the mail daemon) with a switch to use DOMAIN instead of DQ. In this case, *only* DNS will be used, not the HOSTS3 tables. (The "Limit to KA-10 instructions" question should be responded with "y" if you are using a KA-10, of course.)
 	```
 	:midas .mail.;comsat_sysnet;/t
 	$$DQDQ==0
@@ -90,6 +94,16 @@ To make ITS use DNS like a modern netizen, you need to do the following:
 
 	If you use Chaosnet, you need a DNS resolver which knows how to find Chaosnet data, e.g. from the server at DNS.Chaosnet.NET (which does NOT allow recursion).
 	Get in touch and I'll help you (@bictorv)!
+6. You may want to compile DIG, a test program:
+	```
+	:midas sysbin;dig_sysnet;
+	:link sys;ts dig,sysbin;dig bin
+	:dig in;a;hactrn.org
+	:dig ch;hinfo;up.update.uu.se
+	```
+
+So far, you can configure some parameters by editing the code:
+- The DNS server is hardcoded at `ROOHST`/`ROOADR` in `SYSNET;DQDEV`, but you can also use the `iptables`
 
 ## Mail
 Check out this [external guide](https://its.victor.se/wiki/mail-setup)
