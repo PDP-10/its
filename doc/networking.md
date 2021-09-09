@@ -103,7 +103,10 @@ To make ITS use DNS like a modern netizen, you need to do the following. The res
 	```
 
 So far, you can configure some parameters by editing the code:
-- The DNS server is hardcoded at `ROOHST`/`ROOADR` in `SYSNET;DQDEV`, but you can also use the `iptables`
+- The DNS server is hardcoded at `ROOHST`/`ROOADR` in `SYSNET;DQDEV`, but it might be more convenient to use the `iptables` trick above to redirect all DNS packets elsewhere.
+- The domain search list is hardcoded at `DOMS` in `SYSNET;RESOLV`. When you change it, remember to recompile `NAME`, `SUPDUP`, `COMSAT` and perhaps `DIG` (see above).
+- The Chaosnet address-to-name translation domain is hardcoded to `CH-ADDR.NET` in `SYSNET;DQDEV` and in `SYSNET;RESOLV`, but chances are that you want to keep it that way if you join the [Global Chaosnet)](https://chaosnet.net).
+
 
 ## Mail
 Check out this [external guide](https://its.victor.se/wiki/mail-setup)
