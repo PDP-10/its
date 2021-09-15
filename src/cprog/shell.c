@@ -86,6 +86,8 @@ int argc;		/* # of arguments to built-in commands */
 char *argv[max_args];	/* parsed args to built-in commands */
 tag restart;		/* restart loc for ^G interrupt */
 
+static int ts_file _TS_;
+static int dsk_device _DSK_;
 static int default_device _DSK_;
 
 struct _command {
@@ -310,7 +312,7 @@ more:	while (incnt>0)
 			filespec fs;
 			char buf[100];
 			uname = rsuset (UXUNAME);
-			fs.dev = _DSK_;
+			fs.dev = dsk_device;
 			fs.dir = csto6 ("(INIT)");
 			fs.fn1 = uname;
 			fs.fn2 = csto6 ("SHELL_");
@@ -857,7 +859,7 @@ int _login ()
 	else
 		{int ch;
 		filespec ff;
-		ff.dev = _DSK_;
+		ff.dev = dsk_device;
 		ff.dir = oldname;
 		ff.fn1 = _FILE_;
 		ff.fn2 = _PDIRP_;
@@ -1356,7 +1358,7 @@ int findprog (fp)
 
 	if (fp->fn1 == _GREATER_ || fp->fn1 == _LESS_) return (-1000);
 	fp->fn2 = fp->fn1;
-	fp->fn1 = _TS_;
+	fp->fn1 = ts_file;
 
 	if (!fp->dev) fp->dev = default_device;
 	if (fp->dir) return (tryprog (fp));
@@ -1379,7 +1381,7 @@ int tryprog (fp)
 
 	{int oldn2, fd;
 
-	fp->fn1 = _TS_;
+	fp->fn1 = ts_file;
 	if ((fd = open (fp, BII)) >= 0)
 		return (j_cload (fd, fp->fn2));
 	fp->fn1 = _ZZ_;
@@ -1387,7 +1389,7 @@ int tryprog (fp)
 	fp->fn2 = rj6 (fp->fn2);
 	if ((fd = open (fp, BII)) >= 0)
 		return (j_cload (fd, oldn2));
-	fp->fn1 = _TS_;
+	fp->fn1 = ts_file;
 	fp->fn2 = oldn2;
 	return (-1000);
 	}
@@ -1574,7 +1576,7 @@ doinit ()
 		filespec fs;
 		char buf[100];
 		uname = rsuset (UXUNAME);
-		fs.dev = _DSK_;
+		fs.dev = dsk_device;
 		fs.dir = csto6 ("(INIT)");
 		fs.fn1 = uname;
 		fs.fn2 = csto6 ("_SHELL");

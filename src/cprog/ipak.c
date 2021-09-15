@@ -16,6 +16,7 @@ static int encrypt;
 static int verbose;
 static int user;
 static int loser;
+static int dsk_device DSK;
 
 /**********************************************************************
 
@@ -36,7 +37,7 @@ main (argc, argv) char *argv[];
 	user = rsuset (UXUNAME);
 	loser = rsuset (UOPTION) & 10000000000;
 	fparse (argv[0], &pakfil);
-	pakfil.dev = DSK;
+	pakfil.dev = dsk_device;
 	if (pakfil.fn2 == 0) pakfil.fn2 = csto6 ("-IPAK-");
 	if (argc < 2) s = "l";
 	else s = argv[1];
@@ -396,7 +397,7 @@ updatfile (dp, in, out, delflg) desc *dp;
 
 int xopen (fp, mode)	filespec *fp; int mode;
 
-	{if (fp->dev == 0) fp->dev = DSK;
+	{if (fp->dev == 0) fp->dev = dsk_device;
 	if (fp->dir == 0) fp->dir = rsname();
 	return (open (fp, mode));
 	}
