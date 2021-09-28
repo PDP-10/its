@@ -51,7 +51,7 @@ type ":vk\r"
 respond "*" "teach\033\023"
 respond "*" ":emacs\r"
 expect ":KILL"
-respond "*" ":link teach;ts emacs,emacs;tstch >\r"
+respond "*" ":link sys2;ts teachemacs,emacs;tstch >\r"
 type ":vk\r"
 
 # nsalv, timesharing version
