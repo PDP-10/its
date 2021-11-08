@@ -193,6 +193,7 @@
 - LISP11, PDP-11 Lisp.
 - LIVE, PALX Game of Life.
 - LLOGO, Logo implemented in Maclisp.
+- LMODEM, Xmodem file transfer.
 - LOADP, displays system load.
 - LOCK, shut down system.
 - LOGASS, 6502 assembler in Logo.
