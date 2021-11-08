@@ -1,0 +1,185 @@
+;; -*- lisp -*-
+
+; 8-bit disk storage SFA
+
+(herald DSK8 >)
+
+(eval-when (eval compile)
+   (or (get 'extmac 'version)
+       (load '((lisp)extmac)))
+   (or (get 'iota 'macro)
+       (load "liblsp;iota"))
+   (or (get 'condition-handlers 'macro)
+       (load "eb;signal"))
+   (or (get 'er-error 'macro)
+       (load "eb;errmac"))
+   (or (get 'declare-sfa-layout 'macro)
+       (load "eb;sfadcl")))
+
+(defun signalling-open (f options)
+   (let ((v (errset (open f options))))
+     (if (null v)
+	 (signal 'open-error f options)
+	 (car v))))
+
+(declare-sfa-layout 8-bit-disk-sfa (file direction untyi-stack 
+					 word bits-to-right eoffn
+					 nominal-direction))
+
+(defvar *dsk8-sixbit (car (pnget 'dsk8 6)))
+
+(defun 8-bit-disk-sfa-handler (sfa op val)
+  (prog (direction n btr w)
+    (or (setq direction (8-bit-disk-sfa-direction sfa))
+	(memq op '(which-operations close filemode open renamef truename))
+	(er-error "~A operation on closed SFA (~A)." op sfa))
+    (go dispatch)
+   wrong-direction
+    (er-error "SFA (~A) open in wrong direction for ~A operation."
+	      sfa op)
+   dispatch
+    (return (caseq op
+      (tyi (or (eq direction 'input)
+	       (go wrong-direction))
+	   (if (8-bit-disk-sfa-untyi-stack sfa)
+	       (pop (8-bit-disk-sfa-untyi-stack sfa))
+	       (condition-handlers c
+		  ((EOF (file)
+		     (or (fixp val)(setq val -1))
+		     (let ((f (8-bit-disk-sfa-eoffn sfa)))
+		       (if f (funcall f sfa val)
+			   (close sfa)
+			   val))))
+	         (setq btr (8-bit-disk-sfa-bits-to-right sfa))
+		 (cond ((< btr 0)
+			(setf btr 28. 
+			      w (in (8-bit-disk-sfa-file sfa))
+			      (8-bit-disk-sfa-word sfa) w))
+		       (t (setq w (8-bit-disk-sfa-word sfa))))
+		 (setq n (load-byte w btr 8.))
+		 (setf (8-bit-disk-sfa-bits-to-right sfa)
+		       (- btr 8.))
+		 n)))
+      (tyo (or (eq direction 'output)(go wrong-direction))
+	   (setq btr (8-bit-disk-sfa-bits-to-right sfa))
+	   (cond ((< btr 0)
+		  (setf btr 28. w 0.)
+		  (out (8-bit-disk-sfa-file sfa)
+		       (8-bit-disk-sfa-word sfa)))
+		 (t (setq w (8-bit-disk-sfa-word sfa))))
+	   (setq w (deposit-byte w btr 8. val))
+	   (setf (8-bit-disk-sfa-bits-to-right sfa) (- btr 8.)
+		 (8-bit-disk-sfa-word sfa) w)
+	   t)
+      (untyi (or (eq direction 'input)(go wrong-direction))
+	     (push val (8-bit-disk-sfa-untyi-stack sfa))
+	     val)
+      (which-operations
+        (caseq direction
+	  (nil '(tyi tyo untyi open close filemode renamef lengthf eoffn
+		     truename))
+	  (input '(tyi untyi open close filemode renamef lengthf eoffn
+		       truename))
+	  (output '(tyo open close filemode renamef truename))))
+      (truename (truename (8-bit-disk-sfa-file sfa)))
+      (open 
+         (and val (atom val)(setq val (ncons val)))
+	 (loop for option in val
+	       unless (memq option '(dsk in out image))
+	       do (er-error "Open keyword (~A) is not DSK, IN, OUT, or IMAGE."
+			    option))
+	 (and direction (close sfa)) ; flush buffers, etc.
+	 (cond ((or (memq 'out val)
+		    (and (null val)(eq (8-bit-disk-sfa-nominal-direction sfa)
+				       'output)))
+		(signalling-open (8-bit-disk-sfa-file sfa) '(dsk out fixnum))
+		(setq btr 28.)
+		(setq direction 'output)
+		(out (8-bit-disk-sfa-file sfa) *dsk8-sixbit))
+	       (t (signalling-open (8-bit-disk-sfa-file sfa) '(dsk in fixnum))
+		  (setq btr -4.)
+		  (setq direction 'input)
+		  (eoffn (8-bit-disk-sfa-file sfa) 
+			 #'(lambda count
+			      (signal 'EOF (arg 1))))
+		  (setq w (condition-handlers c ((EOF (file) 
+						   (fool-the-compiler file)
+						   0))
+				  (in (8-bit-disk-sfa-file sfa))))))
+	 (setf (8-bit-disk-sfa-word sfa) 0) 
+	 (setf (8-bit-disk-sfa-bits-to-right sfa) btr)
+	 (setf (8-bit-disk-sfa-eoffn sfa) nil)
+	 (recompute-8-bit-disk-sfa-pname sfa direction)
+	 (setf (8-bit-disk-sfa-direction sfa) direction)
+	 (cond ((and (eq direction 'input)
+		     (not (= w *dsk8-sixbit)))
+		(close sfa)
+		(signal 'invalid-file-format sfa)))
+	 sfa)
+      (close
+        (if (null direction) nil
+	    (and (eq direction 'output)
+		 (out (8-bit-disk-sfa-file sfa) (8-bit-disk-sfa-word sfa)))
+	    (close (8-bit-disk-sfa-file sfa))
+	    (setf (8-bit-disk-sfa-direction sfa) nil)
+	    t))
+      (renamef ; doing renamef on file object will close it,
+               ; so must flush buffered word etc.
+         (and (eq direction 'output)
+	      (out (8-bit-disk-sfa-file sfa)
+		   (8-bit-disk-sfa-word sfa)))
+	 (renamef (8-bit-disk-sfa-file sfa) val)
+	 (close (8-bit-disk-sfa-file sfa)) ; paranoia & clarity
+	 (setf (8-bit-disk-sfa-direction sfa) nil)
+	 (recompute-8-bit-disk-sfa-pname sfa direction)
+	 sfa)
+      (filemode 
+         (and direction (cons '(SFA) (sfa-call sfa 'which-operations nil))))
+      (eoffn (or (eq direction 'input)(go wrong-direction))
+	     (setf (8-bit-disk-sfa-eoffn sfa) (car val))
+	     (car val))
+      (lengthf (or (eq direction 'input)(go wrong-direction))
+	       (* 4. (1- (lengthf (8-bit-disk-sfa-file sfa)))))
+      (t (er-error "Attempt to invoke unsupported operation ~A on ~A."
+		   op sfa)))))))
+
+(defun recompute-8-bit-disk-sfa-pname (sfa direction)
+   (setf (8-bit-disk-sfa-nominal-direction sfa) direction)
+   (setf (sfa-get sfa 'pname)
+	 (symbolconc (if (eq direction 'output)
+			 '|8-bit output to |
+			 '|8-bit input from |)
+		     (namestring 
+		      (truename (8-bit-disk-sfa-file sfa))))))
+
+(defun create-8-bit-disk-sfa (filename keywords)
+   (let ((fob (open "NUL:" '(in fixnum)))
+	 (sfa (sfa-create '8-bit-disk-sfa-handler
+			  (8-bit-disk-sfa-storage-size)
+			  'not-initialized)))
+     (close fob)
+     (cnamef fob (mergef filename defaultf))
+     (setf (8-bit-disk-sfa-file sfa) fob)
+     (condition-handlers c ((open-error (f options)
+			     (signal 'open-error filename options)))
+	       (open sfa keywords))))
+
+(defun convert-old-format-com-file (f)
+   (setq f (namelist f))
+   (let ((dir (car f))
+	 (w))
+     (iota ((old f '(dsk in fixnum))
+	    (new `(,dir _CONV_ OUTPUT) '(dsk out fixnum)))
+       (out new *dsk8-sixbit)
+       (setq w (in old))
+       (if (= w *dsk8-sixbit)
+	   (progn (er-warn "~A already looks like DSK8 format, not converting."
+			   (namestring f))
+		  nil)
+	   (out new w)
+	   (loop for i from 2 to (lengthf old)
+		 do (out new (in old)))
+	   (close old)
+	   (renamef new f)))))
+
+(defun fool-the-compiler (x) x)

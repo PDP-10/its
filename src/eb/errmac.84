@@ -1,0 +1,341 @@
+;;; -*- lisp -*-
+;;; No Tabs!!
+
+(eval-when (eval compile)
+   (and (status feature Multics)
+        (or (status macro /#)
+            (load ">udd>Mathlab>Lisp>sharpsign"))))
+
+#+Multics (%include "lisp_prelude")
+
+#+Multics (lisp-need-at-compile-time backquote defmacro let loop
+                                     format)
+#+Multics ;(lisp-need-at-run-time format)
+           (load ">udd>Student>EBarton>format")
+#+Multics (declare (*lexpr format)(special compiler-state))
+
+#+Multics (or (status feature compiler)
+              (setq compiler-state nil))
+
+#-Multics (herald errmac >)
+
+#+ITS
+(eval-when (eval compile load)
+   (or (get 'defmacro 'macro)  ; yes, runtime too
+       (load '((lisp) defmacro)))
+   (or (fboundp 'format)
+       (load '((lisp)format))))
+
+#+ITS
+(eval-when (compile eval)
+   (or (get 'loop 'macro)
+       (load '((liblsp) loop))))
+
+(*rset t)
+
+;; Rewritten to use special macro-defining form and hairy
+;; FORMAT features, and to not use crockish examination of
+;; FORMAT call arguments.  Some functions are now of marginal
+;; usefulness.
+
+;; Now uses FAIL-ACT error channel rather than explicit BREAK
+;; for better interaction with ERRSET.
+
+;; An error produced with macros in this file has three
+;; basic parts:
+;;   <print error header>
+;;   <print error message>
+;;   <enter error loop>
+;; (ER-ERROR <format> ... args ...) does all of these.
+;; (ER-ERROR-HEADER) does only the header.
+;; (ER-ERROR-NO-HEADER <format> ... args ...) omits the header.
+;; (ER-ERROR-0) enters the error loop.
+;; ER-CONTINUE-WARN can be used to print additional error messages
+;; if needed.
+
+;; Similarly, for warnings there are
+;; (ER-WARN <format> ... args ... ),
+;; (ER-WARN-HEADER),
+;; (ER-WARN-NO-HEADER <format> ... args ...),
+;; (ER-CONTINUE-WARN <format> ... args ...).
+;; The last two are identical.
+
+;; In addition, there are ER-CONDITIONAL- versions of
+;; all of these macros.  They take an additional first
+;; argument that is a Boolean.
+
+
+
+(defvar *er-topfn-symbol)
+
+(eval-when (eval load)
+   (and (status feature #+Multics compiler #-Multics complr)
+        (setq *er-topfn-symbol
+              #-Multics
+              (let ((obarray sobarray))
+                 (implode '(T O P F N)))
+              #+Multics
+              (let ((obarray cobarray))
+                 (intern (make_atom "current-function"))))))
+
+;; Stack-Crawling Functions leading up to ER-FIND-MACRO-CALLER
+
+(defun er-unique (x)
+   (loop for zt on x
+    unless (memq (car zt)(cdr zt))
+    collect (car zt)))
+
+(defun er-walk-find (form superform)
+   (if (eq form superform) t
+       (caseq (typep superform)
+            (symbol nil)
+            (list (loop for l /= superform then (cdr l)
+                          until (atom l)
+                          when (er-walk-find form (car l)) return t
+                          finally (return nil)))
+            (t nil))))
+
+(defun er-find-form-in-defs (form fns)
+  (prog (atoms f prop val)
+    (setq atoms (loop for fn in fns when (eq (typep fn) 'symbol) collect fn))
+   atom-loop
+    (and (null atoms) (go try-lambdas))
+    (setq f (pop atoms))
+   atom-loop-1
+    (desetq (prop val) (getl f '(expr fexpr subr lsubr macro)))
+    (or (memq prop '(expr fexpr macro))
+          (go atom-loop))
+    (cond ((atom val)
+             (setq f val)
+             (go atom-loop-1)))
+    (and (er-walk-find form val)
+           (return f))
+    (go atom-loop)
+   try-lambdas
+    (return (loop for fn in (reverse fns) 
+                  when (and (eq (typep fn) 'list)
+                            (eq (car fn) 'lambda)
+                            (er-walk-find form (cddr fn)))
+                  do (return fn)))))
+
+(defun er-get-stacked-functions ()
+   #+PDP10 (mapcar 'car (baklist))
+   #-PDP10 (loop as pdlptr = nil then (cadr evalframe)
+                as evalframe = (evalframe pdlptr)
+                until (null evalframe)
+                collect (car (caddr evalframe)))
+      )
+
+(declare (special f fa))
+
+(defun er-find-macro-caller (form)
+  ;; Crock function to attempt to determine in what function a
+  ;; macro call appears.  Returns NIL if it can't tell.
+  ;; Assumes that FORM is currently under evaluation or compilation.
+  ;; We always search the stack because otherwise we screw up if
+  ;; during the expansion of a macro whose defn is interpreted
+  ;; we encounter a call to ER-ERROR.  If we don't search the stack
+  ;; in that case we will get the wrong function name.
+  (prog (f fa)
+    (cond ((null *rset)
+           (format #+ITS msgfiles #+Multics t
+               "~&;Setting *RSET to T for convenience of ERRMAC macros~%")
+           (*rset t)
+           (return nil)))
+    (setq f (er-find-form-in-defs form (er-get-stacked-functions)))
+    (if (null f)
+        (cond ((memq compiler-state '(compile maklap))
+               (return (symeval *er-topfn-symbol)))
+              (t (return nil))))
+    (and (null f)(return nil))
+    (and (atom f)(return f))
+    (mapatoms #'(lambda (a)
+                  (and (eq f (get a 'macro))
+                       (setq fa a))))
+    (return fa)))
+
+(declare (unspecial f fa))
+
+
+;; (DEFINE-*CALLER-MACRO <name> <arglist>
+;;    <form if *CALLER available>
+;;    <form if *CALLER not available>)
+;; is something of a crock for defining the other macros.
+;; It may break if DEFMACRO is changed.  Its output calls
+;; ER-FIND-MACRO-CALLER.
+
+#+PDP10
+(defmacro define-*caller-macro (name arglist form1 form2)
+   (let* (  (defmacro-displace-call nil)
+            (defmacro-value
+              (funcall (get 'defmacro 'macro)
+                `(defmacro ,name ,arglist
+                      (cond (*caller ,form1)
+                            (t ,form2)))))
+            (defmacro-macro-form
+              (assq 'macro defmacro-value))
+            name1
+            ((nil name-clause (macroarg) . body) defmacro-macro-form))
+     (if defmacro-macro-form 'OK
+         (format msgfiles "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                             ; DEFMACRO result has no MACRO form:~%~
+                             ;   ~S~%" defmacro-value)
+         (error '|| 'error 'fail-act))
+     (if (and (eq (car defmacro-value) 'progn)
+                (equal (cadr defmacro-value) ''compile))
+         'OK 
+         (format msgfiles "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                             ; DEFMACRO result not (PROGN 'COMPILE ...):~%~
+                             ;  ~S~%" defmacro-value)
+         (error '|| 'error 'fail-act))
+     (setq name1 (if (atom name-clause) name-clause (car name-clause)))
+     (if (eq name name1)
+         'OK
+         (format msgfiles 
+                 "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                    ; Def form from DEFMACRO has wrong name.~%~
+                    ; Original name ~S, macro name ~S.~%"
+                 name name1)
+           (error '|| 'error 'fail-act))
+     (let ((lambda-expression `(lambda (,macroarg) ,@ body))
+           (temp (gensym)))
+       (loop for form in defmacro-value
+        collect (if (eq form defmacro-macro-form)
+                   `(defun (,name macro) (,macroarg)
+                      (or (macrofetch ,macroarg)
+                          (prog (*caller ,temp)
+                                (setq *caller (er-find-macro-caller ,macroarg))
+                                (setq ,temp (,lambda-expression ,macroarg))
+                                (return 
+                                  (cond
+                                    (*caller
+                                      (macromemo ,macroarg ,temp ',name))
+                                    (t ,temp))))))
+                   form)))))
+
+
+#+Multics
+(defmacro define-*caller-macro (name arglist form1 form2)
+   (let* ( (defmacro-value
+              (funcall (get 'defmacro 'macro)
+                `(defmacro ,name ,arglist
+                      (if *caller ,form1 ,form2))))
+           (defmacro-defun (assq 'defun defmacro-value))
+           ((nil name1 (macroarg) . body) defmacro-defun)    )
+     (if defmacro-defun 'OK
+         (format t "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                      ; DEFMACRO result has no DEFUN:~%~
+                      ;   ~S~%" defmacro-value)
+         (error '|| 'error 'fail-act))
+      (if (eq (car defmacro-value) 'eval-when) 'ok
+          (format t "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                       ; DEFMACRO result not (EVAL-WHEN ...):~%~
+                       ;   ~S~%" defmacro-value)
+          (error '|| 'error 'fail-act))
+     (if (samepnamep name1(catenate name " macro"))
+         'ok
+         (format t  "~&; Bug in DEFINE-*CALLER-MACRO.~%~
+                       ; Def form from DEFMACRO has wrong name.~%~
+                       ; Original name ~S, macro name ~S.~%"
+                 name name1)
+         (error '|| 'error 'fail-act))
+     (let ((lambda-expression `(lambda (,macroarg) ,@ body))
+           (temp (gensym)))
+       (loop for form in defmacro-value
+        collect (if (eq form defmacro-defun)
+                    `(defun (,name macro) (,macroarg)
+                        (prog (*caller ,temp)
+                           (setq *caller (er-find-macro-caller ,macroarg))
+                           (setq ,temp (,lambda-expression ,macroarg))
+                           (return 
+                             (cond (*caller
+                                     (displace ,macroarg ,temp))
+                                   (t ,temp)))))
+                    form)))))
+
+
+;; The actual macros
+
+(define-*caller-macro er-error (string &rest args)
+   `(progn (format #+ITS msgfiles 
+                   #+Multics t
+                   "~%; Error in ~S:~%; ~1@{~:}"
+                   ',*caller ,string ,@ args)
+           (er-error-0))
+   `(progn (format #+ITS msgfiles
+                   #+Multics t
+                   "~%; ~1@{~:}"
+                   ,string ,@ args)
+           (er-error-0)))
+
+(define-*caller-macro er-error-header ()
+   `(format #+ITS msgfiles
+            #+Multics t
+            "~%; Error in ~S:~%" ',*caller)
+   '(progn nil))
+
+(defmacro er-error-no-header (msg &rest args)
+   `(progn (format #+ITS msgfiles 
+                   #+Multics t
+                   ,msg ,@ args)
+           (er-error-0)))
+
+(defmacro er-error-0 ()
+    '(progn (error '|| 'error 'fail-act)
+            (^g)))
+
+(define-*caller-macro er-warn (string &rest args)
+   `(format #+ITS msgfiles
+            #+Multics t
+            "~&; Warning from ~S:~%; ~1@{~:}~%"
+            ',*caller ,string ,@ args)
+   `(format #+ITS msgfiles
+            #+Multics t
+            "~&; ~1@{~:}~%" ,string ,@ args))
+
+(define-*caller-macro er-warn-header ()
+   `(format #+ITS msgfiles 
+            #+Multics t
+            "~&; Warning from ~S:~%" ',*caller)
+   '(progn nil))
+
+(defmacro er-warn-no-header (msg &rest args)
+   `(er-continue-warn ,msg ,@ args))
+
+(defmacro er-continue-warn (msg &rest args)
+   `(format #+ITS msgfiles 
+            #+Multics t
+            "~&; ~1@{~:}~%" ,msg ,@ args))
+
+
+;; Conditional versions.
+
+#-Multics (declare (setq defmacro-for-compiling nil))
+
+#+Multics (eval-when (eval compile load)
+              (defun symbolconc (x y)
+                 (intern (make_atom (catenate x y)))))
+
+(defmacro er-define-conditional (what)
+   `(progn 'compile
+       (defmacro ,(symbolconc 'er-conditional- what)
+                     (condition &rest args)
+            `(and ,condition
+                    (,',(symbolconc 'er- what)
+                     ,@ args)))))
+
+#-Multics (declare (setq defmacro-for-compiling t))
+
+(er-define-conditional warn)
+(er-define-conditional warn-header)
+(er-define-conditional warn-no-header)
+(er-define-conditional continue-warn)
+
+(er-define-conditional error)
+(er-define-conditional error-header)
+(er-define-conditional error-no-header)
+(er-define-conditional error-0)
+
+(define-*caller-macro er-the-current-defun ()
+  `(quote ,*caller)
+  '(quote unknown-function))
