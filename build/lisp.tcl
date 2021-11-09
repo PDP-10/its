@@ -905,7 +905,6 @@ respond "*" ":pdump sys3;ts cube\r"
 respond "*" ":kill\r"
 
 # LMODEM
-respond "*" ":link eb;lmodem 999, ejs; lmodem >\r"
 respond "*" ":complr\r"
 respond "_" "eb;sfadcl\r"
 respond "_" "eb;errmac\r"
