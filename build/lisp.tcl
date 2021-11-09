@@ -903,3 +903,25 @@ respond "*" {(load "bsg;cdriv")}
 respond "T" "(make-cube)"
 respond "*" ":pdump sys3;ts cube\r"
 respond "*" ":kill\r"
+
+# LMODEM
+respond "*" ":link eb;lmodem 999, ejs; lmodem >\r"
+respond "*" ":complr\r"
+respond "_" "eb;sfadcl\r"
+respond "_" "eb;errmac\r"
+respond "_" "eb;signal\r"
+respond "_" "eb;dsk8\r"
+respond "_" "eb;lmodem\r"
+respond "_" "\032"
+type ":kill\r"
+respond "*" ":lisp\r"
+respond "Alloc?" "n"
+respond "*" {(load "eb;lmodem")}
+expect -re {[\r\n][\r\n][1-7][0-7][0-7]}
+type "(dump-lmodem-program)"
+respond "Filename in which to dump:" "eb; ts lmodem\r"
+expect -re {[\r\n][\r\n]T ?[\r\n][\r\n]}
+type "(quit)"
+expect ":KILL"
+# Make a link for the CP/M archive users.
+respond "*" ":link cpm; ts lmodem, eb;\r"
