@@ -15,7 +15,7 @@ respond "*" ":job lisp\r"
 respond "*" ":load .temp.;*lisp bin\r"
 respond "*" "\033g"
 respond "*" "purify\033g"
-respond "*" ":pdump sys;purqio 2155\r"
+respond "*" ":pdump sys;purqio 2156\r"
 respond "*" ":kill\r"
 
 respond "*" ":link sys;ts lisp,sys:purqio >\r"
