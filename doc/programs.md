@@ -42,6 +42,7 @@
 - BKG, a Backgammon game.
 - BLKLDR, Imlac secondary block loader.
 - BOLIO, typesetting.
+- BOOTER, Dynamic Modeling login program.
 - BOOTVT, GT40 boot ROM.
 - BYE, say goodbye to user. Used in LOGOUT scripts.
 - CALPRT, decode a .CALL instruction's CALL block.
