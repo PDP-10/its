@@ -37,3 +37,7 @@ type ":vk\r"
 # Survey sender demon.
 respond "*" ":link sys; atsign sursnd, survey;\r"
 type ":vk\r"
+
+# Login program.
+respond "*" ":midas sysbin;_syseng; booter\r"
+expect ":KILL"
