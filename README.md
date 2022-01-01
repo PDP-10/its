@@ -52,9 +52,9 @@ we'd be delighted to test this on a real KS10.
 To build ITS with this repository, you need some tools installed; see
 the table below.  Ensure all submodules are checked out, and then type
 `make EMULATOR=simh`, `make EMULATOR=pdp10-ka`, `make
-EMULATOR=pdp10-kl`, or `make EMULATOR=klh10`.  This will leave built
-files in the `out` directory, some of which are disk images with ITS
-installed.
+EMULATOR=pdp10-kl`, `make EMULATOR=pdp10-ks`, or `make
+EMULATOR=klh10`.  This will leave built files in the `out` directory,
+some of which are disk images with ITS installed.
 
 | Emulator | Dependencies |
 | --- | --- |
@@ -62,6 +62,7 @@ installed.
 | simh | git, c compiler, make, expect, curses, autoconf, sdl2
 | pdp10-ka | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, sdl2-net, gtk3
 | pdp10-kl | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
+| pdp10-ks | git, c compiler, make, expect, curses, autoconf, sdl2
 
 ### Usage
 
@@ -108,17 +109,17 @@ along with ITS.  They can be started conveniently with the `start`
 script, or separately.  Not all terminal emulators are set up to work
 with all PDP-10 emulators by default.
 
-| Name    | Description       | Type   | klh10 | pdp10-ka | pdp10-kl | simh
-| ------- | ----------------- | ------ | ----- | -------- | -------- | ----
-| type340 | Type 340          | vector | no    | yes      | no       | no
-| gt40    | GT40 PDP-11       | vector | no    | yes      | no       | yes
-| imlac   | Imlac PDS-1       | vector | no    | yes      | no       | no
-| simh_imlac | Imlac PDS-1    | vector | no    | yes      | no       | no
-| tv11    | Knight TV PDP-11  | cpu    | no    | yes      | no       | no
-| tvcon   | Knight TV console | raster | no    | yes      | no       | no
-| datapoint | Datapoint 3300  | text   | no    | yes      | no       | no
-| vt52    | VT52              | text   | no    | yes      | yes      | yes
-| tek     | Tektronix 4010    | vector | no    | yes      | yes      | no
+| Name    | Description       | Type   | klh10 | pdp10-ka | pdp10-kl | pdp10-ks | simh
+| ------- | ----------------- | ------ | ----- | -------- | -------- | -------- | ----
+| type340 | Type 340          | vector | no    | yes      | no       | no       | no
+| gt40    | GT40 PDP-11       | vector | no    | yes      | no       | yes      | yes
+| imlac   | Imlac PDS-1       | vector | no    | yes      | no       | no       | no
+| simh_imlac | Imlac PDS-1    | vector | no    | yes      | no       | no       | no
+| tv11    | Knight TV PDP-11  | cpu    | no    | yes      | no       | no       | no
+| tvcon   | Knight TV console | raster | no    | yes      | no       | no       | no
+| datapoint | Datapoint 3300  | text   | no    | yes      | no       | no       | no
+| vt52    | VT52              | text   | no    | yes      | yes      | yes      | yes
+| tek     | Tektronix 4010    | vector | no    | yes      | yes      | no       | no
 
 ### Documentation
 
