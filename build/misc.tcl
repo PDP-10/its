@@ -1208,6 +1208,16 @@ expect ":KILL"
 respond "*" ":midas bkph; ts lines_lines\r"
 expect ":KILL"
 
+# Random TV experiments.
+respond "*" ":midas bkph; ts bull_bull\r"
+expect ":KILL"
+respond "*" ":midas bkph; ts grade_grade\r"
+expect ":KILL"
+respond "*" ":midas bkph; ts circle_loops circle\r"
+expect ":KILL"
+respond "*" ":midas bkph; ts randy_randy\r"
+expect ":KILL"
+
 # BLKLDR, Imlac secondary block loader.
 respond "*" ":midas sysbin;_imsrc; blkldr\r"
 expect ":KILL"
