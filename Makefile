@@ -44,7 +44,7 @@ SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       mits_s rab stan_k bs cstacy kp dcp2 -pics- victor imlac rjl mb bh \
       lars drnil radia gjd maint bolio cent shrdlu vis cbf digest prs jsf \
       decus bsg muds54 hello rrs 2500 minsky danny survey librm3 librm4 \
-      klotz atlogo clusys cprog r eb cpm mini
+      klotz atlogo clusys cprog r eb cpm mini nova
 DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       chprog sail draw wl pc tj6 share _glpr_ _xgpr_ inquir mudman system \
       xfont maxout ucode moon acount alan channa fonts games graphs humor \
@@ -52,7 +52,7 @@ DOC = info _info_ sysdoc sysnet syshst kshack _teco_ emacs emacs1 c kcc \
       aplogo _temp_ pdp11 chsncp cbf rug bawden llogo eak clib teach pcnet \
       combat pdl minits mits_s chaos hal -pics- imlac maint cent ksc klh \
       digest prs decus bsg madman hur lmdoc rrs danny netwrk klotz hello \
-      clu r mini
+      clu r mini nova
 BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan inquir sail comlap \
       c decsys graphs draw datdrw fonts fonts1 fonts2 games macsym \
       maint _www_ gt40 llogo bawden sysbin -pics- lmman shrdlu imlac \
