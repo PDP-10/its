@@ -255,6 +255,7 @@
 - NODIPS, SUDS wirelister (without DIP definitions).
 - NTSDDT, non timesharing DDT with 340 support.
 - NUDIR, create user directory.
+- NVMIDS, Nova assembler.
 - NWATCH, small watch display.
 - OBS, observe system activities.
 - OCM/C, Richard Greenblatt's Mac Hack VI chess program.

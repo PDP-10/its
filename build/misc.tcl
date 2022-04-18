@@ -1653,6 +1653,13 @@ respond "OLDMUSIC=" "0\r"
 respond "DFLAG=" "1\r"
 expect ":KILL"
 
+# NVMIDS, Nova assembler
+respond "*" ":cwd nova\r"
+respond "*" ":midas;73\r"
+expect "MIDAS"
+respond "\n" "TS NVMIDS_NVMIDS >\r"
+expect ":KILL"
+
 # 11LOGO
 respond "*" ":cwd 11logo\r"
 respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
