@@ -1634,6 +1634,10 @@ respond "*" ":cwd sits\r"
 respond "*" ":palx sits\r"
 expect ":KILL"
 
+# Salvager for the SITS file system.
+respond "*" ":palx salv\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
