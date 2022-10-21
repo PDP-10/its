@@ -1629,6 +1629,11 @@ expect ":KILL"
 respond "*" ":midas rug; ts punch_punch\r"
 expect ":KILL"
 
+# SITS.
+respond "*" ":cwd sits\r"
+respond "*" ":palx sits\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
