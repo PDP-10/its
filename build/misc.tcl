@@ -1650,6 +1650,10 @@ expect ":KILL"
 respond "*" ":palx fnt\r"
 expect ":KILL"
 
+# INQUIR for SITS.
+respond "*" ":palx inquir\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
