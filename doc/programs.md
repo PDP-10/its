@@ -317,6 +317,7 @@
 - SHELL, Unix-like command line processor.
 - SHUTDN, shut down ITS.
 - SITS, Small ITS for the Logo PDP-11/45.
+- SLOGO, PDP-11 Logo for SITS.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
 - SPEEDY, instruction timing test.
