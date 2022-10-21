@@ -1642,6 +1642,10 @@ expect ":KILL"
 respond "*" ":palx sysspr\r"
 expect ":KILL"
 
+# DDT for SITS.
+respond "*" ":palx ddt\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
