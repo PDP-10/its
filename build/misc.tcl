@@ -1646,6 +1646,10 @@ expect ":KILL"
 respond "*" ":palx ddt\r"
 expect ":KILL"
 
+# Font loader daemon for SITS.
+respond "*" ":palx fnt\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
