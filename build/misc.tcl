@@ -1638,6 +1638,10 @@ expect ":KILL"
 respond "*" ":palx salv\r"
 expect ":KILL"
 
+# System Sphere for SITS.
+respond "*" ":palx sysspr\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
