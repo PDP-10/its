@@ -316,6 +316,7 @@
 - SENVER, Chaosnet SEND server.
 - SHELL, Unix-like command line processor.
 - SHUTDN, shut down ITS.
+- SITS, Small ITS for the Logo PDP-11/45.
 - SN, snoop terminal.
 - SPCWAR, Spacewar game.
 - SPEEDY, instruction timing test.
