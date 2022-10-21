@@ -1654,6 +1654,11 @@ expect ":KILL"
 respond "*" ":palx inquir\r"
 expect ":KILL"
 
+# SLOGO, 11LOGO for SITS.
+respond "*" ":cwd nlogo\r"
+respond "*" ":palx slogo_@slogo\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
