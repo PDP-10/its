@@ -285,6 +285,7 @@
 - PSEND, super sender.
 - PT, pager test.
 - PTY, pseudo-tty.
+- PUNCH, punch out paper tapes in the Logo RUG format.
 - PWMAIL, a limited version of MAIL when not yet logged in under PWORD.
 - PWORD, replacement for ATSIGN HACTRN that requires registered logins.
 - QB, the game of Qubic.
