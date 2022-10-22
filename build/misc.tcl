@@ -1625,6 +1625,10 @@ respond "*" ":palx rug;_ar\r"
 respond "COMPUTER=" "1\r"
 expect ":KILL"
 
+# PUNCH, punch out paper tapes in the Logo RUG format.
+respond "*" ":midas rug; ts punch_punch\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
