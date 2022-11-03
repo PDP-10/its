@@ -1685,6 +1685,11 @@ respond "*" ":cwd bee\r"
 respond "*" ":palx itscom\r"
 expect ":KILL"
 
+# ITS, SITS file transfer.
+respond "*" ":cwd gld\r"
+respond "*" ":palx its\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
