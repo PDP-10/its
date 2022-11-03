@@ -1680,6 +1680,11 @@ expect ":KILL"
 respond "*" ":palx hlogo_@hlogo\r"
 expect ":KILL"
 
+# ITSCOM, ITS-SITS communication.
+respond "*" ":cwd bee\r"
+respond "*" ":palx itscom\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
