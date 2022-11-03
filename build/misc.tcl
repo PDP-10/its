@@ -1629,6 +1629,14 @@ expect ":KILL"
 respond "*" ":midas rug; ts punch_punch\r"
 expect ":KILL"
 
+# LODER, PDP-11 file transfer.
+respond "*" ":midas rug;_loder\r"
+expect ":KILL"
+respond "*" ":link sys; ts nloder, rug; loder bin\r"
+type ":vk\r"
+respond "*" ":link sys1; ts mloder, rug; loder bin\r"
+type ":vk\r"
+
 # SITS.
 respond "*" ":cwd sits\r"
 respond "*" ":palx sits\r"
