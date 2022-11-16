@@ -1654,6 +1654,10 @@ expect ":KILL"
 respond "*" ":palx inquir\r"
 expect ":KILL"
 
+# DIRED for SITS.
+respond "*" ":palx dired\r"
+expect ":KILL"
+
 # SLOGO, 11LOGO for SITS.
 respond "*" ":cwd nlogo\r"
 respond "*" ":palx slogo_@slogo\r"
