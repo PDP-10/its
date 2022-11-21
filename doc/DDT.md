@@ -21,7 +21,7 @@ The ◊ character represents typing <kbd>ESC</kbd>, or holding down the
 | ls *.foo      | <kbd>^R</kbd> dir: second foo   | :print dir: second foo   |
 | more file     | <kbd>^R</kbd> file              | :print file              |
 | mkdir dir     | <kbd>^R</kbd> dir;..new. (udir) | :print dir;..new. (udir) |
-| cd dir        | dir◊<kbd>^S</kbd>               | :cwd dir                 |
+| cd dir        | dir◊◊<kbd>^S</kbd>              | :cwd dir                 |
 | /foo/bar      |                                 | :foo;bar                 |
 | cp f1 f2      | ◊<kbd>^R</kbd> f1,f2            | :copy f1,f2              |
 | rm file       | <kbd>^O</kbd> file              | :delete file             |
