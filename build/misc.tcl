@@ -1668,6 +1668,10 @@ respond "*" ":cwd nlogo\r"
 respond "*" ":palx slogo_@slogo\r"
 expect ":KILL"
 
+# HLOGO, "Hal hack" 11LOGO.
+respond "*" ":palx hlogo_@hlogo\r"
+expect ":KILL"
+
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
