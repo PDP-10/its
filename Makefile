@@ -102,7 +102,7 @@ all: its $(OUT)/stamp/emulators tools/supdup/supdup
 
 its: $(SMF) $(OUT)/stamp/its
 
-download: $(OUT)/stamp/pdp10
+download: $(SMF) $(OUT)/stamp/pdp10
 	$(WGET) $(IMAGES)/$(EMULATOR).tgz
 	$(TAR) xzf $(EMULATOR).tgz
 	$(MKDIR) $(OUT)/stamp
@@ -111,6 +111,8 @@ download: $(OUT)/stamp/pdp10
 	$(CP) -r $(EMULATOR)/system $(OUT)
 	$(CP) $(EMULATOR)/*.tape $(OUT)
 	$(CP) $(EMULATOR)/rp0* $(OUT)
+	$(CP) $(EMULATOR)/*.rim $(OUT)
+	$(CP) $(EMULATOR)/dskdmp* $(OUT)
 	$(TOUCH) $(OUT)/stamp/its
 
 check: all check-dirs
@@ -286,6 +288,7 @@ out/pdp10-ks/system:
 	cp build/pdp10-ks/config.* $(OUT)/system
 
 out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
+	$(MKDIR) $(OUT)/stamp
 	cp=';'; ca=''; \
 	$(TEST) $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
 	$(SED) -e 's/%IP%/$(IP)/' \
@@ -294,9 +297,11 @@ out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
 	    -e "s|%CHAOSA%|$$ca|" < $< > $@
 
 out/simh/boot: build/mchn/$(MCHN)/boot
+	$(MKDIR) $(OUT)/stamp
 	cp $< $@
 
 out/pdp10-ka/run: build/mchn/$(MCHN)/run
+	$(MKDIR) $(OUT)/stamp
 	cp $< $@
 
 $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
