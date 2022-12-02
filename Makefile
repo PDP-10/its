@@ -111,7 +111,7 @@ download: $(SMF) $(OUT)/stamp/pdp10
 	$(CP) -r $(EMULATOR)/system $(OUT)
 	$(CP) $(EMULATOR)/*.tape $(OUT)
 	$(CP) $(EMULATOR)/rp0* $(OUT)
-	$(CP) $(EMULATOR)/*.rim $(OUT)
+	-$(CP) $(EMULATOR)/*.rim $(OUT)
 	$(CP) $(EMULATOR)/dskdmp* $(OUT)
 	$(TOUCH) $(OUT)/stamp/its
 
