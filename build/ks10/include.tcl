@@ -100,6 +100,10 @@ proc prepare_frontend {} {
 
     shutdown
     start_dskdmp "$out/sources.tape"
+
+    # Run the new DSKDMP to ensure it's swapped out to disk.
+    respond "DSKDMP" "dskdmp bin\r"
+
     respond "DSKDMP" "nits\r"
 }
 
