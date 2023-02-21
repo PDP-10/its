@@ -74,7 +74,3 @@ expect ":KILL"
 mkdir "mbprog"
 respond "*" ":assem \"mprog2;lsrtns >\" \"mbprog;lsrtns nbin\"\r"
 expect ":KILL"
-
-# Zork startup
-respond "*" ":midas sys2; ts zork_taa; zork\r"
-expect ":KILL"
