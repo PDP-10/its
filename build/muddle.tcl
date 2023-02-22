@@ -71,6 +71,10 @@ respond "Type Second Name of Save File:" "55save\r"
 respond "Type Sname of Save File:" "mudsav\r"
 expect ":KILL"
 
+mkdir "mbprog"
+respond "*" ":assem \"mprog2;lsrtns >\" \"mbprog;lsrtns nbin\"\r"
+expect ":KILL"
+
 # Zork startup
 respond "*" ":midas sys2; ts zork_taa; zork\r"
 expect ":KILL"
