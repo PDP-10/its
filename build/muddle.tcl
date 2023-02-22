@@ -26,8 +26,8 @@ build_muddle "mudsys" "56"
 # Generate SAV FILE and FIXUP FILE for Muddle pure code library
 respond "*" ":midas mudsys; ts mksvfl_mudsys;mksvfl\r"
 expect ":KILL"
-respond "*" ":mudsys;mksvfl\r"
-expect ":KILL"
+# For now, we don't run this since the resulting files are empty,
+# and we are using known good files from backup tapes instead.
 
 respond "*" ":midas sys3; ts mudinq_sysen2; mudinq\r"
 expect ":KILL"
@@ -52,6 +52,8 @@ expect ":KILL"
 
 respond "*" ":midas sys3; ts pick_sysen2; pick\r"
 expect ":KILL"
+
+respond "*" ":link sys1;ts mud55,mudsav;ts mud55\r"
 
 # Zork startup
 respond "*" ":midas sys2; ts zork_taa; zork\r"
