@@ -55,6 +55,22 @@ expect ":KILL"
 
 respond "*" ":link sys1;ts mud55,mudsav;ts mud55\r"
 
+#Build Muddle PCOMP compiler.
+respond "*" ":midas sys1;ts pcomp_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "pcomp\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "55save\r"
+respond "Type Sname of Save File:" "mudsav\r"
+expect ":KILL"
+
+#Build Muddle ASSEM assembler.
+respond "*" ":midas sys1;ts assem_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "assem\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "55save\r"
+respond "Type Sname of Save File:" "mudsav\r"
+expect ":KILL"
+
 # Zork startup
 respond "*" ":midas sys2; ts zork_taa; zork\r"
 expect ":KILL"
