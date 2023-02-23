@@ -31,34 +31,34 @@ with this content:
   <QUIT>>
 
 <DEFINE SAVE-IT ()
-  <COND (<=? <SAVE "LARS; HELLO SAVE"> "SAVED"> <QUIT>)>
+  <COND (<=? <SAVE "HELLO SAVE"> "SAVED"> <QUIT>)>
   <HELLO>>
-
-<SAVE-IT>
 ```
 
 `HELLO` is the main program which prints a message and terminates.
 `SAVE-IT` is used to create a `SAVE` file and arranges to call `HELLO`
 when it's restored.
 
-Now start `:muddle` and type `<FLOAD "HELLO MUD">` and
-<kbd>Escape</kbd>.  It should look like this:
+Now start `:mud55` and type `<FLOAD "HELLO MUD">` and
+<kbd>Escape</kbd>.  Next, type `<SAVE-IT>`<kbd>Escape</kbd>.
+It should look like this:
 
 ```
-:muddle
-MUDDLE 56 IN OPERATION.
+:mud55
+MUDDLE 55 IN OPERATION.
 LISTENING-AT-LEVEL 1 PROCESS 1
 <FLOAD "HELLO MUD">$
-
+"DONE"
+<SAVE-IT>$
 :KILL
 ```
 
 A `HELLO SAVE` file has been created with the `HELLO` procedure in it.
-To run it, start `:muddle` again and type `<RESTORE "HELLO SAVE">`:
+To run it, start `:mud55` again and type `<RESTORE "HELLO SAVE">`:
 
 ```
-*:muddle
-MUDDLE 56 IN OPERATION.
+*:mud55
+MUDDLE 55 IN OPERATION.
 LISTENING-AT-LEVEL 1 PROCESS 1
 <RESTORE "HELLO SAVE">$
 Hello, muddled world!
