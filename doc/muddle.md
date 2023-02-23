@@ -15,7 +15,7 @@ syntax.  The language is case sensitive, and all standard names must
 be entered in upper case.  To submit an expression to the interpreter,
 type the <kbd>Escape</kbd> key which echoes as `$`.
 
-### Example
+### Interpreted Example
 
 A common way to develop applications in Muddle, is to build a program
 in the interpreter and write out a `SAVE` image file.  This file can
@@ -67,6 +67,57 @@ Hello, muddled world!
 ```
 
 The sample program can be found in the HELLO directory.
+
+### Compiled Example
+
+Any serious Muddle program would be compiled.  To do this, invoke the
+`PCOMP` program which is Muddle with the compiler built in.  Then call
+the procedure `FILE-COMPILE` to compile the source file.  The compiler
+will work in the background.
+
+```
+:pcomp
+MUDDLE COMPILER NOW READY.
+<FILE-COMPILE "HELLO MUD">$
+
+Toodle-oo.
+:PROCED
+*
+Job PCOMP wants the TTY
+```
+
+When the compiler is done, it leaves the compiled file `HELLO NBIN` in
+your directory.  Start Muddle again, and this time load the compiled
+file.  Then make the `SAVE` file:
+
+```
+:mud55
+MUDDLE 55 IN OPERATION.
+LISTENING-AT-LEVEL 1 PROCESS 1
+<FLOAD "HELLO NBIN">$
+"DONE"
+<SAVE-IT>$
+:KILL
+```
+
+The new `SAVE` file can be restored like before, but it can also be
+used to make a standalone executable.  This is done by having the
+MIDAS assembler process the file SUBSYS MAKER.  The assembler will
+request information to locate your `SAVE` file.  The file name is
+`HELLO SAVE`, which is the "Subsystem name" and "Second Name" below.
+The directory is the last question about the "Sname".
+
+```
+:MIDAS TS HELLO_MUDSYS;SUBSYS MAKER
+Muddle Subsystem Bootstrap
+Type in Subsystem (Save File) name: HELLO
+Type Y if you wish to have Save File directly restored: Y
+Type Second Name of Save File: SAVE
+Type Sname of Save File: HELLO
+:KILL
+```
+
+This will produce an exectutable file called TS HELLO.
 
 ### More Information
 
