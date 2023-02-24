@@ -93,9 +93,16 @@ set imp mpx=4 ; Only on PDP10-KA! Set the network interface interrupt
 at imp tap:tap0 ; map the host tap interface
 ```
 Now start ITS as you normally would.
-To find the IP address the SIMH adapter got from DHCP log into your router and search for the MAC address set in the configuration file.
-Now you can FTP and Telnet to that address and should be able to login to ITS.
+To find the IP address the SIMH adapter interrupt the simulation by hitting `CTRL+\` and at the `simh>` prompt type `sho imp` the output will give you the IP address of the simulated network card.
+```
+Simulation stopped, PC: 000017 (AOJA 0,17)
 
+sim> sho imp
+IMP     MAC=E2:6C:84:1D:34:A3, MPX=4, IP=192.168.1.85/24
+        GW=192.168.1.1, HOST=10.3.0.6, DHCP Server IP=192.168.1.1, Lease Expires in 5906 seconds
+        attached to tap:tap0, DHCP, MIT
+```
+to return to ITS type `cont` at the `simh>` prompt.
 
 ### SIMH KS10
 The `simh` (KS) simulator does not currently support networking.
