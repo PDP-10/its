@@ -16,19 +16,123 @@ Unless you are running the current ITS on a current version of KLH10 (see [below
 you need to [rebuild ITS](NITS.md) to change the machine's IP address.
 
 ### SIMH KA10 / KL10
-To get the `pdp10-ka` or `pdp10-kl` online with the lowest effort, use the included NAT interface via DHCP.
-This will assign ITS the ip `10.0.2.15`, set up routing automatically, and forward the ports you specify.
-Edit `build/pdp10-ka/run` and configure the `IMP` interface as follows:
-```
-# IMP Network Interface
-set imp mac=xx:xx:xx:xx:xx:xx
-set imp dhcp
-at imp nat:tcp=2123:10.0.2.15:23,tcp=2121:10.0.2.15:21,tcp=2195:10.0.2.15:95
-```
-This example adds port forwarding for telnet, ftp, and supdup. Modify according to your needs.
+To get the `pdp10-ka` online with reasonably low effort, use the included SIMH NAT interface via DHCP.
+PDP10-KL instructions are in the making and while they should be the same as for KA they are not tested completely yet.
 
+#### Using the host's TAP interface
+This enables networking with Network Address Translation (NAT) where the SIMH network adapter gets an IP address from a on network DHCP server. If you are running multiple SIMH instances with diffrerent networking requirements make sure to look at **Configuring networking in KA/KL with static IP assignment**.
+Depending on your host you will need to create a 
+- TAP network interface
+- Network Bridge
+- Add your Ethernet adapter and the TAP interface to the network bridge
+
+To do this first install the dependencies if you do not have them
+```
+apt-get update && apt-get upgrade -y
+apt-get install make
+apt-get install libpcap-dev
+apt-get install bridge-utils
+apt-get install uml-utilities
+apt-get install net-tools
+apt-get install gawk
+```
+
+On Raspian/Debian based host systems this script will setup everything automatically.
+Make sure you look at your primary ethernet adapter in this case `eth0`
+Edit the first lines to reflect your host.
+Run this command to get the values for the script
+```
+$ ifconfig eth0
+eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1280
+        inet 192.168.1.10  netmask 255.255.255.0  broadcast 192.168.1.255
+        inet6 fe80::215:5dff:fe49:af43  prefixlen 64  scopeid 0x20<link>
+        ether 00:15:5d:49:9d:77  txqueuelen 1000  (Ethernet)
+        
+$ ip route
+default via 192.168.1.1 dev eth0 proto kernel        
+```
+The above are examples from an Ubuntu 20.x system.
+
+
+> **Note**
+>  Edit the script below to match your system!   
+>  Especially the adapter name for the ethernet adapter in my case it is `eth0` 
+
+```
+#!/bin/sh
+HOSTIP='<Your ETH0 Host IP Address>' # i.e. 192.168.1.10
+HOSTNETMASK='<Your ETH0 Host IP Subnnet mask>' # i.e. 255.255.255.0
+HOSTBCASTADDR='<Your ETH0 Broadcast address>' # i.e. 192.168.1.255
+HOSTDEFAULTGATEWAY='<Your ETH0 default gateway>' # i.e. 192.168.1.1
+ENETADAPTERNAME='eth0'
+#
+/usr/sbin/tunctl -t tap0
+/sbin/ifconfig tap0 up
+#
+# Now convert eth0 to a bridge and bridge it with the TAP interface
+/usr/sbin/brctl addbr br0
+/usr/sbin/brctl addif br0 $ENETADAPTERNAME
+/usr/sbin/brctl setfd br0 0
+/sbin/ifconfig $ENETADAPTERNAME 0.0.0.0
+/sbin/ifconfig br0 $HOSTIP netmask $HOSTNETMASK broadcast $HOSTBCASTADDR up
+# set the default route to the br0 interface
+/sbin/route add -net 0.0.0.0/0 gw $HOSTDEFAULTGATEWAY
+# bridge in the tap device
+/usr/sbin/brctl addif br0 tap0
+/sbin/ifconfig tap0 0.0.0.0
+
+```
+Verify you have the TAP0 and BR0 interfaces and check you have internet access.
+
+Next configure SIMH
+Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `out/pdp10-kl/run` and configure the `IMP` interface as follows:
+```
+set imp enabled ; enable SIMH network emulation
+set imp mac=e2:6c:84:1d:34:a3 ; if you are running multiple SIMH instances on the same host you might have to change the MAC address
+set imp DHCP ; enable DHCP, this will allow SIMH to get an IP address from your home network
+set imp host=10.3.0.6 ; configure the ITS host IP 
+set imp mpx=4 ; Only on PDP10-KA! Set the network interface interrupt
+at imp tap:tap0 ; map the host tap interface
+```
+Now start ITS as you normally would.
+To find the IP address the SIMH adapter interrupt the simulation by hitting `CTRL+\` and at the `simh>` prompt type `sho imp` the output will give you the IP address of the simulated network card.
+
+```
+sim> sho imp
+IMP     MAC=E2:6C:84:1D:34:A3, MPX=4, IP=192.168.1.85/24
+        GW=192.168.1.1, HOST=10.3.0.6, DHCP Server IP=192.168.1.1, Lease Expires in 5906 seconds
+        attached to tap:tap0, DHCP, MIT
+```
+to return to ITS type `cont` at the `simh>` prompt.
+
+### Configuring networking in KA/KL with static IP assignment
+
+You do not need a TAP or Bridge interface for this type of configuration but it is a bit more involved on the configuration side.
+#### Configure SIMH
+Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `build/pdp10-kl/run` and configure the `IMP` interface as follows:
+
+```
+set imp enabled    ; enable the SIMH IMP interface
+; set the IP address for the emulated system. This needs to be configured correctly in ITS as well.
+set imp host=10.0.2.4
+; set the IP address of the IMP interface, this is the address the interface will be reachable through on your network.
+; adapt this to your own network configuration. 
+; uses the CIDR notation IP/SUBNET MASK
+set imp ip=172.16.0.4/24 
+; set the default gateway for your network
+set imp gw=172.16.0.2
+; set the nat configuration
+; gateway is the same as the one above
+; network is the IP network used in CIDR notation
+; tcp= are port forwards. <Hostnetwork Port>:<imp IP>:<destination system port>
+; in the example below the forwards are for both Telnet and FTP
+; you would Telnet to the system using `telnet 172.16.0.4 2023` to get a session open to the system
+at imp nat:gateway=172.16.0.2,network=172.16.0.0/24,tcp=2023:172.16.0.4:23,tcp=2021:172.16.0.4:21
+; only for KA based emulation set the interrupt for the interface in ITS, normally 4.
+set imp mpx=4
+```
 ### SIMH KS10
-The `simh` (KS) simulator does not currently support networking.
+Albeit untested the above IMP interface should also work with KS10 based emulation.
 
 ### KLH10
 The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP
