@@ -18,7 +18,8 @@ you need to [rebuild ITS](NITS.md) to change the machine's IP address.
 ### SIMH KA10 / KL10
 To get the `pdp10-ka` or `pdp10-kl` online with reasonably low effort, use the included NAT interface via DHCP.
 
-#### Enable host TAP interface
+#### Using the host's TAP interface
+This enables networking with Network Address Translation (NAT) where the SIMH network adapter gets an IP address from a on network DHCP server. If you are running multiple SIMH instances with diffrerent networking requirements make sure to look at **Configuring networking in KA/KL with static IP assignment**.
 Depending on your host you will need to create a 
 - TAP network interface
 - Network Bridge
@@ -83,7 +84,7 @@ ENETADAPTERNAME='eth0'
 Verify you have the TAP0 and BR0 interfaces and check you have internet access.
 
 Next configure SIMH
-Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` and configure the `IMP` interface as follows:
+Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `out/pdp10-kl/run` and configure the `IMP` interface as follows:
 ```
 set imp enabled ; enable SIMH network emulation
 set imp mac=e2:6c:84:1d:34:a3 ; if you are running multiple SIMH instances on the same host you might have to change the MAC address
@@ -94,9 +95,8 @@ at imp tap:tap0 ; map the host tap interface
 ```
 Now start ITS as you normally would.
 To find the IP address the SIMH adapter interrupt the simulation by hitting `CTRL+\` and at the `simh>` prompt type `sho imp` the output will give you the IP address of the simulated network card.
-```
-Simulation stopped, PC: 000017 (AOJA 0,17)
 
+```
 sim> sho imp
 IMP     MAC=E2:6C:84:1D:34:A3, MPX=4, IP=192.168.1.85/24
         GW=192.168.1.1, HOST=10.3.0.6, DHCP Server IP=192.168.1.1, Lease Expires in 5906 seconds
@@ -104,6 +104,32 @@ IMP     MAC=E2:6C:84:1D:34:A3, MPX=4, IP=192.168.1.85/24
 ```
 to return to ITS type `cont` at the `simh>` prompt.
 
+### Configuring networking in KA/KL with static IP assignment
+
+You do not need a TAP or Bridge interface for this type of configuratio. 
+#### Configure SIMH
+Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `out/pdp10-kl/run` and configure the `IMP` interface as follows:
+
+```
+set imp enabled    ; enable the SIMH IMP interface
+; set the IP address for the emulated system. This needs to be configured correctly in ITS as well.
+set imp host=10.0.2.4
+; set the IP address of the IMP interface, this is the address the interface will be reachable through on your network.
+; adapt this to your own network configuration. 
+; uses the CIDR notation IP/SUBNET MASK
+set imp ip=172.16.0.4/24 
+; set the default gateway for your network
+set imp gw=172.16.0.2
+; set the nat configuration
+; gateway is the same as the one above
+; network is the IP network used in CIDR notation
+; tcp= are port forwards. <Hostnetwork Port>:<imp IP>:<destination system port>
+; in the example below the forwards are for both Telnet and FTP
+; you would Telnet to the system using `telnet 172.16.0.4 2023` to get a session open to the system
+at imp nat:gateway=172.16.0.2,network=172.16.0.0/24,tcp=2023:172.16.0.4:23,tcp=2021:172.16.0.4:21
+; only for KA based emulation set the interrupt for the interface in ITS, normally 4.
+set imp mpx=4
+```
 ### SIMH KS10
 The `simh` (KS) simulator does not currently support networking.
 
