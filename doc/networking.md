@@ -16,7 +16,8 @@ Unless you are running the current ITS on a current version of KLH10 (see [below
 you need to [rebuild ITS](NITS.md) to change the machine's IP address.
 
 ### SIMH KA10 / KL10
-To get the `pdp10-ka` or `pdp10-kl` online with reasonably low effort, use the included SIMH NAT interface via DHCP.
+To get the `pdp10-ka` online with reasonably low effort, use the included SIMH NAT interface via DHCP.
+PDP10-KL instructions are in the making and while they should be the same as for KA they are not tested completely yet.
 
 #### Using the host's TAP interface
 This enables networking with Network Address Translation (NAT) where the SIMH network adapter gets an IP address from a on network DHCP server. If you are running multiple SIMH instances with diffrerent networking requirements make sure to look at **Configuring networking in KA/KL with static IP assignment**.
