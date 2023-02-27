@@ -16,7 +16,7 @@ Unless you are running the current ITS on a current version of KLH10 (see [below
 you need to [rebuild ITS](NITS.md) to change the machine's IP address.
 
 ### SIMH KA10 / KL10
-To get the `pdp10-ka` or `pdp10-kl` online with reasonably low effort, use the included NAT interface via DHCP.
+To get the `pdp10-ka` or `pdp10-kl` online with reasonably low effort, use the included SIMH NAT interface via DHCP.
 
 #### Using the host's TAP interface
 This enables networking with Network Address Translation (NAT) where the SIMH network adapter gets an IP address from a on network DHCP server. If you are running multiple SIMH instances with diffrerent networking requirements make sure to look at **Configuring networking in KA/KL with static IP assignment**.
@@ -106,9 +106,9 @@ to return to ITS type `cont` at the `simh>` prompt.
 
 ### Configuring networking in KA/KL with static IP assignment
 
-You do not need a TAP or Bridge interface for this type of configuratio. 
+You do not need a TAP or Bridge interface for this type of configuration but it is a bit more involved on the configuration side.
 #### Configure SIMH
-Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `out/pdp10-kl/run` and configure the `IMP` interface as follows:
+Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `build/pdp10-kl/run` and configure the `IMP` interface as follows:
 
 ```
 set imp enabled    ; enable the SIMH IMP interface
@@ -131,7 +131,7 @@ at imp nat:gateway=172.16.0.2,network=172.16.0.0/24,tcp=2023:172.16.0.4:23,tcp=2
 set imp mpx=4
 ```
 ### SIMH KS10
-The `simh` (KS) simulator does not currently support networking.
+Albeit untested the above IMP interface should also work with KS10 based emulation.
 
 ### KLH10
 The KLH10 dskdmp.ini file has an IP address (192.168.1.100) and gateway IP
