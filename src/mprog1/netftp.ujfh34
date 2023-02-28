@@ -1,0 +1,293 @@
+<PACKAGE "NETFTP">
+
+<ENTRY CONNECT ACC ICP WAITRESP LAST-RESP SOAK UNSOAK>
+
+<USE "CLOCK">
+
+"SOAK and UNSOAK -- enable and disable scripting of ftp transactions"
+
+<DEFINE SOAK () <SETG SOAK? T>>
+
+<DEFINE UNSOAK () <SETG SOAK? <>>>
+
+<SETG SOAK? T>
+<GDECL (SOAK?) <OR 'T FALSE>>
+
+"CONNECT -- connect to ftp server at a specified host
+  arg1 -- host (fix)
+  arg2 -- access instructions, or false.  if true, must be list
+   of items, as follows:
+	1/ string, arg for user command
+	2/ string, to be used as arg to password command, if empty
+		or false, none will be issued
+	3/ string, to be used as arg to account command
+  arg3 -- type of transfer (string) false--none
+  arg4 -- byte size (fix) false--none
+  arg5 -- mode of transfer (string) false--none
+
+ -- returns list of input and output channels, or #false(reason.string)"
+
+<DEFINE CONNECT (HOST ACC TYP BYT MODE
+		 "AUX" CHS OCH ICH (CR <STRING <ASCII 13> <ASCII 10>>))
+	#DECL ((INCHAN) CHANNEL (VALUE) <OR FALSE <LIST CHANNEL CHANNEL>>
+	       (HOST) FIX (CR) STRING (BYT) <OR FIX FALSE>
+	       (TYP MODE) <OR STRING FALSE> (CHS) <OR LIST <FALSE STRING>>
+	       (ACC) <LIST [3 STRING]> (OCH ICH) CHANNEL)
+	<COND (<SET CHS <ICP .HOST 3>>
+	       <SET ICH <1 .CHS>>
+	       <SET OCH <2 .CHS>>
+	       <WAITRESP <1 .CHS> '(300)>
+	       <COND (.ACC
+		      <PRINC "USER " .OCH>
+		      <PRINC <1 .ACC> .OCH>
+		      <PRINC .CR .OCH>
+		      <WAITRESP <1 .CHS> '(230 200 330)>
+		      <COND (<AND <2 .ACC> <NOT <EMPTY? <2 .ACC>>>>  ;"PASSWORD"
+			     <PRINC "PASS " <2 .CHS>>
+			     <PRINC <2 .ACC> <2 .CHS>>
+			     <PRINC .CR <2 .CHS>>
+			     <WAITRESP .ICH '(230 200 331)>)>
+		      <COND (<NOT <EMPTY? <3 .ACC>>>		      ;"ACCOUNT"
+			     <PRINC "ACCT " .OCH>
+			     <PRINC <3 .ACC> .OCH>
+			     <PRINC .CR .OCH>
+			     <WAITRESP .ICH '(230 200)>)>)>
+	       <COND (.TYP				        ;"TRANSFER TYPE"
+		      <PRINC "TYPE " .OCH>
+		      <PRINC .TYP .OCH>
+		      <PRINC .CR .OCH>
+		      <WAITRESP .ICH '(200)>)>
+	       <COND (.BYT					    ;"BYTE SIZE"
+		      <PRINC "BYTE " .OCH>
+		      <PRINC <UNPARSE .BYT> .OCH>
+		      <PRINC .CR .OCH>
+		      <WAITRESP .ICH '(200)>)>
+	       <COND (.MODE						 ;"MODE"
+		      <PRINC "MODE " .OCH>
+		      <PRINC .MODE .OCH>
+		      <WAITRESP .ICH '(200)>)>
+	       .CHS)>>
+
+"GETLINE -- get a response from ftp connection, including continuation lines"
+
+<DEFINE GETLINE (CH "AUX" COD)  
+	#DECL ((CH) CHANNEL (COD VALUE) STRING)
+	<REPEAT ()
+		<SET COD <RESPONSE-LINE .CH>>
+		<COND (<NOT <LENGTH? .COD 3>> <RETURN>)>>
+	<COND (<==? <4 .COD> !\->		    ;"CONTINUATION LINE"
+	       <REPEAT (L)
+		       #DECL ((L) STRING)
+		       <SET L <RESPONSE-LINE .CH>>
+		       <COND (<AND <NOT <LENGTH? .L 2>>
+				   <==? <1 .L> <1 .COD>>
+				   <==? <2 .L> <2 .COD>>
+				   <==? <3 .L> <3 .COD>>>
+			      <RETURN>)>>)>
+	.COD>
+
+<DEFINE RESPONSE-LINE (CH "AUX" CHAR (CR? <>) L)
+	#DECL ((CH) CHANNEL (L VALUE) STRING (CHAR) <OR CHARACTER FALSE>
+	       (CR?) <OR ATOM FALSE>)
+	<SET L
+	     <MAPF ,STRING
+		   <FUNCTION ()
+			<COND (<NOT <SET CHAR <NETCHR .CH>>>
+			       <ERROR CHANNEL-CLOSED RESPONSE-LINE>)
+			      (<AND .CR? <N==? .CHAR <ASCII 13>>> <MAPSTOP>)
+			      (<==? .CHAR <ASCII 13>> <SET CR? T> <MAPRET>)
+			      (<==? .CHAR <ASCII 0>> <MAPRET>)
+			      (ELSE
+			       <MAPRET .CHAR>)>>>>
+	<COND (<NOT ,SOAK?>
+	       <PROG ((OUTCHAN .OUTCHAN))
+		     #DECL ((OUTCHAN) CHANNEL)
+		     <OR <0? <14 .OUTCHAN>> <CRLF>>
+		     <PRINC "FTP: ">
+		     <PRINC .L>
+		     <CRLF>>)>
+	.L>
+
+"NETCHR -- kludge to handle new telnet protocol without
+lossage waiting for response... returns a character, like
+readchr, but if sees rubout or 377, reads next char and throws
+it away."
+
+<DEFINE NETCHR (CH "AUX" C)
+	#DECL ((CH) CHANNEL (VALUE) <OR CHARACTER FALSE> (C) CHARACTER)
+	<PROG ()
+	      <SET C <READCHR .CH '<RETURN <>>>>
+	      <COND (<OR <==? <ASCII .C> *377*>
+			 <==? <ASCII .C> *177*>>
+		     <READCHR .CH '<RETURN <>>> ;"THROW AWAY"
+		     <AGAIN>)>
+	      <RETURN .C>>>
+
+"WAITRESP -- given a channel, read until one of a supplied set of response
+  codes is received
+  --returns code received (fix), or #false(reason)
+  -- arg1/ channel
+  -- arg2/ list of fixes, codes to watch for.  in all cases,
+     responses beginning with 0 as a code are ignored"
+
+<DEFINE WAITRESP (CHNL RESPONSES 
+		  "AUX" C ARESP MRESP (NUMS '"0123456789") RES) 
+	#DECL ((CHNL) CHANNEL (RESPONSES) LIST (ARESP) STRING
+	       (NUMS) STRING (RES VALUE) <OR FALSE FIX>
+	       (C) CINT (MRESP) <OR LIST FALSE>)
+	<SETG LAST-RESP <>>
+	<SET RES
+	     <REPEAT WAIT-ACT ()
+		     #DECL ((WAIT-ACT) <SPECIAL ACTIVATION>)
+		     <SET C <ALARM WAIT-ACT 120.0>>
+		     <SETG LAST-RESP <SET ARESP <GETLINE .CHNL>>>
+		     <COND (<OR <NOT <MEMQ <1 .ARESP> .NUMS>>
+				<NOT <MEMQ <2 .ARESP> .NUMS>>
+				<NOT <MEMQ <3 .ARESP> .NUMS>>>
+			    <AGAIN>)>
+		     <COND (<SET MRESP
+				 <MEMQ <PARSE <STRING <1 .ARESP>
+						      <2 .ARESP>
+						      <3 .ARESP>>>
+				       .RESPONSES>>
+			    <RETURN <1 .MRESP>>)
+			   (<==? <1 .ARESP> !\0>)
+			   (<OR <==? <1 .ARESP> !\4> <==? <1 .ARESP> !\5>>
+			    <RETURN <CHTYPE (.ARESP) FALSE>>)>>>
+	<ALARM-OFF .C>
+	.RES>
+
+"WATCH -- error/interrupt handler for net channels
+  -- returns from an activation (sl) if we are in it (sleeping)
+"
+
+<DEFINE WATCH (ST CH) 
+	#DECL ((ST) <UVECTOR FIX FIX FIX> (CH) CHANNEL (SL) ACTIVATION)
+	<COND (<OR <==? <1 .ST> 2> <==? <1 .ST> 11>>
+	       <NETACC .CH>
+	       <OFF "CHAR" .CH>
+	       <INT-LEVEL 0>
+	       <RETURN .CH .SL>)
+	      (ELSE <DISMISS T>)>>
+
+"ACC -- function to issue a ftp command to transfer data
+ -- opens another socket in direction indicated, and issues a 'sock xxx'
+    command over ftp telnet channels.  waits for channel connection to
+    be established, and returns the channel.  if trouble, returns
+    #false(reason)
+ -- arg1/ telnet channel pair
+    arg2/ command line to issue after 'sock' command
+    arg3/ direction -- usually read or print
+    arg4/ byte size for channel opening"
+
+<DEFINE ACC (CHS COMM DIREC BYT
+	     "AUX" (FTPCHAN <2 .CHS>) HAN (CL <STRING <ASCII 13> <ASCII 10>>)
+		   CHANL)
+	#DECL ((CHS) <LIST CHANNEL CHANNEL> (FTPCHAN) CHANNEL (HAN) HANDLER
+	       (COMM DIREC CL) STRING (BYT) FIX
+	       (CHANL) <OR FALSE CHANNEL>)
+	<COND (<SET CHANL <OPEN .DIREC -1 -1 "NET" 0 .BYT>>
+	       <COND (<=? .DIREC "PRINT"> <PUT .CHANL 13 120>)>
+	       <PRINC <STRING "SOCK " <UNPARSE <7 .CHANL>> .CL> .FTPCHAN>
+	       <PRINC .COMM .FTPCHAN>
+	       <TERPRI .FTPCHAN>
+	       <NETS .FTPCHAN>
+	       <INT-LEVEL 3>
+	       <SET HAN <ON "CHAR" ,WATCH 3 0 .CHANL>>
+	       <COND (<OR <==? <1 <NETSTATE .CHANL>> 2>
+			  <==? <1 <NETSTATE .CHANL>> 11>>
+		      <NETACC .CHANL>
+		      <OFF .HAN>
+		      <INT-LEVEL 0>
+		      .CHANL)
+		     (ELSE
+		      <PROG SL ()
+			    #DECL ((SL) <SPECIAL ACTIVATION>)
+			    <INT-LEVEL 0>
+			    <SLEEP 30>
+			    <OFF .HAN>
+			    <CLOSE .CHANL>
+			    <RETURN #FALSE ("Datachannel timed-out")>>)>)>>
+
+"ICP -- icp function, returns false or list of input and output channels
+ -- arg1/ host number
+    arg2/ socket to issue icp to
+    val/ list of input and output channel"
+
+<SETG SOC <UVECTOR 0>>
+
+<DEFINE ICP (HOST FSOC "OPTIONAL" (WAITIME 20)
+	     "AUX" CHICP CH1 CH2 (SOC ,SOC) SOCK COD ST)
+   #DECL ((HOST FSOC COD WAITIME SOCK) FIX (CH1 CH2 CHICP) <OR CHANNEL FALSE>
+	  (ST) <OR UVECTOR FALSE> (SOC) UVECTOR)
+   <PROG ()
+   	  <COND (<NOT <SET CHICP <OPEN "READB" -1 .FSOC "NET" .HOST 32>>>
+		 <RETURN .CHICP>)>
+	  <COND (<NOT <SET ST <WAIT-FOR-IT .CHICP .WAITIME>>> <RETURN .ST>)>
+	  <COND (<NOT <OR <==? <SET COD <1 .ST>> 5> <==? .COD 9> <==? .COD 8>>>
+		 <CLOSE .CHICP>
+		 <RETURN #FALSE ("BAD ICP STATE")>)>
+	  <COND (<1? <READB .SOC .CHICP>> <SET SOCK <1 .SOC>>)
+		(<RETURN #FALSE ("Read of socket number failed")>)>
+	  <COND (<NOT <SET CH1
+			   <OPEN "READ" <+ <7 .CHICP> 2> <+ 1 .SOCK> "NET" .HOST 8>>>
+		 <CLOSE .CHICP>
+		 <RETURN #FALSE ("No Network Channels Available")>)>
+	  <COND (<NOT <SET ST <WAIT-FOR-IT .CH1 .WAITIME>>>
+		 <CLOSE .CHICP>
+		 <RETURN .ST>)>
+	  <COND (<NOT <OR <==? <SET COD <1 .ST>> 5> <==? .COD 9> <==? .COD 8>>>
+		 <CLOSE .CHICP>
+		 <CLOSE .CH1>
+		 <RETURN #FALSE ("BAD ICP STATE")>)>
+	  <COND (<NOT <SET CH2 <OPEN "PRINT" <+ <7 .CHICP> 3> .SOCK "NET" .HOST 8>>>
+		 <CLOSE .CH1>
+		 <CLOSE .CHICP>
+		 <RETURN #FALSE ("No Network Channels Available")>)>
+	  <PUT .CH2 13 9000000>
+	  <COND (<NOT <SET ST <WAIT-FOR-IT .CH2 .WAITIME>>>
+		 <CLOSE .CH1>
+		 <CLOSE .CH2>
+		 <RETURN .ST>)>
+	  <COND (<NOT <OR <==? <SET COD <1 .ST>> 5> <==? .COD 9> <==? .COD 8>>>
+		 <CLOSE .CHICP>
+		 <CLOSE .CH1>
+		 <CLOSE .CH2>
+		 <RETURN #FALSE ("BAD ICP STATE")>)>
+	  <CLOSE .CHICP>
+	  (.CH1 .CH2)>>
+
+"WAIT-FOR-IT -- wait for interrupt that indicates channel ready"
+
+<DEFINE WAIT-FOR-IT (CH WAITIME "AUX" ST)
+	#DECL ((VALUE) <OR UVECTOR FALSE> (CH) CHANNEL (WAITIME) FIX
+	       (ST) <UVECTOR FIX FIX FIX>)
+	<PROG ICP-WAIT ()
+	      #DECL ((ICP-WAIT) <SPECIAL ACTIVATION>)
+	      <INT-LEVEL 4>
+	      <ON "CHAR" ,ICP-NETINT 3 0 .CH>
+	      <INT-LEVEL 0>
+	      <COND (<NOT <==? 4 <1 <SET ST <NETSTATE .CH>>>>>
+		     <OFF "CHAR" .CH>
+		     .ST)
+		    (ELSE
+		     <SLEEP .WAITIME>
+		     <OFF "CHAR" .CH>
+		     <CLOSE .CH>
+		     #FALSE ("ICP timed out"))>>>
+
+\
+
+"ICP-NETINT -- interrupt handler for icp channels"
+
+<DEFINE ICP-NETINT (STA CHAN "AUX" ACT) 
+	#DECL ((STA) UVECTOR (VALUE) <OR UVECTOR FALSE> (CHAN) CHANNEL
+	       (ACT) ACTIVATION)
+	<COND (<AND <ASSIGNED? ICP-WAIT>
+		    <TYPE? <SET ACT .ICP-WAIT> ACTIVATION>
+		    <LEGAL? .ACT>
+		    <NOT <==? <1 .STA> 4>>>
+	       <OFF "CHAR" .CHAN>
+	       <DISMISS .STA .ACT 0>)>>
+
+<ENDPACKAGE>
