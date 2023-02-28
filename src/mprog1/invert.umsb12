@@ -1,0 +1,3647 @@
+;"(c) Copyright 1978 Massachusetts Institute of Technology.  All Rights Reserved."
+
+<PACKAGE "INVERT">
+
+<ENTRY INV-INSERT INV-DELETE INV-TEST INV-LENGTH>
+
+<ENTRY INV>
+
+<ENTRY INV-VECTOR INV-IUVECTOR INV-RELDATA>
+
+<ENTRY INV-SRC INV-SRC-MAPF INV-SRC-COUNT>
+
+<NEWTYPE INV VECTOR '<VECTOR FIX FIX <OR FIX <VECTOR [REST FIX UVECTOR]>>>>
+
+<USE "MADMAN">
+
+;"An INV is a data structure which is conceptually equivalent to an
+ordered list of FIXes.  It takes advantage of the assumption that the
+FIXes tend to exist in specific ranges of numerical value, rather than
+being distributed evenly over the 1 to 2**36 range possible.  At the
+simplest level, a program may insert a new FIX into an INV (it will
+be inserted in order, of course), remove a FIX from an INV, determine
+the 'length' (number of FIXes) in an INV, and test to see if a
+particular FIX already exists in a particular INV.  A particular FIX
+may appear only once in an INV, so an attempt to insert a FIX which
+already exists in a particular INV will result in a successful return,
+but will not have changed that INV in any way.  Similarly, an atempt
+to remove a FIX from an INV which does not contain that FIX will
+also produce a successful return, without modifying the INV in question.
+The only situation in which removal will produce a FALSE result is if
+it removed the last FIX in the INV.  There is no such thing as an
+empty INV.
+     Three functions exist which allow a program to perform set
+operations on INVs.  All three functions require the same type of
+'expression' to operate on, and do slightly different things with
+the results of evaluating the expression.
+     A set expression consists of a VECTOR of two or more elements,
+the first of which is a FIX, interpreted as a set operator code to
+be applied to the rest of the elements of the VECTOR.  The other
+elements of the VECTOR may be either INVs or set expressions.
+
+<set-expression> := <opcode> <element> <element> ...
+<element> :=  <INV>|<set-expression> 
+
+The allowable opcodes are:
+1 ==> AND
+2 ==> Inclusive OR
+3 ==> Exclusive OR
+4 ==> NAND
+5 ==> NOR
+
+If a set expression contains only an opcode and one element, AND, IOR,
+and XOR are defined to produce identity, while NAND and NOR are both
+equivalent to NOT.
+
+     The format of an INV is a VECTOR of three elements;
+1) a FIX
+	1 ==> special form for an INV with only one FIX
+	2 ==> multi-fix (normal) form
+2) a FIX, the number of FIXes in the INV
+3) <OR FIX <VECTOR [REST FIX UVECTOR]>>, if single-FIX form, the FIX is
+stored here.  Otherwise, it is a block directory VECTOR (see below).
+For example, an INV with the single fix 12345 in it would be represented
+as #INV [1 1 12345].
+     A block is a UVECTOR of maximum length 1022, in which may be stored
+up to 32400 FIXes.  Each block in the block directory represents a
+RANGE of FIXes.  For example, block #0 will contain all FIXes whose
+values lie between 0 and 32399, and which are in the INV in question.
+The directory block VECTOR consists of diads [REST FIX UVECTOR] of
+block numbers and blocks.  This VECTOR is sorted by block #.  The first
+step in finding where a FIX belongs in an INV is, therefore, to divide
+it by the block range (32400), and use the dividend as that FIX's block
+number.  The block is then located in the block directory VECTOR via
+a binary search.
+     Each block is further subdivided into 60 'buckets' of 15 words
+each,  with each bucket representing a range of 540 values within the
+block's range. A bucket may actually use anywhere from 0 to 15 words,
+depending upon how many FIXes are stored in it.  The format of a block
+is as follows:
+
+ 
+ ----------------------------------------------------------------------
+|  number of fixes in entire block   |  number of buckets in block     |
+ ----------------------------------------------------------------------
+| constant used for consistency check| offset of bucket directory area |
+ ----------------------------------------------------------------------
+|                          data for bucket #3                          |
+ ----------------------------------------------------------------------
+|                          data for bucket #3                          |
+ ----------------------------------------------------------------------
+|                          data for bucket #3                          |
+ ----------------------------------------------------------------------
+|                          data for bucket #0                          |
+ ----------------------------------------------------------------------
+|                          data for bucket #2                          |
+ ----------------------------------------------------------------------
+|                          data for bucket #2                          |
+ ----------------------------------------------------------------------
+                                     .
+                                     .
+                                     .
+                          bucket directory area
+ ----------------------------------------------------------------------
+|                              bucket number                           |
+ ----------------------------------------------------------------------
+|bucket size| unused | bucket length |  offset of bucket data area     |
+ ----------------------------------------------------------------------
+|                              bucket number                           |
+ ----------------------------------------------------------------------
+                                     .
+                                     .
+                                     .
+ ----------------------------------------------------------------------
+|  first dope word of UVECTOR        |                                 |
+ ----------------------------------------------------------------------
+|  second dope word of UVECTOR       |                                 |
+ ----------------------------------------------------------------------
+
+bucket-size ==> the number of words of data being used by a bucket
+bucket-length ==> the number of FIXes being stored in a bucket
+
+      When a particular bucket has its first FIX inserted into it, that
+FIX is stored directly in the bucket's first (and only) data word.  As
+more FIXes are added to the bucket, its data area is expanded, and those
+FIXes are also stored one per word in the data area.  When the fifteenth
+FIX is added to a bucket, however, its data area is transformed into a
+540-bit bit mask (15*36).  Subsequent additions to that bucket are made
+simply by setting the appropriate bit in the mask.  Should enough
+removals be made to lower the number of FIXes in a bucket to less than
+15, its data area reverts to direct representation.  In this way, very
+dense inversions are handled efficiently (bit-mask), while sparse ones
+don't impose an unreasonable overhead interms of space."
+
+<SETG BUCKET-LENGTH 15>
+<SETG BUCKET-COUNT <* ,BUCKET-LENGTH 36>>
+<SETG BUCKETS-PER-BLOCK </ 1024 <+ ,BUCKET-LENGTH 2>>>
+<SETG BLOCK-COUNT <* ,BUCKET-COUNT ,BUCKETS-PER-BLOCK>>
+<SETG BLNT-BPTR *400400*>
+<SETG UNUSED-BPTR *340400*>
+<SETG BCNT-BPTR *221200*>
+<SETG CHECK-CODE *525252*>
+
+
+<SETG INV-SEARCH-MASTER <>>
+
+;"#####################################################################
+#######################################################################
+######################################################################"
+
+
+
+<TITLE INV-SRC>
+
+<DECLARE ("VALUE" <OR INV FIX FALSE> VECTOR <OR INV FALSE>
+		FIX <OR INV FALSE>)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-SRC>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-SRC 4>
+
+	<SUBM	M* (P)>
+	<DMOVE	A* -7(TP)>
+	<DMOVE	C* -5(TP)>
+	<PUSHJ	P* CNVMESS>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	SRCFLS>
+	<DMOVE	C* -1(TP)>		;"<OR INV FALSE>"
+	<GETYP	O* C>
+	<CAIN	O* <TYPE-CODE INV>>
+	<JRST	HERE 3>
+	<MOVE	C* <TYPE-WORD FALSE>>
+	<MOVEI	D* 0>
+	<DPUSH	TP* A>
+	<DPUSH	TP* C>
+	<PUSH	P* [0]>
+	<PUSH	P* [-1]>
+	<PUSH	P* [-1]>
+SRCLP1	<DMOVE	A* -3(TP)>
+	<MOVE	C* -1(P)>
+	<MOVE	D* (P)>
+	<PUSHJ	P* FNDBUCKET>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	SRCRET>
+	<MOVEM	C* -1(P)>
+	<MOVEM	D* (P)>
+;"Here to add new id's to INV in progress"
+;"********************************************************************
+COULD DO THIS MORE EFFICIENTLY BY INSERTING THE ENTIRE BUCKET INTO A SCRATCH
+BLOCK.  WOULD REQUIRE A FAIR AMOUNT OF PROGRAMMING
+********************************************************************"
+	<MOVE	D* (P)>		;"D/ # of current bucket"
+	<IMULI	D* BUCKET-COUNT>
+	<PUSH	P* D>
+	<MOVE	C* (B)>
+SRCLP2	<JFFO	C* SRCLP3>
+	<MOVEI	D* 36>
+	<ADDM	D* (P)>
+	<AOBJN	B* SRCLP2 -1>
+	<POP	P* O>
+	<MOVE	C* -2(P)>
+	<CAMGE	C* -6(TP)>
+	<JRST	SRCNXT>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<PUSHJ	P* RELDATA>
+	<DMOVE	A* -1(TP)>
+	<MOVE	O* <TYPE-WORD FALSE>>
+	<MOVEM	O* -1(TP)>
+	<SETZM	(TP)>
+SRCNXT	<PUSHJ	P* RELDATA>	;"Releases bucket UVECTOR"
+	<JRST	SRCLP1>
+
+SRCLP3	<AOS	-3(P)>
+	<MOVN	E* D>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<TDZ	C* O>	;"clears id from bucket so it won't be encountered again"
+	<MOVE	O* -3(P)>
+	<CAML	O* -6(TP)>
+	<JRST	SRCLP2>
+	<ADD	D* (P)>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<DPUSH	TP* A>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* D>
+	<PUSH	P* C>
+	<MCALL	2 INV-INSERT>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* C>
+	<JRST	SRCLP2>
+
+SRCRET	<DPOP	TP* A>
+	<MOVE	C* -2(P)>
+	<SUB	P* [<3(3)>]>
+	<SUB	TP* [<10(10)>]>
+	<GETYP	O* A>
+	<CAIN	O* <TYPE-CODE INV>>
+	<JRST	MPOPJ>
+	<MOVE	A* $TFIX>
+	<MOVE	B* C>
+	<JRST	MPOPJ>
+
+SRCFLS	<SUB	TP* [<8(8)>]>
+	<MOVE	A* <TYPE-WORD FALSE>>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+
+
+<SUB-ENTRY INV-SRC-COUNT ("VALUE" <OR FIX FALSE> VECTOR
+			<OR INV FALSE>)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-SRC-COUNT>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-SRC-COUNT 2>
+
+	<SUBM	M* (P)>
+	<DMOVE	A* -3(TP)>
+	<DMOVE	C* -1(TP)>
+	<PUSHJ	P* CNVMESS>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CNTFLS>
+	<PUSH	P* [0]>
+	<PUSH	P* [-1]>
+	<PUSH	P* [-1]>
+	<DPUSH	TP* A>
+CNTLP1	<DMOVE	A* -1(TP)>
+	<MOVE	C* -1(P)>
+	<MOVE	D* (P)>
+	<PUSHJ	P* FNDBUCKET>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	CNTRET>
+	<MOVEM	C* -1(P)>
+	<MOVEM	D* (P)>
+	<MOVE	E* B>
+CNTLP2	<MOVE	C* (E)>
+CNTLP3	<JFFO	C* CNTLP4>
+	<AOBJN	E* CNTLP2>
+	<PUSHJ	P* RELDATA>
+	<JRST	CNTLP1>
+CNTLP4	<AOS	-2(P)>
+	<LSH	C* 1(D)>
+	<JRST	CNTLP3>
+
+CNTRET	<SUB	P* [<2(2)>]>
+	<SUB	TP* [<6(6)>]>
+	<MOVE	A* $TFIX>
+	<POP	P* B>
+	<JRST	MPOPJ>
+
+CNTFLS	<SUB	TP* [<4(4)>]>
+	<MOVE	A* <TYPE-WORD FALSE>>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+
+
+
+<SUB-ENTRY INV-SRC-MAPF ("VALUE" ANY VECTOR <OR INV FALSE>
+		<OR APPLICABLE FALSE> <OR APPLICABLE FALSE> <OR VECTOR FALSE>)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-SRC-MAPF>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-SRC-MAPF 5>
+
+	<SUBM	M* (P)>
+	<DMOVE	A* -9(TP)>
+	<DMOVE	C* -7(TP)>
+	<PUSHJ	P* CNVMESS>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	SRCMAPFLS>
+	<DPUSH	TP* A>
+	<PUSH	P* [0]>
+	<PUSH	P* [-1]>
+	<PUSH	P* [-1]>
+	<DMOVE	A* -7(TP)>
+	<GETYP	O* A>
+	<CAIN	O* <TYPE-CODE FALSE>>
+	<JRST	MAPLP1>
+	<DPUSH	TP* A>
+	<AOS	-2(P)>
+MAPLP1	<MOVE	E* -2(P)>
+	<IMULI	E* 2>
+	<SUBM	TP* E>
+	<DMOVE	A* -1(E)>
+	<MOVE	C* -1(P)>
+	<MOVE	D* (P)>
+	<PUSHJ	P* FNDBUCKET>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	SRCMAPRET>
+	<MOVEM	C* -1(P)>
+	<MOVEM	D* (P)>
+	<MOVE	C* D>
+	<IMULI	C* BUCKET-COUNT>
+	<PUSH	P* C>
+MAPLP2	<MOVE	C* (B)>
+MAPLP3	<JFFO	C* MAPLP4>
+	<MOVEI	O* 36>
+	<ADDM	O* (P)>
+	<AOBJN	B* MAPLP2>
+	<POP	P* O>
+	<PUSHJ	P* RELDATA>		;"Releases bucket UVECTOR"
+	<JRST	MAPLP1>
+
+MAPLP4	<MOVN	E* D>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<TDZ	C* O>	;"clears id from bucket so it won't be encountered again"
+	<ADD	D* (P)>
+	<MOVE	E* -3(P)>
+	<IMULI	E* 2>
+	<SUBM	TP* E>
+	<GETYP	O* -5(E)>
+	<CAIN	O* <TYPE-CODE FALSE>>
+	<JRST	MAPNOLOOP>
+	<DPUSH	TP* A>
+	<PUSH	P* C>
+	<DPUSH	TP* -5(E)>	;"Loop function"
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* D>		;"Id"
+	<MOVEI	C* 2>		;"C/ # of things on stack"
+	<GETYP	O* -3(E)>
+	<CAIN	O* <TYPE-CODE VECTOR>>
+	<SKIPL	E* -2(E)>	;"E/ cptr to VECTOR with extra args for loop fcn"
+	<JRST	MAPCALL>
+MAPLP5	<DPUSH	TP* (E)>
+	<AOS	C>
+	<ADD	E* [<2(2)>]>
+	<JUMPL	E* MAPLP5>
+MAPCALL	<MOVE	A* C>
+	<ACALL	A* APPLY>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>		;"B/ cptr to bucket UVECTOR"
+	<POP	P* C>		;"C/ current word of bucket"
+	<SKIPG	-3(P)>
+	<JRST	MAPLP6>
+	<AOS	-3(P)>
+	<JRST	MAPLP3>
+MAPLP6	<DPOP	TP* D>
+	<JRST	MAPLP3>
+
+;"Here if no loop fcn supplied"
+MAPNOLOOP	<SKIPG	-3(P)>
+	<JRST	MAPLP3>		;"jumps if no result fcn either"
+	<AOS	-3(P)>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* D>
+	<JRST	MAPLP3>
+
+
+SRCMAPRET	<DMOVE	A* <PQUOTE T>>
+	<SKIPG	E* -2(P)>
+	<JRST	HERE 3>
+	<MOVE	A* E>
+	<ACALL	A* APPLY>
+	<SUB	TP* [<12(12)>]>
+	<SUB	P* [<3(3)>]>
+	<JRST	MPOPJ>
+
+SRCMAPFLS	<SUB	TP* [<10(10)>]>
+	<MOVE	A* <TYPE-WORD FALSE>>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+
+
+
+<SUB-ENTRY INV-VECTOR ("VALUE" VECTOR "TUPLE" ANY)>
+
+	<MOVEI	B* 0>
+INVMAKLOOP	<JUMPGE	AB* INV-MAKCALL>
+	<DPUSH	TP* (AB)>
+	<ADD	AB* [<2(2)>]>
+	<AOJA	B* INVMAKLOOP>
+INV-MAKCALL	<MOVE	A* <TYPE-WORD FIX>>
+	<PUSHJ	P* GETVECTOR>
+	<JRST	FINIS>
+
+
+<SUB-ENTRY INV-IUVECTOR ("VALUE" UVECTOR FIX)>
+
+	<DPUSH	TP* (AB)>
+	<PUSHJ	P* IINV-IUVECTOR>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-IUVECTOR 1>
+
+	<SUBM	M* (P)>
+	<MOVE	A* (TP)>
+	<PUSHJ	P* GETIUVECTOR>
+	<SUB	TP* [<2(2)>]>
+	<JRST	MPOPJ>
+
+
+
+<SUB-ENTRY INV-RELDATA ("VALUE" ANY ANY)>
+
+	<DPUSH	TP* (AB)>
+	<PUSHJ	P* IINV-RELDATA>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-RELDATA 1>
+
+	<SUBM	M* (P)>
+	<MOVE	A* -1(TP)>
+	<MOVE	B* (TP)>
+	<PUSHJ	P* RELDATA>
+	<SUB	TP* [<2(2)>]>
+	<JRST	MPOPJ>
+
+
+
+
+
+
+;"A&B/ internal search expression VECTOR
+C/ current blk #
+D/ current bucket #"
+
+FNDBUCKET	<SUBM	M* (P)>
+	<DPUSH	TP* A>
+	<PUSH	P* C>
+	<PUSH	P* D>
+FNDL1	<INTGO>
+	<SKIPGE	C* -1(P)>
+	<JRST	FNDBLK>
+	<DMOVE	A* -1(TP)>
+	<MOVE	D* (P)>
+	<HRREI	E* -1>
+	<PUSHJ	P* NXTBNO>
+	<JUMPL	A* FNDBLK>
+	<MOVEM	A* (P)>
+	<MOVE	C* A>
+	<DMOVE	A* -1(TP)>
+	<PUSHJ	P* CHKBNO>
+	<CAME	A* (P)>
+	<JRST	FNDL1>
+	<DMOVE	A* -1(TP)>
+	<MOVE	C* (P)>
+	<HRREI	D* -1>
+	<PUSHJ	P* GETBUCKET>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	FNDL1>
+	<JUMPE	C* FNDL1>
+	<SUB	TP* [<2(2)>]>
+	<POP	P* D>
+	<POP	P* C>
+	<JRST	MPOPJ>
+
+FNDBLK	<INTGO>
+	<DMOVE	A* -1(TP)>
+	<MOVE	C* -1(P)>
+	<HRREI	D* -1>
+	<PUSHJ	P* NXTBLK>
+	<JUMPL	A* FNDFLS>
+	<MOVE	C* A>
+	<MOVEM	C* -1(P)>
+	<DMOVE	A* -1(TP)>
+	<PUSHJ	P* CHKBLK>
+	<CAME	A* -1(P)>
+	<JRST	FNDBLK>
+	<DMOVE	A* -1(TP)>
+	<MOVE	C* -1(P)>
+	<PUSHJ	P* GETBLK>
+	<CAME	A* -1(P)>
+	<JRST	FNDBLK>
+	<JRST	FNDL1>
+
+FNDFLS	<SUB	TP* [<2(2)>]>
+	<POP	P* D>
+	<POP	P* C>
+	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+
+;"A&B/ search expression VECTOR
+C&D/ master inversion (or FALSE)
+==>	A&B/ internal src VECTOR"
+
+CNVMESS	<SUBM	M* (P)>
+	<DPUSH	TP* C>
+	<HRREI	C* -1>
+	<PUSHJ	P* CNVEXP>
+	<MOVE	E* C>
+	<DPOP	TP* C>
+	<DPUSH	TP* A>
+	<JUMPE	E* CNVNOMAST>	;"Jumps if no NANDs, NORs, or NOTs in expression;
+						don't need A MASTER inversion."
+	<GETYP	O* C>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	CNVNMAST>
+;"Here if master inv is an INV"
+	<DMOVE	A* C>
+	<PUSHJ	P* CNVADTBL>
+CNVSMAST	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CNVSMAST1>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [1]>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [-1]>
+	<DPUSH	TP* A>
+	<MOVE	A* $TFIX>
+	<MOVEI	B* 3>
+	<PUSHJ	P* GETVECTOR>
+CNVSMAST1	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<DMOVEM	A* (C)>
+;"Here when master inversion taken care of, return the internal expression
+built by CNVEXP"
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+;"Here if no master inversion supplied"
+CNVNOMAST	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<JRST	CNVSMAST>
+
+;"Here if no master inv supplied"
+CNVNMAST	<CAIN	O* <TYPE-CODE FALSE>>
+	<JRST	CNVNOMAST>
+
+CNVBADM	<DPOP	TP* A>
+	<DPUSH	TP* <PQUOTE ILLEGAL-MASTER-INVERSION-SUPPLIED!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	CNVBADM>
+
+
+;"A&B/ search expression (or subpart)
+    C/ -1 ==> top-level, else boolean opcode of parent expression
+
+==>  A&B/ cptr to internal search expression
+       C/ Zero (0) implies no NAND's or NOR's in expression"
+
+CNVEXP	<SUBM	M* (P)>
+	<HLRE	D* B>
+	<MOVMS	D>
+	<CAIGE	D* 4>		;"At least two elements long?"
+	<JRST	CNVBADEXP>
+	<GETYP	O* (B)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<SKIPG	E* 1(B)>	;"E/ Boolean operator code"
+	<JRST	CNVBADEXP>
+	<CAIGE	E* 4>		;"NAND/NOR/NOT don't distribute"
+	<CAME	E* C>		;"Check if opr same as one in outer expression"
+	<SKIPA>
+	<JRST	EXPEXP>		;"Oprs the same, distributive rule applies,
+				expand this expression into the outer one."
+	<CAIN	E* 6>		;"NOT?"
+	<MOVEI	E* 4>		;"Collapse into NAND"
+	<PUSH	P* [0]>		;"Pushes cleared NAND/NOR/NOT flag onto stack"
+	<CAIL	E* 4>		;"Skips if Boolean operator is not NAND, NOR, or NOT."
+	<SETOM	(P)>		;"Sets NAND/NOR/NOT flag"
+	<PUSH	P* [1]>
+	<PUSH	P* E>		;"Saves operator on P-STACK"
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* E>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [-1]>
+	<MOVEI	E* 2>
+	<ADD	B* [<2(2)>]>
+CNVEXPL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	CNVEXPREC>
+	<DPUSH	TP* A>
+	<PUSH	P* E>
+	<DMOVE	A* (B)>
+	<PUSHJ	P* CNVADTBL>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* E>
+	<ADDI	E* 1>
+CNVEXPL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* CNVEXPL1>
+CNVEXPRET	<MOVE	A* $TFIX>
+	<MOVE	B* E>		;"B/ no. of elements pushed onto stack"
+	<POP	P* E>		;"E/ opr in effect"
+	<POP	P* D>		;"D/ flag to determine whether this an expansion or not"
+	<POP	P* C>		;"C/ NAND/NOR flag"
+	<SKIPGE	D>
+	<JRST	MPOPJ>
+	<CAIG	B* 2>
+	<JRST	CNVBADEXP>
+	<PUSH	P* C>
+	<PUSHJ	P* GETVECTOR>
+	<POP	P* C>
+	<JRST	MPOPJ>
+
+EXPEXP	<PUSH	P* [-1]>
+	<PUSH	P* [-1]>
+	<PUSH	P* C>
+	<MOVEI	E* 0>
+	<JRST	CNVEXPL2>
+
+CNVEXPREC	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CNVBADEXP>
+	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* (P)>
+	<PUSH	P* E>			;"Saves element count on stack"
+	<PUSHJ	P* CNVEXP>		;"Recurses"
+	<POP	P* E>
+	<SKIPE	C>			;"If no NAND/NOR/NOT found, leave flag as is."
+	<SETOM	-2(P)>			;"If NAND/NOR/NOT found, set flag for return."
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CNVRETFIX>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<ADDI	E* 1>
+	<JRST	CNVEXPL2>
+
+CNVRETFIX	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	CNVBADEXP>
+	<ADD	E* B>
+	<JUMPE	B* CNVRETL2>
+	<MOVE	C* TP>
+	<MOVE	D* B>
+	<IMULI	D* 2>
+	<HRLS	D>
+	<SUB	C* D>
+	<DMOVE	A* -1(C)>
+CNVRETL1	<CAMN	C* TP>
+	<JRST	CNVRETL2>
+	<MOVE	D* 1(C)>
+	<MOVEM	D* -1(C)>
+	<ADD	C* [<1(1)>]>
+	<JRST	CNVRETL1>
+CNVRETL2	<SUB	TP* [<2(2)>]>
+	<JRST	CNVEXPL2>
+
+CNVBADEXP	<DPUSH	TP* <PQUOTE ILLEGAL-SEARCH-EXPRESSION!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	CNVBADEXP>
+
+
+;"A&B/ INV
+	Builds 5-word entry for this inversion in the INV-SEARCH-TABLE"
+CNVADTBL	<SUBM	M* (P)>
+	<DPUSH	TP* A>
+	<PUSH	TP* <TYPE-WORD FALSE>>
+	<PUSH	TP* [0]>	;"Holdover from PIO days, used to put CHANP here."
+	<MOVE	O* 1(B)>
+	<CAIG	O* 1>
+	<JRST	SGLINV>
+	<DPUSH	TP* 4(B)>
+	<PUSH	TP* <TYPE-WORD FALSE>>
+	<PUSH	TP* [0]>
+	<PUSH	TP* <TYPE-WORD FALSE>>
+	<PUSH	TP* [0]>
+CNVADMAKE	<MOVEI	B* 5>
+	<PUSHJ	P* GETVECTOR>
+	<JRST	MPOPJ>
+
+;"Here if a single-id INV"
+SGLINV	<MOVE	C* 5(B)>
+	<IDIVI	C* BLOCK-COUNT>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* C>
+	<MOVE	C* 5(B)>
+	<IDIVI	C* BUCKET-COUNT>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* C>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* 5(B)>
+	<JRST	CNVADMAKE>
+
+
+
+;"A&B/ internal search expression
+C/ # of blk currently in use
+D/ last bucket # used (-1 implies first call)
+E/ 'current' bucket # (initially -1, changes when NXTBNO recurses)"
+
+NXTBNO	<SUBM	M* (P)>
+	<PUSH	P* C>
+	<PUSH	P* D>
+	<PUSH	P* E>
+	<SKIPGE	3(B)>
+	<JRST	NBUCRET>
+	<MOVE	C* 1(B)>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+	<CAIE	C* 4>
+	<CAIN	C* 5>
+	<JRST	NBUCMAST>
+NBUCL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTNXTBUC>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	NBUCREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTNXTBUC>
+;"Here when inversion is an INV"
+	<GETYP	O* 6(E)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	NBUCDW>
+	<SKIPL	D* 7(E)>
+	<JRST	NBUCDEX>
+	<MOVE	C* (D)>
+NBUCHKD	<CAMG	C* -1(P)>
+	<JRST	NBUCRD>
+NBUCHK	<SKIPL	(P)>
+	<CAMGE	C* (P)>
+NBUCND	<MOVEM	C* (P)>
+	<JRST	NBUCL2>
+;"Here when bucket dir points to a bucket which is not > the last one."
+NBUCRD	<ADD	D* [<2(2)>]>
+	<MOVEM	D* 7(E)>
+	<JUMPGE	D* NBUCDEX>	;"Exhausted"
+	<MOVE	C* (D)>
+	<JRST	NBUCHKD>
+;"Here when bucket dir (and, therefore, the blk) is exhausted"
+NBUCDEX	<MOVE	C* $TFALSE>
+	<MOVEM	C* 6(E)>
+	<SETZM	7(E)>
+	<MOVEM	C* 8(E)>
+	<SETZM	9(E)>
+	<JRST	NBUCL2>
+;"Here when bucket dir not a UVECTOR"
+NBUCDW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	NBUCL2>
+;"Here when inversion has a single id instead of a bucket dir"
+	<MOVE	C* 5(E)>		;"C/ blk # of id"
+	<CAME	C* -2(P)>
+	<JRST	NBUCL2>		;"Skips this inversion if not same blk #"
+	<MOVE	C* 7(E)>		;"C/ bucket # of id"
+	<CAMLE	C* -1(P)>
+	<JRST	NBUCHK>
+;"Here if single-id inversion exhausted"
+	<MOVE	C* $TFALSE>
+	<MOVEM	C* (E)>
+	<SETZM	D* 1(E)>
+	<JRST	NBUCL2>
+
+;"Here when a NAND or NOR opr, check master inversion first"
+NBUCMAST	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<GETYP	O* (C)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NBUCL1>
+	<DPUSH	TP* A>
+	<DMOVE	A* (C)>
+	<MOVE	C* -2(P)>
+	<MOVE	D* -1(P)>
+	<MOVE	E* (P)>
+	<PUSHJ	P* NXTBNO>
+	<MOVEM	A* (P)>
+	<DPOP	TP* A>
+	<JRST	NBUCL1>
+
+;"Here when search expression is complex, recurse"
+NBUCREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* -2(P)>
+	<MOVE	D* -1(P)>
+	<MOVE	E* (P)>
+	<PUSHJ	P* NXTBNO>
+	<MOVEM	A* (P)>
+	<DPOP	TP* A>
+	<JRST	NBUCL2>
+
+NOTNXTBUC	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+NBUCL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* NBUCL1>
+NBUCRET	<POP	P* A>	;"A/ # of lowest existing bucket not yet examined"
+	<POP	P* O>
+	<POP	P* O>
+	<JRST	MPOPJ>
+
+
+
+;"A&B/ internal search expression
+C/ last block # used (-1 implies first call)
+D/ 'current' block # (initially -1, changes when NXTBLK recurses)
+
+Ignores the blk-existence FIX which is second element of expression"
+
+NXTBLK	<SUBM	M* (P)>
+	<PUSH	P* C>
+	<PUSH	P* D>
+	<MOVE	C* 1(B)>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+	<CAIE	C* 4>
+	<CAIN	C* 5>
+	<JRST	NBLKMAST>
+NBLKL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTNXTBLK>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	NBLKREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTNXTBLK>
+;"Here when inversion is an INV"
+NBLKINV	<GETYP	O* 4(E)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NBLKIW>
+	<SKIPN	7(E)>
+	<JRST	NBLKINV1>
+;"If old blk pointed to by state vector, flush it"
+	<MOVE	C* $TFALSE>
+	<MOVEM	C* 6(E)>
+	<MOVEM	C* 8(E)>
+	<SETZM	7(E)>
+	<SETZM	9(E)>
+NBLKINV1	<SKIPL	D* 5(E)>
+	<JRST	NBLKIEX>
+NBLKHKI	<MOVE	C* 1(D)>
+	<CAMG	C* -1(P)>
+	<JRST	NBLKRI>
+NBLKHK	<SKIPL	(P)>
+	<CAMGE	C* (P)>
+	<MOVEM	C* (P)>
+	<JRST	NBLKL2>
+NBLKRI	<ADD	D* [<4(4)>]>
+	<MOVEM	D* 5(E)>
+	<JUMPGE	D* NBLKIEX>
+	<JRST	NBLKHKI>
+;"Here when blk dir exhausted, entire inversion is exhausted"
+NBLKIEX	<MOVE	C* $TFALSE>
+	<MOVEM	C* (E)>
+	<SETZM	1(E)>
+	<JRST	NBLKL2>
+
+;"Here if blk dir not a VECTOR"
+NBLKIW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	NBLKL2>
+	<MOVE	C* 5(E)>	;"C/ blk # of single id"
+	<CAMLE	C* -1(P)>
+	<JRST	NBLKHK>
+;"Here if single-id inversion exhausted"
+	<MOVE	C* $TFALSE>
+	<MOVEM	C* (E)>
+	<SETZM	D* 1(E)>
+	<JRST	NBLKL2>
+
+
+;"Here when opr is NAND or NOR, check master inversion first"
+NBLKMAST	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<GETYP	O* (C)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NBLKL1>
+	<DPUSH	TP* A>
+	<DMOVE	A* (C)>
+	<MOVE	C* -1(P)>
+	<MOVE	D* (P)>
+	<PUSHJ	P* NXTBLK>
+	<MOVEM	A* (P)>
+	<DPOP	TP* A>
+	<JRST	NBLKL1>
+
+;"Here when search expression is complex, recurse"
+NBLKREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* -1(P)>
+	<MOVE	D* (P)>
+	<PUSHJ	P* NXTBLK>
+	<MOVEM	A* (P)>
+	<DPOP	TP* A>
+	<JRST	NBLKL2>
+
+NOTNXTBLK	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+NBLKL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* NBLKL1>
+	<POP	P* A>		;"A/ # of lowest existing blk not yet examined"
+	<POP	P* B>
+	<JRST	MPOPJ>
+
+
+
+
+;"A&B/ internal search expression
+C/ # of block to be read in for each inversion in search expression
+
+==> A/ original contents of C if any blks found: -1 if none"
+
+;"ASSUMPTION:  The '7' (and '9') slot of each inversion state vector contains
+FALSE, put there by NXTBNO when the last blk of that inversion was exhausted.
+If a '7' slot is encountered which is non-FALSE, it is assumed that it is
+an inversion which appears more than once in the expression and has already
+been handled by GETBLK.  As a safety measure, NXTBLK also clears any such blks
+that it finds."
+
+GETBLK	<SUBM	M* (P)>
+	<PUSH	P* 1(B)>		;"Saves operator code"
+	<PUSH	P* [-1]>
+	<PUSH	P* C>			;"Saves # of block to be read"
+	<SKIPG	3(B)>
+	<JRST	GBLKRET>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+	<MOVE	C* -2(P)>
+	<CAIE	C* 4>
+	<CAIN	C* 5>
+	<JRST	GBLKMAST>
+GBLKL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTGETBLK>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	GBLKREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTGETBLK>
+;"Here when inversion is an INV"
+GBLKINV	<GETYP	O* 4(E)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	GBLKCHKW>
+	<SKIPL	D* 5(E)>
+	<JRST	GBLKCHKOPR>
+	<MOVE	C* 1(D)>
+	<CAME	C* (P)>
+	<JRST	GBLKCHKOPR>
+	<GETYP	O* 6(E)>
+	<CAIN	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBLKL2>
+;"Here when required blk of INV exists"
+	<DMOVE	C* 2(D)>
+	<DMOVEM	C* 8(E)>
+	<HRR	O* 1(D)>
+	<HRL	O* 1(D)>
+	<ADD	D* O>
+	<DMOVEM	C* 6(E)>
+	<MOVE	O* (P)>
+	<MOVEM	O* -1(P)>
+	<JRST	GBLKL2>
+
+;"Here when NAND or NOR opr, get master inversion's blk first"
+GBLKMAST	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<GETYP	O* (C)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	GBLKL1>
+	<DPUSH	TP* A>
+	<DMOVE	A* (C)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* GETBLK>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAMN	C* (P)>
+	<MOVEM	C* -1(P)>
+	<JRST	GBLKL1>
+
+;"Here when search expression is complex, recurse"
+GBLKREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* GETBLK>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAME	C* (P)>
+	<JRST	GBLKCHKOPR>
+	<MOVEM	C* -1(P)>
+	<JRST	GBLKL2>
+
+;"Here when blk dir VECTOR or UVECTOR not there"
+GBLKCHKW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	GBLKCHKOPR>
+;"Here if a single-id inversion"
+	<MOVE	C* 5(E)>
+	<CAME	C* (P)>
+	<JRST	GBLKCHKOPR>
+	<MOVEM	C* -1(P)>
+	<JRST	GBLKL2>
+
+NOTGETBLK	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+GBLKL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* GBLKL1>
+GBLKRET	<POP	P* O>
+	<POP	P* A>		;"A/ # of blk just read in (-1 if none)"
+	<POP	P* O>
+	<JRST	MPOPJ>
+
+;"Here when specified blk doesn't exist in an inversion (or sub-expression)"
+GBLKCHKOPR	<MOVE	O* -2(P)>
+	<CAIE	O* 1>		;"Skips if operator is AND"
+	<JRST	GBLKL2>
+;"Non-existing blk in an AND flushes whole sub-expression"
+	<HLRE	E* B>
+	<MOVMS	E>
+	<SUBI	E* 2>
+	<HRLS	E>
+	<ADD	B* E>
+	<SETOM	-1(P)>
+	<JRST	GBLKL2>
+
+
+
+
+;"A&B/ internal search expression
+C/ # of bucket to be examined next
+
+==> A/ original contents of C if wins: -1 if loses
+
+	This checks the candidate bucket number proposed by NXTBNO.
+If any sub-expression will be null (for example, because a null bucket
+exists in an AND expression), the right half of the flag word (second
+element of the sub-expression) is set to -1.  Such flags are noted by GETBUCKET."
+
+CHKBNO	<SUBM	M* (P)>
+	<PUSH	P* 1(B)>		;"Saves operator code on P-stack"
+	<PUSH	P* C>			;"Saves required bucket # on P-stack"
+	<DPUSH	TP* A>
+	<SKIPGE	3(B)>
+	<JRST	CBUCRET>
+	<MOVEI	D* -1>
+	<HRRM	D* 3(B)>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+	<MOVE	C* -1(P)>
+	<CAIE	C* 4>
+	<CAIN	C* 5>
+	<JRST	CBUCMAST>
+CBUCL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTCHKBUC>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	CBUCREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTCHKBUC>
+;"Here when inversion is an INV"
+	<GETYP	O* 6(E)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	CBUCDW>
+	<SKIPL	D* 7(E)>
+	<JRST	CBUCLOSE>
+	<MOVE	C* (D)>
+	<CAME	C* (P)>
+	<JRST	CBUCLOSE>
+CBUCWIN	<MOVE	E* (TP)>
+	<HRRM	C* 3(E)>
+	<JRST	CBUCL2>
+
+;"Here when bucket dir not a UVECTOR"
+CBUCDW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	CBUCLOSE>
+;"Here when inversion has a single id instead of a bucket dir"
+	<MOVE	C* 7(E)>		;"C/ bucket # of id"
+	<CAMN	C* (P)>
+	<JRST	CBUCWIN>
+;"Here when required bucket doesn't exist"
+CBUCLOSE	<MOVE	O* -1(P)>
+	<CAIE	O* 1>
+	<JRST	CBUCL2>
+;"Here when non-existent bucket in an AND, flushes whole sub-expression"
+	<MOVE	E* (TP)>
+	<MOVEI	D* -1>
+	<HRRM	D* 3(E)>
+	<JRST	CBUCRET>
+
+;"Here when NAND or NOR opr, check master inversion's bucket first"
+CBUCMAST	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<GETYP	O* (C)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CBUCL1>
+	<DPUSH	TP* A>
+	<DMOVE	A* (C)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* CHKBNO>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAME	C* (P)>
+	<HRREI	C* -1>
+	<MOVE	E* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	E* GLOTOP 1 (TVP)>
+	<MOVE	E* 1(E)>
+	<HRRM	C* 3(E)>
+	<JRST	CBUCL1>
+
+
+;"Here when search expression is complex, recurse"
+CBUCREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* CHKBNO>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAME	C* (P)>
+	<JRST	CBUCLOSE>
+	<JRST	CBUCWIN>
+
+NOTCHKBUC	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+	<JRST	CBUCLOSE>
+
+CBUCL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* CBUCL1>
+CBUCRET	<POP	P* C>		;"required bucket #"
+	<POP	P* D>		;"D/ operator code for sub-expression"
+	<DPOP	TP* A>
+	<HRRE	A* 3(B)>
+	<SKIPL	A>
+	<JRST	MPOPJ>
+;"Here if no instance of the required bucket found in sub-expression"
+	<CAIE	D* 4>
+	<CAIN	D* 5>
+	<SKIPA>			;"Skips if opr is NAND or NOR"
+	<JRST	MPOPJ>
+	<HRRM	C* 3(B)>
+	<MOVE	A* C>
+	<JRST	MPOPJ>
+
+
+
+
+;"A&B/ internal search expression
+C/ # of blk to be examined next
+
+==> A/ original contents of C if wins: -1 if loses
+
+	This checks the candidate blk number proposed by NXTBLK.
+If any sub-expression will be null (for example, because a null blk
+exists in an AND expression), the right half of the flag word (second
+element of the sub-expression) is set to -1.  Such flags are noted by GETBLK."
+
+
+CHKBLK	<SUBM	M* (P)>
+	<PUSH	P* 1(B)>
+	<PUSH	P* C>
+	<DPUSH	TP* A>
+	<SETOM	3(B)>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+	<MOVE	C* -1(P)>
+	<CAIE	C* 4>
+	<CAIN	C* 5>
+	<JRST	CBLKMAST>
+CBLKL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTCHKBLK>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	CBLKREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTCHKBLK>
+;"Here when inversion is an INV"
+CBLKINV	<GETYP	O* 4(E)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CBLKIW>
+	<SKIPL	D* 5(E)>
+	<JRST	CBLKLOSE>
+	<MOVE	C* 1(D)>
+	<CAME	C* (P)>
+	<JRST	CBLKLOSE>
+;"Here if required blk exists"
+CBLKWIN	<MOVE	E* (TP)>
+	<HRLS	C>
+	<HRRI	C* -1>
+	<MOVEM	C* 3(E)>
+	<JRST	CBLKL2>
+
+;"Here if blk dir not a UVECTOR"
+CBLKIW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	CBLKLOSE>
+	<MOVE	C* 5(E)>	;"C/ blk # of single id"
+	<CAMN	C* (P)>
+	<JRST	CBLKWIN>
+;"Here if required blk doesn't exist"
+CBLKLOSE	<MOVE	O* -1(P)>
+	<CAIE	O* 1>
+	<JRST	CBLKL2>
+;"Here if non-existent blk in an AND, flush whole sub-expresssion"
+	<MOVE	E* (TP)>
+	<SETOM	3(E)>
+	<JRST	CBLKRET>
+
+
+;"Here when NAND or NOR opr, check master inversion's blk first"
+CBLKMAST	<MOVE	C* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	C* GLOTOP 1 (TVP)>
+	<GETYP	O* (C)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	CBLKL1>
+	<DPUSH	TP* A>
+	<DMOVE	A* (C)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* CHKBLK>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAME	C* (P)>
+	<HRREI	C* -1>
+	<HRLS	C>
+	<HRRI	C* -1>
+	<MOVE	E* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	E* GLOTOP 1 (TVP)>
+	<MOVE	E* 1(E)>
+	<MOVEM	C* 3(E)>
+	<JRST	CBLKL1>
+
+
+;"Here when search expression is complex, recurse"
+CBLKREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* (P)>
+	<PUSHJ	P* CHKBLK>
+	<MOVE	C* A>
+	<DPOP	TP* A>
+	<CAME	C* (P)>
+	<JRST	CBLKLOSE>
+	<JRST	CBLKWIN>
+
+NOTCHKBLK	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+	<JRST	CBLKLOSE>
+
+CBLKL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* CBLKL1>
+CBLKRET	<POP	P* C>		;"C/ # of required blk"
+	<POP	P* D>		;"D/ operator code for sub-expression"
+	<DPOP	TP* A>
+	<HLRE	A* 3(B)>
+	<SKIPL	A>
+	<JRST	MPOPJ>
+	<CAIE	D* 4>
+	<CAIN	D* 5>
+	<SKIPA>
+	<JRST	MPOPJ>
+	<MOVE	A* C>
+	<HRLS	C>
+	<HRRI	C* -1>
+	<MOVEM	C* 3(B)>
+	<JRST	MPOPJ>
+
+
+
+;"ERROR HANDLERS"
+
+BADINTEXP	<DPUSH	TP* <PQUOTE BAD-INTERNAL-SEARCH-EXPRESSION!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	BADINTEXP>
+
+
+
+
+;"A&B/ # of args pushed onto TP stack"
+GETVECTOR	<SUBM	M* (P)>
+	<PUSH	P* B>
+	<MOVE	B* <MQUOTE CURSPACE>>
+	<PUSHJ	P* CASSQ>
+	<JRST	VCTNOSPC>
+;"Here if a current MADMAN space bound and assigned."
+	<POP	P* A>
+	<ACALL	A* ALVECTOR>
+	<JRST	MPOPJ>
+
+VCTNOSPC	<POP	P* A>
+	<ACALL	A* VECTOR>
+	<JRST	MPOPJ>
+
+
+
+;"A/ size of required UVECTOR"
+GETIUVECTOR	<SUBM	M* (P)>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* A>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* [0]>
+	<MOVE	B* <MQUOTE CURSPACE>>
+	<PUSHJ	P* CASSQ>
+	<JRST	GETNEWUVCT>
+;"Here if MADMAN space bound and assigned."
+	<MCALL	2 ALIUVECTOR>
+	<JRST	MPOPJ>
+
+GETNEWUVCT	<MCALL	2 IUVECTOR>
+	<JRST	MPOPJ>
+
+
+;"A&B/ UVECTOR to be released"
+RELDATA	<SUBM	M* (P)>
+	<DPUSH	TP* A>
+	<MOVE	B* <MQUOTE CURSPACE>>
+	<PUSHJ	P* CASSQ>
+	<JRST	RELRET>
+	<MOVE	B* <MQUOTE CURSPACE>>
+	<PUSHJ	P* CILVAL>
+	<DPOP	TP* C>
+	<DPUSH	TP* A>
+	<DPUSH	TP* C>
+	<MCALL	2 ARELEASE>
+	<JRST	MPOPJ>
+
+
+RELRET	<SUB	TP* [<2(2)>]>
+	<JRST	MPOPJ>
+
+
+;"A&B/ internal search expression vector
+C/ # of bucket to be returned
+D/ -1 implies top-level of expression
+
+==> A&B/ bucket UVECTOR (or FALSE)
+	C/ bucket length:
+	-1 ==> bit-mask format, scratch
+	0  ==> empty
+	>0 ==> direct format, read-only
+	BUCKET-LENGTH ==> bit-mask format, read-only"
+
+GETBUCKET	<SUBM	M* (P)>
+	<PUSH	TP* $TFALSE>
+	<PUSH	TP* [0]>		;"Saves return value on TP-stack"
+	<PUSH	P* [0]>			;"Saves slot for bucket length"
+	<PUSH	P* D>			;"Saves top-level indicator"
+	<PUSH	P* 1(B)>		;"Saves sub-expression's operator code"
+	<PUSH	P* C>			;"Saves # of bucket being hacked"
+	<SKIPGE	3(B)>
+	<JRST	GBUCRET>
+	<ADD	B* [<4(4)>]>
+	<JUMPGE	B* BADINTEXP>
+GBUCL1	<GETYP	O* (B)>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTGETBUC>
+	<MOVE	E* 1(B)>
+	<GETYP	O* (E)>
+	<CAIN	O* <TYPE-CODE FIX>>
+	<JRST	GBUCREC>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTGETBUC>
+;"Here when inversion is an INV"
+	<GETYP	O* 6(E)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBUCDW>
+	<SKIPL	D* 7(E)>
+	<JRST	GBUCLOSE>
+	<MOVE	C* (D)>
+	<CAME	C* (P)>
+	<JRST	GBUCLOSE>
+;"Here when bucket exists"
+	<HRRZ	O* 1(D)>
+	<HRLS	O*>
+	<ADD	O* 9(E)>
+	<LDB	E* [<(,BLNT-BPTR) 1(D)>]>	;"E/ length code for new bucket"
+	<MOVE	D* O>				;"D/ cptr to new bucket in INV"
+GBUCOPR	<GETYP	O* -1(TP)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBUCFIRST>
+	<DPUSH	TP* A>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* E>
+	<DMOVE	A* -5(TP)>
+	<MOVE	C* -2(P)>
+	<ADDI	C* OPRTBL>
+	<MOVE	O* -1(C)>
+	<MOVE	C* -4(P)>
+;"A&B/ current bucket
+C/ length code for A&B
+D/ cptr to new bucket
+E/ length code for D"
+	<XCT	O>
+	<EXCH	A* -5(TP)>
+	<EXCH	B* -4(TP)>
+	<EXCH	C* -4(P)>
+	<SKIPGE	C>
+	<CAMN	B* -2(TP)>
+	<SKIPA>
+	<PUSHJ	P* RELDATA>	;"releases original bucket if not needed any longer"
+	<DPOP	TP* A>
+	<POP	P* C>
+	<SKIPGE	C>
+	<CAMN	B* -2(TP)>
+	<SKIPA>
+	<PUSHJ	P* RELDATA>	;"releases new bucket if not needed any longer"
+	<DPOP	TP* A>
+	<GETYP	O* -1(TP)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBUCL2>
+	<SKIPL	-3(P)>
+	<JRST	GBUCL2>
+;"Here when operator returns a writable bucket, make-sure it is non-empty"
+	<MOVEI	E* BUCKET-LENGTH>
+	<MOVE	D* (TP)>
+	<MOVE	C* (D)>
+	<JFFO	C* GBUCL2>
+	<ADD	D* [<1(1)>]>
+	<SOJG	E* HERE -3>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<PUSHJ	P* RELDATA>
+	<DMOVE	A* -1(TP)>
+	<MOVE	O* $TFALSE>
+	<MOVEM	O* -1(TP)>
+	<SETZM	(TP)>
+	<SETZM	-3(P)>
+;"Here if either bucket doesn't exist or operator returned FALSE"
+GBUCLOSE	<MOVE	O* -1(P)>
+	<CAIE	O* 1>
+	<JRST	GBUCL2>
+	<MOVE	O* $TFALSE>
+	<MOVEM	O* -1(TP)>
+	<SETZM	(TP)>
+	<SETZM	-3(P)>
+	<JRST	GBUCRET>
+
+;"Here when bucket dir not a UVECTOR"
+GBUCDW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	GBUCLOSE>
+;"Here when inversion has a single id instead of a bucket dir"
+	<MOVE	C* 7(E)>		;"C/ bucket # of id"
+	<CAME	C* (P)>
+	<JRST	GBUCLOSE>
+	<DPUSH	TP* A>
+	<PUSH	P* 9(E)>
+	<MOVEI	A* 1>
+	<PUSHJ	P* GETIUVECTOR>
+	<DMOVE	C* A>
+	<POP	P* (D)>
+	<DPOP	TP* A>
+	<MOVEI	E* 1>
+	<JRST	GBUCOPR>
+
+;"Here when first bucket of expression found"
+GBUCFIRST	<MOVE	O* $TUVECTOR>
+	<MOVEM	O* -1(TP)>
+	<MOVEM	D* (TP)>
+	<MOVEM	E* -3(P)>
+	<JRST	GBUCL2>
+
+
+;"Here when search expression is complex, recurse"
+GBUCREC	<DPUSH	TP* A>
+	<DMOVE	A* (B)>
+	<MOVE	C* (P)>
+	<MOVEI	D* 1>
+	<PUSHJ	P* GETBUCKET>
+	<MOVE	E* C>			;"E/ length code for new bucket"
+	<DMOVE	C* A>			;"C&D/ new bucket"
+	<DPOP	TP* A>
+	<GETYP	O* C>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBUCLOSE>
+	<JRST	GBUCOPR>
+
+NOTGETBUC	<CAIE	O* <TYPE-CODE FALSE>>
+	<JRST	BADINTEXP>
+	<JRST	GBUCLOSE>
+
+GBUCL2	<ADD	B* [<2(2)>]>
+	<JUMPL	B* GBUCL1>
+GBUCRET	<POP	P* D>			;"D/ # of bucket being returned"
+	<POP	P* O>
+	<DMOVE	A* -1(TP)>
+	<MOVE	C* -1(P)>
+	<CAIE	O* 4>
+	<CAIN	O* 5>
+;"***************************************************************************
+MAY BE ABLE TO JUST COMPLEMENT BUCKET IF AN 'AND' EXISTS IN A HIGHER
+PART OF THE EXPRESSION
+*****************************************************************************"
+	<PUSHJ	P* NOTOPR>
+	<EXCH	C* -1(P)>	;"C/ length code for old bucket"
+	<CAMN	B* (TP)>
+	<JRST	GBUCRET1>
+	<GETYP	O* -1(TP)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	GBUCRET1>
+	<JUMPGE	C* GBUCRET1>
+	<EXCH	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<PUSHJ	P* RELDATA>
+	<DMOVE	A* -1(TP)>		;"A&B/ new bucket"
+GBUCRET1	<SUB	TP* [<2(2)>]>
+	<POP	P* D>			;"D/ level indicator(-1 ==> top level)"
+	<POP	P* C>		;"C/ length code for bucket being returned"
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	MPOPJ>			;"Jumps if no bucket being returned"
+	<SKIPGE	D>		;"Just return if not at top-level"
+	<SKIPGE	C>		;"Just return if bucket is bit-mask, writable"
+	<JRST	MPOPJ>
+;"Here if returning from original call to GETBUCKET and the bucket being returned
+actually points to the data in an INV."
+	<CAIL	C* BUCKET-LENGTH>
+	<JRST	CPYBUCKET>		;"Jumps if already in bit-mask form, just copy"
+	<PUSHJ	P* CNVBITMSK>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+CPYBUCKET	<DPUSH	TP* A>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVE	C* B>
+	<HRL	C* (TP)>
+	<MOVE	D* B>
+	<ADDI	D* BUCKET-LENGTH>
+	<BLT	C* -1(D)>
+	<DPOP	TP* C>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+
+OPRTBL	<PUSHJ	P* ANDOPR>
+	<PUSHJ	P* IOROPR>
+	<PUSHJ	P* XOROPR>
+	<PUSHJ	P* ANDOPR>
+	<PUSHJ	P* IOROPR>
+
+
+
+;"A&B/ current bucket
+C/ length code for B
+D/ cptr to new bucket
+E/ length code for D"
+
+ANDOPR	<SUBM	M* (P)>
+	<JUMPL	C* AND1MSK>
+	<SKIPL	E>
+	<JRST	ANDNEW>
+	<EXCH	B* D>
+	<EXCH	C* E>
+;"B/ cptr to writable, bit-mask bucket"
+AND1MSK	<JUMPL	E* AND2MSK>
+	<CAIL	E* BUCKET-LENGTH>
+	<JRST	AND2MSK>
+;"Here if new bucket in direct format
+Old bucket is bit-format but need not be writable"
+ANDNMSK	<CAIG	E* 1>
+	<JRST	AND1DIR>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<POP	TP* A>		;"A/ cptr to direct format bucket"
+	<POP	TP* O>
+	<EXCH	B* (TP)>	;"B/ cptr to bit-mask bucket"
+ANDIRL1	<MOVE	C* (A)>
+	<IDIVI	C* BUCKET-COUNT>
+	<MOVE	C* D>
+	<IDIVI	C* 36>
+	<MOVNS	D>
+	<MOVSI	E* *400000*>
+	<LSH	E* (D)>
+	<MOVE	D* C>
+	<ADD	D* B>
+	<MOVE	O* (D)>
+	<TDNN	O* E>
+	<JRST	ANDIRL2>
+	<ADD	C* (TP)>
+	<MOVE	O* (C)>
+	<TDO	O* E>
+	<MOVEM	O* (C)>
+ANDIRL2	<ADD	A* [<1(1)>]>
+	<SOSLE	(P)>
+	<JRST	ANDIRL1>
+	<POP	P* O>
+	<DPOP	TP* A>		;"A&B/ new bit-mask format bucket UVECTOR"
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+;"Here when B is bit-mask and D is direct format with length of 1"
+AND1DIR	<PUSH	P* B>
+	<MOVE	A* (D)>
+	<IDIVI	A* BUCKET-COUNT>
+	<MOVE	A* B>
+	<IDIVI	A* 36>
+	<MOVNS	B>
+	<MOVSI	C* *400000*>
+	<LSH	C* (B)>
+	<POP	P* B>
+	<ADD	A* B>
+	<MOVE	O* (A)>
+	<TDNN	O* C>
+	<JRST	ANDFLS>
+	<MOVE	A* $TUVECTOR>
+	<MOVE	B* D>
+	<MOVEI	C* 1>
+	<JRST	MPOPJ>
+
+;"Here to return FALSE"
+ANDFLS	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<MOVEI	C* 0>
+	<JRST	MPOPJ>
+
+;"Here when both in bit-mask format and B is writable"
+AND2MSK	<MOVE	E* B>
+	<MOVEI	C* BUCKET-LENGTH>
+	<MOVE	O* (D)>
+	<ANDM	O* (E)>
+	<ADD	D* [<1(1)>]>
+	<ADD	E* [<1(1)>]>
+	<SOJG	C* HERE -4>
+	<MOVE	A* $TUVECTOR>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+;"Here if neither bucket writable (may still be in bit-mask format)"
+ANDNEW	<CAIGE	C* BUCKET-LENGTH>
+	<JRST	AND2DIR>
+	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	ANDNMSK>
+;"Here if both read-only bit-mask"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVE	C* B>
+	<HRL	C* (TP)>
+	<MOVE	D* B>
+	<ADDI	D* BUCKET-LENGTH>
+	<BLT	C* -1(D)>
+	<DPOP	TP* C>
+	<DPOP	TP* C>
+	<POP	P* E>
+	<HRREI	C* -1>
+	<JRST	AND2MSK>
+
+AND2DIR	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	HERE 4>
+	<EXCH	B* D>
+	<EXCH	C* E>
+	<JRST	ANDNMSK>
+;"Here when both buckets in direct format"
+	<CAIE	C* 1>
+	<CAIN	E* 1>
+	<JRST	AND2DIR1>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* C>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>
+	<MOVEM	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* E>
+	<POP	P* C>
+AND2DL1	<MOVE	O* (B)>
+	<CAMN	O* (D)>
+	<JRST	AND2DFND>
+	<CAML	O* (D)>
+	<JRST	AND2DL2>
+	<ADD	B* [<1(1)>]>
+	<SOJG	C* AND2DL1>
+AND2DRET	<DPOP	TP* A>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+AND2DL2	<ADD	D* [<1(1)>]>
+	<SOJG	E* AND2DL1>
+	<JRST	AND2DRET>
+AND2DFND	<PUSH	P* D>
+	<PUSH	P* E>
+	<MOVE	D* (B)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* (TP)>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<POP	P* E>
+	<POP	P* D>
+	<ADD	B* [<1(1)>]>
+	<ADD	D* [<1(1)>]>
+	<SOJLE	C* AND2DRET>
+	<SOJG	E* AND2DL1>
+	<JRST	AND2DRET>
+
+
+;"Here if either direct-format bucket is only one id long"
+AND2DIR1	<CAIN	C* 1>
+	<JRST	HERE 3>
+	<EXCH	B* D>
+	<EXCH	C* E>
+	<MOVE	O* (B)>
+	<MOVE	A* $TUVECTOR>
+	<CAMN	O* (D)>
+	<JRST	MPOPJ>
+	<ADD	D* [<1(1)>]>
+	<SOJG	E* HERE -3>
+	<JRST	ANDFLS>
+
+
+
+;"A&B/ current bucket
+C/ length code for B
+D/ cptr to new bucket
+E/ length code for D"
+
+IOROPR	<SUBM	M* (P)>
+	<JUMPL	C* IOR1MSK>
+	<SKIPL	E>
+	<JRST	IORNEW>
+	<EXCH	B* D>
+	<EXCH	C* E>
+;"B/ cptr to writable, bit-mask bucket"
+IOR1MSK	<JUMPL	E* IOR2MSK>
+	<CAIL	E* BUCKET-LENGTH>
+	<JRST	IOR2MSK>
+;"Here if new bucket in direct format
+Old bucket is bit-format but need not be writable"
+IORNMSK	<PUSH	P* E>
+	<JUMPL	C* IORIRL1>
+;"Here if old bucket is read-only, copy it"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>		;"C&D/ cptr to old bit-mask format bucket"
+	<HRL	C* D>
+	<HRR	C* B>
+	<MOVE	E* B>
+	<ADDI	E* BUCKET-LENGTH>
+	<BLT	C* -1(E)>		;"copies bit-format bucket into new uvct"
+	<DPOP	TP* C>		;"C&D/ cptr to new, direct format bucket"
+;"A&B/ cptr to bit-mask format bucket, writable"
+IORIRL1	<MOVE	C* D>
+IORIRL2	<MOVE	D* (C)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* B>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<ADD	C* [<1(1)>]>
+	<SOSLE	(P)>
+	<JRST	IORIRL2>
+	<POP	P* O>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+;"Here to return FALSE"
+IORFLS	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<MOVEI	C* 0>
+	<JRST	MPOPJ>
+
+;"Here when both in bit-mask format and B is writable"
+IOR2MSK	<MOVE	E* B>
+	<MOVEI	C* BUCKET-LENGTH>
+	<MOVE	O* (D)>
+	<IORM	O* (E)>
+	<ADD	D* [<1(1)>]>
+	<ADD	E* [<1(1)>]>
+	<SOJG	C* HERE -4>
+	<MOVE	A* $TUVECTOR>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+;"Here if neither bucket writable (may still be in bit-mask format)"
+IORNEW	<CAIGE	C* BUCKET-LENGTH>
+	<JRST	IOR2DIR>
+	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	IORNMSK>
+;"Here if both read-only bit-mask"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVE	C* B>
+	<HRL	C* (TP)>
+	<MOVE	D* B>
+	<ADDI	D* BUCKET-LENGTH>
+	<BLT	C* -1(D)>
+	<DPOP	TP* C>
+	<DPOP	TP* C>
+	<POP	P* E>
+	<HRREI	C* -1>
+	<JRST	IOR2MSK>
+
+IOR2DIR	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	HERE 4>
+	<EXCH	B* D>
+	<EXCH	C* E>
+	<JRST	IORNMSK>
+;"Here when both buckets in direct format"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* C>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>
+	<MOVEM	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* E>
+	<POP	P* C>
+;"B/ old bucket
+C/ length code for B
+D/ new bucket
+E/ length code of D"
+IOR2DL1	<JUMPLE	C* HERE 4>
+	<MOVE	O* (B)>
+	<JUMPLE	E* HERE 3>
+	<CAMLE	O* (D)>
+	<MOVE	O* (D)>
+	<PUSH	P* D>
+	<PUSH	P* E>
+	<MOVE	D* O>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* (TP)>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<POP	P* E>
+	<POP	P* D>
+	<JUMPLE	C* IOR2DL2>		;"jumps if B exhausted"
+	<JUMPLE	E* IOR2DL3>		;"jumps if D exhausted"
+	<MOVE	O* (B)>
+	<CAMN	O* (D)>
+	<JRST	IOR2DBOTH>
+	<CAML	O* (D)>
+	<JRST	IOR2DL2>
+IOR2DL3	<ADD	B* [<1(1)>]>
+	<SOJG	C* IOR2DL1>
+	<JUMPG	E* IOR2DL1>
+IOR2DRET	<DPOP	TP* A>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+IOR2DL2	<ADD	D* [<1(1)>]>
+	<SOJG	E* IOR2DL1>
+	<JUMPG	C* IOR2DL1>
+	<JRST	IOR2DRET>
+IOR2DBOTH	<ADD	B* [<1(1)>]>
+	<ADD	D* [<1(1)>]>
+	<SOS	C>
+	<SOJG	E* IOR2DL1>
+	<JUMPG	C* IOR2DL1>
+	<JRST	IOR2DRET>
+
+
+
+
+
+;"A&B/ current bucket
+C/ length code for B
+D/ cptr to new bucket
+E/ length code for D"
+
+XOROPR	<SUBM	M* (P)>
+	<JUMPL	C* XOR1MSK>
+	<SKIPL	E>
+	<JRST	XORNEW>
+	<EXCH	B* D>
+	<EXCH	C* E>
+;"B/ cptr to writable, bit-mask bucket"
+XOR1MSK	<JUMPL	E* XOR2MSK>
+	<CAIL	E* BUCKET-LENGTH>
+	<JRST	XOR2MSK>
+;"Here if new bucket in direct format
+Old bucket is bit-format but need not be writable"
+XORNMSK	<PUSH	P* E>
+	<JUMPL	C* XORIRL1>
+;"Here if old bucket is read-only, copy it"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>		;"C&D/ cptr to old bit-mask format bucket"
+	<HRL	C* D>
+	<HRR	C* B>
+	<MOVE	E* B>
+	<ADDI	E* BUCKET-LENGTH>
+	<BLT	C* -1(E)>		;"copies bit-format bucket into new uvct"
+	<DPOP	TP* C>		;"C&D/ cptr to new, direct format bucket"
+;"A&B/ cptr to bit-mask format bucket, writable"
+XORIRL1	<MOVE	C* D>
+XORIRL2	<MOVE	D* (C)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* B>
+	<MOVE	E* (D)>
+	<TDNE	E* O>
+	<TDZA	E* O>		;"Removes id if it exists in both buckets"
+	<TDO	E* O>		;"Inserts id if it only exists in one bucket"
+	<MOVEM	E* (D)>
+	<ADD	C* [<1(1)>]>
+	<SOSLE	(P)>
+	<JRST	XORIRL2>
+	<POP	P* O>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+;"Here to return FALSE"
+XORFLS	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<MOVEI	C* 0>
+	<JRST	MPOPJ>
+
+;"Here when both in bit-mask format and B is writable"
+XOR2MSK	<MOVE	E* B>
+	<MOVEI	C* BUCKET-LENGTH>
+	<MOVE	O* (D)>
+	<XORM	O* (E)>
+	<ADD	D* [<1(1)>]>
+	<ADD	E* [<1(1)>]>
+	<SOJG	C* HERE -4>
+	<MOVE	A* $TUVECTOR>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+;"Here if neither bucket writable (may still be in bit-mask format)"
+XORNEW	<CAIGE	C* BUCKET-LENGTH>
+	<JRST	XOR2DIR>
+	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	XORNMSK>
+;"Here if both read-only bit-mask"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVE	C* B>
+	<HRL	C* (TP)>
+	<MOVE	D* B>
+	<ADDI	D* BUCKET-LENGTH>
+	<BLT	C* -1(D)>
+	<DPOP	TP* C>
+	<DPOP	TP* C>
+	<POP	P* E>
+	<HRREI	C* -1>
+	<JRST	XOR2MSK>
+
+XOR2DIR	<CAIGE	E* BUCKET-LENGTH>
+	<JRST	HERE 4>
+	<EXCH	B* D>
+	<EXCH	C* E>
+	<JRST	XORNMSK>
+;"Here when both buckets in direct format"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* C>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>
+	<MOVEM	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* E>
+	<POP	P* C>
+XOR2DL1	<JUMPG	C* HERE 3>
+	<MOVE	O* (D)>
+	<JRST	XOR2DL3>
+	<MOVE	O* (B)>
+	<JUMPLE	E* XOR2DL3>
+	<CAMN	O* (D)>
+	<JRST	XOR2DBOTH>
+	<CAML	O* (D)>
+	<MOVE	O* (D)>
+XOR2DL3	<PUSH	P* D>
+	<PUSH	P* E>
+	<MOVE	D* O>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* (TP)>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<POP	P* E>
+	<POP	P* D>
+	<JUMPLE	C* XOR2DL2>
+	<MOVE	O* (B)>
+	<JUMPLE	E* HERE 3>
+	<CAML	O* (D)>
+	<JRST	XOR2DL2>
+	<ADD	B* [<1(1)>]>
+	<SOJG	C* XOR2DL1>
+	<JUMPG	E* XOR2DL1>
+XOR2DRET	<DPOP	TP* A>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+XOR2DL2	<ADD	D* [<1(1)>]>
+	<SOJG	E* XOR2DL1>
+	<JUMPG	C* XOR2DL1>
+	<JRST	XOR2DRET>
+XOR2DBOTH	<ADD	B* [<1(1)>]>
+	<ADD	D* [<1(1)>]>
+	<SOS	C>
+	<SOJG	E* XOR2DL1>
+	<JUMPG	C* XOR2DL1>
+	<JRST	XOR2DRET>
+
+
+
+
+
+
+
+;"A&B/ bucket UVECTOR
+C/ length code for bucket
+D/ # of bucket being worked on
+
+==> A&B/ NOT of original bucket
+	C/ -1"
+
+NOTOPR	<SUBM	M* (P)>
+	<PUSH	P* D>
+	<MOVE	E* <MQUOTE '%<RGLOC INV-SEARCH-MASTER T>>>
+	<ADD	E* GLOTOP 1 (TVP)>
+	<DMOVE	D* (E)>
+	<GETYP	O* D>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	NOTERR>
+	<SKIPGE	3(E)>
+	<JRST	NOTFLS>
+	<HRRE	O* 3(E)>
+	<JUMPL	O* NOTFLS>
+	<DMOVE	D* 4(E)>
+	<GETYP	O* D>
+	<CAIE	O* <TYPE-CODE VECTOR>>
+	<JRST	BADMASTINV>
+	<GETYP	O* (E)>
+	<CAIE	O* <TYPE-CODE INV>>
+	<JRST	NOTFLS>
+	<GETYP	O* 6(E)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	NOTCHKW>		;"jumps if no bucket dir in inv state vector"
+	<SKIPL	D* 7(E)>
+	<JRST	NOTFLS>
+	<MOVE	O* (D)>
+	<CAME	O* (P)>
+	<JRST	NOTFLS>
+	<HRR	O* 1(D)>
+	<HRL	O* 1(D)>
+	<ADD	O* 9(E)>
+	<LDB	E* [<(,BLNT-BPTR) 1(D)>]>
+	<MOVE	D* O>
+	<POP	P* O>
+;"A&B/ bucket UVECTOR
+C/ length code for A&B
+D/ bucket UVECTOR from master inversion
+E/ length code for D"
+NOTOPR1	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	NOTRETMAST>
+	<SKIPL	C>
+	<CAIL	C* BUCKET-LENGTH>
+	<SKIPA>
+	<JRST	NOTNEW>			;"jumps if old bucket in direct format"
+;"B/ cptr to bit-mask bucket"
+NOT1MSK	<SKIPL	E>
+	<CAIL	E* BUCKET-LENGTH>
+	<JRST	NOT2MSK>		;"jumps if both in bit-mask format"
+;"Here if master bucket in direct format and old bucket in bit-mask format"
+NOTNMSK	<CAIG	E* 1>
+	<JRST	NOT1DIR>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<POP	TP* A>		;"A/ cptr to direct format bucket"
+	<POP	TP* O>
+	<EXCH	B* (TP)>	;"B/ cptr to bit-mask bucket"
+NOTIRL1	<MOVE	C* (A)>
+	<IDIVI	C* BUCKET-COUNT>
+	<MOVE	C* D>
+	<IDIVI	C* 36>
+	<MOVNS	D>
+	<MOVSI	E* *400000*>
+	<LSH	E* (D)>
+	<MOVE	D* C>
+	<ADD	D* B>
+	<MOVE	O* (D)>
+	<TDNE	O* E>
+	<JRST	NOTIRL2>
+	<ADD	C* (TP)>
+	<MOVE	O* (C)>
+	<TDO	O* E>
+	<MOVEM	O* (C)>
+NOTIRL2	<ADD	A* [<1(1)>]>
+	<SOSLE	(P)>
+	<JRST	NOTIRL1>
+	<POP	P* O>
+	<DPOP	TP* A>		;"A&B/ new bit-mask format bucket UVECTOR"
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+NOTCHKW	<CAIE	O* <TYPE-CODE FIX>>
+	<JRST	NOTFLS>
+	<MOVE	O* 7(E)>
+	<CAME	O* (P)>
+	<JRST	NOTFLS>
+	<DPUSH	TP* A>
+	<PUSH	P* C>
+	<PUSH	P* 9(E)>
+	<MOVEI	A* 1>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVE	D* B>
+	<POP	P* (D)>
+	<MOVEI	E* 1>
+	<POP	P* C>
+	<DPOP	TP* A>
+	<POP	P* O>
+	<JRST	NOTOPR1>
+
+NOTRETMAST	<MOVE	A* $TUVECTOR>
+	<MOVE	B* D>
+	<MOVE	C* E>
+	<JRST	MPOPJ>
+
+;"Here when B is bit-mask and D is direct format with length of 1"
+NOT1DIR	<PUSH	P* B>
+	<MOVE	A* (D)>
+	<IDIVI	A* BUCKET-COUNT>
+	<MOVE	A* B>
+	<IDIVI	A* 36>
+	<MOVNS	B>
+	<MOVSI	C* *400000*>
+	<LSH	C* (B)>
+	<POP	P* B>
+	<ADD	A* B>
+	<MOVE	O* (A)>
+	<TDNE	O* C>
+	<JRST	NOTFLS1>
+	<MOVE	A* $TUVECTOR>
+	<MOVE	B* D>
+	<MOVEI	C* 1>
+	<JRST	MPOPJ>
+
+;"Here to return FALSE"
+NOTFLS	<POP	P* O>
+NOTFLS1	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<MOVEI	C* 0>
+	<JRST	MPOPJ>
+
+;"Here when both in bit-mask format"
+NOT2MSK	<JUMPL	C* NOT2MSK1>
+;"Here if old bucket read-only, copy it"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>
+	<HRL	C* D>
+	<HRR	C* B>
+	<MOVE	D* B>
+	<ADDI	D* BUCKET-LENGTH>
+	<BLT	C* -1(D)>
+	<DPOP	TP* C>
+NOT2MSK1	<MOVE	E* B>
+	<MOVEI	C* BUCKET-LENGTH>
+NOT2ML	<MOVE	O* (E)>
+	<ANDCA	O* (D)>
+	<MOVEM	O* (E)>
+	<ADD	D* [<1(1)>]>
+	<ADD	E* [<1(1)>]>
+	<SOJG	C* NOT2ML>
+	<MOVE	A* $TUVECTOR>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+;"Here if old bucket in direct format"
+NOTNEW	<SKIPL	E>
+	<CAIL	E* BUCKET-LENGTH>
+	<SKIPA>
+	<JRST	NOT2DIR>
+;"Here if old bucket in direct format and master bucket in bit-mask"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* E>
+	<PUSHJ	P* CNVBITMSK>
+	<POP	P* E>
+	<POP	TP* D>
+	<POP	TP* O>
+	<JRST	NOT2MSK>
+
+;"Here if both buckets in direct format"
+NOT2DIR	<CAIN	E* 1>
+	<JRST	NOT2DIR1>		;"Jumps if master bucket only 1 long"
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* D>
+	<PUSH	P* C>
+	<PUSH	P* E>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<DPOP	TP* C>
+	<MOVEM	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* E>
+	<POP	P* C>
+NOT2DL1	<MOVE	O* (D)>
+	<JUMPLE	C* NOT2DL2>
+	<CAMN	O* (B)>
+	<JRST	NOT2DFND>
+	<CAMG	O* (B)>
+	<JRST	NOT2DL2>
+	<ADD	B* [<1(1)>]>
+	<SOJA	C* NOT2DL1>
+NOT2DRET	<DPOP	TP* A>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+NOT2DL2	<PUSH	P* D>
+	<PUSH	P* E>
+	<MOVE	D* (D)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<ADD	D* (TP)>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<POP	P* E>
+	<POP	P* D>
+	<ADD	D* [<1(1)>]>
+	<SOJG	E* NOT2DL1>
+	<JRST	NOT2DRET>
+NOT2DFND	<ADD	B* [<1(1)>]>
+	<ADD	D* [<1(1)>]>
+	<SOS	C>
+	<SOJG	E* NOT2DL1>
+	<JRST	NOT2DRET>
+
+
+;"Here if master (direct-format) bucket is only one id long"
+NOT2DIR1	<MOVE	O* (D)>
+	<MOVE	A* $TUVECTOR>
+	<CAMN	O* (B)>
+	<JRST	NOTFLS1>
+	<ADD	B* [<1(1)>]>
+	<SOJG	C* HERE -3>
+	<MOVE	A* $TUVECTOR>
+	<MOVE	B* D>
+	<MOVEI	C* 1>
+	<JRST	MPOPJ>
+
+
+NOTERR	<DPUSH	TP* <PQUOTE TRIED-TO-USE-A-NEGATIVE-OPERATOR!-ERRORS>>
+	<DPUSH	TP* <PQUOTE WITHOUT-A-MASTER-INVERSION!-ERRORS>>
+	<MCALL	2 ERROR>
+	<JRST	NOTERR>
+
+BADMASTINV	<DPUSH	TP* <PQUOTE BAD-STATE-VECTOR-FOR-MASTER-INVERSION!-ERRORS>>
+	<MCALL	1 ERROR>
+	<JRST	BADMASTINV>
+
+
+
+
+;"A&B/ bucket UVECTOR
+C/ length code for bucket
+
+==> A&B/ bit-mask version of original bucket
+	C/ -1"
+
+CNVBITMSK	<SUBM	M* (P)>
+	<SKIPGE	C>
+	<JRST	MPOPJ>
+	<DPUSH	TP* A>
+	<PUSH	P* C>
+	<MOVEI	A* BUCKET-LENGTH>
+	<PUSHJ	P* GETIUVECTOR>
+	<MOVEM	A* -1(TP)>
+	<EXCH	B* (TP)>
+	<POP	P* A>
+CNVBL1	<MOVE	D* (B)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<MOVNS	E>
+	<MOVSI	C* *400000*>
+	<LSH	C* (E)>
+	<ADD	D* (TP)>
+	<MOVE	E* (D)>
+	<TDO	E* C>
+	<MOVEM	E* (D)>
+	<ADD	B* [<1(1)>]>
+	<SOJG	A* CNVBL1>
+	<DPOP	TP* A>
+	<HRREI	C* -1>
+	<JRST	MPOPJ>
+
+
+;"#####################################################################
+#######################################################################
+######################################################################"
+
+
+<TITLE INV-LENGTH>
+
+<DECLARE ("VALUE" FIX INV)>
+
+	<DPUSH	TP* (AB)>
+	<PUSHJ	P* IINV-LENGTH>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-LENGTH 1>
+
+	<SUBM	M* (P)>
+	<MOVE	E* (TP)>
+	<MOVE	A* $TFIX>
+	<MOVEI	B* 0>
+	<SUB	TP* [<2(2)>]>
+	<SKIPGE	E>
+	<MOVE	B* 3(E)>
+	<JRST	MPOPJ>
+
+
+
+;"#####################################################################
+#######################################################################
+######################################################################"
+
+
+
+<TITLE INV-INSERT>
+
+<DECLARE ("VALUE" <OR INV FALSE> <OR INV FALSE> FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-INSERT>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-INSERT 2>
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIN	O* <TYPE-CODE INV>>
+	<SKIPL	E* -2(TP)>
+	<JRST	INSFIRST>
+	<MOVE	A* 1(E)>
+	<CAIE	A* 2>
+	<PUSHJ	P* INSTWO>
+	<GETYP	O* 4(E)>
+	<CAIN	O* <TYPE-CODE VECTOR>>
+	<SKIPL	D* 5(E)>
+	<JRST	BADINV>
+	<MOVE	A* (TP)>
+	<IDIVI	A* BLOCK-COUNT>
+	<CAME	A* 1(D)>
+	<JRST	N1BLK>
+	<GETYP	O* 2(D)>
+	<CAIN	O* <TYPE-CODE UVECTOR>>
+	<SKIPL	C* 3(D)>
+	<JRST	BADINV>
+	<HLRZ	A* (C)>		;"A/ # of idents in blk"
+	<MOVE	B* 3(E)>	;"B/ # of idents in inversion"
+	<SUB	B* A>
+	<PUSH	P* B>
+INSBLK	<MOVE	O* (TP)>
+	<PUSH	TP* $TVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* 2(D)>
+	<PUSH	TP* 3(D)>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* O>
+	<MCALL	2 INS-INTO-INV-BLK>
+	<DPOP	TP* C>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	BADINS>
+	<DMOVEM	A* 2(D)>
+	<HLRZ	A* (B)>
+	<POP	P* B>
+	<ADD	A* B>
+	<MOVE	E* -2(TP)>
+	<MOVEM	A* 3(E)>
+	<SUB	TP* [<2(2)>]>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+INSFIRST	<MOVE	O* (TP)>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [1]>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [1]>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* O>
+	<MCALL	3 INV-VECTOR>
+	<MOVEI	O* <TYPE-CODE INV>>
+	<PUTYP	O* A>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+
+INSTWO	<SUBM	M* (P)>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* [6]>
+	<MCALL	1 INV-IUVECTOR>
+	<ADD	B* [<6(6)>]>
+	<MOVE	E* -2(TP)>
+	<DPUSH	TP* A>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* 5(E)>
+	<MCALL	2 INS-INTO-INV-BLK>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	BADINS>
+	<MOVE	E* -2(TP)>
+	<MOVE	C* 5(E)>
+	<IDIVI	C* BLOCK-COUNT>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* C>
+	<DPUSH	TP* A>
+	<MCALL	2 INV-VECTOR>
+	<MOVE	E* -2(TP)>
+	<DMOVEM	A* 4(E)>
+	<MOVEI	A* 1>
+	<MOVEM	A* 3(E)>
+	<MOVEI	A* 2>
+	<MOVEM	A* 1(E)>
+	<JRST	MPOPJ>
+
+;"A/ blk # of ident being inserted
+D/ cptr to blk dir vector"
+
+N1BLK	<HLRE	B* D>
+	<MOVMS	B>
+	<IDIVI	B* 4>		;"B/ # of entries in blk dir vector"
+	<MOVE	C* D>		;"C/ cptr tp blk dir vector"
+SBLKDIR	<CAILE	B* 3>
+	<JRST	SBLKBIN>
+SBLKLP1	<CAMN	A* 1(C)>
+	<JRST	FNDBLK>		;"jumps if desired blk exists"
+	<CAMG	A* 1(C)>
+	<JRST	NEWBLK>		;"jumps if a new blk needed"
+	<ADD	C* [<4(4)>]>
+	<SOJG	B* SBLKLP1>
+NEWBLK	<MOVE	E* -2(TP)>
+	<MOVE	D* 5(E)>
+	<MOVEI	B* 0>
+	<HRRZ	O* C>
+	<SUBI	O* (D)>
+	<HRLS	O*>
+	<PUSH	P* O>
+NEWBLKLP1	<CAME	D* C>
+	<JRST	NEWBLKLP2>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* A>
+	<PUSH	TP* <TYPE-WORD FALSE>>
+	<PUSH	TP* [0]>
+	<ADDI	B* 2>
+NEWBLKLP2	<JUMPGE	D* NEWBLKLP3>
+	<DPUSH	TP* (D)>
+	<ADD	D* [<2(2)>]>
+	<AOJ	B*>
+	<JRST	NEWBLKLP1>
+NEWBLKLP3	<MOVE	A* B>
+	<ACALL	A* INV-VECTOR>
+	<MOVE	E* -2(TP)>
+	<DPUSH	TP* 4(E)>
+	<DMOVEM	A* 4(E)>
+	<MCALL	1 INV-RELDATA>
+	<MOVE	E* -2(TP)>
+	<DMOVE	A* 4(E)>
+	<POP	P* C>
+	<ADD	C* B>
+	<PUSH	P* 3(E)>
+	<JRST	FNDBLK1>
+
+;"C/ cptr to winning entry in blk dir vector"
+FNDBLK	<MOVE	E* -2(TP)>
+	<SKIPL	D* 3(C)>
+	<JRST	BADINV>
+	<HLRZ	A* (D)>		;"A/ # of idents in blk"
+	<MOVE	B* 3(E)>	;"B/ # of idents in whole inversion"
+	<SUB	B* A>
+	<PUSH	P* B>
+FNDBLK1	<MOVE	D* C>
+	<JRST	INSBLK>
+
+
+SBLKBIN	<MOVE	D* B>
+	<IDIVI	D* 2>
+	<MOVE	E* D>
+	<IMULI	E* 4>
+	<HRLS	E>
+	<ADD	E* C>
+	<CAMGE	A* 1(E)>
+	<JRST	SBLKUP>
+	<CAMN	A* 1(E)>
+	<JRST	FNDBLK>
+	<MOVE	C* E>
+	<SUB	B* D>
+	<JRST	SBLKDIR>
+
+SBLKUP	<MOVE	B* D>
+	<JRST	SBLKDIR>
+
+
+
+BADINV	<DMOVE	A* -2(TP)>
+	<DPUSH	TP* <PQUOTE INVALID-INVERSION!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	BADINV>
+
+BADINS	<DMOVE	C* -2(TP)>
+	<DPUSH	TP* <PQUOTE COULDNT-INSERT-INTO-INV-BLK!-ERRORS>>
+	<DPUSH	TP* A>
+	<DPUSH	TP* C>
+	<MCALL	3 ERROR>
+	<JRST	BADINS>
+
+
+<SUB-ENTRY INV-DELETE ("VALUE" <OR INV FALSE> INV FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-DELETE>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-DELETE 2>
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIN	O* <TYPE-CODE INV>>
+	<SKIPL	E* -2(TP)>
+	<JRST	RETFLS>
+	<MOVE	A* 1(E)>
+	<CAIE	A* 2>
+	<JRST	DELSID>
+	<GETYP	O* 4(E)>
+	<CAIN	O* <TYPE-CODE VECTOR>>
+	<SKIPL	D* 5(E)>
+	<JRST	BADINV>
+	<MOVE	A* (TP)>
+	<IDIVI	A* BLOCK-COUNT>
+	<CAME	A* 1(D)>
+	<JRST	DN1BLK>
+	<GETYP	O* 2(D)>
+	<CAIN	O* <TYPE-CODE UVECTOR>>
+	<SKIPL	C* 3(D)>
+	<JRST	BADINV>
+	<HLRZ	A* (C)>		;"A/ # of idents in blk"
+	<MOVE	B* 3(E)>	;"B/ # of idents in inversion"
+	<SUB	B* A>
+	<PUSH	P* B>
+DELID	<MOVE	O* (TP)>
+	<PUSH	TP* $TVECTOR>
+	<PUSH	TP* D>
+	<PUSH	TP* 2(D)>
+	<PUSH	TP* 3(D)>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* O>
+	<MCALL	2 DEL-FROM-INV-BLK>
+	<DPOP	TP* C>
+	<GETYP	O* A>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	BADDEL>
+	<JUMPGE	B* DELBLK>
+	<MOVE	E* -2(TP)>
+	<MOVEM	B* 3(D)>
+	<HLRZ	A* (B)>
+	<POP	P* B>
+	<ADD	A* B>
+	<MOVEM	A* 3(E)>
+DELRET	<SUB	TP* [<2(2)>]>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+RETFLS	<SUB	TP* [<4(4)>]>
+	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+DELSID	<MOVE	A* 5(E)>
+	<CAME	A* (TP)>
+	<JRST	DELRET>
+	<JRST	RETFLS>
+
+
+;"A/ blk # of ident being inserted
+D/ cptr to blk dir vector"
+
+DN1BLK	<HLRE	B* D>
+	<MOVMS	B>
+	<IDIVI	B* 4>		;"B/ # of entries in blk dir vector"
+	<MOVE	C* D>		;"C/ cptr tp blk dir vector"
+DSBLKDIR	<CAILE	B* 3>
+	<JRST	DSBLKBIN>
+DSBLKLP1	<CAMN	A* 1(C)>
+	<JRST	DFNDBLK>		;"jumps if desired blk exists"
+	<CAMG	A* 1(C)>
+	<JRST	DELRET>
+	<ADD	C* [<4(4)>]>
+	<SOJG	B* DSBLKLP1>
+	<JRST	DELRET>
+
+;"C/ cptr to winning entry in blk dir vector"
+DFNDBLK	<MOVE	E* -2(TP)>
+	<SKIPL	D* 3(C)>
+	<JRST	BADINV>
+	<HLRZ	A* (D)>		;"A/ # of idents in blk"
+	<MOVE	B* 3(E)>	;"B/ # of idents in whole inversion"
+	<SUB	B* A>
+	<PUSH	P* B>
+DFNDBLK1	<MOVE	D* C>
+	<JRST	DELID>
+
+
+DSBLKBIN	<MOVE	D* B>
+	<IDIVI	D* 2>
+	<MOVE	E* D>
+	<IMULI	E* 4>
+	<HRLS	E>
+	<ADD	E* C>
+	<CAMGE	A* 1(E)>
+	<JRST	DSBLKUP>
+	<MOVE	C* E>
+	<SUB	B* D>
+	<CAMN	A* 1(E)>
+	<JRST	DFNDBLK>
+	<JRST	DSBLKDIR>
+
+DSBLKUP	<MOVE	B* D>
+	<JRST	DSBLKDIR>
+
+
+;"A&B/ cptr to empty UVCT
+C&D/ cptr to blk's entry in dir VECTOR"
+
+;"Here if DEL-FROM-INV-BLK returned an empty blk"
+DELBLK	<MOVE	E* -2(TP)>
+	<POP	P* O>		;"O/ number of id's in INV, less # in blk being hacked"
+	<JUMPLE	O* RETFLS>	;"jumps if deleted last id in INV"
+	<MOVEM	O* 3(E)>
+	<MOVE	A* 5(E)>	;"A/ cptr to original dir vector"
+	<ADD	A* [<4(4)>]>	;"A/ cptr to 'new' blk dir vector"
+	<EXCH	A* 5(E)>	;"A/ cptr to old blk dir vector"
+	<CAMN	A* D>
+	<JRST	DELRET>
+	<MOVE	B* D>
+	<ADD	B* [<4(4)>]>
+MOVLP1	<SUB	B* [<1(1)>]>
+	<SUB	D* [<1(1)>]>
+	<MOVE	O* (D)>
+	<MOVEM	O* (B)>
+	<CAME	D* A>
+	<JRST	MOVLP1>
+	<JRST	DELRET>
+
+
+
+BADDEL	<DMOVE	C* -2(TP)>
+	<DPUSH	TP* <PQUOTE COULDNT-DELETE-FROM-INV-BLK>>
+	<DPUSH	TP* A>
+	<DPUSH	TP* C>
+	<MCALL	3 ERROR>
+	<JRST	BADDEL>
+
+
+
+
+<SUB-ENTRY INV-TEST ("VALUE" <OR FIX FALSE> INV FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINV-TEST>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINV-TEST 2>
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>		;"Number being tested"
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIN	O* <TYPE-CODE INV>>
+	<SKIPL	E* -2(TP)>		;"E/ cptr to INV being tested"
+	<JRST	RETFLS>			;"FALSE if not a legal INV"
+	<MOVE	A* 1(E)>		;"A/ type code of INV"
+	<CAIE	A* 2>
+	<JRST	TSTSID>			;"Here if 'single id' form"
+	<GETYP	O* 4(E)>
+	<CAIN	O* <TYPE-CODE VECTOR>>
+	<SKIPL	D* 5(E)>		;"D/ cptr to VECTOR of bucket UVECTORS"
+	<JRST	RETFLS>			;"FALSE if not a legal INV"
+	<MOVE	A* (TP)>		;"A/ id being tested"
+	<IDIVI	A* BLOCK-COUNT>		;"A/ blk # of id being tested"
+	<CAME	A* 1(D)>		;"Is the first (probably only) blk it?"
+	<JRST	TN1BLK>			;"No, go search the block directory"
+;"Here when block to be tested has been found."
+TSTID	<MOVE	O* (TP)>		;"O/ FIX to be tested"
+	<PUSH	TP* 2(D)>
+	<PUSH	TP* 3(D)>		;"Push block to be tested"
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* O>			;"Push FIX to be tested"
+	<MCALL	2 TEST-INV-BLK>		;"And TEST it"
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+;"here to return a non-false result"	
+TSTRET	<DPOP	TP* A>
+	<SUB	TP* [<2(2)>]>
+	<JRST	MPOPJ>
+
+;"Here when INV is of the single-id form"
+TSTSID	<MOVE	A* 5(E)>		;"A/ single id in INV"
+	<CAME	A* (TP)>
+	<JRST	RETFLS>			;"FALSE if id in INV NOT = one being tested"
+	<JRST	TSTRET>			;"Good return if id in INV = one being tested"
+
+
+
+;"A/ blk # of ident being inserted
+D/ cptr to blk dir vector"
+
+TN1BLK	<HLRE	B* D>
+	<MOVMS	B>
+	<IDIVI	B* 4>			;"B/ # of entries in blk dir vector"
+	<MOVE	C* D>			;"C/ cptr to blk dir vector"
+TSBLKDIR	<CAILE	B* 3>
+	<JRST	TSBLKBIN>		;"If search space large, binary search it"
+TSBLKLP1	<CAMN	A* 1(C)>
+	<JRST	TFNDBLK>		;"jumps if desired blk exists"
+	<CAMG	A* 1(C)>
+	<JRST	RETFLS>			;"FALSE if desired blk # < an existing one"
+	<ADD	C* [<4(4)>]>
+	<SOJG	B* TSBLKLP1>
+	<JRST	RETFLS>			;"FALSE if blk not found"
+
+;"C/ cptr to winning entry in blk dir vector"
+TFNDBLK	<MOVE	D* C>
+	<JRST	TSTID>
+
+;"Here to binary search"
+TSBLKBIN	<MOVE	D* B>
+	<IDIVI	D* 2>
+	<MOVE	E* D>
+	<IMULI	E* 4>
+	<HRLS	E>
+	<ADD	E* C>
+	<CAMGE	A* 1(E)>
+	<JRST	TSBLKUP>
+	<MOVE	C* E>
+	<SUB	B* D>
+	<CAMN	A* 1(E)>
+	<JRST	TFNDBLK>
+	<JRST	TSBLKDIR>
+
+TSBLKUP	<MOVE	B* D>
+	<JRST	TSBLKDIR>
+
+
+
+;"#####################################################################
+#######################################################################
+######################################################################"
+
+
+
+<TITLE INS-INTO-INV-BLK>
+
+<DECLARE ("VALUE" UVECTOR <OR UVECTOR FALSE> FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IINS-INTO-INV-BLK>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IINS-INTO-INV-BLK 2>
+
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIE	O* TUVECTOR>
+	<JRST	MAKENEWUVCT>
+	<MOVE	A* -2(TP)>
+	<HLRE	B* A>
+	<JUMPE	B* EMPTYUVCT>
+	<MOVMS	B>
+	<CAIGE	B* 5>
+	<JRST TOOSHORT>
+	<HLRZ	C* 1(A)>
+	<CAIE	C* CHECK-CODE>
+	<JRST	BADCODE>
+	<HRRZ	C* 1(A)>
+	<SKIPLE	C>
+	<SKIPG	(A)>
+	<JRST	BADCOUNT>
+	<HRLS	C>
+	<HRRZ	B* (A)>
+	<ADD	A* C>
+	<HLRE	D* A>
+	<MOVMS	D>
+	<IDIVI	D* 2>
+	<CAME	D* B>
+	<JRST	BADCOUNT>
+	<MOVE	C* (TP)>
+	<IDIVI	C* BUCKET-COUNT>
+	<PUSHJ	P* SRCDIR>
+	<CAME	C* (B)>
+	<JRST	ADDBUCKET>
+
+;"Here if bucket exists, check length to see what format it is in"
+	<LDB	D* [<(,BLNT-BPTR) 1(B)>]>
+	<CAIGE	D* BUCKET-LENGTH>
+	<JRST	ADDIDENT>
+
+;"Here if bucket in bit-mask format, turn on appropriate bit"
+	<MOVE	A* -2(TP)>
+	<HRRZ	C* 1(B)>
+	<ADD	C* A>
+	<MOVE	D* (TP)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<ADD	C* D>
+	<MOVSI	D* *400000*>
+	<MOVNS	E>
+	<LSH	D* (E)>
+	<MOVE	E* (C)>
+	<TDNE	E* D>
+	<JRST	INSRET>
+	<TDO	E* D>
+	<MOVEM	E* (C)>
+
+;"increment appropriate counts and return"
+	<LDB	C* [<(,BCNT-BPTR) 1(B)>]>
+	<ADDI	C* 1>
+	<DPB	C* [<(,BCNT-BPTR) 1(B)>]>	;"increments ident count for bucket"
+	<MOVSI	C* 1>
+	<ADDM	C* (A)>		;"increments ident count for entire block"
+INSRET	<SUB	TP* [<2(2)>]>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+
+;"B/ cptr to bucket entry in dir
+D/ # of words used by bucket (less than BUCKET-LENGTH)"
+ADDIDENT	<PUSH	P* D>
+	<PUSH	P* B>		;"NOT PROTECTED IF A GC HAPPENS (SEE NADDIDENT)"
+	<HRRZ	A* 1(B)>
+	<HRLS	A>
+	<ADD	A* -2(TP)>
+	<MOVE	B* D>
+	<MOVE	C* (TP)>
+	<PUSHJ	P* SRCBUCKET>
+	<JUMPE	A* HERE 3>
+	<CAMN	C* (B)>
+	<JRST	IDENTEXISTS>
+	<HLRE	C* -2(TP)>
+	<MOVMS	C>
+	<HRRZ	D* -2(TP)>
+	<ADD	D* C>
+	<HLRZ	O* 1(D)>
+	<CAIGE	O* 3(C)>		;"skips if enough slush space exists"
+	<JRST	NADDIDENT>
+	<MOVE	A* -2(TP)>
+	<MOVE	C* A>
+	<SUB	C* [<1(1)>]>
+	<PUSHJ	P* INSIDENT>
+ADDIRET	<POP	P* B>		;"B/ cptr to bucket entry in dir"
+	<SUBI	B* -1(A)>
+	<HRLS	B>
+	<ADD	B* C>
+	<EXCH	B* C>		;"B/ cptr to new uvct
+				C/ cptr to bucket entry in dir of new uvct"
+	<POP	P* D>		;"D/ # of idents in bucket (old)"
+	<ADDI	D* 1>
+	<DPB	D* [<(,BLNT-BPTR) 1(C)>]>	;"stores # of words in bucket"
+	<DPB	D* [<(,BCNT-BPTR) 1(C)>]>	;"stores # of idents in bucket"
+	<AOS	1(B)>
+	<MOVSI	E* 1>
+	<ADDM	E* (B)>
+	<HRRZ	E* 1(B)>	;"E/ offset of dir in new uvct"
+	<HRLS	E>
+	<ADD	E* B>		;"E/ cptr to dir of new uvct"
+	<HRRZ	O* 1(C)>
+	<PUSH	P* O>
+LADDIRET	<HRRZ	O* 1(E)>
+	<CAMLE	O* (P)>
+	<AOS	1(E)>
+	<ADD	E* [<2(2)>]>
+	<JUMPL	E* LADDIRET>
+	<POP	P* O>
+	<CAIL	D* BUCKET-LENGTH>
+	<PUSHJ	P* CNVBITMASK>
+	<MOVE	A* -3(TP)>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+IDENTEXISTS	<POP	P* O>
+	<POP	P* O>
+	<JRST	INSRET>
+
+NADDIDENT	<PUSH	TP* <TYPE-WORD UVECTOR>>
+	<PUSH	TP* (P)>		;"MUST PROTECT CPTR THROUGH UPCOMING MCALL"
+	<MOVE	A* C>
+	<ADDI	A* 11>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* A>
+	<MCALL	1 INV-IUVECTOR>
+	<MOVE	C* B>
+	<ADD	C* [<10(10)>]>
+	<POP	TP* B>			;"B/ cptr to slot for new ident (original uv)"
+	<SUB	TP* [<1(1)>]>
+	<POP	TP* (P)>		;"(P)/ cptr to slot in bucket dir"
+	<SUB	TP* [<1(1)>]>
+	<MOVE	A* -2(TP)>
+	<PUSHJ	P* INSIDENT>
+	<HRRZ	D* B>
+	<SUBI	D* (A)>
+	<ADDI	D* 1(C)>
+	<HRL	D* B>
+	<HLRE	E* C>
+	<MOVMS	E>
+	<ADD	E* C>
+	<BLT	D* -1(E)>
+	<JRST	ADDIRET>
+
+
+;"A/ cptr to original uvector
+B/ cptr to slot for new ident (in original uvct)
+C/ cptr to new uvct 
+	C may be a backed cptr to A."
+INSIDENT	<HRRZ	E* B>
+	<SUBI	E* (A)>
+	<ADDI	E* (C)>
+	<HRL	D* A>
+	<HRR	D* C>
+	<BLT	D* -1(E)>
+	<MOVE	O* (TP)>
+	<MOVEM	O* (E)>
+	<POPJ	P*>
+
+	
+
+
+MAKENEWUVCT	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* [15]>
+	<MCALL	1 INV-IUVECTOR>
+	<ADD	B* [<10(10)>]>
+FILLNEWUVCT	<MOVE	O* [<1(1)>]>
+	<MOVEM	O* (B)>
+	<MOVEI	O* 3>
+	<HRLI	O* CHECK-CODE>
+	<MOVEM	O* 1(B)>
+	<MOVE	D* (TP)>
+	<MOVEM	D* 2(B)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVEM	D* 3(B)>
+	<MOVE	O* [<2(*040001*)>]>
+	<MOVEM	O* 4(B)>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+EMPTYUVCT	<HLRE	C* -2(TP)>
+	<MOVMS	C>
+	<ADD	C* -2(TP)>
+	<HLRZ	D* 1(C)>
+	<CAIGE	D* 7>
+	<JRST	MAKENEWUVCT>
+	<MOVEI	B* -5(C)>
+	<HRLI	B* -5>
+	<MOVE	A* -3(TP)>
+	<JRST	FILLNEWUVCT>
+
+
+ADDBUCKET	<HLRE	C* -2(TP)>
+	<MOVMS	C>
+	<HRRZ	D* -2(TP)>
+	<ADD	D* C>
+	<HLRZ	E* 1(D)>
+	<CAIGE	E* 5(C)>		;"skips if enough slush space exists"
+	<JRST	NADDBUCKET>
+	<MOVE	A* -2(TP)>
+	<MOVE	C* A>
+	<SUB	C* [<3(3)>]>
+	<PUSHJ	P* INSBUCKET>
+ADDBRET	<MOVE	A* -3(TP)>
+	<MOVE	B* C>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+
+NADDBUCKET <MOVE	A* C>
+	<ADDI	A* 13>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* <TYPE-WORD FIX>>
+	<PUSH	TP* A>
+	<MCALL	1 INV-IUVECTOR>
+	<MOVE	C* B>
+	<ADD	C* [<10(10)>]>
+	<POP	TP* B>
+	<POP	TP* O>
+	<MOVE	A* -2(TP)>
+	<PUSHJ	P* INSBUCKET>
+	<JUMPGE	B* ADDBRET>
+	<HRRZ	D* B>
+	<SUBI	D* (A)>
+	<ADDI	D* 3(C)>
+	<HRL	D* B>
+	<HLRE	E* C>
+	<MOVMS	E>
+	<ADD	E* C>
+	<BLT	D* -1(E)>
+	<JRST	ADDBRET>
+
+
+;"A/ cptr to original uvector
+B/ cptr to location of new bucket in original
+C/ cptr to new uvct 
+	C may be a backed cptr to A."
+INSBUCKET	<MOVE	D* C>
+	<HRLI	D* (A)>
+	<HRRZ	E* 1(A)>
+	<ADDI	E* (C)>
+	<BLT	D* -1(E)>	;"moves top part of original uvct to top of new uvct"
+	<MOVE	O* (TP)>
+	<MOVEM	O* (E)>		;"stores new indicator in new uvct"
+	<MOVEI	D* 1(E)>
+	<HRRZ	E* 1(C)>
+	<ADD	E* A>
+	<HRL	D* E>
+	<HRRZ	E* B>
+	<SUBI	E* (A)>
+	<ADDI	E* 1(C)>
+	<CAILE	E* (D)>
+	<BLT	D* -1(E)>	;"moves top part of original dir to new uvct"
+	<MOVE	D* (TP)>
+	<MOVE	O* E>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	E* O>
+	<MOVEM	D* (E)>		;"stores new bucket # in new uvct"
+	<HRLI	O* *040001*>
+	<HRR	O* 1(C)>
+	<MOVEM	O* 1(E)>	;"stores new bucket size and offset in new uvct"
+	<MOVE	O* [<1(1)>]>
+	<ADDM	O* (C)>		;"increments indicator and bucket counts in new uvct"
+	<AOS	1(C)>		;"increments offset of dir in new uvct"
+	<POPJ	P*>
+
+
+
+TOOSHORT	<DMOVE	A* -3(TP)>
+	<DPUSH	TP* <PQUOTE UVECTOR-TOO-SHORT!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	TOOSHORT>
+
+BADCODE <DMOVE	A* -3(TP)>
+	<DPUSH	TP* <PQUOTE CONSISTENCY-CHECK-DOESNT-MATCH!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	BADCODE>
+
+BADCOUNT	<DMOVE	A* -3(TP)>
+	<DPUSH	TP* <PQUOTE HEADER-INFORMATION-INCORRECT!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	BADCOUNT>
+
+TOOMANYIDS <DMOVE	A* -3(TP)>
+	<DPUSH	TP* <PQUOTE OVERSIZED-BUCKET!-ERRORS>>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* D>
+	<DPUSH	TP* A>
+	<MCALL	3 ERROR>
+	<JRST	TOOMANYIDS>
+
+
+
+
+
+
+<SUB-ENTRY DEL-FROM-INV-BLK	("VALUE" <OR UVECTOR FALSE> UVECTOR FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* IDEL-FROM-INV-BLK>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY IDEL-FROM-INV-BLK 2>
+
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIE	O* <TYPE-CODE UVECTOR>>
+	<JRST	RETFLS>
+	<SKIPL	E* -2(TP)>
+	<JRST	BADUV>
+	<HLRZ	O* 1(E)>
+	<SKIPLE	(E)>
+	<CAIE	O* CHECK-CODE>
+	<JRST	BADUV>
+	<HRRZ	A* 1(E)>
+	<JUMPLE	A* BADUV>
+	<HRLS	A>
+	<ADD	A* E>			;"A/ cptr to dir area of uvct"
+	<HRRZ	B* (E)>
+	<HLRE	C* A>
+	<MOVMS	C>
+	<IDIVI	C* 2>
+	<CAME	C* B>
+	<JRST	BADUV>
+	<MOVE	C* (TP)>
+	<IDIVI	C* BUCKET-COUNT>
+	<PUSHJ	P* SRCDIR>
+	<CAME	C* (B)>
+	<JRST	DELRET>
+;"Here if bucket exists"
+	<LDB	O* [<(,BLNT-BPTR) 1(B)>]>
+	<CAIGE	O* BUCKET-LENGTH>
+	<JRST	DELDIRECT>
+;"Here if bucket in bit-mask format"
+	<MOVE	A* -2(TP)>
+	<HRRZ	C* 1(B)>
+	<ADD	C* A>
+	<MOVE	D* (TP)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<ADD	C* D>
+	<MOVSI	D* *400000*>
+	<MOVNS	E>
+	<LSH	D* (E)>
+	<MOVE	E* (C)>
+	<TDNN	E* D>
+	<JRST	DELRET>
+	<LDB	O* [<(,BCNT-BPTR) 1(B)>]>
+	<CAILE	O* BUCKET-LENGTH>
+	<JRST	HERE 3>
+	<PUSHJ	P* CNV-TO-DIRECT>
+	<JRST	DELDIRECT>	;"jumps if deletion causes reversion to direct format"
+	<TDZ	E* D>
+	<MOVEM	E* (C)>
+;"decrement appropriate counts and return"
+	<LDB	C* [<(,BCNT-BPTR) 1(B)>]>
+	<SUBI	C* 1>
+	<DPB	C* [<(,BCNT-BPTR) 1(B)>]>	;"decrements ident count for bucket"
+	<HLRZ	C* (A)>
+	<SUBI	C* 1>
+	<HRLM	C* (A)>
+DELRET	<SUB	TP* [<2(2)>]>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+RETFLS	<SUB	TP* [<4(4)>]>
+	<MOVE	A* $TFALSE>
+	<MOVEI	B* 0>
+	<JRST	MPOPJ>
+
+BADUV	<DMOVE	A* -3(TP)>
+	<DPUSH	TP* <PQUOTE INV-BLK-IN-BAD-FORMAT!-ERRORS>>
+	<DPUSH	TP* A>
+	<MCALL	2 ERROR>
+	<JRST	BADUV>
+
+
+;"B/ cptr to dir entry of bucket in direct format"
+
+DELDIRECT	<HRRZ	A* 1(B)>
+	<HRLS	A>
+	<ADD	A* -2(TP)>
+	<PUSH	P* B>		;"saves cptr to dir entry for bucket"
+	<LDB	B* [<(,BLNT-BPTR) 1(B)>]>
+	<MOVE	C* (TP)>
+	<PUSHJ	P* SRCBUCKET>
+	<POP	P* A>		;"A/ cptr to bucket's dir entry slot"
+	<MOVE	C* (TP)>
+	<CAMN	C* (B)>
+	<JRST	DELFND>
+	<LDB	O* [<(,BLNT-BPTR) 1(A)>]>
+	<CAIGE	O* BUCKET-LENGTH>
+	<JRST	DELRET>
+CNVERR	<DMOVE	C* -2(TP)>
+	<DPUSH	TP* <PQUOTE ID-DISAPPEARED-IN-CONVERSION-TO-DIRECT-FORMAT!-ERRORS>>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<DPUSH	TP* C>
+	<MCALL	3 ERROR>
+	<JRST	CNVERR>
+
+;"Here when id has been located in direct format bucket
+A/ cptr to the bucket's dir entry slot
+B/ cptr to id's slot in bucket"
+DELFND	<LDB	O* [<(,BLNT-BPTR) 1(A)>]>
+	<CAIG	O* 1>
+	<JRST	DELBUCKET>
+	<MOVE	C* B>
+MOVLP1	<SUB	C* [<1(1)>]>
+	<MOVE	D* (C)>
+	<MOVEM	D* (B)>
+	<CAMN	C* -2(TP)>
+	<JRST	HERE 3>
+	<SUB	B* [<1(1)>]>
+	<JRST	MOVLP1>
+	<LDB	O* [<(,BLNT-BPTR) 1(A)>]>
+	<SUBI	O* 1>
+	<DPB	O* [<(,BLNT-BPTR) 1(A)>]>
+	<DPB	O* [<(,BCNT-BPTR) 1(A)>]>
+	<HRRZ	C* 1(A)>		;"C/ offset of bucket's data area"
+	<DMOVE	A* -3(TP)>
+	<ADD	B* [<1(1)>]>
+	<HLRZ	D* (B)>
+	<SUBI	D* 1>
+	<HRLM	D* (B)>
+	<SOS	1(B)>
+	<HRREI	D* -1>
+	<PUSHJ	P* MODOFS>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+;"Here when deleting last id in bucket
+A/ cptr to the bucket's dir entry slot
+B/ cptr to id's slot in bucket"
+
+DELBUCKET	<MOVE	E* -2(TP)>
+	<HRRZ	O* (E)>
+	<CAIG	O* 1>
+	<JRST	RETEMPTY>
+	<HRRZ	O* (A)>
+	<PUSH	P* O>		;"Saves offset of bucket's data area"
+	<MOVE	C* A>
+	<SUB	C* [<1(1)>]>
+	<ADD	A* [<1(1)>]>
+MOVLP2	<CAMN	C* B>
+	<SUB	C* [<1(1)>]>
+	<MOVE	D* (C)>
+	<MOVEM	D* (A)>
+	<CAMN	C* -2(TP)>
+	<JRST	MOVLP3>
+	<SUB	C* [<1(1)>]>
+	<SUB	A* [<1(1)>]>
+	<JRST	MOVLP2>
+MOVLP3	<DMOVE	A* -3(TP)>
+	<ADD	B* [<3(3)>]>
+	<POP	P* C>
+	<MOVE	D* (B)>
+	<SUB	D* [<1(1)>]>
+	<MOVEM	D* (B)>
+	<MOVE	D* 1(B)>
+	<SOS	1(B)>
+	<HRREI	D* -1>
+	<PUSHJ	P* MODOFS>
+	<SUB	TP* [<4(4)>]>
+	<JRST	MPOPJ>
+
+RETEMPTY	<SUB	TP* [<2(2)>]>
+	<DPOP	TP* A>
+	<HLRE	C* B>
+	<MOVMS	C>
+	<HRLS	C>
+	<ADD	B* C>
+	<JRST	MPOPJ>
+
+
+
+;"A&B/ cptr to modified inv blk
+C/ offset of effected area
+D/ amount of change"
+
+MODOFS	<HRRZ	E* 1(B)>
+	<HRLS	E>
+	<ADD	E* B>		;"E/ cptr to dir area of inv blk"
+MODLP1	<HRRZ	O* 1(E)>
+	<CAMG	O* C>
+	<JRST	MODLP2>
+	<ADD	O* D>
+	<HRRM	O* 1(E)>
+MODLP2	<ADD	E* [<2(2)>]>
+	<JUMPL	E* MODLP1>
+	<POPJ	P*>
+
+
+
+
+<SUB-ENTRY TEST-INV-BLK	("VALUE" <OR FIX FALSE> UVECTOR FIX)>
+
+	<PUSH	TP* (AB)>
+	<AOBJN	AB* HERE -1>
+	<PUSHJ	P* ITEST-INV-BLK>
+	<JRST	FINIS>
+
+<INTERNAL-ENTRY ITEST-INV-BLK 2>
+
+	<SUBM	M* (P)>
+	<MOVM	A* (TP)>
+	<MOVEM	A* (TP)>		;"Don't allow negative numbers"
+	<GETYP	O* -3(TP)>
+	<CAIN	O* <TYPE-CODE UVECTOR>>
+	<SKIPL	E* -2(TP)>		;"E/ cptr to block UVECTOR"
+	<JRST	RETFLS>			;"FALSE if no block exists"
+	<HLRZ	O* 1(E)>		;"O/ consistency check constant"
+	<SKIPLE	(E)>
+	<CAIE	O* CHECK-CODE>
+	<JRST	RETFLS>			;"FALSE if block in bad format"
+	<HRRZ	A* 1(E)>		;"A/ offset of bucket directory area"
+	<JUMPLE	A* RETFLS>		;"FALSE if block in bad format"
+	<HRLS	A>
+	<ADD	A* E>			;"A/ cptr to bucket directory area"
+	<HRRZ	B* (E)>			;"B/ # of buckets in block"
+	<HLRE	C* A>
+	<MOVMS	C>			;"C/ length of bucket directory area"
+	<IDIVI	C* 2>			;"C/ # of buckets in directory"
+	<CAME	C* B>			;"do they agree?"
+	<JRST	RETFLS>			;"FALSE if block in bad format"
+	<MOVE	C* (TP)>		;"C/ FIX being tested for"
+	<IDIVI	C* BUCKET-COUNT>	;"C/ # of bucket in which FIX lives"
+	<PUSHJ	P* SRCDIR>		;"look for that bucket"
+	<CAME	C* (B)>			;"found?"
+	<JRST	RETFLS>			;"No, return FALSE"
+;"Here if bucket exists"
+	<LDB	O* [<(,BLNT-BPTR) 1(B)>]>	;"O/ # of words of data in bucket"
+	<CAIGE	O* BUCKET-LENGTH>	;"is bucket a bit-mask?"
+	<JRST	TSTDIRECT>		;"No, direct format"
+;"Here if bucket in bit-mask format"
+	<MOVE	A* -2(TP)>		;"A/ cptr to block"
+	<HRRZ	C* 1(B)>		;"C/ offset of data area of bucket"
+	<ADD	C* A>			;"C/ ptr to data area of bucket"
+	<MOVE	D* (TP)>		;"D/ FIX to be tested"
+	<IDIVI	D* BUCKET-COUNT>	;"E/ FIX modulo 540"
+	<MOVE	D* E>			;"D/ bit # in mask to be tested"
+	<IDIVI	D* 36>			;"D/ offset of word to be tested"
+	<ADD	C* D>			;"C/ ptr to word to be tested"
+	<MOVSI	D* *400000*>
+	<MOVNS	E>
+	<LSH	D* (E)>			;"D/ mask for testing bit in word"
+	<MOVE	E* (C)>			;"E/ word to be tested"
+	<TDNN	E* D>			;"skip if bit is on"
+	<JRST	RETFLS>
+TSTRET	<DPOP	TP* A>
+	<SUB	TP* [<2(2)>]>
+	<JRST	MPOPJ>
+
+;"B/ cptr to dir entry of bucket in direct format"
+
+TSTDIRECT	<HRRZ	A* 1(B)>	;"A/ offset of data area for bucket"
+	<HRLS	A>
+	<ADD	A* -2(TP)>		;"A/ cptr to data area for bucket"
+	<LDB	B* [<(,BLNT-BPTR) 1(B)>]>	;"B/ size of data area"
+	<MOVE	C* (TP)>		;"C/ FIX to be found"
+	<PUSHJ	P* SRCBUCKET>		;"look for it"
+	<MOVE	C* (TP)>		;"C/ FIX to be found"
+	<CAME	C* (B)>			;"Was it found?"
+	<JRST	RETFLS>			;"No, return FALSE"
+	<JRST	TSTRET>			;"Yes, win"
+
+	
+
+;"A/ cptr to dir area of uvct
+B/ # of buckets in dir (always positive)
+C/ bucket # being searched for
+
+==> B/ cptr to slot where bucket either is or should be"
+
+SRCDIR	<CAILE	B* 3>
+	<JRST	SRCDBIN>
+	<CAMG	C* (A)>
+	<JRST	HERE 3>
+	<ADD	A* [<2(2)>]>
+	<SOJG	B* HERE -3>
+	<MOVE	B* A>
+	<POPJ	P*>
+
+SRCDBIN	<MOVE	D* B>
+	<IDIVI	D* 2>
+	<MOVE	E* D>
+	<IMULI	E* 2>
+	<HRLS	E>
+	<ADD	E* A>
+	<CAMGE	C* (E)>
+	<JRST	SRCDUP>
+	<MOVE	A* E>
+	<SUB	B* D>
+	<JRST	SRCDIR>
+
+SRCDUP	<MOVE	B* D>
+	<JRST	SRCDIR>
+
+
+
+;"A/ cptr to bucket in direct format
+B/ # of idents in bucket (always positive)
+C/ ident # being searched for
+
+==> B/ cptr to slot where ident either is or should be"
+
+SRCBUCKET	<CAILE	B* 3>
+	<JRST	SRCBBIN>
+	<CAMG	C* (A)>
+	<JRST	HERE 3>
+	<ADD	A* [<1(1)>]>
+	<SOJG	B* HERE -3>
+	<EXCH	B* A>
+	<POPJ	P*>
+
+SRCBBIN	<MOVE	D* B>
+	<IDIVI	D* 2>
+	<MOVE	E* D>
+	<HRLS	E>
+	<ADD	E* A>
+	<CAMGE	C* (E)>
+	<JRST	SRCBUP>
+	<MOVE	A* E>
+	<SUB	B* D>
+	<JRST	SRCBUCKET>
+
+SRCBUP	<MOVE	B* D>
+	<JRST	SRCBUCKET>
+
+
+
+;"B/ cptr to new uvct
+C/ cptr to bucket entry in new uvct
+D/ # of idents in bucket"
+
+CNVBITMASK	<SUBM	M* (P)>
+	<CAIE	D* BUCKET-LENGTH>
+	<JRST	TOOMANYIDS>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* C>
+	<PUSH	P* D>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [,BUCKET-LENGTH]>
+	<MCALL	1 INV-IUVECTOR>
+	<MOVE	A* B>		;"A/ cptr to temporary UVECTOR"
+	<POP	P* D>
+	<POP	TP* C>
+	<POP	TP* O>
+	<POP	TP* B>
+	<POP	TP* O>
+	<HRRZ	E* 1(C)>
+	<ADDI	E* (B)>		;"E/ ptr to bucket in uvct"
+	<HRLS	E>
+	<HRR	E* A>
+	<MOVEI	D* BUCKET-LENGTH>
+	<ADDI	D* (A)>
+	<BLT	E* -1(D)>
+	<HRRZ	D* 1(C)>
+	<ADDI	D* (B)>
+	<PUSH	P* D>
+	<SETZM	(D)>
+	<HRL	O* D>
+	<HRRI	O* 1(D)>
+	<MOVEI	E* BUCKET-LENGTH>
+	<ADD	E* D>
+	<BLT	O* -1(E)>
+CNVLOOP	<MOVE	D* (A)>
+	<IDIVI	D* BUCKET-COUNT>
+	<MOVE	D* E>
+	<IDIVI	D* 36>
+	<ADD	D* (P)>
+	<MOVSI	O* *400000*>
+	<MOVNS	E>
+	<LSH	O* (E)>
+	<MOVE	E* (D)>
+	<TDO	E* O>
+	<MOVEM	E* (D)>
+	<AOBJN	A* CNVLOOP>
+	<POP	P* O>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* A>
+	<MCALL	1 INV-RELDATA>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+
+;"B/ cptr to dir entry for bucket
+	Converts bucket from bit-mask to direct format"
+
+CNV-TO-DIRECT	<SUBM	M* (P)>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TFIX>
+	<PUSH	TP* [,BUCKET-LENGTH]>
+	<MCALL	1 INV-IUVECTOR>
+	<MOVE	A* B>		;"A/ cptr to new UVECTOR"
+	<POP	TP* B>		;"B/ cptr to dir entry for bucket"
+	<POP	TP* O>
+	<HRRZ	C* 1(B)>
+	<ADD	C* -2(TP)>	;"C/ cptr to data area of original bucket"
+;"Copy bit-mask bucket into temporary UVECTOR"
+	<HRL	D* C>
+	<HRR	D* A>
+	<HRRZ	E* A>
+	<ADDI	E* BUCKET-LENGTH>
+	<BLT	D* -1(E)>
+;"A/ cptr to temporary UVECTOR containing bit-mask
+B/ cptr to dir entry for bucket
+C/ ptr to data area of bucket"
+	<PUSH	P* [<BUCKET-LENGTH>]>
+	<MOVE	D* (B)>
+	<IMULI	D* BUCKET-COUNT>
+	<PUSH	P* D>
+CNVLP1	<MOVE	D* (A)>
+CNVLP2	<JFFO	D* FNDID>
+	<MOVEI	D* 36>
+	<ADDM	D* (P)>
+	<AOBJN	A* CNVLP1>
+CNVRET	<SUB	P* [<2(2)>]>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* B>
+	<PUSH	TP* $TUVECTOR>
+	<PUSH	TP* A>
+	<MCALL	1 INV-RELDATA>
+	<DPOP	TP* A>
+	<JRST	MPOPJ>
+
+FNDID	<PUSH	P* E>
+	<MOVNS	E>
+	<MOVSI	O* *400000*>
+	<LSH	O* (E)>
+	<TDZ	D* O>
+	<POP	P* E>
+	<ADD	E* (P)>		;"E/ id of item found"
+	<MOVEM	E* (C)>
+	<ADDI	C* 1>
+	<SOSLE	-1(P)>
+	<JRST	CNVLP2>
+	<JRST	CNVRET>
+
+
+
+;"#####################################################################
+#######################################################################
+######################################################################"
+
+
+
+<END>
+
+<ENDPACKAGE>
+
