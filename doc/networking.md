@@ -58,6 +58,8 @@ The above are examples from an Ubuntu 20.x system.
 >  Edit the script below to match your system!   
 >  Especially the adapter name for the ethernet adapter in my case it is `eth0` 
 
+If you are running multiple ITS systems on the same host you can create more TAP adapters and attach them to the same bridge.
+
 ```
 #!/bin/sh
 HOSTIP='<Your ETH0 Host IP Address>' # i.e. 192.168.1.10
@@ -65,22 +67,23 @@ HOSTNETMASK='<Your ETH0 Host IP Subnnet mask>' # i.e. 255.255.255.0
 HOSTBCASTADDR='<Your ETH0 Broadcast address>' # i.e. 192.168.1.255
 HOSTDEFAULTGATEWAY='<Your ETH0 default gateway>' # i.e. 192.168.1.1
 ENETADAPTERNAME='eth0'
+BRIDGENAME='br0'
+TAPNAME='tap0'
 #
-/usr/sbin/tunctl -t tap0
-/sbin/ifconfig tap0 up
+/usr/bin/tunctl -t $TAPNAME
+/sbin/ifconfig $TAPNAME up
 #
 # Now convert eth0 to a bridge and bridge it with the TAP interface
-/usr/sbin/brctl addbr br0
-/usr/sbin/brctl addif br0 $ENETADAPTERNAME
-/usr/sbin/brctl setfd br0 0
+/usr/sbin/brctl addbr $BRIDGENAME
+/usr/sbin/brctl addif $BRIDGENAME $ENETADAPTERNAME
+/usr/sbin/brctl setfd $BRIDGENAME 0
 /sbin/ifconfig $ENETADAPTERNAME 0.0.0.0
-/sbin/ifconfig br0 $HOSTIP netmask $HOSTNETMASK broadcast $HOSTBCASTADDR up
+/sbin/ifconfig $BRIDGENAME $HOSTIP netmask $HOSTNETMASK broadcast $HOSTBCASTADDR up
 # set the default route to the br0 interface
 /sbin/route add -net 0.0.0.0/0 gw $HOSTDEFAULTGATEWAY
 # bridge in the tap device
-/usr/sbin/brctl addif br0 tap0
-/sbin/ifconfig tap0 0.0.0.0
-
+/usr/sbin/brctl addif $BRIDGENAME $TAPNAME
+/sbin/ifconfig $TAPNAME 0.0.0.0
 ```
 Verify you have the TAP0 and BR0 interfaces and check you have internet access.
 
