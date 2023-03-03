@@ -20,3 +20,8 @@ respond "*"  ":xxfile lcf;zork log_lcf;zork xxfile\r"
 expect "Job XXFILE interrupted: .VALUE;"
 type "\033p"
 expect ":KILL"
+
+respond "*" ":link cfs;madadv help,madman;\r"
+respond "*" ":link cfs;madadv info,madman;\r"
+respond "*" ":link cfs;madadv doc,cfs;madadv help\r"
+
