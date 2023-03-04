@@ -25,7 +25,7 @@ MCHN ?= DB
 endif
 endif
 
-IMAGES=http://hactrn.org/images/
+IMAGES=http://hactrn.kostersitz.com/
 
 include conf/network
 
