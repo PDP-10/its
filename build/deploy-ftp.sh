@@ -17,9 +17,12 @@ echo "login $USER"          >> "$NETRC"
 echo "password $FTP_SECRET" >> "$NETRC"
 chmod 600 "$NETRC"
 
-echo "Deploying to $USER@$HOST"
+(cd out; tar czf $EMULATOR.tgz $EMULATOR)
+
+echo "Deploying as $USER at $HOST"
 
 ftp "$HOST" <<EOF
+passive
 type image
 cd $DIR
 lcd out
