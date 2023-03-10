@@ -86,3 +86,88 @@ respond "Type Y if you wish to have Save File directly restored:" "y\r"
 respond "Type Second Name of Save File:" "55save\r"
 respond "Type Sname of Save File:" "mudsav\r"
 expect ":KILL"
+
+# Build DM Daemons (COMBAT ZONE, BATCHN). GUNNER is already built in dm.tcl
+
+# Build COMBAT ZONE (ZONE)
+respond "*" ":assem \"combat;privat >\" \"combat;privat nbin\"\r"
+expect ":KILL"
+
+respond "*" ":ecomp\r"
+respond "T" "<FILE-COMPILE \"combat;master >\" \"combat;master nbin\">\033"
+respond "Job ECOMP wants the TTY" "\033p"
+respond "I'm done anyway." "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":ecomp\r"
+respond "T" "<FLOAD \"combat;master nbin\">\033"
+respond "\"DONE\"" "<SNAME \"\">\033"
+respond "\"\"" "<PROG () \n\i<SAVE \"mudsav;zone 55save\">\r"
+type "\i<BATCH-COMPIL>\r>\033"
+respond "#FALSE ()" "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":midas sys;atsign zone_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "zone\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "55save\r"
+respond "Type Sname of Save File:" "mudsav\r"
+expect ":KILL"
+
+# Build BATCHN daemon
+
+respond "*" ":ecomp\r"
+respond "T" "<SNAME \".batch\">\033"
+respond "\".batch\"" "<FILE-COMPILE \"templt >\" \"templt nbin\">\033"
+respond "Job ECOMP wants the TTY" "\033p"
+respond "I'm done anyway." "<FILE-COMPILE \"tcheck >\" \"tcheck nbin\">\033"
+respond "Job ECOMP wants the TTY" "\033p"
+respond "I'm done anyway." "<FILE-COMPILE \"taskm >\" \"taskm nbin\">\033"
+expect -timeout 600 "Job ECOMP wants the TTY"
+type "\033p"
+respond "I'm done anyway." "<FILE-COMPILE \"batchq >\" \"batchq nbin\">\033"
+respond "Job ECOMP wants the TTY" "\033p"
+respond "I'm done anyway." "<FILE-COMPILE \"batchn >\" \"batchn nbin\">\033"
+expect -timeout 600 "Job ECOMP wants the TTY"
+type "\033p"
+respond "I'm done anyway." "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":mud55\r"
+respond "LISTENING-AT-LEVEL 1 PROCESS 1" "<SNAME \".batch\">\033"
+respond "\".batch\"" "<FLOAD \"batchn maker\">\033"
+respond "\"DONE\"" "<SAVER T>\033"
+respond "TO CREATE SAVE FILE\"" "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":midas sys;atsign batchn_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "batchn\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "save\r"
+respond "Type Sname of Save File:" ".batch\r"
+expect ":KILL"
+
+# Now build BATCH user program (interfaces with BATCHN daemon)
+
+respond "*" ":link libmud;pmap fbin,mbprog;pmap fbin\r"
+
+respond "*" ":ecomp\r"
+respond "T" "<SNAME \".batch\">\033"
+respond "\".batch\"" "<FILE-COMPILE \"nbatch >\" \"nbatch nbin\">\033"
+expect -timeout 600 "Job ECOMP wants the TTY"
+type "\033p"
+respond "I'm done anyway." "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":mud55\r"
+respond "LISTENING-AT-LEVEL 1 PROCESS 1" "<FLOAD \".batch;nbatch nbin\">\033"
+respond "\"DONE\"" "<DUMPCAL!-MUDCAL!-PACKAGE B11 \".batch;nbatch 55save\">\033"
+respond "\"SAVED\"" "<QUIT>\033"
+expect ":KILL"
+
+respond "*" ":midas sys3;ts batch_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "nbatch\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "55save\r"
+respond "Type Sname of Save File:" ".batch\r"
+expect ":KILL"
