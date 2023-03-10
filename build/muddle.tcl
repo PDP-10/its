@@ -78,3 +78,11 @@ respond "*" ":assem \"mprog2;lsrtns >\" \"mbprog;lsrtns nbin\"\r"
 expect ":KILL"
 respond "*" ":midas mudsys;ts dem_mudsys;itsdem\r"
 expect ":KILL"
+
+# Build Muddle ECOMP compiler (PCOMP isn't good enough)
+respond "*" ":midas sys1;ts ecomp_mudsys;subsys maker\r"
+respond "Type in Subsystem (Save File) name:" "ecomp\r"
+respond "Type Y if you wish to have Save File directly restored:" "y\r"
+respond "Type Second Name of Save File:" "55save\r"
+respond "Type Sname of Save File:" "mudsav\r"
+expect ":KILL"
