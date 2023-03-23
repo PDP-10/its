@@ -17,6 +17,6 @@ type "\033p"
 expect ":KILL"
 
 respond "*"  ":xxfile lcf;zork log_lcf;zork xxfile\r"
-expect "Job XXFILE interrupted: .VALUE;"
+expect -timeout 6000 "Job XXFILE interrupted: .VALUE;"
 type "\033p"
 expect ":KILL"
