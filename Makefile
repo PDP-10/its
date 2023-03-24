@@ -101,7 +101,7 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: its $(OUT)/stamp/emulators tools/supdup/supdup
+all: its $(OUT)/stamp/test $(OUT)/stamp/emulators tools/supdup/supdup
 
 its: $(SMF) $(OUT)/stamp/its
 
@@ -240,6 +240,18 @@ tools/dasm/palx: tools/dasm/palx.c
 $(OUT)/bootvt.img: $(OUT)/bootvt.bin tools/dasm/palx
 	$(MKDIR) out/gt40
 	tools/dasm/palx -I < $< > $@
+
+out/pdp10-ka/stamp/test: out/pdp10-ka/stamp/its
+	$(KA10) build/pdp10-ka/hhtest.simh
+	$(TOUCH) $@
+
+out/simh/stamp/test:
+
+out/klh10/stamp/test:
+
+out/pdp10-kl/stamp/test:
+
+out/pdp10-ks/stamp/test:
 
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
