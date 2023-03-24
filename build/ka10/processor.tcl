@@ -258,3 +258,10 @@ respond "*" ":kill\r"
 respond "*" ":midas sys; atsign 6slave_sysen2; ld10\r"
 respond "   PDP6F = " "1\r"
 expect ":KILL"
+
+# Test for the 340 "hack hack".
+respond "*" $emulator_escape
+punch_tape "$out/hhtest.rim"
+type ":vk\r"
+respond "*" ":midas ptp:_maint;hhtest\r"
+expect ":KILL"
