@@ -21,7 +21,7 @@ respond "*" ":xxfile tty:_lcf;zork xxfile\r"
 #type "\033p"
 expect -timout 500 "<QUIT>$"
 
-expect -timeout 500 ":KILL"
+# expect -timeout 500 ":KILL"
 
-expect -timout 500 ":KILL"
+expect -timeout 500 ":KILL"
 type "\033p"
