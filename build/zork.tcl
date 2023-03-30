@@ -17,11 +17,4 @@ type "\033p"
 expect -timeout 500 ":KILL"
 
 respond "*" ":xxfile tty:_lcf;zork xxfile\r"
-# expect -timeout 6000 "Job XXFILE interrupted: .VALUE;"
-#type "\033p"
-expect -timeout 500 "<QUIT>$"
-
-# expect -timeout 500 ":KILL"
-
 expect -timeout 500 ":KILL"
-type "\033p"
