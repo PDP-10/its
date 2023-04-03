@@ -90,12 +90,18 @@ Verify you have the TAP0 and BR0 interfaces and check you have internet access.
 Next configure SIMH
 Under your root folder for the project i.e. `/home/<user>/its` edit the SIMH configuration file `out/pdp10-ka/run` or `out/pdp10-kl/run` and configure the `IMP` interface as follows:
 ```
-set imp enabled ; enable SIMH network emulation
-set imp mac=e2:6c:84:1d:34:a3 ; if you are running multiple SIMH instances on the same host you might have to change the MAC address
-set imp DHCP ; enable DHCP, this will allow SIMH to get an IP address from your home network
-set imp host=10.3.0.6 ; configure the ITS host IP 
-set imp mpx=4 ; Only on PDP10-KA! Set the network interface interrupt
-at imp tap:tap0 ; map the host tap interface
+; enable SIMH network emulation
+set imp enabled
+; if you are running multiple SIMH instances on the same host you might have to change the MAC address
+set imp mac=e2:6c:84:1d:34:a3
+; enable DHCP, this will allow SIMH to get an IP address from your home network
+set imp DHCP
+; configure the ITS host IP
+set imp host=10.3.0.6
+; Only on PDP10-KA! Set the network interface interrupt
+set imp mpx=4
+; map the host tap interface
+at imp tap:tap0
 ```
 Now start ITS as you normally would.
 To find the IP address the SIMH adapter interrupt the simulation by hitting `CTRL+\` and at the `simh>` prompt type `sho imp` the output will give you the IP address of the simulated network card.
