@@ -22,7 +22,7 @@ chmod 600 "$NETRC"
 echo "Deploying as $USER at $HOST"
 
 ftp "$HOST" <<EOF
-passive
+passive on
 type image
 cd $DIR
 lcd out
