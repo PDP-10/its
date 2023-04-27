@@ -94,6 +94,7 @@ VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
 SIMH_IMLAC=tools/sim-h/BIN/imlac $(OUT)/ssv22.iml
 CBRIDGE=tools/cbridge/cbridge
+USIM=tools/usim
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -126,7 +127,7 @@ out/klh10/stamp/its: $(OUT)/rp0.dsk
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/klh10/stamp/emulators: $(CBRIDGE)
+out/klh10/stamp/emulators: $(CBRIDGE) $(USIM)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -142,7 +143,7 @@ out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(CBRIDGE)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(CBRIDGE) $(USIM)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -150,7 +151,7 @@ out/pdp10-kl/stamp/its: $(OUT)/rp04.1
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(CBRIDGE)
+out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(CBRIDGE) $(USIM)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -158,7 +159,7 @@ out/pdp10-ks/stamp/its: $(OUT)/rp0.dsk
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ks/stamp/emulators: $(GT40) $(VT52) $(CBRIDGE)
+out/pdp10-ks/stamp/emulators: $(GT40) $(VT52) $(CBRIDGE) $(USIM)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -376,6 +377,9 @@ $(VT52):
 
 $(CBRIDGE):
 	$(MAKE) -C tools/cbridge
+
+$(USIM):
+	$(MAKE) -C tools/usim
 
 tek-hack:
 	rm -f $(TEK)
