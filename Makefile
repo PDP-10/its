@@ -69,7 +69,8 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sim-h sims supdup tapeutils tv11 pdp6 vt05 tek4010
+SUBMODULES = dasm itstar klh10 mldev simh sim-h sims supdup tapeutils tv11 pdp6 vt05 \
+             tek4010 cbridge
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -92,6 +93,7 @@ DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
 SIMH_IMLAC=tools/sim-h/BIN/imlac $(OUT)/ssv22.iml
+CBRIDGE=tools/cbridge/cbridge
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -124,7 +126,7 @@ out/klh10/stamp/its: $(OUT)/rp0.dsk
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/klh10/stamp/emulators:
+out/klh10/stamp/emulators: $(CBRIDGE)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -140,7 +142,7 @@ out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(CBRIDGE)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -148,7 +150,7 @@ out/pdp10-kl/stamp/its: $(OUT)/rp04.1
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp/emulators: $(VT52) $(TEK)
+out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(CBRIDGE)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -156,7 +158,7 @@ out/pdp10-ks/stamp/its: $(OUT)/rp0.dsk
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ks/stamp/emulators: $(GT40) $(VT52)
+out/pdp10-ks/stamp/emulators: $(GT40) $(VT52) $(CBRIDGE)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -371,6 +373,9 @@ $(DATAPOINT):
 
 $(VT52):
 	$(MAKE) -C tools/vt05 vt52
+
+$(CBRIDGE):
+	$(MAKE) -C tools/cbridge
 
 tek-hack:
 	rm -f $(TEK)
