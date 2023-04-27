@@ -121,6 +121,7 @@ with all PDP-10 emulators by default.
 | vt52    | VT52              | text   | no    | yes      | yes      | yes      | yes
 | tek     | Tektronix 4010    | vector | no    | yes      | yes      | no       | no
 | chaosnet | CHAOS network    | network | yes  | yes      | yes      | yes      | no
+| cadr    | CADR Lisp machine | cpu    | yes  | yes       | yes      | yes      | no
 
 ### Documentation
 
