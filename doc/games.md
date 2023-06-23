@@ -55,6 +55,10 @@ This is a maze game for EMACS.  To play, start EMACS and type
 This is a Conway Game of Life by Mike Speciner.  Type `:games;mlife` to
 run it.
 
+To load a file, type e.g. `I RGW; LIFE DEMO` (must be upper case).  A
+file can have several patterns.  To read the next, type `R`.  Type
+space to compute a new generation.  Type `P` to run the simulation.
+
 ### Spacewar
 
 This is a PDP-6/10 port of Steve Russell's PDP-1 game, using the Type
