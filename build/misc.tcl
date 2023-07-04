@@ -1822,3 +1822,7 @@ expect ":KILL"
 # CHATER
 respond "*" ":midas sys1;ts chater_gren;coms\r"
 expect ":KILL"
+
+# STINK 121T, used to build Muddle and some old programs
+respond "*" ":midas mudsys;ts stink_sysen2;stink 121t\r"
+expect ":KILL"
