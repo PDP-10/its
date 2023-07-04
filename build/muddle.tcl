@@ -1,9 +1,5 @@
 log_progress "ENTERING BUILD SCRIPT: MUDDLE"
 
-# STINK 121T, used to build Muddle
-respond "*" ":midas mudsys;ts stink_sysen2;stink 121t\r"
-expect ":KILL"
-
 mkdir "mudsav"
 
 proc build_muddle {dir version} {
