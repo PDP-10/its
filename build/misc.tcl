@@ -749,6 +749,10 @@ respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
 respond "*" ":midas device; jobdev shoe_rwk; gunner\r"
 expect ":KILL"
 
+# Trivial Gunner
+respond "*" ":midas cstacy;_gunner >\r"
+expect ":KILL"
+
 # pr
 respond "*" ":midas sys1;ts pr_sysen1;pr\r"
 expect ":KILL"
