@@ -69,7 +69,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sim-h sims supdup tapeutils tv11 pdp6 vt05 tek4010
+SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05 tek4010
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -84,14 +84,14 @@ KS10=tools/sims/BIN/pdp10-ks
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
-GT40=tools/sim-h/BIN/pdp11 $(OUT)/bootvt.img
+GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
 PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
-SIMH_IMLAC=tools/sim-h/BIN/imlac $(OUT)/ssv22.iml
+SIMH_IMLAC=tools/simh/BIN/imlac $(OUT)/ssv22.iml
 
 H3TEXT=$(shell cd build; ls h3text.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
@@ -385,11 +385,11 @@ $(SMF):
 	$(GIT) submodule sync --recursive `dirname $@`
 	$(GIT) submodule update --recursive --init `dirname $@`
 
-tools/sim-h/BIN/pdp11:
-	$(MAKE) -C tools/sim-h pdp11
+tools/simh/BIN/pdp11:
+	$(MAKE) -C tools/simh pdp11
 
-tools/sim-h/BIN/imlac:
-	$(MAKE) -C tools/sim-h imlac
+tools/simh/BIN/imlac:
+	$(MAKE) -C tools/simh imlac
 
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
