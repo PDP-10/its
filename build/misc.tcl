@@ -651,6 +651,18 @@ expect "CORE USED"
 respond "*" "\003"
 respond "*" ":kill\r"
 
+# MACTEN and UUOSYM universal files.
+respond "*" ":macro\r"
+respond "*" "macten.unv=macten.mac\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+respond "*" ":macro\r"
+respond "*" "uuosym.unv=uuosym.mac\r"
+expect "CORE USED"
+respond "*" "\003"
+respond "*" ":kill\r"
+
 # CROSS, assembler
 respond "*" ":macro\r"
 respond "*" "cross=cross\r"
