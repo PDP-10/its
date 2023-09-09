@@ -69,7 +69,8 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 # These are on the minsrc tape.
 SRCIGNORE=-e '^(system|midas)$$'
 
-SUBMODULES = dasm itstar klh10 mldev simh sims supdup tapeutils tv11 pdp6 vt05 tek4010
+SUBMODULES = dasm itstar klh10 mldev simh sims supdup cbridge \
+	tapeutils tv11 pdp6 vt05 tek4010
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -101,7 +102,8 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: its $(OUT)/stamp/test $(OUT)/stamp/emulators tools/supdup/supdup
+all: its $(OUT)/stamp/test $(OUT)/stamp/emulators \
+	tools/supdup/supdup tools/cbridge/cbridge
 
 its: $(SMF) $(OUT)/stamp/its
 
@@ -380,6 +382,9 @@ $(TEK): tek-hack
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
+
+tools/cbridge/cbridge:
+	$(MAKE) -C tools/cbridge
 
 $(SMF):
 	$(GIT) submodule sync --recursive `dirname $@`
