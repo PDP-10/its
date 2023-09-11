@@ -280,13 +280,9 @@ out/pdp10-ks/stamp/pdp10: $(KS10) start
 
 out/klh10/system:
 	$(MKDIR) $(OUT)/system
-	cp=0; ca=0; \
-	$(TEST) $(CHAOS) != no && cp=1 && ca=$(CHAOS); \
 	x=`echo $(IP) | tr . ,`; \
 	$(SED) -e "s/%IP%/$$x/" \
-	    -e 's/%NETMASK%/$(NETMASK)/' \
-	    -e "s/%CHAOSP%/$$cp/" \
-	    -e "s/%CHAOSA%/$$ca/" < build/klh10/config.203 > $(OUT)/system/config.203
+	    -e 's/%NETMASK%/$(NETMASK)/' < build/klh10/config.203 > $(OUT)/system/config.203
 
 out/simh/system:
 	$(MKDIR) $(OUT)/system
@@ -306,12 +302,8 @@ out/pdp10-ks/system:
 
 out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
 	$(MKDIR) $(OUT)/stamp
-	cp=';'; ca=''; \
-	$(TEST) $(CHAOS) != no && cp='' && ca='myaddr=$(CHAOS) $(CHAFRIENDS)'; \
 	$(SED) -e 's/%IP%/$(IP)/' \
-	    -e 's/%GW%/$(GW)/' \
-	    -e "s/%CHAOSP%/$$cp/" \
-	    -e "s|%CHAOSA%|$$ca|" < $< > $@
+	    -e 's/%GW%/$(GW)/' < $< > $@
 
 out/simh/boot: build/mchn/$(MCHN)/boot
 	$(MKDIR) $(OUT)/stamp
@@ -323,10 +315,8 @@ out/pdp10-ka/run: build/mchn/$(MCHN)/run
 
 $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 	$(MKDIR) $(OUT)/syshst
-	$(TEST) $(CHAOS) != no && c="CHAOS $(CHAOS), "; \
 	$(SED) -e 's/%IP%/$(IP)/' \
-	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
-	    -e "s/%CHAOS%/$$c/" < $< > $@
+	    -e 's/%HOSTNAME%/$(HOSTNAME)/' < $< > $@
 	$(CAT) conf/hosts >> $@
 
 $(KLH10):
