@@ -77,8 +77,17 @@ a list of useful commands.
 Alternatively to logging in directly in the system console window, 
 which will always be displaying daemon messages, you may prefer to 
 use a seperate terminal session for logging in.  To do this just
-run `telnet localhost 10003` from another shell window and press
-<kbd>CTRL</kbd><kbd>Z</kbd> to log in there.
+run `telnet localhost <port>` from another shell window and press
+<kbd>CTRL</kbd><kbd>Z</kbd> to log in there. The port should be determined as per this list:
+
+| Port  | Type             | Emulator
+| ----  | ----             | -------
+| 10000 | TK10             | pdp10-ka
+| 10002 | Datapoint kludge | pdp10-ka
+| 10003 | Morton box       | pdp10-ka
+| 10004 | DZ11             | simh, pdp10-ks
+| 10007 | DTE2             | pdp10-kl
+| 10008 | DL10             | (pdp10-kl in the future?)
 
 To shut down ITS, type `:lock` and then `5down`.  Log yourself out to
 avoid the 5 minute grace period: type `:logout`.  When ITS writes
