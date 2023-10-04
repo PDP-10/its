@@ -1139,6 +1139,10 @@ respond "*" ":midas sysbin;_eak; chahtb\r"
 expect ":KILL"
 respond "*" ":link device; chaos hostab, sysbin; chahtb bin\r"
 
+# Chaosnet 11LOAD service for booting MINITS.
+respond "*" ":midas device; chaos 11load_minits; 11load\r"
+expect ":KILL"
+
 # OBS
 respond "*" ":midas sys;ts obs_bawden;obs\r"
 expect ":KILL"
