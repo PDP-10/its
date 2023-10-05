@@ -1611,6 +1611,19 @@ respond "*" ":palx test_config\r"
 respond ":::" "777\r"
 expect ":KILL"
 
+# MINITS boot ROM for an Interlan network interface.
+respond "*" ":cwd mits.b\r"
+respond "*" ":palx bootil\r"
+respond "Interlan CSR?" "0\r"
+respond "Chaos address of Interlan board?" "0\r"
+expect "Which set of downloading hosts?"
+respond ")" "0\r"
+respond "Start address?" "0\r"
+respond "Do you want a power up/boot support" "0\r"
+respond "Boot PROM mapping kludge?" "0\r"
+respond "Start of temporary data storage?" "150000\r"
+expect ":KILL"
+
 # ITS universal file.
 respond "*" ":cwd decsys\r"
 respond "*" ":macro\r"
