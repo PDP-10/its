@@ -1,0 +1,479 @@
+;;; -*-midas-*-
+	.title BOOTIL -- Network booting from an Interlan board
+
+.insrt mits.s;conven macros
+.insrt mits.s;style macros
+;; don't insert cpu macros.  If you do, this code may not be vanilla
+
+;; don't assume he has sob
+.macro sob r,addr
+	dec r
+	bne addr
+.endm
+
+;;; configuration 
+
+.if p1
+  .print "
+    Interlan CSR? (0 gets 164000) "
+  .ttymac ans
+    ilcsr==ans
+  .endm ttymac
+  .iif z ilcsr, ilcsr==164000
+  .print "
+    Chaos address of Interlan board? "
+  .ttymac ans
+    myaddr==ans
+  .endm ttymac
+  .print "
+    Which set of downloading hosts? (0:= MIT, 1:= SCRC, 2:= SCH, 3:= SCC,
+				     4:= TMC, 5:= SPA, 7:= Atari, 8:= SWW,
+				     9:= UTexas, 10:=Harris) "
+  .ttymac ans
+    whchst==ans
+  .endm
+  .print "
+    Start address? (0 for IO page bootprom) "
+  .ttymac ans
+    prmadr=ans
+  .endm ttymac
+  .if z prmadr
+    prmadr=173000
+    .print "
+    Do you want a power up/boot support (for 11/34 boot terminators)? (0, 1) "
+    .ttymac ans
+      pwrup==ans
+    .endm ttymac
+    .iif nz pwrup, pwrup==prmadr+24
+  .endc z prmadr
+  .iif ndf pwrup, pwrup==0
+  .print "
+    Do you want LSI-11/23+ (KDF11B) Boot PROM mapping kludge? (0, 1) "
+  .ttymac ans
+    bpmapk==ans
+  .endm ttymac
+  .if nz bpmapk
+   .print "      OK. PROM data should start at PROM address 0, not 3000
+"
+  .endc
+  .print "
+    Start of temporary data storage? (e.g., 150000) "
+  .ttymac ans
+    spaddr==ans
+  .endm ttymac
+
+.endc p1
+
+
+bit.05==1_5
+
+r0=%0
+r1=%1
+
+csrval=%2
+csrreg=%3
+bytcnt=%4
+bytptr=%5
+
+sp=%6
+pc=%7
+
+;;; Ethernet definitions
+
+%etchs==2010			;ethernet type field
+%etarp==3010			;address resolution type field
+
+;;; chaos definitions
+
+$cpkop==01
+$cpkda==04
+$cpkdi==06
+$cpksa==10
+$cpksi==12
+$cpkdt==20
+
+%corfc==1
+%coans==5
+%cpkfc==170000
+
+;;; interlan definitions
+
+ilbar== ilcsr+2
+ilbcr== ilcsr+4
+
+%ilsil==01_8			;set internal loopback
+%ilsel==02_8			;set external loopback
+%ilclb==03_8			;clear loopback
+%ilspm==04_8			;set   promiscous mode
+%ilcpm==05_8			;clear promiscous mode
+%ilsre==06_8			;set   receive-on error mode
+%ilcre==07_8			;clear receive-on error mode
+%ilofl==10_8			;go OFFline
+%ilonl==11_8			;go ONline
+%ildia==12_8			;run on-board diagnostics
+%ilsis==15_8			;set   insert source address mode
+%ilcis==16_8			;clear insert source address mode
+%ilspd==17_8			;set physical address to default
+
+%ilrrs==30_8			;report and reset statistics
+%ilrdt==31_8			;report collision delay times
+
+%illrb==40_8			;load receive buffer address/byte count queue
+
+%illtd==50_8			;load transmit data
+%illts==51_8			;load transmit data and send
+%illga==52_8			;load group address(es)
+%ildga==53_8			;delete group address(es)
+
+
+%ilfrb==60_8			;flush receive buffer address/byte count queue
+
+%ilrst==77_8			;reset board
+
+.=spaddr			;stack grows down, data grows up
+mode:	.blkw 1
+sndtim:	.blkw 1			;counter to spawn a new RFC
+rsttim:	.blkw 1			;reset time (when this hits zero, we do a complete reset)
+hstptr:	.blkw 1			;point to next host table entry
+
+myethr:	.blkw 3			;my ethernet address
+
+pkt:	.blkb 1+1+2		;interlan software header
+ethpkt:	.blkb 6+6+2		;packet pre-emble
+ethdat:				;ethernet data starts here
+chspkt:	.blkb 16.+488.		;chaos packet
+	.blkb 8			;padding bytes
+pktend==.-1			;for an odd number (non-multiple of 8)
+
+.if p2
+.irp len,\.-spaddr
+.print "
+Data region is len (octal) bytes
+"
+.endm
+.endc
+
+.=prmadr
+go:	.word 12767		;mov (pc)+,mode (sets mode nonzero)
+dbug:	clr mode		;sets mode to zero
+	reset
+	mov #10$,sp		;cpu independent spl 7
+	rti
+10$:	.word go2,340
+
+;;; prtdl:	loop <
+;;; 	  tstb @2(sp)
+;;; 	  exitl eq
+;;; 	  loop <
+;;; 	    tstb @#177564
+;;; 	    rptl pl
+;;; 	    >
+;;; 	  movb @2(sp),@#177566
+;;; 	  inc 2(sp)
+;;; 	  rptl
+;;; 	  >
+;;; 	pop (sp)
+;;; 	return
+
+.if nz pwrup
+  .if l pwrup-.
+	.error Too much stuff before pwrup
+  .iff
+    .if p1
+      .irp waste,\pwrup-.
+	.print "waste bytes wasted before 11/34 power vector
+"
+      .endm
+    .endc
+  .endc
+.=pwrup
+	.word go		;start at loader
+	.word 340		;at priority 7
+.endc
+
+go2:	mov #hsttbl,hstptr
+	mov #ilcsr,csrreg
+.if nz bpmapk
+	movb #1,@#177521	;Map in the top half of the boot prom too
+.endc
+restrt:	mov #spaddr,sp		;make sure SP consistent
+	loop <			;complete interface reset loop
+	  call ilnrst
+	  loop <		;send rfc loop
+	    tst mode		;reloading or debugging?
+	    if ne,<call sndrfc>	;reloading, send RFC and arm receiver
+	    else  <call rcvenb>	;else just arm receiver
+	    loop <		;wait for/process packet loop
+	      bisb (csrreg),csrval	;don't miss the bit
+	      bit #bit.05,csrval
+	      if ne,<call rcvpkt>
+	      dec sndtim
+	      rptl ne
+	      >
+	    dec rsttim
+	    rptl gt
+	    >
+	  rptl
+	  >
+
+;;; note: the length of names must be odd.  Double up if necessary.
+.macro .ildma bar,bcr,names
+	jsr bytcnt,ilndma
+	  .word bar
+	  .word bcr
+	  .ilcm2 <names>
+.endm
+
+.macro .ilcmd names
+	jsr bytcnt,ilncmd	;don't need bytcnt in this routine
+	  .ilcm2 <names>
+.endm
+
+.macro .ilcm2 names
+    .irp name,<names>
+	.byte <<%il'name>_-8>
+    .endm
+	.byte 0
+.endm
+
+ilndma:	mov (bytcnt)+,@#ilbar
+	mov (bytcnt)+,@#ilbcr
+
+ilncmd:	movb (bytcnt)+,r0	;no commands are minus (they're six bits)
+	if ne,<
+	  swab r0		;make it an interlan command
+	  mov r0,(csrreg)
+	  clr r0
+	  mov #10.,r1
+	  loop <
+	    movb (csrreg),csrval
+	    bmi ilncmd
+	    sorl r0
+	    sorl r1
+	    br restrt
+	    >
+	  >
+	rts bytcnt
+
+ilnrst:	loop <			;drain CSR of old data
+	  tstb (csrreg)
+	  rptl mi
+	  >
+	.ilcmd <rst,clb,frb,frb,onl,cis,spd>
+	.ildma pkt,66.,rrs
+	mov #ethpkt,r0
+	mov #myethr,r1
+	mov (r0)+,(r1)+
+	mov (r0)+,(r1)+
+	mov (r0)+,(r1)+
+initim:	mov #10.,rsttim		;reset the timers
+	clr sndtim
+	return
+
+
+hsttbl:	
+
+.if z whchst-0			;MIT servers
+	013065			;REAGAN
+	017316			;ZERMATT
+	015163			;ALLSPICE
+	015044			;MINTAKA
+	003130			;AI
+	003131			;MC
+.endc
+.if z whchst-1			;Symbolics servers
+	024610			;SCRC-QUABBIN
+	024620			;SCRC-STONY-BROOK
+.endc
+.if z whchst-2			;SCH servers
+	23047			;SCH-Gila
+	25446			;SCH-TEST-Iguana
+	22446			;SCH-HUEY-DUCK
+.endc
+.if z whchst-3			;SCC servers
+	031532			;SCC-WAIKATO
+.endc
+.if z whchst-4			;TMC servers
+       	37404			;TMC-Eligius
+	37400			;TMC-Aquinas
+	37700			;TMC-Godot
+.endc
+.if z whchst-5			;SPA servers
+	22120			;SPA-Russian
+	22300			;SPA-Los-Trancos
+	22100			;SPA-Sacramento
+	22110			;SPA-Colorado
+.endc
+.if z whchst-7			;Atari
+	036010			;Atari Cambridge
+	036014			;Atari Cambridge
+	036410			;Atari Sunnyvale
+	036414			;Atari Sunnyvale
+.endc
+.if z whchst-8			;Symbolics West Wood
+	034410			;SWW-RED
+	034420			;SWW-BLACK
+	034430			;SWW-WHITE
+	025010			;SWW-INFRARED
+.endc
+.if z whchst-9			;UTexas-3600
+	1001
+	1010
+	1014
+	1020
+.endc
+.if z whchst-10			;Harris 3600s
+	067410
+	067420
+	067430
+.endc
+ 	0
+
+rfcpkt:	.word -1,-1,-1		;hardware broadcast for RFCs
+	.word 52525,52525,52525	;random source
+	.word %etchs		;chaos packet
+	.word %corfc_8,6	;rfc packet, 6 character contact name
+	.word 0,0		;foreign host and index
+	.word myaddr,125252	;my address and index
+	.word 0,0		;no packet number, no ack number
+	.ascii /11LOAD/
+rfcpke==.
+
+sndrfc:	.ilcmd frb		;flush receive queue
+
+	mov #rfcpkt,bytptr
+	mov #ethpkt,r0		;where to put it
+	mov #<rfcpke-rfcpkt>/2,bytcnt	;get word count for transfer
+	loop <
+	  mov (bytptr)+,(r0)+
+	  sorl bytcnt
+	  >
+	mov hstptr,r0		;this hair saves a word
+	mov (r0)+,chspkt+$cpkda	;stuff host in the destination address
+	tst (r0)
+	if eq,<mov #hsttbl,r0>
+	mov r0,hstptr
+
+sndpkt:	.ildma ethpkt,60.,lts
+
+rcvenb:	.ildma pkt,pktend-pkt,lrb
+	return
+
+rcvpkt:	clr csrval		;turn off the received bit for next time
+	bitb #3,pkt		;errors?
+	  bne rcvenb
+	mov #chspkt-2,bytptr
+	cmp (bytptr)+,#%etchs
+	  bne rcvnch
+	cmp (bytptr)+,#%corfc_8
+	  bne rcvenb
+	mov (bytptr)+,bytcnt
+	bic #%cpkfc,bytcnt		;flush forwarding count
+	sub #6,bytcnt
+	  blt rcvenb		;all possible contact+JCL are at least 6
+	cmp (bytptr)+,#myaddr
+	  bne rcvenb
+	mov #chspkt+$cpkdt,bytptr	;go up to the data field
+	mov (bytptr)+,r0	;get contact name
+	cmp (bytptr)+,#<40+<40_8>>	;space,,space
+	  bne rcvenb
+	loop <			;exit to send the ans
+	  cmp r0,#<'L+<'D_8>>	;LD
+	  if eq,<
+	    mov (bytptr)+,r0	;get deposit address
+	    tst bytcnt		;6 already subtracted above
+	    if eq,< jmp (r0) >	;always expect even jump address
+	    loop <
+	      movb (bytptr)+,(r0)+
+	      sorl bytcnt
+	      >
+	    exitl		;go send ans
+	    >
+	  cmp r0,#<'e+<'x_8>>
+	  if eq,<
+	    mov @(bytptr)+,chspkt+$cpkdt
+	    exitl
+	    >
+	  cmp r0,#<'d+<'p_8>>
+	  if eq,<
+	    mov (bytptr)+,@(bytptr)+
+	    exitl
+	    >
+	  cmp r0,#<'g+<'o_8>>
+	  bne rcvenb		;nope on last possibility
+	  jcall @(bytptr)+
+	  >
+	mov #chspkt,bytptr
+	mov #%coans_8,(bytptr)+	;convert to ans packet
+	mov #2,(bytptr)+	;maybe data from ex request
+	mov bytptr,r0		;swap destination and source chaos ports
+	push (bytptr)+
+	push (bytptr)+
+	mov (bytptr)+,(r0)+
+	mov (bytptr)+,(r0)+
+	pop -(bytptr)	
+	pop -(bytptr)	
+	call initim		;got a good packet, reinitialize the timers
+rtnpkt:	mov #ethpkt+6,bytptr	;set ether destination to previous source
+				;leave source same, since it saves words 
+				;and a full host on the other side shouldn't 
+				;be looking at it anyway
+	mov #ethpkt,r0
+	mov (bytptr)+,(r0)+
+	mov (bytptr)+,(r0)+
+	mov (bytptr)+,(r0)+
+	br sndpkt
+
+
+    dsect <
+ar$hrd::	.blkw 1		;hardware address space type
+ar$pro::	.blkw 1		;protocol address space type
+ar$hln::	.blkb 1		;hardware length
+ar$pln::	.blkb 1		;protocol length
+ar$op::		.blkw 1		;opcode
+ar$sha::	.blkb 6		;for ethernet
+ar$spa::	.blkb 2		;for chaosnet
+ar$tha::	.blkb 6		;for ethernet
+ar$tpa::	.blkb 2		;for chaosnet
+    >
+
+rcvnch:	cmp -2(bytptr),#%etarp	;address resolution
+	  bne rcvenb
+	cmp (bytptr)+,#400	;ethernet?
+	  bne rcvenb
+	cmp (bytptr)+,#%etchs	;chaos protocol
+	  bne rcvenb
+	cmp (bytptr)+,#6+<2_8>	;length of hardware,,length of protocol
+	  bne rcvenb
+	cmp (bytptr),#400	;request?
+	  bne rcvenb
+	asl (bytptr)+		;double it (makes it a reply)
+	mov #ethdat+ar$tha,r0	;go up to target fields
+	mov #myethr,r1
+
+	mov (bytptr),(r0)+	;copy source to target 
+	mov (r1)+,(bytptr)+	;and deposet my ether address as new source
+	mov (bytptr),(r0)+
+	mov (r1)+,(bytptr)+
+	mov (bytptr),(r0)+
+	mov (r1)+,(bytptr)+
+
+	cmp (r0),#myaddr	;is it a request for me?
+	  bne rcvenb
+	push (bytptr)
+	mov (r0),(bytptr)
+	pop (r0)
+	br rtnpkt		;send the packet whence it came.
+
+
+;;; Random peices of data
+
+.if p2
+.irp len,\.-go
+.print "
+Code region is len (octal) bytes
+"
+.endm
+.endc
+
+.end go

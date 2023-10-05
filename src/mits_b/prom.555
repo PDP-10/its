@@ -1,0 +1,108 @@
+;;; -*- Mode: LISP; Base: 8. -*-
+
+;; This is for LISPM only.  It is an adaptation and raped mutation of KTV;BOOTIL by DCP
+
+(defun f-getwrd (file)
+  (+ (tyi file) (lsh (tyi file) 8)))
+
+(defun f-getbyt (file)
+  (tyi file))
+
+(defun sort-data (data)
+  (sort data #'(lambda (x y) (< (car x) (car y)))))
+
+(defun combine-bytes (data)
+  (do ((data data (cdr data))
+       (last '())
+       (new-data '()))
+      ((null data) (and last (setq new-data (cons last new-data)))
+		   (nreverse new-data))
+    (cond (last (cond ((evenp (caar data))
+		       (setq new-data (cons last new-data)
+			     last (car data)))
+		      ((= (caar data) (1+ (car last)))
+		       (setq new-data (cons (cons (car last)
+						  (+ (cdr last)
+						     (lsh (cdar data) 8)))
+					    new-data)
+			     last '()))
+		      ('else (setq new-data (cons last new-data)
+				   new-data (cons (car data) new-data)
+				   last '()))))
+	  ('else (cond ((evenp (caar data))
+			(setq last (car data)))
+		       ('else (setq new-data (cons (car data) new-data))))))))
+
+(defun get-bin-file-contents (file)
+  (do ((data '() (append data new-data))
+       (new-data (get-new-data file) (get-new-data file)))
+      ((null new-data) (close file)
+		       data)))
+
+(defun get-new-data (file)
+  (cond ((not (= (f-getwrd file) 1)) '())
+	('else (let ((len (f-getwrd file))
+		     (addr (f-getwrd file)))
+		 (cond ((<= len 6) '())
+		       ('else (do ((new-data '() (cons (cons addr (f-getbyt file)) new-data))
+				   (addr addr (1+ addr))
+				   (count (- len 6) (1- count)))
+				  ((zerop count) (f-getbyt file)
+						 new-data))))))))
+
+;;;;
+
+(when (si:facility-p :prom-programmer)
+  (si:enable-facility :prom-programmer))
+
+(defconst *default-minits-palx-bin-file* "oz:<dcp.minits.boot-prom>bootil.bin")
+
+(defun 27burn (&optional ifile)
+  (if (not ifile)
+      (setq ifile (prompt-and-read
+		    `(:pathname :visible-default ,*default-minits-palx-bin-file*)
+		    "Bin file ? ")))
+  (27burn-palx-bin-file ifile))
+
+(defun 27burn-palx-bin-file (&optional (ifile *default-minits-palx-bin-file*))
+  (with-open-file (istream ifile :characters nil :byte-size 8)
+    (27burn-data (send (fs:parse-pathname ifile) ':name)
+		 (combine-bytes (sort-data (get-bin-file-contents istream))))))
+
+(defun 27burn-data (name data)
+  (let ((ibase 8.)
+	(low-addr (caar data))
+	(hi-addr (caar (last data))))
+    (format t "~2%Data ranges from ~O to ~O." low-addr hi-addr)
+    (let* ((start-addr (or (prompt-and-read '(:number :base 8 :or-nil t)
+			    "Where do you want it to start (default 3000) ? ")
+			   (progn (format t "Using 3000~%") 3000)))
+	   (offset (- low-addr start-addr))
+	   (size (1+ (// (- hi-addr offset) 2))))
+      (format t "~%Going to burn from ~O to ~O~%" start-addr (- hi-addr offset))
+      (27burn-it name data offset size))))
+
+(defun 27burn-it (name data offset size)
+  (loop for suffix in '("-B00" "-B08")
+	 and lsh-count in '(-0 -8.)
+	for array-name = (intern (string-upcase (string-append name suffix)))
+         and output-array = (make-array size :initial-value 377)
+    do
+	(set array-name output-array)
+        (loop for (addr . datum) in data
+	      for  prog-addr = (// (- addr offset) 2)
+	       and prog-datum = (logand (lsh datum lsh-count) 377)
+	  do (aset prog-datum output-array prog-addr))
+    collect 
+	(27burn-it-now-damn-it array-name)
+    into burn-results
+    finally (return burn-results)))
+
+(defun 27burn-it-now-damn-it (array-name)
+  (format t "~%Attempting to contact prom-programmer...")
+  (and (programmer-reset)
+       (format t "~%Prom Programmer communications established.~%"))
+  (putprop array-name "2716" 'prom-type)
+  (programmer-set-type "2716")
+  (format t "~%Now programming ~A~%" array-name)
+  (programmer-program-prom array-name))
