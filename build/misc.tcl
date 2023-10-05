@@ -162,6 +162,9 @@ respond "*" ":midas alan;ts gensym_alan;gensym\r"
 expect ":KILL"
 respond "*" ":link device; chaos gensym, alan; ts gensym\r"
 
+respond "*" ":midas device;chaos load_alan;load\r"
+expect ":KILL"
+
 # Mini Chaosnet file server.  Version 5 is MINIC.
 respond "*" ":midas sysbin; minic bin_syseng; minisr 5\r"
 expect ":KILL"
