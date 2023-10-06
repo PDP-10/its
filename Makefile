@@ -83,6 +83,7 @@ SIMH=tools/simh/BIN/pdp10
 KA10=tools/sims/BIN/pdp10-ka
 KL10=tools/sims/BIN/pdp10-kl
 KS10=tools/sims/BIN/pdp10-ks
+SIMHV3=tools/simhv3/BIN/pdp10
 ITSTAR=tools/itstar/itstar
 WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
@@ -163,8 +164,16 @@ out/pdp10-ks/stamp/emulators: $(GT40) $(VT52)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
+out/simhv3/stamp/its: $(OUT)/rp0.dsk
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
+out/simhv3/stamp/emulators: $(GT40) $(VT52)
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
 $(OUT)/rp0.dsk: build/simh/init $(OUT)/minsys.tape $(OUT)/minsrc.tape $(OUT)/salv.tape $(OUT)/dskdmp.tape build/build.tcl $(OUT)/sources.tape $(OUT)/stamp/pdp10
-	PATH="$(CURDIR)/tools/simh/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
+	PATH="$(CURDIR)/tools/$(EMULATOR)/BIN:$$PATH" expect -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
 
 $(OUT)/rp03.2 $(OUT)/rp03.3: $(OUT)/ka-minsys.tape $(OUT)/minsrc.tape $(OUT)/magdmp.tap $(OUT)/sources.tape
 	$(EXPECT) -f build/$(EMULATOR)/build.tcl $(IP) $(GW)
@@ -256,6 +265,8 @@ out/pdp10-kl/stamp/test:
 
 out/pdp10-ks/stamp/test:
 
+out/simhv3/stamp/test:
+
 start: build/$(EMULATOR)/start
 	$(LN) -s $< $*
 
@@ -276,6 +287,10 @@ out/pdp10-kl/stamp/pdp10: $(KL10) start
 	$(TOUCH) $@
 
 out/pdp10-ks/stamp/pdp10: $(KS10) start
+	$(MKDIR) $(OUT)/stamp
+	$(TOUCH) $@
+
+out/simhv3/stamp/pdp10: $(SIMHV3) start
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -300,6 +315,10 @@ out/pdp10-kl/system:
 out/pdp10-ks/system:
 	$(MKDIR) $(OUT)/system
 	cp build/pdp10-ks/config.* $(OUT)/system
+
+out/simhv3/system:
+	$(MKDIR) $(OUT)/system
+	cp build/simhv3/config.* $(OUT)/system
 
 out/klh10/dskdmp.ini: build/mchn/$(MCHN)/dskdmp.txt Makefile
 	$(MKDIR) $(OUT)/stamp
@@ -342,6 +361,16 @@ $(KL10):
 
 $(KS10):
 	$(MAKE) -C tools/sims pdp10-ks
+
+$(SIMHV3): tools/simhv3
+	$(MAKE) -C tools/simhv3 pdp10
+
+tools/simhv3: simhv312-4.zip
+	unzip $<
+	mv sim $@
+
+simhv312-4.zip:
+	$(WGET) http://simh.trailing-edge.com/sources/$@
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar
