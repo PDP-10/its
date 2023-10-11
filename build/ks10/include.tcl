@@ -22,6 +22,7 @@ proc start_dskdmp_its {} {
 }
 
 proc mark_pack {unit pack id} {
+    after 1000
     respond "\n" "mark\033g"
     respond "Format pack on unit #" "$unit"
     respond "Are you sure you want to format pack on drive" "y"
