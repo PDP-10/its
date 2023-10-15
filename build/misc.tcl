@@ -765,6 +765,8 @@ respond "*" ":midas device; jobdev shoe_rwk; gunner\r"
 expect ":KILL"
 
 # Trivial Gunner
+# Make a link from e.g. DRAGON; HOURLY GUNNER to use this program.
+# It will log its actions to SPACY; GUNNER LOG.
 respond "*" ":midas cstacy;_gunner >\r"
 expect ":KILL"
 
