@@ -695,6 +695,10 @@ respond "SUBJECT:" "COOKIE\r"
 respond "NAME:" "BEAR\r"
 expect ":KILL"
 
+# Cookie Bear (this one actually works)
+respond "*" ":midas eak;ts bear_eak;bear\r"
+expect ":KILL"
+
 # LOGOUT TIMES cleanup program.
 respond "*" ":midas sys3;ts lotcln_sysen1; lotcln\r"
 expect ":KILL"
