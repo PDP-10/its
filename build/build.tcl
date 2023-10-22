@@ -195,6 +195,10 @@ respond "*" ":copy sys; ts ddt, dsk0: backup;\r"
 respond "*" ":copy sys; ts dump, dsk0: backup;\r"
 respond "*" ":copy sys; ts midas, dsk0: backup;\r"
 
+if [file exists $build/mchn/$mchn/custom.tcl] {
+    source $build/mchn/$mchn/custom.tcl
+}
+
 if {![info exists env(NODUMP)]} {
     # make output.tape
     respond "*" $emulator_escape
