@@ -71,7 +71,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 SRCIGNORE=-e '^(system|midas)$$'
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup cbridge \
-	tapeutils tv11 pdp6 vt05 tek4010
+	tapeutils tv11 pdp6 vt05 tek4010 chaosnet-tools
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -105,7 +105,8 @@ SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
 all: its $(OUT)/stamp/test $(OUT)/stamp/emulators \
-	tools/supdup/supdup tools/cbridge/cbridge
+	tools/supdup/supdup tools/cbridge/cbridge \
+	tools/chaosnet-tools/shutdown
 
 its: $(SMF) $(OUT)/stamp/its
 
@@ -405,6 +406,9 @@ tools/supdup/supdup:
 
 tools/cbridge/cbridge:
 	$(MAKE) -C tools/cbridge
+
+tools/chaosnet-tools/shutdown:
+	$(MAKE) -C tools/chaosnet-tools
 
 $(SMF):
 	$(GIT) submodule sync --recursive `dirname $@`
