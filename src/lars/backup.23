@@ -1,0 +1,266 @@
+	TITLE BACKUP AUTOMATICALLY
+
+;This program runs DUMP as an inferior job, and sends it commands
+;to make an automated backup.
+
+IF1 [
+PRINTX /RTAPE SERVER HOST NAME = /
+.TTYMAC ZZZ
+DEFINE SERVER
+ASCIZ/ZZZ/
+TERMIN
+TERMIN
+]
+
+A==1
+B==A+1
+C==3
+D==4
+P==17
+
+CLOC==1		;Core link channel for DUMP output.
+CLIC==2		;Core link channel for input to DUMP.
+LOGC==3		;Log channel.  DUMP output is written here.
+DSKC==4		;Disk file channel for TS DUMP.
+USRC==5		;Inferior job channel.
+
+PDLLEN=100
+
+DEFINE SYSCAL A,B
+	.CALL [SETZ ? SIXBIT/A/ ? B ((SETZ))]
+TERMIN
+
+DEFINE LOOK [ZZZ
+	MOVEI A,ZZZ
+	PUSHJ P,LOOK1
+TERMIN
+
+DEFINE SEND [ZZZ
+	MOVEI A,ZZZ
+	PUSHJ P,SEND1
+TERMIN
+
+LOC 42
+	TSINT
+
+LOC 100
+GO:	MOVE P,[-PDLLEN,,PDL]
+
+	;Open two core links for DUMP TTY: input/output.
+	SYSCAL OPEN,[[.UAI,,CLOC] ? CLODEV ? CLOFN1 ? CLOFN2 ? CLODIR]
+	 .LOSE %LSFIL
+	SYSCAL OPEN,[[.UAO,,CLIC] ? CLIDEV ? CLIFN1 ? CLIFN2 ? CLIDIR]
+	 .LOSE %LSFIL
+
+	;Delete the old log file.  Then open it for writing.
+	SYSCAL DELETE,[LOGDEV ? LOGFN1 ? LOGFN2 ? LOGDIR]
+	 JFCL
+	SYSCAL OPEN,[[.UAO,,LOGC] ? LOGDEV ? LOGFN1 ? LOGFN2 ? LOGDIR]
+	 .LOSE %LSFIL
+
+	;Make an inferior job.
+	.OPEN USRC,[.BIO,,'USR ? 0 ? SIXBIT /DUMP/]
+	 .LOSE %LSSYS
+	.RESET USRC,
+	.USET USRC,[.RINTB,,INFBIT']	;Inferior interrupt bit.
+	.SUSET [.SMSK2,,INFBIT]		;Subscribe to those interrupts.
+
+	;Translate inferior TTY: input and output to the core links.
+	SYSCAL TRANAD,[[1,,USRC] ? TTYTRA ? CLITRA]
+	 .LOSE %LSSYS
+	SYSCAL TRANAD,[[2,,USRC] ? TTYTRA ? CLOTRA]
+	 .LOSE %LSSYS
+
+	;Load inferior from TS DUMP.
+	SYSCAL OPEN,[[.UII,,DSKC] ? DMPDEV ? DMPFN1 ? DMPFN2 ? DMPDIR]
+	 .LOSE %LSFIL
+	SYSCAL LOAD,[MOVEI USRC ? MOVEI DSKC]
+	 .LOSE %LSSYS
+	.IOT DSKC,A			;Get start address.
+	HRRZS A
+	.USET USRC,[.SUPC,,A]
+	.USET USRC,[.SUSTP,,[0]]	;Start inferior.
+	.CLOSE DSKC,
+
+	;Convert today's date to an ASCII string.
+	.RDATE A,
+	MOVE C,[440700,,DATE]
+LOOP2:	LDB D,[360600,,A]
+	ADDI D,40
+	IDPB D,C
+	LSH A,6
+	JUMPN A,LOOP2
+	IDPB A,C
+
+	PUSHJ P,TAPES			;Figure out highest tape number.
+	AOS TAPE			;Add one to it.
+	PUSHJ P,MOUNT			;Mount remote tape.
+	PUSHJ P,DUMPI			;Incremental backup.
+	PUSHJ P,QUIT
+
+HANG:	JFCL				;Wait for DUMP to finish.
+	 .HANG
+	JRST HANG
+
+TAPES:	SETZM TAPE
+	LOOK PROMPT			;Send the TAPES command,
+	SEND [ASCIZ /TAPESî/]
+	LOOK [ASCIZ /LIST DEV =/]
+	SEND CR
+TAPES1:	PUSHJ P,INPUT
+	CAIE D,^J			;Look for a new line.
+	 JRST TAPES1
+	MOVEI A,6
+	MOVEI B,0
+TAPES2:	PUSHJ P,INPUT			;Parse a decimal number.
+	CAIN D,^M
+	 POPJ P,			;Empty line means end of list.
+	CAIN D,40
+	 SKIPA D,[0]
+	  SUBI D,"0
+	IMULI B,10.
+	ADD B,D
+	SOJG A,TAPES2
+	CAMLE B,TAPE			;Save the largest tape number.
+	 MOVEM B,TAPE
+	JRST TAPES1
+
+MOUNT:	LOOK PROMPT			;Send the REMOTE command,
+	SEND [ASCIZ /REMOTEî/]		;and answer the questions.
+	LOOK [ASCIZ /HOST=/]
+	SEND HOST
+	SEND CR
+	LOOK [ASCIZ /DRIVE=/]
+	PUSHJ P,DRIVE
+	LOOK [ASCIZ /READ-ONLY? /]
+	SEND [ASCIZ /N/]
+	POPJ P,
+
+DUMPI:	LOOK PROMPT			;Send DUMP I command.
+	SEND [ASCIZ /DUMP Iî/]
+	LOOK [ASCIZ /TAPE NO=/]
+	PUSHJ P,TAPENO
+	SEND CR
+	LOOK [ASCIZ /E-O-T/]
+	POPJ P,
+
+DUMPF:	LOOK PROMPT			;Send DUMP F command.
+	SEND [ASCIZ /DUMP F LINKSî/]
+	LOOK [ASCIZ /TAPE NO=/]
+	PUSHJ P,TAPENO
+	LOOK PROMPT			;Send REWIND and ICHECK commands.
+	SEND [ASCIZ /REWINDî/]
+	LOOK PROMPT
+	SEND [ASCIZ /ICHECKî/]
+	LOOK [ASCIZ /E-O-T/]
+	POPJ P,
+
+QUIT:	LOOK PROMPT			;Send QUIT command.
+	SEND [ASCIZ /QUITî/]
+	POPJ P,
+
+SEND1:	HRLI A,440700			;Send a string to inferior.
+SEND2:	ILDB B,A
+	JUMPE B,WAIT
+	.IOT CLIC,B			;Send to inferior.
+	.IOT LOGC,B			;And a copy for the log.
+	JRST SEND2
+
+WAIT:	MOVEI A,30.			;Give DUMP a little time to consume
+	.SLEEP A,			;input and respond with some output.
+	POPJ P,
+
+LOOK1:	HRLI A,440700			;Look for a string from inferior.
+	MOVE B,A
+	ILDB C,B
+LOOK2:	PUSHJ P,INPUT			;Get output from DUMP.
+	CAIE C,(D)			;Match the input string?
+	 JRST [ MOVE B,A		;No, start over from the beginning.
+		ILDB C,B
+		CAIE C,(D)
+		 JRST LOOK2
+		JRST .+1 ]
+	ILDB C,B			;Yes, advance to next character.
+	JUMPE C,WAIT			;All done!
+	JRST LOOK2
+
+INPUT:	.IOT CLOC,D			;Get output from DUMP.
+	JUMPL D,INPUT1
+	.IOT LOGC,D			;Copy to the log.
+	POPJ P,
+INPUT1:	SYSCAL OPEN,[[.UAI,,CLOC] ? CLODEV ? CLOFN1 ? CLOFN2 ? CLODIR]
+	 .LOSE %LSFIL			;Saw end of file, try reopen.
+	JRST INPUT
+
+DRIVE:	SEND [ASCIZ /i/]		;Send tape file name as the
+	SEND DATE			;remote drive.
+	SEND [ASCIZ /-/]
+	PUSHJ P,TAPENO
+	SEND [ASCIZ /.dumpî/]
+	POPJ P,
+
+TAPENO:	MOVE A,TAPE			;Send tape number.
+	JRST DECIM
+
+DECIM:	IDIVI A,10.			;Send a decimal number.
+	JUMPE A,DECIM1
+	PUSH P,B
+	PUSHJ P,DECIM
+	POP P,B
+DECIM1:	ADDI B,"0
+	LSH B,29.
+	SEND B
+	POPJ P,
+
+TSINT:	0
+	0
+	PUSH P,A
+	MOVE A,TSINT
+	JUMPL A,INFINT			;Inferior interrupt?
+	.VALUE [ASCIZ /A[/]
+DISMIS:	POP P,A
+	.DISMIS TSINT+1
+
+INFINT:	.USET USRC,[.RPIRQC,,A]		;Get inferior interrupt
+	TRNN A,%PIBRK			;Inferior requesting to be killed?
+	 JRST DISMIS
+	.UCLOSE USRC,			;Oblige.
+	.LOGOUT 1,
+
+PROMPT:	ASCIZ /
+_/
+CR:	ASCIZ /î/
+
+PDL:	BLOCK PDLLEN
+
+HOST:	SERVER
+	BLOCK 10			;For patching the host name.
+TAPE:	0
+DATE:	BLOCK 3
+
+TTYTRA:	-1,,.+1
+	SIXBIT /TTY/
+
+CLITRA:	-4,,.+1
+CLIDEV:	SIXBIT /CLO/
+CLIFN1:	SIXBIT /DUMP/
+CLIFN2:	SIXBIT /TYI/
+CLIDIR:	SIXBIT /BACKUP/
+
+CLOTRA:	-4,,.+1
+CLODEV:	SIXBIT /CLO/
+CLOFN1:	SIXBIT /DUMP/
+CLOFN2:	SIXBIT /TYO/
+CLODIR:	SIXBIT /BACKUP/
+
+LOGDEV:	SIXBIT /DSK/
+LOGFN1:	SIXBIT /BACKUP/
+LOGFN2:	SIXBIT /LOG/
+LOGDIR:	SIXBIT /DRAGON/
+
+DMPDEV:	SIXBIT /DSK/
+DMPFN1:	SIXBIT /TS/
+DMPFN2:	SIXBIT /DUMP/
+DMPDIR:	SIXBIT /SYS/
+
+END GO
