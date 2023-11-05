@@ -10,3 +10,7 @@ respond "*" ":link dragon; hourly gunner, cstacy; gunner bin\r"
 respond "*" ":midas dragon; weekly backup_lars; backup\r"
 respond "HOST NAME =" "3036\r"
 expect ":KILL"
+
+# get rid of links to daemons that don't run correctly
+respond "*" ":delete dragon;hourly digest\r"
+respond "*" ":delete dragon;hourly gcbulk\r"
