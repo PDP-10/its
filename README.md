@@ -58,7 +58,7 @@ some of which are disk images with ITS installed.
 
 | Emulator | Dependencies |
 | --- | --- |
-| common to all | git, c compiler, make, expect, curses, autoconf
+| common to all | git, c compiler, make, expect, curses, autoconf, ssl library
 | klh10 | 
 | simh | sdl2
 | pdp10-ka | sdl2, sdl2-image, sdl2-net, gtk3
