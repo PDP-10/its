@@ -58,11 +58,12 @@ some of which are disk images with ITS installed.
 
 | Emulator | Dependencies |
 | --- | --- |
-| klh10 | git, c compiler, make, expect, curses, autoconf
-| simh | git, c compiler, make, expect, curses, autoconf, sdl2
-| pdp10-ka | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, sdl2-net, gtk3
-| pdp10-kl | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
-| pdp10-ks | git, c compiler, make, expect, curses, autoconf, sdl2
+| common to all | git, c compiler, make, expect, curses, autoconf
+| klh10 | 
+| simh | sdl2
+| pdp10-ka | sdl2, sdl2-image, sdl2-net, gtk3
+| pdp10-kl | sdl2, sdl2-image, gtk3
+| pdp10-ks | sdl2
 
 ### Usage
 
