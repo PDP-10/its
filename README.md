@@ -1,6 +1,6 @@
 # Incompatible Timesharing System
 
-![CI Build Status](https://github.com/PDP-10/its/workflows/Build/badge.svg)
+![CI Build Status](https://github.com/PDP-10/its/actions/workflows/build.yml/badge.svg)
 
 ### About ITS
 
