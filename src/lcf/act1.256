@@ -1661,6 +1661,11 @@ probably).">
 	  (<VERB? "MUNG">
 	   <TELL <PICK-ONE ,DOORMUNGS>>)>>
 
+<DEFINE DWIND-FUNCTION ()
+    <COND (<VERB? "OPEN">
+           <TELL
+"The window cannot be opened.">)>>
+
 <DEFINE PUMPER ("AUX" (P <SFIND-OBJ "PUMP">))
   <COND (<OR <IN-ROOM? .P>
 	     <MEMQ .P <AOBJS ,WINNER>>>
