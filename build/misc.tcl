@@ -32,6 +32,11 @@ respond "MIDAS.73" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
 respond "*" ":xfile midas; patch 73\r"
 expect ":kill"
 
+# ITS 138
+respond "*" ":midas;73\r"
+respond "MIDAS.73" ".;ITS 138BIN_SYSENG;ITS 138\r"
+expect ":KILL"
+
 # MACTAP
 respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
 expect ":KILL"
