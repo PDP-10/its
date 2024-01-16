@@ -2,9 +2,9 @@
 
 set -e
 
-HOST="ftpupload.net"
-USER="if0_35726802"
-DIR="hactrn.kostersitz.com/htdocs/images"
+HOST="hactrn.kostersitz.com"
+USER="if0_35726802@hactrn.kostersitz.com"
+DIR="/images"
 NETRC="$HOME/.netrc"
 
 if test -z "$FTP_SECRET"; then
