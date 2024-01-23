@@ -33,9 +33,9 @@ install_freebsd() {
 install_osx() {
     brew update
     case "$EMULATOR" in
-        simh*) brew install sdl2;;
-        pdp10-*) brew install sdl2;;
-        klh10) brew install automake;;
+        simh*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
+        pdp10-*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
+        klh10) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
     esac
 }
 
