@@ -89,6 +89,7 @@ WRITETAPE=tools/tapeutils/tapewrite
 MAGFRM=tools/dasm/magfrm
 GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
+XGP11=tools/tv11/xgp11
 PDP6=tools/pdp6/emu/pdp6
 KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
@@ -145,7 +146,7 @@ out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(XGP11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -385,6 +386,9 @@ $(MAGFRM) $(KLFEDR):
 $(TV11):
 	$(MAKE) -C tools/tv11 tv11 CFLAGS=-O3
 	$(MAKE) -C tools/tv11/tvcon
+
+$(XGP11):
+	$(MAKE) -C tools/tv11 xgp11 CFLAGS=-O3
 
 $(PDP6):
 	$(MAKE) -C tools/pdp6/emu
