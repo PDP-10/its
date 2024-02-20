@@ -1,5 +1,5 @@
-t # Some important environment variables
-EMULATOR ?= pdp10-ka
+# Some important environment variables
+export EMULATOR ?= pdp10-ka
 
 # Sometimes you _really_ need to use a different `touch` or `rm`.
 TOUCH ?= touch
@@ -24,10 +24,6 @@ else
 MCHN ?= DB
 endif
 endif
-
-# This is necessary because the default value won't be passed in the environment to
-# the Tcl build scripts otherwise.
-export EMULATOR
 
 IMAGES=http://hactrn.kostersitz.com/images
 
