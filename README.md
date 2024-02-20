@@ -74,7 +74,7 @@ the script takes 2 parameters to run:
 `install_<os>` and `EMULATOR=<emnulatorname>`
 To install the dependencies 
 - on MacOS for the PDP-10 KA run
-  - `./dependencies.sh install_macosx EMULATOR=pdp10-ka`
+  - `./dependencies.sh install_osx EMULATOR=pdp10-ka`
 - on Ubuntu run
   - `./dependencies.sh install_linux EMULATOR=pdp10-ka`
 - on FreeBSD run
