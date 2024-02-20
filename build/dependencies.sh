@@ -31,12 +31,24 @@ install_freebsd() {
 }
 
 install_osx() {
-    brew update
-    case "$EMULATOR" in
-        simh*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
-        pdp10-*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
-        klh10) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
-    esac
+    if [ -x /opt/local/bin/port ]; then
+        echo "Using macports under sudo - your password may be required"
+        case "$EMULATOR" in
+            simh*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
+            pdp10-*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
+            klh10) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
+        esac
+    elif [ -x /opt/homebrew/bin/homebrew ]; then
+        brew update
+        case "$EMULATOR" in
+            simh*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
+            pdp10-*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
+            klh10) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
+        esac
+    else
+        echo "Either MacPorts or Homebrew must be installed to /opt first"
+        exit 1
+    fi
 }
 
 "$1"
