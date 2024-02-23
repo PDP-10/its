@@ -112,7 +112,7 @@ all: deps its $(OUT)/stamp/test $(OUT)/stamp/emulators \
 deps: $(OUT)/.deps_done
 
 $(OUT)/.deps_done:
-	@echo Installing dependencies for `uname -s`
+	@echo Installing dependencies for `uname -s`; your password may be requested by sudo
 	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && touch -f $(OUT)/.deps_done
 
 its: $(SMF) $(OUT)/stamp/its
