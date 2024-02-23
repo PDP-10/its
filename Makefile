@@ -112,8 +112,9 @@ all: deps its $(OUT)/stamp/test $(OUT)/stamp/emulators \
 deps: $(OUT)/.deps_done
 
 $(OUT)/.deps_done:
+	@$(MKDIR) $(OUT)
 	@echo Installing dependencies for `uname -s`; your password may be requested by sudo
-	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && touch -f $(OUT)/.deps_done
+	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && $(TOUCH) -f $@
 
 its: $(SMF) $(OUT)/stamp/its
 
@@ -247,7 +248,7 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 
 $(OUT)/bootvt.bin $(OUT)/aplogo.ptp $(OUT)/ssv22.iml: $(OUT)/output.tape
 	$(RM) -rf $(OUT)/tmp
-	$(MKDIR) -p $(OUT)/tmp
+	$(MKDIR) $(OUT)/tmp
 	$(ITSTAR) -xf $< -C $(OUT)/tmp
 	$(CP) $(OUT)/tmp/gt40/bootvt.bin $(OUT)/bootvt.bin
 	-$(CP) $(OUT)/tmp/imlac/ssv22.iml $(OUT)/ssv22.iml
