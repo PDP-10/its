@@ -1,5 +1,5 @@
 # Some important environment variables
-EMULATOR ?= pdp10-ka
+export EMULATOR ?= pdp10-ka
 
 # Sometimes you _really_ need to use a different `touch` or `rm`.
 TOUCH ?= touch
@@ -105,9 +105,13 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: its $(OUT)/stamp/test $(OUT)/stamp/emulators \
+all: deps its $(OUT)/stamp/test $(OUT)/stamp/emulators \
 	tools/supdup/supdup tools/cbridge/cbridge \
 	tools/chaosnet-tools/shutdown
+
+deps: $(OUT)/.deps_done
+	@echo Installing dependencies for `uname -s`
+	sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && touch -f $(OUT)/.deps_done
 
 its: $(SMF) $(OUT)/stamp/its
 
