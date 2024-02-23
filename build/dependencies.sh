@@ -21,12 +21,12 @@ install_Linux() {
 }
 
 install_FreeBSD() {
-    pkg upgrade -y
-    pkg install -y gmake git expect
+    sudo pkg upgrade -y
+    sudo pkg install -y gmake git expect
     case "$EMULATOR" in
-        pdp10-ka) pkg install -y sdl2 sdl2_image sdl2_net pkgconf gtk3;;
-        pdp10-kl) pkg install -y sdl2 pkgconf gtk3 autoconf;;
-        klh10) pkg install -y pkgconf autotools;;
+        pdp10-ka) sudo pkg install -y sdl2 sdl2_image sdl2_net pkgconf gtk3;;
+        pdp10-kl) sudo pkg install -y sdl2 pkgconf gtk3 autoconf;;
+        klh10) sudo pkg install -y pkgconf autotools;;
     esac
 }
 
