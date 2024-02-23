@@ -32,13 +32,14 @@ install_FreeBSD() {
 
 install_Darwin() {
     if [ -x /opt/local/bin/port ]; then
-        echo "Using macports under sudo - your password may be required"
+        echo "Located and using MacPorts pkg manager"
         case "$EMULATOR" in
             simh*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
             pdp10-*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
             klh10) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
         esac
     elif [ -x /opt/homebrew/bin/homebrew ]; then
+	echo "Located and using Brew pkg manager"
         brew update
         case "$EMULATOR" in
             simh*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;
