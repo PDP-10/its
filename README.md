@@ -56,6 +56,9 @@ EMULATOR=pdp10-kl`, `make EMULATOR=pdp10-ks`, or `make
 EMULATOR=klh10`.  This will leave built files in the `out` directory,
 some of which are disk images with ITS installed.
 
+Note: On FreeBSD, you will need to use the gmake command to avoid incorrectly
+using BSD make.
+
 | Emulator | Dependencies |
 | --- | --- |
 | klh10 | git, c compiler, make, expect, curses, autoconf
