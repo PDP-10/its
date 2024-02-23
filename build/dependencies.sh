@@ -4,7 +4,7 @@ if test -n "$GITLAB_CI" -o -n "$CIRCLECI"; then
     }
 fi
 
-install_linux() {
+install_Linux() {
     sudo apt-get update -myq
     sudo apt-get install -my expect
     # For GitLab CI
@@ -20,7 +20,7 @@ install_linux() {
     esac
 }
 
-install_freebsd() {
+install_FreeBSD() {
     pkg upgrade -y
     pkg install -y gmake git expect
     case "$EMULATOR" in
@@ -30,7 +30,7 @@ install_freebsd() {
     esac
 }
 
-install_osx() {
+install_Darwin() {
     if [ -x /opt/local/bin/port ]; then
         echo "Using macports under sudo - your password may be required"
         case "$EMULATOR" in
