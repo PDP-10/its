@@ -110,8 +110,10 @@ all: deps its $(OUT)/stamp/test $(OUT)/stamp/emulators \
 	tools/chaosnet-tools/shutdown
 
 deps: $(OUT)/.deps_done
+
+$(OUT)/.deps_done:
 	@echo Installing dependencies for `uname -s`
-	sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && touch -f $(OUT)/.deps_done
+	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && touch -f $(OUT)/.deps_done
 
 its: $(SMF) $(OUT)/stamp/its
 
