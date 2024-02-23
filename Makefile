@@ -113,7 +113,7 @@ deps: $(OUT)/.deps_done
 
 $(OUT)/.deps_done:
 	@$(MKDIR) $(OUT)
-	@echo Installing dependencies for `uname -s`; your password may be requested by sudo
+	@echo Installing dependencies for `uname -s`. Your password may be requested by sudo
 	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && $(TOUCH) -f $@
 
 its: $(SMF) $(OUT)/stamp/its
