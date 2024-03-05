@@ -15,6 +15,7 @@ install_linux() {
         pdp10-k?) sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev
               sudo apt-get install -y libx11-dev libxt-dev libsdl2-dev
               sudo apt-get install -y libsdl2-image-dev libpcap-dev
+              sudo apt-get install -y libssl-dev libsdl2-ttf-dev
               sudo apt-get install -y libgtk-3-dev libsdl2-net-dev;;
         klh10) sudo apt-get install -y libusb-1.0-0-dev;;
     esac
