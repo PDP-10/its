@@ -270,6 +270,13 @@ expect ":KILL"
 # create inquir;lsr1 1
 respond "*" ":move .temp.;lsr1 empty,inquir;lsr1 1\r"
 
+# Now create INQUIR updates in new database
+#   note: this reads the file inquir;.upd1. > and loads entries into the LSR database
+respond "*" "inqupd\033j"
+respond "*" "\033linquir;inqupd bin\r"
+respond "*" "\033g"
+expect ":KILL"
+
 # pword/panda
 respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
 respond "Is this to be a PANDA?" "yes\r"
