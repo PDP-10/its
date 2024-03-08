@@ -215,11 +215,6 @@ respond "*" ":lisp inquir;inquir (dump)\r"
 respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
 respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
 
-respond "*" ":midas inquir;dirs bin_inquir;dmunch\r"
-expect ":KILL"
-
-respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
-expect ":KILL"
 respond "*" ":link inquir;ts inqcpy,inqupd bin\r"
 respond "*" ":link inquir;ts inqpat,inqupd bin\r"
 respond "*" ":link inquir;ts lsrini,inqupd bin\r"

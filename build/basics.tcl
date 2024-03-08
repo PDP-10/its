@@ -252,7 +252,23 @@ respond "*" ":midas sysbin;name_sysen2;name\r"
 expect ":KILL"
 
 respond "*" ":link syseng;ttytyp 999999,system;ttytyp >\r"
-respond "*" ":copy inquir;lsr1 empty,inquir;lsr1 >\r"
+
+# Build INQUIR;INQUPD BIN
+respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
+expect ":KILL"
+
+# Build INQUIR;DIRS BIN
+respond "*" ":midas inquir;dirs bin_inquir;dmunch\r"
+expect ":KILL"
+
+# create .temp.;lsr1 empty
+respond "*" "lsrini\033j"
+respond "*" "\033linquir;inqupd bin\r"
+respond "*" "\033g"
+expect ":KILL"
+
+# create inquir;lsr1 1
+respond "*" ":move .temp.;lsr1 empty,inquir;lsr1 1\r"
 
 # pword/panda
 respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
