@@ -14,8 +14,10 @@ expect ":KILL"
 # Gun down dead demons.
 respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
 type ":vk\r"
-respond "*" ":midas sys; atsign gunner_sysen2; gunner\r"
+respond "*" ":midas sysbin;_sysen2; gunner\r"
 expect ":KILL"
+respond "*" ":link sys; atsign gunner, sysbin; gunner bin\r"
+type ":vk\r"
 
 # Line printer unspooler demon.
 respond "*" ":midas sys; atsign unspoo_sysen1; unspoo\r"
