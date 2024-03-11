@@ -1,5 +1,5 @@
 # Some important environment variables
-EMULATOR ?= pdp10-ka
+export EMULATOR ?= pdp10-ka
 
 # Sometimes you _really_ need to use a different `touch` or `rm`.
 TOUCH ?= touch
