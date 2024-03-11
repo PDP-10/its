@@ -4,7 +4,7 @@ if test -n "$GITLAB_CI" -o -n "$CIRCLECI"; then
     }
 fi
 
-install_linux() {
+install_Linux() {
     sudo apt-get update -myq
     sudo apt-get install -my expect
     # For GitLab CI
@@ -21,25 +21,26 @@ install_linux() {
     esac
 }
 
-install_freebsd() {
-    pkg upgrade -y
-    pkg install -y gmake git expect
+install_FreeBSD() {
+    sudo pkg upgrade -y
+    sudo pkg install -y gmake git expect
     case "$EMULATOR" in
-        pdp10-ka) pkg install -y sdl2 sdl2_image sdl2_net pkgconf gtk3;;
-        pdp10-kl) pkg install -y sdl2 pkgconf gtk3 autoconf;;
-        klh10) pkg install -y pkgconf autotools;;
+        pdp10-ka) sudo pkg install -y sdl2 sdl2_image sdl2_net pkgconf gtk3;;
+        pdp10-kl) sudo pkg install -y sdl2 pkgconf gtk3 autoconf;;
+        klh10) sudo pkg install -y pkgconf autotools;;
     esac
 }
 
-install_osx() {
+install_Darwin() {
     if [ -x /opt/local/bin/port ]; then
-        echo "Using macports under sudo - your password may be required"
+        echo "Located and using MacPorts pkg manager"
         case "$EMULATOR" in
             simh*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
             pdp10-*) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
             klh10) sudo port install vde2 automake libsdl2 libsdl2_image libsdl2_net pkgconfig;;
         esac
     elif [ -x /opt/homebrew/bin/homebrew ]; then
+	echo "Located and using Brew pkg manager"
         brew update
         case "$EMULATOR" in
             simh*) brew install automake sdl2 sdl2_image sdl2_net pkg-config;;

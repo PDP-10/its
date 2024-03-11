@@ -1,5 +1,5 @@
 # Some important environment variables
-EMULATOR ?= pdp10-ka
+export EMULATOR ?= pdp10-ka
 
 # Sometimes you _really_ need to use a different `touch` or `rm`.
 TOUCH ?= touch
@@ -105,9 +105,16 @@ DUMP=$(shell cd src; ls syseng/dump.* sysnet/netwrk.*)
 SMF:=$(addprefix tools/,$(addsuffix /.gitignore,$(SUBMODULES)))
 OUT=out/$(EMULATOR)
 
-all: its $(OUT)/stamp/test $(OUT)/stamp/emulators \
+all: deps its $(OUT)/stamp/test $(OUT)/stamp/emulators \
 	tools/supdup/supdup tools/cbridge/cbridge \
 	tools/chaosnet-tools/shutdown
+
+deps: $(OUT)/.deps_done
+
+$(OUT)/.deps_done:
+	@$(MKDIR) $(OUT)
+	@echo Installing dependencies for `uname -s`. Your password may be requested by sudo
+	@sh build/dependencies.sh install_`uname -s` EMULATOR=${EMULATOR} && $(TOUCH) -f $@
 
 its: $(SMF) $(OUT)/stamp/its
 
@@ -241,7 +248,7 @@ $(OUT)/dskdmp.tape: $(WRITETAPE) $(RAM) $(DSKDMP)
 
 $(OUT)/bootvt.bin $(OUT)/aplogo.ptp $(OUT)/ssv22.iml: $(OUT)/output.tape
 	$(RM) -rf $(OUT)/tmp
-	$(MKDIR) -p $(OUT)/tmp
+	$(MKDIR) $(OUT)/tmp
 	$(ITSTAR) -xf $< -C $(OUT)/tmp
 	$(CP) $(OUT)/tmp/gt40/bootvt.bin $(OUT)/bootvt.bin
 	-$(CP) $(OUT)/tmp/imlac/ssv22.iml $(OUT)/ssv22.iml
