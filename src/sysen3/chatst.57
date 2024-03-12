@@ -93,6 +93,7 @@ DEFINE CM NAME,LOC
 TERMIN
 
 CMDT:	CM RFC,ARFC
+	CM BRD,ABRD
 	CM OPEN,AOPN
 	CM CLOSE,ACLS
 	CM EOF,AEOF
@@ -140,7 +141,8 @@ ASOAK1:	SOJL C,CPOPJ
 	PUSHJ P,PPKT
 	JRST ASOAK1
 
-STATAB:	IRP ST,,[Closed,Listening,RFC-Received,RFC-Sent,Open,Lost,Incomplete-Transmission]
+;; See CHSDEF
+STATAB:	IRP ST,,[Closed,Listening,RFC-Received,RFC-Sent,Open,Lost,Incomplete-Transmission,Foreign,BRD-Sent]
 	[ASCIZ/ST/]
 	TERMIN
 
@@ -238,6 +240,133 @@ ALSN:	PUSHJ P,CLBF
 	DPB A,[$CPKNB BF]
 	PUSHJ P,SEND		;JUST SEND, WILL GET INTERRUPT IF RFC MATCHES
 	POPJ P,
+
+BRDPKT:	block %CPMXW
+;Send BRD
+ABRD:	PUSHJ P,CLBF
+	;; Opcode
+	MOVEI A,%COBRD
+	DPB A,[$CPKOP BF]
+	;; Dest
+	setz a,			;To everyone
+	DPB A,[$CPKDA BF]
+	;; Construct bitmask field
+	pushj p,mkbmsk
+	;; Get contact
+	FWRITE TYOC,[[ Contact name: ]]
+	MOVE B,[440800,,%CPKDT+BF+8.]
+	PUSHJ P,ASZIN
+	addi a,32.		;+bitmask length
+	DPB A,[$CPKNB BF]
+	move a,[bf,,brdpkt]	;Save pkt
+	blt a,brdpkt+%cpmxw-1
+	;; Clear hosts we received from already
+	setzm brdmax
+	setzm brdhst
+	move a,[brdhst,,brdhst+1]
+	blt a,brdhst+nbrdh-1
+	.rdtime a,
+	addi a,6.*30.		;10-sec timeout incl retransmission
+	movem a,brdtim'
+ABRD0:	PUSHJ P,SEND
+	FWRITE TYOC,[[ Sending...],CRLF,,]
+	;; NETBLK isn't suitable, since we stay in the same state.
+	;; Instead, use interrupt handler trick (see TSINT).
+	movei a,2.*30.		;2-sec wait before possibly retransmitting
+abrdx:	.sleep a,		;Wait until interrupt or timeout
+	;; Check if we have input?
+	.call [ setz ? 'WHYINT ? movei chic ? movem a ? movem a ? movem t ? setzm a ]
+	 .lose 1000
+	hlrzs t			;number of input packets
+	fwrite tyoc,[[ Have packets: ],oct,t,crlf,,]
+	jumpe t,abrd3		;none yet
+abrd2:	;; Read packets!
+	.CALL [ SETZ ? 'PKTIOT ? MOVEI CHIC ? SETZI BF ]
+	 .LOSE %LSSYS		;CLOSED, CHECK FOR INPUT
+	LDB A,[$CPKOP BF]	;Check what we got
+	CAIE A,%COANS
+	 jrst abrd20		;Not ANS, skip it
+	ldb a,[$cpksa bf]	;Get source
+	pushj p,brdedp		;Got one already?
+	 jrst abrd20		; yes, skip it
+	pushj p,ARANS
+abrd20:	sojg t,abrd2		;Loop back and get the pkts we know are there
+abrd3:	.rdtime b,		;Check if we should timeout
+	camge b,brdtim
+	 jrst abrd4		;Not yet
+	fwrite tyoc,[[ Timed out],CRLF,,]
+	jrst abrdz		;Done
+abrd4:
+ifn 1,[	;;Delay just a little: often more appears here
+	movei b,10.
+	.sleep b,
+]
+	;; channel, %whyca, state, rec,,trns, winrec,,winsnd
+	.call [ setz ? 'WHYINT ? movei chic ? movem a ? movem a ? movem t ? setzm c ]
+	 .lose 1000
+	hlrzs t			;number of input packets
+	fwrite tyoc,[[ More packets: ],oct,t,crlf,,]
+	jumpn t,abrd2		;Try again
+	;; Don't retransmit too often
+	movei b,30.		;Wait a sec, seems enough
+	.sleep b,
+	move a,[brdpkt,,bf]	;Get BRD pkt again
+	blt a,bf+%cpmxw-1
+	jrst abrd0		;Retransmit manually
+abrdz:	;; Close and reopen channels, so retransmissions of BRD stop
+	fwrite tyoc,[[ Closing and reopening channels],CRLF,,]
+	.call [ setz ? sixbit/chaoso/ ? movei chic ? movei choc ? setzi 10 ]
+	 .lose 1000
+	POPJ P,
+
+mkbmsk:
+ifn 0,[	;; Global broadcast
+	setom %cpkdt+bf		;All first four bytes
+	move a,[%cpkdt+bf,,%cpkdt+bf+1]
+	blt a,%cpkdt+bf+8.-1
+	movei a,32.		;#bytes in bitmask
+] .else [
+	;; Calculate bitmask for local subnet
+	;; First clear it
+	setzm %cpkdt+bf
+	move a,[%cpkdt+bf,,%cpkdt+bf+1]
+	blt a,%cpkdt+bf+8.-1
+	move a,[squoze 0,MYCHAD]	;Get my address
+	.eval a,
+	 .lose 1000
+	lsh a,-8.		;Get subnet
+	idivi a,8.		;Get byte index (a) and bit in the byte (b)
+	movei c,1
+	lsh c,(b)		;Make a bit in a byte (rightmost in byte 0 = subnet 0)
+	idivi a,4		;Calculate word (a) and byte in word (b)
+	movem a,t		;Save word offset
+	movei a,3		;Now move the byte (3-a)*8+4 bits to the left
+	sub a,b
+	imuli a,8
+	addi a,4
+	lsh c,(a)
+	movem c,%cpkdt+bf(t)	;Save word in the right place
+	movei a,32.		;#bytes in bitmask
+]
+	dpb a,[$cpkan+bf]	;bitmask length in ACK field
+	popj p,
+
+nbrdh==100
+brdmax:	block 1
+brdhst:	block nbrdh
+
+;; Check table of received hosts for host in A. Zaps B.
+brdedp:	setz b,
+brddp1:	caml b,brdmax
+	 jrst brddp2		;End of list w/o finding it
+	came a,brdhst(b)
+	 aoja b,brddp1		;Try next
+	;; fwrite tyoc,[[ Already had ],N8,a,CRLF,,]
+	popj p,			;found it
+brddp2:	movem a,brdhst(b)	;Save new
+	aos brdmax		;incf length
+	aos (p)			;skip return
+	popj p,
 
 ;SEND RFC
 ARFC:	PUSHJ P,CLBF
@@ -649,8 +778,18 @@ TSINT2:	.CALL [	SETZ
 	FWRITE TYOC,[[Input count=],N10,B,[, Output count=],N10,C,CRLF,,]
 	FWRITE TYOC,[[Input window=],N10,E,[, Output window=],N10,D,CRLF,,]
 	FWRITE TYOC,[[Dismissing...],CRLF,,]
-	SKIPL TSINT
-	 AOS TSINT+1	;Don't retry IOT
+	skipge tsint
+	 jrst tsin22
+	AOS TSINT+1		;Don't retry IOT
+	jrst tsint3		;Don't skip twice
+tsin22:
+	;; If we're waiting for a broadcast answer, move on
+	hrrz c,tsint+1
+	caie c,abrdx
+	 jrst tsint3
+	skipe b			;But only if input available
+	 aos tsint+1
+tsint3:
 	MOVE A,SUUOH
 	MOVEM A,@41
 	MOVE A,SV40
