@@ -4,6 +4,11 @@
 TITLE NAME DRAGON
 versio==.fnam2
 
+;; Use broadcast (BRD) to contact lisp machines, rather than individual RFCs
+%usebrd==1
+;; Broadcast globally, rather than only the local subnet
+%alllm==1
+
 a=1
 b=2
 c=3
@@ -370,6 +375,9 @@ lmfng0:	setzm unmtab+maxtty(a)
 	setzm lmfree(a)
 	aobjn a,lmfng0
 	setz c,			;C has index into LMADRS.
+ifn %usebrd,[
+	jrst lmfinb		;Go use broadcast instead
+]
 	movei b,hslmai
 lmfin2:	move a,b		;Each word of table is an ASCIZ string.  Get address.
 	skipn (a)
@@ -387,6 +395,30 @@ lmfin2:	move a,b		;Each word of table is an ASCIZ string.  Get address.
 	caile c,nontty		;Complain if LMADRS gets full.
 	 .value
 	aoja b,lmfin2
+
+ifn %usebrd,[
+;; Broadcast FINGER routine
+lmfinb:	.rdtime t,		;Get starting time.  Use at most 16 seconds for whole thing.
+	addi t,16*30.		; including retransmissions
+	movem t,brdtim'
+	seto c,			;Start at table index -1, it is increased before use
+	movei a,2		;Use this channel
+	pushj p,lmbrd		;Send the broadcast
+	skipa tt,[15.]		;Wait only half a second the first time
+lmbr1:	movei tt,2*30.		;Wait 2 max seconds for each transmission
+lmbitw:	.sleep tt,		;Wait for interrupt or timeout
+	pushj p,chsin1		;chsin1 processes all replies
+	.rdtime t,
+	camle t,brdtim		;Timed out?
+	 jrst lmbr9		;Yes, finished
+	movei t,30.		;No, wait a sec
+	.sleep t,
+	pushj p,lmbrd0		;Retransmit
+	jrst lmbr1		;and retry
+lmbr9:	.call [ setz ? sixbit/close/ ? setzi (a) ] ;Close, so retransmissions stop
+	 jfcl
+	jrst lmfinx
+]
 
 lmfin3:	setzm nextlm
 	.rdtime t,		;Get starting time.  Use at most 20 seconds for whole thing.
@@ -417,10 +449,119 @@ lmstr9:	movsi a,-20		;Close channels and return
 lmstr8:	.call [ setz ? sixbit/close/ ? setzi (a) ]
 	 jfcl
 	aobjn a,lmstr8
+ifn %usebrd,lmfinx:
 	.iopop ls1c,
 	.iopop tybc,
 	.iopop tyoc,
 	jrst putout
+
+ifn %usebrd,[
+; Send a BRD for FINGER on channel in A.
+; if %alllm then all subnets else local subnet only
+; Same as lmrfc from .rdtime tt,
+lmbrd:	;; Clear hosts we received from already
+	setzm brdmax
+	setzm brdhst
+	move t,[brdhst,,brdhst+1]
+	blt t,brdhst+nbrdh-1
+	;; Make table index from channel
+	move t,a
+	lsh t,-1
+	.rdtime tt,
+	movem tt,chsstm(t)	;Start time
+	setz b,
+	dpb b,[$cpkda+lmpkt]	;send BRD to everyone
+	movei tt,%cobrd
+	dpb tt,[$cpkop+lmpkt]
+	;; Construct bitmap, set $CPKAN to its length, get bm length in b
+	pushj p,mkbmsk
+	movei tt,.length/FINGER/
+	add tt,b		;bitmask length
+	dpb tt,[$cpknb+lmpkt]
+	push p,c
+	idivi b,4		;Make words from bytes
+	pop p,c
+	move tt,[.byte 8 ? "F ? "I ? "N ? "G]
+	movem tt,%cpkdt+lmpkt(b)
+	move tt,[.byte 8 ? "E ? "R]
+	movem tt,%cpkdt+1+lmpkt(b)
+	move tt,[lmpkt,,brdpkt]	;Save pkt for retransmission
+	blt tt,brdpkt+%cpmxw-1
+	;; Open the channel
+	.call [ setz ? 'CHAOSO ? movei (a) ? setzi 1(a) ]
+	 jrst [	setom chsidx(t) ? popj p, ]	;probably device full
+	;; Send it off
+	.call [ setz ? 'PKTIOT ? movei 1(a) ? setzi lmpkt ]
+	 jsr die
+	popj p,
+
+;; Retransmit the BRD packet
+lmbrd0:	move t,a
+	lsh t,-1
+	.rdtime tt,
+	movem tt,chsstm(t)	;Reset start time
+	move tt,[brdpkt,,lmpkt]	;Get pkt for retransmission
+	blt tt,lmpkt+%cpmxw-1
+	;; Send it off
+	.call [ setz ? 'PKTIOT ? movei 1(a) ? setzi lmpkt ]
+	 jsr die
+	popj p,
+	
+;; Check table of received hosts for host in TT.
+brdedp:	push p,b
+	setz b,
+brddp1:	caml b,brdmax
+	 jrst brddp2		;End of list w/o finding it
+	came tt,brdhst(b)
+	 aoja b,brddp1		;Try next
+	pop p,b
+	popj p,			;found it
+brddp2:	movem tt,brdhst(b)	;Save new
+	aos brdmax		;incf length
+	pop p,b
+	aos (p)			;skip return
+	popj p,
+
+;; Make broadcast bitmask, return its length in b.
+mkbmsk:	push p,a
+	push p,c
+ifn %alllm,[
+	;; All lispm = global broadcast
+	setom %cpkdt+lmpkt		;All first four bytes
+	move a,[%cpkdt+lmpkt,,%cpkdt+lmpkt+1]
+	blt a,%cpkdt+lmpkt+8.-1
+	movei b,32.		;#bytes in bitmask
+;	jrst mkbm2
+] .else [
+mkbmlc:	;; Local or associated lispms:
+	;; Calculate bitmask for local subnet.
+	;; (Possibly optimize this to use only necessary bm length.)
+	;; First clear it
+	setzm %cpkdt+lmpkt
+	move a,[%cpkdt+lmpkt,,%cpkdt+lmpkt+1]
+	blt a,%cpkdt+lmpkt+8.-1
+	move a,[squoze 0,MYCHAD]	;Get my address
+	.eval a,
+	 .lose 1000
+	lsh a,-8.		;Get subnet
+	idivi a,8.		;Get byte index (a) and bit in the byte (b)
+	movei c,1
+	lsh c,(b)		;Make a bit in a byte (rightmost in byte 0 = subnet 0)
+	idivi a,4		;Calculate word (a) and byte in word (b)
+	movem a,t		;Save word offset
+	movei a,3		;Now move the byte (3-a)*8+4 bits to the left
+	sub a,b
+	imuli a,8
+	addi a,4
+	lsh c,(a)
+	movem c,%cpkdt+lmpkt(t)	;Save word in the right place
+	movei b,32.		;#bytes in bitmask
+]
+mkbm2:	dpb b,[$cpkan+lmpkt]	;bitmask length in ACK field
+	pop p,c
+	pop p,a
+	popj p,
+]
 
 	;Lisp machines associated with AI.
 hslmai:	irps x,,lm1 lm2 lm3 lm4 lm5 lm6 lm7 lm8 lm9 lm15 lm16 lm18 lm19 lm20 lm22 lm23
@@ -460,17 +601,34 @@ lmrfc:	move t,a		;mark channel free
 chsin1:	;set c to index into lisp-machine tables
 	move tt,a
 	lsh tt,-1
+ife %usebrd,[
 	skipge c,chsidx(tt)
 	 popj p,		;channel not in use
+]
+ifn %usebrd,chsi11:
 	.call [ setz ? 'WHYINT ? movei (a) ? movem b ? movem b ? setzm b ]
 	 jsr die
 	hlrzs b			;number of input packets
 	jumpe b,chsin9		;none yet
+ifn %usebrd,chsi12:
 	.call [ setz ? 'PKTIOT ? movei (a) ? setzi lmpkt ]	;Get the packet
 	 jsr die
 	ldb tt,[$cpkop+lmpkt]
 	caie tt,%coans
+ife %usebrd,[
 	 jrst lmrfc		;Some lossage, ignore this machine
+] .else	jrst lmbrz		;Some lossage, see if there are more pkts
+ifn %usebrd,[
+	;; Broadcast case: check if we already had this, then get another
+	ldb tt,[$cpksa+lmpkt]	;Get source
+	pushj p,brdedp		;Had this already?
+	 jrst lmbrz		; yes, try to get another
+	addi c,1		;One more host in tables
+	caile c,nontty		;Complain if LMUNAM etc gets full.
+	 jsr die
+	tlo tt,(netwrk"nw%chs)	;Mark address as Chaosnet
+	movem tt,lmadrs(c)	;Save address
+]
 	;First line is UNAME in ascii
 	move b,[440800,,%cpkdt+lmpkt]
 	movei d,0
@@ -483,6 +641,17 @@ chsin2:	ildb t,b
 	tlne tt,770000
 	 idpb t,tt
 	jrst chsin2
+
+ifn %usebrd,[
+lmbrz:	.rdtime t,		;Check if we timed out
+	move tt,a		;(tt has been zapped, so reinitialize)
+	lsh tt,-1
+	sub t,chsstm(tt)
+	caile t,2*30.		;Enough is enough
+	 popj p,
+	sojg b,chsi12		;More pkts available?
+	jrst chsi11		;else check for new
+]
 
 chsin3:	movem d,unmtab+maxtty(c)
 	movem d,xuntab+maxtty(c)
@@ -599,9 +768,9 @@ finis2:	movei a,0
 	typi 40
 	move b,lmdoc(c)
 finis3:	ildb a,b
-	caie a,40
-	 jumpn a,[ typi (a)
-		   jrst finis3 ]
+	jumpe a,finis4
+	typi (a)		;(Don't stop at space.)
+	jrst finis3
 finis4:	aobjn c,finis0
 finisd:	typi ^M			;end with crlf
 	movei a,2*30.		;sleep 2 seconds so output
@@ -2135,6 +2304,14 @@ nextlm:	0			;Index of next machine to be connected to
 chsidx:	repeat 10,-1		;-1 not in use, else index in lmadrs of guy connected to
 chsstm:	block 10		;time transaction started
 .vector lmpkt(%cpmxw)
+ifn %usebrd,[
+.vector brdpkt(%cpmxw)
+
+;; Table of host addresses that already replied to broadcast
+nbrdh==100
+brdmax:	block 1
+brdhst:	block nbrdh
+]
 
 sptr:	0			;byte ptr into output buffer
 screen:	block 95.*37./5+1	;space for output to be stored till block IOT
