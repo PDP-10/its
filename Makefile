@@ -26,6 +26,7 @@ endif
 endif
 
 IMAGES=http://hactrn.kostersitz.com/images
+SIMHV3_URL=http://simh.trailing-edge.com/sources
 
 include conf/network
 
@@ -372,7 +373,7 @@ tools/simhv3: simhv312-4.zip
 	mv sim $@
 
 simhv312-4.zip:
-	$(WGET) http://simh.trailing-edge.com/sources/$@
+	$(WGET) $(SIMHV3_URL)/$@ || $(WGET) $(SIMHV3_URL)/archive/$@
 
 $(ITSTAR):
 	$(MAKE) -C tools/itstar
