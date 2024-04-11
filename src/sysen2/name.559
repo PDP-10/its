@@ -132,6 +132,7 @@ $rchost==001100	;host no. taken from .rchst
 %getsw==    40		;set when switches appear in JCL.
 %when==     20		;only interested in login/logout times.
 %usetcp==   10		;should use tcp when opening a connection
+%usebrd==    4		;Use broadcast on Chaosnet
 
 ;the memory map for this crock
 
@@ -710,7 +711,8 @@ jcswtb:	"A,,%abbrev		;don't print full name
 	"J,,%jobno		;include job no.
 	"W,,%whois		;print complete info about user.
 	"T,,%when		;ugly switch choice, oh well.
-	"L,,%nelsp		;/L look on associated Lisp machines too
+	"L,,%nelsp+%usebrd	;/L look on associated Lisp machines too
+				;i.e. machines on local subnet
 
 commen ~
 There is now way this flag can be set in the manner intended.
@@ -729,12 +731,11 @@ ljcl15:	skipn b,itcnt		;ignore null names.
 	ustrn a,[ascstr [,]]	;name of "," comes from a null name, as in :NAME ,@MC
 	 caia
 	ustrn a,[ascstr [*]]	;* special -- like /m alone
-	 jrst [	tlo f,%astflg ? tro f,%nelsp ? jrst ljcl10]
+	 jrst [	tlo f,%astflg ? tro f,%nelsp+%usebrd ? jrst ljcl10]
 	ustrn a,[ascstr [*NET]]	;special name?
 	 jrst [	tlo f,%netusr ? jrst ljcl10]	;set flag, don't store.
-	; By the looks of this this never worked -- Gumby
-;	ustrn a,[ascstr [*LISPM]]	;special name?
-;	 jrst [	tro f,%alllm ? jrst ljcl10]	;set flag, don't store.
+	ustrn a,[ascstr [*LISPM]]	;special name?
+	 jrst [	tlo f,%astflg ? tro f,%alllm+%nelsp+%usebrd ? jrst ljcl10]	;set flags, don't store.
 	pushj p,namsto		;store name in various places
 	jrst ljcl10		;back for another name
 
@@ -1001,6 +1002,8 @@ jcitm5:	move c,e		;save ptr
 	ustrn a,[ascstr [ITS]]
 	 jrst [	pushj p,itsnms
 		jrst jcitm6]
+	;; Would be nice if this worked like the other *LISPM case,
+	;; but seems to require some gross hack.
 	ustrn a,[ascstr [*LISPM]]
 	 jrst [	movei a,hslm
 		jrst jcitm6]
@@ -1309,6 +1312,8 @@ ife 1,[				;now we have reagan this works differently...
 	 jrst [	movei b,hslm	;Find the table of all lisp machines, or
 		jrst lmfin2]
 	]
+	trne f,%usebrd
+	 jrst lmfinb		;Use broadcast instead
 	setz a,			;find the table of lisp machines
 lmfin1:	hllz b,hs10lm(a)	;associated with this machine.
 	jumpe b,lmfinx
@@ -1333,6 +1338,29 @@ lmfin2:	move a,b		;Each word of table is an ASCIZ string.  Get address.
 	caile c,nontty		;Complain if LMADRS gets full.
 	 jsr error
 	aoja b,lmfin2
+
+;; Broadcast FINGER routine
+lmfinb:	.rdtime t,		;Get starting time.  Use at most 6 seconds for whole thing.
+	addi t,6*30.		; including retransmissions
+	movem t,brdtim'
+	seto c,			;Start at table index -1, it is increased before use
+	movei a,2		;Use this channel
+	pushj p,lmbrd		;Send the broadcast
+	.suset [.sdf2,,[0]]	;Enable for state-change interrupts
+lmbr1:	setzm lmintf		;Flag set if chsin1 didn't get latest poop
+	movei tt,2*30.		;Wait 2 max seconds for each transmission
+lmbitw:	.sleep tt,		;Wait for interrupt or timeout
+	pushj p,chsin1		;chsin1 processes all replies
+	.rdtime t,
+	camle t,brdtim		;Timed out?
+	 jrst lmbr9		;Yes, finished
+	movei t,30.		;No, wait a sec
+	.sleep t,
+	pushj p,lmbrd0		;Retransmit
+	jrst lmbr1		;and retry
+lmbr9:	.call [ setz ? sixbit/close/ ? setzi (a) ] ;Close, so retransmissions stop
+	 jfcl
+	jrst lmfinx
 
 lmfin3:	setzm nextlm
 	.rdtime t,		;Get starting time.  Use at most 30 seconds for whole thing.
@@ -1380,6 +1408,117 @@ lmfinx:	setzm lmintb
 	popae p,[tt,t,e,d,c,b,a]
 	popj p,
 
+BVAR
+;; Table of host addresses that already replied
+nbrdh==100
+brdmax:	block 1
+brdhst:	block nbrdh
+EVAR
+
+; Send a BRD for FINGER on channel in A.
+; if %alllm then all subnets else local subnet only
+; Same as lmrfc from .rdtime tt,
+lmbrd:	tro f,%usebrd		;Remember we're doing broadcast
+	;; Clear hosts we received from already
+	setzm brdmax
+	setzm brdhst
+	move t,[brdhst,,brdhst+1]
+	blt t,brdhst+nbrdh-1
+	;; Make table index from channel
+	move t,a
+	lsh t,-1
+	.rdtime tt,
+	movem tt,chsstm(t)	;Start time
+	setz b,
+	dpb b,[$cpkda+lmpkt]	;send BRD to everyone
+	movei tt,%cobrd
+	dpb tt,[$cpkop+lmpkt]
+	;; Construct bitmap, set $CPKAN to its length, get bm length in b
+	pushj p,mkbmsk
+	movei tt,.length/FINGER/
+	add tt,b		;bitmask length
+	dpb tt,[$cpknb+lmpkt]
+	push p,c
+	idivi b,4		;Make words from bytes
+	pop p,c
+	move tt,[.byte 8 ? "F ? "I ? "N ? "G]
+	movem tt,%cpkdt+lmpkt(b)
+	move tt,[.byte 8 ? "E ? "R]
+	movem tt,%cpkdt+1+lmpkt(b)
+	move tt,[lmpkt,,brdpkt]	;Save pkt for retransmission
+	blt tt,brdpkt+%cpmxw-1
+	;; Open the channel
+	.call [ setz ? 'CHAOSO ? movei (a) ? setzi 1(a) ]
+	 jrst [	setom chsidx(t) ? popj p, ]	;probably device full
+	;; Send it off
+	.call [ setz ? 'PKTIOT ? movei 1(a) ? setzi lmpkt ]
+	 jsr error
+	popj p,
+
+;; Retransmit the BRD packet
+lmbrd0:	move t,a
+	lsh t,-1
+	.rdtime tt,
+	movem tt,chsstm(t)	;Reset start time
+	move tt,[brdpkt,,lmpkt]	;Get pkt for retransmission
+	blt tt,lmpkt+%cpmxw-1
+	;; Send it off
+	.call [ setz ? 'PKTIOT ? movei 1(a) ? setzi lmpkt ]
+	 jsr error
+	popj p,
+	
+;; Check table of received hosts for host in TT.
+brdedp:	push p,b
+	setz b,
+brddp1:	caml b,brdmax
+	 jrst brddp2		;End of list w/o finding it
+	came tt,brdhst(b)
+	 aoja b,brddp1		;Try next
+	pop p,b
+	popj p,			;found it
+brddp2:	movem tt,brdhst(b)	;Save new
+	aos brdmax		;incf length
+	pop p,b
+	aos (p)			;skip return
+	popj p,
+
+;; Make broadcast bitmask, return its length in b.
+mkbmsk:	pushae p,[a,c]
+	trnn f,%alllm
+	 jrst mkbmlc
+	;; All lispm = global broadcast
+	setom %cpkdt+lmpkt		;All first four bytes
+	move a,[%cpkdt+lmpkt,,%cpkdt+lmpkt+1]
+	blt a,%cpkdt+lmpkt+8.-1
+	movei b,32.		;#bytes in bitmask
+	jrst mkbm2
+mkbmlc:	;; Local or associated lispms:
+	;; Calculate bitmask for local subnet.
+	;; (Possibly optimize this to use only necessary bm length.)
+	;; First clear it
+	setzm %cpkdt+lmpkt
+	move a,[%cpkdt+lmpkt,,%cpkdt+lmpkt+1]
+	blt a,%cpkdt+lmpkt+8.-1
+	move a,[squoze 0,MYCHAD]	;Get my address
+	.eval a,
+	 .lose 1000
+	lsh a,-8.		;Get subnet
+	idivi a,8.		;Get byte index (a) and bit in the byte (b)
+	movei c,1
+	lsh c,(b)		;Make a bit in a byte (rightmost in byte 0 = subnet 0)
+	idivi a,4		;Calculate word (a) and byte in word (b)
+	movem a,t		;Save word offset
+	movei a,3		;Now move the byte (3-a)*8+4 bits to the left
+	sub a,b
+	imuli a,8
+	addi a,4
+	lsh c,(a)
+	movem c,%cpkdt+lmpkt(t)	;Save word in the right place
+	movei b,32.		;#bytes in bitmask
+mkbm2:	dpb b,[$cpkan+lmpkt]	;bitmask length in ACK field
+	popae p,[c,a]
+	popj p,
+
 ;Enter an RFC to next Lisp machine on channel in A.
 ;Uses AC's a,b,t,tt
 lmrfc:	move t,a		;mark channel free
@@ -1412,55 +1551,86 @@ lmrfc:	move t,a		;mark channel free
 chsin1:	;set c to index into lisp-machine tables
 	move tt,a
 	lsh tt,-1
+	trne f,%usebrd	      ; ignore chsidx for broadcast
+	 jrst chsi11
 	skipge c,chsidx(tt)
 	 popj p,		;channel not in use
-	.call [ setz ? 'WHYINT ? movei (a) ? movem b ? movem b ? setzm b ]
+chsi11:	.call [ setz ? 'WHYINT ? movei (a) ? movem b ? movem b ? setzm l ]
 	 jsr error
-	hlrzs b			;number of input packets
-	jumpe b,chsin9		;none yet
-	.call [ setz ? 'PKTIOT ? movei (a) ? setzi lmpkt ]	;Get the packet
+	hlrzs l			;number of input packets
+	jumpe l,chsin9		;none yet
+chsi12:	.call [ setz ? 'PKTIOT ? movei (a) ? setzi lmpkt ]	;Get the packet
 	 jsr error
-	ldb tt,[$cpkop+lmpkt]
-	caie tt,%coans
+	ldb t,[$cpkop+lmpkt]
+	cain t,%coans
+	 jrst chi20		;Got an ANS, parse data
+	trnn f,%usebrd		;for other broadcast response, just ignore it
 	 jrst lmrfc		;Some lossage, ignore this machine
-	;First line is UNAME in ascii
+chsi13:	.rdtime t,
+	move tt,a		;(tt has been zapped, so reinitialize)
+	lsh tt,-1
+	sub t,chsstm(tt)
+	caile t,2*30.		;Enough is enough
+	 popj p,		;Timed out
+	sojg l,chsi12		;More pkts available?
+	jrst chsi11		;else check for new
+chi20:	trnn f,%usebrd
+	 jrst chi21
+	;; Broadcast case: check if we already had this, then get another
+	ldb tt,[$cpksa+lmpkt]	;Get source
+	pushj p,brdedp		;Had this already?
+	 jrst chsi13		; yes, try to get another
+	addi c,1		;One more host in tables
+	caile c,nontty		;Complain if LMUNAM etc gets full.
+	 jsr error
+	tlo tt,(netwrk"nw%chs)	;Mark address as Chaosnet
+	movem tt,lmadrs(c)	;Save address
+chi21:	;First line is UNAME in ascii
 	move b,[440800,,%cpkdt+lmpkt]
 	movei d,0
-	move tt,[440600,,d]
+	move tt,[440600,,d]	;Put sixbit here
 chsin2:	ildb t,b
-	cain t,215
- 	 jrst chsin3
+	cain t,215		;Newline? 
+ 	 jrst chsin3		; done with uname
 	caige t,140
-	 subi t,40
-	tlne tt,770000
+	 subi t,40		;make uppercase (after stripping 100 bit)
+	tlne tt,770000		;while it fits in a sixbit word
 	 idpb t,tt
 	jrst chsin2
 
-chsin3:	jumpe d,lmrfc		;Ignore if no one logged in there
-	movem d,lmunam(c)
+chsin3:	jumpn d,chin30		;Someone is logged in
+	;; @@@@ room for improvement: collect also free lispm info?
+	trne f,%usebrd		;Noone there: look for more if BRD
+	 jumpe d,chsi13
+	jumpe d,lmrfc		;Ignore if no one logged in there
+chin30:	movem d,lmunam(c)
 	;Second line is console location in ascii
 	move e,lmdoc(c)
 	movei d,10*5-1		;max characters
-chsin4:	ildb t,b
+chsin4:	ildb t,b		;Copy location
 	cain t,215
 	 jrst chsin5
 	idpb t,e
 	sojg d,chsin4
 	ildb t,b
 	caie t,215
-	 jrst .-2
+	 jrst .-2		;discard after byte limit
 chsin5:	;Third line is idle time as a string
 	movei e,lmidle(c)
 	hrli e,440700
 	movei d,4
-chsin6:	ildb t,b
+chsin6:	ildb t,b		;copy idle time
 	cain t,215
 	 jrst chsin7
 	idpb t,e
 	sojg d,chsin6
-chsin7:	jrst lmrfc		;find another guy
+chsin7: trne f,%usebrd
+	 jrst chsi13		;Go check for more broadcast answers
+	jrst lmrfc		;find another guy
 
-chsin9:	.rdtime t,
+chsin9:	trne f,%usebrd
+	 jrst chsi13		;Go check for more broadcast answers
+	.rdtime t,
 	sub t,chsstm(tt)
 	caige t,4*30.
 	 popj p,
@@ -3222,6 +3392,8 @@ lmintr:	setom lmintf
 	hrrz tt,-4(p)		;PC interrupted out of
 	cain tt,lmintw
 	 aos -4(p)		;Unsleep
+	cain tt,lmbitw
+	 aos -4(p)		;Unsleep
 	pop p,tt
 	dismis
 
@@ -3815,6 +3987,7 @@ lmintf:	0			;Interrupt-occurred flag
 chsidx:	repeat 10,-1		;-1 not in use, else index in lmadrs of guy connected to
 chsstm:	block 10		;time transaction started
 .vector lmpkt(%cpmxw)
+.vector brdpkt(%cpmxw)		;Saved pkt for manual retransmission
 
 	; User-info block, one per each user reported.  Blocks stored
 	;dynamically in core above LSR file.
