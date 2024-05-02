@@ -199,6 +199,12 @@ if [file exists $build/mchn/$mchn/custom.tcl] {
     source $build/mchn/$mchn/custom.tcl
 }
 
+# Set timestamp for current uptime record.
+respond "*" ":create sys;record time\r"
+respond "for help" "\003"
+expect ":KILL"
+respond "*" ":sfdate sys;record time, 0/0/00\r"
+
 if {![info exists env(NODUMP)]} {
     # make output.tape
     respond "*" $emulator_escape
