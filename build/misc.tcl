@@ -853,11 +853,6 @@ respond "*" "purify\033g"
 respond "TS @" "\r"
 respond "*" ":kill\r"
 
-# PLAN/CREATE
-respond "*" ":midas sys3;ts create_syseng;create\r"
-expect ":KILL"
-respond "*" ":link sys1;ts plan,sys3;ts create\r"
-
 respond "*" ":midas;324 dsk0:.;@ pt_syseng;pt\r"
 expect ":KILL"
 
