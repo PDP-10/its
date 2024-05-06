@@ -18,8 +18,28 @@ echo "login $USER"          >> "$NETRC"
 echo "password $FTP_SECRET" >> "$NETRC"
 chmod 600 "$NETRC"
 
+pack_archive() {
+    local out_dir="out"
+    local tar_file="$EMULATOR.tgz"
+    
+    # removing the tar file if it exists
+    if [ -e "$out_dir/$tar_file" ]; then
+        echo "Removing existing $tar_file..."
+        rm "$out_dir/$tar_file"
+    else
+        echo "$tar_file does not exist. Skipping removal."
+    fi
+
+    # creating the tarball
+    echo "Creating new $tar_file..."
+    tar czf "$out_dir/$tar_file" "$out_dir/$EMULATOR"
+}
+
+
+
 upload_file(){
-    (cd out; tar czf $EMULATOR.tgz $EMULATOR)
+    # (cd out; rm -r $EMULATOR.tgz; tar czf $EMULATOR.tgz $EMULATOR)
+    pack_archive
 
     echo "Deploying as $USER at $HOST"
 
