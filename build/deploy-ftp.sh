@@ -35,11 +35,10 @@ pack_archive() {
     tar czf "$out_dir/$tar_file" "$out_dir/$EMULATOR"
 }
 
-
-
 upload_file(){
     # (cd out; rm -r $EMULATOR.tgz; tar czf $EMULATOR.tgz $EMULATOR)
     pack_archive
+
 
     echo "Deploying as $USER at $HOST"
 
