@@ -216,9 +216,22 @@ respond "File name->" "\002"
 respond ";BKPT" "(quit)"
 
 respond "*" ":midas maxtul;ts mcl_mcldmp midas\r"
-respond "*" ":link maxtul;.good. complr,sys;ts complr\r"
+respond "*" ":link maxtul;.good. complr,maxtul;mcldmp 32\r"
 
-respond "*" ":link maxtul;ts utmcl,maxtul;ts mcl\r"
+# build UTMCL -- the compiler invoked by compile_lisp_file in Macsyma
+respond "*" "complr\013"
+respond "_" "maxtul;utmcl\r"
+respond "_" "\032"
+type ":kill\r"
+
+# dump out UTMCL
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load \"maxtul;utmcl fasl\")"
+respond_load "\007"
+respond "*" "(dump-utmcl)"
+respond "_" "\032"
+type ":kill\r"
 
 respond "*" "complr\013"
 respond "_" "mrg;macros\r"
@@ -302,8 +315,12 @@ respond "Type ALL;" "all;"
 respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
 
-### build share;array fasl and ellen; check fasl for macsyma
-respond "*" ":maxtul;mcl\r"
+### build share;array fasl and ellen;check fasl for macsyma
+respond "*" "complr\013"
+respond "_" "\007"
+respond "*" "(load '((libmax) module))"
+respond_load "(load '((libmax) maxmac))"
+respond_load "(maklap)"
 respond "_" "share;_maxsrc;array\r"
 respond "_" "ellen;check\r"
 respond "_" "\032"
@@ -311,7 +328,6 @@ type ":kill\r"
 
 ### rebuild float because version built the first time gives
 ### arithmetic overflows.  See ticket #1211.
-
 respond "*" "complr\013"
 respond "_" "\007"
 respond "*" "(load '((libmax) module))"
