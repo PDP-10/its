@@ -14,6 +14,7 @@ GIT ?= git
 CAT ?= cat
 WGET ?= wget
 TAR ?= tar
+EGREP ?= grep -E
 
 ifeq ($(EMULATOR),pdp10-ka)
 MCHN ?= KA
@@ -428,14 +429,14 @@ tools/simh/BIN/imlac:
 check-dirs: Makefile
 	mkdir -p $(OUT)/check
 	echo $(SRC) | tr ' ' '\n' | sort > $(OUT)/check/src1
-	cd src; ls -1 | egrep -v $(SRCIGNORE) > ../$(OUT)/check/src2
+	cd src; ls -1 | $(EGREP) -v $(SRCIGNORE) > ../$(OUT)/check/src2
 	diff -u $(OUT)/check/src1 $(OUT)/check/src2 > $(OUT)/check/src.diff
 	echo $(DOC) | tr ' ' '\n' | sort > $(OUT)/check/doc1
 	cd doc; ls -1d -- */ | tr -d / | sort | \
-		egrep -v $(DOCIGNORE) > ../$(OUT)/check/doc2
+		$(EGREP) -v $(DOCIGNORE) > ../$(OUT)/check/doc2
 	diff -u $(OUT)/check/doc1 $(OUT)/check/doc2 > $(OUT)/check/doc.diff
 	echo $(BIN) | tr ' ' '\n' | sort > $(OUT)/check/bin1
-	cd bin; ls -1 | egrep -v $(BINIGNORE) > ../$(OUT)/check/bin2
+	cd bin; ls -1 | $(EGREP) -v $(BINIGNORE) > ../$(OUT)/check/bin2
 	diff -u $(OUT)/check/bin1 $(OUT)/check/bin2 > $(OUT)/check/bin.diff
 
 clean:
