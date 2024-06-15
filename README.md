@@ -64,23 +64,6 @@ some of which are disk images with ITS installed.
 | pdp10-kl | git, c compiler, make, expect, curses, autoconf, sdl2, sdl2-image, gtk3
 | pdp10-ks | git, c compiler, make, expect, curses, autoconf, sdl2
 
-The repo comes with a handy script to install required dependencies.
-After cloning the repo change to the build folder. For example if you cloned into `~/its` use the following commands
-```
-cd ~/its/build
-sudo chmod +x dependencies.sh
-```
-the script takes 2 parameters to run: 
-`install_<os>` and `EMULATOR=<emnulatorname>`
-To install the dependencies 
-- on MacOS for the PDP-10 KA run
-  - `./dependencies.sh install_osx EMULATOR=pdp10-ka`
-- on Ubuntu run
-  - `./dependencies.sh install_linux EMULATOR=pdp10-ka`
-- on FreeBSD run
-  - `./dependencies.sh install_freebsd EMULATOR=pdp10-ka`
-  
-Once the script completes navigate back to the `~/its` folder with `cd ..` and run `make clean all EMULATOR=pdp10-ka`
 ### Usage
 
 To start ITS, type `./start`.  If you see `KLH10#`, type `go` and
