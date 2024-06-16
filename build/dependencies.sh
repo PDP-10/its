@@ -1,3 +1,7 @@
+# This is script is mainly for installing dependencies for continuous
+# integration builds.  It's not meant to support many kinds of
+# operating system or releases.
+
 if test -n "$GITLAB_CI" -o -n "$CIRCLECI"; then
     sudo() {
         "$@"
