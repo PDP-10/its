@@ -180,6 +180,7 @@ if {$env(BASICS)!="yes"} {
     source $build/zork.tcl
     source $build/sail.tcl
     source $build/typeset.tcl
+    source $build/shrdlu.tcl
 }
 
 bootable_tapes
