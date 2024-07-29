@@ -106,8 +106,8 @@ done
 
 cd "$tmp/tape2"
 tap="$home/diffs.tap"
-head -1 "$diffs" | xargs itstar cvf "$tap"
-tail +2 "$diffs" | xargs itstar rvf "$tap"
+head -n 1 "$diffs" | xargs itstar cvf "$tap"
+tail -n +2 "$diffs" | xargs itstar rvf "$tap"
 itstar rvf "$tap" _temp_/upgrade.xfile
 rm "$diffs"
 
