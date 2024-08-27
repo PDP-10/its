@@ -18,12 +18,44 @@ echo "login $USER"          >> "$NETRC"
 echo "password $FTP_SECRET" >> "$NETRC"
 chmod 600 "$NETRC"
 
+# create_archive will create a tar ball from the out folder 
+# try to extract it to see if it is valid
+# retry 3 times then fail
+create_archive{
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+
+    while (( RETRY_COUNT < MAX_RETRIES )); do
+        (cd out; tar czf $EMULATOR.tgz $EMULATOR)
+
+        # Verify the tarball
+        if tar tf $EMULATOR.tgz >/dev/null 2>&1; then
+            echo "Tarball is valid and can be expanded."
+            break
+        else
+            echo "Tarball is not valid or cannot be expanded. Retrying..."
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            rm -f $EMULATOR.tgz
+            continue
+        fi
+    done
+
+    if (( RETRY_COUNT == MAX_RETRIES )); then
+        echo "Failed to create a valid tarball after $MAX_RETRIES attempts."
+        return 1
+    fi
+}
+
+# upload_file tries to upload the tar ball to the FTP server, will retry 5 times and then fail
 upload_file(){
-    (cd out; tar czf $EMULATOR.tgz $EMULATOR)
+    MAX_RETRIES=5
+    RETRY_COUNT=0
 
-    echo "Deploying as $USER at $HOST"
+    while (( RETRY_COUNT < MAX_RETRIES )); do
+        echo "Deploying as $USER at $HOST"
 
-    ftp "$HOST" <<EOF
+        # Attempt to upload the file
+        if ftp "$HOST" <<EOF
 passive on
 type image
 cd $DIR
@@ -31,8 +63,23 @@ lcd out
 put $EMULATOR.tgz
 bye
 EOF
+        then
+            echo "Upload successful."
+            break
+        else
+            echo "Upload failed. Retrying..."
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+        fi
+    done
+
+    if (( RETRY_COUNT == MAX_RETRIES )); then
+        echo "Failed to upload the file after $MAX_RETRIES attempts."
+        return 1
+    fi
 }
 
+# test_archive_integrity will download the tarball after successful upload and verify its integrity 
+# by binary comparing the contents of the source folder and the expanded folder
 test_archive_integrity(){
     echo "Testing download of $EMULATOR.tgz"
     mkdir -p "$TESTDIR"
@@ -78,8 +125,9 @@ test_archive_integrity(){
     fi
 }
 
-
+# main loop
 while [ $retry_count -lt $RETRY_LIMIT ]; do
+    create_archive
     upload_file
     if test_archive_integrity; then
         echo "File integrity verified successfully."
