@@ -1,8 +1,17 @@
 # Troubleshooting guide
 
-This guide will help you sort out the most common issues of running ITS on the PiDP-10
+This guide will help you sort out the most common issues of running ITS on the PiDP-10.
+Issues covered so far:
 
-## INQUIR not saving changes
+* [COMSAT is crashing on start](#comsat-is-crashing-on-start)
+
+through out the document you will see certain special characters mentioned. They are slightly different depending on your keyboard and terminal
+* `$` means the ALT or ESC key
+* `^` means the CTRL or STRG key
+* `<escape>` means the ALT or ESC key in EMACS
+* `<control>` means the Control key in EMACS
+
+## COMSAT is crashing on start
 Thanks to eswenson for the intial steps here
 
 In order for INQUIR entries to stick, you must have COMSAT running. 
@@ -27,7 +36,7 @@ Index Uname Jname Sname     Status   TTY    Core Out %Time    Time PIs
 Fair Share 99%     Totals:                   317       0%          1
 Logout time =         Lost 0%  Idle 98%  Null time = 5:07
 ```
-As you can see above none of the COMSAT process is running.
+As you can see above none of the COMSAT processes are running.
 
 There are several reasons why COMSAT may die upon startup The most common are:
 Lets start going through those one by one:
@@ -163,7 +172,6 @@ Your cursor will be positioned at the first instance of the string DB.
 Type in
 
 `!`
-
 Yes, just the exclamation point character.  This will replace all instances
 of `DB` with `KA`.
 
@@ -171,7 +179,7 @@ Save the file. (`<control>x<control>s`) and return to DDT (`<control>x<control>c
 
 Now, you are ready to launch `COMSAT`.
 
-But first, make sure there is no (dead) comsat running, but running `peek$k`
+But first, make sure there is no (dead) comsat running, but running `peek^k`
 
 Look for any job with the UNAME COMSAT (and the JNAME IV).  If you find one,
 kill the job by typing:
