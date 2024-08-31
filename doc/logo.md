@@ -127,6 +127,7 @@ Intelligence Laboratory. We can run it on PDP-10 / ITS under emulation.
 
 to run 11LOGO type:
 ```
+*:cwd 11logo
 *:pdp45
 1145.427
 CORE = 8.K
@@ -134,7 +135,8 @@ CORE = 8.K
 CORE = 56.K
 !;a pk
 !;a df
-!;l system bin
+!;l l bin
+!;a ngdis
 !400;g
 11LOGO 1007
 ?STARTDISPLAY
