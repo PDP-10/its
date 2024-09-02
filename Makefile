@@ -31,10 +31,17 @@ SIMHV3_URL=http://simh.trailing-edge.com/sources
 
 include conf/network
 
+# if user hasn't changed HOSTNAME, and MCHN is not DB, then update HOSTNAME
+ifeq ($(HOSTNAME),DB-ITS.EXAMPLE.COM)
+  ifneq ($(MCHN),DB)
+    HOSTNAME = $(MCHN)-ITS.EXAMPLE.COM
+  endif
+endif
+
 # The directores listed in SRC, DOC, and BIN are put on the sources tape.
 SRC = syseng sysen1 sysen2 sysen3 sysnet kshack dragon channa	\
       _teco_ emacs emacs1 rms klh syshst sra mrc ksc eak gren	\
-      bawden _mail_ l lisp libdoc comlap lspsrc nilcom rwk chprog rg	\
+      bawden l lisp libdoc comlap lspsrc nilcom rwk chprog rg	\
       inquir acount gz sys decsys ecc alan sail kcc kcc_sy c games archy dcp \
       spcwar rwg libmax rat z emaxim rz maxtul aljabr cffk das ell ellen \
       jim jm jpg macrak maxdoc maxsrc mrg munfas paulw reh rlb rlb% share \
@@ -100,6 +107,7 @@ TEK=tools/tek4010/tek4010
 SIMH_IMLAC=tools/simh/BIN/imlac $(OUT)/ssv22.iml
 
 H3TEXT=$(shell cd build; ls h3text.*)
+NAMES=$(shell cd build; ls names.*)
 DDT=$(shell cd src; ls sysen1/ddt.* syseng/lsrtns.* syseng/msgs.* syseng/datime.* syseng/ntsddt.*)
 SALV=$(shell cd src; ls kshack/nsalv.* syseng/format.* syseng/rfn.*)
 KSFEDR=$(shell cd src; ls kshack/ksfedr.*)
@@ -225,13 +233,14 @@ $(KLDCPDIR): $(KLFEDR)
 	$(MKDIR) $(OUT)/_klfe_
 	$(KLFEDR) > "$(OUT)/_klfe_/kldcp.$(leftparen)dir$(rightparen)"
 
-$(OUT)/sources.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/stamp/pdp10 $(OUT)/syshst/$(H3TEXT)
+$(OUT)/sources.tape: $(OUT)/stamp/touch $(ITSTAR) $(OUT)/stamp/pdp10 $(OUT)/syshst/$(H3TEXT) $(OUT)/_mail_/$(NAMES)
 	$(MKDIR) $(OUT)
 	$(RM) -f src/*/*~
 	$(ITSTAR) -cf $@ -C src $(SRC)
 	$(ITSTAR) -rf $@ -C doc $(DOC)
 	$(ITSTAR) -rf $@ -C bin $(BIN)
 	$(ITSTAR) -rf $@ -C $(OUT) syshst
+	$(ITSTAR) -rf $@ -C $(OUT) _mail_
 
 $(OUT)/salv.tape: $(WRITETAPE) $(RAM) $(NSALV)
 	$(MKDIR) $(OUT)
@@ -286,11 +295,11 @@ out/pdp10-ka/stamp/pdp10: $(KA10) start out/pdp10-ka/run
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp/pdp10: $(KL10) start
+out/pdp10-kl/stamp/pdp10: $(KL10) start out/pdp10-kl/run
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ks/stamp/pdp10: $(KS10) start
+out/pdp10-ks/stamp/pdp10: $(KS10) start out/pdp10-ks/run
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -310,15 +319,21 @@ out/simh/system:
 
 out/pdp10-ka/system:
 	$(MKDIR) $(OUT)/system
-	cp build/pdp10-ka/config.* $(OUT)/system
+	x=`echo $(IP) | tr . ,`; \
+	$(SED) -e "s/%IP%/$$x/" \
+	    -e 's/%NETMASK%/$(NETMASK)/' < build/pdp10-ka/config.202 > $(OUT)/system/config.202
 
 out/pdp10-kl/system:
 	$(MKDIR) $(OUT)/system
-	cp build/pdp10-kl/config.* $(OUT)/system
+	x=`echo $(IP) | tr . ,`; \
+	$(SED) -e "s/%IP%/$$x/" \
+	    -e 's/%NETMASK%/$(NETMASK)/' < build/pdp10-kl/config.203 > $(OUT)/system/config.203
 
 out/pdp10-ks/system:
 	$(MKDIR) $(OUT)/system
-	cp build/pdp10-ks/config.* $(OUT)/system
+	x=`echo $(IP) | tr . ,`; \
+	$(SED) -e "s/%IP%/$$x/" \
+	    -e 's/%NETMASK%/$(NETMASK)/' < build/pdp10-ks/config.202 > $(OUT)/system/config.202
 
 out/simhv3/system:
 	$(MKDIR) $(OUT)/system
@@ -335,13 +350,29 @@ out/simh/boot: build/mchn/$(MCHN)/boot
 
 out/pdp10-ka/run: build/mchn/$(MCHN)/run
 	$(MKDIR) $(OUT)/stamp
-	cp $< $@
+	$(SED) -e 's/%IP%/$(IP)/' \
+	    -e 's/%GW%/$(GW)/' < $< > $@
+
+out/pdp10-kl/run: build/mchn/$(MCHN)/run
+	$(MKDIR) $(OUT)/stamp
+	$(SED) -e 's/%IP%/$(IP)/' \
+	    -e 's/%GW%/$(GW)/' < $< > $@
+
+out/pdp10-ks/run: build/pdp10-ks/run
+	$(MKDIR) $(OUT)/stamp
+	$(SED) -e 's/%IP%/$(IP)/' \
+	    -e 's/%GW%/$(GW)/' < $< > $@
 
 $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 	$(MKDIR) $(OUT)/syshst
 	$(SED) -e 's/%IP%/$(IP)/' \
-	    -e 's/%HOSTNAME%/$(HOSTNAME)/' < $< > $@
+	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
+	    -e 's/%MCHN%/$(MCHN)/' < $< > $@
 	$(CAT) conf/hosts >> $@
+
+$(OUT)/_mail_/$(NAMES): build/$(NAMES)
+	$(MKDIR) $(OUT)/_mail_
+	$(SED) -e 's/%MCHN%/$(MCHN)/' < $< > $@
 
 $(KLH10):
 	cd tools/klh10; \
