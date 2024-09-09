@@ -372,7 +372,8 @@ $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 
 $(OUT)/_mail_/$(NAMES): build/$(NAMES)
 	$(MKDIR) $(OUT)/_mail_
-	$(SED) -e 's/%MCHN%/$(MCHN)/' < $< > $@
+	$(SED) -e 's/%MCHN%/$(MCHN)/' \
+	    -e 's/%GW%/$(GW)/' < $< > $@
 
 $(KLH10):
 	cd tools/klh10; \
