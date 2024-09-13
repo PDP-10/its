@@ -367,6 +367,7 @@ $(OUT)/syshst/$(H3TEXT): build/$(H3TEXT)
 	$(MKDIR) $(OUT)/syshst
 	$(SED) -e 's/%IP%/$(IP)/' \
 	    -e 's/%HOSTNAME%/$(HOSTNAME)/' \
+	    -e 's/%GW%/$(GW)/' \
 	    -e 's/%MCHN%/$(MCHN)/' < $< > $@
 	$(CAT) conf/hosts >> $@
 
