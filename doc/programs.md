@@ -141,6 +141,7 @@
 - GUNNER, gun down jobs.
 - GMSGS, copy system messages to mail file.
 - H3MAKE, a job that requests DRAGON to build host table.
+- HAUNT, a text-based adventure game written by John Laird in OPS4.
 - HEXIFY, convert COM file into Intel HEX format.
 - HOST, display information about a network host.
 - HOSTAB, display HOSTS2 format host table.
