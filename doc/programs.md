@@ -262,6 +262,7 @@
 - OCTPUS, print character representations.
 - OINIT, init program reporting last login, email.
 - OS, realtime TTY spy.
+- OPS4, a production system that supports HAUNT.
 - OTHELLO, the original Othello game -- simpler than Go.
 - OTJ6, an old version of TJ6.
 - PALX, PDP-11 cross assembler.
