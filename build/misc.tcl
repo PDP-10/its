@@ -733,6 +733,14 @@ respond "*" ":link device;chaos fileo,device;chaos filei\r"
 respond "*" ":midas device;chaos ifile_syseng;ifile\r"
 expect ":KILL"
 
+# NFILE
+respond "*" ":midas alan;_bawden;nfile\r"
+expect ":KILL"
+respond "*" ":job nfile\r"
+respond "*" ":load alan;nfile bin\r"
+respond "*" "purify\033g"
+respond "CHAOS NFILE" "\r"
+
 # 11sim
 respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
 respond "end input with ^C" "45p==0\r"
