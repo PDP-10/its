@@ -1,0 +1,1463 @@
+; -*- Midas -*-
+
+title NFILE Server
+subttl NFILE Server
+
+a=:1	; First per-process AC
+b=:2
+c=:3
+d=:4
+e=:5
+f=:6
+
+in=:7	; network input
+out=:10	; network output
+
+t=:11	; T thru Z are temps, caller must save
+tt=:12
+x=:13
+y=:14
+z=:15	; Last per-process AC
+
+st=:16	; sleep time
+p=:17
+
+nchans==:16.			; All 16 channels allocated
+chmask==:<1_nchans>-1
+
+%fl==:1,,525252			; Flags in LH(0)
+%fltcp==:400000			; TCP, not Chaos (sign bit)
+%fldbg==:200000			; Debugging mode
+%flsrv==:100000			; Started as a server
+%fldie==:040000			; Need to garbage collect a process
+
+%fr==:0,,525252			; Flags in RH(0)
+if2,[
+repeat nchans,[
+conc %fr,\.rpcnt,==:1_.rpcnt	; Set by channel interrupts
+]]
+
+define syscall name,args
+	.call [setz ? .1stwd sixbit /name/ ? args(400000)]
+termin
+
+define calblk name,args
+	setz ? .1stwd sixbit /name/ ? args(400000)
+termin
+
+define conc foo,bar
+foo!bar!termin
+
+call=:pushj p,
+return=:popj p,
+save==:push p,
+rest==:pop p,
+flose=:.lose %lsfil
+slose=:.lose %lssys
+pause=:.break 16,100000
+clkoff=:.suset [.sidf1,,[%pirlt]]
+clkon=:.suset [.sadf1,,[%pirlt]]
+jtcp==:jumpl 0,			.see %fltcp
+jchaos==:jumpge 0,
+
+; JSP T,LOSE is like .LOSE %LSSYS(TT) or SLOSE (TT)
+lose:	trne tt,-100		.see iocint
+	 jrst losioc
+	syscall lose,[movei %lssys(tt) ? movei -2(t)]
+	 slose
+
+losioc:	syscall lose,[movei 1+.lz %piioc ? movei -2(t)]
+	 slose
+
+popj3:	aos (p)
+popj2:	aos (p)
+popj1:	aos (p)
+cpopj:	return
+
+; Protocol definitions, etc.
+
+.insrt dsk:syseng;chsdef >
+$cpkbp==:440800,,%cpkdt
+%comrk==:%codat+1		; Mark opcode
+
+chaprt==:440700,,[asciz /NFILE/]
+chatpr==:440700,,[asciz /NFILE-TEST/]	; For testing
+chacnm==:sixbit /NFILE/
+chawin==:8			; receive window size
+
+tcpprt==:73
+tcptpr==:199.			; For testing
+tcpcnm==:sixbit /SYN073/
+tcpmxw==:500.			; tcp buffer size
+tcpmxc==:tcpmxw*4		; tcp buffer size in bytes
+
+genprt==:-1			; Gensym port (both Chaos and TCP)
+
+; Token list codes:
+; 0. - 199.			; short data token of given length (< 200.).
+zshort==:200.			; Largest short data code plus one
+zpad==:200.			; Padding, ignored
+zlong==:201.			; long data token (>= 200.), followed by 4
+				; bytes of length (least sig. byte first).
+ztlbeg==:202.			; Start top level list
+ztlend==:203.			; End top level list
+zbegin==:204.			; Start embedded list
+zend==:205.			; End embedded list
+zsint==:206.			; short integer in next byte
+zlint==:207.			; long integer, length in next byte, then
+				; magnitude (least sig. byte first).
+				; Only integers less that 2^63 are supported?
+zkey==:208.			; keyword, followed by data token of
+				; upper-case standard ASCII.
+ztrue==:209.			; Boolean truth
+zmax==:210.			; Largest code plus one
+
+; List structure representation:
+; 4.9 0 => Integer: <magnitude>
+;     1 => 4.8 1 => List: -<word length>,,<addr>
+;	       0 => 4.7 0 => Data token: SETZ + <byte length>,,<addr>
+;			1 => Other: <code>,,<???>
+
+define .data *string*
+<400000+<.length string>,,[
+	.byte 8
+irpc ch,,[string]
+	"ch
+termin
+]>termin
+
+lskey==:500001			; Keyword, address in RH.
+lsnil==:500002			; Empty list
+lstrue==:500003			; Truth
+lserror==:500004		; Bottom
+
+urandom==:776543
+qnil=:lsnil,,urandom
+qtrue=:lstrue,,urandom
+qerror=:lserror,,urandom
+
+; Keyword data structure:
+kwdata==:0			; wd 0: data token
+kwhash==:1			; wd 1: hash of data
+kwlen==:2			; wd 2: length of data
+kwnext==:3			; wd 3: hashtable bucket thread 
+kwsubr==:4			; wd 4: command routine
+kwmax==:5			; 5 words total
+
+.lkey.==0
+define defkey name,&string&,subr=aerror
+q!name=:lskey,,.
+u!name:	.data string		; kwdata
+	0			; kwhash
+	0			; kwlen
+	.lkey.			; kwnext
+	subr			; kwsubr
+.lkey.==q!name
+termin
+
+; REPORT macro
+
+format"$$pcode==:1
+.insrt dsk:syseng;format >
+
+.scalar rprtch			; report channel
+
+outstr:	syscall siot,[move rprtch ? a ? b]
+	 slose
+	return
+
+define report &string&,args
+	call [
+	call $report
+.zzz.==-1
+irp arg,,[args]
+	save arg
+.zzz.==.irpcnt
+termin
+	hrroi a,[ascii string]
+	movei b,.length string
+	movni c,.zzz.+1
+	jrst format"format]
+termin
+
+$repor:	tlnn %fldbg
+	 jrst pop1j
+	save a
+	save b
+	save c
+	call @-3(p)
+	rest c
+	rest b
+	rest a
+pop1j:	rest (p)
+	return
+
+; Initialization
+
+usrvar:	sixbit /40ADDR/	? move [twenty,,forty]
+	sixbit /TTY/	? tlo %tbnvr
+	sixbit /OPTION/	? tlo %opint\%opopc
+	sixbit /DF1/	? move [%pirlt]
+	sixbit /MASK/	? move [%pirlt\%pidwn\%pidbg\%pipdl\%piioc]
+	sixbit /UNAME/	? movem uname
+lusrvar==:.-usrvar
+
+.scalar uname			; Uname
+.scalar cname			; Contact name:  CHACNM or TCPCNM
+.scalar time			; Address of system's TIME variable
+
+.vector pdl(lpdl==:20)
+
+purify:	move p,[-lpdl,,pdl-1]
+	call kinit
+	movsi t,-npure
+	syscall corblk,[movei %cbndr ? movei %jself ? move t]
+	 slose
+	syscall corblk,[movei 0 ? movei %jself ? movei timepg]
+	 slose
+	.value [asciz ":PDUMP DSK:DEVICE;CHAOS NFILE"]
+	;; <rubout><alt>P to debug with purity
+go:	.close 1,
+	movem 0,cname
+	setzi 0,		; clear flags
+	move p,[-lpdl,,pdl-1]
+
+	;; Initialize TIME
+	move t,[squoze 0,time]
+	.eval t,
+	 .lose
+	movem t,time
+	ldb t,[121000,,time]
+	syscall corblk,[movei %cbndr
+			movei %jself ? movei timepg
+			movei %jsabs ? move t]
+	 slose
+	movei t,timepg
+	dpb t,[121000,,time]
+
+	;; Build initial process, start scheduler
+	call minit
+	setzm queue
+	setom qlock
+	movei a,gogo
+	call spawn
+	 jsp t,lose
+	move t,[-lusrvar,,usrvar]
+	syscall usrvar,[movei %jself ? move t]
+	 slose
+	move t,[%rlfls\%rlset,,clktim]
+	.realt t,
+	jrst schedq
+
+; Initial process
+
+gogo:	.call sstatu
+	 slose
+	setom hstcnt
+	setom hstlock		; host table ready
+	call kinit		; keywords ready (in case not pure)
+	movei t,chmask
+	movem t,chbits
+	setom chlock		; channels ready
+	call challoc
+	 jsp t,lose
+	syscall open,[movei (t) ? movsi .uao\%tjdis ? [sixbit /TTY/]]
+	 jrst [	call chfree		; %TBNVR is set
+		jrst gogo1 ]
+	hrrzm t,rprtch
+	tlo %fldbg		; Debug chaos by default
+	.value [asciz ""]
+	report "~&Debugging~&"
+gogo1:	movei a,serve
+	call spawn
+	 jsp t,lose
+sysjob:	tlnn %fldie
+	 call hang
+	call diegc
+	jrst sysjob
+
+; Server process
+
+serve:	move t,cname
+	camn t,[chacnm]
+	 tlo %flsrv
+	camn t,[tcpcnm]
+	 tlo %fltcp\%flsrv
+	tlnn %flsrv\%fldbg
+	 .lose
+	move a,[tcpprt]
+	tlne %fldbg
+	 move a,[tcptpr]
+	jtcp serve5
+	move a,[chaprt]
+	tlne %fldbg
+	 move a,[chatpr]
+serve5:	call netlsn
+	 jsp t,lose
+	call netopn
+	 call logout
+	report "~&Network open~&"
+	call login
+
+	call die
+
+; Logging in and out
+
+; CALL LOGOUT:  Logout
+logout:	tlnn %fldbg
+	 .logout
+	pause
+	jrst logout
+
+; CALL LOGIN:  Login
+login:	tlne %fldbg
+	 return
+	save a
+	syscall rfname,[movei (out) ? repeat 4,[ ? movem a]]
+	 slose
+	call hstbeg
+	 jrst login1		; Perhaps host table trashed...
+	call netwrk"hstsix
+	 .lose
+	call hstend
+login1:	move x,uname
+	hrli x,(sixbit /NFL/)	; NFL017
+	syscall usrvar,[movei %jself ? [sixbit /JNAME/] ? [chacnm]]
+	 jfcl			; OK if you fail...
+	syscall login,[moves tt ? move x ? move a]
+	 jsp t,[caie tt,%eexfl
+		 jrst lose
+		addi x,20000	; NFL217, NFL417, etc...
+		jrst .-1 ]
+	movem x,uname
+	.suset [.ssname,,a]
+	;; System demon for fast response, just like QFILE:
+	syscall detach,[movei %jself ? movsi 3]
+	 slose
+	rest a
+	return
+
+; Generic I/O
+
+.vector buffer(nchans)		; Channel buffers
+.vector bufbp(nchans)		; Byte pointer into buffer
+.vector bufbc(nchans)		; Count of data or room in buffer
+				; (always non-zero for output)
+.vector bufcall(nchans)		; What to do when count runs out
+.vector bufsys(nchans)		; system buffer status
+.vector bufmkc(nchans)		; count for mark
+.vector bufmark(nchans)		; routine for sending a mark
+
+; CALL INB:  Read one byte of input
+;  Skips unless error, error code in TT
+; A (val):  Byte or -1 for EOF or -2 for mark
+inb0:	call @bufcall(in)
+	 return			; error
+	 jrst inb1		; eof
+	 jrst inb2		; mark
+inb:	sosge bufbc(in)		; normal
+	 jrst inb0
+	ildb a,bufbp(in)
+	aos (p)
+	return
+
+inb2:	skipa a,[-2]		; mark
+inb1:	 setoi a,		; eof
+	aos (p)
+	return
+
+; CALL OUTB:  Write one byte of output
+;  Skips unless error, error code in TT
+; A (a/v):  Byte
+outb:	idpb a,bufbp(out)
+	sosg bufbc(out)
+	 jrst @bufcall(out)
+	aos (p)
+	return
+
+; Generic network routines
+
+; CALL NETLSN:  Start listening for network connection
+;  Skips if connection opened, else error code in TT
+; A (a/v):  port number/contact name
+; Sets up IN and OUT
+netlsn:	call challoc
+	 return
+	.call inton
+	 slose
+	movei out,(t)
+	call challoc
+	 jrst outcls
+	.call inton
+	 slose
+	movei in,(t)
+	jtcp tcplsn
+	jrst chalsn
+
+; close channels, preserve error code in TT
+iocls:	move t,in
+	call chfree
+outcls:	move t,out
+	jrst chfree
+
+; CALL NETOPN:  Accept network connection
+;  Skips if connection opened
+netopn:	movei tt,5*30.		; 5 seconds
+	tlne %fldbg
+	 movei tt,60.*60.*30.	; 1 hour
+	jtcp tcpopn
+	jrst chaopn
+
+; CALL NETBLK:  Await channel state change
+; CALL CHBLK:  Await channel interrupt
+; X (a/v):  Channel
+; T (arg):  Current state (NETBLK)
+; T (val):  New state (NETBLK)
+; TT (arg):  Time to wait
+; TT (val):  Remaining time
+ntblk1:	call chblk
+netblk:	tdz bit(x)
+	syscall whyint,[movei (x) ? movem z ? movem z]
+	 slose
+	camn t,z
+	 jrst ntblk1
+	move t,z
+	return
+
+chblk:	add tt,@time
+	call chblk1
+	 call hang
+	sub tt,@time
+	return
+
+chblk1:	tdnn bit(x)
+tmblk1:	 camg tt,@time
+	  jrst popj1
+	camle st,tt
+	 move st,tt
+	return
+
+; CALL SLEEP:  Await the passage of time
+; TT (arg):  Time to wait
+sleep:	add tt,@time
+	call tmblk1
+	 call hang
+	return
+
+; TCP routines
+
+if2, .err TCP needs to be re-written
+; And you might want to look at the code in ITSDEV first...
+
+tcplsn:	jfcl ? .lose
+tcpopn:	jfcl ? .lose
+
+ifn 0,[
+
+if2, .err TCP buffer size?
+
+ifn genprt+1, .err TCPLSN demands GENPRT = -1
+tcplsn:	syscall tcpopn,[movei (in) ? movei (out) ? move a ? [-1] ? [-1]]
+	 slose
+	syscall rfname,[movei (in) ? movem a ? movem a]
+	 slose
+	movei t,tcpmxw
+	call malloc
+	 jrst iocls
+	movem t,buffer(in)
+	movei t,tcpmxw
+	call malloc
+	 jrst iocls
+	movem t,buffer(out)
+	report "~&Listening on TCP port ~D~&",a
+	aos (p)
+	return
+
+tcpopn:	movei t,%ntlsn
+tcpop1:	call outblk
+	jumple tt,cpopj
+	cain t,%ntsyr
+	 jrst tcpop1
+	caie t,%ntopn
+	 cain t,%ntwrt
+	  jrst tcpop2
+	jrst iocls
+
+tcpop2:	skipge sysdbg
+if2, .err Refuse TCP connection more gracefully.
+	 jrst iocls
+	aos (p)
+	movei t,tcpin
+	movem t,bufcall(in)
+	setzm bufbc(in)
+	movei t,tcpmrk
+	movem t,bufmark(out)
+	movei t,tcpout
+	movem t,bufcall(out)
+	hrrz t,buffer(out)
+	hrli t,240800
+	movem t,bufbp(out)
+	movei t,tcpmxc-3
+	movem t,bufbc(out)
+	return
+
+; CALL TCPIN:  BUFCALL routine for TCP input
+tcpin:	skiple t,bufmkc(in)
+	 jrst tcpin8
+	movnm t,bufbc(in)
+	sosge bufbc(in)
+	 jsp z,tcpin0
+	ildb t,bufbp(in)
+	lsh t,8
+	movem t,bufmkc(in)
+	sosge bufbc(in)
+	 jsp z,tcpin0
+	ildb t,bufbp(in)
+	addb t,bufmkc(in)
+	jumpg t,tcpin9
+	movn t,bufbc(in)	; found a mark
+	movem t,bufmkc(in)	; remember stuff in buffer
+	setzm bufbc(in)		; make sure he comes back
+	report "~&In ~O:  Mark  (BUFMKC=~D.)~&",[in,bufmkc(in)]
+	jrst popj2
+
+tcpin9:	skipg bufbc(in)
+tcpin8:	 jsp z,tcpin0
+	movn t,bufbc(in)
+	addb t,bufmkc(in)
+	skipge t
+	 addm t,bufbc(in)
+	report "~&In ~O:  ~D. byte~P  (BUFMKC=~D.)~&",[in,bufbc(in),bufmkc(in)]
+	jrst popj3
+
+; JSP Z,TCPIN0:  Refill buffer for TCPIN
+; Returns -2(Z) or RETURNs with error code in TT.
+tcpin1:	move t,whymap(in)
+	.call whyint
+	 slose
+	skipg whyv3(t)
+	 call hang
+	move t,whyv3(t)
+	movem t,bufsys(in)
+	report "~&In ~O:  ~D. byte~P avail.~&",[in,t]
+tcpin0:	skipg t,bufsys(in)
+	 jrst tcpin1
+	caige t,tcpmxc
+	 skipa x,t
+	  movei x,tcpmxc
+	sub t,x
+	movem t,bufsys(in)
+	movem x,bufbc(in)
+	hrrz t,buffer(in)
+	hrli t,440800
+	movem t,bufbp(in)
+	syscall siot,[moves tt ? movei (in) ? move t ? move x]
+	 return
+	report "~&In ~O:  ~D. byte~P~&",[in,bufbc(in)]
+	jrst -2(z)
+
+; CALL TCPOUT:  BUFCALL routine for TCP output
+; (Can't reliably avoid blocking on output under ITS TCP!)
+tcpout:	movei t,tcpmxc-3
+	sub t,bufbc(out)	; T: # bytes
+	jumpe t,popj1
+	hrrz x,buffer(out)	; X: buffer
+	dpb t,[242000,,0(x)]
+tcpou1:	hrli x,240800
+	movem x,bufbp(out)
+	movei tt,tcpmxc-3
+	movem tt,bufbc(out)
+	hrli x,440800
+	addi t,2
+	report "~&Out ~O:  ~D. byte~P~&",[out,t]
+	syscall siot,[moves tt ? movei (out) ? move x ? move t]
+	 return
+	aos (p)
+	return
+
+; CALL TCPMRK:  BUFMARK routine for TCP
+tcpmrk:	movei t,tcpmxc-3
+	sub t,bufbc(out)	; T: # bytes
+	hrrz x,buffer(out)	; X: buffer
+	dpb t,[242000,,0(x)]
+	jumpe t,tcpou1
+	setzi tt,
+	idpb tt,bufbp(out)
+	idpb tt,bufbp(out)
+	addi t,2
+	jrst tcpou1
+
+] ;IFN 0
+
+; Chaosnet routines
+
+pktin:	calblk pktiot,[moves tt ? movei (in) ? move buffer(in)]
+
+pktout:	calblk pktiot,[moves tt ? movei (out) ? move buffer(out)]
+
+chals3:	idivi t,26.
+	addi tt,"A
+	jumpe t,chals4
+	hrlm tt,(p)
+	call chals3
+	hlrz tt,(p)
+chals4:	idpb tt,x
+	return
+
+chalsn:	came a,[genprt]
+	 jrst chals1
+	movei t,5
+	call malloc
+	 return
+	hrli t,440700
+	move x,t
+	move a,t
+	skipa y,[chaprt]
+chals2:	 idpb t,x
+	ildb t,y
+	jumpn t,chals2
+	movei t,"-
+	idpb t,x
+	.gennum t,
+	call chals3
+	setzi t,
+	idpb t,x
+chals1:	syscall chaoso,[movei (in) ? movei (out) ? movei chawin]
+	 slose
+	movei t,%cpmxw
+	call malloc
+	 jrst iocls
+	movem t,buffer(in)
+	movei t,%cpmxw
+	call malloc
+	 jrst iocls
+	movem t,buffer(out)
+	movei tt,%colsn
+	move t,a
+	call pktsnd		; Send LSN
+	report "~&Listening on Chaos for ~A~&",a
+	aos (p)
+	return
+
+chaopn:	movei x,(in)
+	movei t,%cslsn
+	call netblk
+	caie t,%csrfc
+	 return
+	skipge sysdbg
+	 jrst [ movei tt,%cocls
+		move t,[440700,,[asciz "System not up"]]
+		jrst pktsnd ]
+	aos (p)
+	movei tt,%coopn
+	movei t,[440700,,[asciz ""]]
+	call pktsnd
+	.call pktin		; Flush RFC packet
+	 jsp t,lose
+	movei t,chain
+	movem t,bufcall(in)
+	setzm bufbc(in)
+	movei t,chamrk
+	movem t,bufmark(out)
+	movei t,chaout
+	movem t,bufcall(out)
+	movei t,%cpmxc
+	movem t,bufbc(out)
+	hrrz t,buffer(out)
+	add t,[$cpkbp]
+	movem t,bufbp(out)
+	return
+
+; CALL PKTSND:  Send packet with given opcode and contents
+; T (arg):  bp to null-terminated string
+; TT (arg):  Opcode
+pktsnd:	hrrz x,buffer(out)
+	setzm (x)		; ITS insists...
+	dpb tt,[$cpkop(x)]
+	add x,[$cpkbp]
+	setzi tt,
+pktsn1:	ildb y,t
+	jumpe y,pktsn2
+	idpb y,x
+	aoja tt,pktsn1
+
+pktsn2:	hrrz x,buffer(out)
+	dpb tt,[$cpknb(x)]
+	.call pktout
+	 jsp t,lose
+	return
+
+; CALL CHAIN:  BUFCALL routine for Chaos input
+chain0:	caie x,%csopn
+	 jrst enapp
+	tdnn bit(in)
+	 call hang
+chain1:	tdz bit(in)
+	syscall whyint,[moves tt ? movei (in)
+			movem x ? movem x ? movem y]
+	 return
+	tlnn y,-1
+	 jrst chain0
+	hlrzm y,bufsys(in)
+	report "~&In ~O:  ~D. pkt~P avail.~&",[in,bufsys(in)]
+chain:	sosge bufsys(in)
+	 jrst chain1
+	.call pktin
+	 return
+	hrrz x,buffer(in)	; X: buffer
+	ldb y,[$cpkop(x)]	; Y: opcode
+	ldb z,[$cpknb(x)]	; Z: length
+	report "~&In ~O:  ~D. byte~P  (op=~O)~&",[in,z,y]
+	caie y,%codat
+	 jrst chain2
+	movem z,bufbc(in)
+	add x,[$cpkbp]
+	movem x,bufbp(in)
+	jrst popj3
+
+chain2:	cain y,%comrk
+	 jrst popj2
+	cain y,%coeof
+	 jrst popj1
+enapp:	movei tt,%enapp
+	return
+
+; CALL CHAOUT:  BUFCALL routine for Chaos output
+chaout:	movei t,%cpmxc
+	sub t,bufbc(out)	; T: bytes in buffer
+	jumpe t,popj1		; Nothing to send => just return
+	movei tt,%codat		; TT: opcode
+chaou0:	report "~&Out ~O:  ~D. byte~P  (op=~O)~&",[out,t,tt]
+	hrrz x,buffer(out)	; X: buffer
+	dpb tt,[$cpkop(x)]
+	dpb t,[$cpknb(x)]
+	add x,[$cpkbp]
+	movem x,bufbp(out)
+	movei t,%cpmxc
+	movem t,bufbc(out)
+chaou1:	sosge bufsys(out)
+	 jrst chaou2
+	.call pktout
+	 return
+	aos (p)
+	return
+
+chaou3:	tdnn bit(out)
+	 call hang
+chaou2:	tdz bit(out)
+	syscall whyint,[moves tt ? movei (out)
+			movem x ? movem x ? movem y]
+	 return
+	caie x,%csopn
+	 jrst enapp
+	trnn y,-1
+	 jrst chaou3
+	hrrzm y,bufsys(out)
+	report "~&Out ~O:  ~D. pkt~P room~&",[out,bufsys(out)]
+	jrst chaou1
+
+; CALL CHAMRK:  BUFMARK routine for Chaos
+chamrk:	call chaout
+	 return
+	setzi t,
+	movei tt,%comrk
+	jrst chaou0
+
+; Host table routines
+
+netwrk"$$look==:1
+netwrk"$$hstmap==:1
+netwrk"$$hstsix==:1
+.insrt dsk:syseng;netwrk >
+
+.see hstlock			; Write lock on host table variables
+.scalar hstcnt			; Count of host table users less one
+
+; CALL HSTBEG:  Start using host table
+;  Skips if it won, else error code in TT
+hstbeg:	aose hstlock
+	 call hang
+	aose hstcnt		; First one in?
+	 jrst hstwn1		; No
+	call challoc		; Yes: we get to map it in
+	 jrst hstlz1
+	save t
+	syscall open,[moves tt ? movsi .bii ? movei (t) ? [sixbit /DSK/]
+		[sixbit /HOSTS3/] ? [sixbit />/] ? [sixbit /SYSBIN/]]
+	 jrst hstluz
+	syscall fillen,[movei (t) ? movem t]
+	 slose
+	jumple t,hstbdf
+	movei t,1777(t)
+	lsh t,-10.
+	call pgalloc		; T: page aobjn
+	 jrst hstluz
+	movem t,netwrk"hstabn
+	movei x,(t)
+	lsh x,10.		; X: base address
+	move tt,(p)
+	syscall corblk,[movei %cbndr ? movei %jself ? move t ? movei (tt)]
+	 slose
+	move t,netwrk"hstsid(x)
+	camn t,[sixbit /HOSTS3/]
+	 jrst hstwin
+	move t,netwrk"hstabn
+	call pgfree
+	jrst hstbdf
+
+hstwin:	movem x,netwrk"hstadr
+	rest t
+	call chfree
+hstwn1:	aos (p)
+	setom hstlock
+	return
+
+hstbdf:	movei tt,%ebdfl
+hstluz:	rest t
+	call chfree
+hstlz1:	sos hstcnt
+	setom hstlock
+	return
+
+; CALL HSTEND:  Stop using host table
+hstend:	aose hstlock
+	 call hang
+	sosl hstcnt		; Last one out?
+	 jrst hstunx		; No
+	skipn netwrk"hstadr	; Yes: we get to map it out
+	 .lose
+	move t,netwrk"hstabn
+	call pgfree
+	setzm netwrk"hstadr
+hstunx:	setom hstlock
+	return
+
+; Interrupts
+
+; The format of an interrupt stack frame:
+intctl==:<a_6>+<z-a+1>		; A through Z saved
+intsiz==:<z-a+1>+5		; 5 words as follows:
+intrq1==:1-intsiz		;  PIRQC bits
+intrq2==:2-intsiz		;  IFPIR bits
+intdf1==:3-intsiz		;  saved DF1
+intdf2==:4-intsiz		;  saved DF2
+intpc==: 5-intsiz		;  saved PC
+intac0==:6-intsiz-a		; then come ACs
+
+; All interrupts must defer %PIRLT for scheduler to work properly
+tsint:	intctl,,p
+	%piioc ? 0 ? -1 ? -1 ? iocint
+	%pirlt ? 0 ? %pirlt ? 0 ? clkint
+	%pidwn\%pidbg ? 0 ? %pirlt\%pidwn\%pidbg ? 0 ? sstint
+	0 ? chmask ? %pirlt ? chmask ? chint
+ltsint==:.-tsint
+
+dismis:	calblk dismis,[movsi intctl ? move p]
+
+.scalar shutdn,sysdbg
+
+sstatu:	calblk sstatu,[movem shutdn ? movem sysdbg]
+
+sstint:	.call sstatu
+	 slose
+	setzi st,
+	.call dismis
+	 slose
+
+chint:	tdo intrq2(p)
+	setzi st,
+	.call dismis
+	 slose
+
+; Handle IOC interrupts:
+; If the instruction was a .CALL that has an error return argument, we
+; make it look like it just failed to skip.
+iocint:	.suset [.rbchn,,a]
+	syscall status,[movei (a) ? movem b]
+	 slose
+	tlnn b,-100		; better not look like standard error...
+	 .lose
+	move e,@intpc(p)
+	tlc e,(.call)
+	move t,[setz]
+	tlnn e,-1		; better be .CALL [ SETZ ? ... ]
+	 came t,(e)
+	  jrst iocnt3
+iocnt2:	move t,2(e)
+	tlc t,(moves)
+	tlne t,(7^9 @(17))	; unindexed, direct, error return?
+	 aoja e,iocnt1
+	trnn t,-20		; ACs are on stack right now
+	 addi t,intac0(p)
+	hlrzm b,(t)
+	aos intpc(p)
+	.call dismis
+	 slose
+
+iocnt1:	jumpge t,iocnt2
+iocnt3:	hrl a,intpc(p)
+	hrri a,1+.lz %piioc
+	syscall dismis,[movsi intctl ? move p ? move intpc(p)
+			move intdf1(p) ? move intdf2(p) ? move a]
+	 slose
+
+; Scheduler
+
+.see qlock			; Lock on process queue
+.scalar queue			; Queue of runnable processes
+.scalar user			; Currently running process
+
+unext==:0			; WD 0: Next process in queue
+updl==:1			; WD 1: Pdl pointer for process
+luser==:2			; Length of a process
+
+; ST always contains the time at which the scheduler must check all PRHANG
+; instructions again.  Interrupts set ST to 0.  PRHANG instructions that
+; skip after time T set ST to min(ST, T).  When any process is run, ST is
+; set to 0 in case the process does something that might make other
+; processes runnable.
+
+; The scheduler always runs with %PIRLT interrupts defered, and an
+; interrupt frame on the stack, just as if the current process had been
+; interrupted by a %PIRLT.  All interrupts defer %PIRLT, so processes can
+; be swapped just by swapping stack pointers and doing a DISMIS.
+
+prhang==:intrq1			; "FLSINS" (INTRQ1 and INTRQ1 are not used
+				; by %PIRLT interrupts.)
+prdf1==:intdf1			; Must contain 0
+prdf2==:intdf2			; Must contain 0
+prpc==:intpc			; "UPC"
+prac0==:intac0			; "AC0S"
+	
+; CALL HANG:  Wait for previous instruction to skip
+; Instruction can only look at T, TT and X, except in its address
+; calculation where it can look at anything except TT and P.
+hang:	clkoff			; Simulate occurrence of %PIRLT
+repeat 3, save [0]		; Build frame
+	save -3(p)
+repeat z-a+1, save a+.rpcnt
+	move tt,prpc(p)
+	move tt,-2(tt)		; TT: instruction
+	hrri tt,@tt		; Do E.A. calc.
+	tlza tt,(@(17))
+clkint:	 movsi tt,(caia)	; Actual %PIRLT comes here
+	movem tt,prhang(p)	; Set condition
+	move a,user
+	movem p,updl(a)
+schedn:	;; Come here to consider running process after process in A
+	skipn a,unext(a)
+	 jrst schedw
+sched:	;; Come here to consider running process in A
+	move p,updl(a)
+	move t,prac0+t(p)	; Restore T, TT and X
+	move tt,prac0+tt(p)
+	move x,prac0+x(p)
+	xct prhang(p)		; Might adjust ST
+	 jrst schedn
+	movem a,user
+	setzi st,
+	.call dismis
+	 slose
+
+schedw:	camg st,@time		; Going to wait?
+	 jrst schedq		; No: then get right to work
+	camle st,@time		; Wait for time to pass (or interrupt)
+	 .hang
+	.suset [.sapirqc,,[%pirlt]]	; (since we waited)
+schedq:	;; Come here to consider queue from the beginning
+	hrloi st,377777		; +inf
+	skipn a,queue
+	 .lose
+	jrst sched
+
+; Locking order
+
+; To prevent deadlocks we maintain a partial order on locks.
+; If XLOCK > YLOCK then someone tries to lock YLOCK while holding XLOCK.
+
+.scalar klock	; KLOCK > MLOCK
+.scalar qlock	; QLOCK > MLOCK
+.scalar mlock	; MLOCK > PGLOCK
+.scalar hstlock	; HSTLOCK > PGLOCK, HSTLOCK > CHLOCK
+.scalar pglock
+.scalar chlock
+
+; Process management
+
+lproc==:150.
+
+; CALL SPAWN:  Spawn a process
+;  Fails to skip if no free memory, error code in TT
+; A (a/v):  Initial PC
+; A - Z:  Passed to process
+spawn:	movei t,lproc
+	call malloc
+	 return
+	aos (p)			; gonna win
+	move x,t		; X: new process
+	add t,[luser+intsiz,,luser+intsiz-1]	; T: its pdl
+	movem t,updl(x)
+	movem a,prpc(t)
+	movsi tt,(caia)
+	movem tt,prhang(t)
+	hrli tt,a
+	hrri tt,prac0+a(t)
+	blt tt,prac0+z(t)
+	setzm prdf1(t)
+	setzm prdf2(t)
+	aose qlock
+	 call hang
+	move t,queue
+	movem t,unext(x)
+	movem x,queue
+	setom qlock
+	return
+
+; CALL DIE:  Kill current process
+die:	tlo %fldie		; Never skips, do a GC
+	 call hang
+dead:	.value			; The PC of a corpse
+
+; CALL DIEGC:  System job calls this when %FLDIE comes on
+; Clobbers A
+diegc9:	setom qlock
+diegc:	tlzn %fldie
+	 return
+	aose qlock
+	 call hang
+	movei a,queue
+	jrst diegc2
+
+diegc1:	movei a,unext(t)
+diegc2:	skipn t,(a)
+	 jrst diegc9
+	move tt,updl(t)
+	hrrz tt,prpc(tt)
+	caie tt,dead
+	 jrst diegc1
+	move tt,unext(t)
+	movem tt,(a)
+	call mfree
+	jrst diegc2
+
+; Channel management
+
+.see chlock			; Lock on allocating channels
+.scalar chbits			; Mask of free channels
+
+; CALL CHALLOC:  Allocate a channel
+;  Skips if it wins, else error code in TT
+; T (val):  channel in RH
+challo:	aose chlock
+	 call hang
+	move t,chbits
+	jffo t,.+2
+	 jrst [ setom chlock ? movei tt,%ebdch ? return ]
+	movni t,-35.(tt)
+	move tt,bit(t)
+	andcam tt,chbits
+	setzm buffer(t)
+	setzm bufsys(t)
+	setzm bufmkc(t)
+	setzm bufmark(t)
+	aos (p)
+	setom chlock
+	return
+
+; CALL CHFREE:  Free a channel
+; T (arg):  channel in RH
+; TT preserved
+chfree:	syscall close,[movei (t)]
+	 slose
+	move z,[-6,,[	sixbit /MSK2/	? tdz bit(t)
+			sixbit /IFPIR/	? tdz bit(t)
+			sixbit /DF2/	? tdz bit(t) ]]
+	syscall usrvar,[movei %jself ? move z]
+	 slose
+	save bit(t)
+	skipe t,buffer(t)
+	 call mfree
+	rest t
+	iorm t,chbits
+	return
+
+; .CALL INTON:  Enable interrupts on a channel
+; T (arg):  channel in RH
+inton:	calblk usrvar,[movei %jself ? [sixbit /MSK2/] ? [0] ? [tdo bit(t)]]
+
+; Memory Management
+
+; CALL ALLOC:  Allocate from a freelist
+;  skips unless it can't find a winner
+; X (arg):  addr of head of list
+; Z (a/v):  <size>,,0
+; T (val):  aobjn to block of required size
+alloc1:	camg z,(t)		; contains <size>,,<next>
+	 jrst alloc2
+	movei x,(t)		; X: previous
+alloc:	hrrz t,(x)		; T: candidate block
+	jumpn t,alloc1		; loop if non-nil
+	return
+
+alloc2:	aos (p)			; going to win
+	sub t,z			; T: aobjn to allocated block
+	move y,(t)
+	sub y,z			; Y: <new-size>,,<next>
+	tlnn y,-1		; nothing left?
+	 jrst alloc3		; Yes: go remove block
+	movs tt,z		; No: thread up remainder
+	addi tt,(t)
+	movem y,(tt)
+	hrrm tt,(x)
+	return
+
+alloc3:	hrrm y,(x)
+	return
+
+; CALL FREE:  Return to a freelist
+; X (arg):  addr of head of list
+; T (arg):  aobjn to block to be freed
+free.b:	cail y,(t)		; Correct location for T?
+	 jrst free.a
+	movei x,(y)
+free:	hrrz y,(x)		; Y: next block
+	jumpn y,free.b		; Loop if not end
+free.a:	hllz tt,t		; Splice T in: (X) -> (T) -> (Y)
+	movn tt,tt
+	hrri tt,(y)
+	movem tt,(t)
+	hrrm t,(x)		; done
+	hlrz tt,(x)		; Can (X) and (T) merge?
+	addi tt,(x)
+	cain tt,(t)
+	 jrst [	hllz tt,(x)	; Yes: merge
+		add tt,(t)
+		movem tt,(x)
+		movei t,(x)	; T: so following will work
+		jrst .+1 ]
+	hlrz tt,(t)		; Can (T) and (Y) merge?
+	addi tt,(t)
+	caie tt,(y)
+	 return			; No: return
+	hllz tt,(t)		; Yes: merge
+	add tt,(y)
+	movem tt,(t)
+	return
+
+.see pglock			; Lock on page freelist
+.scalar pghead			; Head of freelist
+.vector pgtab(400)		; Freelist is threaded through PGTAB
+
+; CALL PGINIT:  Initialize pages
+pginit:	movsi t,400-freepg
+	movem t,pgtab+freepg
+	movei t,pgtab+freepg
+	movem t,pghead
+	setom pglock
+	return
+
+; CALL PGALLOC:  Allocate pages
+;  Skips if it wins, else error code in TT
+; T (arg):  # pages desired
+; T (val):  page aobjn to a block of that size
+pgallo:	movsi z,(t)		; Z: <size>,,0
+	movei x,pghead
+	aose pglock
+	 call hang
+	call alloc
+	 jrst [ setom pglock ? movei tt,%enacr ? return ]
+	subi t,pgtab
+	aos (p)
+	setom pglock
+	return
+
+; CALL PGFREE:  Free pages
+; CALL PGFRE0:  Free pages without NXMing them
+; T (arg):  page aobjn to block to be freed
+pgfree:	move tt,t
+	syscal corblk,[movei 0 ? movei %jself ? move tt]
+	 slose
+pgfre0:	addi t,pgtab
+	movei x,pghead
+	aose pglock
+	 call hang
+	call free
+	setom pglock
+	return
+
+.see mlock			; Lock on memory freelist
+.scalar mhead			; Head of freelist (in free memory) 
+
+; CALL MINIT:  Initialize memory
+minit:	call pginit
+	movsi t,<freepg_12>-ffaddr
+	movem t,ffaddr
+	movei t,ffaddr
+	movem t,mhead
+	setom mlock
+	return
+
+; CALL MALLOC:  Allocate memory
+;  Skips if it wins, else error code in TT
+; T (arg):  # words desired
+; T (val):  aobjn to a block of that size
+malloc:	movsi z,(t)		; Z: <size>,,0
+	aose mlock
+	 call hang
+maloc2:	movei x,mhead
+	call alloc
+	 jrst maloc1
+	setom mlock
+	aos (p)
+	return
+
+maloc1:	save z
+	movs t,z
+	addi t,1777
+	lsh t,-12
+	call pgalloc
+	 jrst [	rest z ? setom mlock ? return ]	; Propogate error code
+	move tt,t
+	syscall corblk,[movei %cbndr ? movei %jself ? move tt ? movei %jsnew]
+	 slose
+	lsh t,12
+	movei x,mhead
+	call free		; (we already have MLOCK)
+	rest z
+	jrst maloc2
+
+; CALL MFREE:  Free memory
+; T (arg):  aobjn to block to be freed
+; TT preserved
+mfree:	save tt
+	movei x,mhead
+	aose mlock
+	 call hang
+	call free
+	setom mlock
+	rest tt
+	return
+
+.vector keytab(lkeytab==:150.)
+
+; CALL KINIT:  Initialize keywords
+; Clobbers A
+kinit:	skipn a,keys
+	 return
+kinit1:	move t,kwdata(a)
+	call hash
+	movem x,kwhash(a)
+	movem y,kwlen(a)
+	skipe a,kwnext(a)
+	 jrst kinit1
+	movei x,<lkeytab/2>
+kinit2:	caile x,lkeytab
+	 .lose			; Barf!  No mod works!
+	setzm keytab+0
+	move t,[keytab+0,,keytab+1]
+	blt t,keytab+lkeytab-1
+	move a,keys
+kinit3:	move t,kwhash(a)
+	idivi t,(x)
+	skipe keytab(tt)
+	 aoja x,kinit2		; Try a larger hashtable
+	movem a,keytab(tt)
+	skipe a,kwnext(a)
+	 jrst kinit3
+	movem x,keymod		; Won, use this size
+	move x,keys
+	setzm keys
+kinit4:	setzi y,
+	exch y,kwnext(x)
+	skipe x,y
+	 jrst kinit4
+	setom klock
+	return
+
+; CALL HASH:  Compute hash of data token
+; T (arg):  data token
+; X (val):  hash (>= 0)
+; Y (val):  length of data
+hash:	tlc t,400000
+	tlne t,700000
+	 .lose			; better be data token
+	setzi x,		; X: accumulate hash
+	hlrz y,t		; Y: length
+	hlrz z,t		; Z: length
+	jumple z,cpopj
+	hrli t,440800
+hashlp:	ildb tt,t
+	addi x,17.(tt)
+	rot x,7
+	sojg z,hashlp
+	skipge x
+	 setcm x,x
+	return
+
+.see klock			; Lock on interning
+
+; CALL INTERN:  Intern a keyword
+;  Skips if it made a new token
+; A (a/v):  data token
+; Z (val):  keyword token
+intern:	call lookup
+	jumpn z,cpopj
+	aose klock
+	 call hang
+	call looklp
+	jumpn z,kpopj
+	save x
+	save y
+	movei t,kwmax
+	call malloc
+	 jsp t,lose
+	hrri z,(t)
+	hrli z,lskey
+	movem a,kwdata(z)
+	rest kwlen(z)
+	rest kwhash(z)
+	movei t,aerror
+	movem t,kwsubr(z)
+	move t,kwhash(z)
+	idiv t,keymod
+	move t,keytab(tt)
+	movem t,kwnext(z)
+	movem z,keytab(tt)
+	aos (p)
+kpopj:	setom klock
+	return
+
+; CALL LOOKUP:  Lookup a keyword
+; A (a/v):  data token
+; X (val):  hash (>= 0) if token not found
+; Y (val):  length of data if token not found
+; Z (val):  keyword token or 0 if token not found
+lookup:	move t,a
+	call hash		; X: hash (>= 0)  Y: length
+looklp:	move t,x		; CALL LOOKLP
+	idiv t,keymod
+	skipn z,keytab(tt)	; Z: current keyword
+	 return
+lokup1:	camn x,kwhash(z)
+	 came y,kwlen(z)
+	  jrst lokup2
+	jumple y,cpopj
+	save z
+	hrri x,(a)
+	hrli x,440800
+	hrr z,kwdata(z)
+	hrli z,440800
+lokup5:	ildb t,x
+	ildb tt,z
+	came tt,t
+	 jrst lokup3
+	sojg y,lokup5
+	rest z
+	return
+
+lokup3:	rest z
+	move x,kwhash(z)
+	move y,kwlen(z)
+lokup2:	skipn z,kwnext(z)
+	 return
+	jrst lokup1
+
+; CALL UNCONS:  Free object
+; A (arg):  Object
+uncons:	jumpge a,cpopj		; A number, return
+	tlne a,200000
+	 jrst unlist		; A list
+	tlnn a,100000
+	 jrst undata		; A data token
+	return			; Something else, return
+
+undata:	hlrz t,a
+	movei t,400003(t)
+	lsh t,-2
+	hrloi t,-1(t)
+	eqvi t,(a)
+	jumpl t,mfree
+	return			; Empty data token!
+
+unlist:	save a
+	save b
+	move b,a
+
+unlst1:	move a,(b)
+	call uncons
+	aobjn b,unlst1
+
+	rest b
+	rest t
+	jrst mfree
+
+
+aerror:	jfcl
+	 .lose
+
+defkey abort,"ABORT"
+defkey chprops,"CHANGE-PROPERTIES"
+defkey close,"CLOSE"
+defkey complete,"COMPLETE"
+defkey continue,"CONTINUE"
+defkey crdirectory,"CREATE-DIRECTORY"
+defkey crlink,"CREATE-LINK"
+defkey dconn,"DATA-CONNECTION"
+defkey delete,"DELETE"
+defkey drout,"DIRECT-OUTPUT"
+defkey directory,"DIRECTORY"
+defkey disable,"DISABLE-CAPABILITIES"
+defkey enable,"ENABLE-CAPABILITIES"
+defkey expunge,"EXPUNGE"
+defkey filepos,"FILEPOS"
+defkey finish,"FINISH"
+defkey hdirectory,"HOME-DIRECTORY"
+defkey login,"LOGIN"
+defkey mfplists,"MULTIPLE-FILE-PLISTS"
+defkey open,"OPEN"
+defkey properties,"PROPERTIES"
+defkey read,"READ"
+defkey rename,"RENAME"
+defkey resynch,"RESYNCHRONIZE-DATA-CHANNEL"
+defkey undconn,"UNDATA-CONNECTION"
+
+; Constants
+
+cnst0:
+constants
+repeat <.-cnst0+77>/100, conc cnst,\.rpcnt,=:cnst0+.rpcnt*100
+
+bit:	repeat 36., 1_.rpcnt
+
+keys:	.lkey.			; Cleared by KINIT
+keymod:	0			; Initialized by KINIT
+
+forty:	0
+	0
+	-ltsint,,tsint
+	0
+	0
+
+clktim:	3*60.			; 3 second clock
+	0 ? 0 ? 0		; for .REALT
+
+patch::
+pat:	block 100.
+
+npure==:<.+1777>_-12		; End of pure
+timepg==:npure			; Then SYS page containing TIME variable
+loc <timepg+1>_12		; Then our variables
+
+; Variables
+
+variables
+
+twenty:	block 20
+
+vpatch:	block 100.
+
+ffaddr::  -1			; Make memory exist
+
+freepg==:<.+1777>_-12		; First free page
+
+end go
