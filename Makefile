@@ -105,6 +105,7 @@ DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
 SIMH_IMLAC=tools/simh/BIN/imlac $(OUT)/ssv22.iml
+IMP=tools/simh/BIN/h316
 
 H3TEXT=$(shell cd build; ls h3text.*)
 NAMES=$(shell cd build; ls names.*)
@@ -156,7 +157,7 @@ out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(XGP11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(XGP11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(IMP)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -164,7 +165,7 @@ out/pdp10-kl/stamp/its: $(OUT)/rp04.1
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp/emulators: $(VT52) $(TEK)
+out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(IMP)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -439,6 +440,9 @@ tek-hack:
 
 $(TEK): tek-hack
 	$(MAKE) -C tools/tek4010 tek4010
+
+$(IMP):
+	$(MAKE) -C tools/simh h316
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
