@@ -31,6 +31,7 @@ respond "*" ":haunt;ops4\r"
 respond "(CREATED" "(load '((haunt) haunt load))"
 respond ":\$Job Suspended\$" ":sl sys;purqio >\r"
 respond "*" ":pdump haunt;ts haunt\r"
+type ":kill\r"
 
 # make available in SYS:
 respond "*" ":link sys3;ts haunt,haunt;ts haunt\r"

@@ -740,6 +740,7 @@ respond "*" ":job nfile\r"
 respond "*" ":load alan;nfile bin\r"
 respond "*" "purify\033g"
 respond "CHAOS NFILE" "\r"
+respond "*" ":kill\r"
 
 # 11sim
 respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
