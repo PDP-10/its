@@ -206,6 +206,13 @@ respond "*" ":link device;chaos tcp, sysnet;arpa bin\r"
 respond "*" ":midas .;ts redrct_sysnet;redrct\r"
 expect ":KILL"
 
+# Old NIC Arpanet HOSTS TXT.  Run a TECO macro to generate
+# SYSENG;HOSTS PRETTY and HOSTS INSERT.
+respond "*" ":teco\r"
+respond "&" "ER SYSENG;HOSTER >\033 Y HXM MM\033\033"
+respond "&" "\032"
+respond ")   " ":kill\r"
+
 # telnet server
 respond "*" ":midas sysbin;telser_sysnet;telser\r"
 expect ":KILL"
