@@ -218,7 +218,10 @@ respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
 expect ":KILL"
 
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
-respond "*" ":link sys;ts tn,sys;ts telnet\r"
+respond "*" ":link sys;ts tcptn,sys;ts telnet\r"
+respond "*" ":link sys;ts ttn,sys;ts telnet\r"
+respond "*" ":link sys;ts ncptn,sys;ts telnet\r"
+respond "*" ":link sys;ts oth,sys;ts telnet\r"
 
 # supdup port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
