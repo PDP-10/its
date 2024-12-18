@@ -230,6 +230,10 @@ respond "*" ":link sys;ts ttn,sys;ts telnet\r"
 respond "*" ":link sys;ts ncptn,sys;ts telnet\r"
 respond "*" ":link sys;ts oth,sys;ts telnet\r"
 
+# old user telnet
+respond "*" ":midas sys1;ts ut_syseng;ut\r"
+expect ":KILL"
+
 # supdup port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
 
