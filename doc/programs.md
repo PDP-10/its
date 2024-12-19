@@ -368,6 +368,7 @@
 - TREK, Star Trek game.
 - TORTIS, toddler's own recursive turtle interpreter system.
 - TOSBLK, convert PALX binaries to SBLK.
+- TN6, line mode TELNET client with Multics features.
 - TST342, display all Type 342 characters.
 - TV-11, Knight TV PDP-11.
 - TVEDIT, paint program.
