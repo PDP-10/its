@@ -26,6 +26,13 @@ respond "(CR) FOR DEVICE LPT, nn FOR Tnn" "\r"
 respond "(CR) FOR .LPTR. DIRECTORY, OR TYPE NEW NAME" "\r"
 expect ":KILL"
 
+# ARPANET support, Dynamic Modeling demon style
+if [string equal "$mchn" "DM"] {
+    respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
+    respond "DEMONP=" "1\r"
+    expect ":KILL"
+}
+
 # Arpanet survey demon.
 respond "*" ":midas sys; atsign survey_survey; survey\r"
 expect ":KILL"
