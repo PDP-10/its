@@ -217,8 +217,11 @@ respond ")   " ":kill\r"
 respond "*" ":midas sysbin;telser_sysnet;telser\r"
 expect ":KILL"
 
-# port 23 (telnet) uses TELSER
+# TCP port 23 (telnet) uses TELSER
 respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
+# NCP sockets 1 and 23 use TELSER
+respond "*" ":link device;lbsign rfc001,sysbin;telser bin\r"
+respond "*" ":link device;lbsign rfc027,sysbin;telser bin\r"
 
 # telnet client
 respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
@@ -234,8 +237,10 @@ respond "*" ":link sys;ts oth,sys;ts telnet\r"
 respond "*" ":midas sys1;ts ut_syseng;ut\r"
 expect ":KILL"
 
-# supdup port (95) uses telser
+# supdup TCP port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
+# NCP socket 95 uses TELSER
+respond "*" ":link device;lbsign rfc137,sysbin;telser bin\r"
 
 # supdup client
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
