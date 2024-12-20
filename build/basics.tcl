@@ -186,8 +186,11 @@ expect ":KILL"
 respond "*" ":link sys;atsign chaos,sysbin;@chaos bin\r"
 
 # ARPANET support
-respond "*" ":midas sys;atsign netrfc_sysen2; netrfc\r"
-expect ":KILL"
+if { ! [string equal "$mchn" "DM"] } {
+    respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
+    respond "DEMONP=" "0\r"
+    expect ":KILL"
+}
 
 # CHA: and CHAOS: device
 respond "*" ":midas device;jobdev cha_dcp;chadev\r"
