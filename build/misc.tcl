@@ -104,6 +104,7 @@ type ":vk\r"
 respond "*" ":midas sysbin;_sysen2; iec\r"
 expect ":KILL"
 respond "*" ":link sys; atsign iec, sysbin; iec bin\r"
+arpanet "rfc113" "sys; atsign iec"
 
 respond "*" ":midas sys2;ts untalk_gren;untalk\r"
 expect ":KILL"
@@ -442,6 +443,7 @@ respond "*" ":link device;tcp syn161,sysbin;idents bin\r"
 respond "*" ":midas sysbin;timsrv bin_sysnet;timsrv\r"
 expect ":KILL"
 respond "*" ":link device;tcp syn045,sysbin;timsrv bin\r"
+arpanet "rfc045" "sysbin;timsrv bin"
 
 # datsrv
 respond "*" ":midas sysbin;_sysnet;datsrv\r"
@@ -1153,6 +1155,7 @@ respond "*" ":link device;chaos babel,sysbin; babel bin\r"
 respond "*" ":midas sysbin;_eak; chahtb\r"
 expect ":KILL"
 respond "*" ":link device; chaos hostab, sysbin; chahtb bin\r"
+arpanet "rfc121" "sysbin; chahtb bin"
 
 # Chaosnet 11LOAD service for booting MINITS.
 respond "*" ":midas device; chaos 11load_minits; 11load\r"
