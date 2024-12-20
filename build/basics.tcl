@@ -223,8 +223,8 @@ expect ":KILL"
 # TCP port 23 (telnet) uses TELSER
 respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
 # NCP sockets 1 and 23 use TELSER
-respond "*" ":link device;lbsign rfc001,sysbin;telser bin\r"
-respond "*" ":link device;lbsign rfc027,sysbin;telser bin\r"
+arpanet "rfc001" "sysbin;telser bin"
+arpanet "rfc027" "sysbin;telser bin"
 
 # Old telnet server
 respond "*" ":midas sys;atsign stelnt_syseng;stelnt\r"
@@ -247,7 +247,9 @@ expect ":KILL"
 # supdup TCP port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
 # NCP socket 95 uses TELSER
-respond "*" ":link device;lbsign rfc137,sysbin;telser bin\r"
+arpanet "rfc137" "sysbin;telser bin"
+# We don't know why
+arpanet "rcf107" "sys1;ts supdup"
 
 # supdup client
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
@@ -267,6 +269,10 @@ expect ":KILL"
 respond "*" ":link device;tcp syn025,sysbin;ftps bin\r"
 respond "*" ":link device;tcp syn031,sysbin;ftps bin\r"
 respond "*" ":link device;chaos smtp,sysbin;ftps bin\r"
+arpanet "rfc003" "sysbin;ftps bin"
+arpanet "rfc025" "sysbin;ftps bin"
+arpanet "rfc031" "sysbin;ftps bin"
+arpanet "rfc103" "sysbin;ftps bin"
 
 respond "*" ":midas sysbin;ftpu_sysnet;ftpu\r"
 expect ":KILL"
@@ -345,6 +351,7 @@ respond "*" ":link sys;ts f,sys;ts name\r"
 respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
 respond "*" ":link device;chaos name,sys;ts name\r"
+arpanet "rfc117" "sys;ts name"
 
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"

@@ -161,6 +161,18 @@ proc move_to_klfe {file} {
     respond "*" ":delete $file\r"
 }
 
+# Install an ARPANET server.
+proc arpanet {rfc file} {
+    # Dynamic Modeling uses demons, signaled from ATSIGN NETRFC.
+    # Others do not.
+    global mchn
+    if [string equal "$mchn" "DM"] {
+        respond "*" ":link sys;atsign $rfc, $file\r"
+    } else {
+        respond "*" ":link device;lbsign $rfc, $file\r"
+    }
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
