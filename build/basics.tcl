@@ -186,7 +186,8 @@ expect ":KILL"
 respond "*" ":link sys;atsign chaos,sysbin;@chaos bin\r"
 
 # ARPANET support
-respond "*" ":midas sys;atsign netrfc_sysen2; netrfc\r"
+respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
+respond "DEMONP=" "0\r"
 expect ":KILL"
 
 # CHA: and CHAOS: device
