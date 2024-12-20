@@ -329,6 +329,7 @@
 - SRDATE, set reference date on a file.
 - SSV, scroll saver for Imlac PDS-1.
 - SSV4, SSV for Imlac PDS-4.
+- STELNT, old TELNET server.
 - STINK, linker.
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
@@ -368,6 +369,7 @@
 - TREK, Star Trek game.
 - TORTIS, toddler's own recursive turtle interpreter system.
 - TOSBLK, convert PALX binaries to SBLK.
+- TN6, line mode TELNET client with Multics features.
 - TST342, display all Type 342 characters.
 - TV-11, Knight TV PDP-11.
 - TVEDIT, paint program.
@@ -392,6 +394,7 @@
 - UPTINI, program to create new UPTIME DATA.
 - URUG, GT40 debugger.
 - USQ/TYPESQ, unsqueeze/uncram or type a file.
+- UT, old User TELNET (client).
 - UTNAM, set DECtape name.
 - VERSA/SPOOLR, Versatec/Gould printer spooler.
 - VDIR, view directory.

@@ -206,22 +206,45 @@ respond "*" ":link device;chaos tcp, sysnet;arpa bin\r"
 respond "*" ":midas .;ts redrct_sysnet;redrct\r"
 expect ":KILL"
 
+# Old NIC Arpanet HOSTS TXT.  Run a TECO macro to generate
+# SYSENG;HOSTS PRETTY and HOSTS INSERT.
+respond "*" ":teco\r"
+respond "&" "ER SYSENG;HOSTER >\033 Y HXM MM\033\033"
+respond "&" "\032"
+respond ")   " ":kill\r"
+
 # telnet server
 respond "*" ":midas sysbin;telser_sysnet;telser\r"
 expect ":KILL"
 
-# port 23 (telnet) uses TELSER
+# TCP port 23 (telnet) uses TELSER
 respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
+# NCP sockets 1 and 23 use TELSER
+respond "*" ":link device;lbsign rfc001,sysbin;telser bin\r"
+respond "*" ":link device;lbsign rfc027,sysbin;telser bin\r"
+
+# Old telnet server
+respond "*" ":midas sys;atsign stelnt_syseng;stelnt\r"
+expect ":KILL"
 
 # telnet client
 respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
 expect ":KILL"
 
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
-respond "*" ":link sys;ts tn,sys;ts telnet\r"
+respond "*" ":link sys;ts tcptn,sys;ts telnet\r"
+respond "*" ":link sys;ts ttn,sys;ts telnet\r"
+respond "*" ":link sys;ts ncptn,sys;ts telnet\r"
+respond "*" ":link sys;ts oth,sys;ts telnet\r"
 
-# supdup port (95) uses telser
+# old user telnet
+respond "*" ":midas sys1;ts ut_syseng;ut\r"
+expect ":KILL"
+
+# supdup TCP port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
+# NCP socket 95 uses TELSER
+respond "*" ":link device;lbsign rfc137,sysbin;telser bin\r"
 
 # supdup client
 respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
