@@ -223,6 +223,10 @@ respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
 respond "*" ":link device;lbsign rfc001,sysbin;telser bin\r"
 respond "*" ":link device;lbsign rfc027,sysbin;telser bin\r"
 
+# Old telnet server
+respond "*" ":midas sys;atsign stelnt_syseng;stelnt\r"
+expect ":KILL"
+
 # telnet client
 respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
 expect ":KILL"

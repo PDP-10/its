@@ -329,6 +329,7 @@
 - SRDATE, set reference date on a file.
 - SSV, scroll saver for Imlac PDS-1.
 - SSV4, SSV for Imlac PDS-4.
+- STELNT, old TELNET server.
 - STINK, linker.
 - STINKR, new linker (binary only).
 - STTY, set terminal parameters.
