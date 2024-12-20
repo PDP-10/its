@@ -31,6 +31,9 @@ respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
 respond "DEMONP=" "1\r"
 expect ":KILL"
 
+# Arpanet FINGER demon.
+respond "*" ":link sys;atsign rfc117,sys;ts name\r"
+
 # Arpanet survey demon.
 respond "*" ":midas sys; atsign survey_survey; survey\r"
 expect ":KILL"

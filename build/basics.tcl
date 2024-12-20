@@ -343,6 +343,7 @@ respond "*" ":link sys;ts f,sys;ts name\r"
 respond "*" ":link sys2;ts n,sys;ts name\r"
 respond "*" ":link device;tcp syn117,sys;ts name\r"
 respond "*" ":link device;chaos name,sys;ts name\r"
+respond "*" ":link device;lbsign rfc117,sys;ts name\r"
 
 respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
 expect ":KILL"
