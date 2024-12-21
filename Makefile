@@ -80,7 +80,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 SRCIGNORE=-e '^(system|midas)$$'
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup cbridge \
-	tapeutils tv11 pdp6 vt05 tek4010 chaosnet-tools
+	tapeutils tv11 pdp6 vt05 tek4010 chaosnet-tools ncp
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -106,6 +106,7 @@ VT52=tools/vt05/vt52
 TEK=tools/tek4010/tek4010
 SIMH_IMLAC=tools/simh/BIN/imlac $(OUT)/ssv22.iml
 IMP=tools/simh/BIN/h316
+NCPD=tools/ncp/src/ncpd
 
 H3TEXT=$(shell cd build; ls h3text.*)
 NAMES=$(shell cd build; ls names.*)
@@ -157,7 +158,7 @@ out/pdp10-ka/stamp/its: $(OUT)/rp03.2 $(OUT)/rp03.3
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(XGP11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(IMP)
+out/pdp10-ka/stamp/emulators: $(GT40) $(TV11) $(XGP11) $(PDP6) $(DATAPOINT) $(VT52) $(TEK) $(SIMH_IMLAC) $(IMP) $(NCPD)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -165,7 +166,7 @@ out/pdp10-kl/stamp/its: $(OUT)/rp04.1
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
-out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(IMP)
+out/pdp10-kl/stamp/emulators: $(VT52) $(TEK) $(IMP) $(NCPD)
 	$(MKDIR) $(OUT)/stamp
 	$(TOUCH) $@
 
@@ -443,6 +444,10 @@ $(TEK): tek-hack
 
 $(IMP):
 	$(MAKE) -C tools/simh h316
+
+$(NCPD):
+	$(MAKE) -C tools/ncp/src
+	$(MAKE) -C tools/ncp/apps
 
 tools/supdup/supdup:
 	$(MAKE) -C tools/supdup
