@@ -787,7 +787,7 @@ respond "UKBD" "(quit)"
 expect ":KILL"
 
 # Lisp Logo
-respond "*" ":cwd llogo\r"
+cwd "llogo"
 respond "*" ":complr\r"
 respond "_" "germ\r"
 respond "_" "ioc\r"
@@ -835,7 +835,7 @@ respond "_" "\032"
 type ":kill\r"
 
 # 2500 microcode
-respond "*" ":cwd minsky\r"
+cwd "minsky"
 respond "*" "lisp\013"
 respond "Alloc?" "n\r"
 respond "*" "(setq gc-overflow '(lambda (x) t))"

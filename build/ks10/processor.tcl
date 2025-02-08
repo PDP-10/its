@@ -3,7 +3,7 @@ log_progress "ENTERING BUILD SCRIPT: PROCESSOR"
 # Programs particular to the KS10 processor.
 
 # KNS10, KS10 console
-respond "*" ":cwd kshack\r"
+cwd "kshack"
 respond "*" ":cross\r"
 respond "*" "FOR21.DAT/PTP,KNS10.PNT/M80/OCT/CRF/EQ:PASS2:SCECOD=CONDEF.M80,HCORE.M80,CMDS.M80,SUBRTN.M80,DR.M80,MSG.M80,STORE.M80\r"
 expect "Core used"

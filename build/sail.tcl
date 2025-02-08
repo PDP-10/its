@@ -1,7 +1,7 @@
 log_progress "ENTERING BUILD SCRIPT: SAIL"
 
 # stktrn
-respond "*" ":cwd sail\r"
+cwd "sail"
 respond "*" ":fail stktrn\r"
 
 # jobdat
@@ -39,7 +39,7 @@ respond "*" ":link sys1; ts pc, datdrw; pc bin\r"
 respond "*" ":link sys1; ts scnv, datdrw; scnv bin\r"
 
 # The drawing program needs WL; BOARDS REL
-respond "*" ":cwd wl\r"
+cwd "wl"
 respond "*" ":fail boards\r"
 respond ";^C" ";\003"
 
@@ -50,7 +50,7 @@ respond "SELECTED" ";\003"
 respond "*" "\032:kill\r"
 
 # SUDS drawing program
-respond "*" ":cwd draw\r"
+cwd "draw"
 respond "*" ":fail d\r"
 respond ";^C" ";\003"
 respond "*" "\032:kill\r"
@@ -94,7 +94,7 @@ respond "\n" ":pdump datdrw; lay bin\r"
 respond "*" ":kill\r"
 
 # SUDS wirelist program.
-respond "*" ":cwd wl\r"
+cwd "wl"
 respond "*" ":fail wl\r"
 respond "*" "wboard\r"
 respond "*" "\032:kill\r"

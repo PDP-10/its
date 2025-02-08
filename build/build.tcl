@@ -181,6 +181,10 @@ proc macro10 {target sources} {
     respond "*" ":kill\r"
 }
 
+proc cwd {directory} {
+    respond "*" ":cwd $directory\r"
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 

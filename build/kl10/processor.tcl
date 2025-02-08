@@ -45,7 +45,7 @@ expect ":KILL"
 copy_to_klfe "ucode;u1 ram"
 
 # KLDDT
-respond "*" ":cwd kldcp\r"
+cwd "kldcp"
 macro10 "klddt" "klddt"
 respond "*" ":dec sys:link\r"
 respond "*" "klddt/go\r"
@@ -143,7 +143,7 @@ respond "*" ":midas;324 sys3;ts 11boot_syseng;11boot\r"
 expect ":KILL"
 # Note, must be run with symbols loaded.
 # Takes IOELEV BIN and KLRUG BIN from the current directory.
-respond "*" ":cwd sysbin\r"
+cwd "sysbin"
 respond "*" "11boot\033\013"
 expect ":KILL"
 respond "*" ":move sysbin;@ boot11, .;\r"

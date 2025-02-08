@@ -1,6 +1,6 @@
 log_progress "ENTERING BUILD SCRIPT: SHRDLU"
 
-respond "*" ":cwd shrdlu\r"
+cwd "shrdlu"
 
 # first, compile all the sources that should be compiled
 
