@@ -46,11 +46,7 @@ copy_to_klfe "ucode;u1 ram"
 
 # KLDDT
 respond "*" ":cwd kldcp\r"
-respond "*" ":macro\r"
-respond "*" "klddt=klddt\r"
-expect "CORE USED"
-respond "*" "\003"
-respond "*" ":kill\r"
+macro10 "klddt" "klddt"
 respond "*" ":dec sys:link\r"
 respond "*" "klddt/go\r"
 respond "EXIT" ":start 45\r"
