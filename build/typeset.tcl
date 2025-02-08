@@ -16,5 +16,5 @@ respond "_" "lmdoc;paper_lmdoc;paper\r"
 expect ":KILL"
 
 # R manual.
-respond "*" ":cwd r\r"
+cwd "r"
 respond "*" ":r rman.r\r"

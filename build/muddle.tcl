@@ -3,7 +3,7 @@ log_progress "ENTERING BUILD SCRIPT: MUDDLE"
 mkdir "mudsav"
 
 proc build_muddle {dir version} {
-	respond "*" ":cwd $dir\r"
+	cwd "$dir"
 
 	respond "*" ":xfile mud$version assem\r"
 	expect -timeout 300 "Assembly done!"

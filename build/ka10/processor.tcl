@@ -58,7 +58,7 @@ respond "*" ":palx cons;_lmcons;ccons\r"
 expect ":KILL"
 
 # Old Spacewar
-respond "*" ":cwd spcwar\r"
+cwd "spcwar"
 respond "*" ":midas;324 spcwar; war\r"
 expect ":KILL"
 respond "*" ":midas spcwar; stars\r"
@@ -267,7 +267,7 @@ respond "*" ":midas ptp:_maint;hhtest\r"
 expect ":KILL"
 
 # NTS TECO-6
-respond "*" ":cwd .teco.\r"
+cwd ".teco."
 respond "*" ":midas;73\r"
 expect "MIDAS"
 respond "\n" "TECODM REL_TECO DUMMY\r"

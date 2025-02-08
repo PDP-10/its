@@ -1,6 +1,6 @@
 log_progress "ENTERING BUILD SCRIPT: HAUNT"
 
-respond "*" ":cwd haunt\r"
+cwd "haunt"
 
 # build ops4
 respond "*" "complr\013"

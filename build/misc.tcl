@@ -466,7 +466,7 @@ respond "*" ":midas sys3; ts mmodem_gz; mmodem\r"
 expect ":KILL"
 
 # Compile ADVENT and dump it out with DECUUO.
-respond "*" ":cwd games\r"
+cwd "games"
 respond "*" ":dec sys:f40\r"
 respond "*" "advent=advent\r"
 expect "CORE USED"
@@ -482,7 +482,7 @@ respond "*" ":pdump sys3; ts advent\r"
 respond "*" ":kill\r"
 
 # 350-point ADVENT
-respond "*" ":cwd games\r"
+cwd "games"
 respond "*" ":dec sys:f40\r"
 respond "*" "adv3sr=adv3sr\r"
 respond "*" "adv3sb=adv3sb\r"
@@ -502,7 +502,7 @@ respond "*" ":pdump games; ts adv350\r"
 respond "*" ":kill\r"
 
 # 448-point ADVENT
-respond "*" ":cwd games\r"
+cwd "games"
 respond "*" ":dec sys:f40\r"
 respond "*" "adv4ma=adv4ma\r"
 respond "*" "adv4su=adv4su\r"
@@ -522,7 +522,7 @@ respond "*" ":pdump games; ts adv448\r"
 respond "*" ":kill\r"
 
 # TREK
-respond "*" ":cwd games\r"
+cwd "games"
 respond "*" ":dec sys:f40\r"
 respond "*" "trek=trek\r"
 expect "CORE USED"
@@ -574,7 +574,7 @@ respond "*" ":midas sys1;ts wumpus_games; wumpus\r"
 expect ":KILL"
 
 # Jotto
-respond "*" ":cwd games\r"
+cwd "games"
 respond "*" ":midas jotto\r"
 expect ":KILL"
 respond "*" ":job jotto\r"
@@ -614,7 +614,7 @@ expect ":KILL"
 respond "*" ":link sys1;ts %,sys1;ts who%\r"
 
 # MACRO-10
-respond "*" ":cwd decsys\r"
+cwd "decsys"
 respond "*" ":dec sys:macro\r"
 respond "*" "macro=macro\r"
 expect "CORE USED"
@@ -642,7 +642,7 @@ respond "*" ":pdump sys2; ts macro\r"
 respond "*" ":kill\r"
 
 # MACSYM and MONSYM universal files.
-respond "*" ":cwd decsys\r"
+cwd "decsys"
 macro10 "macsym.unv" "macsym.mac"
 macro10 "monsym.unv" "monsym.mac"
 
@@ -664,11 +664,11 @@ respond "*" ":midas 11logo;ts palx_rms;palx 143\r"
 expect ":KILL"
 
 # Phil Budne's PALX Game of Life.
-respond "*" ":cwd budd\r"
+cwd "budd"
 respond "*" ":palx live palx\r"
 
 # MACN11, pdp-11 cross assembler
-respond "*" ":cwd decsys\r"
+cwd "decsys"
 macro10 "macn11" "macn11.hdr,macn11.mac"
 respond "*" ":dec sys:loader\r"
 respond "*" "macn11/g\r"
@@ -984,7 +984,7 @@ respond "*" ":midas kcc;ts 20xcsv_20xcsv\r"
 expect ":KILL"
 
 # Run GETSYM to get all monitor symbols.
-respond "*" ":cwd kcc\r"
+cwd "kcc"
 respond "*" ":getsym\r"
 expect ":KILL"
 
@@ -1356,7 +1356,7 @@ respond "*" ":pdump c; ts cc\r"
 respond "*" ":kill\r"
 
 # CLIB
-respond "*" ":cwd clib\r"
+cwd "clib"
 respond "*" ":midas c10cor cmid\r"
 respond "*" ":midas c10fo cmid\r"
 respond "*" ":midas c10int cmid\r"
@@ -1401,7 +1401,7 @@ expect ":KILL"
 respond "*" ":delete c; \[crel\] 16\r"
 
 # CC
-respond "*" ":cwd c\r"
+cwd "c"
 respond "*" ":copy ts cc, ts occ\r"
 respond "*" ":cc cc.>\r"
 expect ":KILL"
@@ -1472,7 +1472,7 @@ expect "Done."
 patch_clib_16
 
 # C library for drawing on a TV display.
-respond "*" ":cwd clib\r"
+cwd "clib"
 respond "*" ":cc tv.>\r"
 expect ":KILL"
 
@@ -1491,7 +1491,7 @@ respond "*" ":midas sys2; ts otj6_tj6; otj6\r"
 expect ":KILL"
 
 # Alan Snyder's R typesetting language.
-respond "*" ":cwd r\r"
+cwd "r"
 respond "*" ":cc rcntrl rdev rexpr rfile rfonts richar ridn rin rin1 rin2\r"
 respond "*" ":cc rits rline rlpt rmain rmisc rout rreadr rreg rreq1 rreq2\r"
 respond "*" ":cc rreq3 rtext rtoken rtrap rvaria rxgp\r"
@@ -1534,7 +1534,7 @@ proc build_c_program {input output {libs {}}} {
 }
 
 # OINIT
-respond "*" ":cwd c\r"
+cwd "c"
 build_c_program "sysen2/oinit" "sys3/ts.oinit"
 
 # RALP
@@ -1596,7 +1596,7 @@ respond "*" ":midas sys1; ts gtload_syseng; gtload\r"
 expect ":KILL"
 
 # RUG, PDP-11 debugger.
-respond "*" ":cwd pdp11\r"
+cwd "pdp11"
 respond "*" ":palx rug\r"
 respond "?" "2\r"
 respond "?" "100000\r"
@@ -1615,13 +1615,13 @@ respond "*" ":palx gt40;_gt40;gtlem\r"
 expect ":KILL"
 
 # MINITS
-respond "*" ":cwd mits.s\r"
+cwd "mits.s"
 respond "*" ":palx test_config\r"
 respond ":::" "777\r"
 expect ":KILL"
 
 # MINITS boot ROM for an Interlan network interface.
-respond "*" ":cwd mits.b\r"
+cwd "mits.b"
 respond "*" ":palx bootil\r"
 respond "Interlan CSR?" "0\r"
 respond "Chaos address of Interlan board?" "0\r"
@@ -1634,11 +1634,11 @@ respond "Start of temporary data storage?" "150000\r"
 expect ":KILL"
 
 # ITS universal file.
-respond "*" ":cwd decsys\r"
+cwd "decsys"
 macro10 "sits.unv" "sits.mac"
 
 # Datacomputer file transfer.
-respond "*" ":cwd mrc\r"
+cwd "mrc"
 macro10 "dftp" "dftp"
 
 respond "*" ":dec sys:link\r"
@@ -1673,7 +1673,7 @@ respond "*" ":link sys1; ts mloder, rug; loder bin\r"
 type ":vk\r"
 
 # SITS.
-respond "*" ":cwd sits\r"
+cwd "sits"
 respond "*" ":palx sits\r"
 expect ":KILL"
 
@@ -1702,12 +1702,12 @@ respond "*" ":palx dired\r"
 expect ":KILL"
 
 # TECO for SITS.
-respond "*" ":cwd rjl\r"
+cwd "rjl"
 respond "*" ":palx teco\r"
 expect ":KILL"
 
 # SLOGO, 11LOGO for SITS.
-respond "*" ":cwd nlogo\r"
+cwd "nlogo"
 respond "*" ":palx slogo_@slogo\r"
 expect ":KILL"
 
@@ -1716,12 +1716,12 @@ respond "*" ":palx hlogo_@hlogo\r"
 expect ":KILL"
 
 # ITSCOM, ITS-SITS communication.
-respond "*" ":cwd bee\r"
+cwd "bee"
 respond "*" ":palx itscom\r"
 expect ":KILL"
 
 # ITS, SITS file transfer.
-respond "*" ":cwd gld\r"
+cwd "gld"
 respond "*" ":palx its\r"
 expect ":KILL"
 
@@ -1730,7 +1730,7 @@ respond "*" ":midas;324 radia;_tortis\r"
 expect ":KILL"
 
 # BBN Logo
-respond "*" ":cwd bbn\r"
+cwd "bbn"
 macro10 "logo" "logo"
 respond "*" ":dec sys:loader\r"
 respond "*" "logo/g\r"
@@ -1751,7 +1751,7 @@ respond "DFLAG=" "1\r"
 expect ":KILL"
 
 # NVMIDS, Nova assembler
-respond "*" ":cwd nova\r"
+cwd "nova"
 respond "*" ":midas;73\r"
 expect "MIDAS"
 respond "\n" "TS NVMIDS_NVMIDS >\r"
@@ -1788,13 +1788,13 @@ respond "\n" "TIME MACHIN\r"
 expect ":KILL"
 
 # 11LOGO
-respond "*" ":cwd 11logo\r"
+cwd "11logo"
 respond "*" ":palx /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
 respond "ASSSW=" "0\r"
 expect ":KILL"
 
 # Apple II Logo
-respond "*" ":cwd aplogo\r"
+cwd "aplogo"
 respond "*" ":cross\r"
 respond "*" "logo/ptp,logo=logo\r"
 expect "Core used"
@@ -1802,7 +1802,7 @@ respond "*" "\003"
 respond "*" ":kill\r"
 
 # Atari 800 terminal emulator Chameleon by Jack Palevich.
-respond "*" ":cwd atlogo\r"
+cwd "atlogo"
 respond "*" ":cross\r"
 respond "*" "supdup,supdup=supdup/m65\r"
 expect "Core used"
@@ -1855,7 +1855,7 @@ respond "*" ":midas mudsys;ts stink_sysen2;stink 121t\r"
 expect ":KILL"
 
 # Move hello world xfiles into an archive.
-respond "*" ":cwd hello\r"
+cwd "hello"
 respond "*" ":move dsk:c xfile, ar:\r"
 respond "*" ":move dsk:clu xfile, ar:\r"
 respond "*" ":move dsk:clu xxfile, ar:\r"
