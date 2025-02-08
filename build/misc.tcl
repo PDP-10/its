@@ -660,7 +660,7 @@ respond "*" ":pdump sys1; ts cross\r"
 respond "*" ":kill\r"
 
 # Old PALX
-respond "*" ":midas sys3;ts plx143_rms;palx 143\r"
+respond "*" ":midas 11logo;ts palx_rms;palx 143\r"
 expect ":KILL"
 
 # Phil Budne's PALX Game of Life.
@@ -1789,7 +1789,7 @@ expect ":KILL"
 
 # 11LOGO
 respond "*" ":cwd 11logo\r"
-respond "*" ":plx143 /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
+respond "*" ":palx /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
 respond "ASSSW=" "0\r"
 expect ":KILL"
 
