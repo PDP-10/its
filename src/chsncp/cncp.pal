@@ -1,0 +1,1862 @@
+;;; -*-midas-*-
+%cncp2===%fnam2
+	.title NCP for the Chaos Network
+
+;;; PDP-11 Network Control Program (NCP) for the Chaos Network
+
+;;; Derived from CHSGTV;NNCP 71 written by JLK for the Plasma
+;;; Grinnel TV System by OTA and LSP starting on Dec. 11, 1979.
+
+;;; TODO:   Handle %corut, debug
+
+;;; Using this NCP:
+
+;;; The general approach to initialization is as follows:
+;;;
+;;; Every program which includes the NCP is expected to provide a storage
+;;; allocator for packets which provides the following entry points:
+;;;
+;;; alcsiz	-  Allocate a packet given the size in r3.  Return pointer
+;;;		   to packet in r0.
+;;; alc16	-  Allocate a 16 word packet.  Return pointer in r0.
+;;; alc32	-  Ditto for 32 words.
+;;; alc64	-  Ditto for 64 words.
+;;; alc128	-  Ditto for 128 words.
+;;; alc256	-  Ditto for 256 words.
+;;;
+;;; The allocation routines return with the C bit set to indicate failure
+;;; return a new packet.  The method of partitioning memory is unimportant
+;;; to the NCP.
+;;;
+;;; The NCP also expects certain macros to be defined which specify the
+;;; proper configuration of the host machine.  These are:
+;;;
+;;;
+;;;	The INFACE macro which defines the CIF table
+;;;	specifying the configuration of hardware
+;;;	interfaces which reside on the host whose NCP is
+;;;	being assembled.
+;;;
+;;;	The ROUTIN macro which defines the initial routing
+;;;	table for the host.  The macro must create the
+;;;	CHTRTE table.
+;;;
+;;;	The RCVXMT macro which defines the code for the
+;;;	particular hardware interfaces on this host.
+;;;
+;;; The CHAOS NCP will invoke these macros at the appropriate
+;;; places to create the storage for the various tables as well
+;;; as place the transmitter and receiver routines.
+;;;
+;;; In addition, the NCP requires a tasking environment.  The NCP
+;;; consists of three tasks: the receive task, the transmit task and
+;;; the clock driven task.  The exact interface to this environment
+;;; is defined by conditional assembly of the NCP.  Currently
+;;; supported are the LSP/OTA Arpa world (and soon the CBF Grinell
+;;; system.)  The NCP minimally requires a task scheduler which saves
+;;; and restores all the registers, stack state saved between
+;;; schedule intervals, and task create/delete routines. 
+
+;;; The NCP provides the entry CHINIT which should be called to
+;;; re-initialize and re-start the network.  CHINIT will create and
+;;; start the tasks for the NCP.
+
+;;; User programs interface to this NCP primarily via the routines:
+
+;;; chlsn	-  Requests that the NCP listen for a given contact name
+;;;		   User supplies a contact name and a connection openning
+;;;		   routine.
+;;; chrfc	-  Requests that the NCP initiate a connection.
+;;;		   User supplies a contact name, destination host, and
+;;;		   a few other things.  The routine return when the connection
+;;;		   opens.
+;;; cheof	-  Transmit an EOF packet on a connection
+;;; chdati	-  Receive input on a given connection
+;;; chdato	-  Transmit output on a given connection
+;;; chfini	-  Finish all outstanding transmissions.
+;;; chcls	-  Closes and frees a connection.  This is called both
+;;;		   when a connection is noticed to have closed by the
+;;;		   user to clean things up and when the user wants to
+;;;		   terminate a connection.
+
+;;; If these routines fail for any of a number of reasons (usually because
+;;; there are no packets available of an adequate size), they will return
+;;; with the C bit set.  More documentation on the arguments, etc. for
+;;; these routines can be found immediately preceeding them.
+
+
+;;; PRELIMINARIES
+
+.iif ndf $$wait, $$wait===0	;use TASKM style waiting
+.iif ndf rt11fg, rt11fg===0	;not an RT-11 assembly
+
+;;; Load packages needed and not yet loaded elsewhere
+
+;;; load standard macros
+.iif ndf arpmac, .insrt dcls
+
+.iif ndf cbfdfs, .insrt defns
+
+;;; load chaos net symbol definitions
+.iif ndf caicsr, .insrt chsdfs
+
+;;; Define symbols needed and can optionally be defined externally
+
+.iif ndf ncons,  ncons===10.	;maximum number of connections
+.iif ndf mxrtrn, mxrtrn===4	;maximum # of interrupt retransmissions
+.iif ndf lsnmax, lsnmax===6	;maximum number of LSN pkts to queue up
+.iif ndf ticktm, ticktm===1	;conversion from 60.ths to chaos ticks
+.iif ndf prbrat, prbrat===<5.*60.>/ticktm	;approx rate to send probes
+.iif ndf snsrat, snsrat===<10.*60.>/ticktm	;the time to wait before
+						;sending sense anyway
+.iif ndf uprat,  uprat===<125.*60.>/ticktm	;if no response in 125. secs,
+						;declare it dead.
+.iif ndf rfctim, rfctim===<7.*60.>/ticktm	;frequency of RFCs
+.iif ndf maxtry, maxtry===3.			;number of times to try to RFC
+.iif ndf mintim, mintim===prbrat/2	;minimum of prbrat/2 and snsrat/2
+					;which is how often to check for
+					;probing and sensing
+;;; Macro for computing pointers to connection variables for connection in r1
+
+.macro	conptr var,dest
+	mov r1,dest
+	add #var,dest
+.endm
+
+;;; Macro for checking for valid packets.  Used sometimes when debugging.
+
+.macro	chkpak
+.endm
+
+
+	.sbttl Packet Definitions
+
+;;; Conventions used in the NCP.
+
+; The first slot of a packet is a link field which is used by packets which
+; are part of a list, or it must be zero if the packet is not on a list.
+; The next slot is for debugging and contains the address of the call
+; to the packet allocator which created the packet, or, if the packet is on
+; a free storage list, the address of the call to packet releasing routine.
+; The next slot is used for aging items on certain lists, followed by
+; a slot used to indicate the type (usage) of a packet in the low byte.
+
+; Packet types: (type is stored in the pktyp byte of the packet)
+    %ptchs===0			;A Chaos net packet (control or data) used by
+				;the NCP (i.e. part of some NCP structure)
+    %ptcon===1			;A connection packet - contains variables
+				;describing the state of chaos net connections
+    %ptmsg===2			;Internal messge packet generated by the NCP
+    %ptlsn===4			;packet defining a task waiting for a conn.
+    %ptsrv===10			;packet defining a task to be created to
+				;an incomming RFC.
+    %ptusr===100		;Packet used internally by a user program
+
+; Register Usage:
+;    r0 - normally holds pointer to an untyped packet or a chaos net packet.
+;    r1 - pointer to a connection packet
+;    r2 - temporary
+;    r3 - often used to hold counts
+;    r4 - temporary
+;    r5 - temporary
+
+;;; Chaos Net packet definitions
+
+dsect <
+pklnk::	 .blkw 1		;the link for the packet lists (must = 0!)
+pktim::	 .blkw 1		;retransmission time
+pkxmtr:: .blkw 1		;xmtr used to last transmit this packet
+
+;;; NOTE: the above fields are overlapped with the hardware fields used
+;;; by the Chaos net interface.  There can be no more than 3 words here
+;;; unless the maximum packet size is made larger.  Here starts the
+;;; software header.
+
+pkbeg::
+pktyp::	 .blkb 1		;the packet type (byte - internal use only)
+pkop::	 .blkb 1		;the opcode (byte address)
+pklen::	 .blkw 1		;the length word
+pkdhst:: .blkw 1		;the destination host number
+pkdidx:: .blkw 1		;the destination index number
+pkshst:: .blkw 1		;the source host number
+pksidx:: .blkw 1		;the source index number
+pkpkn::	 .blkw 1		;the packet number
+pkakn::	 .blkw 1		;the acknowledge number
+pkdat::	 .blkw 1		;the start of data in the packet
+	>
+
+pkfcnt===170000			;this is the forward count field
+pkfcni===010000			;increment fowarding count with this
+
+pkmasz==512.			;The full length of the largest packet
+pkmdsz==pkmasz-pkdat		;This is the maximum number of data bytes
+
+;;; Symbols used in LSN packets (%ptlsn and %ptsrv)
+
+dsect <
+	 .blkb pkpkn
+lsnadr:: .blkw 1		;address of where to put the RFC packet if
+				;it is a %ptlsn type listen or the address
+				;of the routine to start a task at.  In the 
+				;later case the RFC packet will be in r0.
+lsncon:: .blkw 1
+lsnctn:: .blkw 1		;beginning of the contact name string
+	>
+lsnrfc==lsnadr
+
+;;; Connection packet symbols
+;;; It is assumed that the packet is 32. words long.
+
+dsect <
+	 .blkb pklnk		;align these packet types for convenience
+
+cnlnk::	 .blkw 1		;connection link (used for connection lists)
+cndbg::	 .blkw 1		;debugging slot
+cnact::	 .blkw 1		;the last time that something was received on
+				;this connection
+cntype:: .blkw 1		;connection type
+cnlen::	 .blkw 1		;??
+cnfhst:: .blkw 1		;the foreign host number
+   cnfnet==cnfhst+1		;the foreign net number
+cnfidx:: .blkw 1		;the foreign host index
+cnlidx:: .blkw 1		;the local index of the connection
+   cnlunq==cnlidx+1		;uniquizer field
+trpkn::	 .blkw 1		;the packet number for the next data packet
+				;that we will send on this connection
+trackn:: .blkw 1		;the highest packet number that the
+				;foreign host has acknowledged
+trwsiz:: .blkw 1		;the transmit side window size
+rcwsiz:: .blkw 1		;the receive side window size
+trrcvl:: .blkw 1		;the list of packets awaiting receipts
+trrcvn:: .blkw 1		;the highest packet number that the
+				;foreign host has received
+rtscnt:: .blkw 1		;retransmitted because of statuses
+rttcnt:: .blkw 1		;retransmitted because of time outs.
+rcols::	 .blkw 1		;the ordered list of packets for the user
+				;to read
+rcolse:: .blkw 1		;pointer to the end of rcols
+rcoln::	 .blkw 1		;the packet number of the last packet we have
+ 				;in order on rcols
+rcuols:: .blkw 1		;the unordered list of packets read
+rcacks:: .blkw 1		;the highest numbered packet that we have
+				;acknowledged
+rcsack:: .blkw 1		;the highest numbered packet that we should
+				;acknowledge
+rcsts::	 .blkw 1		;the largest number rcoln-rcacks that we will
+				;allow without trying to send a status
+				;(usually 1/2 window size)
+cnstat:: .blkw 1		;status of the connection
+   cnios==cnstat+1		;I/O status
+   %iosiw===1			;input wait bit
+   %iosow===2			;output wait bit
+cnlast::			;last connection variable
+	>
+
+.iif gt <cnlast-64.>, .error too many connection variables
+				;which must be = pkdat
+
+	.sbttl CHSRCV - Chaos NCP Receiver Task
+
+;;; CHSRCV - This is the code run by the Chaos NCP Receiver Task
+
+chsrcv:
+
+;;; Init the random value for unikey.
+
+	mov clock,r0		;init unikey by waiting for the clock to tick
+	mov #10000.,r1		;count down 10000. times
+loop  <	cmp r0,clock		;values still the same?
+	exitl ne		;exit if not
+	sorl r1			;loop
+	>
+	add r1,unikey		;make the key random
+	tstb unikey		;and the low byte non-zero
+	if eq,< inc unikey>
+
+;;; If any interrupts came from devices which don't want to read out
+;;; packets at interrupt level.  TTYs do not have this problem since
+;;; their characters come in one at a time and the finished packet
+;;; is queued on the list.
+
+cabrk:	mov #ciftbl,r2		;get ready to loop through the interfaces
+1$:	bit #%rcvrd,ci.sts(r2)	;does this rcvr need servicing?
+	beq 2$			;no, go to next interface
+	 mov ci.rcv(r2),r0	;get the receive handler
+	 beq 2$			;no handler (why is bit set?)
+	 kcall (r0)		;read packet out of interface onto rcvr list
+2$:	add #cif.ln,r2		;go to next interface
+	cmp r2,#cifend
+	blo 1$
+
+	lock mxcilv
+	mov rcvpkl,r0		;get the first packet to "receive"
+	beq 3$			;no packets so just sleep
+	 mov (r0),rcvpkl	;unthread packet from list
+	 bne 5$
+	  mov #rcvpkl,rcvpke	;the list is empty
+5$:	 unlock
+	 clr (r0)
+	 kcall caibrk		;process this packet
+	 br 4$
+3$:	unlock
+4$:	cocall			;let other people run awhile
+	br cabrk
+
+	.sbttl Process a packet from the Network
+
+
+caibrk:	cmp pkdhst(r0),myhost	; is this packet for me?
+	bne caforw		; no, forward it to another host
+.iif ne %codat-200, .error ; This code loses
+	movb pkop(r0),r4	; get the opcode of this packet
+	cmpb r4,#%comax		; check opcode
+	bge 1$			; if %COMAX le OPCODE lt 200 then it is illegal
+	if his,<		; if OPCODE gt 200
+	  jcall caidat		; then data packet
+	  >
+	asl r4			; turn into a word index
+	jcall @chidis(r4)	; dispatch on type
+1$:	mov #bopmsg,r2		; no, send a bad opcode msg
+	br calose
+
+
+;;; Dispatch Table for various packet opcodes
+
+chidis:	chinul			;null opcode {01/2}
+	chirfc			;rfc opcode
+	chiopn			;open opcode
+	chicls			;close opcode
+	chifwd			;forward opcode
+	chians			;answer opcode
+	chisns			;sense status opcode
+	chists			;status opcode
+	chirut			;routing opcode
+	chilos			;loss opcode
+	chilsn			;listen opcode
+	chimnt			;maintenance opcode
+	chieof			;eof opcode
+	chiunc			;uncontrolled data opcode
+
+.iif nz %comax-<<.-chidis>/2>, .error chidis wrong length
+
+;;; Handle various functions of incoming control packets
+
+;;; Here the recieved packet is not for us, so just send it a long
+;;; to the next guy if the forwarding count has not been exceeded.
+
+caforw:	cmpb pkop(r0),#%corut	; routing packet?
+	if eq,<			; yes, should have ignored address
+	  jmp chirut
+	  >
+	add #pkfcni,pklen(r0)	;increment fowarding count {/}
+	bit #pkfcnt,pklen(r0)	;is count now all zero's (e.g. overflow)?
+	bne catran		;no, so transmit it
+	inc caovfw		;count over forwarded packets
+	;fall into free packet routine
+
+;;; This return frees the packet in r0 if it is no longer needed.
+
+caifpk:	jcall frepck
+
+
+;;; Here the packet is a loss some how, so send it back as a LOS
+;;; r2 holds pointer to the explanation (asciz string)
+
+calose:	cmpb #%colos,pkop(r0)	;was it already a loss?
+	beq caifpk		;yes, just return, freeing packet
+	movb #%colos,pkop(r0)	;recycle the packet. Set the type to LOS
+	clr pklen(r0)		;start with no data.
+	kcall strcpy		;copy the msg into the packet (ignore error)
+	;falls through to send the packet
+
+;;; calose, chisns (and hence chiopn) comes here in order to get
+;;; the dest. and src fields swapped.  catran is called directly by caforw.
+
+caret:	exch pkdidx(r0),pksidx(r0),r2	;interchange src and dest index
+	exch pkdhst(r0),pkshst(r0),r2	;and host address for recycled packets
+	;falls through
+
+;;; Queue a packet for transmission (e.g. caforw)
+
+catran:	clr pktim(r0)		;set time for detecting retransmission
+	mov chtpak,(r0)		;link it onto the transmit list
+	mov r0,chtpak
+	kretrn
+
+;;; Subroutine to check for open connection for received packet.
+chicpk:	clr r3			; get low byte of local index for this packet
+	bisb pkdidx(r0),r3	; ...
+	cmp r3,#ncons		; in range?
+	bhis 6$			; no
+	asl r3			; turn it into a word index
+	mov contbl(r3),r1	; get the connection packet for that index
+	beq 6$			; no such connection
+	cmp pkdidx(r0),cnlidx(r1)	; make sure the indicies are the same
+	bne 6$
+	cmpb cnstat(r1),#%csopn	; is the connection open?
+	bhi 3$			; no [this is weird]
+	mov clock,cnact(r1)	; the time that something was received
+	kretrn
+3$:	tst (sp)+		; throw away return address
+	mov #cclmsg,r2		; no, send "connection closed" msg
+	br calose
+6$:	tst (sp)+		; throw away return address
+	mov #bimsg,r2		; no, send bad index msg
+	br calose
+
+	.sbttl Received Control Packet Handlers
+
+;;; In general r0 is the packet pointer, and r1 points to a connection packet
+
+;;; NUL, LSN - Both opcodes are illegal when received from the net.
+
+chilsn:				;for internal use by NCP only!
+chinul:				;what is this for?
+	mov #bopmsg,r2		;and give bad opcode error
+	br calose
+
+
+;;; MNT - Ignore.
+
+chimnt==caifpk
+
+
+;;; OPN - The other end is responding to our RFC, agreeing to open
+;;;       the connection.
+
+chiopn:	kcall chicpk
+	cmpb #%csrfs,cnstat(r1)	;we should be in rfc sent state {01/2}
+	beq 1$			;if so, continue below
+	 cmpb #%csopn,cnstat(r1)	;else, was the connectio open?
+	 beq caifpk		;yes, just ignore it (index ok'd in caibrk)
+	  mov #bstmsg,r2	;no, send a bad state message
+	  jcall calose		;in a LOS packet
+1$:	movb #%csopn,cnstat(r1)	;record that the connection is open
+	clrb cnios(r1)		;i/o state is open in both directions
+	mov pksidx(r0),cnfidx(r1)	;set up the foreign index from the OPN
+	mov pkpkn(r0),r3	;the first packet number minus 1
+	mov r3,rcacks(r1)	;the last packet received and acked
+	mov r3,rcsack(r1)	;last packet we received
+	mov r3,rcoln(r1)	;the last packet number received in order
+	mov pkdat+2(r0),trwsiz(r1)	;set the window size
+	inc caopns		;count connections opened.
+	br chisn1		;send a status to finish opening conn.
+
+;;; SNS - Other end is trying to probe us to see if we are alive.
+;;;       Respond by sending a STS (status) packet informing him of our state.
+
+chisns:	kcall chicpk
+	inc casnst		;count statuses evoked by senses.
+chisn1:	kcall maksts		;make the sts packet up {01/2}
+	jcall caret		;and send it by turning around
+
+;;; Assumes that the host and destination are correct,
+;;; r0 points to a packet and r1 has a connection packet.
+
+maksts:	push r2			;save r2
+	inc casts		;increment number of statuses sent
+	movb #%costs,pkop(r0)	;set in op code {01/2}
+	mov #4,pklen(r0)	;set the length to 4 bytes
+	mov r0,r2		;copy pointer to packet
+	add #pkpkn,r2		;get pointer to the packet number
+	clr (r2)+		;set to zero for now (transmit side sets it)
+	mov rcsack(r1),rcacks(r1)	;do this without timing screw
+	mov rcacks(r1),(r2)+	;set the connection acks level
+	mov rcoln(r1),(r2)+	;set in the receipt number
+	mov rcwsiz(r1),(r2)	;set in the window size we want
+	pop r2
+	kretrn
+
+;;; STS - Received connection status info from the remote end.
+;;;       R3 holds the packet receipt number as an argument to
+;;;       caircp.
+
+chists:	kcall chicpk
+	mov pkdat+2(r0),r3	;get the window size requested
+	cmp r3,trwsiz(r1)	;compare with the current window size
+	ble 1$			;if <=, skip, otherwise
+	 bicb #%iosow,cnios(r1)	;clear output waiting since size has increased
+1$:	mov r3,trwsiz(r1)	;set the window size
+	mov pkdat(r0),r3	;get number to have received {01/2}
+	cmpb #%csopn,cnstat(r1)	;is the connection open?
+	bne 2$			;no, skip the receipt processing
+	 kcall caircp		;yes, handle receipts (number in r3). Uses r0
+2$:	kcall chrtrn		;retransmit all the packets that need it
+	jcall frepck		;and free the STS packet in r0
+
+
+;;; FWD, ANS, CLS - Treated the same - passed to user level.
+
+chifwd:
+chians:				;answer opcode {01/}
+chicls:				;and close opcode are all the same
+	kcall chicpk
+	movb #%cscls,cnstat(r1)
+	jcall clsque		;turn it into a message
+
+
+;;; LOS - Connection lost somehow
+
+chilos:	kcall chicpk
+	cmpb #%cscls,cnstat(r1)	;already closed?
+	beq 1$			;yes, just ignore it.
+	 mov trrcvl(r1),r2
+	 kcall frelst		;free the packets waiting receipts so they
+				;don't get sent again.
+	 clr trrcvl(r1)		;free these only once
+	 movb #%cslos,cnstat(r1)	;closed by LOSsage
+	 movb #%cocls,pkop(r0)	;pass up to user only close pkts
+	 jcall clsque
+
+1$:	jcall frepck		;and free the packet
+
+
+;;; EOF - Has the effect of a CLS when read by the user routine
+
+chieof:	kcall chicpk
+	jcall caidat		;treat like data until udati gets it
+
+
+;;; UNC - Handle like a data packet (but no ack or receipt hacking)
+;;;       and it goes right on the front of the list.
+
+chiunc:	kcall chicpk
+	mov rcols(r1),pklnk(r0)	;link in on the front of the list
+	mov r0,rcols(r1)
+	bicb #%iosiw,cnios(r1)	;clear the input wait
+	kretrn
+
+;;; RUT -  Routing not supported yet (but should be ...)
+
+chirut:	kretrn
+
+;;; RFC - Process the RFC by seeing if a connection is already open.  This
+;;;	  implies that the last open we sent was lost so resend the OPN.
+;;;	  If no connection exists then search the list of LSN packets
+;;;	  for one with a contact name which matches.  If none is found
+;;;	  reject the RFC with a close.  If a LSN is found with a matching
+;;;	  contact name that listen is processed.  This involves either
+;;;	  creating a task or waking an existing task to handle the RFC.
+;;;	  Task creating LSNs stay around until explicitly deleted but
+;;;	  LSNs for existing tasks are deleted when they get used.
+
+chirfc:	mov #contbl,r3		;does the requested connection exist already?
+	mov #ciimsg,r2		;error msg if we lose
+4$:	mov (r3)+,r1		;search the connection table to find out
+	beq 5$			;connection index unused
+	cmpb #%cscls,cnstat(r1)	;if connection is closed just assume its gone
+	beq 5$
+	cmp pkshst(r0),cnfhst(r1)	;same host?
+	bne 5$			;no, continue looking
+	cmp pksidx(r0),cnfidx(r1)	;is this the right connection?
+	bne 5$			;nope
+	cmpb #%csopn,cnstat(r1)	;is it in open state?
+	bne 1$			;no
+	 tst trackn(r1)		;is the connection new still?
+	 bne 2$			;no, this must be a spurious RFC
+	 tst rcacks(r1)
+	 bne 2$
+	  mov rcwsiz(r1),r4	;already exists, resend an open
+	  jcall sndopn
+2$:	 jmp calose		;report the spurious RFC
+1$:	jcall frepck		;just ignore the rfc we will reply in due time
+5$:	cmp r3,#<ncons*2>+contbl	;done?
+	blo 4$			;no, loop
+
+;;; Now check for contact names being listened for.
+;;; Register usage: r0 - incoming RFC packet, r1 - current LSN packet,
+;;; r2 - previous LSN packet, r3 - RFC string pointer, r4 - LSN string pointer
+;;; r5 - Byte count of RFC data
+
+	mov #chlsnl,r1		;pointer to LSN list
+lsnlp:	mov r1,r2		;r2 gets pointer to previous item on LSN list
+	mov (r2),r1		;r1 gets pointer to next item on LSN list
+	beq rfclos		;end of list, contact name not found
+	mov r0,r3		;r3 gets ptr to the contact name in RFC pkt
+	add #pkdat,r3
+	mov pklen(r0),r5	;r5 gets data byte count
+	bic #pkfcnt,r5		;clear out all but the count
+	mov r1,r4		;r4 gets ptr to the contact name in LSN pkt
+	add #lsnctn,r4
+1$:	cmpb (r3)+,(r4)+	;do string compare on contact names
+	bne lsnlp		;not equal, so go try the next LSN packet
+	tstb (r4)		;at the end of the LSN contact name?
+	beq 2$			;yes, go see if we have a match
+	 dec r5			;no.  See if we looked at last char of RFC pkt
+	 ble lsnlp		;if so, RFC pkt contact name was too short
+	 cmpb #40,(r3)		;space terminates contact name in RFC pkt
+	 beq lsnlp		;if space, the RFC pkt name was too short
+	  br 1$			;continue the string compare
+2$:	cmpb #40,(r3)		;space terminates contact name
+	beq lsnprc		;packet name terminated also, so win
+	 sob r5,lsnlp		;if cnt didn't run out, RFC pkt name too long
+
+;;; Here, we have found a LSN pkt with a contact name matching that in the RFC
+;;; pkt.  Using the info in the LSN packet either create a task and give it
+;;; the RFC pkt in r0 and the connection in r1, or put the RFC pkt and the
+;;; connection in the specified locations which wakes up a waiting task.
+
+lsnprc:	mov r1,r3		;save the LSN pkt in r3
+	kcall allcon		;allocate a connection
+	bne 3$
+	 mov #noconn,r2		;can't win so inform other side
+	 clr pklen(r0)
+	 br rfclo1		;and refuse the connection
+3$:	movb #%csrfc,cnstat(r1)	;it has received an RFC
+	mov pkshst(r0),cnfhst(r1)	;set foreign hst in index
+	mov pksidx(r0),cnfidx(r1)
+	cmpb #%ptlsn,pktyp(r3)	;Is it the wake up the task type?
+	bne 1$
+	 mov r0,@lsnrfc(r3)	;put RFC ptr where he said to.
+	 mov r1,@lsncon(r3)	;put the connection where he said to.
+	 mov (r3),(r2)		;thread us out of the list
+	 mov r3,r0		;and free the packet
+	 jcall frepck
+1$:	call crtask,<r0,r1,#0,#0,#0,#0,lsnadr(r3)>,r2
+				;create a task to handle things
+	bcc 2$
+	 mov #sflmsg,r2		;can't create a task so tell him system full
+	 clr pklen(r0)		;flush data in RFC packet
+	 kcall rlscon		;free the connection we just grabbed
+	 br rfclo1		;send the close with explain
+2$:	kretrn
+
+rfclos:	mov #unkctn,r2		;pointer to unknown contact name message
+rfclo1:	kcall strcpy		;copy it into the packet (ignore errors)
+	movb #%cocls,pkop(r0)	;set the packet type to a close
+	clr pkdidx(r0)		;indicate there is no connection
+	exch pksidx(r0),pkdidx(r0),r2
+	exch pkshst(r0),pkdhst(r0),r2
+	jcall trnpc1		;and send the packet (Jcall)
+	kretrn
+
+;;; Handle packet receipting
+
+;;; This expects r0 to point to a packet, it handles the setting of
+;;; trrcvn and trackn.  Trackn gets set from the packet, and trrcvn
+;;; gets set from r3.  Called from chists and caidat.
+
+caircp:	cmp r3,trrcvn(r1)	;is the current receipt level < new? {01/3}
+	bmi caiuor		;no, record  and skip to caiack
+	mov r3,trrcvn(r1)	;set receipt variable
+	mov trrcvl(r1),r2	;get pointer to the list
+	beq caiack		;no list
+1$:	cmp pkpkn(r2),r3	;has this packet been received remotely?
+	bpl 3$			;if yes, remove it from the retransmit list
+	push (r2)		;save pointer to next one
+	push r0			;save r0 to accomplish the freeing of the pkt
+	mov r2,r0
+	kcall frepck
+	pop r0,r2		;get back next one on list
+	bne 1$			;and loop back if we are not at the end (=0)
+3$:	mov r2,trrcvl(r1)	;set up new receive list
+	;falls into caiack
+
+;;; Come here when done receipting packets on the retransmit list.
+;;; Now check the acknowledgement status.
+
+caiack:	mov pkakn(r0),r4	;get the ack number for this packet {01/3}
+	cmp trackn(r1),r4	;is the current level less than new?
+	bpl 1$			;no (greater than or equal), just ignore it
+	 mov r4,trackn(r1)	;set it to the new one
+	 bicb #%iosow,cnios(r1)	;clear the user output wait
+				;assumes that the ack window must now be
+				;smaller than the max allowed.
+1$:	kretrn
+
+;;; rcpt'ed a pkt number less than we think has already been ACK'ed.
+
+caiuor:	inc cauorp		;record for statistics {01/3}
+	br caiack
+
+;;; This retransmits all unreceipt'ed packets for the connection in r1.
+;;; Called by chists.
+
+chrtrn:	mov #chtpak,r5		;get transmit list
+1$:	mov r5,r4		;find the end by moving down the list
+	mov (r4),r5		;get pointer to the next packet
+	bne 1$			;loop if not at the end
+	conptr trrcvl,r5	;make it absolute pointer to rexmt list {1/23}
+2$:	mov (r5),r2		;get packet to retransmit
+	beq 4$			;at the end of the list
+	mov pkxmtr(r2),r3	;get the transmitter we used for this packet
+	mov ci.rtl(r3),r3	;how long do we wait before we will retransmit
+	add pktim(r2),r3	;is it time yet
+	cmp r3,clock		;ok, retransmit it.
+	bmi 3$			;not ready yet.
+	 mov r2,r5		;pick up next item on the list.
+	 br 2$			;check the next packet
+3$:	inc rtscnt(r1)		;count of pkts retransmitted because of sts
+	mov (r2),(r5)		;take it out of the retransmit list
+	clr pktim(r2)		;clear the time of all these packets
+	clr (r2)		;clear the link field
+	mov r2,(r4)		;put it on the transmit list
+	mov r2,r4		;update the pointer to the end of the list
+	br 2$			;get the next packet
+4$:	kretrn			;and return
+
+	.sbttl Data Packet Handler
+
+;;;  Process received data packets
+;;;  First check that the packet is both within the window and in order.
+;;;  If not, throw it away or put it on the out of order list respectively.
+;;;  If it is inside the window, then send a receipt for it (the packet)
+;;;  since, even if it is out of order, we have received it correctly.
+;;;  Note, receiving packets outside the window implies buggy software
+;;;  somewhere!
+
+caidat:	kcall chicpk
+	mov pkpkn(r0),r3	;get this packets number
+	mov rcsack(r1),r4	;get the last packet that the user took
+	add rcwsiz(r1),r4	;the maximum packet number we can accept
+	inc r4			;make sure it is less than this
+	cmp r3,r4		;check to see if it is inside the window
+	bmi 1$			;if less, its within the window
+	 inc carwov		;record for stats
+	 jcall frepck		;and free (to be fair to other connections)
+1$:	mov pkakn(r0),r3	;this is also the receipt level
+	kcall caircp		;process the ack in this packet
+	mov pkpkn(r0),r3	;get this packets number
+	mov rcoln(r1),r4	;get the number of the last packet in order
+	cmp r3,r4		;is this one in order?
+	bmi prcdpk		;duplicate packet, dispose of it, send a STS
+	beq prcdpk
+	inc r4			;get the next packet number
+	cmp r3,r4		;is it equal to the current one?
+	bne prnord		;if not =, go put packet on out-of-order list
+
+;;; Now the packet has been validated and receipted, put it on the list
+;;; of packets which have been properly received.  Then look on the out-of-
+;;; order list to see if the first item on that list is now in order.
+;;; Finally, if we now have buffered rcsts number of packets (1/2 the window
+;;; or so), send a STS packet to the remote end telling it of our progress.
+
+2$:	clr pklnk(r0)		;always clear pklnk when nconcing!
+	mov r0,@rcolse(r1)	;link it on the end of the list
+	mov r0,rcolse(r1)	;and set the new end of the list
+	inc r3			;get next number 
+	mov rcuols(r1),r0	;get the next packet from out of order list
+	beq 3$			;none, just return
+	 cmp pkpkn(r0),r3	;is it the next packet?
+	 bne 3$			;nope, just punt
+	  inc r4		;this is the real number.....
+	  mov (r0),rcuols(r1)	;link it out of out of order list
+	  br 2$			;and link it into order list
+3$:	mov r4,rcoln(r1)	;set in new in order packet number
+	bicb #%iosiw,cnios(r1)	;clear the input wait
+	sub rcacks(r1),r4	;get number of packets buffered
+	cmp r4,rcsts(r1)	;is it too big?
+	ble 4$			;if <=, no don't bother sending a STS now
+	 inc cawsts		;count statuses due to window overflow
+	 jcall sndsts
+4$:	kretrn
+
+;;; Put a packet on the out-of-order list
+;;; Assumes r3 has the packet number for packet in r0
+
+prnord:	conptr rcuols,r4	;get pointer to the place to link it in
+1$:	mov r4,r5		;link down the list
+	mov (r5),r4		;get pointer to next packet
+	beq 2$			;at the end of the list
+	 cmp r3,pkpkn(r4)	;is this where to put it?
+	 beq prcdpk		;duplicate packet, dispose of it: send STS
+	 bpl 1$			;no, not less than this packet, loop.
+2$:	mov r4,(r0)		;get this packets forward pointer
+	mov r0,(r5)		;link it on the out of order list
+	inc canord		;record statistics
+	jcall sndsts		;send status on connection in r1
+
+;;; Got a duplicate packet, the other end must be falling behind.
+
+prcdpk:	inc cadupk		;count duplicate packets
+	jcall chisn1		;and pretend we were a sense
+
+	.sbttl Transmit Packets
+
+;;; Chaos NCP Transmit Task
+;;; Loop over all the transmitters.  If the transmitter has a finished
+;;; packet in it then do the end game processing on that packet and
+;;; reset the interface.  If the transmitter is ready search the transmit
+;;; list for a packet going to a sub-net which uses this interface and
+;;; send the packet out over the interface.
+
+chsxmt:
+
+xmtrlp:	mov #ciftbl,r2		;start with first interface
+1$:	bitb #%xmtrd,ci.sts(r2)	;is this interface rdy for packets?
+	beq 3$			;not ready so skip it
+	 mov ci.pkt(r2),r0	;get the packet it just sent
+	 beq 2$			;no pkt, so ready for next
+	  clr ci.pkt(r2)	;the interface is really ready now
+	  bitb #%xmtab,ci.sts(r2)	;did the last transmission abort?
+	  beq 10$
+	   kcall catab		;handle the abort case
+				;resend either aborted pkt or next if this
+				;pkt was aborted too many times
+10$:	  kcall ctpkdn		;deal with packet
+2$:	kcall cattrn		;send next packet for this transmitter
+3$:	add #cif.ln,r2		;go to next packet
+	cmp r2,#cifend		;done with the table?
+	blo 1$
+	cocall
+	br xmtrlp
+
+;;; ctpkdn handles to cleaning up of a packet after the xmtr is done with it.
+
+ctpkdn:	mov r0,chtsav		;save for debugging
+	movb pkop(r0),r3	;is it a control packet? (< 200)
+	bmi 10$			;no
+	;; maybe a control packet
+	cmpb r3,#%coopn		;test for exceptions OPN, EOF
+	beq 10$
+	cmpb r3,#%coeof
+	bne catfre
+10$:	cmp pkshst(r0),myhost	;did i originate this?
+	bne catfre		;no, forwarded packet. Just throw it away
+	movb pksidx(r0),r3	;pick up the index number
+	asl r3			;make into a word offset
+	mov contbl(r3),r1	;get the connection packet
+	beq catfre
+	cmpb #%csopn,cnstat(r1)	;are we still open?
+	bne catfre		;no, just throw this stuff away...
+	cmp pksidx(r0),cnlidx(r1)	;check the indicies
+	bne catfre		;different discard packet (bug ?)
+	cmp trrcvn(r1),pkpkn(r0)	;has this one been received?
+	bpl catfre		;yes, flush it
+;;; Here link it on the list of packets waiting for receipts
+;;; (this is still the previous packet - haven't gotten to the next one yet)
+	mov clock,pktim(r0)	;set the retransmitted time
+	conptr trrcvl,r5	;get pointer to the place to link it in
+	mov pkpkn(r0),r3	;get the packet number
+1$:	mov (r5),r4		;get pointer to next packet
+	beq 3$			;none, just set it up
+	 cmp r3,pkpkn(r4)	;is it less than this packet?
+	 bmi 3$			;yes, just insert it here then
+	 mov r4,r5		;cdr down the list
+	 br 1$			;and go back
+3$:	mov (r5),(r0)		;get this packets forward pointer
+	mov r0,(r5)		;link it on the receipt list
+	kretrn
+
+;;; come here to free the previous packet and continue
+catfre:	kcall frepck
+	kretrn
+
+;;; Come here to get a packet off the transmit list and send it out
+;;; over the network
+
+cattrn:	push #chtpak		;put ptr to packet list on stack
+10$:	mov @(sp),r0		;pick up the packet to be transmitted
+	bne 11$
+	pop *
+	kretrn			;none, just flush out of here
+11$:	mov pkdhst(r0),r4	;get the dest. host
+	movb pkdhst+1(r0),r3	;get the sub-net this host is going on
+	cmpb r3,ci.net(r2)	;is this destined for a host on the
+				;net that the current xmtr is on?
+	beq cattr1		;if so, send it.
+	 cmp r3,#mxsbnt		;larger than the max sub-net number?
+	 blos 1$
+	  clr r3		;illegal subnet number (zero)
+1$:	 asl r3			;word index into routing table
+	 mov chtrte(r3),r4	;this is the gateway address, this is the
+				;host that the packet is actually sent to.
+	 cmp r4,#unknet		;unknown sub net? (can't get there from here)
+	 bne 2$			;its OK
+	  mov (r0),@(sp)	;unthread the packet
+	  clr (r0)
+	  kcall ctpkdn		;try this pkt later, may be routing info then
+	  br 10$		;get another packet
+2$:	 mov r4,r3		;extract the sub net
+	 swab r3
+	 cmpb r3,ci.net(r2)	;is the gateway on the net on this interface
+	 beq cattr1		;yes, send this packet
+3$:	  mov r0,(sp)		;no, get another packet
+	  br 10$
+
+;;; Transmit a packet in r0 (the abort case comes here too)
+
+cattr1:	mov (r0),@(sp)		;unthread the packet
+	clr (r0)
+	pop *			;we are done with previous packet ptr
+	mov r2,pkxmtr(r0)	;save transmitter for this packet for later
+	inc pktim(r0)		;increment number of times transmitted
+	cmp pkshst(r0),myhost	;did i originate this?
+	if ne,<			;no, skip acking
+	  inc ci.tcn(r2)	;count packets transmitted
+	  jcall @ci.xmt(r2)	;just xmt (host is in r4)
+	  >
+	clr r1			;no connection until proven otherwise
+	tst pksidx(r0)		;check the whole index (including high byte)
+	beq 1$			;=0: no real connection exists, skip acking
+	movb pksidx(r0),r3	;get the index
+	asl r3
+	mov contbl(r3),r1	;get the connection
+	beq 1$			;not any more
+	cmp cnlidx(r1),pksidx(r0)
+	bne 1$
+	tstb pkop(r0)		;data packet?
+	bpl 1$			;no, skip ack hacking
+	 mov rcsack(r1),r3	;get the level we should ack
+	 mov r3,rcacks(r1)	;say we acked this far
+	 mov r3,pkakn(r0)	;and set it into the packet
+1$:	inc ci.tcn(r2)		;count packets transmitted
+	kcall @ci.xmt(r2)	;transmit the packet (host is in r4)
+	mov ci.pkt(r2),r0	;get the packet we sent
+	cmpb #%cocls,pkop(r0)	;did we just send a close?
+	bne catdon		;no
+	 tst r1			;is there a connection?
+	 beq catdon		;if not, then don't free the connection
+	 cmp cnlidx(r1),pksidx(r0)	;make sure this is the same connection
+	 bne catdon
+	 kcall rlscon		;user closed, release the connection
+
+catdon:	kretrn
+
+;;; Here the packet in r0 has been aborted, figure out what to do with it.
+
+catab:	inc ci.abc(r2)		;increment abort count for this interface
+	cmp #1,pktim(r0)	;did we transmit it only once?
+	beq 1$			;yes
+	 inc ci.rab(r2)		;no, a retransmit abort.  record it.
+1$:	cmp ci.mab(r2),pktim(r0)	;too many retransmitions?
+	bge cattr1		;no, go and retransmit
+	kretrn			;back we go
+
+	.sbttl	Miscellaneous Utility Routines
+
+;;; Sends a status on connection in r1, clobbers r0 and r2.
+;;; Called from caidat.  Ignored if no packets available.
+
+sndsts:	kcall alc16		;get a 16 word packet (or larger)
+	bcc 1$			;got it
+	 kretrn			;lose, no packets
+1$:	kcall setpck		;setup packet for transmission
+	kcall maksts		;make up rest of packet
+	br sndtrn
+
+;;; Sends a sense (probe) on connection in r1, clobbers r0 and r2.
+;;; Called from the probe routine, chsprb.  Ignored if no pkts free.
+
+sndsns:	kcall alc16		;get a 16 word packet (or larger)
+	bcc 1$			;got it
+	 kretrn			;lose, no packets
+1$:	kcall setpck
+	movb #%cosns,pkop(r0)	;set in sense
+	clr pklen(r0)		;no data
+	clr pkpkn(r0)		;sense packets contain no packet number
+	mov rcsack(r1),rcacks(r1)	;do this without timing screw
+	mov rcacks(r1),pkakn(r0)	;set the connection acks level
+	inc casns		;number of sense packets sent
+
+sndtrn:	clr pktim(r0)		;is this needed?
+	mov chtpak,(r0)		;link it on the transmitt list
+	mov r0,chtpak
+	clz			;successful return
+	kretrn
+
+;;; Setup the packet header for transmission by setting src, dest
+;;; index and host fields.  Assumes a packet in r0, a connection
+;;; in r1.
+
+setpck:	push r2
+	mov r0,r2		;get pointer to indicies in packet
+	add #pkdhst,r2
+	mov cnfhst(r1),(r2)+	;send in foreign host address and index
+	mov cnfidx(r1),(r2)+
+	mov myhost,(r2)+	;my host, net and index
+	mov cnlidx(r1),(r2)
+	pop r2
+	kretrn
+
+;;; Sends an OPN (open) on a connection.  An old RFC packet is assumed
+;;; to be in r0, since the most common thing is to respond to a RFC
+;;; by turning the packet into OPN and sending it back.  The only
+;;; significance to this is that the source and destination fields
+;;; get swapped and pkakn is 1 minus pkpkn of first foreign data packet.
+;;; The desired receive window size should be supplied in r4.
+
+sndopn:	mov r4,rcwsiz(r1)	;set window size from the packet
+	mov r4,pkdat+2(r0)	;store receive window size
+	asr r4			;set the status interval randomly
+	mov r4,rcsts(r1)
+	movb #%csopn,cnstat(r1)	;set the opcode to OPN
+	mov pkshst(r0),cnfhst(r1)	;set foreign host and index
+	mov pksidx(r0),cnfidx(r1)	;into this connection
+	mov cnlidx(r1),pkdidx(r0)	;set dest index (words swapped later)
+	mov pkpkn(r0),r4	;1- pkpkn of 1st foreign data packet
+	mov r4,rcoln(r1)	;init our pk number variables
+	mov r4,rcacks(r1)
+	mov r4,rcsack(r1)
+	mov r4,pkakn(r0)	;and ack the rfc packet
+	mov r4,pkdat(r0)	;yes, the receipt field also...
+	clr pkpkn(r0)		;might as well be 0 to start.
+	movb #%coopn,pkop(r0)	;opcode is OPN
+	clrb pktyp(r0)		;Packet type is 0
+	mov #4,pklen(r0)	;set data length (2 words, 4 bytes)
+	kcall trnpck		;transmit this packet
+	clz
+	kretrn
+
+	.sbttl CHSCLK - Chaos Clock Monitoring Task
+
+;;; This task is responsible for invoking the probing, sensing and timeout
+;;; retransmission routines at the appropriate clock intervals.
+
+chsclk:
+loop <
+.if eq $$wait
+	mov clock,r5
+	add #mintim,r5		;this is the time we next want to check
+  loop <  cocall
+	  cmp clock,r5
+	  rptl mi
+	  >
+.iff
+	push #mintim		; SLEEP arg: 60ths
+	kcall sleep		; wakeup after MINTIM elapsed time
+.endc
+	kcall chsrtn		;check on retransmissions
+	kcall chsprb		;check on the need to probe and sense
+	rptl
+	>
+
+;;; Check for packets which may need retransmission
+
+chsrtn:	clr r1			;connection table index
+	mov #chtpak,r3		;this is pointer to the transmit list
+
+chcnlp:	mov contbl(r1),r4	;connection loop
+	beq chcnle		;nothing there, so iterate
+	cmpb #%cscls,cnstat(r4)	;is the connection closed?
+	beq chcnle		;if so then punt
+	mov r4,r1		;connection packet in r1
+	add #trrcvl,r4		;pointer to transmit receipt list var in r4
+
+chpklp:	mov (r4),r0		;packet loop: get the next packet
+	beq 3$			;no more on this connection
+	mov pkxmtr(r0),r2	;get the transmitter used for this pkt
+	mov ci.atm(r2),r2	;get the age time for this transmitter
+	add pktim(r0),r2	;get the time to retransmit
+	cmp r2,clock		;compare with the current time
+	bmi 1$			;packet time + age time >= now, retransmit it
+	 mov r0,r4		;no, move down the list
+	 br chpklp		;and loop
+
+;;; here we must retransmit packet in r0
+
+1$:	inc rttcnt(r1)		;count pkts retrans. due to timeouts
+	clr pktim(r0)		;clear the time for abort counts
+	mov (r0),(r4)		;update list
+	mov (r3),(r0)		;link this into the list
+	mov r0,(r3)		;smash it into transmit list
+	mov r0,r3		;and update pointer, other packets follow
+	br chpklp		;go back for next packet
+				;(no need to update r4, it was rplacd'd)
+3$:	movb cnlidx(r1),r1	;get the current index back
+	asl r1			;word offset
+chcnle:	add #2,r1		;get to the next connection
+	cmp r1,#ncons*2
+	blo chcnlp		;no, do next connection
+	kretrn
+
+
+	.sbttl Main Program Level - Connection Sensing
+
+;;;  Probing about every 5 seconds on connections that need acks.
+
+chsprb:	mov clock,r3		;get the current time
+	mov r3,r4		;this is time again
+	sub #prbrat,r3		;if packets unacked for this long, send sns
+	sub #snsrat,r4		;if no input in this time, it should send sns
+	clr r2			;the connection pointer
+
+chckp1:	mov contbl(r2),r1
+	beq chcks1		;nothing there
+	cmpb #%csopn,cnstat(r1)	;open?
+	bne chcks1		;no, skip this one
+	 cmp cnact(r1),r4	;too long?
+	 bmi chckto		;time out
+
+	mov trackn(r1),r0	;the number of packet he has acked
+	inc r0			;one larger is next packet
+	cmp r0,trpkn(r1)	;has he acked all of them yet?
+	beq chcks1		;if =, yes, else no.
+	cmp cnact(r1),r3	;has it not received for too long?
+	bpl chcks1		;nope, it's okay.
+
+chcksn:	kcall sndsns		;send a sense on this connection
+
+chcks1:	add #2,r2		;get to next connection
+	cmp r2,#ncons*2	;are we done yet?
+	blt chckp1		;nope, try next connection
+	kretrn			;done
+
+;;;  Connection has timed out.
+
+chckto:	mov clock,r0		;get time for real time out
+	sub #uprat,r0		;connection should be closed after this
+	cmp cnact(r1),r0	;should it be closed?
+	bpl chcksn		;no, send sense instead
+	 movb #%csinc,cnstat(r1)	;incomplete transmission
+	 mov #tmomsg,r2		;send a timeout message
+	 kcall pktmsg
+	 br chcks1		;and continue
+
+	.sbttl User Interface
+
+;;; The plan here is as follows:
+;;; Packets are output via routines called CHOPEN (open a connection),
+;;; CHDATI (input data), CHDATO (output data), CHEOF (eof on connection),
+;;; CHANS (send an answer packet), CHCLS (close the connection),
+;;; CHLSN (wait for a connection), CHRPLY (reply to RFC with OPEN),
+;;; and CHSTAT (returns the status of a chaos connection).
+
+;;; Control packets are always put immediately on the end of the transmit list
+;;; while data packets are subject to waiting (%iosiw, %iosow in cnios word)
+;;; on the transmit window being full.
+;;; Routines return with C set if they fail (usually because no packets
+;;; are available).  The user program is expected to check this.
+
+;;; The arguments for each of the routines are outlined before the
+;;; code for the routine.
+
+;;; CHOPEN: Open a connection on the chaos net.  The arguments to it
+;;; are the destination host number, the initial window size, and the
+;;; contact name and JCL which is placed in the RFC.  The connection
+;;; packet is returned if the open succeeds.  Otherwise, in general
+;;; a CLS packet is returned whose data field contains an error
+;;; message.
+
+chopen:	proc 3,1,<r0,r1,r2,r3,r4>,<cotrys>
+	clr out1(fp)
+	kcall alc16		;get a packet for the RFC
+	bcs colos2		;oops no packets, tough luck for the user
+	clrb pktyp(r0)		;clear the packet type
+	mov #noconn,r4		;load up no connection msg in anticipation
+	kcall allcon		;allocate a connection
+	beq colos1		;oh well, this isn't our day, no connections
+	mov arg1(fp),cnfhst(r1)	;move the host name into the connection
+	movb #%csrfs,cnstat(r1)	;connection state is rfc-send
+	clr cnfidx(r1)		;clear the destination connection index
+	mov arg2(fp),r3		;put the window size in r3
+	mov r3,rcwsiz(r1)	;set the receive window size
+	asr r3			;divide by two to get the status threshold
+	mov r3,rcsts(r1)	;save it in the connection
+	movb #%corfc,pkop(r0)	;store rfc as packet opcode
+	mov arg1(fp),pkdhst(r0)	;load up the destination host
+	clr pkpkn(r0)		;clear the packet number field
+	clr pkakn(r0)		;clear the packet acknowledgement field
+	mov arg3(fp),r2		;put the pointer to contact name et al in r2
+	mov #nopak,r4		;move this in case strcpy loses
+	clr pklen(r0)		;flush old contents
+	kcall strcpy		;copy it into the packet
+	beq colose		;tell the poor user
+	clr cotrys(fp)		;clear out the count of tries
+1$:	inc cotrys(fp)		;increment the number of RFC's sent
+	mov #icptmo,r4		;move the message for timeout
+	cmp cotrys(fp),#maxtry	;have we tried too many times yet?
+	bgt colose		;timeout on open
+	kcall pktsize		;get the size of the packet in r3
+	push r5			;save our fp
+	mov r0,r5		;save the good packet
+	kcall alcsiz		;get another just like it (uses r3)
+	bcc 2$			;oh well, not enough packets
+	 mov r5,r0		;resore the packet which gets returned
+	 pop r5			;get back the fp
+	 mov #nopak,r4		;message for out of packets
+	 br colose		;give the user the lossage
+2$:	mov r5,r3		;copy packet bashes r5
+	kcall coppck		;copy packet in r5 to the one in r0
+	kcall trnpck		;transmit the packet
+	mov r3,r0		;restore the world
+	pop r5			;get back our fp
+	mov clock,r3		;get the current time
+	add #rfctim,r3		;add the timeout time
+3$:	cocall			;reschedule
+	cmpb #%csopn,cnstat(r1)	;did the connection open yet?
+	beq 4$			;lets tell the user the good news
+	cmpb #%csrfs,cnstat(r1)	;are we still in RFC sent state?
+	bne colos3		;we seem to have lost
+	 cmp r3,clock		;compare the time to retry with the time
+	 bpl 3$			;not time to try RFC again yet
+	  br 1$			;loop around and try the RFC again
+4$:	mov r1,out1(fp)		;return the open connection
+	kcall frepck		;free the copy of the RFC packet
+	return
+
+colose:	kcall rlscon		;release the connection
+colos1:	mov r4,r2		;move message string to r2
+	clr pklen(r0)		;clear out the packet length (strcpy appends)
+	kcall strcpy		;if this loses then give up!
+	clr (r0)		;clear out the packet link field
+	mov r0,out1(fp)		;return the packet with the error message
+colos2:	rtnerr			;back to the shadows again
+
+colos3: call chdati,r1,out1(fp)	;see if there is an explanation waiting
+	kcall rlscon		;release the conection
+	kcall frepck		;free the extra packet
+	br colos2		;return to the user
+	
+
+;;; CHCLS: Chaos Net Close Connection.  This routine takes a connection
+;;; packet and closes the connection.  It also takes a reason for the close
+;;; which can be zero, meaning use the standard message. There are no error
+;;; conditions. If the connection was already closed the routine just returns.
+
+chcls:	proc 2,0,<r0,r1,r2>
+	mov arg1(fp),r1		;get the connection into the standard register
+	cmpb #%cscls,cnstat(r1)	;see if the connection is already closed
+	beq 3$			;release the connection
+	kcall alc16		;get a packet for the close
+	bcc 1$			;well, we will close without telling the
+				;foreign host
+	 movb #%cscls,cnstat(r1)	;close the connection
+	 br 3$			;finish up
+1$:	movb #%cocls,pkop(r0)	;make it a close packet.
+	clrb pktyp(r0)		;clear the type
+	mov arg2(fp),r2		;get pointer to string for close message
+	bne 4$
+	 mov #uclmsg,r2		;get default msg
+4$:	clr pkakn(r0)		;clear the packet ack field
+	clr pkpkn(r0)		;clear the packet number
+	clr pklen(r0)		;clear the length of this packet
+	kcall strcpy		;if this loses we don't care
+	kcall trnpck		;send the close and ignore any errors
+				;the bowels of the NCP will finish off the
+				;connection for us when the packet is sent.
+2$:	return
+3$:	kcall rlscon		;free up the connection
+	br 2$
+
+;;; CHLSN: Chaos Net Request to Listen for a Contact Name.  It takes an
+;;; asciz string which is the contact name as the first argument.  The
+;;; second argument is the type of listen: a zero means returns the RFC
+;;; when the RFC arrives, anything else is interpreted as a ptr
+;;; to a routine to be run in a newly created task when the RFC is received.
+;;; The new task will find the RFC packet in r0.  The return value is the
+;;; RFC packet in the first case and zero in the latter.
+
+chlsn:	proc 2,2,<r0,r2>
+
+	clr out1(fp)		;initialize things
+	kcall alc16		;make a listen packet
+	bcs 4$			;no free packets so barf
+	mov arg1(fp),r2		;get the string
+	clr pklen(r0)
+	kcall strcpy		;copy in the contact name
+	beq 3$			;string too long! but free the packet
+	mov arg2(fp),lsnadr(r0)	;fill in the task start addr 
+	beq 1$			;unless we are supposed to wait here
+	 movb #%ptsrv,pktyp(r0)	;make it a server packet type
+	 br 2$
+1$:	mov fp,r2		;make ptr to place to put RFC (zeroed above)
+	add #out1,r2
+	mov r2,lsnrfc(r0)	;so the receiver of the RFC knows where to
+				;put the packet
+	mov fp,r2
+	add #out2,r2
+	mov r2,lsncon(r0)	;where to put the connection
+	movb #%ptlsn,pktyp(r0)	;make it the right kind of packet
+2$:	mov chlsnl,(r0)		;thread packet on the listen list
+	mov r0,chlsnl
+	cmpb #%ptsrv,pktyp(r0)	;if its the create-a-task type then return
+	beq 5$			;we are done
+6$:	cocall			;wait for something to happen
+	tst out1(fp)		;any mail arrive yet
+	beq 6$			;not yet
+5$:	return			;thats all folks
+
+3$:	kcall frepck		;free up the allocated packet
+4$:	rtnerr
+
+;;; CHRPLY: Reply to an RFC with an OPEN.  This routine takes an
+;;; RFC packet, a connection, and the window size, and
+;;; sends an open to the foreign host.
+
+chrply:	proc 3,0,<r0,r1>
+	mov arg1(fp),r0		;get the RFC packet in R0.
+	mov arg2(fp),r1
+	clr trwsiz(r1)		;clear the transmitter window size so we
+				;won't send any packets till far side sends
+				;their status packet.
+	mov arg3(fp),r4		;receive window size
+	kcall sndopn		;open the connection
+	return			;back to the poor luser
+
+;;; CHANS: Send an Answer packet to an RFC.  This takes an RFC packet
+;;; so it can be reused, a connection, a ptr to the data to be put into
+;;; the ANS packet and the length of the data.  The ANS packet is send and
+;;; the connection is freed.
+
+chans:	proc 4,0,<r0,r1,r2,r3>
+
+	mov arg1(fp),r0		;get the RFC packet
+	kcall pktsiz		;get the size of this packet.
+	asl r3			;convert size to bytes
+	sub #pkdat,r3		;get size of text section
+	cmp r3,arg4(fp)		;is there enough room?
+	bge 1$			;yes, so insert the answer
+	 mov arg4(fp),r3	;get another packet of the right size
+	 add #pkdat+1,r3	;leave room for the header (round up)
+	 asr r3			;allocate takes word count
+	 mov r0,r2		;save old packet for freeing
+	 kcall alcsiz		;get a new packet
+	 bcs 5$			;we lost cry on user's shoulder
+	 mov pksidx(r2),pksidx(r0)	;copy across the relevant info
+	 mov pkshst(r2),pkshst(r0)
+	 mov pkdhst(r2),pkdhst(r0)
+	 push r0		;now free the old packet
+	 mov r2,r0
+	 kcall frepck
+	 pop r0
+1$:	clr pklen(r0)		;flush RFC data
+	mov r0,r1		;get ptr to packet part of the data
+	add #pkdat,r1
+	mov arg3(fp),r2		;get ptr to data to send
+	mov arg4(fp),r3		;get count of bytes
+	if ne,<
+2$:	  movb (r2)+,(r1)+	;do the copy
+	  sob r3,2$
+	  >
+	mov arg4(fp),pklen(r0)	;set the length
+	exch pkshst(r0),pkdhst(r0),r1	;send it back
+	mov pksidx(r0),pkdidx(r0)
+	clr pksidx(r0)
+	movb #%coans,pkop(r0)
+	kcall trnpc1		;send the packet (don't set fields)
+	mov arg2(fp),r1		;get the connection to free
+	kcall rlscon
+	return			;we are done
+5$:	rtnerr
+
+;;; CHEOF: Send an EOF packet on a Connection.  This takes a connection
+;;; as the first argument and send the EOF.
+
+cheof:	proc 1,0,<r0,r1>
+
+	mov arg1(fp),r1		;get the connection
+	kcall alc16		;allocate a packet
+	bcs 1$			;oops, no packet available
+	clrb pktyp(r0)		;fill in all the relevant fields
+	movb #%coeof,pkop(r0)
+	clr pklen(r0)
+	call chdato,<r0,r1>
+	bcs 1$
+	return
+1$:	rtnerr
+
+;;; CHSTAT: Checks to see whether or not a packet would be accepted for
+;;; transmission.  This ammounts to a check to see if the transmit window
+;;; is full.  The C bit is set if data can not be accepted
+;;; now or if the connection is closed.
+
+chstat:	proc 1,0,<r1,r4>
+
+	mov arg1(fp),r1		;get the connection
+	bitb #%iosow,cnios(r1)	;currently waiting on output?
+	bne 1$			;yes, just return
+	mov trackn(r1),r4	;this the level that he has acknowledged
+	add trwsiz(r1),r4	;this is the window size in that direction
+	cmp r4,trpkn(r1)	;is this okay for window size?
+	bpl 2$			;yes, its OK
+1$:	 bisb #%iosow,cnios(r1)	;say that we are output blocked here
+	 rtnerr			;caller should try again later
+2$:	cmpb #%csopn,cnstat(r1)	;is it open?
+	bne 1$			;nope
+	return
+	.sbttl User Interface - Data Output And Input Routines
+
+;;; CHDATO: Sends a Data Packet out on a Connection.  It takes a
+;;; packet and a connection.  The C bit is set if data can not be accepted
+;;; now or if the connection is closed.
+
+chdato:	proc 2,0,<r0,r1,r4>
+
+	mov arg1(fp),r0
+	mov arg2(fp),r1
+	bitb #%iosow,cnios(r1)	;currently waiting on output?
+	bne 1$			;yes, just return
+	mov trackn(r1),r4	;this the level that he has acknowledged
+	add trwsiz(r1),r4	;this is the window size in that direction
+	cmp r4,trpkn(r1)	;is this okay for window size?
+	bpl 2$			;yes, its OK
+1$:	 bisb #%iosow,cnios(r1)	;say that we are output blocked here
+	 rtnerr			;caller should try again later
+2$:	cmpb #%csopn,cnstat(r1)	;is it open?
+	bne 1$			;nope, go block output
+	mov trpkn(r1),pkpkn(r0)	;assign this packet it's number
+	inc trpkn(r1)		;and get the next packet number
+	cmpb #%coeof,pkop(r0)	;did the user specify %COEOF?
+	beq 3$			;yes
+	 bisb #%codat,pkop(r0)	;no,set the data bit.
+3$:	kcall trnpck		;transmit this packet
+	return
+
+
+;;; CHDOW: Data output with waiting.
+
+chdow:	push r1
+	mov 4(sp),r1
+loop <	  call chdato,<6(sp),r1>
+	  bcc 1$
+	  cmpb cnstat(r1),#%csopn
+	  exitl ne
+	  cocall
+	  rptl
+	  >
+	sec
+1$:	pop r1
+	kretrn
+
+
+;;; CHFINI: Finish all outstanding transmissions.  Wait for all packets to be
+;;; ack'd.
+
+chfini:	push r1			; save register
+	mov 4(sp),r1		; R1: connection
+loop <	  mov trackn(r1),-(sp)	; get packet number last ack'd
+	  inc (sp)		; add 1 in order to compare with
+	  cmp (sp)+,trpkn(r1)	; number of next packet
+	  exitl eq		; if equal, then other side has ack'd
+				; everything
+	  cocall		; pause
+	  rptl			; and then try again
+	  >
+	pop r1,(sp)		; restore register, remove argument
+	kretrn
+
+;;; CHDATI: Read a Data Packet from the Chaos Net on a Connection.  This
+;;; takes a connection and returns a packet.  If there is no input the
+;;; routine returns with the C bit set.
+
+chdati:	proc 1,1,<r0,r1,r2>
+
+	mov arg1(fp),r1
+	clr out1(fp)
+1$:	mov rcols(r1),r0	;get the packet
+	beq 4$			;nothing there
+	chkpak			;if debuging, check packet validity
+	mov (r0),rcols(r1)	;and link it out
+	mov r0,out1(fp)		;return the guy the packet
+	cmp r0,rcolse(r1)	;is it the last packet?
+	bne 2$			;no, just ignore
+	 conptr rcols,r2		;get abs pointer to rcols
+	 mov r2,rcolse(r1)	;and set it in
+2$:	clr (r0)		;clear the packet link field
+	cmpb #%cocls,pkop(r0)	;is this a close packet?
+	beq 4$			;just send back an error
+	mov pkpkn(r0),r2	;packet number of this packet
+	mov r2,rcsack(r1)	;we should ack this packet
+	sub rcacks(r1),r2	;get number of packets that we have not ack'ed
+	cmp r2,rcsts(r1)	;is it time yet to send a status?
+	ble 3$			;no
+	 push r0		;save packet we are about to return
+	 kcall sndsts
+	 pop r0
+3$:	return
+4$:	rtnerr
+
+
+;;; CHDIW: Data input with waiting.
+
+chdiw:	push r1
+	mov 4(sp),r1
+loop <	  call chdati,r1,4(sp)
+	  bcc 1$
+	  cmpb cnstat(r1),#%csopn
+	  exitl ne
+	  cocall
+	  rptl
+	  >
+	sec
+1$:	pop r1
+	kretrn
+
+	.sbttl User Interface - Packet Transmit Routine
+
+;;; Transmit packet from current host and connection in r1 to world.
+
+trnpck:	kcall setpck		;setup packet header from connection {01/245}
+
+;;; Enter here when packet variables were set up elsewhere.
+;;; Note: uctans depends on the fact the connection is not referred to
+;;; from here on (i.e. r1 is not used).
+
+trnpc1:	push r4,r5		;save r4, r5
+	clr pktim(r0)		;clear so retransmits can be detected {/45}
+	mov #chtpak,r4		;get pointer to transmit list
+1$:	mov r4,r5		;update pointer
+	mov (r5),r4		;get next pointer
+	beq 2$
+	bit #400,pklen(r0)	; inserting a small packet?
+	bne 1$			; no, put on end of list
+	bit #400,pklen(r4)	; packet on list small?
+	beq 1$			; yes, new one goes past it then
+	;; here we've found a large packet on transmit list while inserting a
+	;; small one.  consider putting the small one first.
+	cmp pkshst(r0),pkshst(r4)	; if new packet is same host
+	bne 2$				; and index as old one
+	cmp pksidx(r0),pksidx(r4)	; then don't unorder them
+	beq 1$				; ...
+2$:	mov r4,(r0)		;clear the link field
+	mov r0,(r5)		;link new one on list
+	pop r5,r4
+	kretrn
+
+;;; Send msg on connection in r1.  r2 points an asciz string.
+
+pktmsg:	kcall alc32		;get a packet (32 should be enough, usually)
+	bcc 1$			;got it
+	 kretrn			;no packets available, error return
+1$:	clr pklen(r0)
+	movb #%ptmsg,pktyp(r0)	;set the packet type
+	movb #%cocls,pkop(r0)	;close type packet
+	kcall strcpy		;size is checked here, don't care if it loses
+	kcall clsque		;queue it
+	kretrn
+
+;;; Queue a close type packet in r0.
+
+clsque:	clr (r0)		;clear the link field
+	mov r0,@rcolse(r1)	;put on receive list
+	mov r0,rcolse(r1)	;new end
+	bicb #%iosow,cnios(r1)	;enable input
+	kretrn
+
+;;; this copies a packet pointed to by r5 into the packet pointed to by r0
+;;; leaves a pointer to the end of the target packet in r5
+
+coppck:	push r0,r1		;get regs
+	bic #pkfcnt,pklen(r5)	;so we get the length right
+	mov pklen(r5),r1	;get the length of the packet in bytes
+	add #pkdat-<pklnk+2>+1,r1	;include length of header, round it up
+	asr r1			;bytes -> words
+	add #pklnk+2,r0		;skip the link field
+	add #pklnk+2,r5
+1$:	mov (r5)+,(r0)+		;copy packet
+	sob r1,1$
+	mov r0,r5		;helps out routines that want to add more
+	pop r1,r0
+	kretrn
+
+;;; Copy an asciz string pointed to by r2 to a packet in r0
+;;; Gets a bigger packet, if needed.  Fails if can't get a packet big enough
+;;; to hold the string.  The caller must decide what todo with the
+;;; packet in r0 in such cases.  The string is added after any data already
+;;; in the packet as indicated by pklen.
+
+strcpy:	push r3,r4,r5		;save r3
+	mov r0,r4		;make a pointer to data area in r4
+	add #pkdat,r4		;offset to data area
+	bic #pkfcnt,pklen(r0)	;clear out the forwarding count, if any
+	add pklen(r0),r4	;skip over data already there
+10$:	kcall pktsiz		;Now compute a count of remaining bytes,
+				;returns size in words in r3
+	mov r3,r5		;save the packet size (words) for later use
+	asl r3			;by getting the packet size, words -> bytes
+	sub pklen(r0),r3	;reduce the count by amount already filled
+	sub #pkdat,r3		;account for the header, etc.
+1$:	movb (r2)+,(r4)+	;copy the string into the packet
+	beq 2$			;loop until a null byte is reached
+	sob r3,1$		;is there still room in the packet?
+				;if so, loop otherwise, need a bigger packet.
+	mov r5,r3		;get back the size of the current packet.
+	asl r5			;make it a byte count
+	sub #pkdat,r5		;get length of data
+	mov r5,pklen(r0)	;and store it for use in copy or elsewhere
+	mov r0,r5		;save the current packet in r5
+	add #2,r3		;need the next bigger size
+	kcall alcsiz		;try to get it (puts a new pkt ptr into r0)
+	bcs strcer		;failed, so punt, returning the existing r0
+	push r0,r5		;save old and new packet pointers
+	kcall coppck		;copy old into new
+	mov r5,r4		;save the fill pointer
+	pop r0,r5		;note the order - r0 and r5 are swapped
+	kcall frepck		;free the old packet (don't care about error?)
+	mov r5,r0		;and get back r0
+	br 10$			;and continue
+2$:	dec r4			;back up one character
+	sub r0,r4		;compute byte count
+	sub #pkdat,r4
+	mov r4,pklen(r0)	;and store it
+	pop r5,r4,r3		;restore r3,r4,r5
+	clz
+	kretrn
+
+strcer:	mov r5,r0		;get back the full packet
+	pop r5,r4,r3		;restore r3,r4,r5
+	sez			;error return
+	kretrn
+
+	.sbttl Connection Allocation
+
+;;; Search for a free slot in the connection table and if one is found
+;;; allocate a connection packet for the per connection data
+
+allcon:	push r0,r2
+	kcall alc32
+	bcs allfai		;sorry, space available for the connection
+	movb #%ptcon,pktyp(r0)	;set the type
+	clr r1
+	mov #ncons,r2		;put number of connection in r2
+2$:	tst contbl(r1)		;is this a free connection slot
+	beq 3$			;found a free connection, grab it.
+	add #2,r1
+	sob r2,2$		;keep going
+	 kcall frepck		;free the packet
+	 br allfai
+3$:	mov r1,r2
+	asr r2
+	movb r2,cnlidx(r0)	;store the connection index in the packet
+	mov r0,contbl(r1)	;store the packet in the table
+	mov r0,r1		;R1 normally contains a conn. packet pointer
+	pop r2,r0
+
+;;; Entry point to initialize or reset a pre-allocated connection.
+
+rstcon:	push r0,cnlidx(r1)	;save the index for later
+	mov #32.,r0		;size of packet in words
+1$:	clr (r1)+		;clear a word
+	sob r0,1$		;loop around
+	sub #64.,r1		;restore r1 by subtracting the size in bytes
+	pop cnlidx(r1),r0
+	incb unikey		;step the unique-id key and make sure its never
+	if eq,<inc unikey>	;zero since a connection index of zero is illegal
+	movb unikey,cnlunq(r1)	;set it for this connection
+	mov #1,trpkn(r1)	;the next packet number is 1
+	mov r1,rcolse(r1)
+	add #rcols,rcolse(r1)
+
+	kretrn
+
+;;; Connection allocation failed for various reasons
+
+allfai:	inc allfct		;update the count of failures
+	pop r2,r0
+	sez
+	kretrn
+
+;;; Release a connection for good (pointed to by R1)
+
+rlscon:	push r0,r2
+	mov rcuols(r1),r2	;free the out of order list
+	kcall frelst
+	clr rcuols(r1)		;make sure we don't try twice
+	mov rcols(r1),r2	;free the buffered packets
+	kcall frelst
+	clr rcols(r1)		;make sure we don't try twice
+	mov trrcvl(r1),r2	;free the receipt list
+	kcall frelst
+	clr trrcvl(r1)		;make sure we don't try twice
+	movb cnlidx(r1),r0	;get the index for this connection
+	asl r0			;make it a word offset
+	clr contbl(r0)		;clear the table entry
+	mov r1,r0		;and free the packet
+	kcall frepck
+	clr r1			;connection = 0 is free
+	pop r2,r0
+	kretrn
+
+;;; Frees a whole list of packets pointed to by r2.
+
+frelst:	push r0
+1$:	mov r2,r0		;get the first packet
+	beq 2$			;if zero then nothing to free
+	mov (r0),r2		;get next packet on the list
+	kcall frepck
+	br 1$
+2$:	pop r0
+	kretrn
+
+	.sbttl Initialization Routines
+
+;;; CHINIT: Chaos Net Initialization Routine
+;;; This routine should be called to initialize the CHAOS NCP.  It can be
+;;; called more than once, however, each time will completely re-start
+;;; the network destroying all outstanding connections.
+
+chinit:	proc 0,0,<>
+
+	mov #chtvst,r0		;get pointer to variables to clear
+	mov #chtvln,r1		;and length
+1$:	clr (r0)+		;clear out ncp variables
+	sob r1,1$
+	mov #rcvpkl,rcvpke	;initialize the receive packet list.
+
+	mov #innet_8+inhst,myhost	;set up my host number
+
+	call crtask,<#0,#0,#0,#0,#0,#0,#chsrcv>,tcbrcv
+				;create task and save the tcb pointer
+	bcc 2$			;ok, create the transmitter
+	bpt
+2$:	call crtask,<#0,#0,#0,#0,#0,#0,#chsxmt>,tcbxmt
+				;create task and save the tcb pointer
+	bcc 3$			;ok, one more to go
+	bpt
+3$:	call crtask,<#0,#0,#0,#0,#0,#0,#chsclk>,tcbclk
+				;we are down with the tasks now
+	bcc 4$			;finish un initialization
+	bpt
+4$:	oncini			;do the once only initialization for each
+				;kind of transceiver
+	mov #ciftbl,r1		;get the pointer to the cif table
+5$:	clrb ci.sts(r1)		;clear out the status bits
+	clr ci.pkt(r1)		;clear out the last packet sent
+	clr ci.rcn(r1)		;clear statistics
+	clr ci.tcn(r1)
+	mov ci.ini(r1),r2	;get pointer to initialize routine
+	beq 6$			;if zero, then no program
+	kcall (r2)		;call the routine, r1 is
+				;its table entry
+6$:	add #cif.ln,r1		;point to next entry in table
+	cmp r1,#cifend		;at the end of the table
+	blo 5$
+
+7$:
+	return
+
+
+	.sbttl NCP Variable Definitions
+
+;;; Random constants for use by the NCP
+
+chtvst===.			;start of variables to be cleared on init
+
+;;;variables for statistics gathering
+
+caovfw:	0			;count of overforwarded packets
+calost:	0			;total number of packets lost
+caabtc:	0			;total abort count
+cartab:	0			;# of aborts of packets being retransmitted
+cacrc:	0			;total number of crc errors
+caperr:	0			;total number of packet format errors
+cameml:	0			;number of times that the hw memory lost
+canpkb:	0			;number of times when no packet buffers 
+				;on input interrupt level
+cauorp:	0			;number of out of order acknowledgments
+carwov:	0			;receive window overflow count
+casns:	0			;number of sense packets sent
+casts:	0			;number of status packets sent back
+casnst:	0			;number of statuses sent due to snses
+cawsts:	0			;number of statuses due to window full
+cadupk:	0			;number of duplicate packets received
+caopns:	0			;number of connections opened
+catlst:	0			;number of packets lost due to our slowness
+canrpk:	0			;number of packets received
+cantpk:	0			;number of packets transmitted
+canord:	0			;number of times packet are received
+				;out of order
+allfct:	0			;count of failed connection allocations
+tcbrcv:	0			;tcb ptr to the receiver task
+tcbxmt:	0			;ptr to the tcb of the transmitter task
+tcbclk:	0			;tcb of the task which does probing etc.
+
+;;; variables which are not per connection
+
+chtpak:	0			;transmitter interrupt packet list
+chtlas:	0			;pointer to the last packet transmitted
+rcvpkl:	0			;received packet list
+rcvpke:	0			;end of the above list
+chtsav:	0			;save last packet xmitted (for debugging)
+chlsnl:	0			;list of LSN packets
+contbl:	.blkw ncons		;table of connection packet pointers
+
+chtvln===<.-chtvst>/2		;end of variables to be cleared
+
+myhost:	0			;our network address (including subnet)
+mynet==myhost+1			;our subnet number
+
+unikey:	.			;connection index uniquizer key
+
+;;; Subnet routing table
+;;; The format of the routing information is as follows:
+;;; 1 word for each net known about. Network zero doesn't exist by definition.
+;;; The high byte is the net number of the gateway host or zero which
+;;; indicates that we are directly on that subnet. In latter case the low byte
+;;; is the index of our hardware interface for this net.  Otherwise,
+;;; the low byte is the host number of the gateway which indicates the
+;;; appropriate gateway for packet routing.
+
+	routin			;place the routing table here.
+
+unknet === 0			;value for the unknown network
+
+;;; CHAOS Net Interface Table
+;;; This table defines the available interfaces to the various subnets
+;;; which this host resides on.  It contains the interface status word
+;;; used to communicate between the device driver and the NCP as well as
+;;; the address of the transmitter and receiver programs which deal
+;;; with hardware interfaces.
+
+dsect <
+ci.sts:: .blkb 1		;status of interface (xmt and rcv)
+ci.pad:: .blkb 1		;padding byte
+ci.net:: .blkb 1		;network on which this interface resides
+ci.hst:: .blkb 1		;host of this machine on the this net
+ci.xmt:: .blkw 1		;address of the transmitter routine
+				;takes the packet to send in r0 and
+				;the host in r4
+ci.pkt:: .blkw 1		;pointer to the packet last sent
+ci.atm:: .blkw 1		;timeout for retransmission
+ci.mab:: .blkw 1		;maximum number of times a packet can be
+				;aborted before it is thrown away by the xmtr
+ci.abc:: .blkw 1		;abort count
+ci.rab:: .blkw 1		;count of multiple aborts on the same packet
+ci.rcv:: .blkw 1		;pointer to the receiver routine.  The
+				;procedure allocates a packet and threads it
+				;onto the receive list.  If this pointer is
+				;zero then the packet is threaded on at
+				;interrupt level
+ci.ini:: .blkw 1		;the initialization routine for the xcvr
+ci.dat:: .blkw 1		;the data area for the xcvr, the format
+				;is defined by the type of transmitter
+ci.tcn:: .blkw 1		;count of packets transmitted by interface
+ci.rcn:: .blkw 1		;count of packets received by interface
+ci.rtl:: .blkw 1		;the retransmission latency time
+	>,cif.ln
+
+%rcvrd === 1			;receiver ready bit
+%xmtrd === 2			;transmitter ready bit
+%xmtab === 4			;transmitter aborted last transmission
+
+	insrtr			;insert the tranceivers here
+	mkcftb			;set down the cif table
+
+
+;;; These are the string for the various messages that are placed in packets.
+;;; Some of these are messages to the local user, other ones are sent to
+;;; the foreign host.  All the messages are asciz strings
+
+;;; Connection Timeout message
+
+tmomsg=.
+	.asciz /Connection broken.  Foreign host not responding. [CHAOS]/
+
+;;; LOSE messages
+
+bimsg:	.asciz /Non-existent index!! Connection was broken. [CHAOS]/
+cclmsg:	.asciz /Connection was closed!! [CHAOS]/
+bopmsg:	.asciz /Bad opcode in packet!! [CHAOS]/
+bstmsg:	.asciz /Connection in the wrong state!! [CHAOS]/
+ciimsg:	.asciz /Connection index inconsistent [CHAOS]/
+
+;;; RFC and LSN failure messages
+
+sflmsg:	.asciz /SYSTEM FULL- Unable to creater server task [CHAOS]/
+icptmo:	.asciz /Attempt to connect to foreign host has timed-out.  [CHAOS]/
+uclmsg:	.asciz /User closed the channel manually [CHAOS]/
+unkctn:	.asciz / - Unknown Contact Name [CHAOS]/
+noconn:	.asciz /Unable to allocate a connection [CHAOS]/
+nopak:	.asciz /Unable to allocate a packet [CHAOS]/
+
+
+.if ne 0
+;;; Contact Names
+
+plrnam:	.asciz /PULSAR/
+snknam:	.asciz /SINK/
+.endc
+
+	.even
+
