@@ -667,6 +667,17 @@ expect ":KILL"
 respond "*" ":cwd budd\r"
 respond "*" ":palx live palx\r"
 
+# MACN11, pdp-11 cross assembler
+respond "*" ":cwd decsys\r"
+macro10 "macn11" "macn11.hdr,macn11.mac"
+respond "*" ":dec sys:loader\r"
+respond "*" "macn11/g\r"
+expect "EXIT"
+respond "*" ":start 45\r"
+respond "Command:" "d"
+respond "*" ":pdump sys3; ts macn11\r"
+respond "*" ":kill\r"
+
 # Cookie Bear
 respond "*" ":midas gls; ts check_gls; check\r"
 respond "DEBUGP==" "0\r"
