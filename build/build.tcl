@@ -181,6 +181,31 @@ proc macro10 {target sources} {
     respond "*" ":kill\r"
 }
 
+proc loader {files} {
+    respond "*" ":dec sys:loader\r"
+    respond "*" "$files/g\r"
+    expect "EXIT"
+}
+
+proc linker {files} {
+    respond "*" ":dec sys:link\r"
+    respond "*" "$files/go\r"
+    expect "EXIT" {
+        return
+    } "%LNKNED" {
+        # Sometimes there is this error; workaround is to retry.
+        respond "*" "$files/go\r"
+        expect "EXIT"
+    }
+}
+
+proc decuuo {file {dump ":pdump"}} {
+    respond "*" ":start 45\r"
+    respond "Command:" "d"
+    respond "*" "$dump $file\r"
+    respond "*" ":kill\r"
+}
+
 proc cwd {directory} {
     respond "*" ":cwd $directory\r"
 }
