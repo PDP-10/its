@@ -173,6 +173,14 @@ proc arpanet {rfc file} {
     }
 }
 
+proc macro10 {target sources} {
+    respond "*" ":macro\r"
+    respond "*" "$target=$sources\r"
+    expect "CORE USED"
+    respond "*" "\003"
+    respond "*" ":kill\r"
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
