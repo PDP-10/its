@@ -4,15 +4,14 @@ patch_its_and_go
 pdset
 
 respond "*" ":login db\r"
-sleep 1
+type ":vk\r"
 
 # Normally we'd save the old ITS as OITS, but since it was used for
 # bootstrapping with another configuration, it's no longer any use.
-type ":delete .;@ its\r"
+respond "*" ":delete .;@ its\r"
 
 # The new ITS is now canonical.
 respond "*" ":rename .;@ nits, .;@ its\r"
-sleep 1
 
 respond "*" ":midas sysbin;_syseng;dump\r"
 dump_switches
@@ -117,13 +116,9 @@ expect ":KILL"
 respond "*" ":midas sysbin;_sysen2;find\r"
 expect ":KILL"
 respond "*" ":link sys;ts find,sysbin;find bin\r"
-type ":vk\r"
 respond "*" ":link sys;ts fi,sys;ts find\r"
-type ":vk\r"
 respond "*" ":link sys;ts comb,sys;ts find\r"
-type ":vk\r"
 respond "*" ":link sys2;ts lf,sys;ts find\r"
-type ":vk\r"
 
 respond "*" ":midas sys;ts dskuse_syseng;dskuse\r"
 expect ":KILL"
