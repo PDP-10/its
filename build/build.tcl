@@ -183,6 +183,19 @@ proc midast {target source {action ""}} {
     midas "/t $target" $source $action
 }
 
+proc omidas {target source {action ""}} {
+    respond "*" ":midas;324 ${target}_$source\r"
+    eval $action
+    expect ":KILL"
+}
+
+proc oomidas {version target source {action ""}} {
+    respond "*" ":midas;$version\r"
+    respond "MIDAS.$version" "${target}_$source\r"
+    eval $action
+    expect ":KILL"
+}
+
 proc macro10 {target sources} {
     respond "*" ":macro\r"
     respond "*" "$target=$sources\r"
