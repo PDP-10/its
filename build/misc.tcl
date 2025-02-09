@@ -531,8 +531,7 @@ respond "*" ":midas games;ts ckr_agb;ckr\r"
 expect ":KILL"
 
 # Dazzle Dart, video game for the Logo group PDP-11/45
-respond "*" ":palx bs;_dazzle\r"
-expect ":KILL"
+palx "bs;" "dazzle"
 
 # TOSBLK, convert from PALX binary to SBLK.
 respond "*" ":midas pdp11;ts tosblk_tosblk\r"
@@ -621,7 +620,7 @@ expect ":KILL"
 
 # Phil Budne's PALX Game of Life.
 cwd "budd"
-respond "*" ":palx live palx\r"
+palx "budd;" "live palx"
 
 # MACN11, pdp-11 cross assembler
 cwd "decsys"
@@ -1547,41 +1546,40 @@ expect ":KILL"
 
 # RUG, PDP-11 debugger.
 cwd "pdp11"
-respond "*" ":palx rug\r"
-respond "?" "2\r"
-respond "?" "100000\r"
-respond "?" "1\r"
-respond "?" "1\r"
-expect ":KILL"
+palx "pdp11;" "rug" {
+    respond "?" "2\r"
+    respond "?" "100000\r"
+    respond "?" "1\r"
+    respond "?" "1\r"
+}
 
 # URUG, GT40 debugger.
-respond "*" ":palx sysbin;_sysen2;urug\r"
-respond "=YES" "1\r"
-respond "37000" "37000\r"
-expect ":KILL"
+palx "sysbin;" "sysen2;urug" {
+    respond "=YES" "1\r"
+    respond "37000" "37000\r"
+}
 
 # GT40 Lunar Lander.
-respond "*" ":palx gt40;_gt40;gtlem\r"
-expect ":KILL"
+palx "gt40;" "gt40;gtlem"
 
 # MINITS
 cwd "mits.s"
-respond "*" ":palx test_config\r"
-respond ":::" "777\r"
-expect ":KILL"
+palx "test" "config" {
+    respond ":::" "777\r"
+}
 
 # MINITS boot ROM for an Interlan network interface.
 cwd "mits.b"
-respond "*" ":palx bootil\r"
-respond "Interlan CSR?" "0\r"
-respond "Chaos address of Interlan board?" "0\r"
-expect "Which set of downloading hosts?"
-respond ")" "0\r"
-respond "Start address?" "0\r"
-respond "Do you want a power up/boot support" "0\r"
-respond "Boot PROM mapping kludge?" "0\r"
-respond "Start of temporary data storage?" "150000\r"
-expect ":KILL"
+palx "mits.b;" "bootil" {
+    respond "Interlan CSR?" "0\r"
+    respond "Chaos address of Interlan board?" "0\r"
+    expect "Which set of downloading hosts?"
+    respond ")" "0\r"
+    respond "Start address?" "0\r"
+    respond "Do you want a power up/boot support" "0\r"
+    respond "Boot PROM mapping kludge?" "0\r"
+    respond "Start of temporary data storage?" "150000\r"
+}
 
 # ITS universal file.
 cwd "decsys"
@@ -1594,15 +1592,15 @@ linker "dftp"
 decuuo "sys1; ts dftp"
 
 # PDP-11 Lisp.
-respond "*" ":palx rms;_lisp11\r"
-respond "System (RANDOM, SIMULATOR, LOGO, MATH, or STANFORD)?" "SIMULATOR\r"
-expect ":KILL"
+palx "rms;" "lisp11" {
+    respond "System (RANDOM, SIMULATOR, LOGO, MATH, or STANFORD)?" "SIMULATOR\r"
+}
 
 # Logo RUG.  STUFF prefers it to be RUG; AR BIN.
-respond "*" ":palx rug;_ar\r"
-# We'll just do the Logo PDP-11/45.
-respond "COMPUTER=" "1\r"
-expect ":KILL"
+palx "rug;" "ar" {
+    # We'll just do the Logo PDP-11/45.
+    respond "COMPUTER=" "1\r"
+}
 
 # PUNCH, punch out paper tapes in the Logo RUG format.
 respond "*" ":midas rug; ts punch_punch\r"
@@ -1616,56 +1614,44 @@ respond "*" ":link sys1; ts mloder, rug; loder bin\r"
 
 # SITS.
 cwd "sits"
-respond "*" ":palx sits\r"
-expect ":KILL"
+palx "sits;" "sits"
 
 # Salvager for the SITS file system.
-respond "*" ":palx salv\r"
-expect ":KILL"
+palx "sits;" "salv"
 
 # System Sphere for SITS.
-respond "*" ":palx sysspr\r"
-expect ":KILL"
+palx "sits;" "sysspr"
 
 # DDT for SITS.
-respond "*" ":palx ddt\r"
-expect ":KILL"
+palx "sits;" "ddt"
 
 # Font loader daemon for SITS.
-respond "*" ":palx fnt\r"
-expect ":KILL"
+palx "sits;" "fnt"
 
 # INQUIR for SITS.
-respond "*" ":palx inquir\r"
-expect ":KILL"
+palx "sits;" "inquir"
 
 # DIRED for SITS.
-respond "*" ":palx dired\r"
-expect ":KILL"
+palx "sits;" "dired"
 
 # TECO for SITS.
 cwd "rjl"
-respond "*" ":palx teco\r"
-expect ":KILL"
+palx "rjl;" "teco"
 
 # SLOGO, 11LOGO for SITS.
 cwd "nlogo"
-respond "*" ":palx slogo_@slogo\r"
-expect ":KILL"
+palx "slogo" "@slogo"
 
 # HLOGO, "Hal hack" 11LOGO.
-respond "*" ":palx hlogo_@hlogo\r"
-expect ":KILL"
+palx "hlogo" "@hlogo"
 
 # ITSCOM, ITS-SITS communication.
 cwd "bee"
-respond "*" ":palx itscom\r"
-expect ":KILL"
+palx "bee;" "itscom"
 
 # ITS, SITS file transfer.
 cwd "gld"
-respond "*" ":palx its\r"
-expect ":KILL"
+palx "gld;" "its"
 
 # TORTIS
 respond "*" ":midas;324 radia;_tortis\r"
@@ -1727,9 +1713,9 @@ expect ":KILL"
 
 # 11LOGO
 cwd "11logo"
-respond "*" ":palx /H/M/CL BIN,N CREF_SYSTEM,TYI,READ,EVAL,TURTLE,ZEND\r"
-respond "ASSSW=" "0\r"
-expect ":KILL"
+palx "/H/M/CL BIN,N CREF" "SYSTEM,TYI,READ,EVAL,TURTLE,ZEND" {
+    respond "ASSSW=" "0\r"
+}
 
 # Apple II Logo
 cwd "aplogo"

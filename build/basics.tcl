@@ -400,8 +400,7 @@ respond "*" ":midas sys;ts palx_sysen1;palx\r"
 expect ":KILL"
 
 # GT40 boot ROM.
-respond "*" ":palx gt40;_gt40;bootvt\r"
-expect ":KILL"
+palx "gt40;" "gt40;bootvt"
 
 # PLAN/CREATE
 respond "*" ":midas sys3;ts create_syseng;create\r"

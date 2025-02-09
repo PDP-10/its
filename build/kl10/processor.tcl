@@ -59,8 +59,7 @@ expect ":KILL"
 
 # KL10 front end debugger.  Put it in the same directory as the
 # "MC" IOELEV.
-respond "*" ":palx sysbin;_syseng; klrug\r"
-expect ":KILL"
+palx "sysbin;" "syseng; klrug"
 # 11STNK expects a copy in the . directory.
 respond "*" ":copy sysbin; klrug bin, .;\r"
 
@@ -70,8 +69,7 @@ expect ":KILL"
 respond "*" ":link .; ts boot11, sys1; ts 11stnk\r"
 
 # KL10 diagnostics console program.
-respond "*" ":palx kldcp;_kldcp\r"
-expect ":KILL"
+palx "kldcp;" "kldcp"
 respond "*" ":11stnk\r"
 respond "*" "R"
 respond "FILENAME" "\r"
@@ -83,37 +81,34 @@ expect ":KILL"
 move_to_klfe ".temp.; kldcp bin"
 
 # KL10 diagnostic console utility
-respond "*" ":palx kldcp;_kldcpu\r"
-expect ":KILL"
+palx "kldcp;" "kldcpu\r"
 respond "*" ":pcnvrt kldcp; kldcpu bin\r"
 move_to_klfe "kldcp; kldcpu a11"
 
 # PDP-11 debugger.
 # 16K is used with the DL10 IOELEV.
-respond "*" ":palx .; 11ddt 16k_kldcp; 11ddt\r"
-respond "PDP11=" "40\r"
-respond "EISSW=" "0\r"
-respond "MAPSW=" "0\r"
-respond "HCOR=" "100000\r"
-respond "TT10SW=" "0\r"
-respond "VT05SW=" "0\r"
-respond "DEBSW=" "0\r"
-expect ":KILL"
+palx ".; 11ddt 16k" "kldcp; 11ddt" {
+    respond "PDP11=" "40\r"
+    respond "EISSW=" "0\r"
+    respond "MAPSW=" "0\r"
+    respond "HCOR=" "100000\r"
+    respond "TT10SW=" "0\r"
+    respond "VT05SW=" "0\r"
+    respond "DEBSW=" "0\r"
+}
 # 14K is used with the console IOELEV.
-respond "*" ":palx dsk0:.;11ddt 14k_kldcp; 11ddt\r"
-respond "PDP11=" "40\r"
-respond "EISSW=" "0\r"
-respond "MAPSW=" "0\r"
-respond "HCOR=" "70000\r"
-respond "TT10SW=" "0\r"
-respond "VT05SW=" "0\r"
-respond "DEBSW=" "0\r"
-expect ":KILL"
+palx "dsk0:.;11ddt 14k" "kldcp; 11ddt" {
+    respond "PDP11=" "40\r"
+    respond "EISSW=" "0\r"
+    respond "MAPSW=" "0\r"
+    respond "HCOR=" "70000\r"
+    respond "TT10SW=" "0\r"
+    respond "VT05SW=" "0\r"
+    respond "DEBSW=" "0\r"
+}
 
 # The KL10 console "MC" IOELEV.
-respond "*" ":palx .; cons11_system;ioelev\r"
-respond "MACHINE NAME =" "MC\r"
-expect ":KILL"
+palx ".; cons11" "system;ioelev" { respond "MACHINE NAME =" "MC\r" }
 respond "*" ":11stnk\r"
 respond "*" "D"
 respond "FILENAME" ".; 11ddt 14k\r"
@@ -129,9 +124,7 @@ move_to_klfe ".temp.; ioelev a11"
 # The KL10 "MC-DL" IOELEV.  Put in same directory as KLRUG BIN.
 # TS BOOT11 stuffs it over DL10 in timesharing.  TS 11BOOT makes a
 # @ BOOT11 to stuff out of timesharing.
-respond "*" ":palx sysbin;_system;ioelev\r"
-respond "MACHINE NAME =" "MC\r"
-expect ":KILL"
+palx "sysbin;" "system;ioelev" { respond "MACHINE NAME =" "MC\r" }
 
 # 11BOOT
 respond "*" ":midas;324 sys3;ts 11boot_syseng;11boot\r"
