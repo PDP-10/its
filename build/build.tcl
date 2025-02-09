@@ -181,6 +181,21 @@ proc macro10 {target sources} {
     respond "*" ":kill\r"
 }
 
+proc palx {target sources {actions ""}} {
+    respond "*" ":palx ${target}_$sources\r"
+    eval $actions
+    expect ":KILL"
+}
+
+proc macn11 {target sources {actions ""}} {
+    respond "*" ":macn11\r"
+    respond "*" "${target}_$sources\r"
+    eval $actions
+    expect "CORE USED"
+    respond "*" "\003"
+    respond "*" ":kill\r"
+}
+
 proc loader {files} {
     respond "*" ":dec sys:loader\r"
     respond "*" "$files/g\r"

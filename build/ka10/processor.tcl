@@ -37,22 +37,17 @@ respond "*" ":link channa;rakash tvfix, sys1; ts stuff\r"
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
 # The "AI" IOELEV, also known as CHAOS-11.
 # STUFF prefers to have it in the "." directory.
-respond "*" ":palx dsk0:.;_system;ioelev\r"
-respond "MACHINE NAME =" "AI\r"
-expect ":KILL"
+palx "dsk0:.;" "system;ioelev" { respond "MACHINE NAME =" "AI\r" }
 
 # TV-11.  STUFF prefers it to be in the "." directory.
-respond "*" ":palx dsk0:.;_system;tv\r"
-expect ":KILL"
+palx "dsk0:.;" "system;tv"
 
 # XGP-11.  STUFF prefers it to be SYSBIN; VXGP BIN.
-respond "*" ":palx sysbin;vxgp bin_sysen2;xgp\r"
-expect ":KILL"
+palx "sysbin;vxgp bin" "sysen2;xgp"
 
 # CCONS.  STUFF prefers it to be in the CONS directory.
 mkdir "cons"
-respond "*" ":palx cons;_lmcons;ccons\r"
-expect ":KILL"
+palx "cons;" "lmcons;ccons"
 
 # Old Spacewar
 cwd "spcwar"
