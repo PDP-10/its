@@ -15,9 +15,9 @@ start_dskdmp_its
 
 pdset
 respond "*" ":login db\r"
-sleep 1
+type ":vk\r"
 
-type $emulator_escape
+respond "*" $emulator_escape
 mount_tape "$out/minsrc.tape"
 
 type ":dump\r"

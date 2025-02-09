@@ -21,7 +21,7 @@ expect ":KILL"
 respond "*" ":copy kshack; mcr ram, .; ram ram\r"
 
 # Update microcode on frontend filesystem.
-type ":ksfedr\r"
+respond "*" ":ksfedr\r"
 respond "!" "write\r"
 respond "Are you sure" "yes\r"
 respond "Which file" "ram\r"

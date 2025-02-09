@@ -81,7 +81,6 @@ proc prepare_frontend {} {
     pdset
 
     respond "*" ":login db\r"
-    sleep 1
     type ":vk\r"
 
     respond "*" ":midas sysbin;_kshack;ksfedr\r"

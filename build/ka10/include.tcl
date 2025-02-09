@@ -117,7 +117,8 @@ proc make_dskdmp {} {
     # Paper tape DSKDMP.  This is used for booting ITS.
     respond "*" $emulator_escape
     punch_tape "$out/dskdmp.rim"
-    type ":midas ptp:_system;dskdmp\r"
+    type ":vk\r"
+    respond "*" ":midas ptp:_system;dskdmp\r"
     dskdmp_switches "Y"
     expect ":KILL"
 }

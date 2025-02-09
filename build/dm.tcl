@@ -13,11 +13,9 @@ expect ":KILL"
 
 # Gun down dead demons.
 respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
-type ":vk\r"
 respond "*" ":midas sysbin;_sysen2; gunner\r"
 expect ":KILL"
 respond "*" ":link sys; atsign gunner, sysbin; gunner bin\r"
-type ":vk\r"
 
 # Line printer unspooler demon.
 respond "*" ":midas sys; atsign unspoo_sysen1; unspoo\r"
@@ -41,11 +39,9 @@ expect ":KILL"
 respond "*" ":midas survey; atsign surgiv_surgiv\r"
 expect ":KILL"
 respond "*" ":link sys; atsign surgiv, survey;\r"
-type ":vk\r"
 
 # Survey sender demon.
 respond "*" ":link sys; atsign sursnd, survey;\r"
-type ":vk\r"
 
 # Login program.
 respond "*" ":midas sysbin;_syseng; booter\r"
@@ -72,4 +68,3 @@ respond "*" ":kill\r"
 respond "*" ":kill\r"
 mkdir "(init)"
 respond "*" ":link (init); as hactrn, sys2; ts shell\r"
-type ":vk\r"
