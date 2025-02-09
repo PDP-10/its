@@ -1,0 +1,265 @@
+	.SBTTL	RK05 DISK DRIVER TO BACK-UP DISK THRU ELF
+	.TITLE	DSKRET
+	.ENABL	LC
+
+	.GLOBL	INIDSK,INIRD,DSKWT,begblk,endblk
+	.GLOBL	RDSK,WDSK,DA
+	.GLOBL	SERCNT,HERCNT		;Hard and soft error counts
+	.GLOBL	TOGGLE			;Toggle routine
+
+; Define registers
+
+	R0=%0
+	R1=%1
+	R2=%2
+	R3=%3
+	R4=%4
+	R5=%5
+	SP=%6
+	PC=%7
+	DSPLY	=	177570
+
+
+
+;	Define assignments for RK05
+
+;	-------  BUS ADDRESSES  -------
+
+RKIV =	220		; INTERRUPT VECTOR
+RKDS =	177400		; DRIVE STATUS REGISTER
+RKER =	177402		; ERROR REGISTER
+RKCS =	177404		; CONTROL STATUS REGISTER
+RKWC =	177406		; WORD COUNT REGISTER
+RKBA =	177410		; BUS (DATA) ADDRESS REGISTER
+RKDA =	177412		; DISK ADDRESS REGISTER
+RKDB =	177416		; DATA BUFFER REGISTER
+
+
+
+;	-------  DRIVE STATUS REG BITS  -------
+
+ID	= 160000	; DRIVE IDENT (DRIVE #)
+DPL	= 010000	; DRIVE POWER LOW
+RK05	= 004000	; RK05 IDENTIFIER
+DRU	= 002000	; DRIVE UNSAFE
+SIN	= 001000	; SEEK INCOMPLETE
+SOK	= 000400	; SECTOR COUNTER OK
+DRY	= 000200	; DRIVE READY PHYSICALLY
+DRDY	= 000100	; DRIVE READY LOGICALLY
+WPS	= 000040	; WRITE PROTECT STATUS
+SCEQSA	= 000020	; SECTOR COUNTER = SEEK ADDR
+SC	= 000017	; SECTOR COUNTER
+;	-------  ERROR REG BITS  -------
+
+DRE	= 100000	; DRIVE ERROR
+OVR	= 040000	; OVERRUN (DISK OVERFLOW)
+WLO	= 020000	; WRITE LOCKOUT VIOLATION
+SKE	= 010000	; SEEK ERROR
+PGE	= 004000	; PROGRAMMING ERROR
+NXM	= 002000	; NONEXISTENT MEMORY
+DLT	= 001000	; DATA LATE
+TE	= 000400	; TIMING ERROR
+NXD	= 000200	; NONEXISTENT DISK
+NXC	= 000100	; NONEXISTENT CYLINDER
+NXS	= 000040	; NONEXISTENT SECTOR
+CSE	= 000002	; CHECKSUM ERROR
+WCE	= 000001	; WRITE CHECK ERROR
+
+
+
+
+;	-------  CONTROL STATUS REG BITS  -------
+
+ERROR	= 100000	; ERROR
+HE	= 040000	; HARD ERROR
+SCP	= 020000	; SEARCH COMPLETE
+INHINC	= 004000	; INHIBIT INCR OF RKBA
+FMT	= 002000	; FORMAT MODE
+SSE	= 000400	; STOP ON SOFT ERROR
+RDY	= 000200	; CONTROL READY
+IDE	= 000100	; INTERRUPT ON DONE ENABLE
+MEX	= 000060	; MEMORY ADDR EXTENSION
+FUNC	= 000016	; FUNCTION CODE
+GO	= 000001	; GO
+
+;	FUNCTION CODES:
+
+	CTLRES = 00	; CONTROL RESET
+	WRITE  = 02	; WRITE
+	READ   = 04	; READ
+	WRCHEC = 06	; WRITE CHECK
+	SEEK   = 10	; SEEK
+	RDCHEC = 12	; READ CHECK
+	DRESET = 14	; DRIVE RESET
+	WRLOCK = 16	; WRITE LOCK
+
+
+;	-------  DISK ADDR REG FIELDS  -------
+
+DRSEL	= 160000	; DRIVE SELECT
+CYLAD	= 017740	; CYLINDER ADDRESS
+SUR	= 000020	; SURFACE
+SEC	= 000017	; SECTOR
+; Initialize the disk
+
+INIDSK:
+	MOV	#BUFFZ,R4
+	MOV	#256.,R5
+LP0:	CLR	(R4)+
+	SOB	R5,LP0
+	MOV	#1,@#RKCS		;Do initial control reset
+WLP:	TSTB	@#RKCS			;Ready?
+	BPL	WLP			;Nope
+	MOV	#RKIV,R5		;Get interrupt location
+	MOV	#DSKINT,(R5)+		;Set interrupt handler location
+	MOV	#300,@R5		;Priority 5
+	CLR	SERCNT			;Clear soft error count
+	CLR	HERCNT			;And hard error count
+	CLR	CURBUF			;Clear flag
+	CLR	DA0
+	CLR	DA1
+	CLR	DZ			;Clear all disk addresses
+	MOV	#DA0,DA			;Initial bufffer
+WLP1:	TSTB	@#RKDS			;Drive ready (physically)
+	BPL	WLP1			;Wait for it
+	MOV	#IDE,@#RKCS		;Enable interrupts
+	RTS	PC			;Return
+
+;
+; Interrupt handler 
+;
+
+DSKINT:	RTI		;Long routine
+
+
+; Initialize restore routine
+
+INIRD:
+	MOV	BEGBLK,@DA	;Init disk address
+			;Flow into read transfer routine
+
+
+RTRAN:				;Read from disk in 256 word blocks
+	MOV	#READ!GO,R5	;Save function and Go bit
+	BR	TRAN		;Goto transfer part
+
+WTRAN:				;Write to disk
+	BIT	#WPS,@#RKDS	;Write-protected?
+	BNE	WTRAN		;Yes - wait
+	MOV	#WRITE!GO,R5	;Ok - now do write
+
+TRAN:				;Transfer routine for both read and write
+CLP:	TSTB	@#RKCS		;Control ready?
+	BPL	CLP		;Busy wait for it
+	MOV	#RKDA,R1	;Get disk address register
+	MOV	@DA,@#177570	;Display disk address
+	MOV	@DA,@R1		;Set the disk address
+	MOV	DA,-(R1)	;Buffer address
+	ADD	#2,@R1		;Right buffer
+	MOV	#-256.,-(R1)	;Word count - 1 block (512 bytes)
+	BIS	R5,-(R1)	;Let it go
+	RTS	PC		;and return
+
+; Read from disk
+;	Wait for previous operation then initiate next read
+;
+
+RDSK:
+	JSR	PC,DSKWT	;Wait for last operation to finish
+	CMP	R5,ENDBLK	;Was it last sector?
+	BHIS	TOGGLE		;Yes - don't start new read
+	JSR	PC,RTRAN	;Start new transfer
+	BR	TOGGLE		;TOggle and return
+
+
+; Write a block on disk after waiting for last
+; operation to finish
+;
+
+WDSK:
+	JSR	PC,DSKWT	;Wait
+	JSR	PC,TOGGLE	;Toggle it
+	JSR	PC,WTRAN	;New write
+	BR	TOGGLE		;Toggle and return
+
+
+
+; Wait for disk operation to finish
+
+DSKWT:
+	TSTB	@#RKCS		;Finished?
+	BMI	ERRCHK		;Yes - check for errors
+	WAIT			;No - wait for interrupts
+	BR	DSKWT		;Check if disk ready
+
+ERRCHK:
+	TST	@#RKCS		;Any error?
+	BMI	ERR		;Yes
+EXT0:	MOV	@#RKDA,R5	;Updated disk address
+EXT:	JSR	PC,TOGGLE	;Toggle buffers
+EXT1:	MOV	R5,@DA		;New disk address (must check for eom later)
+DONE:	RTS	PC		;And return
+
+
+;
+; Error routine
+; Check for hard error - if so then update disk address
+; Otherwise just continue on
+;
+
+ERR:
+	BIT	#HE,@#RKCS	;Hard error?
+	BNE	UPDAT		;Yes update disk address
+	INC	SERCNT		;BUmpr soft error counter
+	BR	EXT0		;Toggle flag and buffers
+UPDAT:	INC	HERCNT		;Bump hard error count
+	MOV	#1,@#RKCS	;Control reset
+	MOV	#-1,@DSPLY	;Set to -1 for people watching
+	MOV	@DA,R1		;Get current disk address
+	MOV	R1,DZ		;Save old address in blank buffer
+				;in case of error
+	MOV	R1,R5		;Save old disk address
+	BIC	#^C17,R1	;Clear all but sector 
+	INC	R1		;Next sector
+	CMP	R1,#11.		;Go to next track?
+	BLE	OKINC		;No not yet
+	ADD	#5,R5		;Yes - bump to next track
+LP:	TSTB	@#RKCS		;Finished control reset?
+	BPL	LP		;Nope - keep looping
+	MOV	#100,@#RKCS	;Re-enable interupts
+	JSR	PC,TOGGLE	;Toggle
+	MOV	#DZ,DA		;All zero bytes in buffer
+	BR	DONE		;Return
+
+OKINC:	INC	R5		;Just increment sector count
+	BR	LP		;Go back to swtich buffers
+
+; Toggle routine
+
+TOGGLE:
+	MOV	#DA0,DA
+	COM	CURBUF
+	BEQ	RET1
+	MOV	#DA1,DA
+RET1:	RTS	PC
+
+
+BEGBLK:	.WORD	0
+ENDBLK:	.WORD	0
+
+CURBUF:	.WORD	0
+SERCNT:	.WORD	0	;Soft error count
+HERCNT:	.WORD	0	;Hard error count
+DA:	.WORD	0
+
+DZ:	.WORD	0
+BUFFZ:	.BLKW	256.
+
+DA0:	.WORD	0
+BUFF0:	.BLKW	256.
+
+DA1:	.WORD	0
+BUFF1:	.BLKW	256.
+
+	.END
+

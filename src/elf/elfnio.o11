@@ -1,0 +1,590 @@
+;<VOICE>ELFNIO.M11;8     5-APR-74 21:31:04	EDIT BY RAVELING
+
+;	Fixed timing dependent bug in output process; io bit
+;	in PCTCB was only cleared when an ack signal arrived,
+;	leading to unpredictable output when host-imp queue
+;	contained more than one message.
+
+;<VOICE>ELFNIO.M11;7    12-MAR-74 19:28:09	EDIT BY RAVELING
+
+;	Is it true that old bugs never die?  Fixed NIT interface
+;	restart code to read into a buffer, instead of into
+;	an address of random trash.
+
+;<VOICE>ELFNIO.M11;6     6-MAR-74 12:51:08	EDIT BY RAVELING
+
+;	Rewrote NIT restart procedure code to fix buffer address
+;	bug and avoid ANTS interface busy-bit timing dependency.
+
+;<VOICE>ELFNIO.M11;5     5-MAR-74 19:40:55	EDIT BY RAVELING
+
+;	1.  Added interface-dead checking to NOT process.
+;	2.  Added symbolic assembly of sob instruction via .loop
+;	    macro.
+;	3.  Added .page directives before .sbttl's for the
+;	    benefit of people not assembling with MACN11.
+
+;<VOICE>ELFNIO.M11;4     4-MAR-74 18:34:53	EDIT BY RAVELING
+
+;	    Fixed buffer clobber bug due to copying messages
+;		64-128 bytes long.
+
+;<VOICE>ELFNIO.M11;3     4-MAR-74 18:08:10	EDIT BY RAVELING
+
+;	1.  Fixed 2-byte error in byte count for ANTS output.
+;	2.  Added comment blocks.
+
+;<VOICE>ELFNIO.M11;2     3-MAR-74 22:09:55	EDIT BY RAVELING
+
+;	1.  Added conditional assembly to suit either ISI
+;		or ANTS interface.
+;	2.  Fixed a couple possible bug catchers.
+
+	.page
+
+	.TITLE	ELFNIO -- Network I/O for ISI Local IMP Interface
+
+	.MCALL	$CNFIG
+	.MCALL	$NETHW,$DFREG,$DISCC
+	.MCALL	$PUSH,$POP
+	.MCALL	$WAIT,$POST,$ALOCB
+	.LIST	ME
+	.NLIST	CND
+	$CNFIG
+	$DFREG
+	$DISCC
+	$NETHW
+
+
+
+	.globl	$APCT,$IEXIT,$SVST
+	.globl	$IMPIN,$DEAD,$RTPIN,$RTPOU
+	.globl	$PCTRI,$PCTRO,$DEBUG,$IHQ
+	.globl	$GFMQE,$ENQ,$DEQ,$ALOCW
+	.globl	$HIQ,$PCTIH
+	.page
+	.sbttl	Prose
+
+;			----------------
+
+;	ELFNIO is the device driver for all communication with
+;	the IMP.  This module is configured at assembly time
+;	for use with either a standard ANTS interface or for
+;	USC-ISI's modified version of it.  Definitions in the
+;	$NETHW macro determine which to support.
+
+
+;	ISI's IMP interface differs from the ANTS hardware only
+;	in the following details:
+
+;	1.  DMA transfers are controlled by specifying a start
+;		address and byte count, rather than start and
+;		end addresses.  The ANTS end pointer registers
+;		have become byte count registers to accomplish
+;		this; the length of a transfer is specified by
+;		loading a positive byte count.
+
+;	2.  Extended memory address fields have been included
+;		in the status registers.
+
+
+;			----------------
+
+
+;	This module contains an initialization subroutine,
+;	two interrupt routines, and two processes:
+
+;	$IMPINI is called by ELFDIS during system startup to
+;	initialize interrupt vectors and the IMP interface.
+
+;	The interrupt routines signal an associated process
+;	when I/O completes on either the input or output side
+;	of the interface.
+
+;	The network input transmission (NIT) process reads 
+;	incoming messages into buffers and enqueues them on
+;	the IMP-Host message queue.  It segnals the NCP's
+;	input-handler process after enqueueing each message.
+
+;	The network output transmission (NOT) process dequeues
+;	messages from the Host-IMP queue and transmits them
+;	to the IMP.  NOT is responsible for holding up the
+;	host-master-ready signal to the IMP and for restarting
+;	cleanly if the IMP drops dead.
+	.page
+	.sbttl	IMP Interface Initialization
+
+
+;----------------------------------------------------
+;----						-----
+;----		<< initialization >>		-----
+;----						-----
+;----	1.  Set up interrupt vectors for	-----
+;----	    the IMP interface.			-----
+;----						-----
+;----	2.  Set $DEAD to show resurrection	-----
+;----	    in progress.			-----
+;----						-----
+;----	3.  Reset the IMP interface.		-----
+;----						-----
+;----	4.  Initialize interface regs.		-----
+;----		** Enable interrupts		-----
+;----						-----
+;----------------------------------------------------
+
+;   $IMPIN is called from the dispatcher to initialize
+;	   the IMP when ELF starts.
+
+;   Impin, the internal entry to initialization,
+;	   is called to reset the interface when attempting
+;	   to recover from rigor mortis of the IMP.  This
+;	   entry performs all initialization except setting
+;	   the interrupt vectors.
+
+
+;----------------------------------------------------
+
+;		** Calling Sequence **
+
+;	jsr	pc,$IMPIN
+;	   or
+;	jsr	pc,impin
+
+;		Input parameters	-- None
+;		Returned data		-- None
+;		Volatile registers	-- r0 for $IMPIN,
+;					   none for impin
+
+	.page
+
+$IMPIN:	mov	#IMPIVI,r0		; Load interrupt vector loc
+	mov	#viii,(r0)+		; Set input new-pc,
+	mov	#340,(r0)+		;   new ps => prty 7.
+	mov	#vioi,(r0)+		; Set output vector.
+	mov	#340,(r0)+
+
+impin:	movb	#-1,$DEAD		; Set IMP status to 'reviving'.
+
+	bis	#ireset,@#IMPS2O	; Reset the interface.
+	bis	#noswap+intena,@#IMPS1I	; Enable interrupts and 
+	bis	#noswap+intena,@#IMPS1O	;	disable swapping.
+	rts	pc			; Return.
+	.page
+	.sbttl	Interrupt Routines
+
+;------------------------------------------------------------
+;----							-----
+;----		<< Interrupt Routines >>		-----
+;----							-----
+;----	Interrupt routines for both input & output	-----
+;----	sides of the interface simply signal the	-----
+;----	associated process (NIT or NOT).  Completion	-----
+;----	code for these signals is "io" (octal 40).	-----
+;----							-----
+;------------------------------------------------------------
+
+
+;		Input  Interrupt
+
+viii:	jsr	r5,$SVST		; Save registers.
+	$POST	#$PCTRI+2,#rdy+io	; Post the input process.
+iexit:	jmp	$IEXIT			; Exit via the dispatcher.
+
+
+
+;		Output Interrupt
+
+vioi:	jsr	r5,$SVST		; Save registers
+	$POST	#$PCTRO+2,#rdy+io	; Post the output process.
+	br	iexit			; Exit.
+	.page
+	.sbttl	NOT -- Network Output Transmission Process
+
+;------------------------------------------------------------
+;----							-----
+;----		<< Network Output Transmission >>	-----
+;----							-----
+;----			   *****			-----
+;----							-----
+;----	Functions of the NOT process:			-----
+;----							-----
+;----	    1.	Transmit messages from the NCP's	-----
+;----		host/IMP queue to the IMP.		-----
+;----							-----
+;----	    2.	Maintain the host-master-ready		-----
+;----		signal to the IMP.			-----
+;----							-----
+;----	    3.	Identify interface error conditions	-----
+;----		to set IMP-dead status.			-----
+;----							-----
+;----	    4.  Restart IMP/host communications after	-----
+;----		system startup and catastrophes.	-----
+;----							-----
+;------------------------------------------------------------
+;----							-----
+;----	** Signals received:				-----
+;----							-----
+;----		ack  --	Sent by NCP as an output	-----
+;----			request:  indicates a msg	-----
+;----			was enq'd on host/IMP queue.	-----
+;----							-----
+;----		io   --	Sent by output interrupt rtn	-----
+;----			when msg transfer completes.	-----
+;----							-----
+;----		tim  --	Sent by timer process at end	-----
+;----			of a time interval.		-----
+;----							-----
+;----	** Signals issued:	None			-----
+;----							-----
+;----	** System facilities used:			-----
+;----							-----
+;----		$DEQ,  $POST,  $STIME,  $WAIT		-----
+;----							-----
+;------------------------------------------------------------
+
+	.page
+;	In normal operation the output process performs
+;	the following functions:
+
+;		1.  Set Host-master-ready on the interface;
+;		    this signal stays up about 1.5 seconds
+;		    without being poked again.
+
+;		2.  Wait for 1 second or until an "ack" signal
+;		    arrives from the NCP.
+
+;		    a.  Time interval expired:  Set host-ready
+;			again and start a new 1-second interval.
+;
+;		    b.  Ack signal:  Dequeue a message from the
+;			Host-IMP queue, start transmission to
+;			the IMP, and wait for I/O completion;
+;			Host-ready is held up during this wait
+;			by using 1-second time intervals, as in
+;			the wait-for-ack logic.
+
+
+;	NOT sends a few NOP messages to the IMP when starting
+;	and when restarting after an IMP error or interface
+;	reset.  The latter condition is detected by NIT and
+;	marked by a value of 1 in location $DEAD; when NOT
+;	detects this it checks to see if IMP-master-ready
+;	is up. . .
+
+;		-- If the IMP is up, NOT re-initializes the
+;		   interface and attempts to restart output
+;		   with its sequence of NOP's.
+;		-- If not, NOT just holds up Host-master-ready
+;		   and repeats the status test once per second.
+
+;	During the restart procedure NOT sets $DEAD to -1.
+;	It clears $DEAD when the last NOP has been transmitted
+;	successfully.
+	.page
+nopcnt = 4		; Number of NOP's to send for initialization
+
+;	-----------------  Restart Procedure  -------------------
+
+arise:	jsr	pc,impin		; Reset & init the interface.
+$RTPOU:	bis	#hosrdy,@#IMPS2O	; Set Host-master-ready.
+	mov	#nopcnt,-(sp)		; Set NOPs-to-send counter.
+	$POST	#$PCTRI+2,#rdy		; Tell NIT to start input.
+
+nopup:	jsr	pc,sndnop	;==== Send a
+	dec	@sp		;==== sequence of
+	bgt	nopup		;==== NOP messages to IMP
+
+	tst	(sp)+			; Dispense with used counter.
+	clrb	$DEAD			; Indicate IMP is alive.
+
+
+
+;	-------  Wait for Ack signal from NCP  -------
+;	-------  & hold up Host-master-ready.  -------
+
+owait:	bis	#hosrdy,@#IMPS2O	; Set Host-ready.
+	$STIME	1000.			; start a new 1-sec intvl
+
+	$WAIT				; Wait for any signal.
+
+	jsr	pc,dedtes		; Did the IMP croak?
+	beq	alive			;   No - check signal type.
+	tstb	@#IMPS2I		;   Yes - is it up now?
+	bmi	arise			;      yes: try to restart.
+	br	owait			;      no:  just prod host rdy.
+
+
+alive:	bit	#ack,-(r4)		; Was this signal an ack?
+	beq	owait			; ..Must have been time interval
+	clrb	@r4			; ..expiring if not ack.
+
+	.page
+;	-------  Send a message from Host-IMP queue  -------
+
+ohimsg:	mov	#$HIQ,r2		; Dequeue msg from host-imp q.
+	jsr	pc,$DEQ
+	beq	owait			; Check for empty queue.
+
+
+	mov	-(r0),r5		; Load message address from MQE.
+	mov	-4(r0),r4		; Load message length.
+	asl	r4			; Convert word count to byte count.
+	jsr	pc,sndmsg		; Send the message.
+
+	tst	$HIQ			; Is Host-IMP queue empty?
+	bne	ohimsg			; No - send another message.
+	br	owait
+
+
+;	-------  Subroutine to send a NOP  -------
+
+sndnop:	mov	#nopmsg,r5		; Load loc of NOP leader data
+	mov	#4,r4			; Load leader length.
+					; -- Fall thru to sndmsg --
+
+
+;	---------  Subroutine  Sndmsg  ---------
+
+;	Send a message to the IMP, wait for completion of
+;	the output, and hold up Host-master-ready.
+
+sndmsg:	bis	#hosrdy,@#IMPS2O	; Set Host-ready again.
+	mov	r5,@#IMPSPO		; Set interface's start pointer.
+	.if df	IMPBCO
+	mov	r4,@#IMPBCO		; Set byte count & start.
+	.iff
+	add	r4,r5			; End pointer = start + length
+	tst	-(r5)			; 	-2 for dumb interface.
+	mov	r5,@#IMPEPO		; Set end pointer to start.
+	.endc
+
+
+sndwat:	$STIME	1000.			; Start a new interval.
+
+	bis	#hosrdy,@#IMPS2O	; Hold up Host-ready signal.
+	$WAIT				; Wait for I/O or time complete.
+
+	bit	#io,-(r4)		; Did output finish?
+	beq	sndwat			; No - must have been time.
+	bic	#io,@r4			; Yes -- done!!!
+	rts	pc
+
+
+nopmsg:	2000,0			; NOP control message
+	.page
+	.sbttl	NIT -- Network Input Transmission Process
+
+;------------------------------------------------------------
+;----							-----
+;----		<< Network Input Transmission >>	-----
+;----							-----
+;----			   *****			-----
+;----							-----
+;----	Functions of the NIT process:			-----
+;----							-----
+;----	    1.  Transmit input from the IMP		-----
+;----		to the NCP's IMP/Host queue.		-----
+;----							-----
+;----	    2.	Identify interface error conditions	-----
+;----		to set IMP-dead status.			-----
+;----							-----
+;------------------------------------------------------------
+;----							-----
+;----	** Signals received:				-----
+;----							-----
+;----		io   --	Sent by input interrupt rtn	-----
+;----			when msg transfer completes.	-----
+;----							-----
+;----	** Signals issued:				-----
+;----							-----
+;----		ack  --	Sent to NCP input handler	-----
+;----			when a message has been		-----
+;----			enqueued on IMP/host queue	-----
+;----							-----
+;----	** System facilities used:			-----
+;----							-----
+;----	  $ALOCW,  $ENQ,  $GFMQE,  $POST,  $WAIT	-----
+;----							-----
+;------------------------------------------------------------
+	.page
+;	NIT maintains an outstanding input request to the IMP
+;	to read into a 1024-byte buffer.  When an input operation
+;	completes, it proceeds as follows:
+
+;	Input length was greater than 128 bytes:
+
+;		1.  Allocate a new 1024-byte buffer.  This
+;		    will be used for the next input operation.
+;		2.  Enqueue the original buffer on the IMP-Host
+;		    message queue & signal the NCP's input-handling
+;		    process.
+;		3.  Start another read from the IMP.
+
+;	Input length was less than or equal to 128 bytes:
+
+;		1.  Allocate a 128-byte buffer, & copy the original
+;		    data into it.
+;		2.  Enqueue the new buffer on the IMP-Host queue
+;		    and signal the NCP.
+;		3.  Start another read into the original 1024-byte buffer.
+
+;	Buffers are always allocated by $ALOCW.  Running out of buffer
+;	space will cause the interface to quit accepting data from the
+;	IMP, since input requests are not being re-issued.
+
+
+;	NIT is responsible for declaring the IMP dead.  It does
+;	this whenever it finds the "imp error" bit on, indicating
+;	that the IMP-master-ready signal dropped sometime in
+;	recent history.  NIT notes this predicament by setting
+;	$DEAD to 1.
+	.page
+
+;	-------  Input Process Initialization  -------
+
+$RTPIN:	mov	#1,r0		; Allocate a long (pool 1) buffer.
+	jsr	pc,$ALOCW	;	[1024 bytes]
+	br	initrd		; Issue initial read.
+
+
+;	-------  Wait for i/o completion, then  -------
+;	-------------  process input  -----------------
+
+iwait:	$WAIT			; Wait for a signal.
+
+	jsr	pc,dedtes	; Is the interface alive?
+	bgt	iwait		;    No -- act comatose.
+	bit	#io,-(r4)	;    Yes - was this input completion?
+	bne	inmess		;	 Yes.. pass msg to NCP
+
+;	   Non-input signal was presumably from NOT,
+;	   indicating the interface was reset & everything
+;	   is restarting.
+
+	mov	imsloc,r1	; Reload buf loc in case of restart.
+	bit	#busy,@#IMPS1I	; Is input side running?
+	beq	reread		;    No -- reissue last read.
+	br	iwait		;    Yes - ignore stray signal.
+
+	.page
+;	--------------  Input Completion  --------------
+
+inmess:	clrb	@r4		; Clear completion codes.
+	mov	@#IMPSPI,r1	; Get updated input pointer.
+	sub	imsloc,r1	; Length = (new-old) data loc
+	mov	r1,imslen	; Save input message length.
+
+;	   Set r0 and imstyp to indicate whether message
+;	   is short or long.  By some curious coincidence, this
+;	   short/long flag turns out to be the pool id for
+;	   buffers of the proper size.
+
+	clr	r0			; Presume short input.
+	cmp	r1,#128.		; Is input > 128 bytes?
+	blos	.+4			;    No -- it really is short.
+	inc	r0			;    Yes - flag it 'long'.
+
+	mov	r0,imstyp		; Save buffer length flag.
+	jsr	pc,$ALOCW		; Get buffer to match.
+	mov	r1,newbuf		; Save loc of the new buffer.
+
+	tst	imstyp			; Is input short?
+	bne	longms			; No - enqueue original buffer
+
+;	   *** Input is short:  Copy it to the new buffer
+;	   *** and enqueue the latter on IMP/Host queue.
+
+	mov	imsloc,r2		; Locate original input buffer.
+	mov	r1,imsloc		; Swap current & new buf ptrs.
+	mov	r2,newbuf
+	mov	imslen,r0		; Reload message length.
+	asr	r0			; Make it a word count.
+
+mescop:	mov	(r2)+,(r1)+		; ** copy buffer contents **
+	.loop	r0,mescop
+	.page
+;	   *** Enqueue current input message on IMP-Host msg queue,
+;	   *** signal the NCP's input handler.
+
+
+longms:	jsr	pc,$GFMQE		; Get a free MQE.
+	mov	r4,r0			; Copy MQE loc for later enq.
+	mov	#imsloc,r3		; Point to message parms.
+	mov	(r3)+,-(r4)		; Set buffer pointer in MQE.
+	mov	(r3)+,-(r4)		; Set buffer pool id.
+	mov	@r3,-(r4)		; Set message length.
+	asr	@r4			; Convert byte count to word count.
+
+	mov	#$IHQ,r2		; ** Enqueue the mqe **
+	jsr	pc,$ENQ
+
+	$POST	#$PCTIH+2,#rdy+ack	; Post the NCP.
+
+;	   *** Start input operation into new buffer.
+
+istart:	mov	newbuf,r1		; Locate next input buffer.
+initrd:	mov	r1,imsloc		; Save buffer address.
+reread:	mov	r1,@#IMPSPI		; Set start pointer in interface.
+	.if df	IMPBCI
+	mov	#1024.,@#IMPBCI		; Set byte count to start read.
+	.iff
+	add	#1024.,r1		; Locate end of buffer.
+	mov	r1,@#IMPEPI		; Set end pointer to start read.
+	.endc
+	br	iwait			; Wait for completion again.
+
+	.page
+	.sbttl	Dedtes -- Subroutine to check for dead interface
+
+;	** Dedtes is called by both input and output processes
+;	   to see if the interface is dead.  The symptom of
+;	   this is "imperr" being set in IMPS1I, which means
+;	   the IMP dropped its IMP-master-ready line.  This
+;	   happens for the following reasons:
+
+;	-- The IMP really croaked.
+
+;	-- The IMP voluntarily dropped its ready line when it
+;	   decided we were dead; it recognizes rigor mortis of the 11
+;	   in either of two ways:
+
+;		.. Our Host-master-ready line was down when the IMP
+;		   peeked at it.
+
+;		.. We failed to accept input for an excessive time.
+
+
+
+Dedtes:	tst	@#IMPS1I		; Is IMP error status set?
+	bpl	deadck			;    No - just check $DEAD.
+	movb	#1,$DEAD		;    Yes - mark IMP dead.
+
+deadck:	tstb	$DEAD			; Check recorded status.
+	rts	pc
+
+	.page
+	.sbttl	Network I/O Parameter Storage
+
+
+;	   Imsloc, imstyp, and imslen must remain in the order
+;	   given below; at one point (setting an input MQE) they
+;	   are referenced by autoincrement addressing.
+
+imsloc:	0				; Input message location
+imstyp:	0				; Input type
+;			0 => short (<= 128 bytes)
+;			1 => long  (>128 bytes)
+imslen:	0				; Input message length
+newbuf:	0				; Pointer to next buffer
+
+
+
+$DEAD:	.byte	0			; IMP's vital signs
+
+;	1  - IMP is dead
+;	0  - IMP is alive
+;	-1 - RTO is trying to revive the dead IMP
+
+$DEBUG:	.byte	0			; Debug mode flag
+
+	.end

@@ -1346,6 +1346,35 @@ palx "mits.b;" "bootil" {
     respond "Start of temporary data storage?" "150000\r"
 }
 
+# ELF
+# The configuration to use, either ucbmac or voimac.
+set mac "voimac"
+respond "*" ":cwd elf\r"
+macn11 "dis" "$mac,elfdis"
+macn11 "dm1" "$mac,elfdm1"
+macn11 "dm2" "$mac,elfdm2"
+macn11 "ftp" "$mac,elfftp"
+macn11 "lp" "$mac,elflp"
+macn11 "mdv" "$mac,elfmdv"
+macn11 "ncp" "$mac,elfncp"
+macn11 "np0" "$mac,elfnp0"
+macn11 "np1" "$mac,elfnp1"
+macn11 "np2" "$mac,elfnp2"
+macn11 "rk" "$mac,elfrk"
+macn11 "rst" "$mac,elfrst"
+macn11 "rti" "$mac,elfrti"
+macn11 "rto" "$mac,elfrto"
+macn11 "sa" "$mac,elfsa"
+macn11 "tbl" "$mac,elftbl"
+macn11 "tc" "$mac,elftc"
+macn11 "wd" "$mac,elfwd"
+macn11 "npo" "$mac,netnpo"
+macn11 "clk" "$mac,voiclk"
+macn11 "ioc" "$mac,voiioc"
+macn11 "dtft" "$mac,dtftp"
+macn11 "tnft" "$mac,tnftp"
+macn11 "tnlogs" "$mac,tnlogs"
+
 # ITS universal file.
 cwd "decsys"
 macro10 "sits.unv" "sits.mac"
