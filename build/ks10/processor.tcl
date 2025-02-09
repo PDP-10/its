@@ -11,8 +11,7 @@ respond "*" "\003"
 type ":kill\r"
 
 # KS10 microcode assembler
-respond "*" ":midas kshack;ts micro_micro\r"
-expect ":KILL"
+midas "kshack;ts micro" "micro"
 
 # KS10 microcode.
 # It doesn't seem to work very well when purified.
@@ -32,5 +31,4 @@ respond "!" "quit\r"
 expect ":KILL"
 
 # TENTH, toy Forth for KS10.
-respond "*" ":midas .; @ tenth_aap; tenth\r"
-expect ":KILL"
+midas ".; @ tenth" "aap; tenth"

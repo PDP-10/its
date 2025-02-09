@@ -52,10 +52,8 @@ type ":kill\r"
 # the following are required to compile some of the libmax;
 # FASL files
 #
-respond "*" ":midas rwk;lfsdef fasl_rwk;lfsdef\r"
-expect ":KILL"
-respond "*" ":midas rat;ratlap fasl_rat;ratlap\r"
-expect ":KILL"
+midas "rwk;lfsdef fasl" "rwk;lfsdef"
+midas "rat;ratlap fasl" "rat;ratlap"
 mkdir "maxdmp"
 respond "*" ":link maxdmp;ratlap fasl,rat;ratlap fasl\r"
 respond "*" ":link libmax;lusets fasl,liblsp;\r"
@@ -215,7 +213,7 @@ respond "*" "(dump-mcl 32. t)"
 respond "File name->" "\002"
 respond ";BKPT" "(quit)"
 
-respond "*" ":midas maxtul;ts mcl_mcldmp midas\r"
+midas "maxtul;ts mcl" "mcldmp midas"
 respond "*" ":link maxtul;.good. complr,maxtul;mcldmp 32\r"
 
 # build UTMCL -- the compiler invoked by compile_lisp_file in Macsyma

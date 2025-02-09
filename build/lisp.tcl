@@ -8,9 +8,9 @@ respond "*" ":link lisp;grinde fasl,lisp;gfn fasl\r"
 respond "*" ":link l;loop fasl,liblsp;loop fasl\r"
 respond "*" ":link lisp;loop fasl,liblsp;loop fasl\r"
 
-respond "*" ":midas .temp.;_l;*lisp\r"
-respond "end input with ^C" "\003"
-expect ":KILL"
+midas ".temp.;" "l;*lisp" {
+    respond "end input with ^C" "\003"
+}
 respond "*" ":job lisp\r"
 respond "*" ":load .temp.;*lisp bin\r"
 respond "*" "\033g"
@@ -52,13 +52,12 @@ respond "*" ":link info;complr 1,info;lispc >\r"
 # lisp;* fasl that that have autoload properties in interpreter
 respond "*" ":link sys;.fasl defs,lisp;.fasl defs\r"
 respond "*" ":link sys;fasdfs 1,lisp;.fasl defs\r"
-respond "*" ":midas lisp;_l;allfil\r"
-respond "*" ":midas lisp;_l;bltarr\r"
-respond "*" ":midas lisp;_lspsrc;edit\r"
-respond "*" ":midas lisp;_l;getmid\r"
-respond "*" ":midas lisp;_l;humble\r"
-respond "*" ":midas lisp;_lspsrc;sort\r"
-expect ":KILL"
+midas "lisp;" "l;allfil"
+midas "lisp;" "l;bltarr"
+midas "lisp;" "lspsrc;edit"
+midas "lisp;" "l;getmid"
+midas "lisp;" "l;humble"
+midas "lisp;" "lspsrc;sort"
 
 respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
 
@@ -182,10 +181,8 @@ respond "_" "\032"
 type ":kill\r"
 
 # inquir
-respond "*" ":midas inquir;_lsrrtn\r"
-expect ":KILL"
-respond "*" ":midas inquir;_cstacy;netrtn\r"
-expect ":KILL"
+midas "inquir;" "lsrrtn"
+midas "inquir;" "cstacy;netrtn"
 
 respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
 respond "*" ":link lisp;debug fasl,liblsp;debug fasl\r"
@@ -199,10 +196,8 @@ respond "_" "inquir;inquir\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":midas inquir;ts inqexm_inqexm\r"
-expect ":KILL"
-respond "*" ":midas inquir;ts inqrep_inqrep\r"
-expect ":KILL"
+midas "inquir;ts inqexm" "inqexm"
+midas "inquir;ts inqrep" "inqrep"
 respond "*" ":link inquir;ts inqchk,ts inquir\r"
 
 respond "*" "complr\013"
@@ -235,16 +230,12 @@ type ":kill\r"
 
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 
-respond "*" ":midas inquir;ts lookup_inquir;lookup\r"
-expect ":KILL"
-
+midas "inquir;ts lookup" "inquir;lookup"
 respond "*" ":link sys1;ts lookup,inquir;ts lookup\r"
 
-respond "*" ":midas sys3;ts lsrprt_sysen1; lsrprt\r"
-expect ":KILL"
+midas "sys3;ts lsrprt" "sysen1; lsrprt"
 
-respond "*" ":midas sys3;ts lsrdmp_bawden; lsrdmp\r"
-expect ":KILL"
+midas "sys3;ts lsrdmp" "bawden; lsrdmp"
 
 # more lisp packages
 respond "*" ":link lisp;tty fasl,liblsp;tty fasl\r"
@@ -291,10 +282,8 @@ respond "_" "lisp;_nilcom;thread\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":midas lisp;_l;lchnsp\r"
-expect ":KILL"
-respond "*" ":midas lisp;_l;purep\r"
-expect ":KILL"
+midas "lisp;" "l;lchnsp"
+midas "lisp;" "l;purep"
 
 # struct
 
@@ -315,8 +304,7 @@ type ":kill\r"
 respond "*" ":copy alan;nstruc fasl,liblsp;struct fasl\r"
 respond "*" ":link lisp;struct fasl,liblsp;struct fasl\r"
 
-respond "*" ":midas liblsp;_alan;macits\r"
-expect ":KILL"
+midas "liblsp;" "alan;macits"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_alan;dprint\r"
@@ -514,15 +502,15 @@ respond "_" "lisp;_nilcom;subloa\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":midas liblsp;_libdoc;bssq\r"
-respond "*" ":midas liblsp;_libdoc;aryadr\r"
-respond "*" ":midas liblsp;_libdoc;link\r"
-respond "*" ":midas liblsp;_libdoc;lscall\r"
-respond "*" ":midas liblsp;_libdoc;cpyhnk\r"
+midas "liblsp;" "libdoc;bssq"
+midas "liblsp;" "libdoc;aryadr"
+midas "liblsp;" "libdoc;link"
+midas "liblsp;" "libdoc;lscall"
+midas "liblsp;" "libdoc;cpyhnk"
 
 respond "*" ":link lisp;defns mid,l;defns >\r"
-respond "*" ":midas liblsp;_libdoc;fft\r"
-respond "*" ":midas liblsp;_libdoc;phase\r"
+midas "liblsp;" "libdoc;fft"
+midas "liblsp;" "libdoc;phase"
 
 # More LIBLSP packages
 respond "*" "complr\013"
@@ -540,8 +528,8 @@ respond "_" "liblsp;_libdoc;stacks\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":midas liblsp;_libdoc;dirsiz\r"
-respond "*" ":midas liblsp;_z;timer\r"
+midas "liblsp;" "libdoc;dirsiz"
+midas "liblsp;" "z;timer"
 
 respond "*" ":link lisp;vsaid lisp,nilcom;vsaid >\r"
 respond "*" "complr\013"
@@ -557,14 +545,12 @@ respond "Delete? (Y or N):" "y"
 respond "@" "q\r"
 expect ":KILL"
 
-respond "*" ":midas liblsp;_gsb;ttyvar\r"
-respond "Use what filename instead?" "lisp;\r"
-expect ":KILL"
+midas "liblsp;" "gsb;ttyvar" {
+    respond "Use what filename instead?" "lisp;\r"
+}
 
-respond "*" ":midas liblsp;_libdoc;aryadr\r"
-expect ":KILL"
-respond "*" ":midas liblsp;_libdoc;bssq\r"
-expect ":KILL"
+midas "liblsp;" "libdoc;aryadr"
+midas "liblsp;" "libdoc;bssq"
 
 respond "*" "complr\013"
 respond "_" "liblsp;_libdoc;lddt\r"
@@ -628,10 +614,8 @@ respond "_" "lisp;_lspsrc;vector\r"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" ":midas lisp;_lspsrc;sendi\r"
-expect ":KILL"
-respond "*" ":midas lisp;_lspsrc;straux\r"
-expect ":KILL"
+midas "lisp;" "lspsrc;sendi"
+midas "lisp;" "lspsrc;straux"
 
 # lispt source is in libdoc, therefore fasl should be in liblsp
 # version in lisp; should be a link to liblsp;lispf fasl
@@ -640,14 +624,13 @@ respond "*" ":link lisp;lispt fasl,liblsp;\r"
 respond "*" ":link sys2;ts lispt,sys2;ts edit\r"
 
 # Lisp display library
-respond "*" ":midas lisp; slave fasl_l; slave\r"
-expect ":KILL"
+midas "lisp; slave fasl" "l; slave"
 
 # Lisp display slave, PDP-10 and GT40 version.
-respond "*" ":midas sys; atsign 10slav_sysen2; ld10\r"
-respond "   PDP6F = " "0\r"
-respond "GT40F=" "1\r"
-expect ":KILL"
+midas "sys; atsign 10slav" "sysen2; ld10" {
+    respond "   PDP6F = " "0\r"
+    respond "GT40F=" "1\r"
+}
 
 # animal
 respond "*" "complr\013"

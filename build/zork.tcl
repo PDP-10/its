@@ -1,12 +1,10 @@
 log_progress "ENTERING BUILD SCRIPT: ZORK"
 
 # Old Zork startup
-respond "*" ":midas sys2; ts ozork_taa; zork\r"
-expect ":KILL"
+midas "sys2; ts ozork" "taa; zork"
 
 # New Zork startup
-respond "*" ":midas sys; ts rbye_cfs; zork\r"
-expect ":KILL"
+midas "sys; ts rbye" "cfs; zork"
 respond "*" ":link sys1;ts zork, sys; ts rbye\r"
 
 mkdir "cfs"

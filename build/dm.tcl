@@ -4,48 +4,42 @@ log_progress "ENTERING BUILD SCRIPT: DM"
 # Dynamic Modeling PDP-10.
 
 # Demon starter.
-respond "*" ":midas sys; atsign demstr_sysen2; demstr\r"
-expect ":KILL"
+midas "sys; atsign demstr" "sysen2; demstr"
 
 # Demon status.  Self purifying.
-respond "*" ":midas sysen2; ts demst_sysen2; demst\r"
-expect ":KILL"
+midas "sysen2; ts demst" "sysen2; demst"
 
 # Gun down dead demons.
 respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
-respond "*" ":midas sysbin;_sysen2; gunner\r"
-expect ":KILL"
+midas "sysbin;" "sysen2; gunner"
 respond "*" ":link sys; atsign gunner, sysbin; gunner bin\r"
 
 # Line printer unspooler demon.
-respond "*" ":midas sys; atsign unspoo_sysen1; unspoo\r"
-# Just accept the defaults for now.
-respond "(CR) FOR DEVICE LPT, nn FOR Tnn" "\r"
-respond "(CR) FOR .LPTR. DIRECTORY, OR TYPE NEW NAME" "\r"
-expect ":KILL"
+midas "sys; atsign unspoo" "sysen1; unspoo" {
+    # Just accept the defaults for now.
+    respond "(CR) FOR DEVICE LPT, nn FOR Tnn" "\r"
+    respond "(CR) FOR .LPTR. DIRECTORY, OR TYPE NEW NAME" "\r"
+}
 
 # ARPANET support, Dynamic Modeling demon style
 if [string equal "$mchn" "DM"] {
-    respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
-    respond "DEMONP=" "1\r"
-    expect ":KILL"
+    midas "sys;atsign netrfc" "syseng; netrfc" {
+        respond "DEMONP=" "1\r"
+    }
 }
 
 # Arpanet survey demon.
-respond "*" ":midas sys; atsign survey_survey; survey\r"
-expect ":KILL"
+midas "sys; atsign survey" "survey; survey"
 
 # Survey giver demon.
-respond "*" ":midas survey; atsign surgiv_surgiv\r"
-expect ":KILL"
+midas "survey; atsign surgiv" "surgiv"
 respond "*" ":link sys; atsign surgiv, survey;\r"
 
 # Survey sender demon.
 respond "*" ":link sys; atsign sursnd, survey;\r"
 
 # Login program.
-respond "*" ":midas sysbin;_syseng; booter\r"
-expect ":KILL"
+midas "sysbin;" "syseng; booter"
 # Enter an empty password for AS.
 respond "*" ":job pw\r"
 respond "*" "2/"

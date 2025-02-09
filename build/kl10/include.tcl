@@ -51,40 +51,39 @@ proc its_switches {} {
 
 proc make_ntsddt {} {
     # KL10 NTSDDT.
-    respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
-    respond "cpusw=" "2\r"
-    respond "ndsk=" "3\r"
-    respond "dsksw=" "3\r"
-    respond "dsktp=" "0\r"
-    respond "1PRSW=" "0\r"
-    expect ":KILL"
+    midas "dsk0:.;@ ddt" "system;ddt" {
+        respond "cpusw=" "2\r"
+        respond "ndsk=" "3\r"
+        respond "dsksw=" "3\r"
+        respond "dsktp=" "0\r"
+        respond "1PRSW=" "0\r"
+    }
 }
 
 proc make_salv {} {
-    global mchn
-
-    respond "*" ":midas dsk0:.;_system;salv\r"
-    respond "time-sharing?" "n\r"
-    respond "machine?" "$mchn\r"
-    expect ":KILL"
+    midas "dsk0:.;" "system;salv" {
+        global mchn
+        respond "time-sharing?" "n\r"
+        respond "machine?" "$mchn\r"
+    }
 }
 
 proc make_dskdmp {} {
-    respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
-    expect "Configuration"
-    respond "?" "ASK\r"
-    respond "HRIFLG=" "N\r"
-    respond "BOOTSW=" "N\r"
-    respond "R11R6P=" "N\r"
-    respond "R11R7P=" "N\r"
-    respond "RM03P=" "N\r"
-    respond "RM80P=" "N\r"
-    respond "RH10P=" "Y\r"
-    respond "R10R6P=" "N\r"
-    respond "NUDSL=" "500.\r"
-    respond "KS10P=" "N\r"
-    respond "KL10P=" "Y\r"
-    expect ":KILL"
+    midas "dsk0:.;@ dskdmp" "system;dskdmp" {
+        expect "Configuration"
+        respond "?" "ASK\r"
+        respond "HRIFLG=" "N\r"
+        respond "BOOTSW=" "N\r"
+        respond "R11R6P=" "N\r"
+        respond "R11R7P=" "N\r"
+        respond "RM03P=" "N\r"
+        respond "RM80P=" "N\r"
+        respond "RH10P=" "Y\r"
+        respond "R10R6P=" "N\r"
+        respond "NUDSL=" "500.\r"
+        respond "KS10P=" "N\r"
+        respond "KL10P=" "Y\r"
+    }
 }
 
 proc dump_switches {} {
@@ -140,10 +139,10 @@ proc bootable_tapes {} {
     global out
     global mchn
 
-    respond "*" ":midas .;magdmp bin.${mchn}_syseng;magdmp\r"
-    respond "PTRHRI=" "n\r"
-    magdmp_switches
-    expect ":KILL"
+    midas ".;magdmp bin.${mchn}" "syseng;magdmp" {
+        respond "PTRHRI=" "n\r"
+        magdmp_switches
+    }
 
     respond "*" $emulator_escape
     create_tape "$out/magdmp.tape"

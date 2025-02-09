@@ -1,12 +1,12 @@
 log_progress "ENTERING BUILD SCRIPT: MISC"
 
 # MIDAS 324, needed for older programs.
-respond "*" ":midas /t sysbin; midas 324bin_midas; midas 324\r"
-respond "\n" "itssw==1\r"
-respond "\n" "ptr==100\r"
-respond "\n" "ldbi=ildb\r"
-respond "\n" "dpbi=idpb\003"
-expect ":KILL"
+midast "sysbin; midas 324bin" "midas; midas 324" {
+    respond "\n" "itssw==1\r"
+    respond "\n" "ptr==100\r"
+    respond "\n" "ldbi=ildb\r"
+    respond "\n" "dpbi=idpb\003"
+}
 respond "*" ":job midas\r"
 respond "*" ":load sysbin; midas 324bin\r"
 respond "*" "purify\033g"
@@ -42,8 +42,7 @@ respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
 expect ":KILL"
 
 # TECO6
-respond "*" ":midas sysbin;teco 335bin_.teco.; teco 335\r"
-expect ":KILL"
+midas "sysbin;teco 335bin" ".teco.; teco 335"
 respond "*" ":job teco\r"
 respond "*" ":load sysbin; teco 335bin\r"
 respond "*" "purify\033g"
@@ -58,31 +57,26 @@ expect ":KILL"
 respond "*" ":link sys2;ts teachemacs,emacs;tstch >\r"
 
 # nsalv, timesharing version
-respond "*" ":midas sys1;ts nsalv_kshack;nsalv\r"
-respond "machine?" "TS\r"
-expect "*"
+midas "sys1;ts nsalv" "kshack;nsalv" {
+    respond "machine?" "TS\r"
+}
 
 # salv, timesharing versions
-respond "*" ":midas sys1;ts salv_system;salv\r"
-respond "time-sharing?" "y\r"
-expect ":KILL"
+midas "sys1;ts salv" "system;salv" {
+    respond "time-sharing?" "y\r"
+}
 
-respond "*" ":midas sys3;ts syslod_sysen1;syslod\r"
-expect ":KILL"
+midas "sys3;ts syslod" "sysen1;syslod"
 
-respond "*" ":midas sys3;ts vv_sysen2;vv\r"
-expect ":KILL"
+midas "sys3;ts vv" "sysen2;vv"
 respond "*" ":link sys3;ts vj,sys3;ts vv\r"
 respond "*" ":link sys3;ts detree,sys3;ts vv\r"
 
-respond "*" ":midas sys3;ts trees_sysen1; trees\r"
-expect ":KILL"
+midas "sys3;ts trees" "sysen1; trees"
 
-respond "*" ":midas sys2;ts syschk_sysen2;syschk\r"
-expect ":KILL"
+midas "sys2;ts syschk" "sysen2;syschk"
 
-respond "*" ":midas sysbin;_sysen3;whoj\r"
-expect ":KILL"
+midas "sysbin;" "sysen3;whoj"
 respond "*" ":link sys1;ts talk,sysbin;whoj bin\r"
 respond "*" ":link sys1;ts who,sysbin;whoj bin\r"
 respond "*" ":link sys1;ts whoj,sysbin;whoj bin\r"
@@ -92,49 +86,35 @@ respond "*" ":link sys1;ts w,sys1;ts who\r"
 respond "*" ":link sys2;ts u,sys2;ts users\r"
 
 #Inter-Entity Communication
-respond "*" ":midas sysbin;_sysen2; iec\r"
-expect ":KILL"
+midas "sysbin;" "sysen2; iec"
 respond "*" ":link sys; atsign iec, sysbin; iec bin\r"
 arpanet "rfc113" "sys; atsign iec"
 
-respond "*" ":midas sys2;ts untalk_gren;untalk\r"
-expect ":KILL"
+midas "sys2;ts untalk" "gren;untalk"
 
-respond "*" ":midas sys3;ts ufind_syseng;ufind\r"
-expect ":KILL"
+midas "sys3;ts ufind" "syseng;ufind"
 
-respond "*" ":midas sys3;ts ddtdoc_syseng;ddtdoc\r"
-expect ":KILL"
+midas "sys3;ts ddtdoc" "syseng;ddtdoc"
 
-respond "*" ":midas sys1;ts nwatch_sysen1;nwatch\r"
-expect ":KILL"
+midas "sys1;ts nwatch" "sysen1;nwatch"
 
-respond "*" ":midas sys1;ts crock_sysen1;crock\r"
-respond "System?" "ITS\r"
-expect ":KILL"
+midas "sys1;ts crock" "sysen1;crock" { respond "System?" "ITS\r" }
 respond "*" ":link sys2;ts c,sys1;ts crock\r"
 
-respond "*" ":midas sys1;ts dcrock_sysen1;dcrock\r"
-respond "System?" "ITS\r"
-expect ":KILL"
+midas "sys1;ts dcrock" "sysen1;dcrock" { respond "System?" "ITS\r" }
 respond "*" ":link sys2;ts dc,sys1;ts dcrock\r"
 
 # Not Zork
-respond "*" ":midas sys3;ts zork_sysen3;zork\r"
-expect ":KILL"
+midas "sys3;ts zork" "sysen3;zork"
 
-respond "*" ":midas sys1;ts instal_sysen2;instal\r"
-expect ":KILL"
+midas "sys1;ts instal" "sysen2;instal"
 
-respond "*" ":midas sys1;ts dir_bawden;dir^k\r"
-expect ":KILL"
+midas "sys1;ts dir" "bawden;dir^k"
 
-respond "*" ":midas bawden;_uptime\r"
-expect ":KILL"
+midas "bawden;" "uptime"
 
 # Chaosnet EVACUATE service.
-respond "*" ":midas sysbin; evacua_bawden; evacua\r"
-expect ":KILL"
+midas "sysbin; evacua" "bawden; evacua"
 respond "*" ":job evacua\r"
 respond "*" ":load sysbin; evacua bin\r"
 respond "*" "purify\033g"
@@ -142,75 +122,56 @@ respond "CHAOS EVACUA" "\r"
 respond "*" ":kill\r"
 
 # Mini Chaosnet file server.  Version 24 is MINI.
-respond "*" ":midas sysbin; mini_lmio; minisr 24\r"
-expect ":KILL"
+midas "sysbin; mini" "lmio; minisr 24"
 respond "*" ":link device; chaos mini, sysbin; mini bin\r"
 
 # Mini Chaosnet file server.  This is the 36-bit version.
-respond "*" ":midas kshack;_mini36\r"
-expect ":KILL"
+midas "kshack;" "mini36"
 respond "*" ":link device; chaos mini36, kshack; mini36 bin\r"
 
-respond "*" ":midas sysbin;_sysnet;echo\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;echo"
 respond "*" ":link device; chaos echo, sysbin; echo bin\r"
 
-respond "*" ":midas alan;ts gensym_alan;gensym\r"
-expect ":KILL"
+midas "alan;ts gensym" "alan;gensym"
 respond "*" ":link device; chaos gensym, alan; ts gensym\r"
 
-respond "*" ":midas device;chaos load_alan;load\r"
-expect ":KILL"
+midas "device;chaos load" "alan;load"
 
 # Mini Chaosnet file server.  Version 5 is MINIC.
-respond "*" ":midas sysbin; minic bin_syseng; minisr 5\r"
-expect ":KILL"
+midas "sysbin; minic bin" "syseng; minisr 5"
 respond "*" ":link device; chaos minic, sysbin; minic bin\r"
 
-respond "*" ":midas sysbin;_lmio1; door\r"
-expect ":KILL"
+midas "sysbin;" "lmio1; door"
 respond "*" ":link device; chaos door, sysbin; door bin\r"
 
-respond "*" ":midas sys3; ts esce_sysen1; esce\r"
-expect ":KILL"
+midas "sys3; ts esce" "sysen1; esce"
 
-respond "*" ":midas sysbin;chtn_sysnet;chtn\r"
-expect ":KILL"
-
+midas "sysbin;chtn" "sysnet;chtn"
 respond "*" ":link sys2;ts chtn,sysbin;chtn bin\r"
 
-respond "*" ":midas sys;ts ttloc_sysen1;ttloc\r"
-expect ":KILL"
+midas "sys;ts ttloc" "sysen1;ttloc"
 respond "*" ":link sys2;ts styloc,sys;ts ttloc\r"
 
-respond "*" ":midas device;jobdev dp_sysen3;dpdev\r"
-expect ":KILL"
+midas "device;jobdev dp" "sysen3;dpdev"
 
-respond "*" ":midas sys1;ts quote_sysen1;limeri\r"
-respond "Use what filename instead?" "ecc;quotes >\r"
-expect ":KILL"
+midas "sys1;ts quote" "sysen1;limeri" {
+    respond "Use what filename instead?" "ecc;quotes >\r"
+}
 
-respond "*" ":midas sys2;ts limeri_sysen1;limeri\r"
-respond "Use what filename instead?" "eak; lims >\r"
-expect ":KILL"
-
+midas "sys2;ts limeri" "sysen1;limeri" {
+    respond "Use what filename instead?" "eak; lims >\r"
+}
 respond "*" ":link sys2;ts limmer,sys2;ts limeri\r"
 
-respond "*" ":midas sysbin;_eak;limser\r"
-expect ":KILL"
+midas "sysbin;" "eak;limser"
 respond "*" ":link device;chaos limeri,sysbin;limser bin\r"
 
-respond "*" ":midas sys;ts srccom_sysen2;srccom\r"
-expect ":KILL"
+midas "sys;ts srccom" "sysen2;srccom"
 respond "*" ":link sys2;ts =,sys;ts srccom\r"
 
-respond "*" ":midas .mail.;comsat_sysnet;comsat\r"
-comsat_switches
-expect ":KILL"
+midas ".mail.;comsat" "sysnet;comsat" comsat_switches
 
-respond "*" ":midas device;jobdev dq_sysnet;dqxdev\r"
-dqxdev_switches
-expect ":KILL"
+midas "device;jobdev dq" "sysnet;dqxdev" dqxdev_switches
 
 respond "*" "comsat\033j"
 respond "*" "\033l.mail.;comsat bin\r"
@@ -218,28 +179,23 @@ respond "*" "debug/0\r"
 type "xvers/0\r"
 type "purify\033g"
 respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
-
 respond "*" ":kill\r"
 
 initialize_comsat
 
 respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
 
-respond "*" ":midas sys1;ts rmail_emacs1;rmaill\r"
-expect ":KILL"
+midas "sys1;ts rmail" "emacs1;rmaill"
 
 respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
 respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
 respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
 
-respond "*" ":midas sysbin;_sra; gcmail\r"
-expect ":KILL"
+midas "sysbin;" "sra; gcmail"
 respond "*" ":link dragon; hourly gcmail,sysbin; gcmail bin\r"
 respond "*" ":link dragon; hourly gcbulk,sysbin; gcmail bin\r"
 
-respond "*" ":midas sysbin;qmail_ksc;qmail\r"
-respond "PWORD version (Y or N)? " "N\r"
-expect ":KILL"
+midas "sysbin;qmail" "ksc;qmail" { respond "PWORD version (Y or N)? " "N\r" }
 respond "*" ":job qmail\r"
 respond "*" ":load sysbin;\r"
 respond "*" "purify\033g"
@@ -255,76 +211,58 @@ respond "*" ":link sys2;ts featur,sys;ts qmail\r"
 respond "*" ":link .info.;mail info,.info.;qmail info\r"
 
 # Chaosnet MAILServer
-respond "*" ":midas sysbin;_sysnet;mails\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;mails"
 respond "*" ":link device; chaos mail, sysbin; mails bin\r"
 
 # DIGEST
-respond "*" ":midas digest; ts digest_digest\r"
-expect ":KILL"
+midas "digest; ts digest" "digest"
 respond "*" ":link dragon; hourly digest, digest; ts digest\r"
 
 # MBXLOC
-respond "*" ":midas digest; ts mbxloc_mbxloc\r"
-expect ":KILL"
+midas "digest; ts mbxloc" "mbxloc"
 
 # TIME
-respond "*" ":midas sys1;ts time_sysen2;time\r"
-expect ":KILL"
+midas "sys1;ts time" "sysen2;time"
 
 # DATE
-respond "*" ":midas sys1;ts date_sysen3;date\r"
-expect ":KILL"
+midas "sys1;ts date" "sysen3;date"
 
 # SRDATE
-respond "*" ":midas sys3;ts srdate_sysen3;srdate\r"
-expect ":KILL"
+midas "sys3;ts srdate" "sysen3;srdate"
 
 # PWMAIL
-respond "*" ":midas sys;ts pwmail_ksc;qmail\r"
-respond "PWORD version (Y or N)? " "Y\r"
-expect ":KILL"
+midas "sys;ts pwmail" "ksc;qmail" { respond "PWORD version (Y or N)? " "Y\r" }
 
 # FIDO
-respond "*" ":midas sys3;ts fido_ksc;fidox\r"
-expect ":KILL"
+midas "sys3;ts fido" "ksc;fidox"
 
 # STTY
-respond "*" ":midas sys2;ts stty_archy;stty\r"
-expect ":KILL"
+midas "sys2;ts stty" "archy;stty"
 
 # DOWNLD
-respond "*" ":midas sys3;ts downld_sysen1;downld\r"
-expect ":KILL"
+midas "sys3;ts downld" "sysen1;downld"
 
 # OCTPUS
-respond "*" ":midas sys2;ts octpus_gren;octpus\r"
-expect ":KILL"
+midas "sys2;ts octpus" "gren;octpus"
 
 # TTYTST
-respond "*" ":midas sys3;ts ttytst_sysen2;ttytst\r"
-expect ":KILL"
+midas "sys3;ts ttytst" "sysen2;ttytst"
 
 # GOTO
-respond "*" ":midas sys3;ts goto_kmp; goto\r"
-expect ":KILL"
+midas "sys3;ts goto" "kmp; goto"
 
 # binprt
-respond "*" ":midas sys3;ts binprt_sysen1;binprt\r"
-expect ":KILL"
+midas "sys3;ts binprt" "sysen1;binprt"
 
 # bitprt
-respond "*" ":midas sys3;ts bitprt_sysen2;bitprt\r"
-expect ":KILL"
+midas "sys3;ts bitprt" "sysen2;bitprt"
 
 # bday
-respond "*" ":midas sysbin;_sysen1;bday\r"
-expect ":KILL"
+midas "sysbin;" "sysen1;bday"
 respond "*" ":link dragon;daily bday,sysbin;bday bin\r"
 
 # sender
-respond "*" ":midas sysbin;sender_sysen1;sender\r"
-expect ":KILL"
+midas "sysbin;sender" "sysen1;sender"
 respond "*" ":link sys;ts freply,sysbin;sender bin\r"
 respond "*" ":link sys;ts send,sysbin;sender bin\r"
 respond "*" ":link sys2;ts fr,sysbin;sender bin\r"
@@ -335,110 +273,85 @@ respond "*" ":link sys3;ts snd,sys;ts send\r"
 respond "*" ":link sys3;ts sned,sys;ts send\r"
 
 # psend
-respond "*" ":midas sys3;ts psend_sysen2;b\r"
-expect ":KILL"
+midas "sys3;ts psend" "sysen2;b"
 
 # whosen
-respond "*" ":midas sys2;ts whosen_syseng;wsent\r"
-expect ":KILL"
+midas "sys2;ts whosen" "syseng;wsent"
 
 # sensor
-respond "*" ":midas sys3;ts sensor_gren;sensor\r"
-expect ":KILL"
+midas "sys3;ts sensor" "gren;sensor"
 
 # NICNAM
-respond "*" ":midas sys2;ts nicnam_sysen3;nicnam\r"
-expect ":KILL"
+midas "sys2;ts nicnam" "sysen3;nicnam"
 
 # NICWHO
-respond "*" ":midas sys2;ts nicwho_sysen3;nicwho\r"
-expect ":KILL"
+midas "sys2;ts nicwho" "sysen3;nicwho"
 
 # reatta
-respond "*" ":midas sys1;ts reatta_sysen2;reatta\r"
-expect ":KILL"
+midas "sys1;ts reatta" "sysen2;reatta"
 
 # print
-respond "*" ":midas sys;ts print_sysen2;print\r"
-expect ":KILL"
+midas "sys;ts print" "sysen2;print"
 respond "*" ":link sys;ts copy,sys;ts print\r"
 respond "*" ":link sys;ts listf,sys;ts print\r"
 
 # fdir 
-respond "*" ":midas sys2;ts fdir_syseng;fdir\r"
-expect ":KILL"
+midas "sys2;ts fdir" "syseng;fdir"
 
 # timoon
-respond "*" ":midas sys1;ts timoon_syseng;timoon\r"
-expect ":KILL"
+midas "sys1;ts timoon" "syseng;timoon"
 
 # jedgar
-respond "*" ":midas sys2; ts jedgar_sysen3; jedgar\r"
-expect ":KILL"
-respond "*" ":midas moon; ts jedgar_moon; jedgar\r"
-expect ":KILL"
+midas "sys2; ts jedgar" "sysen3; jedgar"
+midas "moon; ts jedgar" "moon; jedgar"
 
 # failsa
-respond "*" ":midas moon;_failsa\r"
-expect ":KILL"
+midas "moon;" "failsa"
 
 # ports
-respond "*" ":midas sys2;ts ports_sysen2;ports\r"
-expect ":KILL"
+midas "sys2;ts ports" "sysen2;ports"
 
 # sysmsg
-respond "*" ":midas sys1;ts sysmsg_sysen1;sysmsg\r"
-expect ":KILL"
+midas "sys1;ts sysmsg" "sysen1;sysmsg"
 
 # meter
-respond "*" ":midas sys1;ts meter_syseng;meter\r"
-expect ":KILL"
+midas "sys1;ts meter" "syseng;meter"
 respond "*" ":link sys1; ts smeter, sys1; ts meter\r"
 respond "*" ":link sys1; ts meterd, sys1; ts meter\r"
 
 # cross
 # This is not the microcomputer cross assembler.
-#respond "*" ":midas sys1;ts cross_syseng;cross\r"
-#expect ":KILL"
+#midas "sys1;ts cross" "syseng;cross"
 
 # MACN80
-respond "*" ":midas sys3;ts macn80_gz;macn80\r"
-expect ":KILL"
+midas "sys3;ts macn80" "gz;macn80"
 
 # dired
-respond "*" ":midas sys;ts dired_sysen2;dired\r"
-expect ":KILL"
+midas "sys;ts dired" "sysen2;dired"
 
 # dircpy
-respond "*" ":midas sys3;ts dircpy_sysen3;dircop\r"
-expect ":KILL"
+midas "sys3;ts dircpy" "sysen3;dircop"
 
 # hsname
-respond "*" ":midas sys2;ts hsname_sysen1;hsname\r"
-expect ":KILL"
+midas "sys2;ts hsname" "sysen1;hsname"
 
 # arcsal
-respond "*" ":midas sys1;ts arcsal_sysen1;arcsal\r"
-expect ":KILL"
+midas "sys1;ts arcsal" "sysen1;arcsal"
 
 # acount
-respond "*" ":midas sys;ts acount_sysen3;acount\r"
-expect ":KILL"
+midas "sys;ts acount" "sysen3;acount"
 
 # idents
-respond "*" ":midas sysbin;_sysnet;idents\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;idents"
 respond "*" ":link device;tcp syn161,sysbin;idents bin\r"
 
 # timsrv
-respond "*" ":midas sysbin;timsrv bin_sysnet;timsrv\r"
-expect ":KILL"
+midas "sysbin;timsrv bin" "sysnet;timsrv"
 respond "*" ":link device;tcp syn045,sysbin;timsrv bin\r"
 arpanet "rfc045" "sysbin;timsrv bin"
 
 # datsrv
-respond "*" ":midas sysbin;_sysnet;datsrv\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;datsrv"
 respond "*" ":link device;tcp syn015,sysbin;datsrv bin\r"
 
 # WEBSER
@@ -449,12 +362,10 @@ expect -timeout 300 "*:kill"
 respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
 
 # rmtdev
-respond "*" ":midas device;atsign rmtdev_gz;rmtdev\r"
-expect ":KILL"
+midas "device;atsign rmtdev" "gz;rmtdev"
 
 # mmodem
-respond "*" ":midas sys3; ts mmodem_gz; mmodem\r"
-expect ":KILL"
+midas "sys3; ts mmodem" "gz; mmodem"
 
 # Compile ADVENT and dump it out with DECUUO.
 cwd "games"
@@ -510,45 +421,35 @@ loader "trek"
 decuuo "games; ts trek"
 
 # Tech II chess: timesharing, using TV display
-respond "*" ":midas games;ts chess2_rg;chess2\r"
-expect ":KILL"
+midas "games;ts chess2" "rg;chess2"
 
 # Unknown chess
-respond "*" ":midas games;ts chess_as;chess\r"
-expect ":KILL"
+midas "games;ts chess" "as;chess"
 
 # MacHack VI chess: timesharing, using TV display, no CHEOPS processor.
-respond "*" ":midas /t games;ts ocm_chprog;ocm\r"
-respond "with ^C" "CHEOPS==0\r\003"
-expect ":KILL"
+midast "games;ts ocm" "chprog;ocm" { respond "with ^C" "CHEOPS==0\r\003" }
 
 # MacHack VI: timesharing, using 340 display.
-respond "*" ":midas games;ts c_rg;c\r"
-expect ":KILL"
+midas "games;ts c" "rg;c"
 
 # CKR
-respond "*" ":midas games;ts ckr_agb;ckr\r"
-expect ":KILL"
+midas "games;ts ckr" "agb;ckr"
 
 # Dazzle Dart, video game for the Logo group PDP-11/45
 palx "bs;" "dazzle"
 
 # TOSBLK, convert from PALX binary to SBLK.
-respond "*" ":midas pdp11;ts tosblk_tosblk\r"
-expect ":KILL"
+midas "pdp11;ts tosblk" "tosblk"
 
 # PI
-respond "*" ":midas sys3;ts pi_rwg; ran\r"
-expect ":KILL"
+midas "sys3;ts pi" "rwg; ran"
 
 # Hunt the Wumpus
-respond "*" ":midas sys1;ts wumpus_games; wumpus\r"
-expect ":KILL"
+midas "sys1;ts wumpus" "games; wumpus"
 
 # Jotto
 cwd "games"
-respond "*" ":midas jotto\r"
-expect ":KILL"
+midas "games;" "jotto"
 respond "*" ":job jotto\r"
 respond "*" ":load jotto bin\r"
 # Run initialisation code to open the TTY channels.
@@ -564,25 +465,22 @@ respond "words" ":pdump sys1;ts jotto\r"
 respond "*" ":kill\r"
 
 # ngame
-respond "*" ":midas games;ts game_ejs;ngame\r"
-respond "Star Trek: " "ts,trek,games\r"
-respond "Adventure (2): " "ts,adv448,games\r"
-respond "Adventure (1.5): " "ts,adv350,games\r"
-expect ":KILL"
+midas "games;ts game" "ejs;ngame" {
+    respond "Star Trek: " "ts,trek,games\r"
+    respond "Adventure (2): " "ts,adv448,games\r"
+    respond "Adventure (1.5): " "ts,adv350,games\r"
+}
 respond "*" ":link sys3;ts game,games;ts game\r"
 respond "*" ":link info;o.info,_info_;\r"
 
 # guess
-respond "*" ":midas games;ts guess_games;guess\r"
-expect ":KILL"
+midas "games;ts guess" "games;guess"
 
 # ten50
-respond "*" ":midas sys3;ts ten50_mrc; ten50\r"
-expect ":KILL"
+midas "sys3;ts ten50" "mrc; ten50"
 
 # who%
-respond "*" ":midas sys1;ts who%_sysen3;who%\r"
-expect ":KILL"
+midas "sys1;ts who%" "sysen3;who%"
 respond "*" ":link sys1;ts %,sys1;ts who%\r"
 
 # MACRO-10
@@ -615,8 +513,7 @@ loader "cross"
 decuuo "sys1; ts cross"
 
 # Old PALX
-respond "*" ":midas 11logo;ts palx_rms;palx 143\r"
-expect ":KILL"
+midas "11logo;ts palx" "rms;palx 143"
 
 # Phil Budne's PALX Game of Life.
 cwd "budd"
@@ -629,34 +526,29 @@ loader "macn11"
 decuuo "sys3; ts macn11"
 
 # Cookie Bear
-respond "*" ":midas gls; ts check_gls; check\r"
-respond "DEBUGP==" "0\r"
-respond "ITEM:" "COOKIE\r"
-respond "SUBJECT:" "COOKIE\r"
-respond "NAME:" "BEAR\r"
-expect ":KILL"
+midas "gls; ts check" "gls; check" {
+    respond "DEBUGP==" "0\r"
+    respond "ITEM:" "COOKIE\r"
+    respond "SUBJECT:" "COOKIE\r"
+    respond "NAME:" "BEAR\r"
+}
 
 # Cookie Bear (this one actually works)
-respond "*" ":midas eak;ts bear_eak;bear\r"
-expect ":KILL"
+midas "eak;ts bear" "eak;bear"
 
 # LOGOUT TIMES cleanup program.
-respond "*" ":midas sys3;ts lotcln_sysen1; lotcln\r"
-expect ":KILL"
+midas "sys3;ts lotcln" "sysen1; lotcln"
 
 # itsdev
-respond "*" ":midas device;chaos itsdev_bawden;itsdev\r"
-expect ":KILL"
+midas "device;chaos itsdev" "bawden;itsdev"
 respond "*" ":link device; tcp syn723, device; chaos itsdev\r"
 
 # charfc/charfs
-respond "*" ":midas sys1;ts charfc_sysen3;charfc\r"
-expect ":KILL"
+midas "sys1;ts charfc" "sysen3;charfc"
 respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
 
 # file
-respond "*" ":midas sysbin;_syseng;file\r"
-expect ":KILL"
+midas "sysbin;" "syseng;file"
 respond "*" ":job file\r"
 respond "*" ":load sysbin;\r"
 respond "*" "purify\033g"
@@ -664,17 +556,14 @@ respond "CHAOS FILE" "\r"
 respond "*" ":kill\r"
 
 # filei, fileo
-respond "*" ":midas device;chaos filei_eak;file\r"
-expect ":KILL"
+midas "device;chaos filei" "eak;file"
 respond "*" ":link device;chaos fileo,device;chaos filei\r"
 
 # ifile
-respond "*" ":midas device;chaos ifile_syseng;ifile\r"
-expect ":KILL"
+midas "device;chaos ifile" "syseng;ifile"
 
 # NFILE
-respond "*" ":midas alan;_bawden;nfile\r"
-expect ":KILL"
+midas "alan;" "bawden;nfile"
 respond "*" ":job nfile\r"
 respond "*" ":load alan;nfile bin\r"
 respond "*" "purify\033g"
@@ -682,51 +571,42 @@ respond "CHAOS NFILE" "\r"
 respond "*" ":kill\r"
 
 # 11sim
-respond "*" ":midas /t sys1;ts pdp11_syseng;11sim\r"
-respond "end input with ^C" "45p==0\r"
-respond "\n" "\003"
-expect ":KILL"
-respond "*" ":midas sys;ts pdp45_syseng;11sim\r"
-expect ":KILL"
+midas "sys;ts pdp45" "syseng;11sim"
+midast "sys1;ts pdp11" "syseng;11sim" {
+    respond "end input with ^C" "45p==0\r"
+    respond "\n" "\003"
+}
 
 # times
-respond "*" ":midas sysbin;times bin_sysnet;times\r"
-expect ":KILL"
+midas "sysbin;times bin" "sysnet;times"
 respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
 respond "*" ":link sys1;ts times,sysbin;times bin\r"
 
 # idle
-respond "*" ":midas sys1;ts idle_gren;idle\r"
-expect ":KILL"
+midas "sys1;ts idle" "gren;idle"
 
 # spell
-respond "*" ":midas sys1;ts spell_syseng;spell\r"
-expect ":KILL"
+midas "sys1;ts spell" "syseng;spell"
 respond "*" ":link sys1;ts espell,sys1;ts spell\r"
 
 # jobs
-respond "*" ":midas sys2;ts jobs_sysen1;jobs\r"
-expect ":KILL"
+midas "sys2;ts jobs" "sysen1;jobs"
 
 # hsndev
-respond "*" ":midas device;jobdev hsname_sysen1;hsndev\r"
-expect ":KILL"
+midas "device;jobdev hsname" "sysen1;hsndev"
 respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
 respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
 
 # gunner
-respond "*" ":midas device; jobdev shoe_rwk; gunner\r"
-expect ":KILL"
+midas "device; jobdev shoe" "rwk; gunner"
 
 # Trivial Gunner
 # Make a link from e.g. DRAGON; HOURLY GUNNER to use this program.
 # It will log its actions to SPACY; GUNNER LOG.
-respond "*" ":midas cstacy;_gunner >\r"
-expect ":KILL"
+midas "cstacy;" "gunner"
 
 # pr
-respond "*" ":midas sys1;ts pr_sysen1;pr\r"
-expect ":KILL"
+midas "sys1;ts pr" "sysen1;pr"
 respond "*" ":link sys1;ts call,sys1;ts pr\r"
 respond "*" ":link sys1;ts .call,sys1;ts pr\r"
 respond "*" ":link sys1;ts uuo,sys1;ts pr\r"
@@ -744,54 +624,42 @@ respond "*" ":link .info.;its %pi,sysdoc;%pi >\r"
 respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
 
 # inline
-respond "*" ":midas sys2;ts inline_sysen1;inline\r"
-expect ":KILL"
+midas "sys2;ts inline" "sysen1;inline"
 
 # init
-respond "*" ":midas sys3;ts init_sysen2;init\r"
-expect ":KILL"
+midas "sys3;ts init" "sysen2;init"
 
 # scandl
-respond "*" ":midas sys3;ts scandl_sysen1;scandl\r"
-expect ":KILL"
+midas "sys3;ts scandl" "sysen1;scandl"
 
 # os
-respond "*" ":midas sys1;ts os_sysen2;os\r"
-expect ":KILL"
+midas "sys1;ts os" "sysen2;os"
 
 # sn
-respond "*" ":midas sys2;ts sn_sysen3;sn\r"
-expect ":KILL"
+midas "sys2;ts sn" "sysen3;sn"
 
 # ttyswp
-respond "*" ":midas sys;ts ttyswp_sysen3;ttyswp\r"
-expect ":KILL"
+midas "sys;ts ttyswp" "sysen3;ttyswp"
 
 # argus
-respond "*" ":midas sys2;ts argus_sysen2;argus\r"
-expect ":KILL"
+midas "sys2;ts argus" "sysen2;argus"
 
 # fretty
-respond "*" ":midas sys3;ts fretty_sysen2;fretty\r"
-expect ":KILL"
+midas "sys3;ts fretty" "sysen2;fretty"
 
 # bye
-respond "*" ":midas sys1;ts bye_sysen1;bye\r"
-expect ":KILL"
+midas "sys1;ts bye" "sysen1;bye"
 respond "*" ":link device;chaos bye,sys1;ts bye\r"
 
 # yow server
-respond "*" ":midas sys3;ts yow_maeda; yow\r"
-expect ":KILL"
+midas "sys3;ts yow" "maeda; yow"
 respond "*" ":link device;chaos yow, sys3; ts yow\r"
 
 # yow client
-respond "*" ":midas sysnet;ts yow_sysen2; yow\r"
-expect ":KILL"
+midas "sysnet;ts yow" "sysen2; yow"
 
 # @
-respond "*" ":midas sysbin;_sysen1;@\r"
-expect ":KILL"
+midas "sysbin;" "sysen1;@"
 respond "*" ":job @\r"
 respond "*" ":load sysbin;\r"
 respond "*" "purify\033g"
@@ -802,46 +670,36 @@ respond "*" ":midas;324 dsk0:.;@ pt_syseng;pt\r"
 expect ":KILL"
 
 # PTY
-respond "*" ":midas sys1;ts pty_sysen1;pty\r"
-expect ":KILL"
+midas "sys1;ts pty" "sysen1;pty"
 
 # PRUFD
-respond "*" ":midas sys1;ts prufd_sysen2;prufd\r"
-expect ":KILL"
+midas "sys1;ts prufd" "sysen2;prufd"
 
 # udir
-respond "*" ":midas sys3;ts nudir_sysen3; nudir\r"
-expect ":KILL"
+midas "sys3;ts nudir" "sysen3; nudir"
 
 # STY
-respond "*" ":midas sys1;ts sty_sysen2;sty\r"
-expect ":KILL"
+midas "sys1;ts sty" "sysen2;sty"
 
 # luser
-respond "*" ":midas sysbin;luser bin_syseng;luser\r"
-expect ":KILL"
+midas "sysbin;luser bin" "syseng;luser"
 respond "*" ":link sys1;ts luser,sysbin;luser bin\r"
 
 # ARCCPY
-respond "*" ":midas sys2;ts arccpy_sysen2;arccpy\r"
-expect ":KILL"
+midas "sys2;ts arccpy" "sysen2;arccpy"
 
 # CALPRT
-respond "*" ":midas sys2;ts calprt_sysen2;calprt\r"
-expect ":KILL"
+midas "sys2;ts calprt" "sysen2;calprt"
 
 # HOSTAB
-respond "*" ":midas sys2;ts hostab_sysen1;hostab\r"
-expect ":KILL"
+midas "sys2;ts hostab" "sysen1;hostab"
 
 # HOSTAT
-respond "*" ":midas sys2;ts hostat_sysen2;hostat\r"
-expect ":KILL"
+midas "sys2;ts hostat" "sysen2;hostat"
 
 # PROBE
 respond "*" ":link syseng;its defs,sys;itsdfs >\r"
-respond "*" ":midas sysbin;probe bin_bawden;probe\r"
-expect ":KILL"
+midas "sysbin;probe bin" "bawden;probe"
 # note: setting debug to 0 and running causes it to pdump itself to
 #  sys;ts probe
 respond "*" ":job probe\r"
@@ -851,87 +709,67 @@ type "\033g"
 respond "*" ":link sys;ts pb,sys;ts probe\r"
 
 # TTY
-respond "*" ":midas sys1;ts tty_sysen1;tty\r"
-expect ":KILL"
+midas "sys1;ts tty" "sysen1;tty"
 
 # TTYLINK, just a stub.
-respond "*" ":midas sysbin;ttylin bin_bawden; u\r"
-expect ":KILL"
+midas "sysbin;ttylin bin" "bawden; u"
 respond "*" ":link device; chaos ttylin, sysbin; ttylin bin\r"
 
 # IPLJOB
-respond "*" ":midas sys;atsign ipl_sysen2; ipljob\r"
-expect ":KILL"
+midas "sys;atsign ipl" "sysen2; ipljob"
 
 # RIPDEV
-respond "*" ":midas device;atsign r.i.p._sysen2;ripdev\r"
-expect ":KILL"
+midas "device;atsign r.i.p." "sysen2;ripdev"
 
 # GMSGS
-respond "*" ":midas sys2;ts gmsgs_sysen1;gmsgs\r"
-expect ":KILL"
+midas "sys2;ts gmsgs" "sysen1;gmsgs"
 respond "*" ":link sys2;ts expire, sys2;ts gmsgs\r"
 respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
 respond "*" ":link device;chaos gmsgs,sys2;ts gmsgs\r"
 
 # X, Y, Z
-respond "*" ":midas sys1;ts x_sysen2;x\r"
-expect ":KILL"
+midas "sys1;ts x" "sysen2;x"
 respond "*" ":link sys1;ts y,sys1;ts x\r"
 respond "*" ":link sys1;ts z,sys1;ts x\r"
 
 # LOADP
-respond "*" ":midas sys2;ts loadp_sysen1;loadp\r"
-expect ":KILL"
+midas "sys2;ts loadp" "sysen1;loadp"
 
 # ACCLNK
-respond "*" ":midas sys2;ts acclnk_sysen2;acclnk\r"
-expect ":KILL"
+midas "sys2;ts acclnk" "sysen2;acclnk"
 
 # MSPLIT
-respond "*" ":midas sys2;ts msplit_sysen2;msplit\r"
-expect ":KILL"
+midas "sys2;ts msplit" "sysen2;msplit"
 
 # CHATST
-respond "*" ":midas sys2;ts chatst_sysen3;chatst\r"
-expect ":KILL"
+midas "sys2;ts chatst" "sysen3;chatst"
 
 # CHASTA
-respond "*" ":midas sys3;ts chasta_chsgtv;chasta\r"
-expect ":KILL"
+midas "sys3;ts chasta" "chsgtv;chasta"
 
 # CHATAB
-respond "*" ":midas sys3;ts chatab_sysen1;chatab\r"
-expect ":KILL"
+midas "sys3;ts chatab" "sysen1;chatab"
 
 # STYLOG
-respond "*" ":midas sys2;ts stylog_sysen1;stylog\r"
-expect ":KILL"
+midas "sys2;ts stylog" "sysen1;stylog"
 
 # COMIFY
-respond "*" ":midas sys2;ts comify_sysen3;comify\r"
-expect ":KILL"
+midas "sys2;ts comify" "sysen3;comify"
 
 # CRC
-respond "*" ":midas sys3;ts crc_gren; crc\r"
-expect ":KILL"
+midas "sys3;ts crc" "gren; crc"
 
 # TMPKIL
-respond "*" ":midas sys2;ts tmpkil_syseng;tmpkil\r"
-expect ":KILL"
+midas "sys2;ts tmpkil" "syseng;tmpkil"
 respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
 
 # WHAT
-respond "*" ":midas sys2;ts what_syseng;what\r"
-expect ":KILL"
+midas "sys2;ts what" "syseng;what"
 
 # Build KCC support programs: EXECVT, GETSYM, and 20XCSV.
-respond "*" ":midas sys2;ts execvt_sysen3;execvt\r" 
-expect ":KILL"
-respond "*" ":midas kcc;ts getsym_getsym\r"
-expect ":KILL"
-respond "*" ":midas kcc;ts 20xcsv_20xcsv\r"
-expect ":KILL"
+midas "sys2;ts execvt" "sysen3;execvt" 
+midas "kcc;ts getsym" "getsym"
+midas "kcc;ts 20xcsv" "20xcsv"
 
 # Run GETSYM to get all monitor symbols.
 cwd "kcc"
@@ -939,52 +777,41 @@ respond "*" ":getsym\r"
 expect ":KILL"
 
 # UP
-respond "*" ":midas sys1;ts up_sysen1;up\r"
-expect ":KILL"
+midas "sys1;ts up" "sysen1;up"
 respond "*" ":link sys1;ts down, sys1;ts up\r"
 
 # UPTIME
-respond "*" ":midas sysbin;uptime bin_sysen1;uptime\r"
-expect ":KILL"
+midas "sysbin;uptime bin" "sysen1;uptime"
 respond "*" ":link device;chaos uptime,sysbin;uptime bin\r"
 
 # SHUTDN
-respond "*" ":midas sys3;ts shutdn_bawden;shutdn\r"
-expect ":KILL"
+midas "sys3;ts shutdn" "bawden;shutdn"
 
 # HEXIFY
-respond "*" ":midas sys2;ts hexify_sysen3;hexify\r"
-expect ":KILL"
+midas "sys2;ts hexify" "sysen3;hexify"
 
 # PHOTO
-respond "*" ":midas sys2;ts photo_sysen2;photo\r"
-expect ":KILL"
+midas "sys2;ts photo" "sysen2;photo"
 
 # TYPE8
-respond "*" ":midas sys;ts type8_sysen3;type8\r"
-expect ":KILL"
+midas "sys;ts type8" "sysen3;type8"
 
 # USQ
-respond "*" ":midas sys2;ts usq_sysen3;usq\r"
-expect ":KILL"
+midas "sys2;ts usq" "sysen3;usq"
 respond "*" ":link sys2;ts typesq,sys2;ts usq\r"
 
 # SCRAM
-respond "*" ":midas sys2;ts scram_rwk;scram\r"
-expect ":KILL"
+midas "sys2;ts scram" "rwk;scram"
 
 # HOST
-respond "*" ":midas sys3;ts host_sysnet;host\r"
-expect ":KILL"
+midas "sys3;ts host" "sysnet;host"
 
 # EXPN/VRFY
-respond "*" ":midas sys3;ts expn_sysnet;expn\r"
-expect ":KILL"
+midas "sys3;ts expn" "sysnet;expn"
 respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
 
 # MUSCOM
-respond "*" ":midas sysbin;_syseng; muscom\r"
-expect ":KILL"
+midas "sysbin;" "syseng; muscom"
 respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
 
 # BIG
@@ -1043,18 +870,16 @@ respond "MUSCOM" "PDP10;MUSIC WINCH_DECUS;WINCH MUS\r"
 expect "$^X."
 
 # WHOLIN
-respond "*" ":midas sys2;ts wholin_sysen2;wholin\r"
-expect ":KILL"
+midas "sys2;ts wholin" "sysen2;wholin"
 
 # LINE
-respond "*" ":midas sys2;ts line_rab;line\r"
-expect ":KILL"
+midas "sys2;ts line" "rab;line"
 
 # WHOIML
-respond "*" ":midas sysbin;_sysen1; whoiml\r"
-respond "FILE:" "whoiml\r"
-respond "FILE:" "sys2\r"
-expect ":KILL"
+midas "sysbin;" "sysen1; whoiml" {
+    respond "FILE:" "whoiml\r"
+    respond "FILE:" "sys2\r"
+}
 respond "*" ":job whoiml\r"
 respond "*" ":load sysbin; whoiml bin\r"
 respond "*" "start1\033b\033g"
@@ -1062,71 +887,56 @@ expect ">>"
 respond "   " ":kill\r"
 
 # VTTIME
-respond "*" ":midas sys1;ts vttime_rvb;vttime\r"
-expect ":KILL"
+midas "sys1;ts vttime" "rvb;vttime"
 
 # APLCLK
-respond "*" ":midas sys3;ts aplclk_music1; vtclk\r"
-expect ":KILL"
+midas "sys3;ts aplclk" "music1; vtclk"
 
 # DEVICE; CHAOS TIME
-respond "*" ":midas device;chaos time_syseng;ctimsr\r"
-expect ":KILL"
+midas "device;chaos time" "syseng;ctimsr"
 
 # DEVICE; CHAOS SEND
-respond "*" ":midas sysbin;_sysnet;senver\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;senver"
 respond "*" ":link device;chaos send,sysbin;senver bin\r"
 
 # Alternate DEVICE; CHAOS SEND
-respond "*" ":midas sysbin;_sysnet;sends\r"
-expect ":KILL"
+midas "sysbin;" "sysnet;sends"
 #respond "*" ":link device;chaos send,sysbin;senver bin\r"
 
 # Chaosnet BABEL service.
-respond "*" ":midas sysbin; babel_dcp2; babel\r"
-expect ":KILL"
+midas "sysbin; babel" "dcp2; babel"
 respond "*" ":link device;chaos babel,sysbin; babel bin\r"
 
 # Chaosnet HOSTAB service.
-respond "*" ":midas sysbin;_eak; chahtb\r"
-expect ":KILL"
+midas "sysbin;" "eak; chahtb"
 respond "*" ":link device; chaos hostab, sysbin; chahtb bin\r"
 arpanet "rfc121" "sysbin; chahtb bin"
 
 # Chaosnet 11LOAD service for booting MINITS.
-respond "*" ":midas device; chaos 11load_minits; 11load\r"
-expect ":KILL"
+midas "device; chaos 11load" "minits; 11load"
 
 # OBS
-respond "*" ":midas sys;ts obs_bawden;obs\r"
-expect ":KILL"
+midas "sys;ts obs" "bawden;obs"
 
 # FED
-respond "*" ":midas sys;ts fed_sysen2;fed\r"
-expect ":KILL"
+midas "sys;ts fed" "sysen2;fed"
 
 # XHOST
-respond "*" ":midas sys2;ts xhost_sysen3;xhost\r"
-expect ":KILL"
+midas "sys2;ts xhost" "sysen3;xhost"
 
 # FACTOR
-respond "*" ":midas sys1;ts factor_rz;factor\r"
-expect ":KILL"
+midas "sys1;ts factor" "rz;factor"
 
 # balanc
-respond "*" ":midas sys3;ts balanc_alan;balanc\r"
-expect ":KILL"
+midas "sys3;ts balanc" "alan;balanc"
 respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
 
 # scrmbl and unscr
-respond "*" ":midas sys3;ts scrmbl_ejs;scrmbl\r"
-expect ":KILL"
+midas "sys3;ts scrmbl" "ejs;scrmbl"
 respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
 
 # ZOTZ
-respond "*" ":midas ksc; ts zotz_zotz\r"
-expect ":KILL"
+midas "ksc; ts zotz" "zotz"
 
 respond "*" ":job maint\r"
 # KA10 needs the .OLD files.  KL10 and KS10 the newer.
@@ -1138,15 +948,13 @@ expect -re {>>|\)}
 type ":kill\r"
 
 # Test one-proceed.
-respond "*" ":midas maint;ts 1proc_1proc test\r"
-expect ":KILL"
+midas "maint;ts 1proc" "1proc test"
 respond "*" ":maint;1proc\r"
 expect "SUCCESSFUL"
 expect ":KILL"
 
 # XXFILE
-respond "*" ":midas sysbin;xxfile bin_sysen1;xxfile\r"
-expect ":KILL"
+midas "sysbin;xxfile bin" "sysen1;xxfile"
 respond "*" ":job xxfile\r"
 respond "*" ":load sysbin;xxfile bin\r"
 respond "*" "ttyop1\033b\033g"
@@ -1155,8 +963,7 @@ expect ">>"
 respond "   " ":kill\r"
 
 # MSEND
-respond "*" ":midas sysbin;_sysen2;msend\r"
-expect ":KILL"
+midas "sysbin;" "sysen2;msend"
 respond "*" ":job msend\r"
 respond "*" ":load sysbin;msend bin\r"
 respond "*" "ttyopn\033b\033g"
@@ -1164,42 +971,32 @@ expect ">>"
 respond "   " ":kill\r"
 
 # IMLOAD and IMTRAN
-respond "*" ":midas sys1; ts imload_syseng; imload\r"
-expect ":KILL"
+midas "sys1; ts imload" "syseng; imload"
 respond "*" ":link sys1; ts imtran, sys1; ts imload\r"
 
 # UNTRAN
-respond "*" ":midas imlac; ts untran_untran\r"
-expect ":KILL"
+midas "imlac; ts untran" "untran"
 
 # IMPRNT
-respond "*" ":midas sys1; ts imprnt_syseng; imprnt\r"
-expect ":KILL"
+midas "sys1; ts imprnt" "syseng; imprnt"
 respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
 respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
 
 # IMGOUT
-respond "*" ":midas sys3; ts imgout_cbf; imgout\r"
-expect ":KILL"
+midas "sys3; ts imgout" "cbf; imgout"
 
 # LINES
-respond "*" ":midas bkph; ts lines_lines\r"
-expect ":KILL"
+midas "bkph; ts lines" "lines"
 
 # Random TV experiments.
-respond "*" ":midas bkph; ts bull_bull\r"
-expect ":KILL"
-respond "*" ":midas bkph; ts grade_grade\r"
-expect ":KILL"
-respond "*" ":midas bkph; ts circle_loops circle\r"
-expect ":KILL"
-respond "*" ":midas bkph; ts randy_randy\r"
-expect ":KILL"
+midas "bkph; ts bull" "bull"
+midas "bkph; ts grade" "grade"
+midas "bkph; ts circle" "loops circle"
+midas "bkph; ts randy" "randy"
 
 # BLKLDR, Imlac secondary block loader.
-respond "*" ":midas sysbin;_imsrc; blkldr\r"
-expect ":KILL"
+midas "sysbin;" "imsrc; blkldr"
 # IMTRAN will put the file IMLAC; IMLAC BLKLDR first in its output.
 # The BLKLDR file should say !blk ldr! on the first line.
 respond "*" ":create imlac; imlac blkldr\r"
@@ -1232,8 +1029,7 @@ expect ":KILL"
 respond "*" ":link imlac; .prgm. normal, imlac; ssv22 iml\r"
 
 # Assemble SSV4.
-respond "*" ":midas imlac; ts assv4_assv4\r"
-expect ":KILL"
+midas "imlac; ts assv4" "assv4"
 
 # SSV4, SSV for PDS-4.
 respond "*" ":imlac;assv4\r"
@@ -1244,19 +1040,19 @@ respond "@" "imlac; ssv4 iml_imlac; ssv4b >\r"
 respond "@" "\021"
 
 # Maze War
-respond "*" ":midas /t sysbin;_imsrc; maze\r"
-respond "with ^C" "MOUSE==1\r\003"
-respond "with ^C" "MOUSE==1\r\003"
-expect ":KILL"
+midast "sysbin;" "imsrc; maze" {
+    respond "with ^C" "MOUSE==1\r\003"
+    respond "with ^C" "MOUSE==1\r\003"
+}
 respond "*" ":imtran\r"
 respond "@" "imlac; m iml_sysbin; maze bin\r"
 respond "@" "\021"
 
-respond "*" ":midas sysbin;_klh; mazser\r"
-respond "NPTCL=" "1\r"
-respond "DEBUG=" "1\r"
-respond "STATS=" "1\r"
-expect ":KILL"
+midas "sysbin;" "klh; mazser" {
+    respond "NPTCL=" "1\r"
+    respond "DEBUG=" "1\r"
+    respond "STATS=" "1\r"
+}
 respond "*" ":job maze\r"
 respond "*" ":load sysbin; mazser bin\r"
 respond "*" ":start init\r"
@@ -1265,31 +1061,29 @@ respond ":PDUMP" "games; ts maze\r"
 respond "*" ":kill\r"
 
 # SWAR
-respond "*" ":midas imlac;_imsrc; swar\r"
-respond "INFINITE FUEL AND BULLETS VERSION?" "N\r"
-expect ":KILL"
+midas "imlac;" "imsrc; swar" {
+    respond "INFINITE FUEL AND BULLETS VERSION?" "N\r"
+}
 respond "*" ":imtran\r"
 respond "@" "imlac; swar iml_imlac; swar bin\r"
 respond "@" "\021"
 
 # PONG
-respond "*" ":midas imlac;_imsrc; pong\r"
-expect ":KILL"
+midas "imlac;" "imsrc; pong"
 respond "*" ":imtran\r"
 respond "@" "imlac; pong iml_imlac; pong bin\r"
 respond "@" "\021"
 
 # CRASH, PDS-4 version
-respond "*" ":midas imlac;_imsrc; crash\r"
-expect ":KILL"
+midas "imlac;" "imsrc; crash"
 respond "*" ":imtran\r"
 respond "@" "imlac; crash4 iml_imlac; crash bin\r"
 respond "@" "\021"
 # PDS-1 version
-respond "*" ":midas /t imlac;_imsrc; crash\r"
-respond "with ^C" "PDS4==0\r\003"
-respond "with ^C" "PDS4==0\r\003"
-expect ":KILL"
+midast "imlac;" "imsrc; crash" {
+    respond "with ^C" "PDS4==0\r\003"
+    respond "with ^C" "PDS4==0\r\003"
+}
 respond "*" ":imtran\r"
 respond "@" "imlac; crash iml_imlac; crash bin\r"
 respond "@" "\021"
@@ -1306,20 +1100,18 @@ respond "*" ":kill\r"
 
 # CLIB
 cwd "clib"
-respond "*" ":midas c10cor cmid\r"
-respond "*" ":midas c10fo cmid\r"
-respond "*" ":midas c10int cmid\r"
-respond "*" ":midas c10mio cmid\r"
-respond "*" ":midas c10sys cmid\r"
-respond "*" ":midas alloc cmid\r"
-respond "*" ":midas blt cmid\r"
-respond "*" ":midas /t cfloat cmid\r"
-clib_switches
-respond "*" ":midas random cmid\r"
-respond "*" ":midas string cmid\r"
-respond "*" ":midas uuoh cmid\r"
-respond "*" ":midas /t c10run cmid\r"
-clib_switches
+midas "clib;" "c10cor cmid"
+midas "clib;" "c10fo cmid"
+midas "clib;" "c10int cmid"
+midas "clib;" "c10mio cmid"
+midas "clib;" "c10sys cmid"
+midas "clib;" "alloc cmid"
+midas "clib;" "blt cmid"
+midast "clib;" "cfloat cmid" clib_switches
+midas "clib;" "random cmid"
+midas "clib;" "string cmid"
+midas "clib;" "uuoh cmid"
+midast "clib;" "c10run cmid" clib_switches
 respond "*" ":cc c10exp.c\r"
 respond "*" ":cc c10fd.c\r"
 respond "*" ":cc c10fil.c\r"
@@ -1426,8 +1218,7 @@ respond "*" ":cc tv.>\r"
 expect ":KILL"
 
 # TJ6
-respond "*" ":midas sysbin;_tj6;tj6\r"
-expect ":KILL"
+midas "sysbin;" "tj6;tj6"
 respond "*" ":job tj6\r"
 respond "*" ":load sysbin; tj6 bin\r"
 respond "*" "purify\033g"
@@ -1436,8 +1227,7 @@ respond "*" ":kill\r"
 respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
 
 # Old TJ6.
-respond "*" ":midas sys2; ts otj6_tj6; otj6\r"
-expect ":KILL"
+midas "sys2; ts otj6" "tj6; otj6"
 
 # Alan Snyder's R typesetting language.
 cwd "r"
@@ -1499,13 +1289,11 @@ build_c_program "cprog/rstat" "cprog/ts.rstat"
 
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
-respond "*" ":midas sys3;ts versa_dcp; versa\r"
-expect ":KILL"
+midas "sys3;ts versa" "dcp; versa"
 # respond "*" ":link channa; rakash v80spl,sys3; ts versa\r"
 
 # SCAN
-respond "*" ":midas sysbin;_sysen1; scan\r"
-expect ":KILL"
+midas "sysbin;" "sysen1; scan"
 respond "*" ":job scan\r"
 respond "*" ":load sysbin; scan bin\r"
 respond "*" "purify\033g"
@@ -1513,20 +1301,16 @@ respond "*" ":pdump sys3; ts scan\r"
 respond "*" ":kill\r"
 
 # DDT subroutines
-respond "*" ":midas sys3;ts cmd_dcp; cmd\r"
-expect ":KILL"
+midas "sys3;ts cmd" "dcp; cmd"
 
 # XGP and GLP
-respond "*" ":midas sysbin;xgp bin_sysen2;xqueue\r"
-expect ":KILL"
+midas "sysbin;xgp bin" "sysen2;xqueue"
 respond "*" ":job xgp\r"
 respond "*" ":load sysbin;xgp bin\r"
 respond "*" "debug/0\r"
 type ":pdump sys;ts xgp\r"
 respond "*" ":kill\r"
-respond "*" ":midas /t sysbin;glp bin_sysen2;xqueue\r"
-respond "with ^C" "GLP==1\r\003"
-expect ":KILL"
+midast "sysbin;glp bin" "sysen2;xqueue" { respond "with ^C" "GLP==1\r\003" }
 respond "*" ":job glp\r"
 respond "*" ":load sysbin;glp bin\r"
 respond "*" "debug/0\r"
@@ -1534,15 +1318,13 @@ type ":pdump sys2;ts glp\r"
 respond "*" ":kill\r"
 
 # XGPDEV and GLPDEV
-respond "*" ":midas device;jobdev xgp_sysen2;xgpdev\r"
-expect ":KILL"
-respond "*" ":midas /t device;jobdev glp_sysen2;xgpdev\r"
-respond "with ^C" "GLP==1\r\003"
-expect ":KILL"
+midas "device;jobdev xgp" "sysen2;xgpdev"
+midast "device;jobdev glp" "sysen2;xgpdev" {
+    respond "with ^C" "GLP==1\r\003"
+}
 
 # GTLOAD, load programs into GT40.
-respond "*" ":midas sys1; ts gtload_syseng; gtload\r"
-expect ":KILL"
+midas "sys1; ts gtload" "syseng; gtload"
 
 # RUG, PDP-11 debugger.
 cwd "pdp11"
@@ -1603,12 +1385,10 @@ palx "rug;" "ar" {
 }
 
 # PUNCH, punch out paper tapes in the Logo RUG format.
-respond "*" ":midas rug; ts punch_punch\r"
-expect ":KILL"
+midas "rug; ts punch" "punch"
 
 # LODER, PDP-11 file transfer.
-respond "*" ":midas rug;_loder\r"
-expect ":KILL"
+midas "rug;" "loder"
 respond "*" ":link sys; ts nloder, rug; loder bin\r"
 respond "*" ":link sys1; ts mloder, rug; loder bin\r"
 
@@ -1664,15 +1444,15 @@ loader "logo"
 decuuo "bbn; ts logo"
 
 # CLOGO
-respond "*" ":midas sys; ts clogo_rjl; logo\r"
-respond "STANDARD=" "0\r"
-respond "TBOX=" "0\r"
-respond "TURTLE=" "1\r"
-respond "PHYSICS=" "0\r"
-respond "LFLAG=" "0\r"
-respond "OLDMUSIC=" "0\r"
-respond "DFLAG=" "1\r"
-expect ":KILL"
+midas "sys; ts clogo" "rjl; logo" {
+    respond "STANDARD=" "0\r"
+    respond "TBOX=" "0\r"
+    respond "TURTLE=" "1\r"
+    respond "PHYSICS=" "0\r"
+    respond "LFLAG=" "0\r"
+    respond "OLDMUSIC=" "0\r"
+    respond "DFLAG=" "1\r"
+}
 
 # NVMIDS, Nova assembler
 cwd "nova"
@@ -1734,49 +1514,40 @@ respond "*" "\003"
 respond "*" ":kill\r"
 
 # TENTH, toy Forth.
-respond "*" ":midas /t aap; ts tenth_tenth\r"
-respond "end input with ^C" "TS==1\r"
-respond "\n" "KS==0\r"
-respond "\n" "\003"
-expect ":KILL"
+midast "aap; ts tenth" "tenth" {
+    respond "end input with ^C" "TS==1\r"
+    respond "\n" "KS==0\r"
+    respond "\n" "\003"
+}
 
 # GEORGE
-respond "*" ":midas sys3;ts george_syseng;george\r"
-expect ":KILL"
+midas "sys3;ts george" "syseng;george"
 
 # MONIT
 # The ERROR lines printed during assembly are locations of unlikely
 # runtime errors (e.g. not being able to open TTY:).
-respond "*" ":midas sys;ts monit_dmcg;monit\r"
-expect ":KILL"
+midas "sys;ts monit" "dmcg;monit"
 
 # BANNER
-respond "*" ":midas sys3;ts banner_sysen2; banner\r"
-expect ":KILL"
+midas "sys3;ts banner" "sysen2; banner"
 
 # IBMASC
-respond "*" ":midas sys3;ts ibmasc_sysen1;ibmasc\r"
-expect ":KILL"
+midas "sys3;ts ibmasc" "sysen1;ibmasc"
 
 # NEWDEC
-respond "*" ":midas sys3;ts newdec_sysen1;newdec\r"
-expect ":KILL"
+midas "sys3;ts newdec" "sysen1;newdec"
 
 # TBMOFF
-respond "*" ":midas sys; ts tbmoff_cstacy; tbmoff\r"
-expect ":KILL"
+midas "sys; ts tbmoff" "cstacy; tbmoff"
 
 # UPTINI
-respond "*" ":midas ejs;ts uptini_uptini\r"
-expect ":KILL"
+midas "ejs;ts uptini" "uptini"
 
 # CHATER
-respond "*" ":midas sys1;ts chater_gren;coms\r"
-expect ":KILL"
+midas "sys1;ts chater" "gren;coms"
 
 # STINK 121T, used to build Muddle and some old programs
-respond "*" ":midas mudsys;ts stink_sysen2;stink 121t\r"
-expect ":KILL"
+midas "mudsys;ts stink" "sysen2;stink 121t"
 
 # Move hello world xfiles into an archive.
 cwd "hello"

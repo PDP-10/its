@@ -13,9 +13,7 @@ respond "*" ":delete .;@ its\r"
 # The new ITS is now canonical.
 respond "*" ":rename .;@ nits, .;@ its\r"
 
-respond "*" ":midas sysbin;_syseng;dump\r"
-dump_switches
-expect ":KILL"
+midas "sysbin;" "syseng;dump" dump_switches
 respond "*" ":delete sys;ts dump\r"
 respond "*" ":link sys;ts dump,sysbin;dump bin\r"
 respond "*" ":link sys;ts load,sys;ts dump\r"
@@ -34,47 +32,44 @@ mkdir "device"
 mkdir "cstacy"
 
 # TCTYP
-respond "*" ":midas sys1; ts tctyp_syseng;tctyp\r"
-expect ":KILL"
+midas "sys1; ts tctyp" "syseng;tctyp"
 respond "*" ":link sys1;ts tctype, sys1; ts tctyp\r"
 
 source $build/emacs.tcl
 
 # TAGS
-respond "*" ":midas sys2;ts tags_sysen2;tags\r"
-expect ":KILL"
+midas "sys2;ts tags" "sysen2;tags"
 
 # magdmp, paper tape
-respond "*" ":midas dsk0:.;_syseng;magdmp\r"
-respond "PTRHRI=" "y\r"
-magdmp_switches
-expect ":KILL"
+midas "dsk0:.;" "syseng;magdmp" {
+    respond "PTRHRI=" "y\r"
+    magdmp_switches
+}
 
 # magdmp
-respond "*" ":midas sys1;ts magfrm_syseng;magfrm\r"
-expect ":KILL"
+midas "sys1;ts magfrm" "syseng;magfrm"
 
-respond "*" ":midas sys1;ts stink_sysen2;stink\r"
-expect ":KILL"
+# STINK linker
+midas "sys1;ts stink" "sysen2;stink"
 
-respond "*" ":midas sysbin;_sysen1;pdset\r"
-expect ":KILL"
+# PDSET
+midas "sysbin;" "sysen1;pdset"
 respond "*" ":delete sys;ts pdset\r"
 respond "*" ":link sys;ts pdset,sysbin;pdset bin\r"
 
-respond "*" ":midas sysbin;_syseng;lock\r"
-expect ":KILL"
+# LOCK
+midas "sysbin;" "syseng;lock"
 respond "*" ":delete sys;ts lock\r"
 respond "*" ":link sys;ts lock,sysbin;lock bin\r"
 respond "*" ":link sys3; ts vtfix, sys; ts lock\r"
 
-respond "*" ":midas sysbin;_syseng;@dev\r"
-expect ":KILL"
+# ATSIGN DEVICE
+midas "sysbin;" "syseng;@dev\r"
 respond "*" ":delete sys;atsign device\r"
 respond "*" ":link sys;atsign device,sysbin;@dev bin\r"
 
-respond "*" ":midas sysbin;_syseng;crtsty\r"
-expect ":KILL"
+# CRTSTY
+midas "sysbin;" "syseng;crtsty"
 respond "*" ":job crtsty\r"
 respond "*" ":load sysbin;crtsty bin\r"
 respond "*" "purify\033g"
@@ -83,18 +78,16 @@ respond "*" ":kill\r"
 respond "*" ":link sys3;ts crtsty,sysbin;crtsty bin\r"
 
 # CTN, networking "supdup" CRTSTY
-respond "*" ":midas /t sysbin;ctn bin_syseng; crtsty\r"
-respond "with ^C" "NET==1\r\003"
-expect ":KILL"
+midast "sysbin;ctn bin" "syseng; crtsty" {
+    respond "with ^C" "NET==1\r\003"
+}
 respond "*" ":job ctn\r"
 respond "*" ":load sysbin; ctn bin\r"
 respond "*" "purify\033g"
 respond " BIN" "sys3; ts ctn\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas /t sysbin;_sysen2;peek\r"
-peek_switches
-expect ":KILL"
+midast "sysbin;" "sysen2;peek" peek_switches
 respond "*" ":job peek\r"
 respond "*" ":load sysbin;peek bin\r"
 respond "*" "purify\033g"
@@ -102,65 +95,51 @@ respond {$G} "q"
 expect ":KILL"
 respond "*" ":link sys; ts p,sys; ts peek\r"
 
-respond "*" ":midas device;jobdev arc_syseng;arcdev\r"
-expect ":KILL"
+midas "device;jobdev arc" "syseng;arcdev"
 respond "*" ":link device;jobdev ar,device;jobdev arc\r"
 
-respond "*" ":midas device;oarcdv bin_sysen2; dmarcd\r"
-expect ":KILL"
+midas "device;oarcdv bin" "sysen2; dmarcd"
 
 # JOBDEV D (DSKDEV)
-respond "*" ":midas device;jobdev d_syseng;dskdev\r"
-expect ":KILL"
+midas "device;jobdev d" "syseng;dskdev"
 
-respond "*" ":midas sysbin;_sysen2;find\r"
-expect ":KILL"
+midas "sysbin;" "sysen2;find"
 respond "*" ":link sys;ts find,sysbin;find bin\r"
 respond "*" ":link sys;ts fi,sys;ts find\r"
 respond "*" ":link sys;ts comb,sys;ts find\r"
 respond "*" ":link sys2;ts lf,sys;ts find\r"
 
-respond "*" ":midas sys;ts dskuse_syseng;dskuse\r"
-expect ":KILL"
+midas "sys;ts dskuse" "syseng;dskuse"
 
-respond "*" ":midas channa;atsign taraka_taraka\r"
-expect ":KILL"
+midas "channa;atsign taraka" "taraka"
 respond "*" ":link sys; atsign dragon,channa; atsign taraka\r"
 
-respond "*" ":midas channa;rakash dmpcpy_syseng; dmpcpy\r"
-expect ":KILL"
+midas "channa;rakash dmpcpy" "syseng; dmpcpy"
 
-respond "*" ":midas channa;rakash modems_syseng; modems\r"
-expect ":KILL"
+midas "channa;rakash modems" "syseng; modems"
 respond "*" ":link channa;ts modems,channa;rakash modems\r"
-
-respond "*" ":midas channa;rakash netime_sysen1; netime\r"
-expect ":KILL"
-respond "*" ":link channa;ts netime,channa;rakash netime\r"
-
 respond "*" ":link dragon;hourly modems,channa;ts modems\r"
 
-respond "*" ":midas channa;rakash papsav_sysen3;papsav\r"
-expect ":KILL"
+midas "channa;rakash netime" "sysen1; netime"
+respond "*" ":link channa;ts netime,channa;rakash netime\r"
 
-respond "*" ":midas dragon;rakash pfthmg_syseng; pft\r"
-respond "mcp=" "0\r"
-expect ":KILL"
+midas "channa;rakash papsav" "sysen3;papsav"
+
+midas "dragon;rakash pfthmg" "syseng; pft" {
+    respond "mcp=" "0\r"
+}
 respond "*" ":link channa; rakash pfthmg,dragon; rakash pfthmg\r"
 
 # LOSS device
-respond "*" ":midas device;jobdev loss_syseng;loss\r"
-expect ":KILL"
+midas "device;jobdev loss" "syseng;loss"
 respond "*" ":link device;jobdev los,device;jobdev loss\r"
 
-respond "*" ":midas syshst;_syshst;hosts3\r"
-expect ":KILL"
+midas "syshst;" "syshst;hosts3"
 respond "*" ":link syshst;ts hosts3,syshst;hosts3 bin\r"
 
 respond "*" ":link syseng;t20mac 999999,system;t20mac >\r"
 
-respond "*" ":midas syshst;_syshst;h3make\r"
-expect ":KILL"
+midas "syshst;" "syshst;h3make"
 respond "*" ":link syshst;ts h3make,syshst;h3make bin\r"
 
 # Run H3MAKE to make the SYSBIN; HOSTS3 > database.  H3MAKE looks for
@@ -172,37 +151,32 @@ respond "*" ":syshst;h3make\r"
 expect {$$^K}
 
 # basic TCP support
-respond "*" ":midas sys;atsign tcp_syseng;@tcp\r"
-expect ":KILL"
+midas "sys;atsign tcp" "syseng;@tcp"
 
 # Chaosnet support
-respond "*" ":midas sysbin;_syseng;@chaos\r"
-expect ":KILL"
+midas "sysbin;" "syseng;@chaos"
 respond "*" ":link sys;atsign chaos,sysbin;@chaos bin\r"
 
 # ARPANET support
 if { ! [string equal "$mchn" "DM"] } {
-    respond "*" ":midas sys;atsign netrfc_syseng; netrfc\r"
-    respond "DEMONP=" "0\r"
-    expect ":KILL"
+    midas "sys;atsign netrfc" "syseng; netrfc" {
+        respond "DEMONP=" "0\r"
+    }
 }
 
 # CHA: and CHAOS: device
-respond "*" ":midas device;jobdev cha_dcp;chadev\r"
-expect ":KILL"
+midas "device;jobdev cha" "dcp;chadev"
 respond "*" ":link device;jobdev chaos,device;jobdev cha\r"
 
 respond "*" ":link syseng;netwrk 999999,sysnet;netwrk >\r"
 
 # CHAOS ARPA/NCP/TCP gateway
-respond "*" ":midas sysnet;_arpa\r"
-expect ":KILL"
+midas "sysnet;" "arpa"
 respond "*" ":link device;chaos arpa, sysnet;arpa bin\r"
 respond "*" ":link device;chaos ncp, sysnet;arpa bin\r"
 respond "*" ":link device;chaos tcp, sysnet;arpa bin\r"
 
-respond "*" ":midas .;ts redrct_sysnet;redrct\r"
-expect ":KILL"
+midas ".;ts redrct" "sysnet;redrct"
 
 # Old NIC Arpanet HOSTS TXT.  Run a TECO macro to generate
 # SYSENG;HOSTS PRETTY and HOSTS INSERT.
@@ -212,9 +186,7 @@ respond "&" "\032"
 respond ")   " ":kill\r"
 
 # telnet server
-respond "*" ":midas sysbin;telser_sysnet;telser\r"
-expect ":KILL"
-
+midas "sysbin;telser" "sysnet;telser"
 # TCP port 23 (telnet) uses TELSER
 respond "*" ":link device;tcp syn027,sysbin;telser bin\r"
 # NCP sockets 1 and 23 use TELSER
@@ -222,13 +194,10 @@ arpanet "rfc001" "sysbin;telser bin"
 arpanet "rfc027" "sysbin;telser bin"
 
 # Old telnet server
-respond "*" ":midas sys;atsign stelnt_syseng;stelnt\r"
-expect ":KILL"
+midas "sys;atsign stelnt" "syseng;stelnt"
 
 # telnet client
-respond "*" ":midas sysbin;telnet_sysnet;telnet\r"
-expect ":KILL"
-
+midas "sysbin;telnet" "sysnet;telnet"
 respond "*" ":link sys;ts telnet,sysbin;telnet bin\r"
 respond "*" ":link sys;ts tcptn,sys;ts telnet\r"
 respond "*" ":link sys;ts ttn,sys;ts telnet\r"
@@ -236,8 +205,7 @@ respond "*" ":link sys;ts ncptn,sys;ts telnet\r"
 respond "*" ":link sys;ts oth,sys;ts telnet\r"
 
 # old user telnet
-respond "*" ":midas sys1;ts ut_syseng;ut\r"
-expect ":KILL"
+midas "sys1;ts ut" "syseng;ut"
 
 # supdup TCP port (95) uses telser
 respond "*" ":link device;tcp syn137,sysbin;telser bin\r"
@@ -247,9 +215,7 @@ arpanet "rfc137" "sysbin;telser bin"
 arpanet "rcf107" "sys1;ts supdup"
 
 # supdup client
-respond "*" ":midas sysbin;supdup_sysnet;supdup\r"
-expect ":KILL"
-
+midas "sysbin;supdup" "sysnet;supdup"
 respond "*" ":link sys1;ts supdup,sysbin;supdup bin\r"
 
 # these two links are expected by sysnet; ftps > and are present
@@ -258,9 +224,7 @@ respond "*" ":link ksc;nuuos 999999,klh;nuuos >\r"
 respond "*" ":link ksc;macros 999999,klh;macros >\r"
 respond "*" ":link ksc;out 999999,klh; out >\r"
 
-respond "*" ":midas sysbin;ftps_sysnet;ftps \r"
-expect ":KILL"
-
+midas "sysbin;ftps" "sysnet;ftps"
 respond "*" ":link device;tcp syn025,sysbin;ftps bin\r"
 respond "*" ":link device;tcp syn031,sysbin;ftps bin\r"
 respond "*" ":link device;chaos smtp,sysbin;ftps bin\r"
@@ -269,24 +233,19 @@ arpanet "rfc025" "sysbin;ftps bin"
 arpanet "rfc031" "sysbin;ftps bin"
 arpanet "rfc103" "sysbin;ftps bin"
 
-respond "*" ":midas sysbin;ftpu_sysnet;ftpu\r"
-expect ":KILL"
-
+midas "sysbin;ftpu" "sysnet;ftpu"
 respond "*" ":link sys;ts ftp,sysbin;ftpu bin\r"
 
 # NAME
-respond "*" ":midas sysbin;name_sysen2;name\r"
-expect ":KILL"
+midas "sysbin;name" "sysen2;name"
 
 respond "*" ":link syseng;ttytyp 999999,system;ttytyp >\r"
 
 # Build INQUIR;INQUPD BIN
-respond "*" ":midas inquir;inqupd bin_inquir;inqupd\r"
-expect ":KILL"
+midas "inquir;inqupd bin" "inquir;inqupd"
 
 # Build INQUIR;DIRS BIN
-respond "*" ":midas inquir;dirs bin_inquir;dmunch\r"
-expect ":KILL"
+midas "inquir;dirs bin" "inquir;dmunch"
 
 # create .temp.;lsr1 empty
 respond "*" "lsrini\033j"
@@ -305,14 +264,13 @@ respond "*" "\033g"
 expect ":KILL"
 
 # pword/panda
-respond "*" ":midas sysbin;panda bin_sysen1;pword\r"
-respond "Is this to be a PANDA?" "yes\r"
-expect ":KILL"
-respond "*" ":midas sysbin;pword bin_sysen1;pword\r"
-respond "Is this to be a PANDA?" "no\r"
-expect ":KILL"
-respond "*" ":midas sysbin;pwinit bin_sysen1;pwinit\r"
-expect ":KILL"
+midas "sysbin;panda bin" "sysen1;pword" {
+    respond "Is this to be a PANDA?" "yes\r"
+}
+midas "sysbin;pword bin" "sysen1;pword" {
+    respond "Is this to be a PANDA?" "no\r"
+}
+midas "sysbin;pwinit bin" "sysen1;pwinit"
 respond "*" ":job pwinit\r"
 respond "*" ":load sysbin;pwinit\r"
 respond "*" "\033g"
@@ -348,26 +306,20 @@ respond "*" ":link device;tcp syn117,sys;ts name\r"
 respond "*" ":link device;chaos name,sys;ts name\r"
 arpanet "rfc117" "sys;ts name"
 
-respond "*" ":midas device;atsign mldev_sysen2;mldev\r"
-expect ":KILL"
-
+midas "device;atsign mldev" "sysen2;mldev"
 respond "*" ":link device;jobdev db,device;atsign mldev\r"
 respond "*" ":link device;jobdev es,device;atsign mldev\r"
 respond "*" ":link device;jobdev no,device;atsign mldev\r"
 respond "*" ":link device;jobdev sj,device;atsign mldev\r"
 respond "*" ":link device;jobdev up,device;atsign mldev\r"
 
-respond "*" ":midas device;atsign mlslv_sysen2;mlslv\r"
-expect ":KILL"
-
+midas "device;atsign mlslv" "sysen2;mlslv"
 respond "*" ":link device;tcp syn123,device;atsign mlslv\r"
 respond "*" ":link device;chaos mldev,device;atsign mlslv\r"
 
-respond "*" ":midas device;jobdev fc_sysen2;fcdev\r"
-expect ":KILL"
+midas "device;jobdev fc" "sysen2;fcdev"
 
-respond "*" ":midas device;atsign dirdev_syseng;dirdev\r"
-expect ":KILL"
+midas "device;atsign dirdev" "syseng;dirdev"
 respond "*" ":link device;jobdev dir,device;atsign dirdev\r"
 respond "*" ":link device;jobdev dirdb,device;atsign dirdev\r"
 respond "*" ":link device;jobdev dires,device;atsign dirdev\r"
@@ -375,16 +327,15 @@ respond "*" ":link device;jobdev dirno,device;atsign dirdev\r"
 respond "*" ":link device;jobdev dirsj,device;atsign dirdev\r"
 respond "*" ":link device;jobdev dirup,device;atsign dirdev\r"
 
-respond "*" ":midas sys1;ts cftp_sysen2; cftp\r"
-respond "KLp==" "0\r"
-expect ":KILL"
+midas "sys1;ts cftp" "sysen2; cftp" {
+    respond "KLp==" "0\r"
+}
 
 respond "*" ":link device;chaos telnet,sysbin;telser bin\r"
 respond "*" ":link device;chaos supdup,sysbin;telser bin\r"
 
 # decuuo
-respond "*" ":midas decsys;_decuuo\r"
-expect ":KILL"
+midas "decsys;" "decuuo"
 respond "*" ":job decuuo\r"
 respond "*" ":load decsys;decuuo bin\r"
 respond "*" "purify\033g"
@@ -392,19 +343,16 @@ respond "TS DEC" "\r"
 respond "*" ":kill\r"
 respond "*" ":link sys;ts dec\021 *,must; be here\r"
 
-respond "*" ":midas decsys;_decbot\r"
-expect ":KILL"
+midas "decsys;" "decbot"
 
 # palx
-respond "*" ":midas sys;ts palx_sysen1;palx\r"
-expect ":KILL"
+midas "sys;ts palx" "sysen1;palx"
 
 # GT40 boot ROM.
 palx "gt40;" "gt40;bootvt"
 
 # PLAN/CREATE
-respond "*" ":midas sys3;ts create_syseng;create\r"
-expect ":KILL"
+midas "sys3;ts create" "syseng;create"
 respond "*" ":link sys1;ts plan,sys3;ts create\r"
 
 processor_basics

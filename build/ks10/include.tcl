@@ -83,8 +83,7 @@ proc prepare_frontend {} {
     respond "*" ":login db\r"
     type ":vk\r"
 
-    respond "*" ":midas sysbin;_kshack;ksfedr\r"
-    expect ":KILL"
+    midas "sysbin;" "kshack;ksfedr"
     respond "*" ":delete sys;ts ksfedr\r"
     respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
 
@@ -149,27 +148,22 @@ proc its_switches {} {
 }
 
 proc make_ntsddt {} {
-    respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
-    respond "cpusw" "3\r"
-    respond "dsktp=" "1\r"
-    respond "New One Proceed" "1\r"
-    expect ":KILL"
+    midas "dsk0:.;@ ddt" "system;ddt" {
+        respond "cpusw" "3\r"
+        respond "dsktp=" "1\r"
+        respond "New One Proceed" "1\r"
+    }
 }
 
 proc make_salv {} {
-    respond "*" ":midas dsk0:.;_kshack;nsalv\r"
-    respond "Which machine?" "KSRP06\r"
-    expect ":KILL"
+    midas "dsk0:.;" "kshack;nsalv" {
+        respond "Which machine?" "KSRP06\r"
+    }
 }
 
 proc make_dskdmp {} {
-    respond "*" ":midas dsk0:.;_system;dskdmp\r"
-    dskdmp_switches "no"
-    expect ":KILL"
-
-    respond "*" ":midas dsk0:.;bt_system;dskdmp\r"
-    dskdmp_switches "yes"
-    expect ":KILL"
+    midas "dsk0:.;" "system;dskdmp" { dskdmp_switches "no" }
+    midas "dsk0:.;bt" "system;dskdmp" { dskdmp_switches "yes" }
 }
 
 proc dump_switches {} {
@@ -256,6 +250,5 @@ proc dqxdev_switches {} {
 
 proc processor_basics {} {
     # Create KS10 bootable tape.
-    respond "*" ":midas kshack;ts mtboot_kshack;mtboot\r"
-    expect ":KILL"
+    midas "kshack;ts mtboot" "kshack;mtboot"
 }

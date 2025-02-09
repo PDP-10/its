@@ -31,8 +31,7 @@ expect ":KILL"
 respond "*" ":listf sys\r"
 
 mkdir "sysbin"
-respond "*" ":midas sysbin;_midas;midas\r"
-expect ":KILL"
+midas "sysbin;" "midas;midas"
 respond "*" ":job midas\r"
 respond "*" ":load sysbin;midas bin\r"
 respond "*" "purify\033g"
@@ -40,17 +39,14 @@ respond "CR to dump" "\r"
 sleep 2
 respond "*" ":kill\r"
 
-respond "*" ":midas sysbin;_sysen1;ddt\r"
-expect ":KILL"
+midas "sysbin;" "sysen1;ddt"
 respond "*" ":job ddt\r"
 respond "*" ":load sysbin;ddt bin\r"
 respond "*" "purify\033g"
 respond "*" ":pdump sys;atsign ddt\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas dsk0:.;_system;its\r"
-its_switches
-expect ":KILL"
+midas "dsk0:.;" "system;its" its_switches
 
 make_ntsddt
 
