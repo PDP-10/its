@@ -25,21 +25,16 @@ respond "*" ":pdump midas; ts 77\r"
 respond "*" ":kill\r"
 
 # MIDAS 73, bootstrapped from 77.
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
-respond "*" ":midas;73\r"
-respond "MIDAS.73" "MIDAS; TS 73_MIDAS; MIDAS 73\r"
+oomidas 77 "MIDAS; TS 73" "MIDAS; MIDAS 73"
+oomidas 73 "MIDAS; TS 73" "MIDAS; MIDAS 73"
 respond "*" ":xfile midas; patch 73\r"
 expect ":kill"
 
 # ITS 138
-respond "*" ":midas;73\r"
-respond "MIDAS.73" ".;ITS 138BIN_SYSENG;ITS 138\r"
-expect ":KILL"
+oomidas 73 ".;ITS 138BIN" "SYSENG;ITS 138"
 
 # MACTAP
-respond "*" ":midas;324 sysbin;_sysen2; mactap\r"
-expect ":KILL"
+omidas "sysbin;" "sysen2; mactap"
 
 # TECO6
 midas "sysbin;teco 335bin" ".teco.; teco 335"
@@ -666,8 +661,7 @@ respond "*" "purify\033g"
 respond "TS @" "\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas;324 dsk0:.;@ pt_syseng;pt\r"
-expect ":KILL"
+omidas "dsk0:.;@ pt" "syseng;pt"
 
 # PTY
 midas "sys1;ts pty" "sysen1;pty"
@@ -815,21 +809,11 @@ midas "sysbin;" "syseng; muscom"
 respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
 
 # BIG
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_SYSENG; BIG\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_PRS; SUDSUD\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_PRS; PLOT\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_PRS; FIGS\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_PRS; SMOLDM\r"
-expect ":KILL"
+oomidas 77 "SYSBIN;" "SYSENG; BIG"
+oomidas 77 "SYSBIN;" "PRS; SUDSUD"
+oomidas 77 "SYSBIN;" "PRS; PLOT"
+oomidas 77 "SYSBIN;" "PRS; FIGS"
+oomidas 77 "SYSBIN;" "PRS; SMOLDM"
 respond "*" ":stink\r"
 respond "\n" "msysbin;sudsud\033l\033\033"
 respond "\n" "mbig\033l\033\033"
@@ -1020,8 +1004,7 @@ respond "@" "\021"
 expect ":KILL"
 
 # SSV 22, Imlac scroll saver
-respond "*" ":midas;324 sysbin;_imsrc; ssv22\r"
-expect ":KILL"
+omidas "sysbin;" "imsrc; ssv22"
 respond "*" ":imtran\r"
 respond "@" "imlac; ssv22 iml_sysbin; ssv22 bin\r"
 respond "@" "\021"
@@ -1434,8 +1417,7 @@ cwd "gld"
 palx "gld;" "its"
 
 # TORTIS
-respond "*" ":midas;324 radia;_tortis\r"
-expect ":KILL"
+omidas "radia;" "tortis"
 
 # BBN Logo
 cwd "bbn"
@@ -1456,10 +1438,7 @@ midas "sys; ts clogo" "rjl; logo" {
 
 # NVMIDS, Nova assembler
 cwd "nova"
-respond "*" ":midas;73\r"
-expect "MIDAS"
-respond "\n" "TS NVMIDS_NVMIDS >\r"
-expect ":KILL"
+oomidas 73 "TS NVMIDS" "NVMIDS >"
 
 # Nova programs.
 respond "*" ":nvmids\r"

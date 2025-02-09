@@ -123,7 +123,7 @@ move_to_klfe ".temp.; ioelev a11"
 palx "sysbin;" "system;ioelev" { respond "MACHINE NAME =" "MC\r" }
 
 # 11BOOT
-midas;"324 sys3;ts 11boot" "syseng;11boot"
+omidas "sys3;ts 11boot" "syseng;11boot"
 # Note, must be run with symbols loaded.
 # Takes IOELEV BIN and KLRUG BIN from the current directory.
 cwd "sysbin"

@@ -3,21 +3,15 @@ log_progress "ENTERING BUILD SCRIPT: PROCESSOR"
 # Programs particular to the KA10 processor.
 
 # macdmp, PDP-10 hardware read in, with 340 support.
-respond "*" ":midas;77\r"
-respond "MIDAS.77" ".;MACDMP RIM10_SYSENG; MACDMP MOBY1\r"
-expect ":KILL"
+oomidas 77 ".;MACDMP RIM10" "SYSENG; MACDMP MOBY1"
 # macdmp, PDP-6 read in hack.
-respond "*" ":midas;77\r"
-respond "MIDAS.77" ".;MACDMP RIM2_SYSENG; MACDMP 6U32\r"
-expect ":KILL"
+oomidas 77 ".;MACDMP RIM2" "SYSENG; MACDMP 6U32"
 
 # system gen
-respond "*" ":midas;324 dsk0:.;@ sysgen_syseng; system gen\r"
-expect ":KILL"
+omidas "dsk0:.;@ sysgen" "syseng; system gen"
 
 # mark
-respond "*" ":midas;324 dsk0:.;@ mark_syseng; mark\r"
-expect ":KILL"
+omidas "dsk0:.;@ mark" "syseng; mark"
 
 # utnam
 midas "sys3; ts utnam" "lars; utnam"
@@ -48,12 +42,9 @@ palx "cons;" "lmcons;ccons"
 
 # Old Spacewar
 cwd "spcwar"
-respond "*" ":midas;324 spcwar; war\r"
-expect ":KILL"
+omidas "spcwar;" "war"
 midas "spcwar;" "stars"
-expect ":KILL"
-respond "*" ":midas;324 spcwar; math\r"
-expect ":KILL"
+omidas "spcwar;" "math"
 respond "*" ":stink\r"
 respond "\n" "mspcwar; war\033l\033\033"
 respond "\n" "mstars\033l\033\033"
@@ -64,14 +55,14 @@ respond " " "dsk0:.;@ war\r"
 respond "*" ":kill\r"
 
 # Spacewar, standalone
-respond "*" ":midas;324 dsk0:.;@ spcwar_spcwar; spcwar\r"
-respond "ITS version" "NO\r"
-respond "interrupt" "NO\r"
-respond "ships" "\r"
-respond "designs" "\r"
-respond "suns" "\r"
-respond "recording" "\r"
-expect ":KILL"
+omidas "dsk0:.;@ spcwar" "spcwar; spcwar" {
+    respond "ITS version" "NO\r"
+    respond "interrupt" "NO\r"
+    respond "ships" "\r"
+    respond "designs" "\r"
+    respond "suns" "\r"
+    respond "recording" "\r"
+}
 
 # Spacewar, timesharing
 midas "games;ts spcwar" "spcwar; spcwar" {
@@ -85,9 +76,9 @@ midas "games;ts spcwar" "spcwar; spcwar" {
 midas "games;ts dazdrt" "klh; dazdrt" {
     respond "Run under ITS?" "YES\r"
 }
-respond "*" ":midas;324 dsk0:.;@ dazdrt_klh; dazdrt\r"
-respond "Run under ITS?" "NO\r"
-expect ":KILL"
+omidas "dsk0:.;@ dazdrt" "klh; dazdrt" {
+    respond "Run under ITS?" "NO\r"
+}
 
 # Knight TV Spacewar
 midas "gjd;" "swr data"
@@ -140,19 +131,16 @@ midas "sys2;ts munch" "sysen2;munch"
 midas "dsk0:.;@ titler" "mb; titler"
 
 # MLIFE
-respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
-expect ":KILL"
-respond "*" ":midas;324 /t dsk0:.;@ mlife_rwg;mlife\r"
-respond "with ^C" "TS==0\r\003"
-expect ":KILL"
+omidas "games;ts mlife" "rwg;mlife"
+omidas "/t dsk0:.;@ mlife" "rwg;mlife" {
+    respond "with ^C" "TS==0\r\003"
+}
 
 # MLIFE
-respond "*" ":midas;324 dsk0:.;@ pornis_rwg; pornis\r"
-expect ":KILL"
+omidas "dsk0:.;@ pornis" "rwg; pornis"
 
 # 3406
-respond "*" ":midas;324 dsk0:.;@ 3406_stan.k; 3406\r"
-expect ":KILL"
+midas "dsk0:.;@ 3406" "stan.k; 3406"
 
 # 340D
 midas "stan.k;mod11 bin" "340d"
@@ -176,12 +164,8 @@ respond "*" ":link dsk0: .; @ lorenz, lars; ts lorenz\r"
 midas "lars; ts tvbrot" "tvbrot"
 
 # MUSRUN
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_SYSENG; MUSRUN\r"
-expect ":KILL"
-respond "*" ":midas;77\r"
-respond "MIDAS.77" "SYSBIN;_SYSENG; H10D\r"
-expect ":KILL"
+oomidas 77 "SYSBIN;" "SYSENG; MUSRUN"
+oomidas 77 "SYSBIN;" "SYSENG; H10D"
 respond "*" ":stink\r"
 respond "\n" "msysbin; musrun\033l\033\033"
 respond "\n" "mh10d\033l\033\033"
@@ -191,8 +175,7 @@ respond " " "sys1; ts musrun\r"
 respond "*" ":kill\r"
 
 # KA10 maintenance
-respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
-expect ":KILL"
+midas "sys;ts 10run" "sysen2; 10run"
 
 # Display all Type 342 characters.
 midas "dsk0:maint;" "tst342"
@@ -239,22 +222,10 @@ expect ":KILL"
 
 # NTS TECO-6
 cwd ".teco."
-respond "*" ":midas;73\r"
-expect "MIDAS"
-respond "\n" "TECODM REL_TECO DUMMY\r"
-expect ":KILL"
-respond "*" ":midas;73\r"
-expect "MIDAS"
-respond "\n" "MACTAP REL_SYSENG;MACTAP F68\r"
-expect ":KILL"
-respond "*" ":midas;73\r"
-expect "MIDAS"
-respond "\n" "LPT REL_SYSENG;LPT 11\r"
-expect ":KILL"
-respond "*" ":midas;73\r"
-expect "MIDAS"
-respond "\n" "TECO6 REL_.TECO.;TECO6 256K\r"
-expect ":KILL"
+oomidas 73 "TECODM REL" "TECO DUMMY"
+oomidas 73 "MACTAP REL" "SYSENG;MACTAP F68"
+oomidas 73 "LPT REL" "SYSENG;LPT 11"
+oomidas 73 "TECO6 REL" ".TECO.;TECO6 256K"
 respond "*" ":mudsys;stink\r"
 respond "\n" "MTECODM\033L MLPT\033L MMACTAP\033L MTECO6\033L D\033\033"
 respond "\n" "\033YDSK0:.;@ TECO\r"
