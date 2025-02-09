@@ -20,18 +20,15 @@ respond "*" ":midas;324 dsk0:.;@ mark_syseng; mark\r"
 expect ":KILL"
 
 # utnam
-respond "*" ":midas sys3; ts utnam_lars; utnam\r"
-expect ":KILL"
+midas "sys3; ts utnam" "lars; utnam"
 
 # Name Dragon
 respond "*" ":link syseng;tvkbd rooms, sysen2;\r"
-respond "*" ":midas sysbin;_sysen2;namdrg\r"
-expect ":KILL"
+midas "sysbin;" "sysen2;namdrg"
 respond "*" ":link channa;rakash namdrg, sysbin; namdrg bin\r"
 
 # STUFF
-respond "*" ":midas sys1;ts stuff_sysen2;stuff\r"
-expect ":KILL"
+midas "sys1;ts stuff" "sysen2;stuff"
 respond "*" ":link channa;rakash tvfix, sys1; ts stuff\r"
 
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
@@ -53,7 +50,7 @@ palx "cons;" "lmcons;ccons"
 cwd "spcwar"
 respond "*" ":midas;324 spcwar; war\r"
 expect ":KILL"
-respond "*" ":midas spcwar; stars\r"
+midas "spcwar;" "stars"
 expect ":KILL"
 respond "*" ":midas;324 spcwar; math\r"
 expect ":KILL"
@@ -77,24 +74,23 @@ respond "recording" "\r"
 expect ":KILL"
 
 # Spacewar, timesharing
-respond "*" ":midas games;ts spcwar_spcwar; spcwar\r"
-respond "ITS version" "YES\r"
-respond "ships" "\r"
-respond "designs" "\r"
-respond "suns" "\r"
-expect ":KILL"
+midas "games;ts spcwar" "spcwar; spcwar" {
+    respond "ITS version" "YES\r"
+    respond "ships" "\r"
+    respond "designs" "\r"
+    respond "suns" "\r"
+}
 
 # PDP-6/10 Dazzle Dart
-respond "*" ":midas games;ts dazdrt_klh; dazdrt\r"
-respond "Run under ITS?" "YES\r"
-expect ":KILL"
+midas "games;ts dazdrt" "klh; dazdrt" {
+    respond "Run under ITS?" "YES\r"
+}
 respond "*" ":midas;324 dsk0:.;@ dazdrt_klh; dazdrt\r"
 respond "Run under ITS?" "NO\r"
 expect ":KILL"
 
 # Knight TV Spacewar
-respond "*" ":midas gjd;_swr data\r"
-expect ":KILL"
+midas "gjd;" "swr data"
 respond "*" ":job swr\r"
 respond "*" ":load gjd; swr bin\r"
 respond "*" "first\033,last\033\060ygjd; swr ships\r"
@@ -104,52 +100,44 @@ expect ":KILL"
 
 # Dump TV bitmap as XGP scan file.
 # TVREAD expects the binary in BKPH.
-respond "*" ":midas bkph; ts zap_zap\r"
-expect ":KILL"
+midas "bkph; ts zap" "zap"
 
 # View bitmap file on TV.
-respond "*" ":midas sys2; ts tvread_vis; tvread\r"
-expect ":KILL"
+midas "sys2; ts tvread" "vis; tvread"
 
 # Save TV display as bitmap file.
-respond "*" ":midas sys2; ts tvwrit_sysen2; tvwrit\r"
-expect ":KILL"
+midas "sys2; ts tvwrit" "sysen2; tvwrit"
 
 # Save TV display as text file.
-respond "*" ":midas sys2; ts record_sysen2; record\r"
-expect ":KILL"
+midas "sys2; ts record" "sysen2; record"
 
 # TV paint program.
-respond "*" ":midas sys2; ts tvedit_sysen2; tvedit\r"
-expect ":KILL"
+midas "sys2; ts tvedit" "sysen2; tvedit"
 
 # KLH's Knight TV clock.
-respond "*" ":midas klh; ts tinyw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "1\r"
-expect ":KILL"
-respond "*" ":midas klh; ts bigw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "0\r"
-respond "=" "0\r"
-expect ":KILL"
-respond "*" ":midas klh; ts digiw_klh; clock\r"
-respond "=" "1\r"
-respond "=" "0\r"
-respond "=" "1\r"
-expect ":KILL"
+midas "klh; ts tinyw" "klh; clock" {
+    respond "=" "1\r"
+    respond "=" "1\r"
+}
+midas "klh; ts bigw" "klh; clock" {
+    respond "=" "1\r"
+    respond "=" "0\r"
+    respond "=" "0\r"
+}
+midas "klh; ts digiw" "klh; clock" {
+    respond "=" "1\r"
+    respond "=" "0\r"
+    respond "=" "1\r"
+}
 
 # XD, view XGP files on TV.
-respond "*" ":midas sys3;ts xd_sysen2;xd\r"
-expect ":KILL"
+midas "sys3;ts xd" "sysen2;xd"
 
 # TV-munching square.
-respond "*" ":midas sys2;ts munch_sysen2;munch\r"
-expect ":KILL"
+midas "sys2;ts munch" "sysen2;munch"
 
 # TITLER
-respond "*" ":midas dsk0:.;@ titler_mb; titler\r"
-expect ":KILL"
+midas "dsk0:.;@ titler" "mb; titler"
 
 # MLIFE
 respond "*" ":midas;324 games;ts mlife_rwg;mlife\r"
@@ -167,30 +155,25 @@ respond "*" ":midas;324 dsk0:.;@ 3406_stan.k; 3406\r"
 expect ":KILL"
 
 # 340D
-respond "*" ":midas stan.k;mod11 bin_340d\r"
-expect ":KILL"
+midas "stan.k;mod11 bin" "340d"
 respond "*" ":link sys1;ts 340d, stan.k; mod11 bin\r"
 
 # Munching squares for 340 display.
-respond "*" ":midas lars; ts munch_munch\r"
-expect ":KILL"
-respond "*" ":midas /t dsk0: .; @ munch_lars; munch\r"
-respond "with ^C" ".iotlsr==jfcl\r\003"
-expect ":KILL"
+midas "lars; ts munch" "munch"
+midast "dsk0: .; @ munch" "lars; munch" {
+    respond "with ^C" ".iotlsr==jfcl\r\003"
+}
 
 # Minskytron, translated from PDP-1.
-respond "*" ":midas dsk0: lars; ts minsky_minsky tron\r"
-expect ":KILL"
+midas "dsk0: lars; ts minsky" "minsky tron"
 respond "*" ":link dsk0: .; @ minsky, lars; ts minsky\r"
 
 # Edward Lorenz' strange attactor.
-respond "*" ":midas dsk0: lars; ts lorenz_lorenz\r"
-expect ":KILL"
+midas "dsk0: lars; ts lorenz" "lorenz"
 respond "*" ":link dsk0: .; @ lorenz, lars; ts lorenz\r"
 
 # Mandelbrot.
-respond "*" ":midas lars; ts tvbrot_tvbrot\r"
-expect ":KILL"
+midas "lars; ts tvbrot" "tvbrot"
 
 # MUSRUN
 respond "*" ":midas;77\r"
@@ -212,20 +195,16 @@ respond "*" ":midas;324 sys;ts 10run_sysen2; 10run\r"
 expect ":KILL"
 
 # Display all Type 342 characters.
-respond "*" ":midas dsk0:maint;_tst342\r"
-expect ":KILL"
+midas "dsk0:maint;" "tst342"
 
 # XGP spooler
-respond "*" ":midas sys2;ts xgpspl_sysen2;xgpspl\r"
-expect ":KILL"
+midas "sys2;ts xgpspl" "sysen2;xgpspl"
 
 # XGP unspooler
-respond "*" ":midas sysbin;_syseng;scrimp\r"
-expect ":KILL"
+midas "sysbin;" "syseng;scrimp"
 
 # CARPET, remote PDP-11 debugger through Rubin 10-11 interface.
-respond "*" ":midas sys3;ts carpet_syseng;carpet\r"
-expect ":KILL"
+midas "sys3;ts carpet" "syseng;carpet"
 
 # Patch PDP-6 LISP to run on PDP-10.
 respond "*" ":job lisp\r"
@@ -247,9 +226,9 @@ respond " " "dsk0:.;@ lisp\r"
 respond "*" ":kill\r"
 
 # Lisp display slave, PDP-6 version.
-respond "*" ":midas sys; atsign 6slave_sysen2; ld10\r"
-respond "   PDP6F = " "1\r"
-expect ":KILL"
+midas "sys; atsign 6slave" "sysen2; ld10" {
+    respond "   PDP6F = " "1\r"
+}
 
 # Test for the 340 "hack hack".
 respond "*" $emulator_escape

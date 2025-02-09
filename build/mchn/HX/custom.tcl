@@ -2,9 +2,9 @@
 respond "*" ":link dragon; hourly gunner, cstacy; gunner bin\r"
 
 #Run a weekly unattended incremental dump.
-respond "*" ":midas dragon; weekly backup_lars; backup\r"
-respond "HOST NAME =" "177001\r"
-expect ":KILL"
+midas "dragon; weekly backup" "lars; backup" {
+    respond "HOST NAME =" "177001\r"
+}
 
 # get rid of links to daemons that don't run correctly
 respond "*" ":delete dragon;hourly digest\r"

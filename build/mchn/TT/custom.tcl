@@ -1,7 +1,7 @@
 #Enable the remote shutdown service.
-respond "*" ":midas /t device;chaos shutdo_sysnet;shutsr\r"
-respond "end input with ^C" "ALLOW==3036\r\003"
-expect ":KILL"
+midas "/t device;chaos shutdo" "sysnet;shutsr" {
+    respond "end input with ^C" "ALLOW==3036\r\003"
+}
 
 #Disable the DM gunner.
 respond "*" ":delete sys;atsign gunner\r"
@@ -10,9 +10,9 @@ respond "*" ":delete sys;atsign gunner\r"
 respond "*" ":link dragon; hourly gunner, cstacy; gunner bin\r"
 
 #Run a weekly unattended incremental dump.
-respond "*" ":midas dragon; weekly backup_lars; backup\r"
-respond "HOST NAME =" "3036\r"
-expect ":KILL"
+midas "dragon; weekly backup" "lars; backup" {
+    respond "HOST NAME =" "3036\r"
+}
 
 # get rid of links to daemons that don't run correctly
 respond "*" ":delete dragon;hourly digest\r"

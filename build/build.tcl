@@ -173,6 +173,16 @@ proc arpanet {rfc file} {
     }
 }
 
+proc midas {target source {action ""}} {
+    respond "*" ":midas ${target}_$source\r"
+    eval $action
+    expect ":KILL"
+}
+
+proc midast {target source {action ""}} {
+    midas "/t $target" $source $action
+}
+
 proc macro10 {target sources} {
     respond "*" ":macro\r"
     respond "*" "$target=$sources\r"

@@ -1,5 +1,4 @@
-respond "*" ":midas sysbin;_.teco.;teco\r"
-expect ":KILL"
+midas "sysbin;" ".teco.;teco"
 respond "*" ":job teco\r"
 respond "*" ":load sysbin;teco bin\r"
 sleep 2
@@ -105,8 +104,7 @@ respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 147\r"
 respond "*" ":link emacs;emacs init,emacs;* emacs\r"
 
 # make TS BABYL
-respond "*" ":midas sys3;ts babyl_kmp;babyl\r"
-expect ":KILL"
+midas "sys3;ts babyl" "kmp;babyl"
 
 # INFO
 # For some unknown reason, we can't use a printing terminal when

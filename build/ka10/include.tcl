@@ -83,26 +83,24 @@ proc its_switches {} {
 }
 
 proc make_ntsddt {} {
-    respond "*" ":midas dsk0:.;@ ddt_system;ddt\r"
-    respond "cpusw=" "0\r"
-    respond "ndsk=" "0\r"
-    respond "dsksw=" "0\r"
-    respond "dsktp=" "0\r"
-    respond "1PRSW=" "1\r"
-    expect ":KILL"
+    midas "dsk0:.;@ ddt" "system;ddt" {
+        respond "cpusw=" "0\r"
+        respond "ndsk=" "0\r"
+        respond "dsksw=" "0\r"
+        respond "dsktp=" "0\r"
+        respond "1PRSW=" "1\r"
+    }
 
     # Old NTS DDT with 340 support.
-    respond "*" ":midas dsk0:.;@ ntsddt_syseng; ntsddt\r"
-    expect ":KILL"
+    midas "dsk0:.;@ ntsddt" "syseng; ntsddt"
 }
 
 proc make_salv {} {
-    global mchn
-
-    respond "*" ":midas dsk0:.;_system;salv\r"
-    respond "time-sharing?" "n\r"
-    respond "machine?" "$mchn\r"
-    expect ":KILL"
+    midas "dsk0:.;" "system;salv" {
+        global mchn
+        respond "time-sharing?" "n\r"
+        respond "machine?" "$mchn\r"
+    }
 }
 
 proc make_dskdmp {} {
@@ -110,17 +108,13 @@ proc make_dskdmp {} {
     global out
 
     # On-disk @ DSKDMP.
-    respond "*" ":midas dsk0:.;@ dskdmp_system;dskdmp\r"
-    dskdmp_switches "N"
-    expect ":KILL"
+    midas "dsk0:.;@ dskdmp" "system;dskdmp" { dskdmp_switches "N" }
 
     # Paper tape DSKDMP.  This is used for booting ITS.
     respond "*" $emulator_escape
     punch_tape "$out/dskdmp.rim"
     type ":vk\r"
-    respond "*" ":midas ptp:_system;dskdmp\r"
-    dskdmp_switches "Y"
-    expect ":KILL"
+    midas "ptp:" "system;dskdmp" { dskdmp_switches "Y" }
 }
 
 proc dump_switches {} {
@@ -162,10 +156,10 @@ proc bootable_tapes {} {
     global out
     global mchn
 
-    respond "*" ":midas .;magdmp bin.${mchn}_syseng;magdmp\r"
-    respond "PTRHRI=" "n\r"
-    magdmp_switches
-    expect ":KILL"
+    midas ".;magdmp bin.${mchn}" "syseng;magdmp" {
+        respond "PTRHRI=" "n\r"
+        magdmp_switches
+    }
 
     respond "*" $emulator_escape
     create_tape "$out/magdmp.tape"

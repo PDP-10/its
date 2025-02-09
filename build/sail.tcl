@@ -119,5 +119,4 @@ respond "GO ON." "Y\r"
 respond "WL BIN" "\r"
 respond "*" ":kill\r"
 
-respond "*" ":midas datdrw;_draw; scnv\r"
-expect ":KILL"
+midas "datdrw;" "draw; scnv"
