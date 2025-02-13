@@ -449,12 +449,12 @@ respond "*" ":job jotto\r"
 respond "*" ":load jotto bin\r"
 # Run initialisation code to open the TTY channels.
 respond "*" "erase0\033bbeg\033g"
-# Patch in the filename DSK;JOTTO DICT.
-type "utopen/\0331'   dsk\033\r"
-type "b/\0331'jotto\033\r"
-type "c/\0331'dict\033\r"
-# Run the dictionary loader, skipping its filename setup code.
-type "beg7\033g"
+# Load dictionary from disk instead of DECtape.
+respond "ERASE0>>" "\024ut1:*;* *, dsk:games;* *\r"
+# Run the dictionary loader.
+respond "*" "beg7\033g"
+respond "utape drive for dictionary?" "1"
+respond "file name?" "JOTTO DICT\r"
 # Dump out TS JOTTO including the dictionary.
 respond "words" ":pdump sys1;ts jotto\r"
 respond "*" ":kill\r"
