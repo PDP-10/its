@@ -1346,6 +1346,16 @@ palx "mits.b;" "bootil" {
     respond "Start of temporary data storage?" "150000\r"
 }
 
+# NSWIT, new switch.
+cwd "chsncp"
+palx "chsncp;" "nswit" {
+    expect "System "
+    respond "?" "L11\r"
+}
+
+palx "chsncp;" "aswitc"
+palx "chsncp;" "bswitc"
+
 # ITS universal file.
 cwd "decsys"
 macro10 "sits.unv" "sits.mac"
