@@ -18,7 +18,7 @@ timestamps(){
             t="$2"
             TZ=EST
         else
-            t=`git log -1 --date=format:%Y%m%d%H%M.%S --format=%cd -- "$1"`
+            t=`git log -1 --date=format:%Y%m%d%H%M.%S --format=%cd -- "$i"`
             TZ="$OTZ"
         fi
         touch -h -t "$t" -- "$i"
