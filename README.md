@@ -76,7 +76,7 @@ a list of useful commands.
 
 Alternatively to logging in directly in the system console window, 
 which will always be displaying daemon messages, you may prefer to 
-use a seperate terminal session for logging in.  To do this just
+use a separate terminal session for logging in.  To do this just
 run `telnet localhost <port>` from another shell window and press
 <kbd>CTRL</kbd><kbd>Z</kbd> to log in there. The port should be determined as per this list:
 
@@ -93,7 +93,7 @@ To shut down ITS, type `:lock` and then `5down`.  Log yourself out to
 avoid the 5 minute grace period: type `:logout`.  When ITS writes
 `SHUTDOWN COMPLETE`, it's safe to stop the emulator.  Press <kbd>CTRL</kbd><kbd>\\</kbd>
 to escape to the simulator command prompt and `quit` to close it.  If
-you had a separate telnet user session running you can similary
+you had a separate telnet user session running you can similarly
 press <kbd>CTRL</kbd><kbd>\[</kbd> and then exit telnet.
 
 ITS can optionally use some additional peripheral devices.  To attach
@@ -162,7 +162,7 @@ Some major applications:
 
 - Adventure, game
 - C10, C compiler
-- CLU, progamming language.
+- CLU, programming language.
 - DDT, debugger
 - Emacs, editor
 - Logo, interpreter
