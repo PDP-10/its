@@ -1,0 +1,1306 @@
+	.title	Switcher
+	.csect
+	.sbttl	Terminal Switcher
+	.enabl	lc
+	.mcall	.regdef
+	.regdef
+
+	.globl	tip,hndlnw,runsys
+	.globl	bfcrat,getchr,getchs,putchr,putchs,rlsedv,getdv
+	.globl	ibftbl,binptr,botptr,nidevs,nodevs,inbtbl,dvownr
+	.globl	otdvtb,devtyp,chrclr,dvdesc,dftdsc,dlvhdl
+
+;rt11s = 1	;assemble RT11 stuff
+
+cr = 015
+lf = 012
+spce = 040	;space
+del = 177	;delete char
+eschr = '\	;default escape char
+up = 44
+iscnsl = 100000
+rmcnsl =  40000
+lecho  =  1
+hndshk =  2
+tparty =  4
+
+ap = r5		;automatic storage ptr
+	.block	ato,ap		;shape of automatic storage
+	ato	tsk,2		;my task id (pointer)
+	ato	jid,2		; task index
+	ato	myd,2		;my console index
+	ato	myp,2		;my printer channel
+	ato	myk,2		;my keyboard channel
+	ato	rmo,2		;xmit channel to remote
+	ato	rmi,2		;rcv channel from remote
+	ato	esc,1		;the escape char in use
+	ato	flg,1		;some flags for control
+
+runsys:	sub	#ato.ln,sp	;setup auto area
+	mov	sp,ap
+	mov	botptr,ap.myp(ap)	;output dev
+	mov	#up,swtstt	;set marker saying system alive
+	mov	#-1,metrlk	;enable meterer
+	mov #-1,mantlk		;enable maintenance
+	mov	#sysmsg,r0
+	jsr	pc,outlin	;print msg
+; send messages to console devices
+	mov	#otdvtb,r3
+	mov	#nodevs,r4
+	mov	#devtyp,r2
+1$:	mov	(r3)+,ap.myp(ap)	;maybe ouput
+	beq	2$		;if zero do nothing
+	bit	#iscnsl,(r2)	;if console bit on
+	beq	2$
+	bit	#rmcnsl,(r2)	;see if it is remote thing
+	beq	3$
+	mov	#belmsg,r0
+	br	4$
+3$:	mov	#frems,r0
+4$:	jsr	pc,outlin	;print msg
+2$:	tst	(r2)+		;advance devtyp pointer
+	sob	r4,1$
+	$exit			;go away after initialization
+
+hndlnw:	mov	r4,r2		;move interrupter index to r2
+	mov	inbtbl(r2),r3	;get inbuf adr of interrupter
+ntcnsl:	bit	#iscnsl,devtyp(r2)	;is this a console?
+	bne	2$
+	$exit			;ignore if not console
+2$:	mtps #340		; mask
+	movb	(r3),r4		;get wakeup char
+	cmp	swtstt,#up	;is system active?
+	beq	1$		;yes, go on
+	mtps	#0		; unmask
+	$exit			;no, just vanish
+1$:
+	mtps	#0		; unmask
+tip:	mov	binptr(r2),r4	;get system buffer ptr for this dev
+	jsr	pc,bfcrat	;make it input buffer
+	mov	r4,ibftbl(r2)	;set up for input
+	mov	r1,dvownr(r2)	;tag device owner
+	mov	r0,bf.tsk(r4)	;this is the task to wakeup
+	sub	#ato.ln,sp	;setup auto ptr
+	mov	sp,ap
+	mov	r4,ap.myk(ap)	;my keyboard channel
+	mov	r2,ap.myd(ap)	;save console index
+	mov	r0,ap.tsk(ap)	;save task id
+	mov	r1,ap.jid(ap)	;save task index
+	movb	#eschr,ap.esc(ap)	;set default escape cahr
+	clrb	ap.flg(ap)	;initialize flags to zero
+	mov	botptr(r2),r3
+	mov	r3,ap.myp(ap)	;my printer channel
+	bic	#otrt1b+otrt1c,bf.flg(r3)
+	clr	ap.rmo(ap)	;no active output
+	clr	ap.rmi(ap)	;no active input
+	mov	#stmsg,r0	;get ptr to start msg
+	jsr	pc,outlin	;print it
+;
+	bit	#rmcnsl,devtyp(r2)	;remote console?
+	beq	loop		;treat is as local
+	mov	#4,r0		;wait a short time
+	$wait			;make sure it is a considered attempt
+	mov	#15.,r3		;ready to throw characters away
+	mov	ap.myk(ap),r0	;get input buf ptr
+1$:	dec	r3		;count chars to discard
+	bgt	2$
+	br	3$		;too many garbage chars
+2$:	jsr	pc,getchs	;check on input status
+	bcc	1$		;loop back after discarding char
+	mov	#80.,r0		;time to wait
+	$wait			;must repeat start char within that time
+	mov	ap.myk(ap),r0	;to read char
+	jsr	pc,getchs	;read if any
+	bcs	3$		;go and clean up
+	bic	#177600,r1	;only check 7 bits
+	cmpb	r1,#eschr	;is it the escape char?
+	beq	hdlesc		;tak it and go
+3$:	jmp	qabrt		;forget this
+
+loop:	mov	ap.myk(ap),r0	;get kb chanel
+	jsr	pc,getchr	;read chr
+	mov	r1,r3		;don't change output char
+	bic	#177600,r3	;only check 7 bits
+	cmpb	r3,ap.esc(ap)	;escape char?
+	beq	hdlesc		;yes, go handle
+schr:	mov	ap.rmo(ap),r0	;channel for output?
+	bne	11$		;check if output active
+	cmpb	r3,#'?		;random ? mark
+	bne	13$
+	mov	#helpms,r0
+	br	12$
+13$:	mov	#nocon,r0	;get ptr for error msg
+12$:	jsr	pc,outlin	;print it
+	br	loop		;more chars
+11$:	bitb	#hndshk,ap.flg(ap)	;are we handshaking
+	beq	2$		;no
+	mov	ap.myp(ap),r2	;get ptr to output buf
+	cmpb	r3,#021		;ctrl Q
+	bne	3$
+	bis	#otrt1b,bf.flg(r2)	;reenable automatics
+	br	2$
+3$:	cmpb	r3,#023		;ctrl s
+	bne	2$
+	bic	#otrt1b+otrt1c,bf.flg(r2)	;take over
+2$:	bitb	#tparty,ap.flg(ap)	;clear parity bit?
+	beq	4$		;skip if do nothing
+	bic	#200,r1		;clear high order bit
+4$:	jsr	pc,putchr	;output the char to remote
+	bitb	#lecho,ap.flg(ap)	;local echo?
+	beq	loop
+	jsr	pc,putpr	;echo it locally
+	br	loop
+
+hdlesc:	jsr	pc,putpr	;echo char
+	mov	ap.myk(ap),r0
+	jsr	pc,getchr	;get chr from keyboard
+	movb	r1,r3		;for checking low order bits
+	bic	#177600,r3	;7 bits
+	cmpb	r3,ap.esc(ap)	;repeat of escape char?
+	beq	schr		;go send it (good char still in r1)
+	bic	#177600,r1	;only need check low order bits
+	jsr	pc,putpr	;echo it
+	cmpb	r1,#del		;ignore?
+	bne	2$
+	mov	#crlf,r0
+	jsr	pc,outlin	;newline and go on
+	br	loop
+2$:	cmpb	r1,#'?		;help?
+	bne	3$
+	movb	#'H,r1		;make it H
+	beq	cmds
+3$:	cmpb	r1,#cr		;carriage return?
+	bne	cmds		;no, it is a cmd
+	mov	#lf,r1		;echo linefeed
+	jsr	pc,putpr
+	br	loop
+cmds:	cmpb	r1,#spce	;allow leading spaces
+	bne	1$
+	jsr	pc,getkb
+	br	cmds
+1$:	bic	#040,r1		;here to handle commands
+	cmpb	r1,#'C		;is it to Close connection?
+	bne	30$		;no, check if next cmd
+	tst	ap.rmo(ap)	;any connection at all?
+	beq	21$		;no, go complain
+	jsr	pc,cline	;wait for cr
+	bcs	loop		;he thought better of it
+	clr	ap.rmo(ap)	;clear output channel
+	mov	ap.rmi(ap),r2	;get index of remote stuff
+	asr	r2
+	jsr	pc,bindec	;output dev no.
+	mov	ap.rmi(ap),r2
+	mov	dvdesc(r2),r0	;get remote discription
+	jsr	pc,outlin	;output dev closed
+	mov	ap.rmi(ap),r0	;get remote index again
+	jsr	pc,rlsedv	;release it
+	clr	ap.rmi(ap)
+	mov	#clmsg,r0	;closed msg
+	jsr	pc,outlin
+	jmp	loop
+21$:	mov	#nocon,r0	;errmsg
+	jsr	pc,outlin
+	jmp	loop
+
+30$:
+doopen:	cmpb	r1,#'O		;is it to Open connection?
+	beq	123$
+	jmp	doclse
+123$:	tst	ap.rmo(ap)	;any connection open?
+	bne	32$		;yes, go complain
+	jsr	pc,getdec	;get dev nbr to open
+	bcc	4$		;a number was gotten
+	bic	#40,r1		;(accept lower case)
+	cmpb	r1,#'S		;no number, was it a SAIL?
+	bne	36$		;they did not say SAIL
+	jsr	pc,cline
+	bcs	36$		;they didn't mean it
+	mov	ap.myp(ap),r1	;my ptr
+	mov	sallnp,r4	;list of sail lines
+1$:	mov	(r4)+,r0	;let's try a line
+	mov	r0,r2
+	beq	2$
+	asl	r0
+	jsr	pc,getdv
+	bcc	3$
+	br	1$
+2$:	mov	#sallst,sallnp
+	mov	#nslms,r0	;send message of lossage
+	br	35$
+3$:	mov	r4,sallnp
+	cmp	r4,#salls1
+	blo	5$
+	mov	#sallst,sallnp
+5$:	mov	r2,r4
+	mov	#gotsal,r0
+	jsr	pc,outlin
+	jsr	pc,bindec
+	mov	#crlf,r0
+	jsr	pc,outlin
+	mov	r4,r3
+	asl	r3
+	br	38$
+4$:	mov	r0,r3		;get the value
+	cmp	r3,#nidevs	;is it legal
+	bhis	33$		;if too big it is bad
+	cmp	r1,#15		;was it terminated by CR
+	beq	31$		;yes, good
+	jsr	pc,cline	;no, make sure they really want it
+	bcs	35$		;if carry, quit
+31$:	asl	r3		;double for byte offset
+	tst	otdvtb(r3)	;see that it exists
+	beq	33$		;if zero bad
+	mov	ap.myp(ap),r1	;grab it, send chars to my printer
+	mov	r3,r0		;to go get it
+	jsr	pc,getdv
+	bcs	34$		;someone else has it, lose
+38$:	mov	r3,ap.rmi(ap)	;set internal table
+	mov	otdvtb(r3),ap.rmo(ap)	;set my remote out to this device
+	mov	#opnmsg,r0
+35$:	jsr	pc,outlin
+	jmp	loop
+36$:	mov	#crlf,r0
+	br	35$
+32$:	mov	#alropn,r0
+	br	35$
+33$:	mov	#badopn,r0
+	br	35$
+34$:	mov	#notfre,r0
+	jsr	pc,outlin
+	mov	r3,r4
+	mov	dvownr(r4),r2	;get job index of owner
+	mov	joblst(r2),r4	;get job ptr
+	asr	r2
+	jsr	pc,bindec	;print job nbr
+	mov	10.(r4),r3	;HACK! use HIS auto ptr
+	mov	ap.myd(r3),r2	;get his console nbr
+	mov	r2,-(sp)	;save console index
+	asr	r2
+	jsr	pc,bindec
+	clr	r2
+	cmp	tc.wat(r4),#w.iowt	;is he waiting on I/O
+	bne	39$			;no
+	mov	tc.wtm(r4),r2	;get idle time
+39$:	jsr	pc,bindec	;print it
+	mov	(sp)+,r2	;restore tty index to R3
+	mov	dvdesc(r2),r0	;get character string device description
+	bne	40$		;prepare to default it??
+	mov	#dftdsc,r0
+40$:	jsr	pc,outlin	;output the description
+	mov	#crlf,r0
+	br	35$
+
+doclse:	cmpb	r1,#'Q		;to quit and reset?
+	bne	t1		;try next
+	jsr	pc,cline	;wait for confirmation
+	bcc	qclse		;skip if really to do it
+	jmp	loop		;he didn't mean it
+qclse:	mov	ap.rmo(ap),r2	;connection open?
+	beq	41$		;no, just exit
+	mov	ap.rmi(ap),r2	;get index of remote input
+	asr	r2
+	jsr	pc,bindec
+	mov	ap.rmi(ap),r2
+	mov	dvdesc(r2),r0	;get device discription
+	jsr	pc,outlin	;print remote discription
+	mov	ap.rmi(ap),r0	;get index of remote input
+	jsr	pc,rlsedv
+41$:	mov	#quitms,r0
+	jsr	pc,outlin
+qabrt:	mov	ap.myd(ap),r2	;get index of my device
+	clr	ibftbl(r2)	;close my console
+	clr	dvownr(r2)
+	$exit
+
+t1:
+60$:	cmpb	r1,#'I		;to change escape char?
+	bne	70$		;next
+	jsr	pc,getkb	;get character
+	cmp	r1,#41		;make sure it is reasonable
+	blt	62$		;put msg
+	cmp	r1,#177
+	bge	62$
+	mov	r1,r3
+	jsr	pc,cline
+	bcs	63$
+	movb	r3,ap.esc(ap)	;change the escape
+	br	63$
+62$:	mov	#badesc,r0
+	jsr	pc,outlin
+63$:	jmp	loop
+
+70$:	cmpb	r1,#'E		;echo control?
+t2:	bne	80$		;next
+	jsr	pc,cline	;confirm?
+	bcs	71$
+	mov	#lecho,r3
+	movb	ap.flg(ap),r4
+	xor	r3,r4
+	movb	r4,ap.flg(ap)	;complement it
+71$:	jmp	loop
+
+80$:
+sbrk:	cmpb	r1,#'S		;send something?
+	beq	1$
+	jmp	help
+1$:	jsr	pc,getkb
+	bic	#40,r1		;ro regularize case
+	cmpb	r1,#'B		;for break char
+	bne	82$		;not break
+	mov	ap.rmo(ap),r3	;get buffer addr
+	beq	83$
+	mov	bf.adr(r3),r2	;get dev addr
+	beq	83$
+	jsr	pc,cline
+	bcs	89$
+	bis	#1,(r2)		;set break bit
+	mov	#30.,r0		;wait for a time
+	$wait
+	bic	#1.,(r2)	;clear it again
+89$:	jmp	loop
+
+81$:	jsr	pc,outlin
+	br	89$
+
+83$:	mov	#nocon,r0	;no connection ready
+	br	81$
+82$:	cmpb	r1,#'M		;for messages
+	beq	smsg
+	cmpb	r1,#'D		;send Boot to GDP?
+	beq	sgboot
+	mov	#watcmd,r0	;bad send spec
+	br	81$
+sgboot:	jsr	pc,cline
+	bcs	1$
+2$:	jsr	pc,drvnxt
+	bcs	3$
+	mov	r0,r1
+	mov	botptr+36.,r0
+	jsr	pc,putchr
+	br	2$
+3$:	mov	r0,r1
+	mov	botptr+36.,r0
+	jsr	pc,putchr
+1$:	jmp	loop
+
+
+smsg:	jsr	pc,getdec	;get destination
+	bcs	10$
+	cmp	r0,#nodevs
+	bhis	11$		;bad spec
+	asl	r0		;mak it byte offset
+	mov	otdvtb(r0),r2	;get outbuf ptr
+	beq	11$		;if zero, no good
+	mov	ap.jid(ap),r4	;get job index
+	mov	lnbfs(r4),r4	;get a buffer pointer (how crude)
+	mov	r4,r3
+	movb	#7,(r4)+
+	movb	r1,(r4)+
+	movb	#200,(r4)
+1$:	jsr	pc,getkb	;get a character
+	cmpb	r1,#177		;delete?
+	bne	2$
+	dec	r4
+	cmp	r4,r3
+	blo	10$
+	mov	r4,r0
+	jsr	pc,outlin
+	movb	#200,(r4)
+	br	1$
+2$:	cmpb	r1,#15		;eom
+	bne	3$
+	movb	#7,(r4)+
+	clr	(r4)
+	mov	r3,r4
+	mov	ap.myp(ap),-(sp)
+	mov	r2,ap.myp(ap)
+	mov	#frmtty,r0
+	jsr	pc,outlin
+	mov	ap.myd(ap),r2
+	asr	r2
+	jsr	pc,bindec
+	mov	r4,r0
+	jsr	pc,outlin
+	mov	(sp)+,ap.myp(ap)
+	br	10$
+3$:	cmpb	r1,#12		;if line feed cancel
+	beq	10$
+	movb	r1,(r4)+
+	movb	#200,(r4)
+	br	1$
+10$:	mov	#crlf,r0
+	jsr	pc,outlin
+	jmp	loop
+11$:	mov	#badopn,r0
+	jsr	pc,outlin
+	jmp	loop
+
+help:	cmpb	r1,#'H		;help them
+	bne	20$
+	jsr	pc,cline
+	bcs	12$
+	mov	#helpms,r0
+	jsr	pc,outlin
+12$:	jmp	loop
+20$:
+
+shaker:	cmpb	r1,#'K		;hand shake
+	bne	30$
+	jsr	pc,cline
+	bcs	21$
+	movb	ap.flg(ap),r4	;get current flags
+	mov	#hndshk,r3
+	xor	r3,r4
+	movb	r4,ap.flg(ap)	;complement it
+	mov	ap.myp(ap),r3
+	bic	#otrt1b+otrt1c,bf.flg(r3)
+	mov	#shkno,r0
+	bitb	#hndshk,ap.flg(ap)
+	beq	22$
+	bis	#otrt1b,bf.flg(r3)
+	mov	#shkyes,r0
+22$:	jsr	pc,outlin
+21$:	jmp	loop
+30$:
+parity:	cmpb	r1,#'P		;parity bit clearling
+	bne	30$
+	jsr	pc,cline
+	bcs	21$
+	movb	ap.flg(ap),r4	;get current flags
+	mov	#tparty,r3
+	xor	r3,r4
+	movb	r4,ap.flg(ap)	;complement it
+	mov	#parno,r0
+	bitb	#tparty,ap.flg(ap)
+	beq	22$
+	mov	#paryes,r0
+22$:	jsr	pc,outlin
+21$:	jmp	loop
+30$:
+	cmpb	r1,#'M		;to maintenance
+	bne	40$
+	jsr	pc,cline
+	bcs	31$
+	jmp	mancsl
+31$:	jmp	loop
+40$:
+badcmd:	mov	#watcmd,r0
+	jsr	pc,outlin
+	jmp	loop
+
+swtstt:	.word	0		;word for status and so on
+
+sallst:	.word	2.,14.,15.,16.,25.,26.,27.,28.
+salls1:	.word	2.,14.,15.,16.,25.,26.,27.,28.,0
+sallnp:	.word	sallst
+
+;	.nlist	bex
+sysmsg:	.asciz	<15><12>/System up and available/
+watcmd:	.asciz	<7>/ HUH?/
+qmark:	.asciz	/ ?/
+nocon:	.asciz	<7>/ No connection open/
+stmsg:	.asciz	/ O-Group Switch - Use ? cmd for help/
+clmsg:	.asciz	/ O Closed/<35>
+alropn:	.asciz	<7>/ Connection already open/
+badopn:	.asciz	<7>/ Bad remote specification/
+notfre:	.ascii	\ In use: Job/tty/Idle -\<200>
+opnmsg:	.asciz	/ O Open/
+quitms:	.ascii	/ Console free/<35><15><12>
+frems:	.asciz	/Type "/<eschr>/" to grab terminal./<7>
+badesc:	.asciz	<7>/ Disallowed escape/
+shkno:	.asciz	/ Handshaking off/
+shkyes:	.asciz	/ Handshaking on/
+parno:	.asciz	/ Parity transmitted/
+paryes:	.asciz	/ Parity cleared/
+nslms:	.asciz	/ Special SAIL lines in use.  /
+gotsal:	.ascii	/ You have a SAIL line through Dev/<200>
+frmtty:	.ascii	<15><12>/From/<200>
+nwscrn:	.byte	37,35,200
+helpms:	.byte	15,12
+	.ascii	\DEL before CR cancels command.  \
+	.ascii	\CR alone is null command.\<15><12>
+	.ascii	\ On opens connection to device n.\<15><12>
+	.ascii	\ OS looks for and opens a line to SAIL.\<15><12>
+	.ascii	\ C closes the open connection.\<15><12>
+	.ascii	\ Q closes any connection and frees console and job.\
+	.ascii	<15><12>\ E toggles local echo flag. \
+	.ascii	\(default off)\<15><12>
+	.ascii	\ M makes local console maintenance console.\<15><12>
+	.ascii	\ Ix sets escape character to x.\<15><12>
+	.ascii	\ P toggles masking to zero fo parity bit.\<15><12>
+	.ascii	\ K toggles RT11 console handshaking.\<15><12>
+	.ascii	/ SMn sends msg to dev n; DEL deletes char, /
+	  .ascii	/LF cancels./<15><12>
+	.ascii	/ SB sends BREAK through connection./<15><12>
+	.asciz	/ SD sends a boot routine to the GDP LSI./<15><12>
+crlf:	.byte	15,12,200
+cronl:	.byte	15,200
+belmsg:	.byte	7,200
+slshsp:	.ascii	\/\<200>
+badrmt:	.asciz	/Function not allowed from remote console/
+otrmnt:	.asciz	/Maintenance function already assigned./
+nfjbs:	.asciz	/Not enough job slots for FIDO, remember to close this/
+mntcsl:	.asciz	/Switch Maintenance Console - Type ? for help/
+mhepms:	.ascii	/ E start meter, F stop meter/<15><12>
+	.ascii	/ W displays assignments, Knn kills job nn/<15><12>
+	.ascii	/ Q quits this mode/
+	.byte	15,12
+	.ascii	\ ODT style:  / _ @ ^ LF CR\<15><12>
+	.ascii	/ Other: nB sets BASE to n, B reset/<15><12>
+	.ascii	/	 nT use task n; opens TCB/<15><12>
+	.ascii	/	 nR reg n of task of offset in TCB/<15><12>
+	.asciz	/	  S PS of task/
+whohdr:	.asciz	<15><12>/Dev no               Job  Idle       Dev no               Job  Idle/
+kilmsg:	.asciz	/Job killed/
+notelg:	.asciz	/Job not eligible to be killed/
+badjid:	.asciz	/Bad job ID/
+qmtmsg:	.asciz	/ Return to switch functions/
+	.list bex
+
+	.even
+
+outlin:	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	r2,-(sp)
+	mov	r0,r2
+	mov	ap.myp(ap),r0
+1$:	movb	(r2)+,r1
+	beq	2$
+	cmpb	r1,#200
+	beq	outdn
+	jsr	pc,putchr
+	br	1$
+2$:	mov	#15,r1
+	jsr	pc,putchr
+	movb	#12,r1
+	jsr	pc,putchr
+outdn:	mov	(sp)+,r2
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rts	pc
+
+getkb:	mov	ap.myk(ap),r0
+	jsr	pc,getchr
+	bic	#177600,r1
+putpr:	mov	ap.myp(ap),r0
+	jsr	pc,putchr
+	rts	pc
+
+cline:	jsr	pc,getkb	;just wait for CR
+	cmpb	r1,#CR		;is it?
+	bne	1$		;no, keep going
+	mov	#LF,r1
+	jsr	pc,putpr
+	clc			;clear carry to say all is well
+	rts	pc
+1$:	cmpb	r1,#del		;delete the command?
+	bne	cline		;no, loop
+	mov	#crlf,r0	;just newline
+	jsr	pc,outlin
+	sec			;set code
+	rts	pc
+;
+	.page
+.sbttl drvlod
+
+drvcks:	0
+drvpnt:	drvtab
+
+drvnxt:	cmp drvpnt,#drvend
+	bhis 1$
+3$:	movb @drvpnt,r0
+	bic #177400,r0
+	sub r0,drvcks
+	inc drvpnt
+	clc
+	rts pc
+
+1$:	bne 2$
+	mov drvcks,r0
+	bic #177400,r0
+	clr drvcks
+	add #2,drvpnt
+	clc
+	rts pc
+
+2$:	cmp drvpnt,#drven2
+	blo 3$
+	mov drvcks,r0
+	bic #177400,r0
+	clr drvcks
+	mov #drvtab,drvpnt
+	sec
+	rts pc
+
+;This is an absolute loader that loads a funny kind of BIN file.  Each
+;block in the BIN file must have an even number of bytes and the checksum
+;must be followed by a null byte so that the next block begins on a word
+;boundary
+
+drvcsr=177100
+drvtdb=drvcsr+2
+drvrdb=drvcsr+4
+
+drvpdl=100
+
+drvtab:	1,drvsiz,200		;header,size,starting load address
+drvgo:	mov #drvpdl,sp
+	mov #drvcsr,r0
+	clr (r0)		;clear csr
+	mov r0,r1
+	cmp (r1)+,(r1)+		;advance pointer to read buffer
+	tst (r1)		;reference read buffer to clear it out
+	mov #1000,r2
+	mov #<70000-400>,r3	;div by two done by hand to avoid minus lossage
+4$:	clr (r2)+
+	sob r3,4$
+5$:	jsr pc,drvrdw
+	cmp r2,#1
+	bne 5$
+	mov #1,r5		;checksum
+	jsr pc,drvrdw
+	mov r2,r3		;byte count
+	bit #1,r3
+	beq 1$
+	halt
+1$:	jsr pc,drvrdw
+	mov r2,r4		;address
+	bit #1,r4
+	beq 2$
+	halt
+2$:	sub #6,r3		;remaining byte count
+	beq drvstb		;branch if start block
+	clc
+	ror r3			;convert to word count
+3$:	tst (r0)
+	bpl 3$
+	mov (r1),r2		;get next word
+	mov r2,(r4)+		;store wherever
+	add r2,r5
+	swab r2
+	add r2,r5
+	sob r3,3$
+	jsr pc,drvrdw		;read checksum
+	tstb r5			;test checksum
+	beq 5$			;ok, get another block
+drverr:	halt
+
+drvstb:	jsr pc,drvrdw		;read checksum
+	tstb r5			;test checksum
+	bne drverr
+	jmp (r4)
+
+drvrdw:	tst (r0)		;wait for a word
+	bpl drvrdw
+	mov (r1),r2
+	add r2,r5
+	swab r2
+	add r2,r5
+	swab r2
+	rts pc
+drvsiz=.-drvtab
+drvend:	0
+	1,6,200			;header,count,start address
+drven2:
+	.page
+	.sbttl	Maintenance Mode
+mancsl:
+	mov	ap.myd(ap),r2
+	bit	#rmcnsl,devtyp(r2)	;is this local console
+	br	okcnsl			;allow anyone for now
+;	beq	okcnsl			;yes, good
+	mov	#badrmt,r0		;print msg
+	jsr	pc,outlin
+	jmp	loop
+okcnsl:	inc	mantlk		; try to grab maintenance lock
+	beq	okmain		; got it
+	dec	mantlk		; didn't get it, remove our attempt
+	mov	#otrmnt,r0
+	jsr	pc,outlin
+	jmp	loop
+okmain:	mov	ap.tsk(ap),r4		; now that we've got the lock
+	mov	r4,mantlk		; we replace the 0 with our id
+
+	mov	sp,r3
+	mov	#fido,r0
+	$task
+	mov	r0,mantlk		;mark it with FIDO id
+	bne	1$
+	mov	#nfjbs,r0
+	jsr	pc,outlin
+1$:	mov	#mntcsl,r0
+	jsr	pc,outlin
+
+odt:	mov	#crlf,r0		;would you believe
+	jsr	pc,outlin
+	clr	opntag			;whether location is open
+	clr	utask			;whether task has been specified
+	clr	ofset			;base for examines
+mtloop:
+odtlop:	jsr	pc,getoct		;get value
+	bcc	1$			;we got a value
+	jmp	chkodt			;go see about valueless cmds
+1$:	cmpb	r1,#'/			;open
+	bne	nxt1
+	mov	r0,opnwrd
+	tst	ofset			;apply offset?
+	beq	exword			;no, just print it
+	add	ofset,opnwrd
+	jmp	neword			;print out addr
+exword:	clc
+	mov	@#4,temp4
+	mov	@#6,temp6
+	mfps	@#6
+	mov	#bhndr,@#4
+	mov	@opnwrd,r2
+	mov	temp4,@#4
+	mov	temp6,@#6
+	bcs	badwrd			;did error occur
+	mov	r2,opnval
+	bis	#1,opntag
+	mov	#spac10+9.,r0
+	jsr	pc,outlin
+	jsr	pc,binoct
+	mov	#spac10+8.,r0
+	jsr	pc,outlin
+	br	odtlop
+badwrd:	bic	#1,opntag
+	mov	#qmark,r0
+	jsr	pc,outlin
+	br	odtlop
+nxt1:	cmpb	r1,#15			;to write and close location
+	bne	21$
+	bit	#1,opntag		;was locatio open
+	beq	1$
+	bic	#1,opntag
+	jsr	pc,putwrd		;to store the word
+	bcs	2$
+1$:	jmp	odtlop
+2$:	jmp	badwrd
+21$:
+lfed:	cmpb	r1,#12
+	bne	nxt3
+	bit	#1,opntag
+	beq	a1
+	jsr	pc,putwrd
+	bcs	a1
+	add	#2,opnwrd
+nwrd0:	mov	#cronl,r0
+nwrd1:	jsr	pc,outlin
+	mov	opnwrd,r2
+	jsr	pc,binoct
+	mov	#slshsp,r0
+	jsr	pc,outlin
+	jmp	exword
+a1:	jmp	badwrd
+
+bhndr:	bis	#1,2(sp)
+	rti			;set corry to be and return
+
+putwrd:	clc
+	mov	@#4,temp4
+	mov	@#6,temp6
+	mfps	@#6
+	mov	#bhndr,@#4
+	mov	r0,@opnwrd
+	mov	temp4,@#4
+	mov	temp6,@#6
+	rts	pc
+
+nxt3:	cmpb	r1,#'^
+	bne	nxt4
+	bit	#1,opntag
+	beq	b1
+	jsr	pc,putwrd
+	bcs	b1
+supar:	sub	#2,opnwrd
+neword:	mov	#crlf,r0
+	jmp	nwrd1
+b1:	jmp	badwrd
+nxt4:	cmpb	r1,#'T
+	bne	23$
+	cmp	r0,#mxjobs
+	bhi	1$
+	asl	r0
+	mov	r0,utask
+	mov	joblst(r0),r0
+	mov	r0,opnwrd
+	mov	r0,utaskp
+	jmp	neword
+1$:	jmp	badwrd
+
+23$:
+regs:	cmpb	r1,#'R
+	bne	24$
+	tst	utask
+	beq	2$
+	cmp	r0,#7
+	bhi	1$
+	asl	r0
+	add	utaskp,r0
+	mov	r0,opnwrd
+	jmp	exword
+1$:	add	utaskp,r0
+	mov	r0,opnwrd
+	jmp	neword
+2$:	jmp	badwrd
+24$:
+basel:	cmpb	r1,#'B
+	bne	25$
+	mov	r0,ofset
+	jmp	odtlpr
+25$:
+	cmpb	r1,#177
+	bne	badodt
+	jmp	badwrd
+
+badodt:	mov	#watcmd,r0
+odpret:	jsr	pc,outlin
+	jmp	odtlop
+
+odtlpr:	mov	#crlf,r0
+	br	odpret
+
+chkodt:
+	cmpb	r1,#'^
+	bne	32$
+	bit	#1,opntag
+	beq	10$
+	jmp	supar
+32$:
+	cmpb	r1,#12
+	bne	base0
+	bit	#1,opntag
+	bne	11$
+10$:	jmp	badwrd
+11$:	add	#2,opnwrd
+	jmp	nwrd0
+base0:	cmpb	r1,#'B
+	bne	32$
+	clr	ofset
+	jmp	odtlpr
+32$:	cmpb	r1,#15
+	bne	33$
+	bic	#1,opntag
+	jmp	odtlop
+33$:	cmpb	r1,#'/
+	bne	34$
+1$:	jmp	exword
+2$:	jmp	badwrd
+34$:
+	cmpb	r1,#'S
+	bne	35$
+	tst	utask
+	beq	2$
+	mov	utaskp,opnwrd
+	add	#tc.stt,opnwrd
+	jmp	exword
+35$:
+indirt:	cmpb	r1,#'@
+	bne	36$
+	bit	#1,opntag
+	beq	2$
+	mov	opnval,opnwrd
+	jmp	neword
+2$:	jmp	badwrd
+36$:
+	cmpb	r1,#'_
+	bne	37$
+	bit	#1,opntag
+	beq	2$
+	add	opnval,opnwrd
+	add	#2,opnwrd
+	jmp	neword
+37$:
+	cmpb	r1,#177
+	bne	38$
+	jmp	badwrd
+38$:
+
+trymnt:	cmpb	r1,#'?		;help message
+	bne	1$
+	mov	#crlf,r0
+	jsr	pc,outlin
+	mov	#mhepms,r0
+	jsr	pc,outlin
+	jmp	mtloop
+1$:	bic	#40,r1		;allow lower case
+
+stmtr:	cmpb	r1,#'E		;E for start metering
+	bne	edmtr
+	mov	ap.myd(ap),r4	;move console index to r4 for mtr tsk
+	mov	#outstt,r0
+	$task
+	jmp	mtdone
+
+edmtr:	cmpb	r1,#'F		;F for stop metering
+	bne	who
+	mov	#-1,metrlk
+	jmp	mtdone
+
+;	*** code for w request in m mode ***
+tab12:	.byte	40,40,40,40,40,40	;tab charictor for output
+tab6:	.byte	40,40,40,40,40,40,200,0
+tab7:	.byte	40,40,40,40,40,40,40,200
+count:	.word	0	;iteration counter for who
+side:	.word	0	;side of screen display for who
+who:	cmpb	r1,#'W		;for systat fo Who
+	bne	kjob
+	mov	#whohdr,r0
+	jsr	pc,outlin
+	mov	#nidevs,r4
+	mov	r4,count	;init iteration counter
+	inc	r4		;calc start of second col. for disp
+	asr	r4		;(count+1)/2
+	asl	r4
+	mov	r4,side		;store start
+	clr	r4		;start with dev 0
+1$:	mov	r4,r2
+	asr	r2		;for printout
+	jsr	pc,bindec
+	mov	dvdesc(r4),r0	;get device description
+	bne	4$
+	mov	dftdsc,r0	;default description
+4$:	jsr	pc,outlin
+	mov	ibftbl(r4),r1	;is it assigned?
+	beq	6$
+	mov	dvownr(r4),r2	;get job index
+	asr	r2
+	jsr	pc,bindec
+	mov	ibftbl(r4),r1	;get buffer id
+	mov	bf.tsk(r1),r1	;is it made for console wakeup?
+	beq	7$
+	clr	r2
+	cmp	tc.wat(r1),#w.iowt	;is the task in I/O wait?
+	bne	2$		;no, print zero
+	mov	tc.wtm(r1),r2	;see how long it has waited
+2$:	jsr	pc,bindec	;print wait time
+	br	3$
+6$:	mov	#tab12,r0	;fill out first side
+	jsr	pc,outlin
+	br	3$
+7$:	mov	#tab6,r0
+	jsr	pc,outlin
+3$:	mov	#crlf,r0
+	cmp	r4,side		;which side are we on
+	bhi	5$		;end of line
+	mov	#tab7,r0		;middel of line
+5$:	jsr	pc,outlin
+	add	#2,r4
+	mov	r4,-(sp)	;save last side
+	mov	side,r4		;switch sides
+	mov	(sp)+,side
+	dec	count		;one more done
+	bne	1$		;are we done yet?
+	jmp	mtdone
+
+kjob:	cmpb	r1,#'K		;for killing job
+	bne	40$
+	jsr	pc,getdec
+	bcs	4$
+	cmpb	r1,#12
+	beq	83$
+	cmpb	r1,#15		;was it ended by carriage return?
+	bne	4$
+83$:	mov	r1,r2
+	asl	r0		;make it index
+	cmp	r0,#2*mxjobs
+	bgt	3$
+	mov	joblst(r0),r1	;get TCB ptr
+	cmp	tc.jid(r1),r0	;see that it is goo
+	bne	3$
+	mtps #340		; mask for checking
+	cmp	tc.wat(r1),#w.iowt
+	bne	2$
+	cmp	r2,#12
+	beq	84$
+	cmp	tc.wtm(r1),#1000.	; about 15 seconds
+	blo	2$
+84$:	cmp	@10.(r1),r1		;task id ok?
+	bne	2$
+	mov	#qclse,14.(r1)		;set new pc
+	clr	tc.wat(r1)
+	mov	#kilmsg,r0
+1$:	mtps	#0		; unmask
+	jsr	pc,outlin
+	jmp	mtloop
+2$:	mov	#notelg,r0
+	br	1$
+3$:	mov	#badjid,r0
+	br	1$
+4$:	jmp	mtdone
+
+40$:
+
+qmant:	cmpb	r1,#'Q		;for Quitting
+	bne	qmat1
+qmantq:	mov	#qmtmsg,r0
+	jsr	pc,outlin
+	mov	#-1,mantlk	; release maintenance mode
+	jmp	loop
+qmat1:
+
+	mov	#watcmd,r0
+	jsr	pc,outlin
+	jmp	mtloop
+
+mtdone:	mov	#crlf,r0
+	jsr	pc,outlin
+	jmp	mtloop
+
+mntidl = 7200.
+fido:	mov	r1,r2
+	clr	r0
+1$:	mtps	#0		; unmask
+	sub	#mntidl,r0
+	neg	r0
+	$wait
+	mtps	#340
+	cmp	r2,mantlk
+	bne	2$
+	cmp	tc.wat(r4),#w.iowt
+	bne	1$
+	mov	tc.wtm(r4),r0
+	cmp	r0,#mntidl
+	blt	1$
+	mtps	#340		; mask
+	cmp	tc.wat(r4),#w.iowt
+	bne	1$
+	cmp	tc.wtm(r4),#mntidl
+	blt	1$
+	cmp	r2,mantlk
+	bne	2$
+	clr	mantlk
+	mov	#qmantq,14.(r4)
+	mov	r3,12.(r4)
+	clr	tc.wat(r4)
+2$:	$exit
+
+;
+opntag:	.word	0
+opnwrd:	.word	0
+opnval:	.word	0
+utask:	.word	0
+utaskp:	.word	0
+temp4:	.word	0
+temp6:	.word	0
+ofset:	.word	0
+
+;
+	.sbttl	Status and Metering
+
+	.block	sto,st		;area for this guy
+	sto	ato.ln		;use same basic automatic
+	sto	tim,2		;current or old time
+	sto	tmn,2		;new time
+	sto	inh,2
+	sto	inl,2
+	sto	oth,2
+	sto	otl,2
+	sto	ihn,2
+	sto	iln,2
+	sto	ohn,2
+	sto	oln,2
+	sto	wat,2
+	sto	fre,2
+	sto	chg,2
+	sto	cgn,2
+outstt:			;this routine meters I/O and displays it
+	sub	#sto.ln,sp	;make my own automatic
+	mov	sp,ap
+	mov	r0,ap.tsk(ap)	;save job id
+	mov	r1,ap.jid(ap)	;save job index
+	mov	botptr(r4),ap.myp(ap)	;output channel,r4 set by caller
+	clr	st.tim(ap)	;initial time
+	inc	metrlk		;try to grab the lock
+	beq	1$		; got it?
+	dec	metrlk		; no,restore it
+	mov	#mtlmsg,r0	; print lose message
+	jsr	pc,outlin	; give bad news to user
+	$exit			;just go away
+1$:	trap	1
+	mov	#mtrmsg,r0	;let the world know
+	jsr	pc,outlin
+	mfps	-(sp)		; to get consistent data
+	mtps	#340
+	clr	idlcpu		;clear it to restart metering
+	clr	trfcnt		;clear times in traffic controller
+	clr	trfcpu		;clear cpu time for traffic controller
+	mov	chgcpu,st.chg(ap)
+	mov	timlo,st.tim(ap)	;get local timer
+	mov	chrsih,st.inh(ap)	;chars in high
+	mov	chrsil,st.inl(ap)
+	mov	chrsoh,st.oth(ap)	;chars out high
+	mov	chrsol,st.otl(ap)
+	mtps	(sp)+		; got our snapshot, unmask
+	mov	#mthdrm,r0
+	jsr	pc,outlin	;header line
+mloop:	mov	#mtintv,r0	;setup for interval timer
+	$wait			;wait awhile
+	mfps	-(sp)		; again to get consistent data
+	mtps	#340
+	mov	chgcpu,st.cgn(ap)
+	mov	timlo,st.tmn(ap)
+	mov	chrsih,st.ihn(ap)
+	mov	chrsil,st.iln(ap)
+	mov	chrsoh,st.ohn(ap)
+	mov	chrsol,st.oln(ap)
+	clr	r2		;for division
+	mov	st.tmn(ap),r3	;get new time
+	sub	st.tim(ap),r3	;subtract old time
+	mtps	(sp)+		; we've got our consistent data
+	add	#29.,r3		;for rounding
+	div	#60.,r2		;to make it seconds
+	mov	r2,st.tim(ap)	;temp for elapsed time
+	jsr	pc,bindec	;convert it to decimal
+	mov	st.ihn(ap),r2	;chars in
+	mov	st.iln(ap),r3
+	sub	st.inl(ap),r3	;subtract old chars
+	sbc	r2
+	sub	st.inh(ap),r2	;finish double subtract
+	div	st.tim(ap),r2	;divide for average
+	jsr	pc,bindec	;print that
+	mov	st.ohn(ap),r2	;chars out
+	mov	st.oln(ap),r3
+	sub	st.otl(ap),r3	;subtract old chars
+	sbc	r2
+	sub	st.oth(ap),r2
+	div	st.tim(ap),r2	;divide for average
+	jsr	pc,bindec
+	mfps	-(sp)		; consistent data
+	mtps	#340
+	mov	watcnt,st.wat(ap)
+	mov	frecnt,st.fre(ap)
+	mtps	(sp)+
+	mov	actcnt,r2
+	jsr	pc,bindec		;nbr active jobs
+	mov	st.wat(ap),r2
+	jsr	pc,bindec		;nbr of jobs in wait
+	mov	st.fre(ap),r2
+	jsr	pc,bindec		;nbr of free TCBs
+	mov	st.cgn(ap),r2		;charged CPU time
+	sub	st.chg(ap),r2		;subtract old
+	jsr	pc,bindec
+	mov	ap.tsk(ap),r2
+	mov	tc.use(r2),r2		;get cpu time used for metering
+	jsr	pc,bindec
+	mfps	-(sp)
+	mtps	#340
+	mov	trfcpu,-(sp)		;save on $MASKs
+	clr	trfcpu
+	mov	trfcnt,-(sp)
+	clr	trfcnt
+	mov	idlcpu,r2
+	clr	idlcpu
+	mtps	(sp)+
+	jsr	pc,bindec		;CPU time in idle loop
+	mov	idlovl,r2
+	jsr	pc,bindec		;times idle loop too slow
+	mov	totjbs,r2
+	jsr	pc,bindec		;total jobs initiated
+	mov	(sp)+,r2		;get trfcnt back
+	jsr	pc,bindec
+	mov	(sp)+,r2		;get trfcpu back
+	jsr	pc,bindec
+	mov	#crlf,r0		;newline
+	jsr	pc,outline
+	mov	st.cgn(ap),st.chg(ap)
+	mov	st.tmn(ap),st.tim(ap)
+	mov	st.ohn(ap),st.oth(ap)
+	mov	st.oln(ap),st.otl(ap)
+	mov	st.ihn(ap),st.inh(ap)
+k1:	mov	st.iln(ap),st.inl(ap)
+	tst	metrlk
+	blt	1$
+	jmp	mloop
+1$:	mov	#-1,metrlk
+	$exit
+;
+binoct:	mov	#8.,r0
+	br	binchr
+bindec:	mov	#10.,r0
+binchr:	mov	r2,r3		;clear way
+	mov	#3,r2		;for count
+	mov	#declin+2,r1	;for blanks
+1$:	mov	#020040,(r1)+	;blank out area
+	sob	r2,1$
+	mov	#declin+8.,r1	;beyond end
+2$:	clr	r2
+	div	r0,r2		;get quotient/remainder
+	bis	#060,r3		;tag remainder
+	movb	r3,-(r1)	;write low order digit
+	mov	r2,r3		;next digit
+	bgt	2$		;more to do
+	mov	#declin+2,r0
+	jsr	pc,outlin
+	rts	pc
+
+getdec:	mov	r4,-(sp)
+	mov	#10.,r4
+	br	getnbr
+getoct:	mov	r4,-(sp)
+	mov	#8.,r4
+getnbr:	mov	r2,-(sp)
+	mov	r3,-(sp)
+	clr	r2
+	clr	r3
+5$:	jsr	pc,getkb
+	cmpb	r1,#40		;allow leading spaces
+	beq	5$
+	br	6$
+1$:	jsr	pc,getkb
+6$:	cmpb	r1,#'0		;is within ranged?
+	blt	2$
+	cmpb	r1,#'9
+	bgt	2$
+	bic	#177760,r1
+	cmp	r1,r4
+	bge	2$
+	inc	r2
+	mul	r4,r3
+	add	r1,r3
+	br	1$
+2$:	cmpb	r1,#177
+	beq	3$
+	cmpb	r1,#15
+	bne	4$
+	mov	#crlf,r0
+	jsr	pc,outlin
+4$:	tst	r2
+	beq	3$
+	mov	r3,r0
+	mov	(sp)+,r3
+	mov	(sp)+,r2
+	mov	(sp)+,r4
+	clc
+	rts	pc
+3$:	mov	r3,r0
+	mov	(sp)+,r3
+	mov	(sp)+,r2
+	mov	(sp)+,r4
+	sec
+	rts	pc
+
+mantlk:	.word	-1
+metrlk:	.word	-1
+mtintv = 60.*30.	;thrity seconds for now
+declin:	.byte	040,040
+	.blkb	6
+	.byte	200
+;	.nlist	bex
+mtlmsg:	.asciz	\Meter in use\
+mtrmsg:	.asciz	\I/O Meter\
+spac10:	.ascii	/          /<200>
+mthdrm:	.ascii	\Intrvl   Chrs/Sec  Active  Wait  Free  Used  Mtr  \
+	.ascii	\Idle  Ovrld Jobs  Traf Time\<15><12>
+	.asciz	\         In  Out\
+	.even
+	.list	bex
+
+tmpctr = bufare
+lnbfs:
+	.rept	mxjobs+1
+	.word	tmpctr
+	tmpctr = tmpctr+80.
+	.endr
+bufare:	.blkw	80.

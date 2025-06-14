@@ -1,0 +1,473 @@
+.title Read a random tape
+
+.=1000
+
+.insrt sysmac.v4[s1,pmf
+
+r0=%0
+r1=%1
+r2=%2
+r3=%3
+r4=%4
+r5=%5
+sp=%6
+pc=%7
+
+mtc==11		;magtape channel
+outchn==0	;output channel
+fnrew==373	;rewind function
+fnrd==370	;read record function
+fnwrt==371	;write record function
+fnwrf==377	;write eof
+fnbsb==375	;backspace block
+tapbuf=10000.	; number of bytes in tape buffer
+
+.mcall .lookup,.fetch,.spfun,.csigen,.prtx,.exit,.writw,.close
+
+lose:	.prtx #lost
+	.exit
+mterr:	.prtx #mtlost
+	.exit
+noent:	mov savesp,sp
+	.prtx #entmsg
+	.exit
+
+go:	mov #tapbuf/2,bufsiz
+	.fetch free,#mt			; fetch the tape handler
+	bcs lose
+	mov r0,free
+	.lookup #area,#mtc,#mt0,#0	;rewind the tape
+	bcs mterr
+loop:	.prtx #prompt			; prompt user for filename
+	mov sp,savesp
+	clr conver			; clear option flag
+	clr blksiz			; clear record oriented flag
+	clr rewind			; don't rewind by default
+	.csigen free,defext,#0		; read a file name
+	bcs noent
+	mov (sp)+,r1			; get count of switchs
+2$:	tst r1				; were there any
+	beq 1$
+	mov (sp)+,r2			; get a switch
+	cmpb #'C,r2			; convert option?
+	bne 3$
+	  mov #-1,conver		; yes
+	  br 2$
+3$:	cmpb #'B,r2			; Blocked typed files?
+	bne 4$
+	  mov #80.,blksiz		; for now just presume blksiz of 80.
+	  br 2$
+4$:	cmpb #'R,r2			; rewind?
+	bne 5$
+	  .lookup #area,#mtc,#mt0,#0	
+	  bcs mterr
+	  br 2$
+5$:	cmpb #'?,r2
+	bne 6$
+7$:	  .prtx #helpms
+	  br loop
+6$:	cmpb #'H,r2
+	beq 7$
+1$:	mov savesp,sp
+	mov r0,free
+	clr badcnt
+	clr blkno		; disk file block counter
+	mov #256.*2,dskcnt
+	mov #dskbuf,dskpnt
+	; read as large a tape record as we can
+loop1:	.spfun #area,#mtc,#fnrd,#mtbuf,bufsiz,#mteblk,#0
+
+	cmp mteblk,#1		; eof?
+	beq mteof
+	cmp mteblk,#6		;short record?
+	bne mteror		; no, some real error perhaps
+
+; a block shorter than the one requested was read (unsurprising)
+short:	mov bufsiz,r1		; compute actual number of words read
+	sub mteblk+2,r1		; mteblk+2 contains bufsiz-# of words read
+	asl r1			; conver to bytes
+	mov #mtbuf,r2
+	tst blksiz		; is this card image oriented?
+	bne cardlp		; use different loop if so.
+
+1$:	movb (r2)+,r3		; get a word
+	jsr pc,putb		; write a char to disk
+	sob r1,1$
+	br loop1
+
+cardlp:	mov blksiz,r0
+	clr r4			; count consecutive spaces
+1$:	movb (r2)+,r3		; get a char
+	tst conver		; is EBCDIC conversion flag on?
+	beq 3$			; no
+	 jsr pc,cnvrt		; yes
+3$:	cmpb r3,#40		; is character a space?
+	bne 4$
+	  inc r4		; yes, just count it
+	  br 2$			; and get next char
+4$:	tst r4			; have we buffered any spaces?
+	beq 9$			; no.
+	  mov r3,-(sp)		; save current char
+	  mov #40,r3		; yes, we've got to insert them now
+5$:	  jsr pc,putb
+	  sob r4,5$
+	  mov (sp)+,r3		; restore current char
+9$:	jsr pc,putb		; write a char to disk
+2$:	dec r0			; end of record?
+	bne 7$			; no.
+	  mov blksiz,r0		; reset record counter
+	  clr r4		; yes, throw any trailings spaces away
+	  mov #15,r3
+	  jsr pc,putb
+	  mov #12,r3
+	  jsr pc,putb
+7$:	sob r1,1$
+	br loop1
+
+mteof:	jsr pc,flsdsk		; flush the last block
+	jmp loop		; and prompt for next file
+
+; PUTDSK writes the byte in R3 to the disk file
+putb:	dec dskcnt		; any room in buffer?
+	bgt 1$			; yes,
+	 mov r0,-(sp)
+	 .writw #area,#outchn,#dskbuf,#256.,blkno
+	 mov (sp)+,r0
+	 bcs dsklos
+	 inc blkno
+	 mov #256.*2,dskcnt
+	 mov #dskbuf,dskpnt
+1$:	movb r3,@dskpnt
+	inc dskpnt
+	rts pc
+
+; FLSDSK flushes any disk buffers and closes channel
+flsdsk:	tst dskcnt		; is the block exactly even?
+	beq 2$			; skip zeroing loop if so
+1$:	  clrb @dskpnt		; otherwise zero till end of block
+	  inc dskpnt
+	  dec dskcnt
+	  bgt 1$
+2$:	.writw #area,#outchn,#dskbuf,#256.,blkno
+	bcs dsklos
+	.close #outchn
+	rts pc
+
+mteror:	.prtx #mtlost
+	jmp loop
+
+dsklos:	.close #outchn		; try to complete file
+	.prtx #dskerr
+	.exit
+illasc==24		;"for all" in ascii
+
+cnvrt:	movb asctab(r3),r3
+	bic #177600,r3
+	cmp r3,#illasc
+	bne 2$
+	inc badcnt
+2$:	rts pc
+
+asctab:	.byte ILLASC		;0
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 177
+	.byte ILLASC		;10
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;20
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;30
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;40
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;50
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;60
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;70
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 40		;100
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;110
+	.byte ILLASC
+	.byte ILLASC
+	.byte 56
+	.byte 74
+	.byte 50
+	.byte 53
+	.byte 174
+	.byte 46		;120
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;130
+	.byte ILLASC
+	.byte 41
+	.byte 44
+	.byte 52
+	.byte 51
+	.byte 73
+	.byte 5
+	.byte 55		;140
+	.byte 57
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;150
+	.byte ILLASC
+	.byte ILLASC
+	.byte 54
+	.byte 45
+	.byte 30
+	.byte 76
+	.byte 77
+	.byte ILLASC		;160
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;170
+	.byte ILLASC
+	.byte 72
+	.byte 43
+	.byte 100
+	.byte 47
+	.byte 75
+	.byte 42
+	.byte ILLASC		;200
+	.byte 141
+	.byte 142
+	.byte 143
+	.byte 144
+	.byte 145
+	.byte 146
+	.byte 147
+	.byte 150		;210
+	.byte 151
+	.byte ILLASC
+	.byte 173
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;220
+	.byte 152
+	.byte 153
+	.byte 154
+	.byte 155
+	.byte 156
+	.byte 157
+	.byte 160
+	.byte 161		;230
+	.byte 162
+	.byte ILLASC
+	.byte 176
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;240
+	.byte 32
+	.byte 163
+	.byte 164
+	.byte 165
+	.byte 166
+	.byte 167
+	.byte 170
+	.byte 171		;250
+	.byte 172
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 133
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;260
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC		;270
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 135
+	.byte ILLASC
+	.byte ILLASC
+	.byte 173		;300
+	.byte 101
+	.byte 102
+	.byte 103
+	.byte 104
+	.byte 105
+	.byte 106
+	.byte 107
+	.byte 110		;310
+	.byte 111
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 176		;320
+	.byte 112
+	.byte 113
+	.byte 114
+	.byte 115
+	.byte 116
+	.byte 117
+	.byte 120
+	.byte 121		;330
+	.byte 122
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 134		;340
+	.byte ILLASC
+	.byte 123
+	.byte 124
+	.byte 125
+	.byte 126
+	.byte 127
+	.byte 130
+	.byte 131		;350
+	.byte 132
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte 60		;360
+	.byte 61
+	.byte 62
+	.byte 63
+	.byte 64
+	.byte 65
+	.byte 66
+	.byte 67
+	.byte 70		;370
+	.byte 71
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+	.byte ILLASC
+area:	.blkw 10
+defext:	0
+	0
+	0
+	0
+conver: 0			; flags
+rewind:	0
+blksiz: 0
+
+badcnt:	0
+chrcnt:	0
+savesp:	0
+dskbuf:	.blkw 256.
+	.word 0			; safety
+blkno:	0
+dskcnt:	0
+dskpnt:	dskbuf
+bufsiz:	.blkw 1			; max buffer size computed and stored here
+mteblk:	.blkw 4
+
+.macro .ascil string
+	.ascii Ôstringä	.byte 15,12
+.endm
+
+helpms:	.ascil ^"Tape reading program.  Reads an entire file from MT0 into"
+	.ascil ^"specified disk file.  Options are:"
+	.ascil ^"/C  -  Convert from EBCDIC to ASCII while reading"
+	.ascil ^"/B  -  Convert from 80 character card images"
+	.ascil ^"/R  -  Rewind tape before reading"
+	.byte 0
+lost:	.asciz /couldn't fetch mt/
+mtlost:	.asciz /magtape operation error/
+prompt:	.ascil ^"Read Tape, type /? for help."
+	.byte 0
+badmsg:	.asciz /there were characters I couldn't translate./
+entmsg:	.asciz /can't enter file/
+dskerr:	.asciz /disk output error/
+	.even
+mt:	.rad50 "mt "
+mt0:	.rad50 "mt0"
+	0
+	0
+	0
+free:	last
+mtbuf:	.blkb tapbuf		; the tape buffer
+last:
+	.end go
