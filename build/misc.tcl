@@ -1056,6 +1056,10 @@ midast "imlac;" "imsrc; crash" {
 }
 imtran "imlac; crash iml" "imlac; crash bin"
 
+# Freeway Crossing
+midas "sysbin;free waybin" "imsrc; free way"
+imtran "imlac; freway iml" "sysbin; free waybin"
+
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
 respond "*" ":job cc\r"
