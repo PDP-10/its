@@ -1005,10 +1005,7 @@ expect ":KILL"
 
 # SSV 22, Imlac scroll saver
 omidas "sysbin;" "imsrc; ssv22"
-respond "*" ":imtran\r"
-respond "@" "imlac; ssv22 iml_sysbin; ssv22 bin\r"
-respond "@" "\021"
-expect ":KILL"
+imtran "imlac; ssv22 iml" "sysbin; ssv22 bin"
 respond "*" ":link imlac; .prgm. normal, imlac; ssv22 iml\r"
 
 # Assemble SSV4.
@@ -1018,18 +1015,14 @@ midas "imlac; ts assv4" "assv4"
 respond "*" ":imlac;assv4\r"
 respond "NUMBER" ">"
 expect ":KILL"
-respond "*" ":imtran\r"
-respond "@" "imlac; ssv4 iml_imlac; ssv4b >\r"
-respond "@" "\021"
+imtran "imlac; ssv4 iml" "imlac; ssv4b >"
 
 # Maze War
 midast "sysbin;" "imsrc; maze" {
     respond "with ^C" "MOUSE==1\r\003"
     respond "with ^C" "MOUSE==1\r\003"
 }
-respond "*" ":imtran\r"
-respond "@" "imlac; m iml_sysbin; maze bin\r"
-respond "@" "\021"
+imtran "imlac; m iml" "sysbin; maze bin"
 
 midas "sysbin;" "klh; mazser" {
     respond "NPTCL=" "1\r"
@@ -1047,29 +1040,21 @@ respond "*" ":kill\r"
 midas "imlac;" "imsrc; swar" {
     respond "INFINITE FUEL AND BULLETS VERSION?" "N\r"
 }
-respond "*" ":imtran\r"
-respond "@" "imlac; swar iml_imlac; swar bin\r"
-respond "@" "\021"
+imtran "imlac; swar iml" "imlac; swar bin"
 
 # PONG
 midas "imlac;" "imsrc; pong"
-respond "*" ":imtran\r"
-respond "@" "imlac; pong iml_imlac; pong bin\r"
-respond "@" "\021"
+imtran "imlac; pong iml" "imlac; pong bin"
 
 # CRASH, PDS-4 version
 midas "imlac;" "imsrc; crash"
-respond "*" ":imtran\r"
-respond "@" "imlac; crash4 iml_imlac; crash bin\r"
-respond "@" "\021"
+imtran "imlac; crash4 iml" "imlac; crash bin"
 # PDS-1 version
 midast "imlac;" "imsrc; crash" {
     respond "with ^C" "PDS4==0\r\003"
     respond "with ^C" "PDS4==0\r\003"
 }
-respond "*" ":imtran\r"
-respond "@" "imlac; crash iml_imlac; crash bin\r"
-respond "@" "\021"
+imtran "imlac; crash iml" "imlac; crash bin"
 
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.

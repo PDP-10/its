@@ -248,6 +248,13 @@ proc cwd {directory} {
     respond "*" ":cwd $directory\r"
 }
 
+proc imtran {target source} {
+    respond "*" ":imtran\r"
+    respond "@" "${target}_${source}\r"
+    respond "@" "\021"
+    expect ":KILL"
+}
+
 set ip [ip_address [lindex $argv 0]]
 set gw [ip_address [lindex $argv 1]]
 
