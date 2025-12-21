@@ -20,6 +20,7 @@ If you want to connect your machine to a network, this is also where you define 
    Common options you may want to consider:
    - NQS, the number of disk drives.
    - IMPP, whether there's an IMP interface.
+   - IMPUS, the machine's ARPANET host number.
    - IMPUS3, the machine's **IP address**.
    - NCPP, INETP, CHAOSP, network protocols.
 
@@ -109,3 +110,8 @@ If you're in DSKDMP and want to run ITS right away after dumping it, type <code>
 
 ## Step 7
 When the new ITS has passed testing, rename the old `.; @ ITS` to `.; @ OITS`.  Rename the new ITS to `.; @ ITS`.
+
+## Step 8
+The DMPCPY crash dump manager is prone to moving files on the `.`
+directory to another disk pack.  If this happens to the new `@ ITS`,
+you can move it back with e.g. `:MOVE .;@ ITS, DSK0:`
