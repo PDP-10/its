@@ -110,10 +110,52 @@ proc ip_address {string} {
     format "%o" $x
 }
 
+proc expect_load {} {
+    # Loading a FASL outputs a number in the current base.
+    # Loading a source file outputs T.
+    expect -re {[\r\n]([0-9]+\.?|T) *[\r\n]}
+}
+
 # Respond to the output from (load ...).
 proc respond_load { r } {
-    expect -re {[\r\n][0-9]+\.? *[\r\n]}
+    expect_load
     type $r
+}
+
+# Call the LISP compiler.  The action argument is evalutated first to
+# send commands to LISP for setting up the compilation environment.
+# The second argument is a list of files to be compiled.
+proc complr_action {action files} {
+    respond "*" "complr\013"
+    expect "LISP COMPILER"
+    if {$action ne ""} {
+        respond "_" "\007"
+        eval $action
+        type "(maklap)"
+    }
+    foreach i $files {
+        respond "_" "$i\r"
+    }
+    respond "_" "\032"
+    respond ")   " ":kill\r"
+}
+
+# Call the LISP compiler, first loading a set of libraries to set up
+# the compilation environment.
+proc complr_load {libs files} {
+    set action ""
+    set respond {respond "*"}
+    foreach i $libs {
+        set action "$action$respond \"(load '$i)\"\n"
+        set respond "respond_load"
+    }
+    set action "$action;expect_load\n"
+    complr_action $action $files
+}
+
+# Call LISP compiler with no fuss.
+proc complr {files} {
+    complr_action {} $files
 }
 
 proc build_macsyma_portion {} {

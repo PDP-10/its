@@ -4,59 +4,24 @@ cwd "shrdlu"
 
 # first, compile all the sources that should be compiled
 
-respond "*" ":complr graphf\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr macros\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr proggo\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr plnr\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr thtrac\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr syscom\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr morpho\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr show\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr progmr\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr ginter\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr gramar\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr dictio\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr smspec\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr smass\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr smutil\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr newans\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr blockp\r"
-respond "Job COMPLR finished" ":kill\r"
-
-respond "*" ":complr blockl\r"
-respond "Job COMPLR finished" ":kill\r"
+complr {"graphf"}
+complr {"macros"}
+complr {"proggo"}
+complr {"plnr"}
+complr {"thtrac"}
+complr {"syscom"}
+complr {"morpho"}
+complr {"show"}
+complr {"progmr"}
+complr {"ginter"}
+complr {"gramar"}
+complr {"dictio"}
+complr {"smspec"}
+complr {"smass"}
+complr {"smutil"}
+complr {"newans"}
+complr {"blockp"}
+complr {"blockl"}
 
 # now load up a compiled version of SHRDLU
 respond "*" ":lisp\r"

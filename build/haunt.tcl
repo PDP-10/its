@@ -3,10 +3,7 @@ log_progress "ENTERING BUILD SCRIPT: HAUNT"
 cwd "haunt"
 
 # build ops4
-respond "*" "complr\013"
-respond "_" "haunt;_haunt;ops4 lsp\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"haunt;_haunt;ops4 lsp"}
 
 # dump ops4
 respond "*" "lisp\013"
@@ -17,14 +14,9 @@ respond ":\$Job Suspended\$" ":pdump haunt;ts ops4\r"
 type ":kill\r"
 
 # build compile haunt lisp code
-respond "*" "complr\013"
-respond "_" "haunt;_haunt;comman lsp\r"
-respond "_" "haunt;_haunt;haunt lsp\r"
-respond "_" "haunt;_haunt;slurp lsp\r"
-respond "_" "haunt;_haunt;tlist lsp\r"
-respond "_" "haunt;_haunt;user lsp\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"haunt;_haunt;comman lsp" "haunt;_haunt;haunt lsp"
+        "haunt;_haunt;slurp lsp" "haunt;_haunt;tlist lsp"
+        "haunt;_haunt;user lsp"}
 
 # dump haunt
 respond "*" ":haunt;ops4\r"

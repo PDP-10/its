@@ -5,10 +5,7 @@ log_progress "ENTERING BUILD SCRIPT: MACSYMA"
 # all libmax components (well almost all) require libmax;module fasl
 # at compile time.  Build it first.
 
-respond "*" "complr\013"
-respond "_" "libmax;module\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"libmax;module"}
 
 # libmax;maxmac can't be compiled unless libmax;mforma is (first) compiled.
 # However, libmax;mforma uses libmax;macmac.  Hence you end up having to
@@ -17,37 +14,10 @@ type ":kill\r"
 # files for each, but anything that depends on these two packages will also
 # have errors during compilation.
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;mforma\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;maxmac\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;mforma\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;maxmac\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} {"libmax;mforma"}
+complr_load {"((libmax) module)"} {"libmax;maxmac"}
+complr_load {"((libmax) module)"} {"libmax;mforma"}
+complr_load {"((libmax) module)"} {"libmax;maxmac"}
 
 # the following are required to compile some of the libmax;
 # FASL files
@@ -58,72 +28,31 @@ mkdir "maxdmp"
 respond "*" ":link maxdmp;ratlap fasl,rat;ratlap fasl\r"
 respond "*" ":link libmax;lusets fasl,liblsp;\r"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;ermsgx\r"
-respond "_" "libmax;ermsgc\r"
-respond "_" "z;fildir\r"
-respond "_" "libmax;lmmac\r"
-respond "_" "libmax;meta\r"
-respond "_" "libmax;lmrund\r"
-respond "_" "libmax;lmrun\r"
-respond "_" "libmax;displm\r"
-respond "_" "libmax;defopt\r"
-respond "_" "libmax;mopers\r"
-respond "_" "libmax;mrgmac\r"
-respond "_" "libmax;nummac\r"
-respond "_" "libmax;opshin\r"
-respond "_" "libmax;edmac_emaxim;\r"
-respond "_" "libmax;procs\r"
-respond "_" "libmax;readm\r"
-respond "_" "libmax;strmac\r"
-respond "_" "libmax;transm\r"
-respond "_" "libmax;rzmac_rz;macros\r"
-respond "_" "libmax;transq\r"
-respond "_" "libmax;mdefun\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} \
+    {"libmax;ermsgx" "libmax;ermsgc" "z;fildir" "libmax;lmmac"
+     "libmax;meta" "libmax;lmrund" "libmax;lmrun" "libmax;displm"
+     "libmax;defopt" "libmax;mopers" "libmax;mrgmac" "libmax;nummac"
+     "libmax;opshin" "libmax;edmac_emaxim;" "libmax;procs" "libmax;readm"
+     "libmax;strmac" "libmax;transm" "libmax;rzmac_rz;macros"
+     "libmax;transq" "libmax;mdefun"}
 
 # build MAXTUL FASL files
 
 mkdir "maxerr"
 mkdir "maxer1"
 
-respond "*" "complr\013"
-respond "_" "maxtul;strmrg\r"
-respond "_" "maxtul;defile\r"
-respond "_" "maxtul;docgen\r"
-respond "_" "maxtul;query\r"
-respond "_" "maxtul;maxtul\r"
-respond "_" "maxtul;toolm\r"
-respond "_" "maxtul;dclmak\r"
-respond "_" "maxtul;mailer\r"
-respond "_" "maxtul;mcl\r"
-respond "_" "maxtul;timepn\r"
-respond "_" "maxtul;expand\r"
-respond "_" "maxtul;fsubr!\r"
-respond "_" "maxtul;error!\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"maxtul;strmrg" "maxtul;defile" "maxtul;docgen" "maxtul;query"
+        "maxtul;maxtul" "maxtul;toolm" "maxtul;dclmak" "maxtul;mailer"
+        "maxtul;mcl" "maxtul;timepn" "maxtul;expand" "maxtul;fsubr!"
+        "maxtul;error!"}
 
-respond "*" "complr\013"
-respond "_" "maxtul;fasmap\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"maxtul;fasmap"}
 
 # define needs (for some reason) to be compiled separately.
 # not doing this results in errors compiling macsyma sources,
 # such as ELL; HYP >
 #
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;define\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} {"libmax;define"}
 
 # build macsyma
 
@@ -131,21 +60,10 @@ mkdir "macsym"
 
 respond "*" ":link macsym;mdefun fasl,libmax;\r"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "macsym;ermsgm_maxsrc;ermsgm\r"
-respond "_" "maxdoc;tdcl\r"
-respond "_" "rlb;bitmac\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} \
+    {"macsym;ermsgm_maxsrc;ermsgm" "maxdoc;tdcl" "rlb;bitmac"}
 
-respond "*" "complr\013"
-respond "_" "rlb;faslre\r"
-respond "_" "rlb;faslro\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"rlb;faslre" "rlb;faslro"}
 
 respond "*" ":link rlb%;faslre fasl,rlb;\r"
 respond "*" ":copy rlb;faslre fasl,liblsp;\r"
@@ -175,33 +93,14 @@ respond "MAXIMUM TOOLAGE>" "declare-file-make\r"
 respond "MAXIMUM TOOLAGE>" "quit\r"
 respond "*" "(quit)"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;mhayat_rat;mhayat\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;ratmac_rat;ratmac\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} {"libmax;mhayat_rat;mhayat"}
+complr_load {"((libmax) module)"} {"libmax;ratmac_rat;ratmac"}
 
 # mforma needs to get recompiled (not sure exactly which
 # dependency yet causes the version we've built so far
 # not to work, but if recompiled at this point, we're
 # able to build macsyma
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(maklap)"
-respond "_" "libmax;mforma\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)"} {"libmax;mforma"}
 
 respond "*" "complr\013"
 respond "_" "\007"
@@ -217,10 +116,7 @@ midas "maxtul;ts mcl" "mcldmp midas"
 respond "*" ":link maxtul;.good. complr,maxtul;mcldmp 32\r"
 
 # build UTMCL -- the compiler invoked by compile_lisp_file in Macsyma
-respond "*" "complr\013"
-respond "_" "maxtul;utmcl\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"maxtul;utmcl"}
 
 # dump out UTMCL
 respond "*" "complr\013"
@@ -231,10 +127,7 @@ respond "*" "(dump-utmcl)"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" "complr\013"
-respond "_" "mrg;macros\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"mrg;macros"}
 
 mkdir "maxout"
 mkdir "share2"
@@ -314,31 +207,15 @@ respond "Type ALL;" "all;"
 respond "(C2)" "quit();"
 
 ### build share;array fasl and ellen;check fasl for macsyma
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(load '((libmax) maxmac))"
-respond_load "(maklap)"
-respond "_" "share;_maxsrc;array\r"
-respond "_" "ellen;check\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)" "((libmax) maxmac)"} \
+    {"share;_maxsrc;array" "ellen;check"}
 
 ### rebuild float because version built the first time gives
 ### arithmetic overflows.  See ticket #1211.
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libmax) module))"
-respond_load "(load '((libmax) maxmac))"
-respond_load "(maklap)"
-respond "_" "macsym;_rat;float\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libmax) module)" "((libmax) maxmac)"} \
+    {"macsym;_rat;float"}
 
 # this is not technically part of macsyma, but requires a bunch
 # of macsyma macros and libraries in order to compile
-respond "*" ":complr\r"
-respond "_" "liblsp;_libdoc;lchstr\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;lchstr"}
 respond "*" ":delete liblsp;lchstr unfasl\r"

@@ -61,124 +61,41 @@ midas "lisp;" "lspsrc;sort"
 
 respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;loop\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;loop"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_lspsrc;umlmac\r"
-respond "_" "lisp;_nilcom;sharpa\r"
-respond "_" "lisp;_nilcom;sharpc\r"
-respond "_" "lisp;_nilcom;defvst\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_lspsrc;umlmac" "lisp;_nilcom;sharpa"
+        "lisp;_nilcom;sharpc" "lisp;_nilcom;defvst"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;errck\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;errck"}
+complr {"lisp;_nilcom;backq"}
+complr {"lisp;_lspsrc;bits" "lisp;_lspsrc;cerror" "lisp;_nilcom;defmac"}
+complr {"lisp;_nilcom;defmax"}
+complr {"lisp;_nilcom;defvsx"}
+complr {"lisp;_nilcom;defvsy" "lisp;_lspsrc;descri" "lisp;_lspsrc;dumpar"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;backq\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_lspsrc;bits\r"
-respond "_" "lisp;_lspsrc;cerror\r"
-respond "_" "lisp;_nilcom;defmac\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;defmax\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;defvsx\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;defvsy\r"
-respond "_" "lisp;_lspsrc;descri\r"
-respond "_" "lisp;_lspsrc;dumpar\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_lspsrc;extmac\r"
-respond "_" "lisp;_lspsrc;extbas\r"
-respond "_" "lisp;_lspsrc;extsfa\r"
-respond "_" "lisp;_nilcom;evonce\r"
-respond "_" "lisp;_lspsrc;extend\r"
-respond "_" "lisp;_lspsrc;grind\r"
-respond "_" "lisp;_lspsrc;grinde\r"
-respond "_" "lisp;_lspsrc;lap\r"
-respond "_" "lisp;_comlap;ledit\r"
-respond "_" "lisp;_nilcom;let\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_lspsrc;extmac" "lisp;_lspsrc;extbas" "lisp;_lspsrc;extsfa"
+        "lisp;_nilcom;evonce" "lisp;_lspsrc;extend" "lisp;_lspsrc;grind"
+        "lisp;_lspsrc;grinde" "lisp;_lspsrc;lap" "lisp;_comlap;ledit"
+        "lisp;_nilcom;let"}
 
 respond "*" ":link l;humble fasl,lisp;\r"
 respond "*" ":link l;ledit* fasl,lisp;\r"
 respond "*" ":link l;let fasl,lisp;\r"
 
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;macaid\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;macaid"}
+complr {"lisp;_lspsrc;mlmac" "lisp;_lspsrc;mlsub"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_lspsrc;mlmac\r"
-respond "_" "lisp;_lspsrc;mlsub\r"
-respond "_" "\032"
-type ":kill\r"
+complr_action {respond "*" "(remprop 'eval-ordered* '*lexpr)"
+               expect "(T AUTOLOAD ((LISP) EVONCE FASL))"} \
+    {"lisp;_nilcom;setf"}
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(remprop 'eval-ordered* '*lexpr)"
-respond "(T AUTOLOAD ((LISP) EVONCE FASL))" "(maklap)"
-respond "_" "lisp;_nilcom;setf\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;sharpm"}
+complr {"lisp;_nilcom;string"}
+complr {"lisp;_nilcom;subseq" "lisp;_lspsrc;trace"}
+complr {"lisp;_nilcom;yesnop"}
+complr {"liblsp;_libdoc;lspmac" "liblsp;_libdoc;lusets"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;sharpm\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;string\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;subseq\r"
-respond "_" "lisp;_lspsrc;trace\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;yesnop\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;lspmac\r"
-respond "_" "liblsp;_libdoc;lusets\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((lisp) extend))"
-respond_load "(maklap)"
-respond "_" "lisp;_lspsrc;extstr\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((lisp) extend)"} {"lisp;_lspsrc;extstr"}
 
 # inquir
 midas "inquir;" "lsrrtn"
@@ -186,25 +103,15 @@ midas "inquir;" "cstacy;netrtn"
 
 respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
 respond "*" ":link lisp;debug fasl,liblsp;debug fasl\r"
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;tty\r"
-respond "_" "inquir;reader\r"
-respond "_" "inquir;fake-s\r"
-respond "_" "rwk;debmac\r"
-respond "_" "liblsp;_libdoc;lispm\r"
-respond "_" "inquir;inquir\r"
-respond "_" "\032"
-type ":kill\r"
+
+complr {"liblsp;_libdoc;tty" "inquir;reader" "inquir;fake-s"
+        "rwk;debmac" "liblsp;_libdoc;lispm" "inquir;inquir"}
 
 midas "inquir;ts inqexm" "inqexm"
 midas "inquir;ts inqrep" "inqrep"
 respond "*" ":link inquir;ts inqchk,ts inquir\r"
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;dbg ejs2\r"
-respond "_" "liblsp;_libdoc;comrd kmp1\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;dbg ejs2" "liblsp;_libdoc;comrd kmp1"}
 
 respond "*" ":lisp inquir;inquir (dump)\r"
 respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
@@ -215,18 +122,12 @@ respond "*" ":link inquir;ts inqpat,inqupd bin\r"
 respond "*" ":link inquir;ts lsrini,inqupd bin\r"
 
 # od
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc; od\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc; od"}
 respond "*" ":lisp libdoc;od (dump)\r"
 expect ":KILL"
 
 # comred
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc; comred\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc; comred"}
 
 respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
 
@@ -239,16 +140,9 @@ midas "sys3;ts lsrdmp" "bawden; lsrdmp"
 
 # more lisp packages
 respond "*" ":link lisp;tty fasl,liblsp;tty fasl\r"
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((lisp) subloa lsp))"
-respond "T" "(maklap)"
-respond "_" "lisp;_lspsrc;funcel\r"
-respond "_" "lisp;_lspsrc;reap\r"
-respond "_" "lisp;_lspsrc;lexprf\r"
-respond "_" "lisp;_lspsrc;ldbhlp\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((lisp) subloa lsp)"} \
+    {"lisp;_lspsrc;funcel" "lisp;_lspsrc;reap"
+     "lisp;_lspsrc;lexprf" "lisp;_lspsrc;ldbhlp"}
 
 respond "*" "complr\013"
 respond "_" "lisp;_nilcom;lsets\r"
@@ -257,30 +151,14 @@ respond "(Y or N)" "Y"
 respond "_" "\032"
 type ":kill\r"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((lisp) subloa lsp))"
-respond "T" "(maklap)"
-respond "_" "lisp;_lspsrc;nilaid\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((lisp) subloa lsp)"} {"lisp;_lspsrc;nilaid"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;sharab\r"
-respond "_" "liblsp;_libdoc;bs\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;sharab" "liblsp;_libdoc;bs"}
 
 respond "*" ":link lisp;sharab fasl,liblsp;\r"
 respond "*" ":link lisp;bs fasl,liblsp;\r"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((lisp) subloa lsp))"
-respond "T" "(maklap)"
-respond "_" "lisp;_nilcom;thread\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((lisp) subloa lsp)"} {"lisp;_nilcom;thread"}
 
 midas "lisp;" "l;lchnsp"
 midas "lisp;" "l;purep"
@@ -291,45 +169,23 @@ respond "*" ":link alan;dprint fasl,liblsp;dprint fasl\r"
 respond "*" ":link alan;struct 9,alan;nstruc 280\r"
 respond "*" ":copy liblsp;struct fasl,alan;struct boot\r"
 respond "*" ":link alan;struct fasl,liblsp;struct fasl\r"
-respond "*" "complr\013"
-respond "_" "alan;lspcom\r"
-respond "_" "alan;lspenv\r"
-respond "_" "alan;lspint\r"
-respond "_" "alan;setf\r"
-respond "_" "alan;binda\r"
-respond "_" "alan;crawl\r"
-respond "_" "alan;nstruc 280\r"
-respond "_" "\032"
-type ":kill\r"
+
+complr {"alan;lspcom" "alan;lspenv" "alan;lspint" "alan;setf"
+        "alan;binda" "alan;crawl" "alan;nstruc 280"}
 respond "*" ":copy alan;nstruc fasl,liblsp;struct fasl\r"
 respond "*" ":link lisp;struct fasl,liblsp;struct fasl\r"
 
 midas "liblsp;" "alan;macits"
 
-respond "*" "complr\013"
-respond "_" "liblsp;_alan;dprint\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_alan;dprint"}
 
-#respond "*" "complr\013"
-#respond "_" "alan;ljob\r"
-#respond "_" "liblsp;_libdoc;gprint rcw3\r"
-#respond "_" "alan;lspgub\r"
-#respond "_" "\032"
-#type ":kill\r"
+#complr {"alan;ljob" "liblsp;_libdoc;gprint rcw3" "alan;lspgub"}
 
 # compile lisp compiler
-respond "*" "complr\013"
-respond "_" "comlap;cd.fas 40_cdmacs\r"
-respond "_" "comlap;cx.fas 25_comaux\r"
-respond "_" "comlap;cl.fas 936_complr\r"
-respond "_" "comlap;fl.fas 392_faslap\r"
-respond "_" "comlap;in.fas 120_initia\r"
-respond "_" "comlap;mk.fas 80_maklap\r"
-respond "_" "comlap;ph.fas 86_phas1\r"
-respond "_" "comlap;st.fas 20_srctrn\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"comlap;cd.fas 40_cdmacs" "comlap;cx.fas 25_comaux"
+        "comlap;cl.fas 936_complr" "comlap;fl.fas 392_faslap"
+        "comlap;in.fas 120_initia" "comlap;mk.fas 80_maklap"
+        "comlap;ph.fas 86_phas1" "comlap;st.fas 20_srctrn"}
 
 # and redump compiler
 respond "*" "comlap\033\033\023"
@@ -340,112 +196,45 @@ type ":vk\r"
 respond "*" ":kill\r"
 
 # Additional LSPLIB packages
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;iota\r"
-respond "_" "liblsp;_libdoc;time\r"
-respond "_" "liblsp;_libdoc;letfex\r"
-respond "_" "liblsp;_libdoc;break\r"
-respond "_" "liblsp;_libdoc;smurf\r"
-respond "_" "liblsp;_rlb%;fasdmp\r"
-respond "_" "liblsp;_libdoc;lispt\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;iota" "liblsp;_libdoc;time" "liblsp;_libdoc;letfex"
+        "liblsp;_libdoc;break" "liblsp;_libdoc;smurf" "liblsp;_rlb%;fasdmp"
+        "liblsp;_libdoc;lispt"}
 
 respond "*" ":link liblsp;gcdemn fasl,lisp;\r"
 
 ### more lisplib stuff
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;%print\r"
-respond "_" "liblsp;_libdoc;6bit\r"
-respond "_" "liblsp;_libdoc;apropo\r"
-respond "_" "liblsp;_libdoc;arith\r"
-respond "_" "liblsp;_libdoc;aryfil\r"
-respond "_" "liblsp;_libdoc;atan\r"
-respond "_" "liblsp;_libdoc;autodf\r"
-respond "_" "liblsp;_libdoc;bboole\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;%print" "liblsp;_libdoc;6bit" "liblsp;_libdoc;apropo"
+        "liblsp;_libdoc;arith" "liblsp;_libdoc;aryfil" "liblsp;_libdoc;atan"
+        "liblsp;_libdoc;autodf" "liblsp;_libdoc;bboole"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;bench\r"
-respond "_" "liblsp;_libdoc;binprt\r"
-respond "_" "liblsp;_lmlib;gprint\r"
-respond "_" "liblsp;_libdoc;carcdr\r"
-respond "_" "liblsp;_libdoc;char\r"
-respond "_" "liblsp;_libdoc;debug*\r"
-respond "_" "liblsp;_libdoc;defsta\r"
-respond "_" "liblsp;_libdoc;doctor\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;bench" "liblsp;_libdoc;binprt" "liblsp;_lmlib;gprint"
+        "liblsp;_libdoc;carcdr" "liblsp;_libdoc;char" "liblsp;_libdoc;debug*"
+        "liblsp;_libdoc;defsta" "liblsp;_libdoc;doctor"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;dow\r"
-respond "_" "liblsp;_libdoc;dribbl\r"
-respond "_" "liblsp;_libdoc;dumpgc\r"
-respond "_" "liblsp;_libdoc;fake-s\r"
-respond "_" "liblsp;_libdoc;fforma\r"
-respond "_" "liblsp;_libdoc;filbit\r"
-respond "_" "liblsp;_libdoc;fload\r"
-respond "_" "liblsp;_libdoc;fontrd\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;dow" "liblsp;_libdoc;dribbl" "liblsp;_libdoc;dumpgc"
+        "liblsp;_libdoc;fake-s" "liblsp;_libdoc;fforma" "liblsp;_libdoc;filbit"
+        "liblsp;_libdoc;fload" "liblsp;_libdoc;fontrd"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;for\r"
-respond "_" "lisp;_lspsrc;gcdemn\r"
-respond "_" "liblsp;_libdoc;genfns\r"
-respond "_" "liblsp;_libdoc;graphs\r"
-respond "_" "liblsp;_libdoc;graphm\r"
-respond "_" "liblsp;_libdoc;graph$\r"
-respond "_" "liblsp;_libdoc;grapha\r"
-respond "_" "liblsp;_libdoc;grapht\r"
-respond "_" "liblsp;_libdoc;impdef\r"
-respond "_" "liblsp;_libdoc;laugh\r"
-respond "_" "liblsp;_libdoc;lets\r"
-respond "_" "liblsp;_libdoc;linere\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;for" "lisp;_lspsrc;gcdemn" "liblsp;_libdoc;genfns"
+        "liblsp;_libdoc;graphs" "liblsp;_libdoc;graphm" "liblsp;_libdoc;graph$"
+        "liblsp;_libdoc;grapha" "liblsp;_libdoc;grapht" "liblsp;_libdoc;impdef"
+        "liblsp;_libdoc;laugh" "liblsp;_libdoc;lets" "liblsp;_libdoc;linere"}
 
 respond "*" ":delete libdoc;gcdemn 999999\r"
 respond "*" ":link libdoc;gcdemn 999999,lspsrc;gcdemn >\r"
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;loop\r"
-respond "_" "liblsp;_libdoc;more\r"
-respond "_" "liblsp;_libdoc;nshare\r"
-respond "_" "liblsp;_libdoc;octal\r"
-respond "_" "liblsp;_libdoc;optdef\r"
-respond "_" "liblsp;_libdoc;phsprt\r"
-respond "_" "liblsp;_libdoc;privob\r"
-respond "_" "liblsp;_libdoc;prompt\r"
-respond "_" "liblsp;_libdoc;qtrace\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;loop" "liblsp;_libdoc;more" "liblsp;_libdoc;nshare"
+        "liblsp;_libdoc;octal" "liblsp;_libdoc;optdef" "liblsp;_libdoc;phsprt"
+        "liblsp;_libdoc;privob" "liblsp;_libdoc;prompt" "liblsp;_libdoc;qtrace"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;reads\r"
-respond "_" "liblsp;_libdoc;redo\r"
-respond "_" "liblsp;_libdoc;save\r"
-respond "_" "liblsp;_libdoc;sets\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;reads" "liblsp;_libdoc;redo"
+       "liblsp;_libdoc;save" "liblsp;_libdoc;sets"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;share\r"
-respond "_" "liblsp;_libdoc;sixbit\r"
-respond "_" "liblsp;_libdoc;split\r"
-respond "_" "liblsp;_libdoc;stack\r"
-respond "_" "liblsp;_libdoc;statty\r"
-respond "_" "liblsp;_libdoc;stepmm\r"
-respond "_" "liblsp;_libdoc;stepr\r"
-respond "_" "liblsp;_libdoc;string\r"
-respond "_" "liblsp;_libdoc;sun\r"
-respond "_" "liblsp;_libdoc;trap\r"
-respond "_" "liblsp;_libdoc;ttyhak\r"
-respond "_" "liblsp;_libdoc;wifs\r"
-respond "_" "liblsp;_libdoc;window\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;share" "liblsp;_libdoc;sixbit" "liblsp;_libdoc;split"
+        "liblsp;_libdoc;stack" "liblsp;_libdoc;statty" "liblsp;_libdoc;stepmm"
+        "liblsp;_libdoc;stepr" "liblsp;_libdoc;string" "liblsp;_libdoc;sun"
+        "liblsp;_libdoc;trap" "liblsp;_libdoc;ttyhak" "liblsp;_libdoc;wifs"
+        "liblsp;_libdoc;window"}
 
 respond "*" ":link liblsp;defvst fasl,lisp;\r"
 respond "*" ":link liblsp;format fasl,liblsp;fforma fasl\r"
@@ -464,28 +253,13 @@ respond "Delete? (Y or N):" "y"
 respond "@" "q\r"
 expect ":KILL"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((libdoc) set ira10))"
-respond "T" "(maklap)"
-respond "_" "liblsp;_libdoc;askusr\r"
-respond "_" "liblsp;_pratt;cgrub\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((libdoc) set ira10)"} \
+    {"liblsp;_libdoc;askusr" "liblsp;_pratt;cgrub"}
 
 # compile cgol
-respond "*" "complr\013"
-respond "_" "lisp;_pratt;cgol\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_pratt;cgol"}
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(load '((lisp) cgol fasl))"
-respond_load "(maklap)"
-respond "_" "liblsp;_pratt;cgprin\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"((lisp) cgol fasl)"} {"liblsp;_pratt;cgprin"}
 
 # clean up remaining unfasl files in liblsp
 respond "*" ":dired liblsp;\r"
@@ -494,13 +268,9 @@ respond "Delete? (Y or N):" "y"
 respond "@" "q\r"
 expect ":KILL"
 
-respond "*" "complr\013"
-respond "_" "\007"
-respond "*" "(sstatus features Compile-Subload)"
-respond "COMPILE-SUBLOAD" "(maklap)"
-respond "_" "lisp;_nilcom;subloa\r"
-respond "_" "\032"
-type ":kill\r"
+complr_action {respond "*" "(sstatus features Compile-Subload)"
+               expect "COMPILE-SUBLOAD"} \
+       {"lisp;_nilcom;subloa"}
 
 midas "liblsp;" "libdoc;bssq"
 midas "liblsp;" "libdoc;aryadr"
@@ -513,29 +283,16 @@ midas "liblsp;" "libdoc;fft"
 midas "liblsp;" "libdoc;phase"
 
 # More LIBLSP packages
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;didl\r"
-respond "_" "liblsp;_libdoc;getsyn\r"
-respond "_" "liblsp;_libdoc;iter\r"
-respond "_" "liblsp;_libdoc;hash\r"
-respond "_" "liblsp;_libdoc;graph3\r"
-respond "_" "liblsp;_libdoc;ledit*\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;didl" "liblsp;_libdoc;getsyn" "liblsp;_libdoc;iter"
+        "liblsp;_libdoc;hash" "liblsp;_libdoc;graph3" "liblsp;_libdoc;ledit*"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;stacks\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;stacks"}
 
 midas "liblsp;" "libdoc;dirsiz"
 midas "liblsp;" "z;timer"
 
 respond "*" ":link lisp;vsaid lisp,nilcom;vsaid >\r"
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;vsaid\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;vsaid"}
 respond "*" ":link liblsp;vsaid fasl,lisp;\r"
 
 # cleanup unfasl files in lisp;
@@ -552,39 +309,17 @@ midas "liblsp;" "gsb;ttyvar" {
 midas "liblsp;" "libdoc;aryadr"
 midas "liblsp;" "libdoc;bssq"
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;lddt\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;ndone\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;lddt"}
+complr {"liblsp;_libdoc;ndone"}
 
 respond "*" ":link graphs;graph3 fasl,liblsp\r"
 respond "*" ":link graphs;plot3 fasl,liblsp\r"
 respond "*" ":link graphs;plot fasl,liblsp\r"
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;plot\r"
-respond "_" "liblsp;_libdoc;plot3\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;plot" "liblsp;_libdoc;plot3"}
 
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;prime\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;step\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" "complr\013"
-respond "_" "liblsp;_libdoc;utils\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"liblsp;_libdoc;prime"}
+complr {"liblsp;_libdoc;step"}
+complr {"liblsp;_libdoc;utils"}
 
 # cleanup unfasl files in liblsp;
 respond "*" ":dired liblsp;\r"
@@ -594,25 +329,13 @@ respond "@" "q\r"
 expect ":KILL"
 
 # DEFSET
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;defset\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;defset"}
 
 # compile some lisp; libraries
-respond "*" "complr\013"
-respond "_" "lisp;_nilcom;cnvd\r"
-respond "_" "lisp;_lspsrc;exthuk\r"
-respond "_" "lisp;_lspsrc;gfile\r"
-respond "_" "lisp;_lspsrc;gfn\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_nilcom;cnvd" "lisp;_lspsrc;exthuk"
+        "lisp;_lspsrc;gfile" "lisp;_lspsrc;gfn"}
 
-respond "*" "complr\013"
-respond "_" "lisp;_lspsrc;querio\r"
-respond "_" "lisp;_lspsrc;vector\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lisp;_lspsrc;querio" "lisp;_lspsrc;vector"}
 
 midas "lisp;" "lspsrc;sendi"
 midas "lisp;" "lspsrc;straux"
@@ -633,18 +356,10 @@ midas "sys; atsign 10slav" "sysen2; ld10" {
 }
 
 # animal
-respond "*" "complr\013"
-respond "_" "games;_games;parse\r"
-respond "_" "games;_games;pattrn\r"
-respond "_" "games;_games;words\r"
-respond "_" "games;_games;word\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_games;parse" "games;_games;pattrn"
+        "games;_games;words" "games;_games;word"}
 
-respond "*" "complr\013"
-respond "_" "games;_games;animal 133\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_games;animal 133"}
 
 respond "*" "l\013"
 respond "Alloc?" "n"
@@ -653,42 +368,23 @@ respond_load "(dump '((games) ts animal))"
 expect "KILL"
 
 # think
-respond "*" "complr\013"
-respond "_" "games;_games;think\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_games;think"}
 
 # wa
-respond "*" "complr\013"
-respond "_" "games;_games;wa 10\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_games;wa 10"}
 
 # chase
-respond "*" "complr\013"
-respond "_" "games;_chase\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_chase"}
 
 # yahtze
-respond "*" "complr\013"
-respond "_" "sca;macros\r"
-respond "_" "sca;modeb\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"sca;macros" "sca;modeb"}
 
 # note sca;mode > will not compile. Yahtze will load it interpreted
 
-respond "*" "complr\013"
-respond "_" "games;yahtze\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;yahtze"}
 
 # ITSter
-respond "*" "complr\013"
-respond "_" "games;_hibou;itster\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"games;_hibou;itster"}
 
 # Knight TV Spacewar
 respond "*" ":lisp gjd; sine lisp\r"
@@ -696,44 +392,27 @@ expect ":KILL"
 
 # Kermit
 respond "*" ":link math;defset fasl,lisp;\r"
-respond "*" ":complr\r"
-respond "_" "math;common\r"
-respond "_" "math;kermit\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"math;common" "math;kermit"}
 respond "*" ":lisp math; kermit dumper\r"
 respond "to dump.|" "(kermit-dump)"
 expect ":KILL"
 respond "*" ":link sys3;ts kermit,math;\r"
 
 # SUPDUP ARDS
-respond "*" ":complr\r"
-respond "_" "dcp;sgincl\r"
-respond "_" "dcp;supard\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"dcp;sgincl" "dcp;supard"}
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
 respond "*" {(load "dcp;supard")}
 respond "system program" "(bootstrap)"
 
 # ARDS to SVG converter
-respond "*" ":complr\r"
-respond "_" "victor; ards\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"victor; ards"}
 
 # Forth
-respond "*" ":complr\r"
-respond "_" "kle;forth\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"kle;forth"}
 
 # ULisp
-respond "*" ":complr\r"
-respond "_" "teach; ulisp\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"teach; ulisp"}
 respond "*" ":lisp\r"
 respond "Alloc?" "n\r"
 respond "*" "(load '((teach) ulisp))"
@@ -751,15 +430,8 @@ respond "\n" ":vk\r"
 respond "*" ":kill\r"
 
 # AS8748
-respond "*" ":complr\r"
-respond "_" "lmio1;as8748\r"
-respond "_" "\032"
-type ":kill\r"
-
-respond "*" ":complr\r"
-respond "_" "moon;8478sa\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lmio1;as8748"}
+complr {"moon;8478sa"}
 
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
@@ -771,36 +443,11 @@ expect ":KILL"
 
 # Lisp Logo
 cwd "llogo"
-respond "*" ":complr\r"
-respond "_" "germ\r"
-respond "_" "ioc\r"
-respond "_" "\032"
-type ":kill\r"
-respond "*" ":complr\r"
-respond "_" "\007"
-respond "*" "(load 'ioc)"
-respond_load "(load 'define)"
-respond "T" "(maklap)"
-respond "_" "define\r"
-respond "_" "\032"
-type ":kill\r"
-respond "*" ":complr\r"
-respond "_" "\007"
-respond "*" "(load 'ioc)"
-respond_load "(load 'define)"
-respond_load "(maklap)"
-respond "_" "error\r"
-respond "_" "parser\r"
-respond "_" "primit\r"
-respond "_" "print\r"
-respond "_" "reader\r"
-respond "_" "setup\r"
-respond "_" "unedit\r"
-respond "_" "music\r"
-respond "_" "turtle\r"
-respond "_" "tvrtle\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"germ" "ioc"}
+complr_load {"ioc" "define"} {"define"}
+complr_load {"ioc" "define"} \
+    {"error" "parser" "primit" "print" "reader" "setup" "unedit" "music"
+     "turtle" "tvrtle"}
 respond "*" ":lisp loader\r"
 respond "?" "Y\r"
 respond "?" "LLOGO\r"
@@ -809,13 +456,7 @@ expect ":KILL"
 respond "*" ":link sys1; ts llogo, llogo; ts llogo\r"
 
 # 2500 assembler
-respond "*" ":complr\r"
-respond "_" "\007"
-respond "*" "(load 'ioc)"
-respond_load "(maklap)"
-respond "_" "2500;zap\r"
-respond "_" "\032"
-type ":kill\r"
+complr_load {"ioc"} {"2500;zap"}
 
 # 2500 microcode
 cwd "minsky"
@@ -832,26 +473,11 @@ expect ":KILL"
 
 # TEACH;TS XLISP
 
-respond "*" ":complr\r"
-respond "_" "teach;macro\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"teach;macro"}
 
-respond "*" ":complr\r"
-respond "_" "teach;apropos\r"
-respond "_" "teach;compla\r"
-respond "_" "teach;databa\r"
-respond "_" "teach;errhan\r"
-respond "_" "teach;errhel\r"
-respond "_" "teach;exlist\r"
-respond "_" "teach;io\r"
-respond "_" "teach;lessn\r"
-respond "_" "teach;more\r"
-respond "_" "teach;record\r"
-respond "_" "teach;teach\r"
-respond "_" "teach;treepr\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"teach;apropos" "teach;compla" "teach;databa" "teach;errhan"
+        "teach;errhel" "teach;exlist" "teach;io" "teach;lessn"
+        "teach;more" "teach;record" "teach;teach" "teach;treepr"}
 
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
@@ -862,20 +488,10 @@ expect ":KILL"
 respond "*" ":rename teach;ts xlisp,ts lisp\r"
 
 # Munching squares for display terminals.
-respond "*" ":complr\r"
-respond "_" "lars; munch lisp\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"lars; munch lisp"}
 
 # CUBE, Rubik's cube by Bernard Greenberg.
-respond "*" ":complr\r"
-respond "_" "bsg;cube\r"
-respond "_" "bsg;cutils\r"
-respond "_" "bsg;csolve\r"
-respond "_" "bsg;cinput\r"
-respond "_" "bsg;cxfrm\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"bsg;cube" "bsg;cutils" "bsg;csolve" "bsg;cinput" "bsg;cxfrm"}
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
 respond "*" {(load "bsg;cdriv")}
@@ -884,14 +500,7 @@ respond "*" ":pdump sys3;ts cube\r"
 respond "*" ":kill\r"
 
 # LMODEM
-respond "*" ":complr\r"
-respond "_" "eb;sfadcl\r"
-respond "_" "eb;errmac\r"
-respond "_" "eb;signal\r"
-respond "_" "eb;dsk8\r"
-respond "_" "eb;lmodem\r"
-respond "_" "\032"
-type ":kill\r"
+complr {"eb;sfadcl" "eb;errmac" "eb;signal" "eb;dsk8" "eb;lmodem"}
 respond "*" ":lisp\r"
 respond "Alloc?" "n"
 respond "*" {(load "eb;lmodem")}
