@@ -185,6 +185,10 @@ proc build_macsyma_portion {} {
     set timeout 100
 }
 
+proc make_link {to from} {
+    respond "*" ":link $to,$from\r"
+}
+
 set timeout 100
 proc setup_timeout {} {
     # Don't do this until after you've called "spawn", otherwise it'll cause a
@@ -209,9 +213,9 @@ proc arpanet {rfc file} {
     # Others do not.
     global mchn
     if [string equal "$mchn" "DM"] {
-        respond "*" ":link sys;atsign $rfc, $file\r"
+        make_link "sys;atsign $rfc" $file
     } else {
-        respond "*" ":link device;lbsign $rfc, $file\r"
+        make_link "device;lbsign $rfc" $file
     }
 }
 

@@ -25,8 +25,8 @@ complr_load {"((libmax) module)"} {"libmax;maxmac"}
 midas "rwk;lfsdef fasl" "rwk;lfsdef"
 midas "rat;ratlap fasl" "rat;ratlap"
 mkdir "maxdmp"
-respond "*" ":link maxdmp;ratlap fasl,rat;ratlap fasl\r"
-respond "*" ":link libmax;lusets fasl,liblsp;\r"
+make_link "maxdmp;ratlap fasl" "rat;ratlap fasl"
+make_link "libmax;lusets fasl" "liblsp;"
 
 complr_load {"((libmax) module)"} \
     {"libmax;ermsgx" "libmax;ermsgc" "z;fildir" "libmax;lmmac"
@@ -58,14 +58,14 @@ complr_load {"((libmax) module)"} {"libmax;define"}
 
 mkdir "macsym"
 
-respond "*" ":link macsym;mdefun fasl,libmax;\r"
+make_link "macsym;mdefun fasl" "libmax;"
 
 complr_load {"((libmax) module)"} \
     {"macsym;ermsgm_maxsrc;ermsgm" "maxdoc;tdcl" "rlb;bitmac"}
 
 complr {"rlb;faslre" "rlb;faslro"}
 
-respond "*" ":link rlb%;faslre fasl,rlb;\r"
+make_link "rlb%;faslre fasl" "rlb;"
 respond "*" ":copy rlb;faslre fasl,liblsp;\r"
 respond "*" "l\013"
 respond "Alloc?" "n"
@@ -113,7 +113,7 @@ respond "File name->" "\002"
 respond ";BKPT" "(quit)"
 
 midas "maxtul;ts mcl" "mcldmp midas"
-respond "*" ":link maxtul;.good. complr,maxtul;mcldmp 32\r"
+make_link "maxtul;.good. complr" "maxtul;mcldmp 32"
 
 # build UTMCL -- the compiler invoked by compile_lisp_file in Macsyma
 complr {"maxtul;utmcl"}
@@ -184,11 +184,11 @@ respond "T" "(loader 1001)"
 respond "(C1)" "quit();"
 
 respond "*" ":copy aljabr;user profil,macsym;\r"
-respond "*" ":link macsym;check fasl,ellen;\r"
-respond "*" ":link sys3;ts macsym,maxdmp;loser >\r"
-respond "*" ":link sys;ts a,sys3; ts macsym\r"
-respond "*" ":link demo;manual demo,demo;manual >\r"
-respond "*" ":link manual;manual demo,demo;manual demo\r"
+make_link "macsym;check fasl" "ellen;"
+make_link "sys3;ts macsym" "maxdmp;loser >"
+make_link "sys;ts a" "sys3; ts macsym"
+make_link "demo;manual demo" "demo;manual >"
+make_link "manual;manual demo" "demo;manual demo"
 
 ### build ctensr for macsyma
 respond "*" "macsym\013"
@@ -197,7 +197,7 @@ respond "(C2)" "compile_lisp_file(translate_file(\"tensor\\;ctensr funcs\")\[2\]
 respond "Type ALL;" "all;"
 respond "Type ALL;" "all;"
 respond "(C3)" "quit();"
-respond "*" ":link share;ctensr fasl,tensor;\r"
+make_link "share;ctensr fasl" "tensor;"
 
 ### build eigen for macsyma
 respond "*" "macsym\013"

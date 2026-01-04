@@ -24,20 +24,20 @@ midas "mudsys; ts mksvfl" "mudsys;mksvfl"
 
 # Run mksvfl to create pure library for MDL 54 for the purposes of the 500-point zork
 midas "sys3; ts mudinq" "sysen2; mudinq"
-respond "*" ":link sys3; ts purge, sys3; ts mudinq\r"
-respond "*" ":link sys3; ts makscr, sys3; ts mudinq\r"
-respond "*" ":link sys3; ts status, sys3; ts mudinq\r"
-respond "*" ":link sys3; ts whomud, sys3; ts mudinq\r"
+make_link "sys3; ts purge" " sys3; ts mudinq"
+make_link "sys3; ts makscr" " sys3; ts mudinq"
+make_link "sys3; ts status" " sys3; ts mudinq"
+make_link "sys3; ts whomud" " sys3; ts mudinq"
 
-respond "*" ":link sys3; ts mdl,mudsav; ts mud56\r"
-respond "*" ":link sys3; ts muddle,mudsav; ts mud56\r"
+make_link "sys3; ts mdl" "mudsav; ts mud56"
+make_link "sys3; ts muddle" "mudsav; ts mud56"
 
 midas "sys3; ts mudcom" "sysen3; mudcom" {
     respond "(Y OR N)" "Y\r"
 }
-respond "*" ":link sys3; ts mudchk, sys3; ts mudcom\r"
-respond "*" ":link sys3; ts mudlst, sys3; ts mudcom\r"
-respond "*" ":link sys3; ts mudfnd, sys3; ts mudcom\r"
+make_link "sys3; ts mudchk" " sys3; ts mudcom"
+make_link "sys3; ts mudlst" " sys3; ts mudcom"
+make_link "sys3; ts mudfnd" " sys3; ts mudcom"
 
 midas "sys3; ts combat" "sysen3; combat" {
     respond "(Y OR N)" "Y\r"
@@ -45,7 +45,7 @@ midas "sys3; ts combat" "sysen3; combat" {
 
 midas "sys3; ts pick" "sysen2; pick"
 
-respond "*" ":link sys1;ts mud55,mudsav;ts mud55\r"
+make_link "sys1;ts mud55" "mudsav;ts mud55"
 
 #Build Muddle PCOMP compiler.
 midas "sys1;ts pcomp" "mudsys;subsys maker" {
@@ -138,7 +138,7 @@ midas "sys;atsign batchn" "mudsys;subsys maker" {
 
 # Now build BATCH user program (interfaces with BATCHN daemon)
 
-respond "*" ":link libmud;pmap fbin,mbprog;pmap fbin\r"
+make_link "libmud;pmap fbin" "mbprog;pmap fbin"
 
 respond "*" ":ecomp\r"
 respond "T" "<SNAME \".batch\">\033"

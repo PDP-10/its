@@ -2,11 +2,11 @@ log_progress "ENTERING BUILD SCRIPT: LISP"
 
 
 # lisp
-respond "*" ":link l;fasdfs 1,lisp;.fasl defs\r"
-respond "*" ":link lisp;grind fasl,lisp;gfile fasl\r"
-respond "*" ":link lisp;grinde fasl,lisp;gfn fasl\r"
-respond "*" ":link l;loop fasl,liblsp;loop fasl\r"
-respond "*" ":link lisp;loop fasl,liblsp;loop fasl\r"
+make_link "l;fasdfs 1" "lisp;.fasl defs"
+make_link "lisp;grind fasl" "lisp;gfile fasl"
+make_link "lisp;grinde fasl" "lisp;gfn fasl"
+make_link "l;loop fasl" "liblsp;loop fasl"
+make_link "lisp;loop fasl" "liblsp;loop fasl"
 
 midas ".temp.;" "l;*lisp" {
     respond "end input with ^C" "\003"
@@ -18,26 +18,26 @@ respond "*" "purify\033g"
 respond "*" ":pdump sys;purqio 2156\r"
 respond "*" ":kill\r"
 
-respond "*" ":link sys;ts lisp,sys:purqio >\r"
-respond "*" ":link sys;ts q,sys;purqio >\r"
-respond "*" ":link sys;atsign lisp,sys;purqio >\r"
-respond "*" ":link sys;ts l,sys;ts lisp\r"
+make_link "sys;ts lisp" "sys:purqio >"
+make_link "sys;ts q" "sys;purqio >"
+make_link "sys;atsign lisp" "sys;purqio >"
+make_link "sys;ts l" "sys;ts lisp"
 
-respond "*" ":link .info.;lisp step,.info.;step info\r"
-respond "*" ":link libdoc;struct 280,alan;struct >\r"
-respond "*" ":link libdoc;struct doc,alan;struct doc\r"
-respond "*" ":link .info.;lisp struct,libdoc;struct doc\r"
-respond "*" ":link l;-read- -this-,lisp;-read- -this-\r"
+make_link ".info.;lisp step" ".info.;step info"
+make_link "libdoc;struct 280" "alan;struct >"
+make_link "libdoc;struct doc" "alan;struct doc"
+make_link ".info.;lisp struct" "libdoc;struct doc"
+make_link "l;-read- -this-" "lisp;-read- -this-"
 
 # lisp compiler
-respond "*" ":link comlap;cdmacs fasl,cd.fas >\r"
-respond "*" ":link comlap;complr fasl,comlap;cl.fas >\r"
-respond "*" ":link comlap;phas1 fasl,comlap;ph.fas >\r"
-respond "*" ":link comlap;comaux fasl,comlap;cx.fas >\r"
-respond "*" ":link comlap;faslap fasl,comlap;fl.fas >\r"
-respond "*" ":link comlap;maklap fasl,comlap;mk.fas >\r"
-respond "*" ":link comlap;initia fasl,comlap;in.fas >\r"
-respond "*" ":link comlap;srctrn fasl,comlap;st.fas >\r"
+make_link "comlap;cdmacs fasl" "cd.fas >"
+make_link "comlap;complr fasl" "comlap;cl.fas >"
+make_link "comlap;phas1 fasl" "comlap;ph.fas >"
+make_link "comlap;comaux fasl" "comlap;cx.fas >"
+make_link "comlap;faslap fasl" "comlap;fl.fas >"
+make_link "comlap;maklap fasl" "comlap;mk.fas >"
+make_link "comlap;initia fasl" "comlap;in.fas >"
+make_link "comlap;srctrn fasl" "comlap;st.fas >"
 mkdir "lspdmp"
 respond "*" "lisp\013"
 respond "Alloc?" "n\r"
@@ -45,13 +45,13 @@ respond "*" "(load \"comlap;ccload\")"
 respond ";BKPT CCLOAD:DUMPVERNO" "(setq ccload:dumpverno 1998)"
 respond "1998" "(return)"
 respond "*" ":kill\r"
-respond "*" ":link sys;ts complr,lspdmp;cl.dmp >\r"
-respond "*" ":link sys;ts cl,sys;ts complr\r"
-respond "*" ":link info;complr 1,info;lispc >\r"
+make_link "sys;ts complr" "lspdmp;cl.dmp >"
+make_link "sys;ts cl" "sys;ts complr"
+make_link "info;complr 1" "info;lispc >"
 
 # lisp;* fasl that that have autoload properties in interpreter
-respond "*" ":link sys;.fasl defs,lisp;.fasl defs\r"
-respond "*" ":link sys;fasdfs 1,lisp;.fasl defs\r"
+make_link "sys;.fasl defs" "lisp;.fasl defs"
+make_link "sys;fasdfs 1" "lisp;.fasl defs"
 midas "lisp;" "l;allfil"
 midas "lisp;" "l;bltarr"
 midas "lisp;" "lspsrc;edit"
@@ -59,7 +59,7 @@ midas "lisp;" "l;getmid"
 midas "lisp;" "l;humble"
 midas "lisp;" "lspsrc;sort"
 
-respond "*" ":link lisp;subloa lsp,nilcom;subloa >\r"
+make_link "lisp;subloa lsp" "nilcom;subloa >"
 
 complr {"liblsp;_libdoc;loop"}
 
@@ -78,9 +78,9 @@ complr {"lisp;_lspsrc;extmac" "lisp;_lspsrc;extbas" "lisp;_lspsrc;extsfa"
         "lisp;_lspsrc;grinde" "lisp;_lspsrc;lap" "lisp;_comlap;ledit"
         "lisp;_nilcom;let"}
 
-respond "*" ":link l;humble fasl,lisp;\r"
-respond "*" ":link l;ledit* fasl,lisp;\r"
-respond "*" ":link l;let fasl,lisp;\r"
+make_link "l;humble fasl" "lisp;"
+make_link "l;ledit* fasl" "lisp;"
+make_link "l;let fasl" "lisp;"
 
 complr {"lisp;_nilcom;macaid"}
 complr {"lisp;_lspsrc;mlmac" "lisp;_lspsrc;mlsub"}
@@ -101,25 +101,25 @@ complr_load {"((lisp) extend)"} {"lisp;_lspsrc;extstr"}
 midas "inquir;" "lsrrtn"
 midas "inquir;" "cstacy;netrtn"
 
-respond "*" ":link liblsp;debug fasl,liblsp;dbg fasl\r"
-respond "*" ":link lisp;debug fasl,liblsp;debug fasl\r"
+make_link "liblsp;debug fasl" "liblsp;dbg fasl"
+make_link "lisp;debug fasl" "liblsp;debug fasl"
 
 complr {"liblsp;_libdoc;tty" "inquir;reader" "inquir;fake-s"
         "rwk;debmac" "liblsp;_libdoc;lispm" "inquir;inquir"}
 
 midas "inquir;ts inqexm" "inqexm"
 midas "inquir;ts inqrep" "inqrep"
-respond "*" ":link inquir;ts inqchk,ts inquir\r"
+make_link "inquir;ts inqchk" "ts inquir"
 
 complr {"liblsp;_libdoc;dbg ejs2" "liblsp;_libdoc;comrd kmp1"}
 
 respond "*" ":lisp inquir;inquir (dump)\r"
-respond "*" ":link inquir;ts inquir,inquir;inqbin >\r"
-respond "*" ":link sys;ts inquir,inquir;ts inquir\r"
+make_link "inquir;ts inquir" "inquir;inqbin >"
+make_link "sys;ts inquir" "inquir;ts inquir"
 
-respond "*" ":link inquir;ts inqcpy,inqupd bin\r"
-respond "*" ":link inquir;ts inqpat,inqupd bin\r"
-respond "*" ":link inquir;ts lsrini,inqupd bin\r"
+make_link "inquir;ts inqcpy" "inqupd bin"
+make_link "inquir;ts inqpat" "inqupd bin"
+make_link "inquir;ts lsrini" "inqupd bin"
 
 # od
 complr {"liblsp;_libdoc; od"}
@@ -129,17 +129,17 @@ expect ":KILL"
 # comred
 complr {"liblsp;_libdoc; comred"}
 
-respond "*" ":link inquir;lsrtns 1,syseng;lsrtns >\r"
+make_link "inquir;lsrtns 1" "syseng;lsrtns >"
 
 midas "inquir;ts lookup" "inquir;lookup"
-respond "*" ":link sys1;ts lookup,inquir;ts lookup\r"
+make_link "sys1;ts lookup" "inquir;ts lookup"
 
 midas "sys3;ts lsrprt" "sysen1; lsrprt"
 
 midas "sys3;ts lsrdmp" "bawden; lsrdmp"
 
 # more lisp packages
-respond "*" ":link lisp;tty fasl,liblsp;tty fasl\r"
+make_link "lisp;tty fasl" "liblsp;tty fasl"
 complr_load {"((lisp) subloa lsp)"} \
     {"lisp;_lspsrc;funcel" "lisp;_lspsrc;reap"
      "lisp;_lspsrc;lexprf" "lisp;_lspsrc;ldbhlp"}
@@ -155,8 +155,8 @@ complr_load {"((lisp) subloa lsp)"} {"lisp;_lspsrc;nilaid"}
 
 complr {"liblsp;_libdoc;sharab" "liblsp;_libdoc;bs"}
 
-respond "*" ":link lisp;sharab fasl,liblsp;\r"
-respond "*" ":link lisp;bs fasl,liblsp;\r"
+make_link "lisp;sharab fasl" "liblsp;"
+make_link "lisp;bs fasl" "liblsp;"
 
 complr_load {"((lisp) subloa lsp)"} {"lisp;_nilcom;thread"}
 
@@ -165,15 +165,15 @@ midas "lisp;" "l;purep"
 
 # struct
 
-respond "*" ":link alan;dprint fasl,liblsp;dprint fasl\r"
-respond "*" ":link alan;struct 9,alan;nstruc 280\r"
+make_link "alan;dprint fasl" "liblsp;dprint fasl"
+make_link "alan;struct 9" "alan;nstruc 280"
 respond "*" ":copy liblsp;struct fasl,alan;struct boot\r"
-respond "*" ":link alan;struct fasl,liblsp;struct fasl\r"
+make_link "alan;struct fasl" "liblsp;struct fasl"
 
 complr {"alan;lspcom" "alan;lspenv" "alan;lspint" "alan;setf"
         "alan;binda" "alan;crawl" "alan;nstruc 280"}
 respond "*" ":copy alan;nstruc fasl,liblsp;struct fasl\r"
-respond "*" ":link lisp;struct fasl,liblsp;struct fasl\r"
+make_link "lisp;struct fasl" "liblsp;struct fasl"
 
 midas "liblsp;" "alan;macits"
 
@@ -200,7 +200,7 @@ complr {"liblsp;_libdoc;iota" "liblsp;_libdoc;time" "liblsp;_libdoc;letfex"
         "liblsp;_libdoc;break" "liblsp;_libdoc;smurf" "liblsp;_rlb%;fasdmp"
         "liblsp;_libdoc;lispt"}
 
-respond "*" ":link liblsp;gcdemn fasl,lisp;\r"
+make_link "liblsp;gcdemn fasl" "lisp;"
 
 ### more lisplib stuff
 complr {"liblsp;_libdoc;%print" "liblsp;_libdoc;6bit" "liblsp;_libdoc;apropo"
@@ -221,7 +221,7 @@ complr {"liblsp;_libdoc;for" "lisp;_lspsrc;gcdemn" "liblsp;_libdoc;genfns"
         "liblsp;_libdoc;laugh" "liblsp;_libdoc;lets" "liblsp;_libdoc;linere"}
 
 respond "*" ":delete libdoc;gcdemn 999999\r"
-respond "*" ":link libdoc;gcdemn 999999,lspsrc;gcdemn >\r"
+make_link "libdoc;gcdemn 999999" "lspsrc;gcdemn >"
 
 complr {"liblsp;_libdoc;loop" "liblsp;_libdoc;more" "liblsp;_libdoc;nshare"
         "liblsp;_libdoc;octal" "liblsp;_libdoc;optdef" "liblsp;_libdoc;phsprt"
@@ -236,13 +236,13 @@ complr {"liblsp;_libdoc;share" "liblsp;_libdoc;sixbit" "liblsp;_libdoc;split"
         "liblsp;_libdoc;trap" "liblsp;_libdoc;ttyhak" "liblsp;_libdoc;wifs"
         "liblsp;_libdoc;window"}
 
-respond "*" ":link liblsp;defvst fasl,lisp;\r"
-respond "*" ":link liblsp;format fasl,liblsp;fforma fasl\r"
-respond "*" ":link libdoc;lispt info,info;lispt >\r"
-respond "*" ":link liblsp;sharpm fasl,lisp;\r"
+make_link "liblsp;defvst fasl" "lisp;"
+make_link "liblsp;format fasl" "liblsp;fforma fasl"
+make_link "libdoc;lispt info" "info;lispt >"
+make_link "liblsp;sharpm fasl" "lisp;"
 respond "*" ":copy nilcom;sharpm >,libdoc;sharpm nil\r"
-respond "*" ":link libdoc;step info,.info.;\r"
-respond "*" ":link libdoc;stepmm info,.info.;lisp stepmm\r"
+make_link "libdoc;step info" ".info.;"
+make_link "libdoc;stepmm info" ".info.;lisp stepmm"
 respond "*" ":copy nilcom;string >,libdoc;string nil\r"
 
 # can't build any more LIBLSP FASLs because directory is full
@@ -278,7 +278,7 @@ midas "liblsp;" "libdoc;link"
 midas "liblsp;" "libdoc;lscall"
 midas "liblsp;" "libdoc;cpyhnk"
 
-respond "*" ":link lisp;defns mid,l;defns >\r"
+make_link "lisp;defns mid" "l;defns >"
 midas "liblsp;" "libdoc;fft"
 midas "liblsp;" "libdoc;phase"
 
@@ -291,9 +291,9 @@ complr {"liblsp;_libdoc;stacks"}
 midas "liblsp;" "libdoc;dirsiz"
 midas "liblsp;" "z;timer"
 
-respond "*" ":link lisp;vsaid lisp,nilcom;vsaid >\r"
+make_link "lisp;vsaid lisp" "nilcom;vsaid >"
 complr {"lisp;_nilcom;vsaid"}
-respond "*" ":link liblsp;vsaid fasl,lisp;\r"
+make_link "liblsp;vsaid fasl" "lisp;"
 
 # cleanup unfasl files in lisp;
 respond "*" ":dired lisp;\r"
@@ -312,9 +312,9 @@ midas "liblsp;" "libdoc;bssq"
 complr {"liblsp;_libdoc;lddt"}
 complr {"liblsp;_libdoc;ndone"}
 
-respond "*" ":link graphs;graph3 fasl,liblsp\r"
-respond "*" ":link graphs;plot3 fasl,liblsp\r"
-respond "*" ":link graphs;plot fasl,liblsp\r"
+make_link "graphs;graph3 fasl" "liblsp"
+make_link "graphs;plot3 fasl" "liblsp"
+make_link "graphs;plot fasl" "liblsp"
 complr {"liblsp;_libdoc;plot" "liblsp;_libdoc;plot3"}
 
 complr {"liblsp;_libdoc;prime"}
@@ -343,8 +343,8 @@ midas "lisp;" "lspsrc;straux"
 # lispt source is in libdoc, therefore fasl should be in liblsp
 # version in lisp; should be a link to liblsp;lispf fasl
 respond "*" ":delete lisp;lispt fasl\r"
-respond "*" ":link lisp;lispt fasl,liblsp;\r"
-respond "*" ":link sys2;ts lispt,sys2;ts edit\r"
+make_link "lisp;lispt fasl" "liblsp;"
+make_link "sys2;ts lispt" "sys2;ts edit"
 
 # Lisp display library
 midas "lisp; slave fasl" "l; slave"
@@ -391,12 +391,12 @@ respond "*" ":lisp gjd; sine lisp\r"
 expect ":KILL"
 
 # Kermit
-respond "*" ":link math;defset fasl,lisp;\r"
+make_link "math;defset fasl" "lisp;"
 complr {"math;common" "math;kermit"}
 respond "*" ":lisp math; kermit dumper\r"
 respond "to dump.|" "(kermit-dump)"
 expect ":KILL"
-respond "*" ":link sys3;ts kermit,math;\r"
+make_link "sys3;ts kermit" "math;"
 
 # SUPDUP ARDS
 complr {"dcp;sgincl" "dcp;supard"}
@@ -453,7 +453,7 @@ respond "?" "Y\r"
 respond "?" "LLOGO\r"
 respond "?" "1700\r"
 expect ":KILL"
-respond "*" ":link sys1; ts llogo, llogo; ts llogo\r"
+make_link "sys1; ts llogo" " llogo; ts llogo"
 
 # 2500 assembler
 complr_load {"ioc"} {"2500;zap"}
@@ -511,4 +511,4 @@ expect -re {[\r\n][\r\n]T ?[\r\n][\r\n]}
 type "(quit)"
 expect ":KILL"
 # Make a link for the CP/M archive users.
-respond "*" ":link cpm; ts lmodem, eb;\r"
+make_link "cpm; ts lmodem" " eb;"

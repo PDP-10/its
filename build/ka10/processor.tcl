@@ -17,13 +17,13 @@ omidas "dsk0:.;@ mark" "syseng; mark"
 midas "sys3; ts utnam" "lars; utnam"
 
 # Name Dragon
-respond "*" ":link syseng;tvkbd rooms, sysen2;\r"
+make_link "syseng;tvkbd rooms" "sysen2;"
 midas "sysbin;" "sysen2;namdrg"
-respond "*" ":link channa;rakash namdrg, sysbin; namdrg bin\r"
+make_link "channa;rakash namdrg" "sysbin; namdrg bin"
 
 # STUFF
 midas "sys1;ts stuff" "sysen2;stuff"
-respond "*" ":link channa;rakash tvfix, sys1; ts stuff\r"
+make_link "channa;rakash tvfix" "sys1; ts stuff"
 
 # IOELEV, PDP-11 doing I/O for the PDP-10 host.
 # The "AI" IOELEV, also known as CHAOS-11.
@@ -144,7 +144,7 @@ midas "dsk0:.;@ 3406" "stan.k; 3406"
 
 # 340D
 midas "stan.k;mod11 bin" "340d"
-respond "*" ":link sys1;ts 340d, stan.k; mod11 bin\r"
+make_link "sys1;ts 340d" "stan.k; mod11 bin"
 
 # Munching squares for 340 display.
 midas "lars; ts munch" "munch"
@@ -154,11 +154,11 @@ midast "dsk0: .; @ munch" "lars; munch" {
 
 # Minskytron, translated from PDP-1.
 midas "dsk0: lars; ts minsky" "minsky tron"
-respond "*" ":link dsk0: .; @ minsky, lars; ts minsky\r"
+make_link "dsk0: .; @ minsky" "lars; ts minsky"
 
 # Edward Lorenz' strange attactor.
 midas "dsk0: lars; ts lorenz" "lorenz"
-respond "*" ":link dsk0: .; @ lorenz, lars; ts lorenz\r"
+make_link "dsk0: .; @ lorenz" "lars; ts lorenz"
 
 # Mandelbrot.
 midas "lars; ts tvbrot" "tvbrot"

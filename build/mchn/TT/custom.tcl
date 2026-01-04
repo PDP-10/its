@@ -7,7 +7,7 @@ midas "/t device;chaos shutdo" "sysnet;shutsr" {
 respond "*" ":delete sys;atsign gunner\r"
 
 #Gun down users that are idle and not logged in.
-respond "*" ":link dragon; hourly gunner, cstacy; gunner bin\r"
+make_link "dragon; hourly gunner" "cstacy; gunner bin"
 
 #Run a weekly unattended incremental dump.
 midas "dragon; weekly backup" "lars; backup" {

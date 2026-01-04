@@ -11,9 +11,9 @@ respond "==>" "(quit)"
 # New Scheme interpreter
 complr {"quux;_schint lsp" "quux;_schmac lsp" "quux;_schuuo lsp"}
 
-respond "*" ":link quux;scheme interp, schint fasl\r"
-respond "*" ":link quux;scheme macros, schmac fasl\r"
-respond "*" ":link quux;scheme uuohan, schuuo fasl\r"
+make_link "quux;scheme interp" " schint fasl"
+make_link "quux;scheme macros" " schmac fasl"
+make_link "quux;scheme uuohan" " schuuo fasl"
 respond "*" ":lisp quux;scheme (dump)\r"
 
 # Fails the build, disabled for now.

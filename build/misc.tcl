@@ -45,11 +45,11 @@ respond "PURIFIED" "\r"
 respond "*" ":pdump .teco.; ts 335\r"
 respond "*" ":kill\r"
 
-respond "*" ":link teach;teach emacs,emacs;teach emacs\r"
+make_link "teach;teach emacs" "emacs;teach emacs"
 respond "*" "teach\033\023"
 respond "*" ":emacs\r"
 expect ":KILL"
-respond "*" ":link sys2;ts teachemacs,emacs;tstch >\r"
+make_link "sys2;ts teachemacs" "emacs;tstch >"
 
 # nsalv, timesharing version
 midas "sys1;ts nsalv" "kshack;nsalv" {
@@ -64,25 +64,25 @@ midas "sys1;ts salv" "system;salv" {
 midas "sys3;ts syslod" "sysen1;syslod"
 
 midas "sys3;ts vv" "sysen2;vv"
-respond "*" ":link sys3;ts vj,sys3;ts vv\r"
-respond "*" ":link sys3;ts detree,sys3;ts vv\r"
+make_link "sys3;ts vj" "sys3;ts vv"
+make_link "sys3;ts detree" "sys3;ts vv"
 
 midas "sys3;ts trees" "sysen1; trees"
 
 midas "sys2;ts syschk" "sysen2;syschk"
 
 midas "sysbin;" "sysen3;whoj"
-respond "*" ":link sys1;ts talk,sysbin;whoj bin\r"
-respond "*" ":link sys1;ts who,sysbin;whoj bin\r"
-respond "*" ":link sys1;ts whoj,sysbin;whoj bin\r"
-respond "*" ":link sys1;ts whom,sysbin;whoj bin\r"
-respond "*" ":link sys2;ts users,sysbin;whoj bin\r"
-respond "*" ":link sys1;ts w,sys1;ts who\r"
-respond "*" ":link sys2;ts u,sys2;ts users\r"
+make_link "sys1;ts talk" "sysbin;whoj bin"
+make_link "sys1;ts who" "sysbin;whoj bin"
+make_link "sys1;ts whoj" "sysbin;whoj bin"
+make_link "sys1;ts whom" "sysbin;whoj bin"
+make_link "sys2;ts users" "sysbin;whoj bin"
+make_link "sys1;ts w" "sys1;ts who"
+make_link "sys2;ts u" "sys2;ts users"
 
 #Inter-Entity Communication
 midas "sysbin;" "sysen2; iec"
-respond "*" ":link sys; atsign iec, sysbin; iec bin\r"
+make_link "sys; atsign iec" " sysbin; iec bin"
 arpanet "rfc113" "sys; atsign iec"
 
 midas "sys2;ts untalk" "gren;untalk"
@@ -94,10 +94,10 @@ midas "sys3;ts ddtdoc" "syseng;ddtdoc"
 midas "sys1;ts nwatch" "sysen1;nwatch"
 
 midas "sys1;ts crock" "sysen1;crock" { respond "System?" "ITS\r" }
-respond "*" ":link sys2;ts c,sys1;ts crock\r"
+make_link "sys2;ts c" "sys1;ts crock"
 
 midas "sys1;ts dcrock" "sysen1;dcrock" { respond "System?" "ITS\r" }
-respond "*" ":link sys2;ts dc,sys1;ts dcrock\r"
+make_link "sys2;ts dc" "sys1;ts dcrock"
 
 # Not Zork
 midas "sys3;ts zork" "sysen3;zork"
@@ -118,34 +118,34 @@ respond "*" ":kill\r"
 
 # Mini Chaosnet file server.  Version 24 is MINI.
 midas "sysbin; mini" "lmio; minisr 24"
-respond "*" ":link device; chaos mini, sysbin; mini bin\r"
+make_link "device; chaos mini" " sysbin; mini bin"
 
 # Mini Chaosnet file server.  This is the 36-bit version.
 midas "kshack;" "mini36"
-respond "*" ":link device; chaos mini36, kshack; mini36 bin\r"
+make_link "device; chaos mini36" " kshack; mini36 bin"
 
 midas "sysbin;" "sysnet;echo"
-respond "*" ":link device; chaos echo, sysbin; echo bin\r"
+make_link "device; chaos echo" " sysbin; echo bin"
 
 midas "alan;ts gensym" "alan;gensym"
-respond "*" ":link device; chaos gensym, alan; ts gensym\r"
+make_link "device; chaos gensym" " alan; ts gensym"
 
 midas "device;chaos load" "alan;load"
 
 # Mini Chaosnet file server.  Version 5 is MINIC.
 midas "sysbin; minic bin" "syseng; minisr 5"
-respond "*" ":link device; chaos minic, sysbin; minic bin\r"
+make_link "device; chaos minic" " sysbin; minic bin"
 
 midas "sysbin;" "lmio1; door"
-respond "*" ":link device; chaos door, sysbin; door bin\r"
+make_link "device; chaos door" " sysbin; door bin"
 
 midas "sys3; ts esce" "sysen1; esce"
 
 midas "sysbin;chtn" "sysnet;chtn"
-respond "*" ":link sys2;ts chtn,sysbin;chtn bin\r"
+make_link "sys2;ts chtn" "sysbin;chtn bin"
 
 midas "sys;ts ttloc" "sysen1;ttloc"
-respond "*" ":link sys2;ts styloc,sys;ts ttloc\r"
+make_link "sys2;ts styloc" "sys;ts ttloc"
 
 midas "device;jobdev dp" "sysen3;dpdev"
 
@@ -156,13 +156,13 @@ midas "sys1;ts quote" "sysen1;limeri" {
 midas "sys2;ts limeri" "sysen1;limeri" {
     respond "Use what filename instead?" "eak; lims >\r"
 }
-respond "*" ":link sys2;ts limmer,sys2;ts limeri\r"
+make_link "sys2;ts limmer" "sys2;ts limeri"
 
 midas "sysbin;" "eak;limser"
-respond "*" ":link device;chaos limeri,sysbin;limser bin\r"
+make_link "device;chaos limeri" "sysbin;limser bin"
 
 midas "sys;ts srccom" "sysen2;srccom"
-respond "*" ":link sys2;ts =,sys;ts srccom\r"
+make_link "sys2;ts =" "sys;ts srccom"
 
 midas ".mail.;comsat" "sysnet;comsat" comsat_switches
 
@@ -178,17 +178,17 @@ respond "*" ":kill\r"
 
 initialize_comsat
 
-respond "*" ":link emacs;rmail \021:ej,emacs;\[rmai\] >\r"
+make_link "emacs;rmail \021:ej" "emacs;\[rmai\] >"
 
 midas "sys1;ts rmail" "emacs1;rmaill"
 
-respond "*" ":link channa;rakash cnavrl,.mail.;comsat launch\r"
-respond "*" ":link channa;ts cnavrl,channa;rakash cnavrl\r"
-respond "*" ":link dragon;hourly cnavrl,.mail.;comsat launch\r"
+make_link "channa;rakash cnavrl" ".mail.;comsat launch"
+make_link "channa;ts cnavrl" "channa;rakash cnavrl"
+make_link "dragon;hourly cnavrl" ".mail.;comsat launch"
 
 midas "sysbin;" "sra; gcmail"
-respond "*" ":link dragon; hourly gcmail,sysbin; gcmail bin\r"
-respond "*" ":link dragon; hourly gcbulk,sysbin; gcmail bin\r"
+make_link "dragon; hourly gcmail" "sysbin; gcmail bin"
+make_link "dragon; hourly gcbulk" "sysbin; gcmail bin"
 
 midas "sysbin;qmail" "ksc;qmail" { respond "PWORD version (Y or N)? " "N\r" }
 respond "*" ":job qmail\r"
@@ -197,21 +197,21 @@ respond "*" "purify\033g"
 respond "QMAIL BIN" "\r"
 respond "*" ":kill\r"
 
-respond "*" ":link sys;ts mail,sysbin;qmail bin\r"
-respond "*" ":link sys;ts qmail,sysbin;qmail bin\r"
-respond "*" ":link sys;ts qsend,sysbin;qmail bin\r"
-respond "*" ":link sys1;ts bug,sysbin;qmail bin\r"
-respond "*" ":link sys;ts m,sys;ts mail\r"
-respond "*" ":link sys2;ts featur,sys;ts qmail\r"
-respond "*" ":link .info.;mail info,.info.;qmail info\r"
+make_link "sys;ts mail" "sysbin;qmail bin"
+make_link "sys;ts qmail" "sysbin;qmail bin"
+make_link "sys;ts qsend" "sysbin;qmail bin"
+make_link "sys1;ts bug" "sysbin;qmail bin"
+make_link "sys;ts m" "sys;ts mail"
+make_link "sys2;ts featur" "sys;ts qmail"
+make_link ".info.;mail info" ".info.;qmail info"
 
 # Chaosnet MAILServer
 midas "sysbin;" "sysnet;mails"
-respond "*" ":link device; chaos mail, sysbin; mails bin\r"
+make_link "device; chaos mail" " sysbin; mails bin"
 
 # DIGEST
 midas "digest; ts digest" "digest"
-respond "*" ":link dragon; hourly digest, digest; ts digest\r"
+make_link "dragon; hourly digest" " digest; ts digest"
 
 # MBXLOC
 midas "digest; ts mbxloc" "mbxloc"
@@ -254,18 +254,18 @@ midas "sys3;ts bitprt" "sysen2;bitprt"
 
 # bday
 midas "sysbin;" "sysen1;bday"
-respond "*" ":link dragon;daily bday,sysbin;bday bin\r"
+make_link "dragon;daily bday" "sysbin;bday bin"
 
 # sender
 midas "sysbin;sender" "sysen1;sender"
-respond "*" ":link sys;ts freply,sysbin;sender bin\r"
-respond "*" ":link sys;ts send,sysbin;sender bin\r"
-respond "*" ":link sys2;ts fr,sysbin;sender bin\r"
-respond "*" ":link sys2;ts reply,sysbin;sender bin\r"
-respond "*" ":link sys3;ts fs,sysbin;sender bin\r"
-respond "*" ":link sys1;ts s,sys;ts send\r"
-respond "*" ":link sys3;ts snd,sys;ts send\r"
-respond "*" ":link sys3;ts sned,sys;ts send\r"
+make_link "sys;ts freply" "sysbin;sender bin"
+make_link "sys;ts send" "sysbin;sender bin"
+make_link "sys2;ts fr" "sysbin;sender bin"
+make_link "sys2;ts reply" "sysbin;sender bin"
+make_link "sys3;ts fs" "sysbin;sender bin"
+make_link "sys1;ts s" "sys;ts send"
+make_link "sys3;ts snd" "sys;ts send"
+make_link "sys3;ts sned" "sys;ts send"
 
 # psend
 midas "sys3;ts psend" "sysen2;b"
@@ -287,8 +287,8 @@ midas "sys1;ts reatta" "sysen2;reatta"
 
 # print
 midas "sys;ts print" "sysen2;print"
-respond "*" ":link sys;ts copy,sys;ts print\r"
-respond "*" ":link sys;ts listf,sys;ts print\r"
+make_link "sys;ts copy" "sys;ts print"
+make_link "sys;ts listf" "sys;ts print"
 
 # fdir 
 midas "sys2;ts fdir" "syseng;fdir"
@@ -311,8 +311,8 @@ midas "sys1;ts sysmsg" "sysen1;sysmsg"
 
 # meter
 midas "sys1;ts meter" "syseng;meter"
-respond "*" ":link sys1; ts smeter, sys1; ts meter\r"
-respond "*" ":link sys1; ts meterd, sys1; ts meter\r"
+make_link "sys1; ts smeter" " sys1; ts meter"
+make_link "sys1; ts meterd" " sys1; ts meter"
 
 # cross
 # This is not the microcomputer cross assembler.
@@ -338,23 +338,23 @@ midas "sys;ts acount" "sysen3;acount"
 
 # idents
 midas "sysbin;" "sysnet;idents"
-respond "*" ":link device;tcp syn161,sysbin;idents bin\r"
+make_link "device;tcp syn161" "sysbin;idents bin"
 
 # timsrv
 midas "sysbin;timsrv bin" "sysnet;timsrv"
-respond "*" ":link device;tcp syn045,sysbin;timsrv bin\r"
+make_link "device;tcp syn045" "sysbin;timsrv bin"
 arpanet "rfc045" "sysbin;timsrv bin"
 
 # datsrv
 midas "sysbin;" "sysnet;datsrv"
-respond "*" ":link device;tcp syn015,sysbin;datsrv bin\r"
+make_link "device;tcp syn015" "sysbin;datsrv bin"
 
 # WEBSER
 respond "*" ":xfile sysnet;make webser\r"
 expect -timeout 300 "*:kill"
 
 # mailt
-respond "*" ":link sys;ts mailt,sys2;ts emacs\r"
+make_link "sys;ts mailt" "sys2;ts emacs"
 
 # rmtdev
 midas "device;atsign rmtdev" "gz;rmtdev"
@@ -465,8 +465,8 @@ midas "games;ts game" "ejs;ngame" {
     respond "Adventure (2): " "ts,adv448,games\r"
     respond "Adventure (1.5): " "ts,adv350,games\r"
 }
-respond "*" ":link sys3;ts game,games;ts game\r"
-respond "*" ":link info;o.info,_info_;\r"
+make_link "sys3;ts game" "games;ts game"
+make_link "info;o.info" "_info_;"
 
 # guess
 midas "games;ts guess" "games;guess"
@@ -476,7 +476,7 @@ midas "sys3;ts ten50" "mrc; ten50"
 
 # who%
 midas "sys1;ts who%" "sysen3;who%"
-respond "*" ":link sys1;ts %,sys1;ts who%\r"
+make_link "sys1;ts %" "sys1;ts who%"
 
 # MACRO-10
 cwd "decsys"
@@ -536,11 +536,11 @@ midas "sys3;ts lotcln" "sysen1; lotcln"
 
 # itsdev
 midas "device;chaos itsdev" "bawden;itsdev"
-respond "*" ":link device; tcp syn723, device; chaos itsdev\r"
+make_link "device; tcp syn723" " device; chaos itsdev"
 
 # charfc/charfs
 midas "sys1;ts charfc" "sysen3;charfc"
-respond "*" ":link sys1;ts charfs,sys1;ts charfc\r"
+make_link "sys1;ts charfs" "sys1;ts charfc"
 
 # file
 midas "sysbin;" "syseng;file"
@@ -552,7 +552,7 @@ respond "*" ":kill\r"
 
 # filei, fileo
 midas "device;chaos filei" "eak;file"
-respond "*" ":link device;chaos fileo,device;chaos filei\r"
+make_link "device;chaos fileo" "device;chaos filei"
 
 # ifile
 midas "device;chaos ifile" "syseng;ifile"
@@ -574,23 +574,23 @@ midast "sys1;ts pdp11" "syseng;11sim" {
 
 # times
 midas "sysbin;times bin" "sysnet;times"
-respond "*" ":link sys1;ts ctimes,sysbin;times bin\r"
-respond "*" ":link sys1;ts times,sysbin;times bin\r"
+make_link "sys1;ts ctimes" "sysbin;times bin"
+make_link "sys1;ts times" "sysbin;times bin"
 
 # idle
 midas "sys1;ts idle" "gren;idle"
 
 # spell
 midas "sys1;ts spell" "syseng;spell"
-respond "*" ":link sys1;ts espell,sys1;ts spell\r"
+make_link "sys1;ts espell" "sys1;ts spell"
 
 # jobs
 midas "sys2;ts jobs" "sysen1;jobs"
 
 # hsndev
 midas "device;jobdev hsname" "sysen1;hsndev"
-respond "*" ":link device;jobdev hs,device;jobdev hsname\r"
-respond "*" ":link device;jobdev hf,device;jobdev hsname\r"
+make_link "device;jobdev hs" "device;jobdev hsname"
+make_link "device;jobdev hf" "device;jobdev hsname"
 
 # gunner
 midas "device; jobdev shoe" "rwk; gunner"
@@ -602,21 +602,21 @@ midas "cstacy;" "gunner"
 
 # pr
 midas "sys1;ts pr" "sysen1;pr"
-respond "*" ":link sys1;ts call,sys1;ts pr\r"
-respond "*" ":link sys1;ts .call,sys1;ts pr\r"
-respond "*" ":link sys1;ts uuo,sys1;ts pr\r"
-respond "*" ":link sys1;ts uset,sys1;ts pr\r"
-respond "*" ":link sys1;ts suset,sys1;ts pr\r"
-respond "*" ":link sys1;ts doc,sys1;ts pr\r"
-respond "*" ":link sys1;ts intrup,sys1;ts pr\r"
-respond "*" ":link sys1;ts ttyvar,sys1;ts pr\r"
-respond "*" ":link sys1;ts prim,sys1;ts pr\r"
+make_link "sys1;ts call" "sys1;ts pr"
+make_link "sys1;ts .call" "sys1;ts pr"
+make_link "sys1;ts uuo" "sys1;ts pr"
+make_link "sys1;ts uset" "sys1;ts pr"
+make_link "sys1;ts suset" "sys1;ts pr"
+make_link "sys1;ts doc" "sys1;ts pr"
+make_link "sys1;ts intrup" "sys1;ts pr"
+make_link "sys1;ts ttyvar" "sys1;ts pr"
+make_link "sys1;ts prim" "sys1;ts pr"
 
-respond "*" ":link .info.;its .calls,sysdoc;.calls >\r"
-respond "*" ":link .info.;its uuos,sysdoc;uuos >\r"
-respond "*" ":link .info.;its usets,sysdoc;usets >\r"
-respond "*" ":link .info.;its %pi,sysdoc;%pi >\r"
-respond "*" ":link .info.;its ttyvar,sysdoc;ttyvar >\r"
+make_link ".info.;its .calls" "sysdoc;.calls >"
+make_link ".info.;its uuos" "sysdoc;uuos >"
+make_link ".info.;its usets" "sysdoc;usets >"
+make_link ".info.;its %pi" "sysdoc;%pi >"
+make_link ".info.;its ttyvar" "sysdoc;ttyvar >"
 
 # inline
 midas "sys2;ts inline" "sysen1;inline"
@@ -644,11 +644,11 @@ midas "sys3;ts fretty" "sysen2;fretty"
 
 # bye
 midas "sys1;ts bye" "sysen1;bye"
-respond "*" ":link device;chaos bye,sys1;ts bye\r"
+make_link "device;chaos bye" "sys1;ts bye"
 
 # yow server
 midas "sys3;ts yow" "maeda; yow"
-respond "*" ":link device;chaos yow, sys3; ts yow\r"
+make_link "device;chaos yow" " sys3; ts yow"
 
 # yow client
 midas "sysnet;ts yow" "sysen2; yow"
@@ -677,7 +677,7 @@ midas "sys1;ts sty" "sysen2;sty"
 
 # luser
 midas "sysbin;luser bin" "syseng;luser"
-respond "*" ":link sys1;ts luser,sysbin;luser bin\r"
+make_link "sys1;ts luser" "sysbin;luser bin"
 
 # ARCCPY
 midas "sys2;ts arccpy" "sysen2;arccpy"
@@ -692,7 +692,7 @@ midas "sys2;ts hostab" "sysen1;hostab"
 midas "sys2;ts hostat" "sysen2;hostat"
 
 # PROBE
-respond "*" ":link syseng;its defs,sys;itsdfs >\r"
+make_link "syseng;its defs" "sys;itsdfs >"
 midas "sysbin;probe bin" "bawden;probe"
 # note: setting debug to 0 and running causes it to pdump itself to
 #  sys;ts probe
@@ -700,14 +700,14 @@ respond "*" ":job probe\r"
 respond "*" ":load sysbin;probe bin\r"
 respond "*" "debug/0\r"
 type "\033g"
-respond "*" ":link sys;ts pb,sys;ts probe\r"
+make_link "sys;ts pb" "sys;ts probe"
 
 # TTY
 midas "sys1;ts tty" "sysen1;tty"
 
 # TTYLINK, just a stub.
 midas "sysbin;ttylin bin" "bawden; u"
-respond "*" ":link device; chaos ttylin, sysbin; ttylin bin\r"
+make_link "device; chaos ttylin" " sysbin; ttylin bin"
 
 # IPLJOB
 midas "sys;atsign ipl" "sysen2; ipljob"
@@ -717,14 +717,14 @@ midas "device;atsign r.i.p." "sysen2;ripdev"
 
 # GMSGS
 midas "sys2;ts gmsgs" "sysen1;gmsgs"
-respond "*" ":link sys2;ts expire, sys2;ts gmsgs\r"
-respond "*" ":link dragon;daily expire,sys2;ts gmsgs\r"
-respond "*" ":link device;chaos gmsgs,sys2;ts gmsgs\r"
+make_link "sys2;ts expire" " sys2;ts gmsgs"
+make_link "dragon;daily expire" "sys2;ts gmsgs"
+make_link "device;chaos gmsgs" "sys2;ts gmsgs"
 
 # X, Y, Z
 midas "sys1;ts x" "sysen2;x"
-respond "*" ":link sys1;ts y,sys1;ts x\r"
-respond "*" ":link sys1;ts z,sys1;ts x\r"
+make_link "sys1;ts y" "sys1;ts x"
+make_link "sys1;ts z" "sys1;ts x"
 
 # LOADP
 midas "sys2;ts loadp" "sysen1;loadp"
@@ -755,7 +755,7 @@ midas "sys3;ts crc" "gren; crc"
 
 # TMPKIL
 midas "sys2;ts tmpkil" "syseng;tmpkil"
-respond "*" ":link dragon;hourly tmpkil,sys2;ts tmpkil\r"
+make_link "dragon;hourly tmpkil" "sys2;ts tmpkil"
 
 # WHAT
 midas "sys2;ts what" "syseng;what"
@@ -772,11 +772,11 @@ expect ":KILL"
 
 # UP
 midas "sys1;ts up" "sysen1;up"
-respond "*" ":link sys1;ts down, sys1;ts up\r"
+make_link "sys1;ts down" " sys1;ts up"
 
 # UPTIME
 midas "sysbin;uptime bin" "sysen1;uptime"
-respond "*" ":link device;chaos uptime,sysbin;uptime bin\r"
+make_link "device;chaos uptime" "sysbin;uptime bin"
 
 # SHUTDN
 midas "sys3;ts shutdn" "bawden;shutdn"
@@ -792,7 +792,7 @@ midas "sys;ts type8" "sysen3;type8"
 
 # USQ
 midas "sys2;ts usq" "sysen3;usq"
-respond "*" ":link sys2;ts typesq,sys2;ts usq\r"
+make_link "sys2;ts typesq" "sys2;ts usq"
 
 # SCRAM
 midas "sys2;ts scram" "rwk;scram"
@@ -802,11 +802,11 @@ midas "sys3;ts host" "sysnet;host"
 
 # EXPN/VRFY
 midas "sys3;ts expn" "sysnet;expn"
-respond "*" ":link sys3;ts vrfy,sys3;ts expn\r"
+make_link "sys3;ts vrfy" "sys3;ts expn"
 
 # MUSCOM
 midas "sysbin;" "syseng; muscom"
-respond "*" ":link sys1;ts muscom, sysbin; muscom bin\r"
+make_link "sys1;ts muscom" " sysbin; muscom bin"
 
 # BIG
 oomidas 77 "SYSBIN;" "SYSENG; BIG"
@@ -881,19 +881,19 @@ midas "device;chaos time" "syseng;ctimsr"
 
 # DEVICE; CHAOS SEND
 midas "sysbin;" "sysnet;senver"
-respond "*" ":link device;chaos send,sysbin;senver bin\r"
+make_link "device;chaos send" "sysbin;senver bin"
 
 # Alternate DEVICE; CHAOS SEND
 midas "sysbin;" "sysnet;sends"
-#respond "*" ":link device;chaos send,sysbin;senver bin\r"
+#make_link "device;chaos send" "sysbin;senver bin"
 
 # Chaosnet BABEL service.
 midas "sysbin; babel" "dcp2; babel"
-respond "*" ":link device;chaos babel,sysbin; babel bin\r"
+make_link "device;chaos babel" "sysbin; babel bin"
 
 # Chaosnet HOSTAB service.
 midas "sysbin;" "eak; chahtb"
-respond "*" ":link device; chaos hostab, sysbin; chahtb bin\r"
+make_link "device; chaos hostab" " sysbin; chahtb bin"
 arpanet "rfc121" "sysbin; chahtb bin"
 
 # Chaosnet 11LOAD service for booting MINITS.
@@ -913,11 +913,11 @@ midas "sys1;ts factor" "rz;factor"
 
 # balanc
 midas "sys3;ts balanc" "alan;balanc"
-respond "*" ":link sys3;ts movdir,sys3;ts balanc\r"
+make_link "sys3;ts movdir" "sys3;ts balanc"
 
 # scrmbl and unscr
 midas "sys3;ts scrmbl" "ejs;scrmbl"
-respond "*" ":link sys3;ts unscr,sys3;ts scrmbl\r"
+make_link "sys3;ts unscr" "sys3;ts scrmbl"
 
 # ZOTZ
 midas "ksc; ts zotz" "zotz"
@@ -956,16 +956,16 @@ respond "   " ":kill\r"
 
 # IMLOAD and IMTRAN
 midas "sys1; ts imload" "syseng; imload"
-respond "*" ":link sys1; ts imtran, sys1; ts imload\r"
+make_link "sys1; ts imtran" " sys1; ts imload"
 
 # UNTRAN
 midas "imlac; ts untran" "untran"
 
 # IMPRNT
 midas "sys1; ts imprnt" "syseng; imprnt"
-respond "*" ":link sys1; ts imprin, sys1; ts imprnt\r"
-respond "*" ":link sys1; ts ardprn, sys1; ts imprnt\r"
-respond "*" ":link sys1; ts tekprn, sys1; ts imprnt\r"
+make_link "sys1; ts imprin" " sys1; ts imprnt"
+make_link "sys1; ts ardprn" " sys1; ts imprnt"
+make_link "sys1; ts tekprn" " sys1; ts imprnt"
 
 # IMGOUT
 midas "sys3; ts imgout" "cbf; imgout"
@@ -1009,7 +1009,7 @@ respond "*" ":imtran\r"
 respond "@" "imlac; ssv22 iml_sysbin; ssv22 bin\r"
 respond "@" "\021"
 expect ":KILL"
-respond "*" ":link imlac; .prgm. normal, imlac; ssv22 iml\r"
+make_link "imlac; .prgm. normal" " imlac; ssv22 iml"
 
 # Assemble SSV4.
 midas "imlac; ts assv4" "assv4"
@@ -1207,7 +1207,7 @@ respond "*" ":load sysbin; tj6 bin\r"
 respond "*" "purify\033g"
 respond "DSK: SYS; TS NTJ6" "\r"
 respond "*" ":kill\r"
-respond "*" ":link sys; ts tj6, sys; ts ntj6\r"
+make_link "sys; ts tj6" " sys; ts ntj6"
 
 # Old TJ6.
 midas "sys2; ts otj6" "tj6; otj6"
@@ -1218,7 +1218,7 @@ respond "*" ":cc rcntrl rdev rexpr rfile rfonts richar ridn rin rin1 rin2\r"
 respond "*" ":cc rits rline rlpt rmain rmisc rout rreadr rreg rreq1 rreq2\r"
 respond "*" ":cc rreq3 rtext rtoken rtrap rvaria rxgp\r"
 respond "*" ":stinkr r\r"
-respond "*" ":link sys3; ts r, r; ts r30\r"
+make_link "sys3; ts r" " r; ts r30"
 # sys2; ts rr -> r; ts rr
 # .info.; r info -> r; r info
 # .info.; r recent -> r; r recent
@@ -1273,7 +1273,7 @@ build_c_program "cprog/rstat" "cprog/ts.rstat"
 # Versatec spooler
 # This has some harmless unresolved symbols (FOO, XE4).
 midas "sys3;ts versa" "dcp; versa"
-# respond "*" ":link channa; rakash v80spl,sys3; ts versa\r"
+# make_link "channa; rakash v80spl" "sys3; ts versa"
 
 # SCAN
 midas "sysbin;" "sysen1; scan"
@@ -1372,8 +1372,8 @@ midas "rug; ts punch" "punch"
 
 # LODER, PDP-11 file transfer.
 midas "rug;" "loder"
-respond "*" ":link sys; ts nloder, rug; loder bin\r"
-respond "*" ":link sys1; ts mloder, rug; loder bin\r"
+make_link "sys; ts nloder" " rug; loder bin"
+make_link "sys1; ts mloder" " rug; loder bin"
 
 # SITS.
 cwd "sits"
