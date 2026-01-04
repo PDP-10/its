@@ -26,5 +26,5 @@ respond "*" ":pdump haunt;ts haunt\r"
 type ":kill\r"
 
 # make available in SYS:
-respond "*" ":link sys3;ts haunt,haunt;ts haunt\r"
-respond "*" ":link sys3;ts ops4,haunt;ts ops4\r"
+make_link "sys3;ts haunt" "haunt;ts haunt"
+make_link "sys3;ts ops4" "haunt;ts ops4"

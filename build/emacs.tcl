@@ -6,11 +6,11 @@ respond "*" "dumpit\033g"
 sleep 2
 respond "TECPUR" "\r"
 respond "*" ":kill\r"
-respond "*" ":link sys;ts teco,.teco.;tecpur >\r"
-respond "*" ":link sys;ts t, sys; ts teco\r"
+make_link "sys;ts teco" ".teco.;tecpur >"
+make_link "sys;ts t" " sys; ts teco"
 
-respond "*" ":link sys2;ts emacs,emacs;ts >\r"
-respond "*" ":link sys2;ts ne,emacs;ts >\r"
+make_link "sys2;ts emacs" "emacs;ts >"
+make_link "sys2;ts ne" "emacs;ts >"
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033xrun\033einit\033? Generate\r"
 expect -timeout 1000 -exact { -> DSK: EMACS; [PURE]}
@@ -29,8 +29,8 @@ respond "*" ":teco\r"
 respond "&" "mmrun\033purify\033dump\033ts 163\033\033"
 respond "&" "\003"
 respond "*" ":kill\r"
-respond "*" ":link sys2;ts edit,sys2;ts emacs\r"
-respond "*" ":link sys2;ts e, sys2; ts emacs\r"
+make_link "sys2;ts edit" "sys2;ts emacs"
+make_link "sys2;ts e" " sys2; ts emacs"
 
 # BABYL, BABYLM, CACHE, FIXLIB, IVORY, MKDUMP, OUTLINE-MODE, PL1,
 # TEACH-C100, TMACS and WORDAB are generated with IVORY.
@@ -101,7 +101,7 @@ respond "*" ":rename emacs;\[rmai\] \021:ej, emacs;\[rmai\] 147\r"
 
 # Support canonical phrase "er emacs;emacs init$ @y :m(hfx*)$"
 # at end of personal init file
-respond "*" ":link emacs;emacs init,emacs;* emacs\r"
+make_link "emacs;emacs init" "emacs;* emacs"
 
 # make TS BABYL
 midas "sys3;ts babyl" "kmp;babyl"
@@ -125,8 +125,8 @@ send "\r"
 expect ":KILL"
 # The previous file version was 62, dated 1982-01-05.
 respond "*" ":rename emacs; tsinfo >, tsinfo 63\r"
-respond "*" ":link sys2;ts info,emacs;tsinfo >\r"
-respond "*" ":link sys2;ts h, sys2; ts info\r"
+make_link "sys2;ts info" "emacs;tsinfo >"
+make_link "sys2;ts h" " sys2; ts info"
 
 respond "*" ":emacs\r"
 respond "EMACS Editor" "\033XLoad Library\033docond\r"
@@ -156,10 +156,10 @@ send "\r"
 respond "*" ":move turnip; ts view, sys3;\r"
 
 # VDIR
-respond "*" ":link sys3; ts vdir, ts view\r"
+make_link "sys3; ts vdir" " ts view"
 
 # RMODE
-respond "*" ":link sys1; ts rmode, .teco.;\r"
+make_link "sys1; ts rmode" " .teco.;"
 
 # Make TECORD within Emacs work
-respond "*" ":link info;tecord 999999,.teco.;tecord >\r"
+make_link "info;tecord 999999" ".teco.;tecord >"

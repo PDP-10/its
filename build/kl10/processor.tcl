@@ -23,10 +23,10 @@ respond "*" ":kill\r"
 
 # Microcode ASCIIzer and binarator converter.
 midas "sysbin;" "syseng;cnvrt"
-respond "*" ":link sys1;ts mcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts pcnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts ucnvrt,sysbin;cnvrt bin\r"
-respond "*" ":link sys1;ts acnvrt,sysbin;cnvrt bin\r"
+make_link "sys1;ts mcnvrt" "sysbin;cnvrt bin"
+make_link "sys1;ts pcnvrt" "sysbin;cnvrt bin"
+make_link "sys1;ts ucnvrt" "sysbin;cnvrt bin"
+make_link "sys1;ts acnvrt" "sysbin;cnvrt bin"
 
 respond "*" ":mcnvrt .; @ ddt\r"
 expect ":KILL"
@@ -62,7 +62,7 @@ respond "*" ":copy sysbin; klrug bin, .;\r"
 
 # PDP-11 linker.
 midas "sys1;ts 11stnk" "kldcp;11stnk"
-respond "*" ":link .; ts boot11, sys1; ts 11stnk\r"
+make_link ".; ts boot11" "sys1; ts 11stnk"
 
 # KL10 diagnostics console program.
 palx "kldcp;" "kldcp"

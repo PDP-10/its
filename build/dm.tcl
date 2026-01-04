@@ -10,9 +10,9 @@ midas "sys; atsign demstr" "sysen2; demstr"
 midas "sysen2; ts demst" "sysen2; demst"
 
 # Gun down dead demons.
-respond "*" ":link taa; pwfile 999999, sysen1; pwfile >\r"
+make_link "taa; pwfile 999999" " sysen1; pwfile >"
 midas "sysbin;" "sysen2; gunner"
-respond "*" ":link sys; atsign gunner, sysbin; gunner bin\r"
+make_link "sys; atsign gunner" " sysbin; gunner bin"
 
 # Line printer unspooler demon.
 midas "sys; atsign unspoo" "sysen1; unspoo" {
@@ -33,10 +33,10 @@ midas "sys; atsign survey" "survey; survey"
 
 # Survey giver demon.
 midas "survey; atsign surgiv" "surgiv"
-respond "*" ":link sys; atsign surgiv, survey;\r"
+make_link "sys; atsign surgiv" " survey;"
 
 # Survey sender demon.
-respond "*" ":link sys; atsign sursnd, survey;\r"
+make_link "sys; atsign sursnd" " survey;"
 
 # Login program.
 midas "sysbin;" "syseng; booter"
@@ -61,4 +61,4 @@ respond " " "sys;\021 \021 pass \021 words\r"
 respond "*" ":kill\r"
 respond "*" ":kill\r"
 mkdir "(init)"
-respond "*" ":link (init); as hactrn, sys2; ts shell\r"
+make_link "(init); as hactrn" " sys2; ts shell"

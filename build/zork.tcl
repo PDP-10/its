@@ -5,7 +5,7 @@ midas "sys2; ts ozork" "taa; zork"
 
 # New Zork startup
 midas "sys; ts rbye" "cfs; zork"
-respond "*" ":link sys1;ts zork, sys; ts rbye\r"
+make_link "sys1;ts zork" " sys; ts rbye"
 
 mkdir "cfs"
 

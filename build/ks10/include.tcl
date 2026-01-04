@@ -85,7 +85,7 @@ proc prepare_frontend {} {
 
     midas "sysbin;" "kshack;ksfedr"
     respond "*" ":delete sys;ts ksfedr\r"
-    respond "*" ":link sys;ts ksfedr,sysbin;ksfedr bin\r"
+    make_link "sys;ts ksfedr" "sysbin;ksfedr bin"
 
     respond "*" ":ksfedr\r"
     respond "!" "write\r"
@@ -203,8 +203,8 @@ proc bootable_tapes {} {
     global emulator_escape
     global out
 
-    respond "*" ":link kshack;good ram,.;ram ram\r"
-    respond "*" ":link kshack;ddt bin,.;@ ddt\r"
+    make_link "kshack;good ram" ".;ram ram"
+    make_link "kshack;ddt bin" ".;@ ddt"
     respond "*" $emulator_escape
     create_tape "$out/ndskdmp.tape"
     type ":kshack;mtboot\r"
