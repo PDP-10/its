@@ -283,6 +283,21 @@ proc linker {files} {
     }
 }
 
+# Load a binary file, do some potentially purifying and dumping
+# actions, and kill the job.
+proc purify {job file actions} {
+    respond "*" ":job $job\r"
+    respond "*" ":load $file\r"
+    eval $actions
+    # Some actions leave the job around, others don't.  The following
+    # will take care of both cases.
+    respond "*" "$job\033\030"
+    expect -exact "--Kill--" {
+        type " "
+    } -exact "No Such Job" {
+    }
+}
+
 proc decuuo {file {dump ":pdump"}} {
     respond "*" ":start 45\r"
     respond "Command:" "d"

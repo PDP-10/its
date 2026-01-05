@@ -15,11 +15,10 @@ copy_to_klfe "kldcp; kldcp hlp"
 
 # KL10 microcode assembler
 midas "sysbin;" "syseng;micro"
-respond "*" ":job micro\r"
-respond "*" ":load sysbin; micro bin\r"
-respond "*" ":start purify\r"
-respond "TS MICRO" "sys; ts micro\r"
-respond "*" ":kill\r"
+purify micro "sysbin; micro bin" {
+    respond "*" ":start purify\r"
+    respond "TS MICRO" "sys; ts micro\r"
+}
 
 # Microcode ASCIIzer and binarator converter.
 midas "sysbin;" "syseng;cnvrt"

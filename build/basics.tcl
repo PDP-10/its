@@ -70,29 +70,27 @@ make_link "sys;atsign device" "sysbin;@dev bin"
 
 # CRTSTY
 midas "sysbin;" "syseng;crtsty"
-respond "*" ":job crtsty\r"
-respond "*" ":load sysbin;crtsty bin\r"
-respond "*" "purify\033g"
-respond " BIN" "\r"
-respond "*" ":kill\r"
+purify crtsty "sysbin;crtsty bin" {
+    respond "*" "purify\033g"
+    respond " BIN" "\r"
+}
 make_link "sys3;ts crtsty" "sysbin;crtsty bin"
 
 # CTN, networking "supdup" CRTSTY
 midast "sysbin;ctn bin" "syseng; crtsty" {
     respond "with ^C" "NET==1\r\003"
 }
-respond "*" ":job ctn\r"
-respond "*" ":load sysbin; ctn bin\r"
-respond "*" "purify\033g"
-respond " BIN" "sys3; ts ctn\r"
-respond "*" ":kill\r"
+purify ctn "sysbin; ctn bin" {
+    respond "*" "purify\033g"
+    respond " BIN" "sys3; ts ctn\r"
+}
 
 midast "sysbin;" "sysen2;peek" peek_switches
-respond "*" ":job peek\r"
-respond "*" ":load sysbin;peek bin\r"
-respond "*" "purify\033g"
-respond {$G} "q"
-expect ":KILL"
+purify peek "sysbin;peek bin" {
+    respond "*" "purify\033g"
+    respond {$G} "q"
+    expect ":KILL"
+}
 make_link "sys; ts p" "sys; ts peek"
 
 midas "device;jobdev arc" "syseng;arcdev"
@@ -248,20 +246,20 @@ midas "inquir;inqupd bin" "inquir;inqupd"
 midas "inquir;dirs bin" "inquir;dmunch"
 
 # create .temp.;lsr1 empty
-respond "*" "lsrini\033j"
-respond "*" "\033linquir;inqupd bin\r"
-respond "*" "\033g"
-expect ":KILL"
+purify lsrini "inquir;inqupd bin" {
+    respond "*" "\033g"
+    expect ":KILL"
+}
 
 # create inquir;lsr1 1
 respond "*" ":move .temp.;lsr1 empty,inquir;lsr1 1\r"
 
 # Now create INQUIR updates in new database
 #   note: this reads the file inquir;.upd1. > and loads entries into the LSR database
-respond "*" "inqupd\033j"
-respond "*" "\033linquir;inqupd bin\r"
-respond "*" "\033g"
-expect ":KILL"
+purify inqupd "inquir;inqupd bin" {
+    respond "*" "\033g"
+    expect ":KILL"
+}
 
 # pword/panda
 midas "sysbin;panda bin" "sysen1;pword" {
@@ -271,17 +269,16 @@ midas "sysbin;pword bin" "sysen1;pword" {
     respond "Is this to be a PANDA?" "no\r"
 }
 midas "sysbin;pwinit bin" "sysen1;pwinit"
-respond "*" ":job pwinit\r"
-respond "*" ":load sysbin;pwinit\r"
-respond "*" "\033g"
+purify pwinit "sysbin;pwinit" {
+    respond "*" "\033g"
+}
 respond "*" ":copy cstacy;big dat,sysbin;\021 \021 \021 big \021 \021 0dat\r"
-respond "*" ":job panda\r"
-respond "*" ":load sysbin;panda bin\r"
-# set password to "panda"
-respond "*" "spword/107150326162\r"
-type "purify\033g"
-respond "*" ":pdump sysbin;panda bin\r"
-respond "*" ":kill\r"
+purify panda "sysbin;panda bin" {
+    # set password to "panda"
+    respond "*" "spword/107150326162\r"
+    type "purify\033g"
+    respond "*" ":pdump sysbin;panda bin\r"
+}
 make_link "sys;atsign pword" "sysbin;pword bin"
 make_link "sys;ts panda" "sysbin;panda bin"
 
@@ -289,10 +286,10 @@ make_link "sys;ts panda" "sysbin;panda bin"
 respond "*" ":delete sysbin; hosts3 <\r"
 
 respond "*" ":copy sysbin;name bin,sys;ts name\r"
-respond "*" "name\033j"
-respond "*" "\033l sys;ts name\r"
-respond "*" "debug/"
-respond "-1" "0\r\033g"
+purify name "sys;ts name" {
+    respond "*" "debug/"
+    respond "-1" "0\r\033g"
+}
 
 make_link "sys1;ts when" "sys;ts name"
 make_link "sys1;ts whoare" "sys;ts name"
@@ -336,11 +333,10 @@ make_link "device;chaos supdup" "sysbin;telser bin"
 
 # decuuo
 midas "decsys;" "decuuo"
-respond "*" ":job decuuo\r"
-respond "*" ":load decsys;decuuo bin\r"
-respond "*" "purify\033g"
-respond "TS DEC" "\r"
-respond "*" ":kill\r"
+purify decuuo "decsys;decuuo bin" {
+    respond "*" "purify\033g"
+    respond "TS DEC" "\r"
+}
 make_link "sys;ts dec\021 *" "must; be here"
 
 midas "decsys;" "decbot"

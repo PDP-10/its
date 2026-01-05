@@ -7,22 +7,20 @@ midast "sysbin; midas 324bin" "midas; midas 324" {
     respond "\n" "ldbi=ildb\r"
     respond "\n" "dpbi=idpb\003"
 }
-respond "*" ":job midas\r"
-respond "*" ":load sysbin; midas 324bin\r"
-respond "*" "purify\033g"
-respond "TS MIDAS" "midas;ts 324\r"
-respond "*" ":kill\r"
+purify midas "sysbin; midas 324bin" {
+    respond "*" "purify\033g"
+    respond "TS MIDAS" "midas;ts 324\r"
+}
 
 # MIDAS 77, needed for MUSRUN.
-respond "*" ":job midas\r"
-respond "*" ":load sysbin; midas 77bin\r"
-# Patch to accomodate more symbols returned from .GETSYS.
-respond "*" "tsymgt+5/"
-respond "P" "10\r"
-respond "\n" "purify\033g"
-expect "PURIFIED"
-respond "*" ":pdump midas; ts 77\r"
-respond "*" ":kill\r"
+purify midas "sysbin; midas 77bin" {
+    # Patch to accomodate more symbols returned from .GETSYS.
+    respond "*" "tsymgt+5/"
+    respond "P" "10\r"
+    respond "\n" "purify\033g"
+    expect "PURIFIED"
+    respond "*" ":pdump midas; ts 77\r"
+}
 
 # MIDAS 73, bootstrapped from 77.
 oomidas 77 "MIDAS; TS 73" "MIDAS; MIDAS 73"
@@ -38,12 +36,11 @@ omidas "sysbin;" "sysen2; mactap"
 
 # TECO6
 midas "sysbin;teco 335bin" ".teco.; teco 335"
-respond "*" ":job teco\r"
-respond "*" ":load sysbin; teco 335bin\r"
-respond "*" "purify\033g"
-respond "PURIFIED" "\r"
-respond "*" ":pdump .teco.; ts 335\r"
-respond "*" ":kill\r"
+purify teco "sysbin; teco 335bin" {
+    respond "*" "purify\033g"
+    respond "PURIFIED" "\r"
+    respond "*" ":pdump .teco.; ts 335\r"
+}
 
 make_link "teach;teach emacs" "emacs;teach emacs"
 respond "*" "teach\033\023"
@@ -110,11 +107,10 @@ midas "bawden;" "uptime"
 
 # Chaosnet EVACUATE service.
 midas "sysbin; evacua" "bawden; evacua"
-respond "*" ":job evacua\r"
-respond "*" ":load sysbin; evacua bin\r"
-respond "*" "purify\033g"
-respond "CHAOS EVACUA" "\r"
-respond "*" ":kill\r"
+purify evacua "sysbin; evacua bin" {
+    respond "*" "purify\033g"
+    respond "CHAOS EVACUA" "\r"
+}
 
 # Mini Chaosnet file server.  Version 24 is MINI.
 midas "sysbin; mini" "lmio; minisr 24"
@@ -168,13 +164,12 @@ midas ".mail.;comsat" "sysnet;comsat" comsat_switches
 
 midas "device;jobdev dq" "sysnet;dqxdev" dqxdev_switches
 
-respond "*" "comsat\033j"
-respond "*" "\033l.mail.;comsat bin\r"
-respond "*" "debug/0\r"
-type "xvers/0\r"
-type "purify\033g"
-respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
-respond "*" ":kill\r"
+purify comsat ".mail.;comsat bin" {
+    respond "*" "debug/0\r"
+    type "xvers/0\r"
+    type "purify\033g"
+    respond ":PDUMP DSK:.MAIL.;COMSAT LAUNCH" "\r"
+}
 
 initialize_comsat
 
@@ -191,11 +186,10 @@ make_link "dragon; hourly gcmail" "sysbin; gcmail bin"
 make_link "dragon; hourly gcbulk" "sysbin; gcmail bin"
 
 midas "sysbin;qmail" "ksc;qmail" { respond "PWORD version (Y or N)? " "N\r" }
-respond "*" ":job qmail\r"
-respond "*" ":load sysbin;\r"
-respond "*" "purify\033g"
-respond "QMAIL BIN" "\r"
-respond "*" ":kill\r"
+purify qmail "sysbin;" {
+    respond "*" "purify\033g"
+    respond "QMAIL BIN" "\r"
+}
 
 make_link "sys;ts mail" "sysbin;qmail bin"
 make_link "sys;ts qmail" "sysbin;qmail bin"
@@ -445,19 +439,18 @@ midas "sys1;ts wumpus" "games; wumpus"
 # Jotto
 cwd "games"
 midas "games;" "jotto"
-respond "*" ":job jotto\r"
-respond "*" ":load jotto bin\r"
-# Run initialisation code to open the TTY channels.
-respond "*" "erase0\033bbeg\033g"
-# Load dictionary from disk instead of DECtape.
-respond "ERASE0>>" "\024ut1:*;* *, dsk:games;* *\r"
-# Run the dictionary loader.
-respond "*" "beg7\033g"
-respond "utape drive for dictionary?" "1"
-respond "file name?" "JOTTO DICT\r"
-# Dump out TS JOTTO including the dictionary.
-respond "words" ":pdump sys1;ts jotto\r"
-respond "*" ":kill\r"
+purify jotto "jotto bin" {
+    # Run initialisation code to open the TTY channels.
+    respond "*" "erase0\033bbeg\033g"
+    # Load dictionary from disk instead of DECtape.
+    respond "ERASE0>>" "\024ut1:*;* *, dsk:games;* *\r"
+    # Run the dictionary loader.
+    respond "*" "beg7\033g"
+    respond "utape drive for dictionary?" "1"
+    respond "file name?" "JOTTO DICT\r"
+    # Dump out TS JOTTO including the dictionary.
+    respond "words" ":pdump sys1;ts jotto\r"
+}
 
 # ngame
 midas "games;ts game" "ejs;ngame" {
@@ -544,11 +537,10 @@ make_link "sys1;ts charfs" "sys1;ts charfc"
 
 # file
 midas "sysbin;" "syseng;file"
-respond "*" ":job file\r"
-respond "*" ":load sysbin;\r"
-respond "*" "purify\033g"
-respond "CHAOS FILE" "\r"
-respond "*" ":kill\r"
+purify file "sysbin;" {
+    respond "*" "purify\033g"
+    respond "CHAOS FILE" "\r"
+}
 
 # filei, fileo
 midas "device;chaos filei" "eak;file"
@@ -559,11 +551,10 @@ midas "device;chaos ifile" "syseng;ifile"
 
 # NFILE
 midas "alan;" "bawden;nfile"
-respond "*" ":job nfile\r"
-respond "*" ":load alan;nfile bin\r"
-respond "*" "purify\033g"
-respond "CHAOS NFILE" "\r"
-respond "*" ":kill\r"
+purify nfile "alan;nfile bin" {
+    respond "*" "purify\033g"
+    respond "CHAOS NFILE" "\r"
+}
 
 # 11sim
 midas "sys;ts pdp45" "syseng;11sim"
@@ -655,11 +646,10 @@ midas "sysnet;ts yow" "sysen2; yow"
 
 # @
 midas "sysbin;" "sysen1;@"
-respond "*" ":job @\r"
-respond "*" ":load sysbin;\r"
-respond "*" "purify\033g"
-respond "TS @" "\r"
-respond "*" ":kill\r"
+purify "atsign" "sysbin;@ bin" {
+    respond "*" "purify\033g"
+    respond "TS @" "\r"
+}
 
 omidas "dsk0:.;@ pt" "syseng;pt"
 
@@ -696,10 +686,10 @@ make_link "syseng;its defs" "sys;itsdfs >"
 midas "sysbin;probe bin" "bawden;probe"
 # note: setting debug to 0 and running causes it to pdump itself to
 #  sys;ts probe
-respond "*" ":job probe\r"
-respond "*" ":load sysbin;probe bin\r"
-respond "*" "debug/0\r"
-type "\033g"
+purify probe "sysbin;probe bin" {
+    respond "*" "debug/0\r"
+    type "\033g"
+}
 make_link "sys;ts pb" "sys;ts probe"
 
 # TTY
@@ -864,11 +854,11 @@ midas "sysbin;" "sysen1; whoiml" {
     respond "FILE:" "whoiml\r"
     respond "FILE:" "sys2\r"
 }
-respond "*" ":job whoiml\r"
-respond "*" ":load sysbin; whoiml bin\r"
-respond "*" "start1\033b\033g"
-expect ">>"
-respond "   " ":kill\r"
+purify whoiml "sysbin; whoiml bin" {
+    respond "*" "start1\033b\033g"
+    expect ">>"
+    respond "   " ":vk\r"
+}
 
 # VTTIME
 midas "sys1;ts vttime" "rvb;vttime"
@@ -939,20 +929,20 @@ expect ":KILL"
 
 # XXFILE
 midas "sysbin;xxfile bin" "sysen1;xxfile"
-respond "*" ":job xxfile\r"
-respond "*" ":load sysbin;xxfile bin\r"
-respond "*" "ttyop1\033b\033g"
-expect ":PDUMP SYS2;TS XXFILE"
-expect ">>"
-respond "   " ":kill\r"
+purify xxfile "sysbin;xxfile bin" {
+    respond "*" "ttyop1\033b\033g"
+    expect ":PDUMP SYS2;TS XXFILE"
+    expect ">>"
+    respond "   " ":vk\r"
+}
 
 # MSEND
 midas "sysbin;" "sysen2;msend"
-respond "*" ":job msend\r"
-respond "*" ":load sysbin;msend bin\r"
-respond "*" "ttyopn\033b\033g"
-expect ">>"
-respond "   " ":kill\r"
+purify msend "sysbin;msend bin" {
+    respond "*" "ttyopn\033b\033g"
+    expect ">>"
+    respond "   " ":vk\r"
+}
 
 # IMLOAD and IMTRAN
 midas "sys1; ts imload" "syseng; imload"
@@ -1036,12 +1026,11 @@ midas "sysbin;" "klh; mazser" {
     respond "DEBUG=" "1\r"
     respond "STATS=" "1\r"
 }
-respond "*" ":job maze\r"
-respond "*" ":load sysbin; mazser bin\r"
-respond "*" ":start init\r"
-respond "M IML" "\r"
-respond ":PDUMP" "games; ts maze\r"
-respond "*" ":kill\r"
+purify maze "sysbin; mazser bin" {
+    respond "*" ":start init\r"
+    respond "M IML" "\r"
+    respond ":PDUMP" "games; ts maze\r"
+}
 
 # SWAR
 midas "imlac;" "imsrc; swar" {
@@ -1073,13 +1062,12 @@ respond "@" "\021"
 
 # The old CLIB has a UFA instruction which doesn't work on a KS10.
 # Patch out the call to FIXIFY.
-respond "*" ":job cc\r"
-respond "*" ":load c; ts cc\r"
-respond "*" "55107/"
-respond "FIXIFY" "jfcl\r"
-respond "UNPURE" ":corblk pure,55107\r"
-respond "*" ":pdump c; ts cc\r"
-respond "*" ":kill\r"
+purify cc "c; ts cc" {
+    respond "*" "55107/"
+    respond "FIXIFY" "jfcl\r"
+    respond "UNPURE" ":corblk pure,55107\r"
+    respond "*" ":pdump c; ts cc\r"
+}
 
 # CLIB
 cwd "clib"
@@ -1202,11 +1190,10 @@ expect ":KILL"
 
 # TJ6
 midas "sysbin;" "tj6;tj6"
-respond "*" ":job tj6\r"
-respond "*" ":load sysbin; tj6 bin\r"
-respond "*" "purify\033g"
-respond "DSK: SYS; TS NTJ6" "\r"
-respond "*" ":kill\r"
+purify tj6 "sysbin; tj6 bin" {
+    respond "*" "purify\033g"
+    respond "DSK: SYS; TS NTJ6" "\r"
+}
 make_link "sys; ts tj6" " sys; ts ntj6"
 
 # Old TJ6.
@@ -1228,14 +1215,13 @@ make_link "sys3; ts r" " r; ts r30"
 
 # Binary patch Lisp image to work on ITS not named AI, ML, MC, or DM.
 # This is for Bolio.
-respond "*" ":job purqio\r"
-respond "*" ":load sys; purqio 2138\r"
-respond "*" "udirset+20/"
-# Cross fingers, nop out valret, hope for best!
-respond ".VALUE" "JFCL\r"
-respond "UNPURE" ":corblk pure .\r"
-respond "*" ":pdump sys; purqio 2138\r"
-respond "*" ":kill\r"
+purify purqio "sys; purqio 2138" {
+    respond "*" "udirset+20/"
+    # Cross fingers, nop out valret, hope for best!
+    respond ".VALUE" "JFCL\r"
+    respond "UNPURE" ":corblk pure .\r"
+    respond "*" ":pdump sys; purqio 2138\r"
+}
 
 proc build_c_program {input output {libs {}}} {
     respond "*" ":cc $input\r"
@@ -1277,28 +1263,25 @@ midas "sys3;ts versa" "dcp; versa"
 
 # SCAN
 midas "sysbin;" "sysen1; scan"
-respond "*" ":job scan\r"
-respond "*" ":load sysbin; scan bin\r"
-respond "*" "purify\033g"
-respond "*" ":pdump sys3; ts scan\r"
-respond "*" ":kill\r"
+purify scan "sysbin; scan bin" {
+    respond "*" "purify\033g"
+    respond "*" ":pdump sys3; ts scan\r"
+}
 
 # DDT subroutines
 midas "sys3;ts cmd" "dcp; cmd"
 
 # XGP and GLP
 midas "sysbin;xgp bin" "sysen2;xqueue"
-respond "*" ":job xgp\r"
-respond "*" ":load sysbin;xgp bin\r"
-respond "*" "debug/0\r"
-type ":pdump sys;ts xgp\r"
-respond "*" ":kill\r"
+purify xgp "sysbin;xgp bin" {
+    respond "*" "debug/0\r"
+    type ":pdump sys;ts xgp\r"
+}
 midast "sysbin;glp bin" "sysen2;xqueue" { respond "with ^C" "GLP==1\r\003" }
-respond "*" ":job glp\r"
-respond "*" ":load sysbin;glp bin\r"
-respond "*" "debug/0\r"
-type ":pdump sys2;ts glp\r"
-respond "*" ":kill\r"
+purify glp "sysbin;glp bin" {
+    respond "*" "debug/0\r"
+    type ":pdump sys2;ts glp\r"
+}
 
 # XGPDEV and GLPDEV
 midas "device;jobdev xgp" "sysen2;xgpdev"

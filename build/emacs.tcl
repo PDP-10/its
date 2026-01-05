@@ -1,11 +1,10 @@
 midas "sysbin;" ".teco.;teco"
-respond "*" ":job teco\r"
-respond "*" ":load sysbin;teco bin\r"
-sleep 2
-respond "*" "dumpit\033g"
-sleep 2
-respond "TECPUR" "\r"
-respond "*" ":kill\r"
+purify teco "sysbin;teco bin" {
+    sleep 2
+    respond "*" "dumpit\033g"
+    sleep 2
+    respond "TECPUR" "\r"
+}
 make_link "sys;ts teco" ".teco.;tecpur >"
 make_link "sys;ts t" " sys; ts teco"
 
