@@ -32,19 +32,17 @@ respond "*" ":listf sys\r"
 
 mkdir "sysbin"
 midas "sysbin;" "midas;midas"
-respond "*" ":job midas\r"
-respond "*" ":load sysbin;midas bin\r"
-respond "*" "purify\033g"
-respond "CR to dump" "\r"
-sleep 2
-respond "*" ":kill\r"
+purify midas "sysbin;midas bin" {
+    respond "*" "purify\033g"
+    respond "CR to dump" "\r"
+    sleep 2
+}
 
 midas "sysbin;" "sysen1;ddt"
-respond "*" ":job ddt\r"
-respond "*" ":load sysbin;ddt bin\r"
-respond "*" "purify\033g"
-respond "*" ":pdump sys;atsign ddt\r"
-respond "*" ":kill\r"
+purify ddt "sysbin;ddt bin" {
+    respond "*" "purify\033g"
+    respond "*" ":pdump sys;atsign ddt\r"
+}
 
 midas "dsk0:.;" "system;its" its_switches
 

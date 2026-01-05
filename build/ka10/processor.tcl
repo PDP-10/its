@@ -82,10 +82,9 @@ omidas "dsk0:.;@ dazdrt" "klh; dazdrt" {
 
 # Knight TV Spacewar
 midas "gjd;" "swr data"
-respond "*" ":job swr\r"
-respond "*" ":load gjd; swr bin\r"
-respond "*" "first\033,last\033\060ygjd; swr ships\r"
-respond "*" ":kill\r"
+purify swr "gjd; swr bin" {
+    respond "*" "first\033,last\033\060ygjd; swr ships\r"
+}
 respond "*" ":midas games;ts tvwar_spcwar; tvwar\r"
 expect ":KILL"
 
@@ -190,23 +189,21 @@ midas "sysbin;" "syseng;scrimp"
 midas "sys3;ts carpet" "syseng;carpet"
 
 # Patch PDP-6 LISP to run on PDP-10.
-respond "*" ":job lisp\r"
-respond "*" ":load .; @ lisp\r"
-respond "*" "33777//\031"
-respond "*" "\033q\033,777777\033\033z"
-respond "*" "pitele+13/"
-respond "FSC" "push p,b\n"
-respond "FSC" "jrst patch\r"
-respond "\n" "patch/"
-respond "0" "move b,echocc\n"
-respond "0" "add b,ticc\n"
-respond "0" "dpb b,.+3\n"
-respond "0" "pop p,b\n"
-respond "0" "jrst pitele+15\n"
-respond "0" "331000,,a\r"
-respond "\n" "\033y"
-respond " " "dsk0:.;@ lisp\r"
-respond "*" ":kill\r"
+purify lisp ".; @ lisp" {
+    respond "*" "33777//\031"
+    respond "*" "\033q\033,777777\033\033z"
+    respond "*" "pitele+13/"
+    respond "FSC" "push p,b\n"
+    respond "FSC" "jrst patch\r"
+    respond "\n" "patch/"
+    respond "0" "move b,echocc\n"
+    respond "0" "add b,ticc\n"
+    respond "0" "dpb b,.+3\n"
+    respond "0" "pop p,b\n"
+    respond "0" "jrst pitele+15\n"
+    respond "\n" "\033y"
+    respond " " "dsk0:.;@ lisp\r"
+}
 
 # Lisp display slave, PDP-6 version.
 midas "sys; atsign 6slave" "sysen2; ld10" {

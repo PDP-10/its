@@ -11,12 +11,11 @@ make_link "lisp;loop fasl" "liblsp;loop fasl"
 midas ".temp.;" "l;*lisp" {
     respond "end input with ^C" "\003"
 }
-respond "*" ":job lisp\r"
-respond "*" ":load .temp.;*lisp bin\r"
-respond "*" "\033g"
-respond "*" "purify\033g"
-respond "*" ":pdump sys;purqio 2156\r"
-respond "*" ":kill\r"
+purify lisp ".temp.;*lisp bin" {
+    respond "*" "\033g"
+    respond "*" "purify\033g"
+    respond "*" ":pdump sys;purqio 2156\r"
+}
 
 make_link "sys;ts lisp" "sys:purqio >"
 make_link "sys;ts q" "sys;purqio >"
