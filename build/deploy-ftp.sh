@@ -29,7 +29,7 @@ create_archive() {
         (cd out; tar czf $EMULATOR.tgz $EMULATOR)
 
         # Verify the tarball
-        if tar tf $EMULATOR.tgz >/dev/null 2>&1; then
+        if tar tzf $EMULATOR.tgz >/dev/null 2>&1; then
             echo "Tarball is valid and can be expanded."
             break
         else
