@@ -29,13 +29,13 @@ create_archive() {
         (cd out; tar czf $EMULATOR.tgz $EMULATOR)
 
         # Verify the tarball
-        if tar tzf $EMULATOR.tgz >/dev/null 2>&1; then
+        if tar tzf out/$EMULATOR.tgz >/dev/null 2>&1; then
             echo "Tarball is valid and can be expanded."
             break
         else
             echo "Tarball is not valid or cannot be expanded. Retrying..."
             RETRY_COUNT=`expr "$RETRY_COUNT" + 1`
-            rm -f $EMULATOR.tgz
+            rm -f out/$EMULATOR.tgz
             continue
         fi
     done
