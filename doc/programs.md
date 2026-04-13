@@ -64,6 +64,7 @@
 - CLOCK, analogue, small, or digital clock.
 - CLOGO, Logo programming language.
 - CLU, compiled programming language.
+- COLOR HACK, display hacks for the color scope.
 - COMBAT, submit jobs to the Muddle compiler.
 - COMIFY, convert HEX to COM format.
 - COMPLR, Lisp compiler.
