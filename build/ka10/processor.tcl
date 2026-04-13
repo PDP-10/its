@@ -129,6 +129,9 @@ midas "sys2;ts munch" "sysen2;munch"
 # TITLER
 midas "dsk0:.;@ titler" "mb; titler"
 
+# COLOR HACK - display hacks for the color scope
+midas "dsk0:pdp10;color hack" "mb; color"
+
 # MLIFE
 omidas "games;ts mlife" "rwg;mlife"
 omidas "/t dsk0:.;@ mlife" "rwg;mlife" {
