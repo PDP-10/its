@@ -1,0 +1,568 @@
+; DEFS - Definitions and configuration data   -*-PALX-*-
+
+.nlist
+.auxil
+
+cbfdfs===1			; stupid flag so don't load twice
+.iif ndf $$pic, $$pic===1
+
+;;; Define YES and NO so they're acceptable SETF answers
+yes===1
+no===0
+
+.macro	setf q,a
+  .if ndf  a
+	.print "q "
+	.ttymac ans
+	  .if ndf  ans
+	    setf ^"Bad input, try again:",a
+	    .mexit
+	  .endc
+	  a==ans
+	.endm
+  .endc
+.endm
+
+
+;;; Define configuration.
+.insrt conf
+
+setf ^"PDP11 model number?",pdp11
+
+.sbttl Register definitons
+
+
+r0=%0
+r1=%1
+r2=%2
+r3=%3
+r4=%4
+r5=%5
+sp=%6
+pc=%7
+
+.xcref	r0,r1,r2,r3,r4,r5,sp,pc
+
+; Assume a switch register for most cpus, none for 11/03 and ask for 11/34.
+.if ndf havswr
+   .iif eq pdp11-03, havswr===0
+   .iif eq pdp11-34, setf ^"Does your 11/34 have the real programmer's console?",havswr
+.endc
+.iif ndf havswr, havswr===1
+
+.if ne  havswr
+swr==177570		; switch register
+.endc
+.lif ne pdp11-03
+ps==177776		; processor status word
+
+.if ndf memman
+.iif eq <pdp11-10>*<pdp11-20>, memman===0
+.ielse memman===1
+.endc
+
+.if ndf eis
+.iif eq <pdp11-10>*<pdp11-20>, eis===0
+.ielse eis===1
+.endc
+
+pr0==000		; processor priority definitions
+pr1==040
+pr2==100
+pr3==140
+pr4==200
+pr5==240
+pr6==300
+pr7==340
+
+.lif ne  pdp11-03
+lks==177546		; line clock
+
+tks==177560		; console tty registers
+tkb==177562
+tps==177564
+tpb==177566
+
+.if ne 0
+    ; keep this stuff here for reference, but we don't really want to
+    ; waste symbol table space in debugger
+    .if ne  nrk
+    rkdsr==177400		; RK11 disk registers
+    rkerr==177402
+    rkcsr==177404
+    rkwcr==177406
+    rkbar==177410
+    rkdar==177412
+    .endc
+
+    .if ne nrl
+    rlcsr==174400		; RL11 disk registers
+    rlbar==174402
+    rldar==174404
+    rlmpr==174406
+    .endc
+
+    .if ne  nrx
+    rxcs==177170		; floppy disk control/status register
+    rxdb==177172		; floppy disk data buffer register
+    .endc
+
+    .if ne  nlp
+    lps==177514
+    lpb==177516
+    lvs==177510
+    lvb==177512
+    .endc
+.endc
+
+.sbttl	Instruction macros
+
+.if ne  pdp11-03
+.if ne  pdp11-34
+
+; MTPS and MFPS macros simulate PS intructions on 11/03 (LSI)
+; and 11/34 processors.
+.macro	mtps src
+	movb src,@#ps
+.endm
+
+.macro	mfps dst
+	movb @#ps,dst
+.endm
+
+.endc
+.endc
+
+
+.if ne  pdp11-45
+.if ne  pdp11-70
+
+; SPL macro changes the the priority to its argument. It
+; (unfortunately) does this with a MOV, thus clobbering
+; the condition codes and such.
+.macro	spl n
+	.iif ne  n,	mtps #n*40
+	.else
+	.iif eq  pdp11-03,	mtps #0
+	.ielse			clrb @#ps
+	.endc
+.endm
+
+.endc
+.endc
+
+.if eq  <pdp11-10>*<pdp11-20>
+
+; SOB macro expands into code which performs identically to
+; the SOB instruction found on more powerfull 11 processors
+.macro	sob r,addr
+	dec r
+	bne addr
+.endm
+
+; RTT macro expands into a RTI.  This is so RTTs can be used in
+; places where they would be called for on 11/40s, 11/45s etc.
+.macro	rtt
+	rti
+.endm
+
+
+; XOR macro simulates XOR instruction on 11/45.
+; Caution: this macro is not intended to work with
+; (Rn)+, -(Rn) or (SP) destinations.
+.macro	xor r,d
+	mov r,-(sp)
+	bic d,(sp)
+	bic r,d
+	bis (sp)+,d
+.endm
+
+
+; SXT macro performs sign extend as on PDP11/45.
+.macro	sxt d
+	if mi,<
+	  mov #-1,d
+	  >
+	else <
+	  clr d
+	  >
+.endm
+
+.endc	; eq <pdp11-10>*<pdp11-20>
+
+.if eq  eis
+; ASH macro generates a series of ASR or ASL instructions to
+; simulate the 11/45 ASH instruction.
+.macro	ash src,r
+.ntype %.m,r
+.iif ne  %.m&70,	.error ASH dst must be register
+.ntype %.m,src
+.iif ne  %.m-27,	.error ASH macro must have constant shift
+%.m===0'src
+	.if ge  %.m
+	 .rept %.m
+	  asl r
+	  .endr
+	.iff
+	 .rept -%.m
+	  asr r
+	  .endr
+	.endc
+.endm
+
+
+; MUL macro generates call to either MUL1 or MUL2 depending upon
+; whether register destination is even or odd.  Simulates 11/45 MUL.
+.macro	mul src,r
+.ntype %.m,r
+.iif ne  %.m&70,	.error MUL dst must be register
+	push src,r
+	.iif ne  %.m&1,	jsr r5,mul1
+	.ielse		jsr r5,mul2
+	pop r
+	.iif eq  %.m&1,	pop r+1
+.endm
+
+
+; DIV macro generates call to DIV2 to simulate 11/45 DIV instruction.
+.macro	div src,r
+.ntype %.m,r
+.iif ne  %.m&70,	.error DIV dst must be register
+	push r,r+1,src
+	jsr r5,div2
+	pop r+1,r
+.endm
+
+.endc	; eq eis
+
+.sbttl	Random macros
+
+.macro	push	a0,a1,a2,a3,a4,a5,a6,a7
+	.irp d,<a0,a1,a2,a3,a4,a5,a6,a7>
+	  .if idn  d,#0
+	    clr -(sp)
+	  .iff
+	    .lif nb  d
+	      mov d,-(sp)
+	  .endc
+	  .endm
+	.endm push
+
+
+.macro	pop	a0,a1,a2,a3,a4,a5,a6,a7
+	.irp d,<a0,a1,a2,a3,a4,a5,a6,a7>
+	  .if idn  d,*
+	    tst (sp)+
+	  .iff
+	    .lif nb  d
+	      mov (sp)+,d
+	  .endc
+	  .endm
+	.endm pop
+.macro	vcall x
+	jsr r5,x
+.endm
+
+.macro vreturn
+       rts r5
+.endm
+
+.macro	typval text
+	.print Ôtextä.endm
+
+; DSECT defines a dummy section, used to define symbols
+; that are offsets from a register (or some other variable).
+; An optional second argument is set to length of structure.
+; Example of use:
+;	DSECT <	PCBNEXT: 0	;PCBNEXT=0
+;		PCBLAST: 0	;PCBLAST=2
+;		PCBFOOO: 0
+;		>
+.macro	dsect sect,len
+	.if p1		; define symbols only on pass 1
+	  %.dtmp===.
+	  .=0
+	  sect
+	  .iif nb len,  len==.
+	  .=%.dtmp
+	  .endc
+.endm
+
+; Text accumulation macros.  TXTINT creates a text segment of the
+; specified name.  APPEND appends text to that segment.  To insert the
+; accumulated text into the assembly merely use the segment's name. 
+
+.macro txtint name
+.macro name op1,op2,op3
+op1'op2
+op3
+.endm name
+.endm txtint
+
+.macro append name,newcft
+.nlist
+name ^|.macro name op1,op2,op3
+op1|,^|newcft'op2
+op3|,.endm
+.list
+.endm append
+
+.sbttl	Flow of control macros
+
+; IF macro: Generates code that executes the if clause
+; if the specified conditon is true, the else clause if
+; it is false.  The else clause is not required.  Example:
+;	if eq,<
+;	  mov r0,r1
+;	  mov (r1)+,r2
+;	  >
+;	else <
+;	  jsr pc,foo
+;	  >
+
+.macro	if cond,code
+	.nlist
+	gncnt===gncnt+1
+	.irp foo,\gncnt
+	.iif p1,  .word 0
+	.else
+	  %.itmp===<g'foo-<.+2>>/2
+	  .iif gt %.itmp-377,	.error Branch out of range
+	  .iif lt %.itmp+377,	.error Branch out of range
+	  .iif eq  <b'cond>&400,  <b'cond>+%.itmp+400
+	  .ielse		  <b'cond>+%.itmp-400
+	  .endc
+	code
+g'foo===.
+ifcnt===foo
+	.endm .irp
+	.list
+	.endm if
+
+.macro	else code
+	gncnt===gncnt+1
+	.irp foo,\ifcnt
+	.irp bar,\gncnt
+	br g'bar
+g'foo===.
+	code
+g'bar===.
+	.endm
+	.endm
+	.endm else
+
+gncnt===777		; gensym count
+
+
+; LOOP macro allows loops without labels.  Use RPTL and EXITL
+; to repeat loop and exit loop.  Both take branch condition arguments.
+; If condition arg is null, then BR is used, i.e. unconditional.
+; End of CODE falls out of loop unless specific RPTL is used.
+
+; Example of LOOP macro:
+; loop <    cmpb r0,(r1)+	; found char yet?
+;	    exitl eq		; exit loop on equal
+;	    inc r2		; not found
+;	    cmp r2,r5		; too many?
+;	    rptl lt		; no, keep going
+;	    jmp error		; too many
+;	    >
+;				; EXITL comes here
+
+; LOOP defines two lables around the code argument,
+; the first for looping back via the RPTL macro, the
+; second for exiting the loop via the EXITL macro.
+; Labels are of the form %Ln or %Xn where n signifies
+; that this is the nth use of the LOOP macro.  %Yv
+; gives the loop number of the v'th level of nesting.
+; Up to 7 levels of nesting are allowed.
+	%level===0
+	%loopn===0
+.macro	loop code
+	%loopn===%loopn+1
+	.if gt  %loopn-7777
+	 .error Too many loops (maximum of 4095)
+	 .mexit
+	 .endc
+	%level===%level+1
+	.if gt  %level-7
+	 .error Loop depth exceeds 7
+	 .mexit
+	 .endc
+	.irp n,\%level
+	  %y'n===%loopn
+	  .endm
+	.irp n,\%loopn
+	  %l'n===.		; loop back to here
+	  code
+	  %x'n===.		; exit to here
+	  .endm
+	%level===%level-1
+.endm loop
+
+.macro	rptl cond
+	.if eq  %level
+	 .error	RPTL not inside LOOP
+	 .mexit
+	 .endc
+	.irp n1,\%level
+	  .irp n2,\%y'n1
+	    .iif b  cond,	br %l'n2
+	    .ielse		b'cond %l'n2
+	    .endm
+	  .endm
+.endm rptl
+
+; SORL expands into a SOB instruction back to the last LOOP
+; point.  SORL takes one arg, a register to use with the SOB
+; instruction.
+.macro	sorl r
+	.if eq  %level
+	 .error SORL not inside LOOP
+	 .mexit
+	 .endc
+	.irp n1,\%level
+	  .irp n2,\%y'n1
+	    sob r,%l'n2
+	    .endm
+	  .endm
+.endm sorl
+
+
+.macro	exitl cond
+	.if eq  %level
+	 .error EXITL not inside LOOP
+	 .mexit
+	 .endc
+	.irp n1,\%level
+	  .irp n2,\%y'n1
+	    .iif b  cond,	br %x'n2
+	    .ielse		b'cond %x'n2
+	    .endm
+	  .endm
+.endm exitl
+
+.sbttl	Literal macros
+
+; Literal macros -- deposit literals into contants area which
+; will have length %.clen.
+	.iif p1, %.clen===0	; start off length 0
+
+
+; .LITRL macro will store a literal -- a block of code that
+; is the first argument to .LITRL.  The literal is stored in
+; the constant area at %.CONSTA, and will be forced to an even
+; address.  If there is no second argument the pointer to the
+; literal will be stored inline;  if there is a second arg the
+; second arg will be set to the literal's pointer value.
+; For example:
+; The following stores a pointer to a string of bytes (0,1,2...)
+; at location foo:
+; foo:	.litrl	^"
+; 	  .byte	0,1,2,3,4,5"
+; The following sets foo to a pointer to a block of words and
+; bytes (0,1,2,...):
+; 	.litrl	^"
+; 	  .word	0,1,2
+; 	  .byte	3,4,5",foo
+
+.macro	.litrl	litarg,litptr
+	.nlist
+	.if p1
+	  %.ctmp===.
+	  .even
+	  litarg	; stick literal here now so can find its length
+	  %.clen===<<%.clen+1>&177776>+.-<<%.ctmp+1>&177776>
+	  .=%.ctmp
+	.iff
+	  %.ctmp===.
+	  .=%.consta
+	  .even
+	  %.cadr===.
+	  litarg	; actual storage of literal
+	  %.consta===.
+	  .=%.ctmp
+	.endc
+	.if b  litptr
+	  .even
+.if ne $$pic
+	  .word	%.cadr-.	; deposit ptr to literal
+.iff
+	  .word %.cadr
+.endc
+	.iff
+	  litptr==%.cadr	; set ptr to pt to literal
+	.endc
+	.list
+.endm
+
+
+; The .STRING macro stores an asciz string in the constants area,
+; at %.CONSTA, and either stores the pointer to that string
+; at the .STRING, or sets a value (if there is a second arg).
+; For example, the following stores, at FOO, a relative pointer
+; to the asciz string "hello":
+; FOO:	.string	^"hello"
+; The following sets foo to a pointer to asciz string "hello":
+;	.string	^"hello",foo
+
+.macro	.string text,strptr
+	.nlist
+	.if p1
+	  %.clen===%.clen+.length ^Ôtext¨+1
+	.iff
+	  %.ctmp===.
+	  .if ndf %.consta
+	    .error "No CONSTANTS macro invocation"
+	    .endc
+	  .=%.consta
+	  %.cadr===.
+	  .asciz Ôtextä	  %.consta===.
+	  .=%.ctmp
+	.endc
+	.if b  strptr
+.if ne  $$pic
+	  .word	%.cadr-.
+.iff
+	  .word %.cadr
+.endc
+	.iff
+	  strptr==%.cadr
+	.endc
+	.list
+.endm
+
+; CONSTANTS causes space to be allocated for the constants
+; generated by .LITRL and .STRING
+
+.macro	constants
+	.nlist
+	.even
+	%.consta===.		; constants will be assembled here.
+	.=.+%.clen		; reserve space for them.
+	.even
+
+	.if p1
+	.if gt  %.clen
+	  .print "
+Constants area "
+	  typval \%.clen
+	  .print " bytes,
+From "
+	  typval \%.consta
+	  .print " to "
+	  typval \.-1
+	  .print " inclusive.
+"
+	.endc
+	.endc
+	.list
+.endm constants
+
+.macro	.decim N
+.iif ne  N/10., .decim N/10.
+	.byte N-<N/10.*10.>+'0
+.endm
+
+.list
+

@@ -1,0 +1,482 @@
+	.title	Kernal Traffic Controller
+	.mcall	.regdef
+	.regdef
+
+
+.if ndf palx			; if assembling under macro-11
+  .macro crash code
+	jsr pc,sysdie
+	.word code
+	.endm
+.endc
+
+	.sbttl	Process Switcher
+	.csect
+	.globl	traf,exit,await,rsum,restrt,nxtjob,sysdie
+
+lcpuck:	.word	0		;temp holder for cpuclk
+trafbt:	.word	0
+traf:				; Entered at timer/sched intrpt or task change
+	inc	trafbt		;mark traffic controller busy
+	mov	cpuclk,lcpuck
+	clr	cpuclk
+	mtps	#0		;allow interrupts ( they must NOT invoke us!)
+	inc	trfcnt		;increment times gotten here
+	tst	active		;see if task id is reasonable
+	beq	nxtjob		;no task needs saving
+	mov	r0,@active	;save reg0
+	mov	active,r0	;load ptr to TCB area
+	mov	r1,2(r0)	;save reg1
+	mov	tc.jid(r0),r1	;get job id from tcb
+	cmp	r1,actid	;is the id that of the active job
+	beq	2$		;yes, all is golden
+	crash 	k.atid
+2$:	cmp	r0,joblst(r1)	;check for consistency with systab
+	beq	3$		;if equal all is coold
+	crash 	k.atid
+3$:	add	lcpuck,tc.use(r0)	;update cpu time for this task
+	add	lcpuck,@tc.chg(r0)	;update cpu time for account
+	mov	r0,r1		;duplicate ptr for auto inc
+	add	#4,r1		;move save pointer
+	mov	r2,(r1)+
+	mov	r3,(r1)+
+	mov	r4,(r1)+
+	mov	r5,(r1)+
+	mov	(sp)+,2(r1)	;move old pc to pc save slot
+	mov	(sp)+,tc.stt(r0)	;save old status byte
+	mov	sp,(r1)		;save stk ptr (inc'd by 4)
+	clr	active
+	mov	chaind,r1	;move this guy to end of chain
+	bne	10$
+	mov	#chain-tc.nxt,r1
+10$:	mov	r0,tc.nxt(r1)
+	mov	r0,chaind	;put this guy at end
+	inc	actcnt		;one more in RUNQ
+;The old state has been saved; looking for next job
+
+; Now a new job is started up
+nxtjob:	mov	chain,r0
+	bne	1$		;if not empty go on
+	mov	#idle,r0
+1$:	mov	tc.nxt(r0),chain	;update chain header
+	bne	2$		;if not only thing on chain good
+	clr	chaind		;indicate NOTHING on chain
+2$:	dec	actcnt		;one less in runq
+
+	clr	tc.nxt(r0)
+	mov	tc.jid(r0),r2
+	cmp	r0,joblst(r2)	;is this a consistent TCB?
+	beq	3$
+	crash	k.attc
+3$:
+
+;The next job to run has been chosen and TCB_ptr is in r0
+restrt:	mov	r0,active	;mark the active one
+	mov	tc.jid(r0),actid
+	mov	12.(r0),sp	;new stack ptr
+	movb	tc.stt(r0),-(sp)	;new PS
+	mov	14.(r0),-(sp)		;new PC
+	mov	r0,r1		;temp tcb ptr
+	add	#32.,r1		;minimum stack protec
+	cmp	tc.ste(r0),r1	;is stack full marker good
+	blo	badstk		;ths job is badd
+	cmp	sp,tc.ste(r0)	;is sp within range
+	blo	badstk
+	add	#tc.gar-36.,r1	;check for other end
+	cmp	sp,r1		;check on range of sp
+	bhi	badstk		;this job popped too often
+	cmp	tc.ste(r0),r1	;check other end of range for marker
+	bhis	badstk
+; Basic consistency checks accomplished
+	tst	(r0)+
+	mov	(r0)+,r1
+	mov	(r0)+,r2
+	mov	(r0)+,r3
+	mov	(r0)+,r4
+	mov	(r0)+,r5
+	mov	@active,r0
+	mtps	#340		;mask again
+	add	cpuclk,trfcpu	;if any time taken in process switcher
+	clr	cpuclk
+	clr	trafbt		;unlock scheduler lock
+	rti			;go to it
+
+badstk:
+	halt	;for now
+;	bis	#1,tc.nxt(r0)	;tag it
+;	mov	#fretcb,tc.wqu(r0)	;set queue
+;	jmp	nxtjob
+
+sysdie:	halt
+	reset
+	br	2$
+1$:	br	1$
+2$:	jmp	init
+;
+
+timer:	adc	timlo
+	adc	timhi
+	inc	cpuclk
+	dec	trfclk
+	ble	1$
+	rti
+1$:	mov	trfint,trfclk
+	tst	trafbt		;see if scheduler busy
+	beq	2$		;if not, call it
+	rti			;otherwise leave well enough alone
+2$:	jmp	traf
+	.page
+	.sbttl	Supervisor Trap Services
+
+fatal:	mov	r0,temp0	;random fatal trap
+	bit	#360,2(sp)	;were we in system-like stuff?
+	beq	badreq		;no, just kill the task
+	crash	k.ftal
+
+traps:	bic	#020,2(sp)	;if they want service, no tracing
+	mov	r0,temp0
+	mov	(sp),r0		;get current pc of job
+	mov	-(r0),r0	;get the trap instruction
+	bic	#177400,r0	;look only at function code in lower byte
+	asl	r0		;double for word offset
+	cmp	r0,#mxtrps	;see if within legal range
+	ble	okreq		;skip if within range
+
+;  This stops job for debug because of bad request
+badreq:	jmp	exit	;for now
+;	mov	active,r0	;get tcb addr
+;	bis	#1,tc.nxt(r0)	;tag it
+;	mov	#fretcb,tc.wqu(r0)
+;	mov	temp0,r0
+;	jmp	trytrf
+
+okreq:	mov	trptbl(r0),temp1
+	mov	temp0,r0
+	jmp	@temp1
+
+temp0:	.word	0
+temp1:	.word	0
+
+trptbL:	.word	badreq,trytrf,strtjb,exit,await,rsum,badreq
+	.word	suspnd
+mxtrps=<.-trptbl>
+
+trytrf:		;consistency check on scheduler lock
+	tst	trafbt		;see if scheduler busy
+	bne	1$		;zero means free, all ok
+	jmp	traf
+1$:	crash	k.trfl		;some inrpt hndler must have turkeyed
+
+exsus:
+	clr	tc.use(r0)	;clear continuous run time timer
+	tst	trafbt		;see if scheduler busy
+	beq	11$		;zero is OK
+	crash	k.trfl		;this should NOT happen
+11$:	inc	trafbt		;mark traffic controller busy
+	mov	cpuclk,lcpuck
+	clr	cpuclk
+	mtps	#0		;allow interrupts ( they must NOT invoke us!)
+	inc	trfcnt		;increment times gotten here
+	mov	r1,2(r0)	;save reg1
+	mov	tc.jid(r0),r1	;get job id from tcb
+	cmp	r1,actid	;is the id that of the active job
+	beq	2$		;yes, all is golden
+	crash	k.atid		;wrong id
+2$:	cmp	r0,joblst(r1)	;check for consistency with systab
+	beq	3$		;if equal all is coold
+	crash	k.attc
+3$:	add	lcpuck,@tc.chg(r0)	;update cpu time for account
+	mov	r0,r1		;duplicate ptr for auto inc
+	add	#4,r1		;move save pointer
+	mov	r2,(r1)+
+	mov	r3,(r1)+
+	mov	r4,(r1)+
+	mov	r5,(r1)+
+	mov	(sp)+,2(r1)	;move old pc to pc save slot
+	mov	(sp)+,tc.stt(r0)	;save old status byte
+	mov	sp,(r1)		;save stk ptr (inc'd by 4)
+	clr	active
+	jmp	nxtjob		;go start up new job
+
+exit:	mov	active,r0
+	mov	fretcb,tc.nxt(r0)
+	mov	r0,fretcb
+	inc	frecnt
+	br	exsus
+
+await:	mov	active,r0
+	clr	tc.wtm(r0)	;reset time in wait code
+	mov	temp0,tc.wat(r0)	;tag the wait condition
+	mov	waitch,tc.nxt(r0)
+	mov	r0,waitch
+	inc	watcnt
+	br	exsus
+
+rsum:	mov	r1,temp1	;save r1 while checking id
+	mov	tc.jid(r0),r1	;get job id from alleged tcb
+	cmp	joblst(r1),r0	;is that consistent?
+	beq	1$		;yes, let's accept it for now
+	br	badreq		;nope, go and kill this
+1$:	jsr	pc,rstrt	;to resume a given job
+	rti
+
+rstrt:	mov	chain,tc.nxt(r0)
+	bne	1$
+	mov	r0,chaind
+1$:	mov	r0,chain
+	clr	tc.wqu(r0)
+	inc	actcnt		;another one activated
+	rts	pc
+
+suspnd:	mov	active,r0
+	mov	temp0,tc.wat(r0)	;reason
+	clr	tc.wqu(r0)
+	br	exsus
+
+strtjb:	jsr	pc,makjb	;to create a job
+	tst	r0		;did it work?
+	bne	1$
+	rti			;return if it didn't
+1$:	jmp	trytrf
+
+makjb:	tst	fretcb		;any tcbs loose?
+	bne	1$
+	clr	r0		;no, just return zero
+	rts	pc
+1$:	mov	r0,@fretcb	;save r0
+	mov	fretcb,r0	;get tcb addr to use
+	mov	tc.nxt(r0),fretcb
+	dec	frecnt		;decrement nbr of free blocks
+	mov	r1,temp1
+	mov	tc.jid(r0),r1	;get id in tcb
+	cmp	r0,joblst(r1)	;compare
+	beq	2$
+	crash	k.attc
+2$:	mov	r1,2(r0)	;set job id into r1 of new tcb
+	mov	(r0),14.(r0)	;set new pc for task
+	mov	r0,(r0)		;set tcb addr into r0 of new job
+	mov	chain,tc.nxt(r0)	;chain it into active list
+	bne	10$
+	mov	r0,chaind
+10$:	inc	actcnt		;increment cont of active jobs
+	inc	totjbs		;incremetn jobs started
+	mov	r0,chain
+	mov	r0,r1		;for temp calc
+	add	#tc.gar-4,r1
+	mov	r1,12.(r0)	;setup new sp for task
+	mov	#chgcpu,tc.chg(r0)	;setup charging ptr
+	clr	tc.wqu(r0)
+	clr	tc.stt(r0)
+	clr	tc.use(r0)
+	clr	tc.wat(r0)
+	clr	tc.wtm(r0)
+	mov	r0,r1
+	add	#4,r1
+	mov	r2,(r1)+
+	mov	r3,(r1)+
+	mov	r4,(r1)+
+	mov	r5,(r1)+
+	add	#28.,r1
+	mov	r1,tc.ste(r0)
+	mov	tc.jid(r0),r0	;to return ID of job created
+	mov	temp1,r1
+	rts	pc		;finished with making job
+
+;
+	.page
+	.sbttl	System Initialization
+	.globl	init
+
+; Initialization of system
+kbpssv:	.word	0
+kbpcsv:	.word	0
+prpcsv:	.word	0
+prpssv:	.word	0
+pssav:	.word	0
+
+;start of code
+init:	mtps	#340		; make sure of high priority
+	mov	#2,@#0		; init all vectors to bpt traps
+	mov	#3,@#2		; but leave RUG's alone
+	mov	#20,r0
+1$:	mov	r0,(r0)
+	add	#2,(r0)+
+	mov	#3,(r0)+
+	cmp	r0,#600
+	blo	1$
+	mov	#traps,@#34
+	mov	#340,@#36
+; set our own timer handler
+	mov	#timer,@#100
+	mov	#341,@#102
+; setup scheduler clocks
+inita:	mov	#trfinv,trfint
+	mov	trfint,trfclk
+; intialize system time clocks
+	clr	timlo
+	clr	timhi	;system time
+	clr	cpuclk	;cpu used temp timer
+	clr	chgcpu	;user cpu time
+	clr	idlcpu	;idl loop cpu time
+	clr	trfcpu	;time in scheduler
+
+; set up task block chains - chain free blocks
+	mov	#mxjobs,r5
+	mov	#idle,fretcb
+	clr	r0
+	mov	#idle,r2
+1$:	mov	r2,joblst(r0)
+	clr	tc.wat(r2)
+	mov	r0,tc.jid(r2)
+	tst	(r0)+
+	mov	r2,r4
+	add	#tcb.ln,r2
+	mov	r2,tc.nxt(r4)
+	sob	r5,1$
+;tag end of free chain
+	clr	tc.nxt(r4)
+	mov	idle+tc.nxt,fretcb
+	clr	idle+tc.nxt
+	clr	waitch		;clear chain of waiting tasks
+; set up chain counters
+	mov	#mxjobs,frecnt
+	clr	watcnt
+	clr	actcnt
+	clr	totjbs
+	clr	trfcnt
+; make idle task active one and set it all up
+	mov	#idle,active
+	clr	actid
+	clr	chain
+	clr	chaind
+	clr	idle+tc.stt
+	clr	idle+tc.wqu
+	clr	idle+tc.use
+	clr	idle+tc.wat
+	clr	idle+tc.wtm
+	mov	#idlcpu,idle+tc.chg
+	mov	#idle+40.,idle+tc.ste
+	mov	#idle+tc.gar-4.,sp
+	mov	sp,idle+12.
+; setup idle loop's own variables
+	mov	#2,idlflg		;for idle loop task list
+	mov	#idlls0,idlstt
+	mov	#idlls1,idlstt+2
+	mov	idlstt,idlcnt		;start of list 0
+	mov	idlstt+2,idlcnt+2	;start of list 1
+	mov	#idllen,idlmax		;length of lists
+	mov	#idllen,idlmax+2	;same
+	add	idlcnt,idlmax		;make end ptr 0
+	add	idlcnt+2,idlmax+2	;make end ptr 1
+	clr	idllse			;count times no TCb
+	clr	idlwin			;count of tasks started
+	clr	idlovl
+	mtps	#0			;enable interrupts
+	trap	1			;let scheduler in
+;the idle loop proper follows
+	.sbttl	Idle Loop
+	.globl	notact,inbtbl
+	.globl	chrsnd,hndlnw
+	.globl	muxctl
+
+	mov	timlo,lrelck
+	mov	#chrsnd,r0	;addr of IO initializer
+	trap	2		;start up that as a task
+;here is the idle loop
+idlelp:	mov	lrelck,r0	;old clock
+	mov	timlo,r5	;new clock
+	mov	r5,lrelck	;update old clock ptr
+	sub	r0,r5		;get difference
+;Update the timer waits
+waitim:	mov	#mxjobs+2,r4	;for check on chain
+	mov	#waitch-tc.nxt,r2	;get start of chain
+1$:	mov	r2,r1
+2$:	mov	tc.nxt(r1),r2	;next element on chain
+	beq	3$		;if zero, end of chain
+	dec	r4		;for consistency check
+	bgt	4$		;ok
+	crash	k.watc		;wait chain lossage
+4$:	mov	tc.jid(r2),r3	;get job id for comparison
+	cmp	r2,joblst(r3)	;check against systab
+	beq	5$
+	jsr	pc,sysdie
+	.word	k.atid
+5$:	add	r5,tc.wtm(r2)		;mark time in wait q
+	bvc	7$
+	mov	#77777,tc.wtm(r2)	;just use maxnum if overflowed
+7$:	tst	tc.wat(r2)		;check tim count
+	blt	1$			;if not positive, not timer wait
+	sub	r5,tc.wat(r2)		;dec wait time by elasped time
+	bgt	1$			;if pos still not time
+	clr	tc.wat(r2)
+	mtps	#340
+21$:	cmp	tc.nxt(r1),r2		;has anyone munched this queue
+	beq	22$			;no (it could only have been insertion)
+	mov	tc.nxt(r1),r1		;move down one to the one just before us
+	bne	21$			;if zero, lost.  anyhow, go make sure
+	crash	i.atid			;let this be a warning
+22$:	mov	tc.nxt(r2),tc.nxt(r1)	;chain around this guy
+	inc	actcnt			;move to active list
+	dec	watcnt			;taken from wait
+	mov	chain,tc.nxt(r2)	;make him point to next active
+	bne	20$
+	mov	r2,chaind		;in case chain is empty
+20$:	mov	r2,chain		;make active point to him
+	mtps	#0
+	br	2$
+3$:
+
+	jsr	pc,muxctl	;switch muxing around
+
+idlans:		;answering service
+	swab	idlflg		;swap buffers
+	movb	idlflg+1,r3	;get the list to use
+	cmp	idlcnt(r3),idlstt(r3)	;anything?
+	blos	idlend		;nothing, the system load is OK
+	mov	idlstt(r3),r2	;get beginning of list
+10$:	tstb	(r2)		;if zero is end of lst
+	beq	lsdone		;go reset list header
+	cmpb	(r2)+,#1	;is the function to start new task?
+	beq	1$		;if yes ok (nothing else implemented)
+	crash	k.idle		;terrible
+1$:	movb	(r2)+,r4	;get the interrupting device code
+	movb	@inbtbl(r4),r0	;get the character
+	bic	#177600,r0	;only check 7 bits
+	cmpb	r0,#'\		;Backslash?
+	bne	2$
+	mov	#hndlnw,r0	;setup the new task pc
+	trap	2		;invoke that task
+	tst	r0		;did that work?
+	bne	2$		;NE means a good task id
+	inc	idllse		;increment couner
+	br	idlend		;skip this and go on
+2$:	inc	idlwin		;increment winnage counter
+	br	10$		;see if anymore to do
+lsdone:	mov	idlstt(r3),idlcnt(r3)	;reset
+
+idlend:	trap	1
+	jmp	idlelp		;more idle loop
+
+lrelck:	.word	0	;temp holder for real-time clock
+;
+
+notact:	movb	idlflg,r0		;queue it for the idle loop
+	cmp	idlcnt(r0),idlmax(r0)	;is queue full?
+	blo	1$			;no, put it in
+	inc	idlovl			;nbr of overloads
+	mov	idlcnt(r0),r0		;what device is doing it?
+	cmpb	-1(r0),r1		;previous and this one
+;	bne	2$			;not the same, something wrong
+	nop	;place filler for above
+	tst	@inbtbl(r1)		;device must be bad, reset RBUF
+	br	done1			;just go away again
+2$:	crash	k.jobs			; system overload, not enough job slots
+1$:	mov	idlcnt(r0),r0		;get next addr to fill
+	movb	#1,(r0)+		;code for "new device"
+	movb	r1,(r0)+		;device slot requesting help
+	clr	(r0)			;tag end of queue
+	movb	idlflg,r1		;get the double buffer flg again
+	mov	r0,idlcnt(r1)		;save ptr
+done1:	rts	pc			;return from interrupt
+
+

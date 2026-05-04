@@ -1,0 +1,893 @@
+COMMENT    VALID 00002 PAGES
+C REC  PAGE   DESCRIPTION
+C00001 00001
+C00002 00002		.title	character I/O stuff
+C00038 ENDMK
+C;
+	.title	character I/O stuff
+	.mcall	.regdef
+	.regdef
+
+	.sbttl	I/O loop
+	.globl	chrsnd,dlvhdl,chrclr,runsys
+	.globl	chrsin,chrsot,chrsol,chrsil,chrsih
+	.globl	kbinbr,kbintv,printv
+	.globl	outcpu,advcnt,otactb,otrt1b,otrt1c
+
+advcnt:	.word	0		;count of active buffers
+intid:	.word	0		;temp for dev id on intrpt
+
+chrtmp:	.word	0	;temp
+chrsnd:	mov	#outcpu,tc.chg(r0)	;my own cpu count
+	clr	outcpu		;start it at zero
+	clr	chrsot		;initialize for metering
+	clr	chrsol
+	clr	chrsih
+	clr	chrsil
+	mov	#nidevs,r0
+	mov	#ibftbl,r1
+	mov	#otdvtb,r2
+	mov	#dvownr,r3
+3$:	clr	(r1)+
+	clr	(r2)+
+	clr	(r3)+
+	sob	r0,3$
+
+	clr	chrtmp
+	mov	#nidevs,r0	;number of input devs
+	mov	#ininls,r1	;input interrupt handler list
+	mov	#idevin,r2	;ptr to table of int vectors
+	mov	#inbtbl,r3	;ptr to table of dev in bufs
+1$:	mov	(r3)+,r5	;get dev in buf adr
+	tstb	(r5)		;clr status by reading it
+	mov	(r2)+,r4	;get its interupt vector
+	mov	r1,(r4)+	;make it point to interrupt handler
+	mov	chrtmp,2(r1)
+	add	#2,chrtmp
+	mov	#340,(r4)	;set the new status
+	add	#intln,r1		;next interupt handler
+	mov	#100,-(r5)	;enable interupts from devs
+	sob	r0,1$		;loop through tabe of devs
+	mov	#nodevs,r0	;now for output devs
+	clr	chrtmp
+	mov	#otinls,r1	;for interrupts
+	mov	#obufs,r4	;buffer area
+	mov	#odevtb,r2	;ptr to table of devs
+	mov	#otdvtb,r3	;ptr to area for output handler
+2$:	clr	@(r2)		;reset output csr
+	jsr	pc,bfcrat	;setup buffer for output
+	mov	odevin-odevtb(r2),r5	;get int vector addr
+	mov	r1,(r5)+		;set int vector to outputter
+	mov	chrtmp,2(r1)
+	add	#2,chrtmp
+	mov	#340,(r5)
+	add	#intln,r1			;next dev
+	mov	(r2)+,bf.adr(r4)	;dev addr into buffer
+	mov	#dlvhdl,bf.hdl(r4)
+	mov	r4,(r3)+	;put bufptr into output list
+	add	#obufsi,r4	;point to next in buffer area
+	sob	r0,2$		;loop through output devs
+
+; Initialize any special interfaces that need it.
+;	mov	#6377,@#dlvead+2
+;	mov	#126,@#dlvead
+;	mov	#20,@#dlvead+4
+
+	mov	#146,@#dlvead	; RTS, DTR on, intrpt on rcv chr or RTS chng
+	mov	#100,@#dlvead+4		; turn out XMT interrupts
+	mov	#mx8ot,@odevin+16.	;kluge mux
+	mov	#mx8in,@idevin+16.	;same
+	mov	#240,muxctl	;self modifying code!
+	jsr	pc,setdz	;set up dzlines ******************
+	jmp	runsys		;go and start off switch
+;
+	.page
+	.sbttl	Input Character Interrupt Handler
+	.globl	chrint
+	.globl	notact	;if non-active
+	.globl	ibftbl,inbtbl,botptr,putchr,otrt1b,otrt1c
+
+chrint:			;interrupt vectors for usual tty type inputs
+	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	intid,r1	;get the device index
+	mov	ibftbl(r1),r0	;get ptr to buffer for this devie
+	bne	10$
+	tstb	@inbtbl(r1)	; read character so we don't get interrupted
+				; on broken devices like Technical Magic 8S
+	jsr	pc,notact	;no buffer, device unactive, go handle
+	br	done
+10$:	add	#1,chrsin+2	;update chars input
+	adc	chrsin		;for overflow
+	cmp	bf.cnt(r0),bf.siz(r0)	;buffer already full?
+	blt	1$		;skip to handler if not yet full
+	clr	bf.cnt(r0)	;let's start with fresh buffer
+	mov	bf.lst(r0),bf.fst(r0)	;adjust ptrs
+1$:	inc	bf.cnt(r0)	;increment the count
+c$:	inc	bf.lst(r0)	;next location
+	cmp	bf.lst(r0),bf.ben(r0)	;ring buf ptr at end?
+	blos	2$		;skip if not at end yet
+	mov	#bf.bfp,bf.lst(r0)	;reset ptr to beginning
+	add	r0,bf.lst(r0)	;add base to offset for addr
+2$:	movb	@inbtbl(r1),@bf.lst(r0)	;put char in buffer
+1$:	mov	bf.tsk(r0),r1	;see if this device talks to task
+	bne	wtask		;yes, go wake it if necessary
+	tst	bf.adr(r0)	;is this a direct transfer?
+	beq	done		;nom, ignore for now
+	jsr	pc,@bf.hdl(r0)	;go do something
+	bit	#otrt1b,bf.flg(r0)	;is this rt11 kluge?
+	beq	done		;no, go away
+	mov	bf.siz(r0),r1	;get buffer size
+	sub	bf.cnt(r0),r1	;is it almost full?
+	cmp	r1,#60.
+	bge	done		;not yet
+	mov	intid,r1	;get the index again
+	mov	r0,-(sp)	;save it
+	mov	r1,bf.inp(r0)	;index of source
+	mov	botptr(r1),r0	;bufptr to send stop to
+	cmp	bf.cnt(r0),bf.siz(r0)	;if it is full, do nothing
+	bge	4$
+	mov	#023,r1		;ctrl S
+	jsr	pc,putchr	;send it away
+	mov	(sp),r0
+	bis	#otrt1c,bf.flg(r0)	;
+4$:	tst	(sp)+
+	br	done
+wtask:	cmp	tc.wat(r1),#w.iowt	;is the task in IO wait state?
+	bne	done			;no, don't do anything
+	cmp	bf.cnt(r0),bf.wct(r0)	;enough chars to wake it?
+	bge	3$			;yes, go do it
+	movb	@bf.lst(r0),intid	;used temporary
+	bic	#177600,intid		;only check seven bits
+	cmpb	bf.brk(r0),intid	;is this the activation char?
+	bne	done			;no, just go away
+3$:	clr	tc.wat(r1)		;clear wait indicator making it ready
+done:	mov	(sp)+,r1		;restore
+	mov	(sp)+,r0
+	rti				;return from intrpt
+
+	.page
+	.sbttl	Line Multiplexor
+	.globl	muxctl
+
+abufct:	.word	0
+abufhd:	.word	0
+abuftl:	.word	0
+abuf:	.blkb	256.
+bbufct:	.word	0
+bbufhd:	.word	0
+bbuftl:	.word	0
+bbuf:	.blkb	256.
+
+dle=220
+mx8tag:	.word	007,031,036,052,055,063,064,113,114
+mx8chs:	.word	0,4020,4036,4034,4004,4040,4062,4064,4066,4070
+mx8chb:	.word	0,mx8ai,mx8bi,mx8ci,mx8di,mx8ei,mx8fi,mx8gi,mx8hi,mx8ii
+
+	.globl	mx8ali,mx8asi,mx8alo,mx8aso,mx8cco,mx8clo
+mx8ali:	.word	0		;count of incoming intrpts
+mx8asi:	.word	0		;count of special groups
+mx8bdi:	.word	0		;how many unacceptable channel ids
+mx8rdi:	.word	0		;how many nondirected chars
+mx8alo:	.word	0		;count of outgoing intrpts
+mx8aso:	.word	0		;count of special chars
+mx8cco:	.word	0		;count of channel specifiers
+mx8clo:	.word	0		;count of idle downs
+
+mx8spi:	.word	0
+mx8tpi:	.word	0
+mx8adi:	.word	0
+mx8chi:	.word	0
+	.word	0
+mx8ai:	.word	0,0
+mx8bi:	.word	0,0
+mx8ci:	.word	0,0
+mx8di:	.word	0,0
+mx8ei:	.word	0,0
+mx8fi:	.word	0,0
+mx8gi:	.word	0,0
+mx8hi:	.word	0,0
+mx8ii:	.word	0,0
+
+mx8in:	tst @#dlvead			; was it data set change interrupt?
+	bpl 100$			; no, it wasn't
+	bit #20000,@#dlvead		; is CTS now on?
+	beq 99$				; no, just see if char came in
+	bis #100,@#dlvead+4		; it was, reenable output interrupts
+99$:	tstb @#dlvead			; any char come in?
+	bmi 100$
+	rti
+
+100$:	inc	mx8ali			;count interrupts
+	movb	@#dlvead+2,mx8tpi	;move it into temporary reg
+	tstb	mx8spi			;special input?
+	beq	4$
+	clr	mx8spi			;clear the tag
+	inc	mx8asi			;count special chars
+	cmpb	mx8tpi,#dle		;DLE character?
+	beq	5$			;just go a receive it
+	sub	#50,mx8tpi		;subtract offset of number system
+	cmp	#23,mx8tpi		;see if bad number
+	blo	41$			;yes, it was bad
+	bit	#1,mx8tpi		;odd
+	bne	41$
+	mov	r0,-(sp)
+	mov	mx8tpi,r0		;to index
+	mov	mx8chs(r0),mx8chi	;channel index
+	mov	mx8chb(r0),mx8adi	;buffer ptr
+	mov	(sp)+,r0
+3$:	rti
+41$:	clr	mx8chi			;no legal channel
+	clr	mx8tpi			;fix high order byte from SUB
+	inc	mx8bdi			;log
+	rti
+4$:	cmpb	mx8tpi,#dle		;is this a DLE?
+	bne	5$			;no, ok
+	mov	#dle,mx8spi		;remember for next time
+	rti
+5$:6$:	tst	mx8chi			;any legal channel opened?
+	beq	7$
+	movb	mx8tpi,@mx8adi
+	mov	mx8chi,intid
+	bic	#4000,intid
+	jmp	chrint			;go and pretend
+7$:	inc	mx8rdi			;random char
+	rti
+
+mx8spo:	.word	0
+mx8mko:	.word	0
+mx8mno:	.word	0
+mx8mpo:	.word	0
+mx8tpo:	.word	0
+mx8cho:	.word	0,botptr+16.,botptr+30.,botptr+28.,botptr+4
+	.word	botptr+32.
+	.word	botptr+50.,botptr+52.,botptr+54.,botptr+56.
+
+mx8ot:	inc	mx8alo		;count all outgoing interrupts
+	bit	#020000,@#dlvead	; Clear to Send?
+	bne	100$		; yes, we can send
+	bic	#100,@#dlvead+4	; not CTS, clear output interrupts
+	rti
+
+100$:	tstb	mx8spo		;special output handling?
+	beq	1$		;no, just regular
+	movb	mx8spo,@#dlvead+6	;send it
+	clrb	mx8spo		;clear the tag
+	inc	mx8aso		;count of special outgoing chars
+	rti			;return
+1$:	mov	r0,-(sp)
+	mov	r1,-(sp)
+	mov	mx8mpo,r1	;any prescribed channel?
+	bne	3$		;not zero, go check the channel
+2$:	bic	#100,@#dlvead+4	;idle down the channel
+	clrb	mx8mko		;not using any channel
+	inc	mx8clo		;log the closing
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rti
+3$:	mov	mx8mko,r1	;get index
+	cmp	r1,mx8mpo	;is what we are using same as recommended?
+	bne	4$		;go and switch channels
+	mov	@mx8cho(r1),r0
+	tst	bf.cnt(r0)
+	beq	2$
+	mov	bf.fst(r0),r1
+	cmp	r1,bf.ben(r0)
+	blos	11$
+	mov	r0,r1
+	add	#bf.bfp-1,r1
+11$:	cmpb	1(r1),#dle
+	beq	9$
+	jmp	mx8ohk
+9$:	movb	#dle,@#dlvead+6
+	movb	#dle,mx8spo
+	dec	bf.cnt(r0)
+	inc	bf.fst(r0)
+	cmp	bf.fst(r0),bf.ben(r0)
+	blos	6$
+	add	r0,bf.fst(r0)
+6$:	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rti
+4$:	movb	#dle,@#dlvead+6
+	mov	mx8mpo,mx8mko
+	movb	mx8mko,mx8spo
+	add	#50,mx8spo
+	inc	mx8cco		;how many times we change channel?
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rti
+
+mx8lno:	mov	bbuftl,r0
+	movb	bbuf(r0),@#dlvead+6
+	cmpb	bbuf(r0),#dle
+	bne	1$
+	movb	#dle,mx8spo
+1$:	inc	bbuftl
+	dec	bbufct
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rti
+
+muxctl:		;this entry to change mux channels
+	rts	pc		;this code is modified at rntime
+	mov	#9.,r3		;nine channels
+	mov	#77777,mx8mno	;for finding shortest list
+	clr	r2		;remember where we are up to
+2$:	jsr	pc,mx8mro
+	sob	r3,2$
+	cmp	#77777,mx8mno
+	ble	3$
+	bis	#100,@#dlvead+4
+	mov	mx8tpo,mx8mpo
+3$:	tstb	@#dlvead
+	bpl	4$
+	tstb	@#dlvead+2
+4$:	rts	pc
+
+mx8mro:	tst	(r2)+
+	mov	@mx8cho(r2),r0
+	mov	bf.cnt(r0),r1
+	ble	1$
+	cmp	r1,mx8mno
+	bgt	1$
+	mov	r1,mx8mno
+	mov	r2,mx8tpo
+1$:	rts	pc
+
+	.sbttl	DZV11 CODE
+
+;*******************************************************************
+;	the following code handles i/o for 2 dzv11
+;	note: dz devices must occupy consecutive slots.
+;*******************************************************************
+
+	;dz initialization code
+dzvadr:	.word	dzad1,dzad2,dzad3	;device address
+dzvec:	.word	dzvc1,dzvc2,dzvc3	;device vectors
+dzpl:	.word	30.*2,34.*2,38.*2	;first dz device no.
+dzldef:	.word	17030,17031,17032,17033	;line def paramitors for dz line
+	.word	17030,17031,17032,17033
+	.word	17030,13431,17032,16033
+	dzdtr = 7400			;bit mask to turn on dtr lines
+	dzstr = 40140			;mask to enable interupts, scan
+dzbuf:	.word	30.*obufsi+obufs	;first dz output buf
+dzchl:	.word				;holds dz chanel currently up
+dzmask:	.word	1,2,4,10		;bit mask for output control
+dmask:	.word
+dz:	.word				;holds no. of current dz
+dzchr0:	.word	0,0,0,0			;holds dz input char
+	.word	0,0,0,0			;on a per channel basses
+	.word	0,0,0,0
+dzchr:	.word				;holds dz input char
+
+setdz:	mov	r0,-(sp)		;save registers
+	mov	r1,-(sp)
+	mov	r2,-(sp)
+	mov	r3,-(sp)
+	mov	r4,-(sp)
+	mov	r5,-(sp)
+
+	mov	dzvec,r0		;set interupt vectors
+	mov	#dzi0,@r0
+	mov	#dzo0,4(r0)
+	mov	dzvec+2,r0
+	mov	#dzi1,@r0
+	mov	#dzo1,4(r0)
+	mov	dzvec+4,r0
+	mov	#dzi2,@r0
+	mov	#dzo2,4(r0)
+
+	clr	r3			;r3 to step through line defs
+	mov	dzbuf,r5			;r5 through bf.hdl
+
+	mov	dzvadr,r0		;get dev adr
+	mov	#dzh0,r1		;get io hndl
+	jsr	pc,dzinit		;init dev
+	mov	dzvadr+2,r0		;same for second dev
+	mov	#dzh0,r1
+	jsr	pc,dzinit
+	mov	dzvadr+4,r0
+	mov	#dzh0,r1
+	jsr	pc,dzinit
+
+	mov	(sp)+,r5
+	mov	(sp)+,r4
+	mov	(sp)+,r3
+	mov	(sp)+,r2
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rts	pc
+
+dzinit:	mov	#20,@r0			;reset dz
+1$:	tst	@r0			;reset done?
+	bne	1$			;no ttry again!
+
+	mov	#4,r4			;step through lines
+2$:	mov	dzldef(r3),2(r0)	;set line def from table
+	mov	r1,bf.hdl(r5)		;stick in handel in buff
+	add	#obufsi,r5
+	add	#2,r3
+	add	#10,r1			;advance dzvhdl entry
+	sob	r4,2$			;loop ?
+	mov	#dzdtr,4(r0)		;set dtr for dev
+	mov	#dzstr,@r0		;set scan and int inable
+	rts	pc
+
+dzi0:	mov	#0,dz			;vector jump table
+	br	dzin
+dzi1:	mov	#2,dz
+	br	dzin
+dzi2:	mov	#4,dz
+	br	dzin
+dzo0:	mov	#0,dz
+	br	dzout
+dzo1:	mov	#2,dz
+	br	dzout
+dzo2:	mov	#4,dz
+	br	dzout
+dzh0:	mov	dzmask,dmask		;get proper mask for chan
+	br	dzvhdl		;through jmp table to dzvhdl
+	mov	dzmask+2,dmask
+	br	dzvhdl
+	mov	dzmask+4,dmask
+	br	dzvhdl
+	mov	dzmask+6,dmask
+	br	dzvhdl
+
+	;dz input code
+dzin:	mov	r0,-(sp)		;save r0
+	mov	r1,-(sp)
+
+	mov	dz,r1			;get input buffer
+	mov	dzvadr(r1),r0
+	mov	2(r0),r1		;get input
+	mov	r1,dzchr
+
+	bic	#176377,r1		;comp channel
+	swab	r1
+	rol	r1
+
+	mov	dz,r0			;comp intid
+	add	dzpl(r0),r1
+	mov	r1,intid
+	mov	dzchr,@inbtbl(r1)	;put char in channel slot
+
+	mov	(sp)+,r1
+	mov	(sp)+,r0
+	jmp	chrint			;dl routines well take it now
+
+	;dz output code
+dzout:	mov	r0,-(sp)		;save r0
+	mov	r1,-(sp)		;save r1
+
+	mov	dz,r0			;get dev csr
+	mov	@dzvadr(r0),r1
+
+	bic	#176377,r1		;get channel
+	swab	r1
+	rol	r1
+	mov	r1,dzchl
+
+	mov	dz,r0				;get intid
+	add	dzpl(r0),r1
+	mov	r1,intid
+	mov	otdvtb(r1),r0		;get buffer pointer
+	jmp	dzohk			;dl routines well takke it now
+
+dzvhdl:	bis	dmask,@bf.adr(r0)	;set line enable
+	rts	pc
+
+	;end of dz code
+;*******************************************************************
+
+;int routine to get one char out of buffer
+chrout:	mov	r0,-(sp)		;save
+	mov	r1,-(sp)
+	mov	intid,r1		;get the device id
+	mov	otdvtb(r1),r0		;get buf ptr
+mx8ohk:	tst	bf.cnt(r0)		;see if zero	;mux out hook
+	bgt	ch1
+	bic	#100,@bf.adr(r0)	;reset interupt enb
+	br	ch2			;your not a dz!
+;*******************************************************************
+				;this section of code added for dz
+dzohk:	tst	bf.cnt(r0)		;hook for dz lines
+	bgt	ch1			;nothinng to output
+	mov	dzchl,r1			;then disable line
+	bic	dzmask(r1),@bf.adr(r0)
+;*****************************************************************
+ch2:	bic	#otactb,bf.flg(r0)
+	br	intret
+ch1:	bis	#otactb,bf.flg(r0)
+	inc	bf.fst(r0)		;buffer ptr in r0
+	cmp	bf.fst(r0),bf.ben(r0)	;end?
+	blos	2$			;no, skip wraparound
+	mov	#bf.bfp,bf.fst(r0)	;offset of buffer from start
+	add	r0,bf.fst(r0)		;make it a ptr
+2$:	dec	bf.cnt(r0)		;decrement char count
+	bit	#otrt1c,bf.flg(r0)	;checking RT11 handshakes?
+	beq	3$			;no, skip
+	cmp	bf.cnt(r0),#40.		;low limit?
+	bge	3$
+	mov	r0,-(sp)		;save
+	mov	bf.inp(r0),r0		;index of input device
+	mov	botptr(r0),r0		;get bufptr of device
+	cmp	bf.cnt(r0),bf.siz(r0)	;room for stuff?
+	bge	4$			;no room
+	mov	#021,r1			;ctrl Q
+	jsr	pc,putchr
+	bic	#otrt1c,bf.flg(r0)
+4$:	mov	(sp)+,r0
+3$:	movb	@bf.fst(r0),r1
+	mov	bf.adr(r0),r0
+	movb	r1,2(r0)		;output for reg line
+	add	#1,chrsol
+	adc	chrsot			;update chars out
+intret:	mov	(sp)+,r1
+	mov	(sp)+,r0
+	rti
+
+;the basic output handler
+dlvhdl:	bis	#100,@bf.adr(r0)
+	rts	pc
+;
+
+chrclr:	mov	#nidevs,r0
+	mov	#inbtbl,r3
+1$:	mov	(r3)+,r5
+	clr	-(r5)
+	tst	2(r5)
+	sob	r0,1$
+	mov	#nodevs,r0		;to clear int enbs of outputs
+	mov	#odevtb,r3
+3$:	clr	@(r3)+
+	sob	r0,3$
+	tst	r2			;change of RT11 console?
+	bmi	2$			;no, just clean up
+	cmp	r2,#dzpl		;don't let dz be console ****
+	blo	4$
+	cmp	r2,#dzpl+10
+	blo	2$			;end dz check ****************
+4$:	mov	idevin(r2),kbintv	;input int vector
+	mov	odevin(r2),printv	;output int vector
+	mov	@#54,r1			;get RT11 offset etc
+	mov	inbtbl(r2),kbinbr	;input buffer
+	mov	kbinbr,306(r1)		;set input buff
+	sub	#2,kbinbr		;input status
+	mov	kbinbr,304(r1)		;set input status
+	mov	odevtb(r2),310(r1)	;set output status
+	mov	310(r1),312(r1)		;set output buf
+	add	#2,312(r1)
+	mov	kbintv,r3		;get vector to protect it
+	jsr	pc,prtvec
+	mov	printv,r3		;save for output
+	jsr	pc,prtvec
+2$:	mov	#60,r0
+	$wait
+	trap	6
+
+prtvec:	mov	r1,r2			;temp for resident offset
+	add	#326,r2			;offset in resident of bitmap
+	asr	r3			;make it word number (not byte addr)
+	mov	r3,r4			;temp
+	asr	r3
+	asr	r3
+	asr	r3
+	add	r3,r2			;offset for byte to modify
+	mov	#200,r5			;bit in high position
+	bic	#177770,r4		;which one of eight bits
+	beq	4$			;leave it alone
+3$:	asr	r5
+	sob	r4,3$
+4$:	bisb	r5,(r2)			;protect it
+	rts	pc
+;
+	.page
+	.sbttl	I/O utility subrs
+
+	.globl	putchr,getchr,bfcrat,getchs,getchw,rlsedv,getdv
+	.globl	putchw,putchs
+	.globl	w.iowt,active,actid
+;
+putchr:
+putchw:	jsr	pc,putchs
+	bcs	1$
+	rts	pc
+1$:	mov	r0,-(sp)
+	mov	#5.,r0
+	$wait
+	mov	(sp)+,r0
+	br	putchw
+putchs:	mfps	-(sp)		;save for own mask function
+	mtps	#340
+	inc	bf.cnt(r0)
+	cmp	bf.cnt(r0),bf.siz(r0)
+	ble	2$
+	dec	bf.cnt(r0)
+	mtps	(sp)+
+	sec
+	rts	pc
+2$:
+potchr:	inc	bf.lst(r0)
+	cmp	bf.lst(r0),bf.ben(r0)
+	blos	1$
+	mov	#bf.bfp,bf.lst(r0)
+	add	r0,bf.lst(r0)
+1$:	movb	r1,@bf.lst(r0)
+	jsr	pc,@bf.hdl(r0)
+	mtps	(sp)+		;unmask
+	clc
+	rts	pc
+;
+getchs:	tst	bf.cnt(r0)
+	bgt	gotchr
+	sec
+	rts	pc
+gotchr:	mfps	-(sp)
+	mtps	#340
+	inc	bf.fst(r0)
+	cmp	bf.fst(r0),bf.ben(r0)
+	blos	2$
+	mov	#bf.bfp,bf.fst(r0)
+	add	r0,bf.fst(r0)
+2$:	movb	@bf.fst(r0),r1
+	dec	bf.cnt(r0)
+	mtps	(sp)+
+	clc
+	rts	pc
+getchr:
+getchw:	tst	bf.cnt(r0)
+	bgt	gotchr
+	mov	r0,-(sp)
+	mov	#w.iowt,r0
+	$wait
+	mov	(sp)+,r0
+	br	getchw
+;
+
+bfcrat:	mov	r5,-(sp)
+	mov	#bufctn,bf.siz(r4)
+	clr	bf.flg(r4)
+	clr	bf.cnt(r4)
+	clr	bf.tsk(r4)
+	clr	bf.wct(r4)
+	clr	bf.dta(r4)
+	clr	bf.adr(r4)
+	mov	#bf.bfp,r5
+	add	r4,r5
+	mov	r5,bf.fst(r4)
+	mov	r5,bf.lst(r4)
+	mov	#bf.bfp+buflst,r5
+	add	r4,r5
+	mov	r5,bf.ben(r4)
+	mov	#frob,bf.hdl(r4)
+	mov	(sp)+,r5
+	rts	pc
+
+frob:	mov	bf.tsk(r0),-(sp)		;inter process channel
+	beq	1$
+	add	#tc.wat,(sp)
+	cmp	@(sp),#w.iowt
+	bne	1$
+	clr	@(sp)
+1$:	tst	(sp)+
+	rts	pc
+
+rlsedv:	cmp	#nidevs*2,r0
+	blos	1$
+	cmp	actid,dvownr(r0)
+	bne	1$
+	mfps	-(sp)
+	mtps	#340
+	clr	ibftbl(r0)
+	clr	dvownr(r0)
+	mtps	(sp)+
+1$:	rts	pc
+
+getdv:	cmp	r0,#nidevs*2
+	bhis	2$
+	mfps	-(sp)
+	mtps	#340
+	tst	ibftbl(r0)
+	bne	1$
+	tst	dvownr(r0)
+	bne	1$
+	mov	r1,ibftbl(r0)
+	mov	actid,dvownr(r0)
+	mtps	(sp)+
+	clc
+	rts	pc
+1$:	mtps	(sp)+
+2$:	sec
+	rts	pc
+;
+	.page
+	.sbttl	I/O config tables
+	.globl	ibftbl,inbtbl,otdvnb,otdvtb,binptr,botptr
+	.globl	nidevs,nodevs,dvownr
+	.globl	hndlnw
+
+;	NOTE: **** this table size must be increased as devises are added
+ibftbl:	.blkw	50.	;pointer table to device buffers
+
+	.csect	iodtab
+	.globl	odevtb,devtyp,dvdesc,dftdsc
+sc15a = 170020
+st15a = 160
+sc120a = 170030
+st120a = 170
+dlvead = 175610		; DLV11-E address
+dlveit = 130		; DLV11-E interrupt vector
+duvad0 = 171000
+duvit0 = 500
+;dlvead = 171010
+;duvit1 = 510
+dzad1 = 171400			;dz11 addresses
+dzad2 = 171420
+dzad3 = 171430
+dzvc1 = 520			;dz11 vectors
+dzvc2 = 530
+dzvc3 = 540
+;	TABLE OF POINTERS TO DEVICE INPUT BUFFERS
+inbtbl:	.word	177562,176552,mx8di,170022
+	.word	176542,176562,170002,170012
+	.word	mx8ai,176512,176522,176532
+	.word	176502,170202,mx8ci,mx8bi
+	.word	mx8ei,170212,170222,170232
+	.word	170302,170242,170252,170262,170272
+	.word	mx8fi,mx8gi,mx8hi,mx8ii,170032
+	.word	dzchr0,dzchr0+2,dzchr0+4,dzchr0+6
+	.word	dzchr0+10,dzchr0+12,dzchr0+14,dzchr0+16
+	.word	dzchr0+20,dzchr0+22,dzchr0+24,dzchr0+26
+;	TABLE OF POINTERS TO INPUT INTERUPT VECTORS
+idevin:	.word	60,450,dummy,160,440,460,140,150
+	.word	dlveit,410,420,430,400,200,duvit0,dummy
+	.word	dummy,210,220,230,330,240,250,260,270
+	.word	dummy,dummy,dummy,dummy,170
+	.word	dzvc1,dummy,dummy,dummy
+	.word	dzvc2,dummy,dummy,dummy
+	.word	dzvc3,dummy,dummy,dummy
+nidevs = <.-idevin>/2
+;	TABLE OF POINTERS TO OUTPUT DEVICE CONTROL STATUS REG
+odevtb:	.word	177564,176554,dlvead+4,170024
+	.word	176544,176564,170004,170014
+	.word	dlvead+4,176514,176524,176534
+	.word	176504,170204,dlvead+4,dlvead+4
+	.word	dlvead+4,170214,170224,170234
+	.word	170304,170244,170254,170264,170274
+	.word	dlvead+4,dlvead+4,dlvead+4,dlvead+4,170034
+	.word	dzad1+4,dzad1+4,dzad1+4,dzad1+4
+	.word	dzad2+4,dzad2+4,dzad2+4,dzad2+4
+	.word	dzad3+4,dzad3+4,dzad3+4,dzad3+4
+nodevs = <.-odevtb>/2
+
+$host = 0		; a computer, does not respond to backslash
+$term = 100000		; a terminal, 1 backslash gets command proc
+$eithr = 140000		; sometimes either, 2 quick backslashes for cmnd
+devtyp:	.word	$term,$term,$host,$eithr,$host,$eithr,$host,$host	; 0-7
+	.word	$eithr,$term,$term,$host,$term,$host,$host,$host	; 8-15
+	.word	$host,$term,$term,$term,$term,$term,$host,$term		;16-23
+	.word	$term,$host,$host,$host,$host,$host,$term,$term		;24-31
+	.word	$term,$term,$term,$term,$term,$term,$term,$term		;32-39
+	.word	$term,$host						;40-41
+
+
+;	TABLE OF POINTERS TO OUTPUT INTERUPT VECTORS
+odevin:	.word	64,454,dummy,164,444,464,144,154
+	.word	dlveit+4,414,424,434,404,204,duvit0+4,dummy
+	.word	dummy,214,224,234,334
+	.word	244,254,264,274
+	.word	dummy,dummy,dummy,dummy,174
+	.word	dzvc1+4,dummy,dummy,dummy
+	.word	dzvc2+4,dummy,dummy,dummy
+	.word	dzvc3+4,dummy,dummy,dummy
+
+dvownr:	.blkw	nidevs		;table of device owners
+
+ininls:	.rept	nidevs
+	mov	#0,intid	;what id
+	jmp	chrint
+	.endr
+otinls:	.rept	nodevs
+	mov	#0,intid
+	jmp	chrout
+	.endr
+intln = 10.
+
+	$temp = ibufs
+binptr:	.rept	nidevs
+	.word	$temp
+	$temp = $temp+ibufsi
+	.endr
+	$temp = obufs
+botptr:	.rept	nodevs
+	.word	$temp
+	$temp = $temp+obufsi
+	.endr
+
+otdvnb = nidevs
+otdvtb:	.blkw	otdvnb
+
+	.enabl	lc
+	.nlist	bex
+dft:	.ascii	\            \<200>
+dejg:	.ascii	\ EJG com31  \<200>
+djbr:	.ascii	\ JBR com41  \<200>
+dpmf:	.ascii	\ PMF com42  \<200>
+dllw:	.ascii	\ LLW com26  \<200>
+dlcw:	.ascii  \ LCW com38  \<200>
+dcbfc:	.ascii	\ CBFc100 c43\<200>
+dceg:	.ascii	\ CEG com11  \<200>
+dan:	.ascii	\ LAN com54  \<200>
+dtaw:	.ascii	\ TAW com58  \<200>
+dlwr:	.ascii	\ LWR com47  \<200>
+deak:	.ascii	\ EAK com45  \<200>
+dota:	.ascii	\ OTA com48  \<200>
+dcbf:	.ascii	\ CBF com43  \<200>
+dhwc:	.ascii	\ HWC com37  \<200>
+dtm:	.ascii	\ TM  com39  \<200>
+djmb:	.ascii	\ JMB com28  \<200>
+dwrb:	.ascii	\ WRB com29  \<200>
+dsjc:	.ascii	\ SJC com65  \<200>
+dmole:	.ascii	\ SAIL4979308\<200>
+dmark1:	.ascii	\ mk1 com32  \<200>
+dcdw:	.ascii	\ CDW  x27287\<200>
+dcnsl:	.ascii	\ display    \<200>
+d0:	.ascii	\ 1876 TI c22\<200>
+d2:	.ascii	\ T1200/R150 \<200>
+d3:	.ascii	\ T150/R1200 \<200>
+d4:	.ascii	\ 11/34      \<200>
+d5:	.ascii	\ LSI-10 S1  \<200>
+d6:	.ascii	\ LSI-11 S1  \<200>
+gri:	.ascii	\ Grinnell 11\<200>
+d8:	.ascii	\ SAIL TTY 7 \<200>
+dsail:	.ascii	\ SAIL       \<200>
+sail40:	.ascii	\ SAIL tty40 \<200>
+sail41:	.ascii	\ SAIL tty41 \<200>
+sail42:	.ascii	\ SAIL tty42 \<200>
+sail43:	.ascii	\ SAIL tty43 \<200>
+sail44:	.ascii	\ SAIL tty44 \<200>
+sail45:	.ascii	\ SAIL tty45 \<200>
+sail46:	.ascii	\ SAIL tty46 \<200>
+sail47:	.ascii	\ SAIL tty47 \<200>
+sail48:	.ascii	\ SAIL tty48 \<200>
+sail49:	.ascii	\ SAIL tty49 \<200>
+sail50:	.ascii	\ SAIL tty50 \<200>
+sail51:	.ascii	\ SAIL tty51 \<200>
+dsal11:	.ascii	\ SAIL 11    \<200>
+dsalad:	.ascii	\ SAIL ADM   \<200>
+dgdp11:	.ascii	\ GDP com55  \<200>
+dlpt11:	.ascii	\ LPT 11     \<200>
+dtlnet:	.ascii	\ Telnet 11  \<200>
+arpa:	.ascii	\ Arpa 11    \<200>
+md:	.ascii	\ MD 11      \<200>
+dev11:	.ascii	\ Develop 11 \<200>
+diab:	.ascii	\ diablo c49 \<200>
+dvadic:	.ascii	\ dialin23897\<200>
+dz4800:	.ascii	\ DZ4800     \<200>
+dz9600:	.ascii	\ DZ9600     \<200>
+unix:	.ascii	\ UNIX       \<200>
+		.even
+dvdesc:	.word	d0,dejg,sail42,arpa,unix,d5,d6,dev11
+	.word	dmole,djbr,dpmf,dtlnet,dlcw,gri,sail50,sail44
+	.word	sail43,dcbfc,dgdp11,dmark1,dcdw,dceg,md,dlwr
+	.word	diab,sail46,sail51,sail47,sail45,dlpt11,deak,dota
+	.word	dcbf,dhwc,dtm,djmb,dwrb,dsjc,dtaw,dvadic,dllw,dz4800
+
+	.list	bex
+dftdsc:	.word	dft
+
+	.word	0,0,0
+dummy:	.word	0,0,0,0
+
+;
+obufsi=180.
+ibufsi=180.
+
+bufctn = obufsi - buf.ln - 8.
+buflst = bufctn
+ibufs:	.blkb	nidevs*ibufsi
+obufs:	.blkb	nodevs*obufsi
+
+	.listî
