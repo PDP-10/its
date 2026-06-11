@@ -513,6 +513,21 @@ macro10 "macn11" "macn11.hdr,macn11.mac"
 loader "macn11"
 decuuo "sys3; ts macn11"
 
+# QUEUER
+macro10 "queuer" "queuer.mac"
+
+# HELPER.MAC would originally assemble with C.MAC.  In order to use
+# the MACTEN and UUOSYM files instead, the TTY: input supplies the
+# necessary definitions that trigger the right behavior in HELPER.
+macro10 "helper" "tty:,dsk:macten,uuosym,helper" {
+    respond "\n" "%..C==1\r"
+    respond "\n" "%%C==0\r"
+    respond "\n" "\003"
+    respond "END OF PASS1" "%..C==1\r"
+    respond "\n" "%%C==0\r"
+    respond "\n" "\003"
+}
+
 # Cookie Bear
 midas "gls; ts check" "gls; check" {
     respond "DEBUGP==" "0\r"
