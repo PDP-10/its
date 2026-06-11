@@ -523,10 +523,16 @@ macro10 "helper" "tty:,dsk:macten,uuosym,helper" {
     respond "\n" "%..C==1\r"
     respond "\n" "%%C==0\r"
     respond "\n" "\003"
-    respond "END OF PASS1" "%..C==1\r"
+    respond "END OF PASS 1" "%..C==1\r"
     respond "\n" "%%C==0\r"
     respond "\n" "\003"
 }
+
+# DEC BASIC V17E
+macro10 "basicl" "basicl.mac"
+macro10 "basich" "basich.mac"
+loader "basicl,basich,queuer,helper"
+decuuo "decsys; ts basic"
 
 # Cookie Bear
 midas "gls; ts check" "gls; check" {
