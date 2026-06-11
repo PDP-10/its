@@ -242,9 +242,10 @@ proc oomidas {version target source {action ""}} {
     expect ":KILL"
 }
 
-proc macro10 {target sources} {
+proc macro10 {target sources {action ""}} {
     respond "*" ":macro\r"
     respond "*" "$target=$sources\r"
+    eval $action
     expect "CORE USED"
     respond "*" "\003"
     respond "*" ":kill\r"
