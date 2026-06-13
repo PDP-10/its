@@ -405,11 +405,11 @@ $(KS10):
 $(SIMHV3): tools/simhv3
 	$(MAKE) -C tools/simhv3 pdp10
 
-tools/simhv3: simhv312-4.zip
+tools/simhv3: simhv312-5.zip
 	unzip $<
 	mv sim $@
 
-simhv312-4.zip:
+simhv312-5.zip:
 	$(WGET) $(SIMHV3_URL)/$@ || $(WGET) $(SIMHV3_URL)/archive/$@
 
 $(ITSTAR):
