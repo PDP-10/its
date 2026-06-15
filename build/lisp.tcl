@@ -190,7 +190,7 @@ complr {"comlap;cd.fas 40_cdmacs" "comlap;cx.fas 25_comaux"
 respond "*" "comlap\033\033\023"
 respond "*" ":lisp ccload\r"
 expect "Dumping LSPDMP"
-sleep 1
+sleep 10
 type ":vk\r"
 respond "*" ":kill\r"
 
