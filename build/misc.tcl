@@ -495,6 +495,9 @@ macro10 "monsym.unv" "monsym.mac"
 macro10 "macten.unv" "macten.mac"
 macro10 "uuosym.unv" "uuosym.mac"
 
+# JOBDAT
+macro10 "jobdat" "jobdat"
+
 # CROSS, assembler
 macro10 "cross" "cross"
 loader "cross"
