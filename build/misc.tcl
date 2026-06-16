@@ -428,10 +428,7 @@ respond "*" ":kill\r"
 linker "macro"
 decuuo "sys2; ts macro"
 respond "*" ":delete decsys; macro shr\r"
-# Assemble with itself, now no errors
-macro10 "macro" "macro"
-linker "macro"
-decuuo "sys2; ts macro"
+# Assemble the fresh MACRO-10 again with itself below.
 
 # MACSYM and MONSYM universal files.
 cwd "decsys"
@@ -441,6 +438,23 @@ macro10 "monsym.unv" "monsym.mac"
 # MACTEN and UUOSYM universal files.
 macro10 "macten.unv" "macten.mac"
 macro10 "uuosym.unv" "uuosym.mac"
+
+# HELPER.MAC would originally assemble with C.MAC.  In order to use
+# the MACTEN and UUOSYM files instead, the TTY: input supplies the
+# necessary definitions that trigger the right behavior in HELPER.
+macro10 "helper" "tty:,dsk:macten,uuosym,helper" {
+    respond "\n" "%..C==1\r"
+    respond "\n" "%%C==0\r"
+    respond "\n" "\003"
+    respond "END OF PASS 1" "%..C==1\r"
+    respond "\n" "%%C==0\r"
+    respond "\n" "\003"
+}
+
+# Assemble MACRO-10 with itself, now no errors
+macro10 "macro" "macro"
+linker "macro,helper"
+decuuo "sys2; ts macro"
 
 # JOBDAT
 macro10 "jobdat" "jobdat"
@@ -465,18 +479,6 @@ decuuo "sys3; ts macn11"
 
 # QUEUER
 macro10 "queuer" "queuer.mac"
-
-# HELPER.MAC would originally assemble with C.MAC.  In order to use
-# the MACTEN and UUOSYM files instead, the TTY: input supplies the
-# necessary definitions that trigger the right behavior in HELPER.
-macro10 "helper" "tty:,dsk:macten,uuosym,helper" {
-    respond "\n" "%..C==1\r"
-    respond "\n" "%%C==0\r"
-    respond "\n" "\003"
-    respond "END OF PASS 1" "%..C==1\r"
-    respond "\n" "%%C==0\r"
-    respond "\n" "\003"
-}
 
 # DEC BASIC V17E
 macro10 "basicl" "basicl.mac"
