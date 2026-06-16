@@ -268,18 +268,22 @@ proc macn11 {target sources {actions ""}} {
 
 proc loader {files} {
     respond "*" ":dec sys:loader\r"
-    respond "*" "$files/g\r"
+    # /U displays undefined symbols, if any.
+    # /B creates an in-core symbol block.
+    respond "*" "$files/u/b/g\r"
     expect "EXIT"
 }
 
 proc linker {files} {
     respond "*" ":dec sys:link\r"
-    respond "*" "$files/go\r"
+    # /U displays undefined symbols, if any.
+    # /SYMSEG writes in-core symbols.
+    respond "*" "$files/u/symseg/go\r"
     expect "EXIT" {
         return
     } "%LNKNED" {
         # Sometimes there is this error; workaround is to retry.
-        respond "*" "$files/go\r"
+        respond "*" "$files/u/symseg/go\r"
         expect "EXIT"
     }
 }
