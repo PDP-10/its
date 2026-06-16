@@ -356,59 +356,6 @@ midas "device;atsign rmtdev" "gz;rmtdev"
 # mmodem
 midas "sys3; ts mmodem" "gz; mmodem"
 
-# Compile ADVENT and dump it out with DECUUO.
-cwd "games"
-respond "*" ":dec sys:f40\r"
-respond "*" "advent=advent\r"
-expect "CORE USED"
-respond "*" "\032"
-type ":kill\r"
-loader "advent"
-respond "*" ":start\r"
-respond "*" "\032"
-type ":vk\r"
-decuuo "sys3; ts advent"
-
-# 350-point ADVENT
-cwd "games"
-respond "*" ":dec sys:f40\r"
-respond "*" "adv3sr=adv3sr\r"
-respond "*" "adv3sb=adv3sb\r"
-expect "CORE USED"
-respond "*" "\032"
-type ":kill\r"
-loader "adv3sb,adv3sr"
-respond "*" ":start\r"
-respond "*" "adv3db.1"
-respond "*" "\032"
-type ":vk\r"
-decuuo "games; ts adv350"
-
-# 448-point ADVENT
-cwd "games"
-respond "*" ":dec sys:f40\r"
-respond "*" "adv4ma=adv4ma\r"
-respond "*" "adv4su=adv4su\r"
-expect "CORE USED"
-respond "*" "\032"
-type ":kill\r"
-loader "adv4ma,adv4su"
-respond "*" ":start\r"
-respond "*" "adv4db.2"
-respond "Are you a wizard?" "\032"
-type ":vk\r"
-decuuo "games; ts adv448"
-
-# TREK
-cwd "games"
-respond "*" ":dec sys:f40\r"
-respond "*" "trek=trek\r"
-expect "CORE USED"
-respond "*" "\032"
-type ":kill\r"
-loader "trek"
-decuuo "games; ts trek"
-
 # Tech II chess: timesharing, using TV display
 midas "games;ts chess2" "rg;chess2"
 
@@ -500,7 +447,7 @@ macro10 "jobdat" "jobdat"
 
 # CROSS, assembler
 macro10 "cross" "cross"
-loader "cross"
+loader "cross,jobdat"
 decuuo "sys1; ts cross"
 
 # Old PALX
@@ -534,7 +481,7 @@ macro10 "helper" "tty:,dsk:macten,uuosym,helper" {
 # DEC BASIC V17E
 macro10 "basicl" "basicl.mac"
 macro10 "basich" "basich.mac"
-loader "basicl,basich,queuer,helper"
+loader "basicl,basich,queuer,helper,jobdat"
 decuuo "decsys; ts basic"
 
 # Cookie Bear
@@ -1363,6 +1310,59 @@ macro10 "dftp" "dftp"
 linker "dftp"
 decuuo "sys1; ts dftp"
 
+# Compile ADVENT and dump it out with DECUUO.
+cwd "games"
+respond "*" ":dec sys:f40\r"
+respond "*" "advent=advent\r"
+expect "CORE USED"
+respond "*" "\032"
+type ":kill\r"
+loader "advent,sys:jobdat"
+respond "*" ":start\r"
+respond "*" "\032"
+type ":vk\r"
+decuuo "sys3; ts advent"
+
+# 350-point ADVENT
+cwd "games"
+respond "*" ":dec sys:f40\r"
+respond "*" "adv3sr=adv3sr\r"
+respond "*" "adv3sb=adv3sb\r"
+expect "CORE USED"
+respond "*" "\032"
+type ":kill\r"
+loader "adv3sb,adv3sr,sys:jobdat"
+respond "*" ":start\r"
+respond "*" "adv3db.1"
+respond "*" "\032"
+type ":vk\r"
+decuuo "games; ts adv350"
+
+# 448-point ADVENT
+cwd "games"
+respond "*" ":dec sys:f40\r"
+respond "*" "adv4ma=adv4ma\r"
+respond "*" "adv4su=adv4su\r"
+expect "CORE USED"
+respond "*" "\032"
+type ":kill\r"
+loader "adv4ma,adv4su,sys:jobdat"
+respond "*" ":start\r"
+respond "*" "adv4db.2"
+respond "Are you a wizard?" "\032"
+type ":vk\r"
+decuuo "games; ts adv448"
+
+# TREK
+cwd "games"
+respond "*" ":dec sys:f40\r"
+respond "*" "trek=trek\r"
+expect "CORE USED"
+respond "*" "\032"
+type ":kill\r"
+loader "trek,sys:jobdat"
+decuuo "games; ts trek"
+
 # PDP-11 Lisp.
 palx "rms;" "lisp11" {
     respond "System (RANDOM, SIMULATOR, LOGO, MATH, or STANFORD)?" "SIMULATOR\r"
@@ -1429,7 +1429,7 @@ omidas "radia;" "tortis"
 # BBN Logo
 cwd "bbn"
 macro10 "logo" "logo"
-loader "logo"
+loader "logo,sys:jobdat"
 decuuo "bbn; ts logo"
 
 # CLOGO
