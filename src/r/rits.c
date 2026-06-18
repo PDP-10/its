@@ -218,7 +218,7 @@ getfdates (f)
 	int q;
 
 	q = rfdate (itschan (f));
-	if (q<0)
+	if (q==-1)
 		{ftime_ac = ac_create ("?");
 		fdate_ac = ac_create ("?");
 		}
