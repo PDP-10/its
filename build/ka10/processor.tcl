@@ -149,10 +149,8 @@ midas "stan.k;mod11 bin" "340d"
 make_link "sys1;ts 340d" "stan.k; mod11 bin"
 
 # Munching squares for 340 display.
-midas "lars; ts munch" "munch"
-midast "dsk0: .; @ munch" "lars; munch" {
-    respond "with ^C" ".iotlsr==jfcl\r\003"
-}
+midas "dsk0: lars; ts munch" "munch 340"
+make_link "dsk0: .; @ munch" "lars;ts munch"
 
 # Minskytron, translated from PDP-1.
 midas "dsk0: lars; ts minsky" "minsky tron"
