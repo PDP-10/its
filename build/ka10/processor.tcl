@@ -152,6 +152,9 @@ make_link "sys1;ts 340d" "stan.k; mod11 bin"
 midas "dsk0: lars; ts munch" "munch 340"
 make_link "dsk0: .; @ munch" "lars;ts munch"
 
+# Munching squares for Knight TV.
+midas "lars; ts tvmunch" "munch tv"
+
 # Minskytron, translated from PDP-1.
 midas "dsk0: lars; ts minsky" "minsky tron"
 make_link "dsk0: .; @ minsky" "lars; ts minsky"
