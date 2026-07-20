@@ -70,7 +70,7 @@ BIN = sys sys1 sys2 emacs _teco_ lisp liblsp alan sail comlap \
       maint _www_ gt40 llogo bawden sysbin -pics- lmman shrdlu imlac \
       pdp10 madman survey rrs clu clucmp rws mini mudsav mudsys libmud \
       librm1 librm2 librm3 librm4 mbprog mprog1 mprog mprog2 mudbug mudtmp \
-      _batch
+      _batch gls xfont
 MINSRC = midas system $(DDT) $(SALV) $(KSFEDR) $(DUMP)
 
 # These are not included on the tape.
