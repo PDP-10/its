@@ -132,6 +132,9 @@ midas "dsk0:.;@ titler" "mb; titler"
 # COLOR HACK - display hacks for the color scope
 midas "dsk0:pdp10;color hack" "mb; color"
 
+# PATERSON'S WORM
+midas "ts pworm" "mb;pworm"
+
 # MLIFE
 omidas "games;ts mlife" "rwg;mlife"
 omidas "/t dsk0:.;@ mlife" "rwg;mlife" {
