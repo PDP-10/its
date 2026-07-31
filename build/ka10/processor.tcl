@@ -153,18 +153,22 @@ make_link "sys1;ts 340d" "stan.k; mod11 bin"
 
 # Munching squares for 340 display.
 midas "dsk0: lars; ts munch" "munch 340"
-make_link "dsk0: .; @ munch" "lars;ts munch"
+make_link ".; @ munch" "lars;ts munch"
 
 # Munching squares for Knight TV.
 midas "lars; ts tvmunch" "munch tv"
 
 # Minskytron, translated from PDP-1.
 midas "dsk0: lars; ts minsky" "minsky tron"
-make_link "dsk0: .; @ minsky" "lars; ts minsky"
+make_link ".; @ minsky" "lars; ts minsky"
 
 # Edward Lorenz' strange attactor.
 midas "dsk0: lars; ts lorenz" "lorenz"
-make_link "dsk0: .; @ lorenz" "lars; ts lorenz"
+make_link ".; @ lorenz" "lars; ts lorenz"
+
+# Recursive C-Curve.
+midas "dsk0: lars; ts ccurve" "ccurve"
+make_link ".; @ ccurve" "lars; ts ccurve"
 
 # Mandelbrot.
 midas "lars; ts tvbrot" "tvbrot"
