@@ -81,7 +81,7 @@ BINIGNORE=-e '^(ka10|kl10|ks10|minsys)$$'
 SRCIGNORE=-e '^(system|midas)$$'
 
 SUBMODULES = dasm itstar klh10 mldev simh sims supdup cbridge \
-	tapeutils tv11 pdp6 vt05 tek4010 chaosnet-tools ncp
+	tapeutils tv11 blincolnlights vt05 tek4010 chaosnet-tools ncp
 
 # These files are used to create bootable tape images.
 RAM = bin/ks10/boot/ram.262
@@ -100,7 +100,7 @@ MAGFRM=tools/dasm/magfrm
 GT40=tools/simh/BIN/pdp11 $(OUT)/bootvt.img
 TV11=tools/tv11/tv11
 XGP11=tools/tv11/xgp11
-PDP6=tools/pdp6/emu/pdp6
+PDP6=tools/blincolnlights/pdp6/pdp6
 KLFEDR=tools/dasm/klfedr
 DATAPOINT=tools/vt05/dp3300
 VT52=tools/vt05/vt52
@@ -429,7 +429,10 @@ $(XGP11):
 	$(MAKE) -C tools/tv11 xgp11 CFLAGS=-O3
 
 $(PDP6):
-	$(MAKE) -C tools/pdp6/emu
+	$(MAKE) -C tools/blincolnlights/pdp6
+	$(MAKE) -C tools/blincolnlights/vpanel_pdp6
+	$(MAKE) -C tools/blincolnlights/pdp_periph
+	$(MAKE) -C tools/blincolnlights/netmem_cache
 
 $(DATAPOINT):
 	$(MAKE) -C tools/vt05 dp3300
