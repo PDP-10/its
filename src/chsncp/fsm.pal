@@ -1,0 +1,364 @@
+; FSM  -*-PALX-*-
+
+.sbttl	 Storage Management
+
+; Storage manager: allocates and frees contiguous blocks of memory within
+; within a special area.  The free-storage list is a doubly-linked list of
+; free blocks, pictured below.  When allocated, each block still contains
+; some overhead giving the size of the block, who allocated it, and a bit to
+; show that it is in use.  These help compaction, garbage collection of
+; storage, and run-time checking that each process frees all storage that it
+; allocated before killing itself.  Allocation is by "first-fit"; 
+; deallocation will compact adjacent free blocks.
+
+; Note that the free area is surrounded by -1 words, which represent
+; boundary conditions of "allocated" so that compaction will not try
+; to compact beyond the free area.
+
+; FREE BLOCKS:
+
+;	|---|--------------------|
+;	| 0 |  N (size in words) |
+;	|---|--------------------|
+;	|      forward link      |
+;	|------------------------|
+;	|     backward  link     |
+;	|------------------------|
+;	|			 |
+;	|       (N-4 words)      |
+;	|			 |
+;	|---|--------------------|
+;	| 0 |        N		 |
+;	|---|--------------------|
+
+
+; ALLOCATED BLOCKS:
+
+;	|---|--------------------|
+;	| 1 |  N (size in words) |
+;	|---|--------------------|
+;	|			 |
+;	|   N-3 allocated words  |
+;	|			 |
+;	|------------------------|
+;	|	Process ID	 |
+;	|---|--------------------|
+;	| 1 |  N (size in words) |
+;	|---|--------------------|
+
+; The following defines the fsm offsets in a dummy section:
+dsect <
+	  .word 0		; Freebit is bit-15, rest is size.
+ fsfptr:: .word 0		; Forward pointer.
+ fsbptr:: .word 0		; Backward pointer.
+	>
+; Reference section 2.5 in Knuth.
+				
+.sbttl	Free-storage initialization
+
+; FSINIT sets up the free-storage area, and initializes the
+; free-storage variables.  The area of core bounded by FSINIT's
+; two args is made into one large free block and is put into
+; the freelist.
+
+;	ARGS:				VALS:
+; SP ->	top of area + 2			(none)
+;	bottom of area
+
+fsinit:	jsr r5,save6		; save regs
+	mov #-1,r5		; will use this a few times
+	mov 20(sp),r1		; points to bottom of free area
+	mov 16(sp),r2		; points to top+2 of free area
+	mov r1,fslo		; save for future reference
+	mov r2,fshi		; ...
+	add #2,fslo		; correct for surround of -1s
+	sub #2,fshi		; ...
+	mov r2,r3		; now find size of free area
+	sub r1,r3		; have size in bytes
+	sub #4,r3		; correct for 2-words of boundary, i.e. there
+				; are 2 words of -1 which will surround the
+				; free area
+	clc			; so can ROR
+	ror r3			; convert size to words
+	if cs,<
+	  crash ^"Odd number bytes in free area."
+	  >
+	cmp r3,#4		; free area must have room for
+				; overhead (4 words)
+	if lo,<
+	  crash ^"Free area too small."
+	  >
+	mov r3,fssize		; save size of free area
+	mov pc,r0		; get ptr to fslist
+	add #fslist-.,r0
+
+		; R0 pts to FSLIST
+		; R1 pts to free area
+		; R2 pts to top of free area + 2
+		; R3 has the size of the free block
+		; R5 has a -1
+
+	mov r5,(r1)+		; set free-area boundary conditions,
+	mov r1,2(r0)		; set fwd ptr to free block
+	mov r3,(r1)+		; set first word (size of free blk)
+	mov r0,(r1)+		; set fwd ptr of free block to fslist
+	mov r0,(r1)+		; set back ptr (both point to
+				; freelist-ptr block, making the
+				; fslist block and the free block into
+				; a doubly-linked ring)
+	mov #1,(r0)+		; set fslist size and freebit:
+				; size is fake (too small) so it
+				; will not be allocated
+	mov (r0)+,(r0)+		; set back ptr to free block
+	mov #1,(r0)		; set fslist fake size and freebit
+	mov r5,-(r2)		; i.e.  -1 so that the surrounding
+				; area will look "allocated" to the
+				; free routine which will not try to
+				; compact outside the free area
+	mov r3,-(r2)		; set last word in free area,
+				; i.e. freebit=0 and size
+	clr fsmctr		; clear free counter
+	clr fsflen
+	clr fsac
+	clr fsatr+0
+	clr fsatr+2
+	clr fsata+0
+	clr fsata+2
+	clr fsasl
+	clr fsft+0
+	clr fsft+2
+	clr fsarc
+	jsr r5,rest6		; restore regs
+	pop (sp),(sp)		; remove args from stack
+	vreturn
+
+; ALLOC returns a ptr to a block of storage of the requested size.
+; The first argument is the size of the block in words and the
+; second is an id to be placed in the allocated block.
+
+;	ARGS:				VALS:
+; SP ->	id of caller		 SP ->	ptr to allocated block
+;	N words to allocate		error code
+
+alloc:	push r0,r1,r2,r3	; save regs
+	add #3,14(sp)		; correct reqested size to include
+	 			; size and caller-id words
+	mov 14(sp),r2		; and keep it around for search
+
+	add r2,fsatr+0		; update total alloc requests (+4)
+	adc fsatr+2		; hi order
+	inc fsarc		; update number of alloc requests
+
+	mov pc,r0		; init ptr to point to the freelist ptr
+	add #fslist-.,r0	; The freelist ptr looks like a dummy block
+				; (i.e. 0 words in it)
+	mov r0,r3		; save ptr in R3, compare with this to see
+				; if done searching freelist
+	mfps -(sp)		; save our priority
+	spl 4			; mask ourselves
+
+; Loop searching for a free block big enough for request:
+
+loop <	  mov fsfptr(r0),r0	; next free block
+	  cmp r0,r3		; any more?
+	  if eq,<
+	    mov #%enacr,16(sp)	; set error code to no core available
+	    mtps (sp)+		; allow preemption again
+	    br 2$
+	    >
+	  inc fsasl		; increment no. of entries on freelist
+				; looked at 
+	  tst (r0)		; yes, is free-bit = "free" (0)?
+	  if le,<
+	    crash ^"Free block isn't."
+	    >
+				  ; Either free-bit is "allocated" or else
+				  ; the length is 0 (which it can't be since
+				  ; it must include the overhead words.
+	  cmp (r0),r2		; yes, big enough for request?
+	  rptl lt		; no, repeat loop, try next block
+	  >
+
+	sub (r0),r2		; request+2-size_of_block
+	neg r2
+	cmp r2,#fsmin		; if dif is less than fsmin, the dif
+	 			; won't be kept around as a free block,
+	 			; since would slow ALLOC's search
+	if lt,<
+	  mov fsbptr(r0),r1	; less -- remove free block from fslist
+	  mov fsfptr(r0),fsfptr(r1)   ; link prev to next
+	  mov fsfptr(r0),r1
+	  mov fsbptr(r0),fsbptr(r1)   ; back-link next to prev
+	  mov r0,r1		; ptr to block to be given to caller
+	  dec fsflen		; decrement length of freelist
+	  >
+	else <			; dif is greater than fsmin, so will have
+				; the remainder be a new, smaller, free block
+	  mov r2,r1		; dif
+	  asl r1		; times 2 for byte dif
+	  add r0,r1		; points to block to give to caller
+	  mov r2,-2(r1)		; set size in dif block (and set to "free")
+	  mov r2,(r0)		; set 1st size and freebit word
+	  mov 16(sp),(r1)	; set size in caller's block
+	  >
+	mov r1,r0		; points to caller's block
+
+	add (r1),fsata+0	; yes, update total allocated, lo order
+	adc fsata+2		; hi order
+
+	add (r1),r0		; add twice for byte offset
+	add (r1),r0		; points to just after caller's block
+	bis #100000,(r1)	; set "inuse" bit at beginning of block
+	mov (r1)+,-(r0)		; set "inuse" at end of block and move
+				; ptr to caller area -- i.e.  2nd word
+				; in block. Also make r1 the pointer
+				; to caller's area.
+	mov 14(sp),-(r0)	; put id into block
+	mtps (sp)+		; allow preemption again
+
+loop <	  cmp r0,r1		; now clear all data words in the block
+	  exitl los		; ...
+	  clr -(r0)		; ...
+	  rptl
+	  >
+
+	clr 14(sp)		; set error code to zero to indicate success
+	inc fsac		; increment no. of blocks allocated
+
+2$:	mov r1,12(sp)		; give caller pointer to allocated area
+	pop r3,r2,r1,r0		; restore regs
+	vreturn
+
+.sbttl	FREE - Deallocation
+
+; FREE takes a ptr to a block allocated by ALLOC and returns it to free
+; storage.
+
+;	ARGS:				VALS:
+; SP ->	Ptr to block			(none)
+
+free:	push r0,r1,r2,r3	; save regs
+	mov 12(sp),r0		; block to be freed + 2.  i.e. points
+				; to sizeword+2
+	tst -(r0)		; move ptr back to beginning of block
+				; and also check if freebit = "in use"
+	if pl,<
+	  crash ^"Allocated block isn't."
+	  >
+	bic #100000,(r0)	; clear freebit to "free"
+
+	add (r0),fsft+0		; low order of total freed
+	adc fsft+2		; hi order
+	inc fsflen		; increment length of freelist
+
+	mfps -(sp)		; turn off preemption
+	spl 7
+
+	; Check blocks surrounding the one to be freed.  If either is
+	; free, then it will be combined with the arg-block into a
+	; larger free block ("compaction").
+
+	mov -2(r0),r3		; check block below this one -- free?
+	if pl,<			; yes, so compact lower block and this one
+	  asl r3		; word count times two for byte count
+	  sub r0,r3		; will compact the two
+	  neg r3		; points to block below one to be freed
+
+	  ; Compaction consists of removing the lower block from the
+	  ; free-storage list and combining it with the block to be
+	  ; freed to get a new (bigger) block to be freed.
+
+	  mov fsfptr(r3),r1	; forward link of lower block
+	  mov fsbptr(r3),r2	; back linkof lower block
+	  mov r2,fsbptr(r1)	; back-link next to prev
+	  mov r1,fsfptr(r2)	; link prev to next
+	  add (r0),(r3)		; combine two blocks by adding sizes
+	  mov r3,r0		; new block to be freed is lower block
+	  dec fsflen		; decrement length of freelist
+	  >
+
+ 	; See if can compact block to be freed with block above it.
+
+	mov r0,r3		; ptr to block to be freed
+	add (r0),r3		; twice since word count
+	add (r0),r3		; block above it
+	tst -2(r3)		; just a check -- make sure last word
+				; in block to be freed says that it is
+				; an allocated block
+	if pl,<
+	  crash ^"Allocated block isn't."
+	  >
+	tst (r3)		; is upper block free?
+	if pl,<			; yes, so compact with upper block
+	  mov fsfptr(r3),r1	; will compact block to be freed with
+				; block above
+	  mov fsbptr(r3),r2	; back ptr of upper block
+	  mov r2,fsbptr(r1)	; back-link next to prev
+	  mov r1,fsfptr(r2)	; link prev to next, removing upper
+				; block from list
+	  add (r3),(r0)		; add sizes of block to be freed and
+				; upper block. thus getting new block
+				; to be freed
+	  mov r0,r3		; ptr to new block to be freed
+	  add (r0),r3		; twice since word count
+	  add (r0),r3		; points to next block up,
+	  tst (r3)		; which should always be in use since
+				; compaction should catch it otherwise
+	  if pl,<
+	    crash ^"Compaction missed a block sometime."
+	    >
+	  dec fsflen		; decrement length of freelist
+	  >
+
+	; Now add the block to be freed to the freelist.  This may be
+	; the original arg-block, or a bigger block created by
+	; compacting the arg-block with upper or lower blocks (if so,
+	; the other blocks have been removed from the freelist so that
+	; the total block is "free").
+
+	mov (r0),-2(r3)		; set freebit="free" and size in last
+				; word of block to be freed
+	mov fslist+fsfptr,fsfptr(r0)	; add block to free-storage list by
+					; setting its forward ptr to point to
+					; the first block in the freelist
+	push pc			; make a ptr to FSLIST and put
+	add #fslist-.,(sp)	; it in as backptr of new free block
+	pop fsbptr(r0)		; ...
+	mov fslist+fsfptr,r1	; old 1st block is
+	mov r0,fsbptr(r1)	; now linked back to new 1st block
+	mov r0,fslist+fsfptr	; and this block is 1st
+	dec fsac		; decrement no. of blocks allocated
+	inc fsmctr		; counts number of frees.  allocates that fail
+				; can wait on this counter; when memory is
+				; freed the allocator can try again
+	mtps (sp)+		; allow preemption again
+	pop r3,r2,r1,r0,(sp)	; restore regs, remove arg from stack
+	vreturn
+
+.sbttl	Free-storage variables
+
+.iif ndf  fsmin,   fsmin==10
+
+; Free-list pointer, which is a "free block", but consists only
+; of overhead, and has a fake size so that it can't be allocated.
+fslist:	.word 1			; fake size, and freebit=free
+	.word 1,1		; forward, back links
+	.word 1			; fake size, freebit
+
+fslo:	.word 0			; start of free storage area
+fshi:	.word 0			; end of free storage area (last address + 2)
+fssize:	.word 0			; size of free storage area
+fsata:	.word 0,0		; total of block-sizes allocated
+fsatr:	.word 0,0		; total requested
+fsac:	.word 0			; no. of block allocated at this moment
+fsflen:	.word 0			; length of freelist
+fsasl:	.word 0			; no. of blocks on freelist checked by ALLOC
+fsarc:	.word 0			; number of alloc requests
+fsft:	.word 0,0		; total of block-sizes freed
+
+fsmctr:	.word 0			; Counter to show number of times
+				; memory has been freed.
+				; If there isn't enuf memory then
+				; the allocator should wait for this
+				; location to change before retrying.
+
