@@ -126,6 +126,9 @@ midas "sys3;ts xd" "sysen2;xd"
 # TV-munching square.
 midas "sys2;ts munch" "sysen2;munch"
 
+# TV bug.
+midas "sys2;ts tvbug" "gls;tvbug"
+
 # TITLER
 midas "dsk0:.;@ titler" "mb; titler"
 

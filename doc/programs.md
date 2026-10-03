@@ -375,6 +375,7 @@
 - TN6, line mode TELNET client with Multics features.
 - TST342, display all Type 342 characters.
 - TV-11, Knight TV PDP-11.
+- TVBUG, a bug crawling down the TV display.
 - TVEDIT, paint program.
 - TVREAD, read a bitmap file and display on TV.
 - TVWAR, Knight TV Spacewar.
