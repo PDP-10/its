@@ -224,6 +224,10 @@ midas "sys; atsign 6slave" "sysen2; ld10" {
     respond "   PDP6F = " "1\r"
 }
 
+# Lisp color scope slave, PDP-6 version.
+midas "gls; cslave bin" "gls; cslave"
+make_link "sys; atsign cslave" "gls; cslave bin"
+
 # Test for the 340 "hack hack".
 respond "*" $emulator_escape
 punch_tape "$out/hhtest.rim"
